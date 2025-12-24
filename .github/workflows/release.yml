@@ -21,6 +21,9 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Install Cloudsmith CLI
+        run: pip install cloudsmith-cli
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

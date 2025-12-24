@@ -87,3 +87,29 @@ brews:
 #     authors: Alexey Evlampiev
 #     ...
 #     api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
+
+nfpms:
+  - id: pgmi
+    package_name: pgmi
+    vendor: vvka-141
+    homepage: "https://github.com/vvka-141/pgmi"
+    maintainer: "Alexey Evlampiev <alexey.evlampiev@gmail.com>"
+    description: "PostgreSQL-native execution fabric for humans and autonomous agents"
+    license: "MPL-2.0"
+    formats:
+      - deb
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/pgmi/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/pgmi/README.md
+
+publishers:
+  - name: cloudsmith
+    ids:
+      - pgmi
+    cmd: |
+      cloudsmith push deb vvka-141/pgmi/any-distro/any-version {{ .ArtifactPath }}
+    env:
+      - CLOUDSMITH_API_KEY={{ .Env.CLOUDSMITH_API_KEY }}
