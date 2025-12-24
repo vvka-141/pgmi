@@ -22,9 +22,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
+      - -X github.com/vvka-141/pgmi/internal/cli.version={{.Version}}
+      - -X github.com/vvka-141/pgmi/internal/cli.commit={{.ShortCommit}}
+      - -X github.com/vvka-141/pgmi/internal/cli.date={{.Date}}
 
 archives:
   - id: default
