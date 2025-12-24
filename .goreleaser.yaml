@@ -80,22 +80,10 @@ brews:
     test: |
       system "#{bin}/pgmi", "--version"
 
-chocolateys:
-  - name: pgmi
-    owners: vvka-141
-    authors: Alexey Evlampiev
-    project_url: "https://github.com/vvka-141/pgmi"
-    license_url: "https://github.com/vvka-141/pgmi/blob/main/LICENSE"
-    require_license_acceptance: false
-    project_source_url: "https://github.com/vvka-141/pgmi"
-    docs_url: "https://github.com/vvka-141/pgmi#readme"
-    bug_tracker_url: "https://github.com/vvka-141/pgmi/issues"
-    tags: "postgresql database deployment cli devops migration"
-    summary: "PostgreSQL-native execution fabric"
-    description: |
-      pgmi is a PostgreSQL-native execution fabric and deployment tool.
-      It uses a session-centric approach: loads SQL files and runtime
-      parameters into PostgreSQL session-scoped temporary tables, then
-      hands control to a user-provided deploy.sql script.
-    release_notes: "https://github.com/vvka-141/pgmi/releases/tag/{{.Tag}}"
-    api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
+# Chocolatey disabled for now - requires Windows runner or choco CLI on Linux
+# chocolateys:
+#   - name: pgmi
+#     owners: vvka-141
+#     authors: Alexey Evlampiev
+#     ...
+#     api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
