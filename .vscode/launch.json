@@ -1,0 +1,189 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Deploy Overwrite",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "./example-project",
+                "--database", "pgmi_debug_db",
+                "--overwrite",
+                "--force",
+                "--verbose"
+            ],
+            "env": {
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Deploy (No Overwrite)",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "./example-project",
+                "--database", "pgmi_debug_db",
+                "--verbose"
+            ],
+            "env": {
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Deploy with Params",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "./example-project",
+                "--database", "pgmi_debug_db",
+                "--param", "env=development",
+                "--param", "api_key=test123",
+                "--verbose"
+            ],
+            "env": {
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Deploy with Granular Flags",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "./example-project",
+                "--host", "localhost",
+                "--port", "5433",
+                "--username", "postgres",
+                "--database", "pgmi_granular_db",
+                "--overwrite",
+                "--force",
+                "--verbose"
+            ]
+        },
+        {
+            "name": "Debug Deploy with PG Environment Variables",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "./example-project",
+                "--database", "pgmi_env_db",
+                "--overwrite",
+                "--force",
+                "--verbose"
+            ],
+            "env": {
+                "PGHOST": "localhost",
+                "PGPORT": "5433",
+                "PGUSER": "postgres",
+                "PGDATABASE": "postgres"
+            }
+        },
+        {
+            "name": "Debug Init Command",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "init",
+                "test-project",
+                "--template", "basic",
+                "--verbose"
+            ]
+        },
+        {
+            "name": "Debug Test Command",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "test",
+                "./example-project",
+                "--database", "pgmi_debug_db",
+                "--verbose"
+            ],
+            "env": {
+                "PGHOST": "localhost",
+                "PGPORT": "5433",
+                "PGUSER": "postgres"
+            }
+        },
+        {
+            "name": "Debug Scaffolding Tests - All",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/scaffold",
+            "args": [
+                "-test.v",
+                "-test.timeout", "5m"
+            ],
+            "env": {
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Scaffolding Tests - Standard Only",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/scaffold",
+            "args": [
+                "-test.v",
+                "-test.run", "TestTemplateDeployment/standard",
+                "-test.timeout", "5m"
+            ],
+            "env": {
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Scaffolding Tests - Basic Only",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/scaffold",
+            "args": [
+                "-test.v",
+                "-test.run", "TestTemplateDeployment/basic",
+                "-test.timeout", "5m"
+            ],
+            "env": {
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        },
+        {
+            "name": "Debug Standard Template Manual Deploy",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/pgmi",
+            "args": [
+                "deploy",
+                "test-standard-final",
+                "--database", "test_standard_debug",
+                "--overwrite",
+                "--force",
+                "--verbose"
+            ],
+            "env": {
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+            }
+        }
+    ]
+}

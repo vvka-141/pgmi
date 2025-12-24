@@ -1,0 +1,55 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Claude Code artifacts (proprietary - keep locally only)
+.claude/
+
+# Claude instructions (proprietary - keep locally only)
+CLAUDE.md
+
+# Internal planning documents (keep locally only)
+apt-change-request.md
+code-review.md
+az-entra-id-upgrade.md
+docs/advanced-api-redesign.md
+docs/PARAMETER_DECLARATION_IMPLEMENTATION_PLAN.md
+docs/TEMPLATE_REMOVAL_PLAN.md
+docs/retry-timeout-behavior.md
+docs/archive/
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+# Test scaffolds (pgmi init output during development)
+test_*/

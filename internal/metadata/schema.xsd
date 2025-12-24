@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    elementFormDefault="qualified"
+    attributeFormDefault="unqualified">
+
+  <!-- Root element: <pgmi-meta> -->
+  <xs:element name="pgmi-meta" type="MetaType"/>
+
+  <!-- MetaType: Main metadata container with required attributes -->
+  <xs:complexType name="MetaType">
+    <xs:sequence>
+      <!-- Optional elements in order -->
+      <xs:element name="description" type="xs:string" minOccurs="0"/>
+      <xs:element name="membership" type="MembershipType" minOccurs="0"/>
+      <xs:element name="dependency" type="DependencyType" minOccurs="0"/>
+    </xs:sequence>
+
+    <!-- Required attributes -->
+    <xs:attribute name="id" type="uuid" use="required"/>
+    <xs:attribute name="idempotent" type="xs:boolean" use="required"/>
+    <xs:attribute name="sortKey" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <!-- MembershipType: Container for group references -->
+  <xs:complexType name="MembershipType">
+    <xs:sequence>
+      <xs:element name="group" type="GroupRefType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- GroupRefType: Single group reference with UUID -->
+  <xs:complexType name="GroupRefType">
+    <xs:attribute name="id" type="uuid" use="required"/>
+  </xs:complexType>
+
+  <!-- DependencyType: Container for dependency references -->
+  <xs:complexType name="DependencyType">
+    <xs:sequence>
+      <xs:element name="dependsOn" type="DependsOnRefType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- DependsOnRefType: Single dependency reference with UUID -->
+  <xs:complexType name="DependsOnRefType">
+    <xs:attribute name="id" type="uuid" use="required"/>
+  </xs:complexType>
+
+  <!-- UUID simple type with regex pattern validation -->
+  <xs:simpleType name="uuid">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+</xs:schema>

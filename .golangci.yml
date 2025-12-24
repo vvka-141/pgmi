@@ -1,0 +1,46 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (io.Writer).Write
+      - fmt.Fprintf
+      - fmt.Fprintln
+
+issues:
+  exclude-rules:
+    # Ignore errcheck in test files - test code often ignores errors intentionally
+    - path: _test\.go
+      linters:
+        - errcheck
+
+    # Ignore unused in test files - mock types may be for future use
+    - path: _test\.go
+      linters:
+        - unused
+
+    # Ignore benchmark files completely
+    - path: _bench_test\.go
+      linters:
+        - errcheck
+        - gosimple
+
+    # Ignore example files - they're documentation
+    - path: example_test\.go
+      linters:
+        - errcheck
+
+  # Don't limit the number of issues
+  max-issues-per-linter: 0
+  max-same-issues: 0
