@@ -58,9 +58,8 @@ END;
     END IF;
 
     IF NOT EXISTS (
-        SELECT 1 FROM api.rest_exchange e
-        JOIN api.inbound_queue q ON q.object_id = e.queue_object_id
-        WHERE q.handler_object_id = v_handler_id
+        SELECT 1 FROM api.rest_exchange
+        WHERE handler_object_id = v_handler_id
     ) THEN
         RAISE EXCEPTION 'REST exchange not logged';
     END IF;

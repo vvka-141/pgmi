@@ -125,13 +125,8 @@ BEGIN
         ]) || COALESCE(v_response.headers, ''::extensions.hstore);
 
         IF v_route.auto_log THEN
-            WITH q AS (
-                INSERT INTO api.inbound_queue (protocol, handler_object_id)
-                VALUES ('rest', v_route.object_id)
-                RETURNING object_id, sequence_number
-            )
-            INSERT INTO api.rest_exchange (queue_object_id, queue_sequence_number, request, response, completed_at)
-            SELECT object_id, sequence_number, v_request, v_response, now() FROM q;
+            INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
+            VALUES (v_route.object_id, v_request, v_response, now());
         END IF;
 
         RETURN v_response;
@@ -216,13 +211,8 @@ BEGIN
         ]) || COALESCE(v_response.headers, ''::extensions.hstore);
 
         IF v_handler.auto_log THEN
-            WITH q AS (
-                INSERT INTO api.inbound_queue (protocol, handler_object_id)
-                VALUES ('rpc', v_handler.object_id)
-                RETURNING object_id, sequence_number
-            )
-            INSERT INTO api.rpc_exchange (queue_object_id, queue_sequence_number, request, response, completed_at)
-            SELECT object_id, sequence_number, v_request, v_response, now() FROM q;
+            INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
+            VALUES (v_handler.object_id, v_request, v_response, now());
         END IF;
 
         RETURN v_response;
@@ -288,13 +278,8 @@ BEGIN
     BEGIN
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
-        WITH q AS (
-            INSERT INTO api.inbound_queue (protocol, handler_object_id)
-            VALUES ('mcp', v_handler.object_id)
-            RETURNING object_id, sequence_number
-        )
-        INSERT INTO api.mcp_exchange (queue_object_id, queue_sequence_number, mcp_type, mcp_name, request, response)
-        SELECT object_id, sequence_number, 'tool', v_handler.mcp_name, v_request, v_response FROM q;
+        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
+        VALUES (v_handler.object_id, 'tool', v_handler.mcp_name, v_request, v_response);
 
         RETURN v_response;
 
@@ -361,13 +346,8 @@ BEGIN
     BEGIN
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
-        WITH q AS (
-            INSERT INTO api.inbound_queue (protocol, handler_object_id)
-            VALUES ('mcp', v_handler.object_id)
-            RETURNING object_id, sequence_number
-        )
-        INSERT INTO api.mcp_exchange (queue_object_id, queue_sequence_number, mcp_type, mcp_name, request, response)
-        SELECT object_id, sequence_number, 'resource', v_handler.mcp_name, v_request, v_response FROM q;
+        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
+        VALUES (v_handler.object_id, 'resource', v_handler.mcp_name, v_request, v_response);
 
         RETURN v_response;
 
@@ -427,13 +407,8 @@ BEGIN
     BEGIN
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
-        WITH q AS (
-            INSERT INTO api.inbound_queue (protocol, handler_object_id)
-            VALUES ('mcp', v_handler.object_id)
-            RETURNING object_id, sequence_number
-        )
-        INSERT INTO api.mcp_exchange (queue_object_id, queue_sequence_number, mcp_type, mcp_name, request, response)
-        SELECT object_id, sequence_number, 'prompt', v_handler.mcp_name, v_request, v_response FROM q;
+        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
+        VALUES (v_handler.object_id, 'prompt', v_handler.mcp_name, v_request, v_response);
 
         RETURN v_response;
 
@@ -451,12 +426,12 @@ CREATE OR REPLACE FUNCTION api.mcp_list_tools()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, internal, pg_temp
+SET search_path = api, core, pg_temp
 AS $$
     SELECT jsonb_build_object('tools', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', internal.get_text_attribute(r.handler_object_id, 'description'),
+            'description', core.get_attached_text(r.handler_object_id, 'description'),
             'inputSchema', r.input_schema
         )
     ), '[]'::jsonb))
@@ -468,12 +443,12 @@ CREATE OR REPLACE FUNCTION api.mcp_list_resources()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, internal, pg_temp
+SET search_path = api, core, pg_temp
 AS $$
     SELECT jsonb_build_object('resources', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', internal.get_text_attribute(r.handler_object_id, 'description'),
+            'description', core.get_attached_text(r.handler_object_id, 'description'),
             'uri', r.uri_template,
             'mimeType', r.mime_type
         )
@@ -486,12 +461,12 @@ CREATE OR REPLACE FUNCTION api.mcp_list_prompts()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, internal, pg_temp
+SET search_path = api, core, pg_temp
 AS $$
     SELECT jsonb_build_object('prompts', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', internal.get_text_attribute(r.handler_object_id, 'description'),
+            'description', core.get_attached_text(r.handler_object_id, 'description'),
             'arguments', r.arguments
         )
     ), '[]'::jsonb))
