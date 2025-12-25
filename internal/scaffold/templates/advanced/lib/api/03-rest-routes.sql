@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS api.rest_route (
 CREATE INDEX IF NOT EXISTS ix_rest_route_lookup
     ON api.rest_route(sequence_number DESC);
 
+COMMENT ON TABLE api.rest_route IS
+    'REST routes matched by sequence_number DESC. Later-registered routes take priority when patterns overlap.';
+
+COMMENT ON COLUMN api.rest_route.sequence_number IS
+    'Auto-incrementing priority. Higher values (later registration) match first.';
+
 -- ============================================================================
 -- Grant Permissions
 -- ============================================================================

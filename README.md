@@ -165,13 +165,13 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
+        SELECT path, content FROM pg_temp.pgmi_source
         WHERE path != './deploy.sql'
         ORDER BY path
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```

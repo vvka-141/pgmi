@@ -189,7 +189,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         auto_log = EXCLUDED.auto_log;
 
     IF v_description IS NOT NULL THEN
-        PERFORM internal.set_text_attribute(v_id, 'description', v_description);
+        PERFORM core.set_attached_text(v_id, 'description', v_description);
     END IF;
 END;
 $func$;
@@ -331,7 +331,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         auto_log = EXCLUDED.auto_log;
 
     IF v_description IS NOT NULL THEN
-        PERFORM internal.set_text_attribute(v_id, 'description', v_description);
+        PERFORM core.set_attached_text(v_id, 'description', v_description);
     END IF;
 END;
 $func$;
@@ -465,7 +465,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         arguments = EXCLUDED.arguments;
 
     IF v_description IS NOT NULL THEN
-        PERFORM internal.set_text_attribute(v_id, 'description', v_description);
+        PERFORM core.set_attached_text(v_id, 'description', v_description);
     END IF;
 END;
 $func$;
