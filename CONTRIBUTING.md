@@ -124,12 +124,17 @@ func TestParser_ParseConnectionString(t *testing.T) {
 
 ## Git Workflow
 
-This project follows gitflow:
+This project uses a simplified gitflow:
 
-- `main` - stable production releases
-- `develop` - integration branch for features
-- `feature/*` - feature branches
+- `main` - stable production releases (tagged with `vX.Y.Z`)
+- `feature/*` - feature branches (created from and merged to `main`)
 - `hotfix/*` - urgent production fixes
+
+**Workflow:**
+1. Create feature branch from `main`: `git checkout -b feature/my-feature`
+2. Implement changes with tests
+3. Push and create PR to `main`
+4. After merge, maintainers tag releases: `git tag v0.7.x && git push origin v0.7.x`
 
 ## Commit Messages
 
@@ -153,12 +158,12 @@ Examples:
 
 ## Pull Requests
 
-1. Create a feature branch from `develop`
+1. Create a feature branch from `main`
 2. Implement your changes with tests
 3. Run `go test ./...` to verify all tests pass
 4. Run `go build ./...` to ensure everything compiles
 5. Update documentation if needed
-6. Submit PR with clear description of changes
+6. Submit PR to `main` with clear description of changes
 
 ## Questions?
 
