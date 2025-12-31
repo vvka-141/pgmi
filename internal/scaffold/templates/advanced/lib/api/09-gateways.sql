@@ -124,7 +124,7 @@ BEGIN
             'x-route-id', v_route.object_id::text
         ]) || COALESCE(v_response.headers, ''::extensions.hstore);
 
-        IF v_route.auto_log AND p_method NOT IN ('GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS') THEN
+        IF v_route.auto_log THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
             VALUES (v_route.object_id, v_request, v_response, now());
         END IF;
