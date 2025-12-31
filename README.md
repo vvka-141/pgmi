@@ -6,7 +6,7 @@
 
 **pgmi** puts PostgreSQL in control of your database deployments.
 
-Instead of an external runtime deciding what runs and when, pgmi loads your SQL files into PostgreSQL temp tables and hands control to your `deploy.sql` script. You write the deployment logic in SQL. PostgreSQL executes it.
+Instead of an external runtime deciding what runs and when, pgmi loads all your project files into PostgreSQL temp tables and hands control to your `deploy.sql` script. You write the deployment logic in SQL. PostgreSQL executes it.
 
 ---
 
@@ -258,6 +258,49 @@ pgmi's architecture is well-suited for automated workflows:
 - **Clear signals**: Success = clean exit. Failure = PostgreSQL exception with standard error output. No ambiguous states.
 - **Single session**: All deployment happens in one database session. No connection pool complexity, no distributed state.
 
+### Environment-Aware Deployments
+
+pgmi loads **all files** from your project—not just SQL. This enables powerful DevOps patterns where infrastructure provisioning outputs (Terraform, Kubernetes, etc.) feed directly into database configuration:
+
+```
+myapp/
+├── deploy.sql
+├── migrations/
+│   └── 001_schema.sql
+├── config/
+│   └── environment.json    ← Terraform output, K8s ConfigMap, etc.
+└── setup/
+    └── 01_configure.sql
+```
+
+Your `deploy.sql` can read and process configuration files:
+
+```sql
+DO $$
+DECLARE
+    v_config JSONB;
+BEGIN
+    -- Load environment config from JSON file
+    SELECT content::jsonb INTO v_config
+    FROM pg_temp.pgmi_source
+    WHERE path = './config/environment.json';
+
+    -- Populate service registry from infrastructure output
+    INSERT INTO app.service_endpoints (name, url, region)
+    SELECT
+        svc->>'name',
+        svc->>'url',
+        svc->>'region'
+    FROM jsonb_array_elements(v_config->'services') AS svc
+    ON CONFLICT (name) DO UPDATE
+    SET url = EXCLUDED.url, region = EXCLUDED.region;
+
+    RAISE NOTICE 'Configured % services', jsonb_array_length(v_config->'services');
+END $$;
+```
+
+This pattern enables your database to be fully environment-aware, supporting use cases like service discovery, feature flags, and dynamic configuration—all driven by SQL.
+
 ### Portability
 
 pgmi adds minimal abstraction over your SQL:
@@ -392,7 +435,7 @@ The `pgmi test` command runs tests in an isolated transaction with automatic rol
 When you run `pgmi deploy`, the tool:
 1. Connects to PostgreSQL using your chosen method (password, certificates, IAM, Entra ID, etc.).
 2. Prepares a session with temp tables:
-   - `pg_temp.pgmi_source`: Metadata + contents of all user's SQL source files (excluding test files).
+   - `pg_temp.pgmi_source`: Metadata + contents of all project files (SQL, JSON, YAML, etc.) (excluding test files).
    - `pg_temp.pgmi_parameter`: Key/value parameters passed via CLI.
    - `pg_temp.pgmi_plan`: Execution plan built by deploy.sql.
    - `pg_temp.pgmi_unittest_script`: Test files from `__test__/` directories, isolated from deployment files.
@@ -447,7 +490,7 @@ After `deploy.sql` completes, pgmi reads commands from `pg_temp.pgmi_plan` and e
 ## ⚡ What pgmi Provides
 
 **Session Infrastructure:**
-- **Session preparation**: Loads SQL files and parameters into PostgreSQL temp tables
+- **Session preparation**: Loads all project files (SQL, config, data) and parameters into PostgreSQL temp tables
 - **Plan execution**: Executes commands from `pg_temp.pgmi_plan` sequentially
 - **Deploy command**: Orchestrates the session lifecycle (connect → prepare → execute deploy.sql → execute plan)
 - **Test command**: Execute database tests in isolated transactions with automatic rollback

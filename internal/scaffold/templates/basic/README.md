@@ -43,7 +43,7 @@ Output:
 
 When you ran `pgmi deploy`, here's what occurred:
 
-1. **pgmi loaded** all SQL files into session-scoped temp tables (`pgmi_source`, `pgmi_unittest_script`)
+1. **pgmi loaded** all project files into session-scoped temp tables (`pgmi_source`, `pgmi_unittest_script`)
 2. **Template expansion** replaced `$` `{name}` with your parameter value (default: 'World')
 3. **Session variables** were set - parameters are now accessible via `current_setting('pgmi.name')`
 4. **Single transaction** deployed migrations and ran tests atomically

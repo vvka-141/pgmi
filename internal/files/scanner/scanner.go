@@ -12,7 +12,9 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// Scanner discovers and processes SQL files from a directory tree.
+// Scanner discovers and processes files from a directory tree.
+// All file types are loaded into pg_temp.pgmi_source; use is_sql_file column
+// to filter SQL files in deploy.sql if needed.
 // Scanner is safe for concurrent use by multiple goroutines as long as
 // the provided calculator and fsProvider are also thread-safe.
 type Scanner struct {
@@ -85,11 +87,6 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 			return nil
 		}
 
-		// Only process .sql files
-		if strings.ToLower(filepath.Ext(file.Path())) != ".sql" {
-			return nil
-		}
-
 		// Process the file
 		fileMetadata, err := s.processFile(file)
 		if err != nil {
@@ -110,7 +107,7 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 }
 
 // processFile reads a file and generates its metadata.
-// It also extracts and validates PGMI metadata from <pgmi:meta> XML blocks.
+// For SQL files, it also extracts and validates PGMI metadata from <pgmi:meta> XML blocks.
 func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	// Read file content
 	content, err := file.ReadContent()
@@ -147,11 +144,12 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	checksumNormalized := s.calculator.CalculateNormalized(content)
 	checksumRaw := s.calculator.CalculateRaw(content)
 
-	// Extract and validate metadata (skip for test files)
+	// Extract and validate metadata (only for SQL files, skip test files)
 	var scriptMetadata *pgmi.ScriptMetadata
 	isTestFile := strings.Contains(unixPath, pgmi.TestDirectoryPattern)
+	isSQLFile := isSQLExtension(extension)
 
-	if !isTestFile {
+	if isSQLFile && !isTestFile {
 		meta, err := metadata.ExtractAndValidate(string(content), unixPath)
 		if err != nil {
 			// Check if this is a "no metadata" error (not fatal)
@@ -184,6 +182,17 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		ModifiedAt:      info.ModTime(),
 		Metadata:        scriptMetadata,
 	}, nil
+}
+
+// isSQLExtension checks if the file extension indicates a SQL file.
+// Matches the pattern used in pg_temp.pgmi_is_sql_file().
+func isSQLExtension(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql":
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateDeploySQL checks if deploy.sql exists in the source directory.
