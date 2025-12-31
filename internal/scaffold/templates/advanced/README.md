@@ -2,6 +2,18 @@
 
 PostgreSQL as your application server - HTTP routing, business logic, and data in one transactional system.
 
+> **New to this approach?** Read [ARCHITECTURE.md](ARCHITECTURE.md) first to understand the "Application as Dataset" philosophy, layered schema design, and when this template is right for your project.
+
+## When to Use This Template
+
+**Choose this template if:**
+- Business logic belongs in the database (transactional guarantees for all state changes)
+- You need multi-protocol support (REST, RPC, MCP)
+- Data integrity is critical (financial, healthcare, compliance)
+- Your team has solid PostgreSQL skills
+
+**Prerequisites:** Familiarity with PostgreSQL functions, views, and transactions. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full decision guide.
+
 ## Deployment Architecture
 
 **IMPORTANT**: The HTTP handlers in this template are designed to run **behind a web server or API gateway** (Go, Node.js, nginx, Envoy, AWS API Gateway, etc.). PostgreSQL is NOT directly exposed to the internet.
