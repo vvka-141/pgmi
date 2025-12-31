@@ -365,10 +365,9 @@ migrations/
   001_create_users.sql
   002_add_roles.sql
   __test__/
-    _setup.sql              ← Shared fixtures (runs first)
+    _setup.sql              ← Shared fixtures (wrapped in SAVEPOINT)
     test_user_creation.sql
     test_role_assignment.sql
-    _teardown.sql           ← Cleanup (runs last)
 ```
 
 **Physical isolation**: During session setup, pgmi automatically separates test files from deployment files. Test files move to `pg_temp.pgmi_unittest_script`, preventing accidental execution during deployment.
@@ -377,20 +376,19 @@ migrations/
 
 ### Hierarchical Fixtures
 
-The `_setup.sql` and `_teardown.sql` files provide shared fixtures:
+The `_setup.sql` files provide shared fixtures with automatic savepoint isolation:
 
 ```
 __test__/
-  _setup.sql                 ← Runs before all tests in this directory
+  _setup.sql                 ← Creates SAVEPOINT, runs fixtures
   test_a.sql
   test_b.sql
   integration/
-    _setup.sql               ← Additional setup for integration tests
+    _setup.sql               ← Nested SAVEPOINT for integration tests
     test_full_flow.sql
-  _teardown.sql              ← Runs after all tests
 ```
 
-Setup files execute in directory order (parent before child). Teardown files execute in reverse order.
+**Savepoint-based cleanup**: pgmi creates a `SAVEPOINT` before each `_setup.sql` and automatically rolls back after tests complete. No teardown scripts needed—PostgreSQL's transactional semantics handle cleanup.
 
 ### Pure PostgreSQL Testing
 
@@ -608,7 +606,7 @@ pgmi test ./myapp --database test_db --param test_user_id=123
 - Runs tests in a transaction with automatic rollback (no side effects)
 - Fails immediately on first test failure (PostgreSQL native fail-fast)
 - Output is PostgreSQL `RAISE NOTICE` messages (minimal pgmi abstraction)
-- Regex filtering automatically includes required setup/teardown scripts
+- Regex filtering automatically includes required `_setup.sql` fixtures
 
 **Typical workflow:**
 ```bash

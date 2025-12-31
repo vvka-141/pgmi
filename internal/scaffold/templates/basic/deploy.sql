@@ -74,9 +74,10 @@ BEGIN
     -- This ensures absolutely no side effects from test execution.
     --
     -- pgmi_plan_tests() automatically:
-    --   - Executes setup/test/teardown scripts in correct order
-    --   - Wraps each test in its own savepoint (nested within before_tests)
-    --   - Includes only ancestor setup/teardown needed for matching tests
+    --   - Creates SAVEPOINT before each _setup.sql (fixtures)
+    --   - Executes tests in correct order
+    --   - Rolls back to SAVEPOINT after tests (automatic cleanup)
+    --   - Includes only ancestor _setup.sql files needed for matching tests
     --
     -- Pattern Syntax: POSIX regular expressions (PostgreSQL ~ operator)
     --   • Use .* for "match anything" (not % like SQL LIKE)
