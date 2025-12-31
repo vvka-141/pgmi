@@ -28,7 +28,8 @@ Shell Completion:
 Exit Codes:
   0  - Success
   1  - General error (deployment or test failed)
-  2  - Panic or unexpected system error
+  2  - CLI usage error (invalid arguments or flags)
+  3  - Panic or unexpected system error
   10 - Invalid configuration or parameters
   11 - Database connection failed
   12 - User denied overwrite approval
@@ -50,9 +51,8 @@ func Execute() error {
 }
 
 func init() {
-	// Global flags can be added here
-	// No short flag for verbose to avoid conflict with potential -v for version
-	rootCmd.PersistentFlags().Bool("verbose", false, "Enable verbose output")
+	// Global flags - verbose applies to all commands
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output for all commands")
 }
 
 // getVerboseFlag safely retrieves the verbose flag value

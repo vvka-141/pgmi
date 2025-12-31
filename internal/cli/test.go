@@ -100,10 +100,13 @@ func init() {
 			"Example: postgresql://user:pass@localhost:5432/test_db")
 
 	// Granular connection flags (PostgreSQL standard)
+	// Precedence: flag > environment variable > default
 	testCmd.Flags().StringVar(&testHost, "host", "",
-		"PostgreSQL server host (default: localhost, or $PGHOST)")
+		"PostgreSQL server host\n"+
+			"Precedence: --host > $PGHOST > localhost")
 	testCmd.Flags().IntVarP(&testPort, "port", "p", 0,
-		"PostgreSQL server port (default: 5432, or $PGPORT)")
+		"PostgreSQL server port\n"+
+			"Precedence: --port > $PGPORT > 5432")
 	testCmd.Flags().StringVarP(&testUsername, "username", "U", "",
 		"PostgreSQL user (default: $PGUSER or current OS user)")
 	testCmd.Flags().StringVarP(&testDatabase, "database", "d", "",

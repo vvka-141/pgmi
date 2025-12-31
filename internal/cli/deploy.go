@@ -104,10 +104,13 @@ func init() {
 			"Example: postgresql://user:pass@localhost:5432/postgres")
 
 	// Granular connection flags (PostgreSQL standard)
+	// Precedence: flag > environment variable > default
 	deployCmd.Flags().StringVar(&deployHost, "host", "",
-		"PostgreSQL server host (default: localhost, or $PGHOST)")
+		"PostgreSQL server host\n"+
+			"Precedence: --host > $PGHOST > localhost")
 	deployCmd.Flags().IntVarP(&deployPort, "port", "p", 0,
-		"PostgreSQL server port (default: 5432, or $PGPORT)")
+		"PostgreSQL server port\n"+
+			"Precedence: --port > $PGPORT > 5432")
 	deployCmd.Flags().StringVarP(&deployUsername, "username", "U", "",
 		"PostgreSQL user (default: $PGUSER or current OS user)")
 	deployCmd.Flags().StringVarP(&deployDatabase, "database", "d", "",
@@ -128,9 +131,12 @@ func init() {
 
 	// Deployment workflow flags
 	deployCmd.Flags().BoolVar(&deployOverwrite, "overwrite", false,
-		"Drop and recreate the database (requires interactive confirmation unless --force is used)")
+		"Drop and recreate the database\n"+
+			"Requires interactive confirmation unless --force is used")
 	deployCmd.Flags().BoolVar(&deployForce, "force", false,
-		"Skip interactive approval prompt (use with --overwrite for automated pipelines)")
+		"Skip interactive approval prompt for destructive operations\n"+
+			"Only affects the confirmation dialog, not deployment behavior\n"+
+			"Use with --overwrite for CI/CD pipelines")
 
 	// Parameter flags
 	deployCmd.Flags().StringSliceVar(&deployParams, "param", nil,
@@ -141,9 +147,12 @@ func init() {
 		"Load parameters from .env files (can be specified multiple times)\n"+
 			"Later files override earlier ones, CLI --param overrides all")
 
-	// Timeout flag
+	// Timeout flag - catastrophic failure protection, not normal timeout control
 	deployCmd.Flags().DurationVar(&deployTimeout, "timeout", 3*time.Minute,
-		"Global timeout for deployment (default 3m)\n"+
+		"Catastrophic failure protection timeout (default 3m)\n"+
+			"Prevents indefinite hangs from network issues or deadlocks\n"+
+			"For query-level timeouts, use SET statement_timeout in SQL\n"+
+			"Production: Set based on expected deployment duration\n"+
 			"Examples: 30s, 5m, 1h30m")
 }
 

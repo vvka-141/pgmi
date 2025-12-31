@@ -3,12 +3,16 @@ package pgmi
 import "time"
 
 // Exit codes for semantic error classification.
-// These follow Unix conventions: 0=success, 1=general error, 2=panic.
-// Higher codes (10+) provide fine-grained error categorization.
+// These follow Unix/GNU conventions:
+//   - 0: Success
+//   - 1: General error
+//   - 2: CLI usage error (misuse of command line)
+//   - 3+: Application-specific errors
 const (
 	ExitSuccess          = 0  // Deployment/test completed successfully
 	ExitGeneralError     = 1  // Unknown or unclassified error
-	ExitPanic            = 2  // Internal panic (unexpected crash)
+	ExitUsageError       = 2  // CLI usage error (missing args, invalid flags)
+	ExitPanic            = 3  // Internal panic (unexpected crash)
 	ExitConfigError      = 10 // Invalid configuration or parameters
 	ExitConnectionError  = 11 // Failed to connect to database
 	ExitApprovalDenied   = 12 // User denied overwrite approval

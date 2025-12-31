@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -26,11 +27,14 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// printVersionInfo prints version information
+// printVersionInfo prints version information.
+// Version string goes to stdout for pipeline consumption.
+// Decorative content goes to stderr.
 func printVersionInfo() {
 	fmt.Fprintln(os.Stderr, asciiLogo)
 	fmt.Fprintln(os.Stderr)
-	fmt.Printf("pgmi %s (%s, %s)\n", version, commit, date)
+	// Machine-parseable version to stdout
+	fmt.Printf("pgmi %s (%s, %s) %s/%s\n", version, commit, date, runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintln(os.Stderr, "PostgreSQL deployment tool")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Repository: https://github.com/vvka-141/pgmi")
