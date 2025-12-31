@@ -330,20 +330,29 @@ Traditional workflow separates deployment from testing:
 pgmi enables a different pattern—tests run **inside** the deployment transaction:
 
 ```sql
--- deploy.sql: Deploy and verify in one transaction
-BEGIN;
+-- deploy.sql: Schedule deployment and tests in one transaction
+DO $$
+DECLARE
+    v_file RECORD;
+BEGIN
+    -- Schedule transaction start
+    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
--- Deploy all scripts
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
-LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
+    -- Schedule all scripts for execution
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    LOOP
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
 
--- Run all tests (still inside the same transaction)
-PERFORM pg_temp.pgmi_plan_tests();
+    -- Schedule tests (run inside the same transaction)
+    PERFORM pg_temp.pgmi_plan_tests();
 
-COMMIT;  -- Only reached if everything passes
+    -- Schedule commit (only reached if everything passes)
+    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+END $$;
 ```
+
+**Key insight**: The `pgmi_plan_*` functions don't execute immediately—they schedule commands for later execution. After `deploy.sql` completes, pgmi executes the plan sequentially. By scheduling `BEGIN` and `COMMIT` as commands, the actual file execution and tests run inside a single transaction.
 
 If any test fails, PostgreSQL raises an exception and the entire transaction rolls back. **Successful deployment implies functional verification.**
 
