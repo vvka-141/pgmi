@@ -287,9 +287,10 @@ END $$;
 DO $$
 DECLARE
     v_response api.mcp_response;
+    v_envelope jsonb;
     v_list jsonb;
 BEGIN
-    RAISE NOTICE '→ Testing MCP Protocol';
+    RAISE NOTICE '→ Testing MCP Protocol (JSON-RPC 2.0 Compliance)';
 
     -- Register test MCP handlers
     PERFORM api.create_or_replace_mcp_handler(
@@ -309,8 +310,7 @@ BEGIN
 BEGIN
     RETURN api.mcp_tool_result(
         jsonb_build_array(api.mcp_text('Tool executed successfully')),
-        (request).request_id,
-        false
+        (request).request_id
     );
 END;
         $body$
@@ -353,8 +353,8 @@ END;
         ),
         $body$
 BEGIN
-    RETURN (
-        jsonb_build_object('messages', jsonb_build_array(
+    RETURN api.mcp_prompt_result(
+        jsonb_build_array(
             jsonb_build_object(
                 'role', 'user',
                 'content', jsonb_build_object(
@@ -362,55 +362,82 @@ BEGIN
                     'text', 'Test prompt with input: ' || ((request).arguments->>'input')
                 )
             )
-        )),
+        ),
         (request).request_id
-    )::api.mcp_response;
+    );
 END;
         $body$
     );
 
     -- ========================================================================
-    -- Test: MCP Tool Invocation
+    -- Test: MCP Tool Invocation (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
     v_response := api.mcp_call_tool('test_tool', '{}'::jsonb, NULL, 'req-1');
+    v_envelope := (v_response).envelope;
 
-    IF (v_response).request_id != 'req-1' THEN
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP tool response missing jsonrpc 2.0';
+    END IF;
+
+    IF v_envelope->>'id' != 'req-1' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP tool request_id not echoed';
     END IF;
 
-    IF (v_response).result->'isError' = 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP test_tool returned error';
+    IF v_envelope->'result' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP test_tool missing result field';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP tool test_tool returns result';
+    IF v_envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP test_tool should not have error field';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP tool returns JSON-RPC 2.0 success response';
 
     -- ========================================================================
-    -- Test: MCP Tool Not Found
+    -- Test: MCP Tool Not Found (JSON-RPC 2.0 Error Format)
     -- ========================================================================
 
     v_response := api.mcp_call_tool('nonexistent_tool_xyz', '{}'::jsonb, NULL, 'req-2');
+    v_envelope := (v_response).envelope;
 
-    IF (v_response).result->'isError' != 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP nonexistent_tool_xyz should return error';
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error response missing jsonrpc 2.0';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP nonexistent tool returns error';
+    IF v_envelope->'error' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP nonexistent_tool_xyz should have error object';
+    END IF;
+
+    IF (v_envelope->'error'->>'code')::int != -32601 THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error should use code -32601 (Method not found)';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP nonexistent tool returns JSON-RPC 2.0 error';
 
     -- ========================================================================
-    -- Test: MCP Resource Read
+    -- Test: MCP Resource Read (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
     v_response := api.mcp_read_resource('test:///123', NULL, 'req-3');
+    v_envelope := (v_response).envelope;
 
-    IF (v_response).request_id != 'req-3' THEN
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP resource response missing jsonrpc 2.0';
+    END IF;
+
+    IF v_envelope->>'id' != 'req-3' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP resource request_id not echoed';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP resource read returns result';
+    IF v_envelope->'result'->'contents' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP resource missing contents in result';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP resource read returns JSON-RPC 2.0 success response';
 
     -- ========================================================================
-    -- Test: MCP Prompt
+    -- Test: MCP Prompt (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
     v_response := api.mcp_get_prompt(
@@ -419,16 +446,21 @@ END;
         NULL,
         'req-4'
     );
+    v_envelope := (v_response).envelope;
 
-    IF (v_response).request_id != 'req-4' THEN
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP prompt response missing jsonrpc 2.0';
+    END IF;
+
+    IF v_envelope->>'id' != 'req-4' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP prompt request_id not echoed';
     END IF;
 
-    IF (v_response).result->'messages' IS NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP prompt missing messages';
+    IF v_envelope->'result'->'messages' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP prompt missing messages in result';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP prompt returns messages';
+    RAISE NOTICE '  ✓ MCP prompt returns JSON-RPC 2.0 success response';
 
     -- ========================================================================
     -- Test: MCP Discovery Functions
@@ -476,7 +508,7 @@ END;
 
     RAISE NOTICE '  ✓ MCP list_prompts returns prompts array with test_prompt';
 
-    RAISE NOTICE '✓ MCP Protocol tests passed';
+    RAISE NOTICE '✓ MCP Protocol tests passed (JSON-RPC 2.0 compliant)';
 END $$;
 
 DO $$
@@ -529,7 +561,7 @@ END;
         ),
         $body$
 BEGIN
-    RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id, false);
+    RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id);
 END;
         $body$
     );

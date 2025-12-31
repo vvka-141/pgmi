@@ -249,11 +249,7 @@ BEGIN
     WHERE r.mcp_name = p_name AND r.mcp_type = 'tool';
 
     IF v_handler.handler_exec_sql IS NULL THEN
-        RETURN api.mcp_tool_result(
-            jsonb_build_array(api.mcp_text('Tool not found: ' || p_name)),
-            p_request_id,
-            true
-        );
+        RETURN api.mcp_error(-32601, 'Tool not found: ' || p_name, p_request_id);
     END IF;
 
     IF p_context IS NOT NULL THEN
@@ -265,12 +261,8 @@ BEGIN
         END IF;
     END IF;
 
-    IF v_handler.requires_auth AND current_setting('auth.user_id', true) IS NULL THEN
-        RETURN api.mcp_tool_result(
-            jsonb_build_array(api.mcp_text('Authentication required: user_id missing from context')),
-            p_request_id,
-            true
-        );
+    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
@@ -284,11 +276,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
-        RETURN api.mcp_tool_result(
-            jsonb_build_array(api.mcp_text('Error: ' || SQLERRM)),
-            p_request_id,
-            true
-        );
+        RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
 $$;
@@ -319,10 +307,7 @@ BEGIN
       AND p_uri ~ ('^' || regexp_replace(r.uri_template, '\{[^}]+\}', '[^/]+', 'g') || '$');
 
     IF v_handler.handler_exec_sql IS NULL THEN
-        RETURN api.mcp_resource_result(
-            jsonb_build_array(jsonb_build_object('uri', p_uri, 'text', 'Resource not found')),
-            p_request_id
-        );
+        RETURN api.mcp_error(-32601, 'Resource not found: ' || p_uri, p_request_id);
     END IF;
 
     IF p_context IS NOT NULL THEN
@@ -334,11 +319,8 @@ BEGIN
         END IF;
     END IF;
 
-    IF v_handler.requires_auth AND current_setting('auth.user_id', true) IS NULL THEN
-        RETURN api.mcp_resource_result(
-            jsonb_build_array(jsonb_build_object('uri', p_uri, 'text', 'Authentication required: user_id missing from context')),
-            p_request_id
-        );
+    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (NULL, p_uri, p_context, p_request_id)::api.mcp_request;
@@ -352,10 +334,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
-        RETURN api.mcp_resource_result(
-            jsonb_build_array(jsonb_build_object('uri', p_uri, 'text', 'Error: ' || SQLERRM)),
-            p_request_id
-        );
+        RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
 $$;
@@ -386,7 +365,7 @@ BEGIN
     WHERE r.mcp_name = p_name AND r.mcp_type = 'prompt';
 
     IF v_handler.handler_exec_sql IS NULL THEN
-        RETURN (jsonb_build_object('messages', jsonb_build_array()), p_request_id)::api.mcp_response;
+        RETURN api.mcp_error(-32601, 'Prompt not found: ' || p_name, p_request_id);
     END IF;
 
     IF p_context IS NOT NULL THEN
@@ -398,8 +377,8 @@ BEGIN
         END IF;
     END IF;
 
-    IF v_handler.requires_auth AND current_setting('auth.user_id', true) IS NULL THEN
-        RETURN (jsonb_build_object('messages', jsonb_build_array(), 'error', 'Authentication required: user_id missing from context'), p_request_id)::api.mcp_response;
+    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
@@ -413,7 +392,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
-        RETURN (jsonb_build_object('messages', jsonb_build_array()), p_request_id)::api.mcp_response;
+        RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
 $$;

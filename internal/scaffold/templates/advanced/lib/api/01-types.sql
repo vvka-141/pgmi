@@ -93,15 +93,14 @@ BEGIN
 END $$;
 
 -- ============================================================================
--- MCP Response Type
+-- MCP Response Type (JSON-RPC 2.0 Compliant)
 -- ============================================================================
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'mcp_response' AND typnamespace = 'api'::regnamespace) THEN
         CREATE TYPE api.mcp_response AS (
-            result jsonb,
-            request_id text
+            envelope jsonb
         );
     END IF;
 END $$;
@@ -112,5 +111,5 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.rpc_request - RPC request type (route_id, headers, content bytea)';
     RAISE NOTICE '  ✓ api.mcp_request - MCP request type (arguments, uri, context, request_id)';
     RAISE NOTICE '  ✓ api.http_response - unified HTTP response (status_code, headers, content bytea)';
-    RAISE NOTICE '  ✓ api.mcp_response - MCP response type (result, request_id)';
+    RAISE NOTICE '  ✓ api.mcp_response - MCP response type (JSON-RPC 2.0 envelope)';
 END $$;

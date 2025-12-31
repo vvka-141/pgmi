@@ -114,27 +114,32 @@ END;
     RAISE NOTICE '  ✓ RPC: Handler exception → JSON-RPC error code -32603';
 
     -- ========================================================================
-    -- Test: MCP tool error handling → isError: true
+    -- Test: MCP tool error handling → JSON-RPC 2.0 error object
     -- ========================================================================
 
     v_mcp_response := api.mcp_call_tool('test_error_tool', '{}'::jsonb, NULL, 'err-req-1');
 
-    IF (v_mcp_response).result->'isError' != 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP tool error should have isError=true';
+    IF (v_mcp_response).envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error should be JSON-RPC 2.0 format';
     END IF;
 
-    IF (v_mcp_response).request_id != 'err-req-1' THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP error should preserve request_id';
+    IF (v_mcp_response).envelope->'error' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP tool error should have error object';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM jsonb_array_elements((v_mcp_response).result->'content') AS c
-        WHERE c->>'text' LIKE '%Deliberate MCP test error%'
-    ) THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP tool error content should contain exception message';
+    IF (v_mcp_response).envelope->>'id' != 'err-req-1' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error should preserve request_id in envelope.id';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Handler exception → isError=true with error message';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int != -32603 THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP tool error code should be -32603, got %', (v_mcp_response).envelope->'error'->>'code';
+    END IF;
+
+    IF (v_mcp_response).envelope->'error'->>'message' NOT LIKE '%Deliberate MCP test error%' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP tool error message should contain exception text';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP: Handler exception → JSON-RPC 2.0 error with code -32603';
 
     RAISE NOTICE '✓ Gateway Error Handling tests passed';
 END $$;

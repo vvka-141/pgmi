@@ -161,8 +161,7 @@ BEGIN
             version(),
             current_user
         ))),
-        (request).request_id,
-        false
+        (request).request_id
     );
 END;
     $body$
@@ -237,8 +236,8 @@ BEGIN
     v_task := (request).arguments->>'task';
     v_tables := COALESCE((request).arguments->>'tables', 'any relevant tables');
 
-    RETURN (
-        jsonb_build_object('messages', jsonb_build_array(
+    RETURN api.mcp_prompt_result(
+        jsonb_build_array(
             jsonb_build_object(
                 'role', 'user',
                 'content', jsonb_build_object(
@@ -249,9 +248,9 @@ BEGIN
                     )
                 )
             )
-        )),
+        ),
         (request).request_id
-    )::api.mcp_response;
+    );
 END;
     $body$
 );

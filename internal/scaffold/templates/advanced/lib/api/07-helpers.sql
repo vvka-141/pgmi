@@ -228,20 +228,60 @@ BEGIN
 END $$;
 
 -- ============================================================================
--- MCP Response Builders
+-- MCP Response Builders (JSON-RPC 2.0 Compliant)
 -- ============================================================================
+
+CREATE OR REPLACE FUNCTION api.mcp_success(
+    result jsonb,
+    request_id text
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT ROW(
+        jsonb_build_object(
+            'jsonrpc', '2.0',
+            'id', request_id,
+            'result', result
+        )
+    )::api.mcp_response;
+$$;
+
+CREATE OR REPLACE FUNCTION api.mcp_error(
+    code integer,
+    message text,
+    request_id text,
+    data jsonb DEFAULT NULL
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT ROW(
+        jsonb_build_object(
+            'jsonrpc', '2.0',
+            'id', request_id,
+            'error', jsonb_strip_nulls(jsonb_build_object(
+                'code', code,
+                'message', message,
+                'data', data
+            ))
+        )
+    )::api.mcp_response;
+$$;
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     content jsonb,
-    request_id text,
-    is_error boolean DEFAULT false
+    request_id text
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT (
-        jsonb_build_object('content', content) ||
-        CASE WHEN is_error THEN jsonb_build_object('isError', true) ELSE '{}'::jsonb END,
+    SELECT api.mcp_success(
+        jsonb_build_object('content', content),
         request_id
-    )::api.mcp_response;
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION api.mcp_tool_error(
+    message text,
+    request_id text
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.mcp_error(-32603, message, request_id);
 $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
@@ -249,7 +289,37 @@ CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     request_id text
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT (jsonb_build_object('contents', contents), request_id)::api.mcp_response;
+    SELECT api.mcp_success(
+        jsonb_build_object('contents', contents),
+        request_id
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION api.mcp_resource_error(
+    message text,
+    request_id text
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.mcp_error(-32603, message, request_id);
+$$;
+
+CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
+    messages jsonb,
+    request_id text
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.mcp_success(
+        jsonb_build_object('messages', messages),
+        request_id
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION api.mcp_prompt_error(
+    message text,
+    request_id text
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.mcp_error(-32603, message, request_id);
 $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_text(content text)
@@ -258,17 +328,57 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT jsonb_build_object('type', 'text', 'text', content);
 $$;
 
--- Inline tests
+-- Inline tests for MCP response builders
 DO $$
 DECLARE
     v_response api.mcp_response;
+    v_envelope jsonb;
     v_text jsonb;
 BEGIN
-    v_response := api.mcp_tool_result('[{"type": "text", "text": "Hello"}]'::jsonb, 'req-1', false);
-    IF (v_response).request_id != 'req-1' THEN
-        RAISE EXCEPTION 'mcp_tool_result failed';
+    -- Test mcp_success
+    v_response := api.mcp_success('{"value": 42}'::jsonb, 'req-1');
+    v_envelope := (v_response).envelope;
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'mcp_success: missing jsonrpc 2.0';
+    END IF;
+    IF v_envelope->>'id' != 'req-1' THEN
+        RAISE EXCEPTION 'mcp_success: wrong id';
+    END IF;
+    IF v_envelope->'result' IS NULL THEN
+        RAISE EXCEPTION 'mcp_success: missing result';
     END IF;
 
+    -- Test mcp_error
+    v_response := api.mcp_error(-32603, 'Internal error', 'req-2');
+    v_envelope := (v_response).envelope;
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'mcp_error: missing jsonrpc 2.0';
+    END IF;
+    IF v_envelope->>'id' != 'req-2' THEN
+        RAISE EXCEPTION 'mcp_error: wrong id';
+    END IF;
+    IF (v_envelope->'error'->>'code')::int != -32603 THEN
+        RAISE EXCEPTION 'mcp_error: wrong error code';
+    END IF;
+
+    -- Test mcp_tool_result
+    v_response := api.mcp_tool_result('[{"type": "text", "text": "Hello"}]'::jsonb, 'req-3');
+    v_envelope := (v_response).envelope;
+    IF v_envelope->>'jsonrpc' != '2.0' THEN
+        RAISE EXCEPTION 'mcp_tool_result: missing jsonrpc 2.0';
+    END IF;
+    IF v_envelope->'result'->'content' IS NULL THEN
+        RAISE EXCEPTION 'mcp_tool_result: missing content in result';
+    END IF;
+
+    -- Test mcp_tool_error
+    v_response := api.mcp_tool_error('Tool failed', 'req-4');
+    v_envelope := (v_response).envelope;
+    IF v_envelope->'error' IS NULL THEN
+        RAISE EXCEPTION 'mcp_tool_error: missing error object';
+    END IF;
+
+    -- Test mcp_text helper
     v_text := api.mcp_text('Hello world');
     IF v_text->>'type' != 'text' OR v_text->>'text' != 'Hello world' THEN
         RAISE EXCEPTION 'mcp_text failed';
@@ -282,7 +392,10 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.json_response - JSON response builder';
     RAISE NOTICE '  ✓ api.problem_response - RFC 7807 error response';
     RAISE NOTICE '  ✓ api.jsonrpc_success/error - JSON-RPC 2.0 responses';
-    RAISE NOTICE '  ✓ api.mcp_tool_result/resource_result/text - MCP response builders';
+    RAISE NOTICE '  ✓ api.mcp_success/error - MCP JSON-RPC 2.0 base builders';
+    RAISE NOTICE '  ✓ api.mcp_tool_result/error - MCP tool response builders';
+    RAISE NOTICE '  ✓ api.mcp_resource_result/error - MCP resource response builders';
+    RAISE NOTICE '  ✓ api.mcp_prompt_result/error - MCP prompt response builders';
 END $$;
 
 -- ============================================================================

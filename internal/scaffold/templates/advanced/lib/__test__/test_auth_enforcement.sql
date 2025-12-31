@@ -64,8 +64,7 @@ END;
 BEGIN
     RETURN api.mcp_tool_result(
         jsonb_build_array(api.mcp_text('user_id: ' || current_setting('auth.user_id', true))),
-        (request).request_id,
-        false
+        (request).request_id
     );
 END;
         $body$
@@ -121,8 +120,7 @@ END;
 BEGIN
     RETURN api.mcp_tool_result(
         jsonb_build_array(api.mcp_text('public access')),
-        (request).request_id,
-        false
+        (request).request_id
     );
 END;
         $body$
@@ -244,13 +242,23 @@ END;
     -- Test: MCP protected tool rejects unauthenticated requests
     -- ========================================================================
 
+    -- Reset session auth variables from previous tests
+    PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    PERFORM set_config('auth.token', '', true);
+
     v_mcp_response := api.mcp_call_tool('test_protected_tool', '{}'::jsonb, NULL, 'req-1');
 
-    IF (v_mcp_response).result->'isError' != 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected MCP without context should return isError=true';
+    IF (v_mcp_response).envelope->'error' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: Protected MCP without context should return JSON-RPC error';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Protected tool returns isError without context.user_id';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int != -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: Protected MCP auth error should have code -32001, got %', (v_mcp_response).envelope->'error'->>'code';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP: Protected tool returns JSON-RPC error -32001 without context.user_id';
 
     -- ========================================================================
     -- Test: MCP protected tool accepts authenticated requests
@@ -263,12 +271,12 @@ END;
         'req-2'
     );
 
-    IF (v_mcp_response).result->'isError' = 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected MCP with context should succeed';
+    IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: Protected MCP with context should succeed, got error: %', (v_mcp_response).envelope->'error';
     END IF;
 
     IF NOT EXISTS (
-        SELECT 1 FROM jsonb_array_elements((v_mcp_response).result->'content') AS c
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'content') AS c
         WHERE c->>'text' LIKE '%user789%'
     ) THEN
         RAISE EXCEPTION 'TEST FAILED: MCP result should contain user_id from context';
@@ -282,8 +290,8 @@ END;
 
     v_mcp_response := api.mcp_call_tool('test_public_tool', '{}'::jsonb, NULL, 'req-3');
 
-    IF (v_mcp_response).result->'isError' = 'true'::jsonb THEN
-        RAISE EXCEPTION 'TEST FAILED: Public MCP tool should succeed without context';
+    IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: Public MCP tool should succeed without context, got error: %', (v_mcp_response).envelope->'error';
     END IF;
 
     RAISE NOTICE '  ✓ MCP: Public tool succeeds without auth';
