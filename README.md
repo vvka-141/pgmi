@@ -187,8 +187,8 @@ During deployment, your SQL files aren't on the filesystem (from PostgreSQL's pe
 For production projects, `pgmi init` scaffolds well-structured starting points:
 
 ```bash
-pgmi init myapp --template basic      # Simple structure
-pgmi init myapp --template advanced   # Metadata-driven deployment
+pgmi init myapp --template basic      # Simple structure, no metadata required
+pgmi init myapp --template advanced   # Metadata-driven deployment (see docs/METADATA.md)
 ```
 
 Templates provide proven patterns, but they're optional. You can always start with just `deploy.sql`.
@@ -434,6 +434,71 @@ pgmi test ./myapp -d test_db --list
 ```
 
 The `pgmi test` command runs tests in an isolated transaction with automatic rollback—useful for verification without re-deploying.
+
+---
+
+## 📋 Script Metadata (Optional)
+
+pgmi supports optional XML metadata blocks in SQL files for advanced deployment scenarios. **Metadata is not required**—the basic template works perfectly without it.
+
+### When You Don't Need Metadata
+
+For simple projects with linear migrations, path-based ordering works fine:
+
+```
+migrations/
+├── 001_users.sql      # Executes first (no metadata needed)
+├── 002_orders.sql     # Executes second
+└── 003_payments.sql   # Executes third
+```
+
+### When Metadata Helps
+
+Add metadata when you need:
+
+| Capability | What It Does |
+|------------|--------------|
+| **Path-independent identity** | Track scripts by UUID, not file path (survives renames) |
+| **Idempotency control** | Mark scripts as "run once" vs "always update" |
+| **Explicit ordering** | Override lexicographic path order with sort keys |
+| **Multi-phase execution** | Run the same script at different deployment stages |
+
+### Example
+
+```sql
+/*
+<pgmi-meta
+    id="550e8400-e29b-41d4-a716-446655440000"
+    idempotent="false">
+  <description>Add email column (one-time migration)</description>
+  <sortKeys>
+    <key>02-migrations/001</key>
+  </sortKeys>
+</pgmi-meta>
+*/
+
+ALTER TABLE users ADD COLUMN email TEXT;
+```
+
+This script:
+- Has a stable UUID identity (survives file renames)
+- Runs once and is skipped on subsequent deployments (`idempotent="false"`)
+- Executes in explicit order via sort key
+
+### CLI Commands
+
+```bash
+# Generate metadata for files that don't have it
+pgmi metadata scaffold ./myproject --write
+
+# Validate metadata syntax and check for conflicts
+pgmi metadata validate ./myproject
+
+# Preview execution order
+pgmi metadata plan ./myproject
+```
+
+**Full documentation**: [docs/METADATA.md](docs/METADATA.md)
 
 ---
 

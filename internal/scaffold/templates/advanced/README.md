@@ -210,6 +210,8 @@ END $$;
 
 ## Metadata-Driven Deployment
 
+The advanced template uses pgmi's optional metadata system for path-independent tracking, idempotency control, and explicit ordering. For a complete guide, see [docs/METADATA.md](https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md).
+
 Every script requires a `<pgmi-meta>` block:
 
 ```sql

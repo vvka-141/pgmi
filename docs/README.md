@@ -6,6 +6,7 @@ This directory contains all technical documentation, design notes, and planning 
 
 ### User Documentation
 - **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for new users
+- **[METADATA.md](METADATA.md)** - Script metadata guide (optional XML blocks for advanced deployments)
 - **[PARAMETERS.md](PARAMETERS.md)** - Parameter system documentation and usage
 - **[TESTING.md](TESTING.md)** - Testing philosophy and test writing guide
 
