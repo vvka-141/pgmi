@@ -150,14 +150,16 @@ $%s$ LANGUAGE plpgsql$sql$,
         object_id, handler_type, handler_func, handler_function_name,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
-        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name
+        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
+        description
     ) VALUES (
         v_id, 'rest', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
-        v_snapshot.language_name, v_snapshot.owner_name
+        v_snapshot.language_name, v_snapshot.owner_name,
+        v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -177,7 +179,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         leakproof = EXCLUDED.leakproof,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
-        owner_name = EXCLUDED.owner_name;
+        owner_name = EXCLUDED.owner_name,
+        description = EXCLUDED.description;
 
     INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log)
     VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log)
@@ -187,10 +190,6 @@ $%s$ LANGUAGE plpgsql$sql$,
         version_regexp = EXCLUDED.version_regexp,
         route_name = EXCLUDED.route_name,
         auto_log = EXCLUDED.auto_log;
-
-    IF v_description IS NOT NULL THEN
-        PERFORM core.set_attached_text(v_id, 'description', v_description);
-    END IF;
 END;
 $func$;
 
@@ -295,14 +294,16 @@ $%s$ LANGUAGE plpgsql$sql$,
         object_id, handler_type, handler_func, handler_function_name,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
-        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name
+        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
+        description
     ) VALUES (
         v_id, 'rpc', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
-        v_snapshot.language_name, v_snapshot.owner_name
+        v_snapshot.language_name, v_snapshot.owner_name,
+        v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -322,17 +323,14 @@ $%s$ LANGUAGE plpgsql$sql$,
         leakproof = EXCLUDED.leakproof,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
-        owner_name = EXCLUDED.owner_name;
+        owner_name = EXCLUDED.owner_name,
+        description = EXCLUDED.description;
 
     INSERT INTO api.rpc_route (handler_object_id, method_name, auto_log)
     VALUES (v_id, v_method_name, v_auto_log)
     ON CONFLICT (handler_object_id) DO UPDATE SET
         method_name = EXCLUDED.method_name,
         auto_log = EXCLUDED.auto_log;
-
-    IF v_description IS NOT NULL THEN
-        PERFORM core.set_attached_text(v_id, 'description', v_description);
-    END IF;
 END;
 $func$;
 
@@ -427,14 +425,16 @@ $%s$ LANGUAGE plpgsql$sql$,
         object_id, handler_type, handler_func, handler_function_name,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
-        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name
+        returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
+        description
     ) VALUES (
         v_id, v_handler_type, v_handler_oid::regprocedure, v_function_name,
         ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
-        v_snapshot.language_name, v_snapshot.owner_name
+        v_snapshot.language_name, v_snapshot.owner_name,
+        v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_type = EXCLUDED.handler_type,
@@ -452,7 +452,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         leakproof = EXCLUDED.leakproof,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
-        owner_name = EXCLUDED.owner_name;
+        owner_name = EXCLUDED.owner_name,
+        description = EXCLUDED.description;
 
     INSERT INTO api.mcp_route (handler_object_id, mcp_type, mcp_name, input_schema, uri_template, mime_type, arguments)
     VALUES (v_id, v_type, v_name, v_input_schema, v_uri_template, v_mime_type, v_arguments)
@@ -463,10 +464,6 @@ $%s$ LANGUAGE plpgsql$sql$,
         uri_template = EXCLUDED.uri_template,
         mime_type = EXCLUDED.mime_type,
         arguments = EXCLUDED.arguments;
-
-    IF v_description IS NOT NULL THEN
-        PERFORM core.set_attached_text(v_id, 'description', v_description);
-    END IF;
 END;
 $func$;
 

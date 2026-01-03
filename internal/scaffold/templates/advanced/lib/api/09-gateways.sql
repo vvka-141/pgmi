@@ -405,16 +405,17 @@ CREATE OR REPLACE FUNCTION api.mcp_list_tools()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, core, pg_temp
+SET search_path = api, pg_temp
 AS $$
     SELECT jsonb_build_object('tools', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', core.get_attached_text(r.handler_object_id, 'description'),
+            'description', h.description,
             'inputSchema', r.input_schema
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
+    JOIN api.handler h ON h.object_id = r.handler_object_id
     WHERE r.mcp_type = 'tool';
 $$;
 
@@ -422,17 +423,18 @@ CREATE OR REPLACE FUNCTION api.mcp_list_resources()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, core, pg_temp
+SET search_path = api, pg_temp
 AS $$
     SELECT jsonb_build_object('resources', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', core.get_attached_text(r.handler_object_id, 'description'),
+            'description', h.description,
             'uri', r.uri_template,
             'mimeType', r.mime_type
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
+    JOIN api.handler h ON h.object_id = r.handler_object_id
     WHERE r.mcp_type = 'resource';
 $$;
 
@@ -440,16 +442,17 @@ CREATE OR REPLACE FUNCTION api.mcp_list_prompts()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
-SET search_path = api, core, pg_temp
+SET search_path = api, pg_temp
 AS $$
     SELECT jsonb_build_object('prompts', COALESCE(jsonb_agg(
         jsonb_build_object(
             'name', r.mcp_name,
-            'description', core.get_attached_text(r.handler_object_id, 'description'),
+            'description', h.description,
             'arguments', r.arguments
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
+    JOIN api.handler h ON h.object_id = r.handler_object_id
     WHERE r.mcp_type = 'prompt';
 $$;
 
