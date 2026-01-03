@@ -14,11 +14,10 @@
 DO $$ BEGIN RAISE NOTICE '→ Installing handler registry'; END $$;
 
 -- ============================================================================
--- Handler Registry Table
+-- Handler Registry Table (inherits identity from core.entity)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS api.handler (
-    object_id uuid PRIMARY KEY,
     handler_type api.handler_type NOT NULL,
     handler_func regprocedure NOT NULL UNIQUE,
     handler_function_name text NOT NULL,
@@ -42,11 +41,87 @@ CREATE TABLE IF NOT EXISTS api.handler (
     language_name text NOT NULL,
     owner_name name NOT NULL,
 
-    description text,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
+    description text
+) INHERITS (core.entity);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'api.handler'::regclass AND contype = 'p'
+    ) THEN
+        ALTER TABLE api.handler ADD PRIMARY KEY (object_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
+
+-- ============================================================================
+-- Table and Column Documentation
+-- ============================================================================
+
+COMMENT ON TABLE api.handler IS
+    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as immutable snapshot. Inherits identity from core.entity.';
+
+COMMENT ON COLUMN api.handler.handler_type IS
+    'Protocol type: rest, rpc, mcp_tool, mcp_resource, mcp_prompt, queue';
+
+COMMENT ON COLUMN api.handler.handler_func IS
+    'OID reference to pg_proc (regprocedure). Used for function existence checks and introspection.';
+
+COMMENT ON COLUMN api.handler.handler_function_name IS
+    'Fully qualified function name (schema.function) for display and debugging.';
+
+COMMENT ON COLUMN api.handler.accepts IS
+    'MIME types this handler accepts. Default: */*';
+
+COMMENT ON COLUMN api.handler.produces IS
+    'MIME types this handler produces. Default: application/json';
+
+COMMENT ON COLUMN api.handler.response_headers IS
+    'Additional HTTP headers to include in responses (JSONB object).';
+
+COMMENT ON COLUMN api.handler.requires_auth IS
+    'Whether authentication is required before invocation.';
+
+COMMENT ON COLUMN api.handler.handler_exec_sql IS
+    'Executable SQL statement generated for handler invocation at runtime.';
+
+COMMENT ON COLUMN api.handler.handler_sql_submitted IS
+    'Original SQL submitted during registration (for debugging and auditing).';
+
+COMMENT ON COLUMN api.handler.handler_sql_canonical IS
+    'Canonicalized function definition from pg_get_functiondef() at registration time.';
+
+COMMENT ON COLUMN api.handler.def_hash IS
+    'SHA-256 hash of handler_sql_canonical. Used to detect definition drift.';
+
+COMMENT ON COLUMN api.handler.returns_type IS
+    'Return type OID from pg_proc snapshot (regtype).';
+
+COMMENT ON COLUMN api.handler.returns_set IS
+    'True if function returns SETOF (multiple rows).';
+
+COMMENT ON COLUMN api.handler.volatility IS
+    'Function volatility: immutable (deterministic), stable (reads DB), or volatile (may modify).';
+
+COMMENT ON COLUMN api.handler.parallel IS
+    'Parallel safety: safe (can run in parallel), restricted (leader only), or unsafe (not parallel safe).';
+
+COMMENT ON COLUMN api.handler.leakproof IS
+    'True if function is LEAKPROOF (no side-channel data leakage via errors or timing).';
+
+COMMENT ON COLUMN api.handler.security IS
+    'Execution context: definer (runs as function owner) or invoker (runs as calling user).';
+
+COMMENT ON COLUMN api.handler.language_name IS
+    'Implementation language: sql, plpgsql, plv8, etc.';
+
+COMMENT ON COLUMN api.handler.owner_name IS
+    'Role that owns the handler function.';
+
+COMMENT ON COLUMN api.handler.description IS
+    'Human-readable description (typically from pg_description or handler metadata).';
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.handler - central handler registry with pg_proc snapshot';
