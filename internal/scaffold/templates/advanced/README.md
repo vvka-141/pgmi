@@ -198,7 +198,7 @@ DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    v_response := api.rest_invoke('GET', '/my-endpoint', NULL, NULL);
+    v_response := api.rest_invoke('GET', '/my-endpoint', NULL, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Expected 200, got %', (v_response).status_code;

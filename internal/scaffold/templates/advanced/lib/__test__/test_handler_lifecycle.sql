@@ -40,7 +40,7 @@ END;
     RAISE NOTICE '  + Handler registered';
 
     -- Invoke handler
-    v_response := api.rest_invoke('GET', '/test-lifecycle', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-lifecycle', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Handler invocation failed: %', (v_response).status_code;
@@ -101,7 +101,7 @@ END;
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>application/json'::extensions.hstore,
-        NULL
+        NULL::bytea
     );
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Accept: application/json should return 200, got %', (v_response).status_code;
@@ -115,7 +115,7 @@ END;
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>*/*'::extensions.hstore,
-        NULL
+        NULL::bytea
     );
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Accept: */* should return 200, got %', (v_response).status_code;
@@ -129,7 +129,7 @@ END;
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>application/xml'::extensions.hstore,
-        NULL
+        NULL::bytea
     );
     IF (v_response).status_code != 406 THEN
         RAISE EXCEPTION 'Accept: application/xml should return 406, got %', (v_response).status_code;
@@ -140,7 +140,7 @@ END;
     -- Test: No Accept header -> 200 (no preference)
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-content-nego', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-content-nego', ''::extensions.hstore, NULL::bytea);
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'No Accept header should return 200, got %', (v_response).status_code;
     END IF;
@@ -153,7 +153,7 @@ END;
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         '"accept"=>"text/html, application/json, text/plain"'::extensions.hstore,
-        NULL
+        NULL::bytea
     );
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Accept with json in list should return 200, got %', (v_response).status_code;

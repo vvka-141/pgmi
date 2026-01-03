@@ -68,7 +68,7 @@ END;
     -- Test: REST error handling → 500 with error message
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-error-rest', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-error-rest', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 500 THEN
         RAISE EXCEPTION 'TEST FAILED: REST error should return 500, got %', (v_response).status_code;

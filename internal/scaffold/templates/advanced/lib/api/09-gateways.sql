@@ -138,6 +138,54 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION api.rest_invoke(
+    p_method text,
+    p_url text,
+    p_headers extensions.hstore,
+    p_content jsonb
+) RETURNS api.http_response
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_headers extensions.hstore;
+    v_content_bytes bytea;
+BEGIN
+    v_headers := COALESCE(p_headers, ''::extensions.hstore);
+
+    IF p_content IS NOT NULL THEN
+        IF NOT v_headers ? 'content-type' THEN
+            v_headers := v_headers || 'content-type=>application/json'::extensions.hstore;
+        END IF;
+        v_content_bytes := convert_to(p_content::text, 'UTF8');
+    END IF;
+
+    RETURN api.rest_invoke(p_method, p_url, v_headers, v_content_bytes);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION api.rest_invoke(
+    p_method text,
+    p_url text,
+    p_headers extensions.hstore,
+    p_content xml
+) RETURNS api.http_response
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_headers extensions.hstore;
+    v_content_bytes bytea;
+BEGIN
+    v_headers := COALESCE(p_headers, ''::extensions.hstore);
+
+    IF p_content IS NOT NULL THEN
+        IF NOT v_headers ? 'content-type' THEN
+            v_headers := v_headers || 'content-type=>application/xml'::extensions.hstore;
+        END IF;
+        v_content_bytes := convert_to(p_content::text, 'UTF8');
+    END IF;
+
+    RETURN api.rest_invoke(p_method, p_url, v_headers, v_content_bytes);
+END;
+$$;
+
 -- ============================================================================
 -- RPC Resolution
 -- ============================================================================
@@ -458,7 +506,9 @@ $$;
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.set_auth_context() - authentication header extraction';
-    RAISE NOTICE '  ✓ api.rest_invoke() - REST gateway with URL routing';
+    RAISE NOTICE '  ✓ api.rest_invoke(bytea) - REST gateway with URL routing';
+    RAISE NOTICE '  ✓ api.rest_invoke(jsonb) - REST overload for JSON content';
+    RAISE NOTICE '  ✓ api.rest_invoke(xml) - REST overload for XML content';
     RAISE NOTICE '  ✓ api.rpc_resolve() - RPC method name to UUID resolution';
     RAISE NOTICE '  ✓ api.rpc_invoke() - RPC gateway with UUID-based invocation';
     RAISE NOTICE '  ✓ api.mcp_call_tool() - MCP tool invocation';

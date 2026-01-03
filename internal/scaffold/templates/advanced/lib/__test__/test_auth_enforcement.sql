@@ -130,7 +130,7 @@ END;
     -- Test: REST protected handler rejects unauthenticated requests
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-protected-rest', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-protected-rest', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 401 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected REST without auth should return 401, got %', (v_response).status_code;
@@ -151,7 +151,7 @@ END;
         'GET',
         '/test-protected-rest',
         'x-user-id=>user123'::extensions.hstore,
-        NULL
+        NULL::bytea
     );
 
     IF (v_response).status_code != 200 THEN
@@ -169,7 +169,7 @@ END;
     -- Test: REST public handler accepts unauthenticated requests
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-public-rest', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-public-rest', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'TEST FAILED: Public REST should return 200, got %', (v_response).status_code;

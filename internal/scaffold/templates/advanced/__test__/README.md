@@ -27,7 +27,7 @@ Tests use pure PostgreSQL - no framework required:
 DO $$
 BEGIN
     -- Test your handler
-    IF (api.rest_invoke('GET', '/my-endpoint', NULL, NULL)).status_code != 200 THEN
+    IF (api.rest_invoke('GET', '/my-endpoint', NULL, NULL::bytea)).status_code != 200 THEN
         RAISE EXCEPTION 'Expected 200 OK';
     END IF;
 

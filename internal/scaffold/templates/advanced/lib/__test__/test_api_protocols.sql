@@ -76,7 +76,7 @@ END;
     -- Test: REST Hello World (without query params)
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-hello', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-hello', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello expected 200, got %', (v_response).status_code;
@@ -93,7 +93,7 @@ END;
     -- Test: REST Hello World (with query params)
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-hello?name=Claude', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-hello?name=Claude', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello?name=Claude expected 200, got %', (v_response).status_code;
@@ -132,7 +132,7 @@ END;
     -- Test: REST Health Check
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/test-health', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/test-health', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'TEST FAILED: REST /test-health expected 200, got %', (v_response).status_code;
@@ -149,7 +149,7 @@ END;
     -- Test: REST 404 Not Found
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/nonexistent-route-xyz', ''::extensions.hstore, NULL);
+    v_response := api.rest_invoke('GET', '/nonexistent-route-xyz', ''::extensions.hstore, NULL::bytea);
 
     IF (v_response).status_code != 404 THEN
         RAISE EXCEPTION 'TEST FAILED: REST /nonexistent-route-xyz expected 404, got %', (v_response).status_code;
