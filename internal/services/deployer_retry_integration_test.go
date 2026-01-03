@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/retry"
 )
 
@@ -265,31 +264,4 @@ func TestRetryExecutor_SuccessOnFirstAttempt(t *testing.T) {
 	}
 
 	t.Log("Success on first attempt (no retries needed)")
-}
-
-// mockConnector simulates a connector with configurable failure behavior
-type mockConnector struct {
-	failCount   int
-	failures    []error
-	callCount   int
-}
-
-func (m *mockConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
-	m.callCount++
-	if m.callCount <= m.failCount && len(m.failures) > 0 {
-		idx := m.callCount - 1
-		if idx >= len(m.failures) {
-			idx = len(m.failures) - 1
-		}
-		return nil, m.failures[idx]
-	}
-	return nil, nil // Simulate success (would return real pool in integration test)
-}
-
-// TestConnectorRetry_SimulatedFailures tests connector-level retry integration.
-func TestConnectorRetry_SimulatedFailures(t *testing.T) {
-	t.Skip("Skipping mock connector test - retry logic is tested in StandardConnector")
-
-	// This test demonstrates how retry logic would work at the connector level
-	// The actual StandardConnector now has built-in retry via retry.Executor
 }

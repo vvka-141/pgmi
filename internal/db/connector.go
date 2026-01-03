@@ -107,7 +107,7 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	case pgmi.AuthMethodAWSIAM:
 		return nil, fmt.Errorf("AWS IAM authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodGoogleIAM:
-		return nil, fmt.Errorf("Google Cloud IAM authentication: %w", pgmi.ErrNotImplemented)
+		return nil, fmt.Errorf("google cloud IAM authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodAzureEntraID:
 		return newAzureConnector(config)
 	default:

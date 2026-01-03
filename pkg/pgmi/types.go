@@ -67,12 +67,12 @@ func (c *DeploymentConfig) Validate() error {
 
 	// Force requires Overwrite to be set
 	if c.Force && !c.Overwrite {
-		errs = append(errs, fmt.Errorf("Force flag requires Overwrite to be enabled: %w", ErrInvalidConfig))
+		errs = append(errs, fmt.Errorf("force flag requires overwrite to be enabled: %w", ErrInvalidConfig))
 	}
 
 	// Validate timeout if set
 	if c.Timeout < 0 {
-		errs = append(errs, fmt.Errorf("Timeout cannot be negative: %w", ErrInvalidConfig))
+		errs = append(errs, fmt.Errorf("timeout cannot be negative: %w", ErrInvalidConfig))
 	}
 
 	return errors.Join(errs...)

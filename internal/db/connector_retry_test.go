@@ -10,20 +10,6 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// mockRetryExecutor simulates retry behavior for testing
-type mockRetryExecutor struct {
-	attempts int
-	err      error
-}
-
-func (m *mockRetryExecutor) Execute(ctx context.Context, op func(ctx context.Context) error) error {
-	m.attempts++
-	if m.err != nil {
-		return m.err
-	}
-	return op(ctx)
-}
-
 func TestStandardConnector_RetryConfiguration(t *testing.T) {
 	config := &pgmi.ConnectionConfig{
 		Host:     "localhost",
