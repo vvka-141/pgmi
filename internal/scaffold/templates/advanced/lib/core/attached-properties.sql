@@ -147,3 +147,200 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ core.set_attached_text() - upsert helper';
     RAISE NOTICE '  ✓ core.get_attached_text() - retrieval helper';
 END $$;
+
+-- ============================================================================
+-- Core Entity Views
+-- ============================================================================
+
+DO $$ BEGIN RAISE NOTICE '→ Installing core entity views'; END $$;
+
+-- ============================================================================
+-- Power-User Analysis View
+-- ============================================================================
+
+CREATE OR REPLACE VIEW core.vw_entity_info AS
+SELECT
+    e.object_id,
+    e.created_at,
+    now() - e.created_at AS age,
+
+    e.tableoid::regclass::text AS actual_table,
+    split_part(e.tableoid::regclass::text, '.', 1) AS schema_name,
+    split_part(e.tableoid::regclass::text, '.', 2) AS table_name,
+
+    EXISTS (
+        SELECT 1 FROM pg_inherits i
+        WHERE i.inhrelid = e.tableoid
+        AND i.inhparent = 'core.managed_entity'::regclass
+    ) AS is_managed,
+
+    (SELECT m.deleted_at
+     FROM core.managed_entity m
+     WHERE m.object_id = e.object_id) AS deleted_at,
+
+    (SELECT m.deleted_at IS NOT NULL
+     FROM core.managed_entity m
+     WHERE m.object_id = e.object_id) AS is_deleted,
+
+    (SELECT count(*)::int
+     FROM core.attached_property ap
+     WHERE ap.weakref_object_id = e.object_id) AS attached_count
+
+FROM core.entity e;
+
+COMMENT ON VIEW core.vw_entity_info IS
+    'Power-user analysis view for all entities. Shows lifecycle age, actual table (via tableoid), managed status, deletion state, and attached properties count.';
+
+-- ============================================================================
+-- Statistics View (GROUPING SETS)
+-- ============================================================================
+
+CREATE OR REPLACE VIEW core.vw_entity_stats AS
+WITH entity_base AS (
+    SELECT
+        e.object_id,
+        e.tableoid::regclass::text AS actual_table,
+        split_part(e.tableoid::regclass::text, '.', 1) AS schema_name,
+        EXISTS (
+            SELECT 1 FROM pg_inherits i
+            WHERE i.inhrelid = e.tableoid
+            AND i.inhparent = 'core.managed_entity'::regclass
+        ) AS is_managed,
+        (SELECT m.deleted_at IS NOT NULL
+         FROM core.managed_entity m
+         WHERE m.object_id = e.object_id) AS is_deleted,
+        EXISTS (
+            SELECT 1 FROM core.attached_property ap
+            WHERE ap.weakref_object_id = e.object_id
+        ) AS has_attached
+    FROM core.entity e
+)
+SELECT
+    actual_table,
+    schema_name,
+    is_managed,
+    is_deleted,
+    has_attached,
+    count(*) AS entity_count,
+
+    GROUPING(actual_table) AS _grp_table,
+    GROUPING(schema_name) AS _grp_schema,
+    GROUPING(is_managed) AS _grp_managed,
+    GROUPING(is_deleted) AS _grp_deleted,
+    GROUPING(has_attached) AS _grp_attached
+FROM entity_base
+GROUP BY GROUPING SETS (
+    (),
+    (actual_table),
+    (schema_name),
+    (is_managed),
+    (is_deleted),
+    (has_attached),
+    (schema_name, is_managed),
+    (actual_table, is_deleted),
+    (is_managed, is_deleted)
+);
+
+COMMENT ON VIEW core.vw_entity_stats IS
+    'Multi-dimensional entity statistics using GROUPING SETS. Use _grp_* columns to identify aggregation level (1=aggregated, 0=specific value).';
+
+-- ============================================================================
+-- Summary Dashboard View (single row)
+-- ============================================================================
+
+CREATE OR REPLACE VIEW core.vw_entity_summary AS
+SELECT
+    count(*) AS total_entities,
+    count(DISTINCT e.tableoid) AS distinct_types,
+
+    count(*) FILTER (WHERE EXISTS (
+        SELECT 1 FROM pg_inherits i
+        WHERE i.inhrelid = e.tableoid
+        AND i.inhparent = 'core.managed_entity'::regclass
+    )) AS managed_entities,
+
+    count(*) FILTER (WHERE EXISTS (
+        SELECT 1 FROM core.managed_entity m
+        WHERE m.object_id = e.object_id AND m.deleted_at IS NOT NULL
+    )) AS deleted_entities,
+
+    count(*) FILTER (WHERE EXISTS (
+        SELECT 1 FROM core.attached_property ap
+        WHERE ap.weakref_object_id = e.object_id
+    )) AS entities_with_attached,
+
+    (SELECT count(*) FROM core.attached_property)::bigint AS total_attached_properties,
+
+    min(e.created_at) AS oldest_entity_at,
+    max(e.created_at) AS newest_entity_at
+
+FROM core.entity e;
+
+COMMENT ON VIEW core.vw_entity_summary IS
+    'Single-row dashboard showing entity counts by type, managed status, deletion state, and attached properties.';
+
+-- ============================================================================
+-- Attached Properties Statistics View
+-- ============================================================================
+
+CREATE OR REPLACE VIEW core.vw_attached_stats AS
+WITH attached_base AS (
+    SELECT
+        e.tableoid::regclass::text AS entity_table,
+        split_part(e.tableoid::regclass::text, '.', 1) AS entity_schema,
+        ap.tableoid::regclass::text AS property_table,
+        ap.attribute_name
+    FROM core.attached_property ap
+    JOIN core.entity e ON e.object_id = ap.weakref_object_id
+)
+SELECT
+    entity_table,
+    entity_schema,
+    property_table,
+    attribute_name,
+    count(*) AS property_count,
+
+    GROUPING(entity_table) AS _grp_entity_table,
+    GROUPING(entity_schema) AS _grp_entity_schema,
+    GROUPING(property_table) AS _grp_property_table,
+    GROUPING(attribute_name) AS _grp_attribute
+FROM attached_base
+GROUP BY GROUPING SETS (
+    (),
+    (entity_table),
+    (entity_schema),
+    (property_table),
+    (attribute_name),
+    (entity_table, attribute_name),
+    (entity_schema, property_table),
+    (property_table, attribute_name)
+);
+
+COMMENT ON VIEW core.vw_attached_stats IS
+    'Multi-dimensional attached properties statistics. Shows property distribution by entity type, property type, and attribute name.';
+
+DO $$ BEGIN
+    RAISE NOTICE '  ✓ core.vw_entity_info - power-user analysis view';
+    RAISE NOTICE '  ✓ core.vw_entity_stats - multi-dimensional statistics';
+    RAISE NOTICE '  ✓ core.vw_entity_summary - dashboard summary';
+    RAISE NOTICE '  ✓ core.vw_attached_stats - attached properties statistics';
+END $$;
+
+-- ============================================================================
+-- Grant Permissions on Views
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
+    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+BEGIN
+    EXECUTE format('GRANT SELECT ON core.vw_entity_info TO %I', v_api_role);
+    EXECUTE format('GRANT SELECT ON core.vw_entity_stats TO %I', v_api_role);
+    EXECUTE format('GRANT SELECT ON core.vw_entity_summary TO %I', v_api_role);
+    EXECUTE format('GRANT SELECT ON core.vw_attached_stats TO %I', v_api_role);
+    EXECUTE format('GRANT SELECT ON core.vw_entity_info TO %I', v_admin_role);
+    EXECUTE format('GRANT SELECT ON core.vw_entity_stats TO %I', v_admin_role);
+    EXECUTE format('GRANT SELECT ON core.vw_entity_summary TO %I', v_admin_role);
+    EXECUTE format('GRANT SELECT ON core.vw_attached_stats TO %I', v_admin_role);
+END $$;

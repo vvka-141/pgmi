@@ -3,18 +3,18 @@
     id="a7f01000-0002-4000-8000-000000000002"
     idempotent="true">
   <description>
-    Handler views: analysis, statistics, and summary views for api.handler
+    API schema views: analysis, statistics, and summary views for handlers and routes
   </description>
   <sortKeys>
-    <key>004/005/100</key>
+    <key>004/010</key>
   </sortKeys>
 </pgmi-meta>
 */
 
-DO $$ BEGIN RAISE NOTICE '→ Installing handler views'; END $$;
+DO $$ BEGIN RAISE NOTICE '→ Installing API views'; END $$;
 
 -- ============================================================================
--- Power-User Analysis View
+-- Handler Analysis View
 -- ============================================================================
 
 CREATE OR REPLACE VIEW api.vw_handler_info AS
@@ -69,7 +69,7 @@ COMMENT ON VIEW api.vw_handler_info IS
     'Power-user analysis view for handlers. Includes lifecycle age, health checks (function_exists, definition_drifted), route bindings, and attached properties indicator.';
 
 -- ============================================================================
--- Statistics View (GROUPING SETS)
+-- Handler Statistics View (GROUPING SETS)
 -- ============================================================================
 
 CREATE OR REPLACE VIEW api.vw_handler_stats AS
@@ -106,7 +106,7 @@ COMMENT ON VIEW api.vw_handler_stats IS
     'Multi-dimensional handler statistics using GROUPING SETS. Use _grp_* columns to identify aggregation level (1=aggregated, 0=specific value).';
 
 -- ============================================================================
--- Summary Dashboard View (single row)
+-- Handler Summary Dashboard View (single row)
 -- ============================================================================
 
 CREATE OR REPLACE VIEW api.vw_handler_summary AS
