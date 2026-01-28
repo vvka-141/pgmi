@@ -1,6 +1,6 @@
 # {{PROJECT_NAME}}
 
-A minimal PostgreSQL deployment project powered by [pgmi](https://github.com/pgmi/pgmi).
+A minimal PostgreSQL deployment project powered by [pgmi](https://github.com/vvka-141/pgmi).
 
 ## Quick Start
 
@@ -159,10 +159,6 @@ The advanced template includes:
 
 ## Learn More
 
-- [pgmi Documentation](https://github.com/pgmi/pgmi)
-- [Template Parameters Guide](https://github.com/pgmi/pgmi/docs/parameters.md)
-- [Session Tables Reference](https://github.com/pgmi/pgmi/docs/session-tables.md)
-
----
-
-**Happy deploying!** Remember: pgmi gives you PostgreSQL superpowers—you write the SQL, you control the logic.
+- [pgmi Documentation](https://github.com/vvka-141/pgmi)
+- [Session API Reference](https://github.com/vvka-141/pgmi/blob/main/docs/session-api.md)
+- [Metadata Guide](https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md)
