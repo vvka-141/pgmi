@@ -59,11 +59,6 @@ brew tap vvka-141/pgmi
 brew install pgmi
 ```
 
-### Windows (Chocolatey)
-```powershell
-choco install pgmi
-```
-
 ### Debian/Ubuntu (APT)
 ```bash
 # Add repository (one-time)
@@ -73,16 +68,26 @@ curl -1sLf 'https://dl.cloudsmith.io/vvka-141/pgmi/setup.deb.sh' | sudo bash
 sudo apt update && sudo apt install pgmi
 ```
 
-### Direct Download
+### Windows
+Download the latest release from [GitHub Releases](https://github.com/vvka-141/pgmi/releases):
+1. Download `pgmi_<version>_windows_amd64.zip`
+2. Extract to a directory (e.g., `C:\Tools`)
+3. Add the directory to your PATH
+
+Or install with Go (requires Go 1.22+):
+```powershell
+go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+```
+
+### Direct Download (Linux/macOS)
 ```bash
-# Linux/macOS
 curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
 
 # Or download from GitHub Releases
 # https://github.com/vvka-141/pgmi/releases
 ```
 
-### From Source
+### From Source (All Platforms)
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
 ```
@@ -787,12 +792,11 @@ pgmi deploy ./migrations \
 
 ## 📦 Distribution
 
-pgmi is available through multiple package managers:
+pgmi is available through multiple channels:
 - **Homebrew** (macOS/Linux): `brew install vvka-141/pgmi/pgmi`
 - **APT** (Debian/Ubuntu): via Cloudsmith repository
-- **Chocolatey** (Windows): `choco install pgmi`
-- **Direct download**: Prebuilt binaries from GitHub Releases
-- **Go module**: `go install github.com/vvka-141/pgmi/cmd/pgmi@latest`
+- **Windows**: Download from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) or use `go install`
+- **From source**: `go install github.com/vvka-141/pgmi/cmd/pgmi@latest` (requires Go 1.22+)
 
 ---
 

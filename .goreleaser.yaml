@@ -88,9 +88,9 @@ release:
     sudo apt install pgmi
     ```
 
-    **Windows (Chocolatey):**
+    **Windows:** Download from the table below, or install with Go:
     ```
-    choco install pgmi
+    go install github.com/vvka-141/pgmi/cmd/pgmi@latest
     ```
 
     **Manual download:** grab the archive for your platform from the assets below.
