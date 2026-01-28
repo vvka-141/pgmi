@@ -47,6 +47,19 @@ checksum:
 
 changelog:
   sort: asc
+  use: github
+  groups:
+    - title: New Features
+      regexp: '^.*?feat(\(.+\))?\!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\(.+\))?\!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))?\!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
   filters:
     exclude:
       - '^docs:'
@@ -60,7 +73,55 @@ release:
     name: pgmi
   draft: false
   prerelease: auto
-  name_template: "{{.Tag}}"
+  name_template: "pgmi {{.Tag}}"
+  header: |
+    ## Quick Install
+
+    **macOS / Linux (Homebrew):**
+    ```
+    brew install vvka-141/pgmi/pgmi
+    ```
+
+    **Debian / Ubuntu (APT):**
+    ```
+    curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
+    sudo apt install pgmi
+    ```
+
+    **Windows (Chocolatey):**
+    ```
+    choco install pgmi
+    ```
+
+    **Manual download:** grab the archive for your platform from the assets below.
+
+    | Platform | amd64 | arm64 |
+    |----------|-------|-------|
+    | Linux | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_linux_amd64.tar.gz) | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_linux_arm64.tar.gz) |
+    | macOS | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_amd64.tar.gz) | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_arm64.tar.gz) |
+    | Windows | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_amd64.zip) | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_arm64.zip) |
+
+    **Install manually after download:**
+
+    Linux / macOS:
+    ```
+    tar xzf pgmi_*.tar.gz && sudo mv pgmi /usr/local/bin/
+    ```
+
+    Windows (PowerShell as Admin):
+    ```
+    Expand-Archive pgmi_*.zip -DestinationPath C:\Tools
+    # Add C:\Tools to your PATH if not already present
+    ```
+
+  footer: |
+    ---
+    **Verify download integrity:**
+    ```
+    sha256sum -c checksums.txt
+    ```
+
+    **Full changelog**: https://github.com/vvka-141/pgmi/compare/{{ .PreviousTag }}...{{ .Tag }}
 
 brews:
   - name: pgmi
@@ -79,14 +140,6 @@ brews:
       bin.install "pgmi"
     test: |
       system "#{bin}/pgmi", "--version"
-
-# Chocolatey disabled for now - requires Windows runner or choco CLI on Linux
-# chocolateys:
-#   - name: pgmi
-#     owners: vvka-141
-#     authors: Alexey Evlampiev
-#     ...
-#     api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
 
 nfpms:
   - id: pgmi
