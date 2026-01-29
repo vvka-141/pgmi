@@ -95,12 +95,16 @@ END $$;
 ```
 {{PROJECT_NAME}}/
 ├── deploy.sql                      # Controls execution order and logic
+├── pgmi.yaml                       # Project configuration (connection defaults, parameters)
 ├── migrations/
 │   └── 001_hello_world.sql        # Creates hello_world() function
 ├── __test__/
 │   └── test_hello_world.sql       # Validates the function works
 └── README.md                       # This file
 ```
+
+### pgmi.yaml
+Project configuration. Stores connection defaults (database name) and parameters so you can deploy with `pgmi deploy .` instead of passing flags every time. Edit to change the target database or add default parameters. See [Configuration Reference](https://github.com/vvka-141/pgmi/blob/main/docs/CONFIGURATION.md).
 
 ### deploy.sql
 The orchestrator. This file decides:

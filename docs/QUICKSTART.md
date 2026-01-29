@@ -59,6 +59,8 @@ The repository includes an example project you can use to test pgmi:
 ./bin/pgmi init my-project --template basic
 ```
 
+This generates a `pgmi.yaml` with connection defaults, enabling `pgmi deploy .` with no extra flags.
+
 2. **Customize your project:**
 - Edit `my-project/deploy.sql` to implement deployment logic
 - Add SQL files to `my-project/migrations/`
@@ -74,7 +76,8 @@ The repository includes an example project you can use to test pgmi:
 ```
 my-project/
 ├── deploy.sql              # Your deployment orchestrator
-└── migrations/           # Your SQL files
+├── pgmi.yaml               # Project configuration (connection defaults, parameters)
+└── migrations/             # Your SQL files
     ├── 001_create_users.sql
     └── 002_create_posts.sql
 ```

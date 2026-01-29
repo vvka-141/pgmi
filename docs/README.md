@@ -2,6 +2,7 @@
 
 ## User Documentation
 - **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for new users
+- **[CONFIGURATION.md](CONFIGURATION.md)** - Project configuration (pgmi.yaml) reference
 - **[METADATA.md](METADATA.md)** - Script metadata guide (optional XML blocks for advanced deployments)
 - **[session-api.md](session-api.md)** - Session tables and helper functions reference
 - **[TESTING.md](TESTING.md)** - Testing philosophy and test writing guide

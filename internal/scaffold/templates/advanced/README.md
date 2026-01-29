@@ -118,6 +118,7 @@ myproject/
 │   └── examples.sql          # Starting point - modify/replace this
 ├── __test__/                 # YOUR TESTS
 ├── deploy.sql                # Deployment orchestrator
+├── pgmi.yaml                 # Project configuration (connection, params, timeout)
 ├── init.sql                  # Infrastructure bootstrap (roles, schemas)
 └── README.md
 ```
