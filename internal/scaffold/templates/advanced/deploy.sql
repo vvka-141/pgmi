@@ -21,6 +21,20 @@
 -- ============================================================================
 
 
+DO $$
+BEGIN
+    IF current_setting('server_version_num')::int < 160000 THEN
+        RAISE WARNING $msg$
+════════════════════════════════════════════════════════════════════════
+  PostgreSQL % detected. This template targets PostgreSQL 16+.
+  Some SQL features may not be available on your server version.
+  If deployment fails, review the error and adjust the SQL to match
+  your PostgreSQL version. See: https://www.postgresql.org/docs/release/
+════════════════════════════════════════════════════════════════════════
+$msg$, current_setting('server_version');
+    END IF;
+END $$;
+
 SELECT pg_temp.pgmi_plan_command($$
     BEGIN;
     SELECT pg_temp.provision();

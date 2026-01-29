@@ -20,6 +20,20 @@
 --   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
 -- ============================================================================
 
+DO $$
+BEGIN
+    IF current_setting('server_version_num')::int < 160000 THEN
+        RAISE WARNING $msg$
+════════════════════════════════════════════════════════════════════════
+  PostgreSQL % detected. This template targets PostgreSQL 16+.
+  Some SQL features may not be available on your server version.
+  If deployment fails, review the error and adjust the SQL to match
+  your PostgreSQL version. See: https://www.postgresql.org/docs/release/
+════════════════════════════════════════════════════════════════════════
+$msg$, current_setting('server_version');
+    END IF;
+END $$;
+
 -- STEP 1: Declare parameters with defaults and type validation
 -- Parameters are automatically available as PostgreSQL session variables
 -- with the 'pgmi.' namespace prefix (no manual initialization needed).
