@@ -46,7 +46,7 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		Host:             "localhost",
 		Port:             5432,
 		Database:         "postgres",
-		SSLMode:          "prefer",
+		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
 	}
@@ -109,7 +109,7 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 		Host:             "localhost",
 		Port:             5432,
 		Database:         "postgres",
-		SSLMode:          "prefer",
+		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
 	}
