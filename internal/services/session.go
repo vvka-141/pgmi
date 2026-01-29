@@ -69,6 +69,7 @@ func (sm *SessionManager) PrepareSession(
 	connConfig *pgmi.ConnectionConfig,
 	sourcePath string,
 	parameters map[string]string,
+	verbose bool,
 ) (*pgmi.Session, error) {
 	// Scan and validate source files
 	scanResult, err := sm.scanAndValidateFiles(sourcePath)
@@ -88,6 +89,14 @@ func (sm *SessionManager) PrepareSession(
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
+	}
+
+	if verbose {
+		if _, err := conn.Exec(ctx, "SET client_min_messages = 'debug'"); err != nil {
+			conn.Release()
+			pool.Close()
+			return nil, fmt.Errorf("failed to set client_min_messages: %w", err)
+		}
 	}
 
 	// Prepare session (utility functions, files, params, unittest framework)

@@ -97,7 +97,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
 	targetConfig := *connConfig
 	targetConfig.Database = config.DatabaseName
-	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters)
+	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
@@ -396,7 +396,7 @@ func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestCo
 	s.logger.Info("Initializing test session...")
 	targetConfig := *connConfig
 	targetConfig.Database = config.DatabaseName
-	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters)
+	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
