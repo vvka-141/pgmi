@@ -34,6 +34,16 @@ function Write-Err     { param([string]$Msg) Write-Host "[-] $Msg" -ForegroundCo
 
 function Test-Command { param([string]$Name) $null -ne (Get-Command $Name -ErrorAction SilentlyContinue) }
 
+function Invoke-Native {
+    param([string]$Command, [string[]]$Args)
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & $Command @Args 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevPref
+    return [PSCustomObject]@{ Output = $output.Trim(); ExitCode = $code }
+}
+
 function Test-WingetAvailable {
     try { winget --version | Out-Null; return $true } catch { return $false }
 }
@@ -68,13 +78,11 @@ function Assert-Wsl2 {
     Write-Status "Checking WSL2 availability..."
 
     if (Test-Command "wsl") {
-        try {
-            $wslOutput = wsl --status 2>&1 | Out-String
-            if ($LASTEXITCODE -eq 0 -or $wslOutput -match "WSL|Default") {
-                Write-Ok "WSL2 is available."
-                return
-            }
-        } catch {}
+        $r = Invoke-Native "wsl" "--status"
+        if ($r.ExitCode -eq 0 -or $r.Output -match "WSL|Default") {
+            Write-Ok "WSL2 is available."
+            return
+        }
     }
 
     Write-Err "WSL2 is not installed or not functional. Both Docker Desktop and Rancher Desktop require WSL2."
@@ -141,8 +149,8 @@ function Assert-ContainerRuntime {
     Refresh-Path
 
     if (Test-Command "docker") {
-        $dockerCheck = docker info 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $r = Invoke-Native "docker" "info"
+        if ($r.ExitCode -eq 0) {
             Write-Ok "Docker CLI is functional."
             return
         }
@@ -213,8 +221,8 @@ function Assert-Pgmi {
     }
 
     Write-Status "Installing pgmi via go install..."
-    go install "$PgmiRepo"
-    if ($LASTEXITCODE -ne 0) {
+    $r = Invoke-Native "go" @("install", $PgmiRepo)
+    if ($r.ExitCode -ne 0) {
         Write-Err "Failed to install pgmi. Check Go and Git are working, then retry."
         exit 1
     }
@@ -245,34 +253,35 @@ function Assert-PostgresContainer {
         New-Item -ItemType Directory -Path $DataVolumePath -Force | Out-Null
     }
 
-    $existing = docker ps -a --filter "name=^${ContainerName}$" --format "{{.Status}}" 2>&1
-    if ($existing) {
-        if ($existing -like "Up*") {
+    $r = Invoke-Native "docker" @("ps", "-a", "--filter", "name=^${ContainerName}$", "--format", "{{.Status}}")
+    if ($r.Output) {
+        if ($r.Output -like "Up*") {
             Write-Ok "Container '$ContainerName' is already running."
         } else {
             Write-Status "Starting existing container '$ContainerName'..."
-            docker start $ContainerName | Out-Null
+            $null = Invoke-Native "docker" @("start", $ContainerName)
             Write-Ok "Container '$ContainerName' started."
         }
     } else {
         Write-Status "Pulling image $PostgresImage..."
-        docker pull $PostgresImage
-        if ($LASTEXITCODE -ne 0) {
+        $r = Invoke-Native "docker" @("pull", $PostgresImage)
+        if ($r.ExitCode -ne 0) {
             Write-Err "Failed to pull image. Check your internet connection and Docker login."
             exit 1
         }
 
         Write-Status "Creating container '$ContainerName'..."
-        docker run -d `
-            --name $ContainerName `
-            -e POSTGRES_USER=$PostgresUser `
-            -e POSTGRES_PASSWORD=$PostgresPassword `
-            -p "${PostgresPort}:5432" `
-            -v "${DataVolumePath}:/var/lib/postgresql/data" `
-            --restart unless-stopped `
+        $r = Invoke-Native "docker" @(
+            "run", "-d",
+            "--name", $ContainerName,
+            "-e", "POSTGRES_USER=$PostgresUser",
+            "-e", "POSTGRES_PASSWORD=$PostgresPassword",
+            "-p", "${PostgresPort}:5432",
+            "-v", "${DataVolumePath}:/var/lib/postgresql/data",
+            "--restart", "unless-stopped",
             $PostgresImage
-
-        if ($LASTEXITCODE -ne 0) {
+        )
+        if ($r.ExitCode -ne 0) {
             Write-Err "Failed to create container."
             exit 1
         }
@@ -282,8 +291,8 @@ function Assert-PostgresContainer {
     Write-Status "Waiting for PostgreSQL to accept connections..."
     $maxAttempts = 30
     for ($i = 1; $i -le $maxAttempts; $i++) {
-        $result = docker exec $ContainerName pg_isready -U $PostgresUser 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $r = Invoke-Native "docker" @("exec", $ContainerName, "pg_isready", "-U", $PostgresUser)
+        if ($r.ExitCode -eq 0) {
             Write-Ok "PostgreSQL is ready."
             return
         }

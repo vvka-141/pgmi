@@ -137,8 +137,8 @@ BEGIN
     -- Grant owner role to current user (allows SET ROLE to owner)
     -- INHERIT FALSE prevents cross-database interference
     -- SET TRUE allows switching to this role via SET ROLE
-    EXECUTE format('GRANT %I TO CURRENT_USER WITH INHERIT FALSE, SET TRUE', v_owner_role);
-    RAISE DEBUG '  ✓ Granted % to % (INHERIT FALSE, SET TRUE)', v_owner_role, CURRENT_USER;
+    EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
+    RAISE DEBUG '  ✓ Granted % to %', v_owner_role, CURRENT_USER;
 
     -- Create admin and API roles (LOGIN roles require superuser privileges)
     -- These must be created BEFORE SET ROLE since only superuser can create LOGIN roles
@@ -167,12 +167,8 @@ BEGIN
     );
 
     -- Grant owner to admin (INHERIT TRUE for automatic permissions)
-    EXECUTE format(
-        'GRANT %I TO %I WITH INHERIT TRUE',
-        v_owner_role,
-        v_admin_role
-    );
-    RAISE NOTICE '  ✓ Granted % to % (INHERIT TRUE)', v_owner_role, v_admin_role;
+    EXECUTE format('GRANT %I TO %I', v_owner_role, v_admin_role);
+    RAISE NOTICE '  ✓ Granted % to %', v_owner_role, v_admin_role;
 
     -- Create API role (LOGIN)
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_api_role) THEN
