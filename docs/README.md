@@ -6,6 +6,7 @@
 - **[session-api.md](session-api.md)** - Session tables and helper functions reference
 - **[TESTING.md](TESTING.md)** - Testing philosophy and test writing guide
 - **[retry-timeout-behavior.md](retry-timeout-behavior.md)** - Retry logic and timeout behavior
+- **[SECURITY.md](SECURITY.md)** - Security model, threat vectors, and CI/CD pipeline patterns
 
 ## Archive
 The `archive/` directory contains historical development notes and design decisions.

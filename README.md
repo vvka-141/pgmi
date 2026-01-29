@@ -765,10 +765,27 @@ pgmi deploy ./migrations \
 
 ---
 
-## 🛡️ Handling Secrets
-- Secrets are passed via `--param` and stored in session-scoped tables.
-- pgmi never logs or persists parameter values.
-- Best practice: use secrets transiently, avoid logging or persisting them.
+## 🛡️ Security & Secrets
+
+pgmi is designed for secure parameter handling in CI/CD pipelines:
+
+- **No secret leakage** — pgmi logs parameter counts only, never keys or values, even in `--verbose` mode
+- **Parameterized queries** — all database operations use `$1`/`$2` placeholders, eliminating SQL injection
+- **Session-scoped** — parameters exist only in temporary tables and session variables that vanish when the connection closes
+- **`--params-file` support** — load secrets from `.env` files to avoid process list exposure (`/proc/<pid>/cmdline`)
+
+**Recommended pipeline pattern:**
+```bash
+cat > "$RUNNER_TEMP/params.env" <<EOF
+db_admin_password=$DB_ADMIN_PASSWORD
+api_key=$API_KEY
+EOF
+
+pgmi deploy ./migrations -d myapp --params-file "$RUNNER_TEMP/params.env"
+rm -f "$RUNNER_TEMP/params.env"
+```
+
+For the full security model, threat analysis, PostgreSQL server hardening advice, and CI/CD examples (GitHub Actions, GitLab CI), see the **[Security Guide](docs/SECURITY.md)**.
 
 ---
 
