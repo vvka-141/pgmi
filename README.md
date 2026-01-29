@@ -675,7 +675,7 @@ pgmi test ./myapp --database test_db --param test_user_id=123
 - Executes ONLY test files from `__test__/` directories
 - Runs tests in a transaction with automatic rollback (no side effects)
 - Fails immediately on first test failure (PostgreSQL native fail-fast)
-- Output is PostgreSQL `RAISE NOTICE` messages (minimal pgmi abstraction)
+- Output is PostgreSQL `RAISE NOTICE` messages (minimal pgmi abstraction); use `--verbose` to also see `RAISE DEBUG`
 - Regex filtering automatically includes required `_setup.sql` fixtures
 
 **Typical workflow:**

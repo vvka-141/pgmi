@@ -22,6 +22,7 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 │     pg_temp.pgmi_plan        ← Empty execution queue                     │
 │     pg_temp.pgmi_plan_view   ← Pre-computed execution plan view          │
 │                                                                          │
+│     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG) │
 │     Also creates helper functions: pgmi_plan_command(), pgmi_plan_file() │
 └────────────────────────────────────────────────┬────────────────────────┘
                                                  │

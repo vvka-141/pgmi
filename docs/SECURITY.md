@@ -22,7 +22,9 @@ Every database operation uses **parameterized queries** (`$1`, `$2` placeholders
 
 ## What pgmi Logs
 
-pgmi logs **parameter counts only**, never keys or values — even in `--verbose` mode:
+pgmi logs **parameter counts only**, never keys or values — even in `--verbose` mode.
+
+Note: `--verbose` also sets `client_min_messages = 'debug'` on the PostgreSQL session, which enables `RAISE DEBUG` output from SQL scripts. Ensure your SQL scripts do not leak secrets via `RAISE DEBUG`.
 
 ```
 ✓ Loaded 3 parameters into pg_temp.pgmi_parameter
