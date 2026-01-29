@@ -57,10 +57,11 @@ func TestResolveConnectionParams_PartialEnvVars(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config, maintenanceDB, err := ResolveConnectionParams(
-				"",                   // no connection string
-				&GranularConnFlags{}, // no flags
-				nil,                  // no Azure flags
+				"",
+				&GranularConnFlags{},
+				nil,
 				tt.envVars,
+				nil,
 			)
 
 			if err != nil {
@@ -75,7 +76,6 @@ func TestResolveConnectionParams_PartialEnvVars(t *testing.T) {
 				t.Errorf("Port = %d, want %d", config.Port, tt.wantPort)
 			}
 
-			// Username may be OS user, so only check if we expect a specific value
 			if tt.wantUser != "" && config.Username != tt.wantUser {
 				t.Errorf("Username = %q, want %q", config.Username, tt.wantUser)
 			}
@@ -123,10 +123,11 @@ func TestResolveConnectionParams_SSLModePrecedence(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config, _, err := ResolveConnectionParams(
-				"",       // no connection string
+				"",
 				tt.flags,
-				nil,      // no Azure flags
+				nil,
 				tt.envVars,
+				nil,
 			)
 
 			if err != nil {
@@ -184,7 +185,7 @@ func TestResolveConnectionParams_DatabaseURL_Precedence(t *testing.T) {
 				DATABASE_URL: tt.databaseURL,
 			}
 
-			config, _, err := ResolveConnectionParams(tt.connStr, tt.flags, nil, envVars)
+			config, _, err := ResolveConnectionParams(tt.connStr, tt.flags, nil, envVars, nil)
 
 			if tt.expectError {
 				if err == nil {
@@ -211,6 +212,7 @@ func TestResolveConnectionParams_EmptyDatabaseInConnectionString(t *testing.T) {
 		&GranularConnFlags{},
 		nil,
 		&EnvVars{},
+		nil,
 	)
 
 	if err != nil {
@@ -275,10 +277,11 @@ func TestResolveConnectionParams_PGPORTEdgeCases(t *testing.T) {
 			}
 
 			config, _, err := ResolveConnectionParams(
-				"",                   // no connection string
-				&GranularConnFlags{}, // no flags
-				nil,                  // no Azure flags
+				"",
+				&GranularConnFlags{},
+				nil,
 				envVars,
+				nil,
 			)
 
 			if tt.expectError {
@@ -310,6 +313,7 @@ func TestResolveConnectionParams_PasswordFromEnvOnly(t *testing.T) {
 		&GranularConnFlags{},
 		nil,
 		envVars,
+		nil,
 	)
 
 	if err != nil {
@@ -356,6 +360,7 @@ func TestResolveConnectionParams_MaintenanceDatabaseDifference(t *testing.T) {
 				tt.flags,
 				nil,
 				&EnvVars{},
+				nil,
 			)
 
 			if err != nil {

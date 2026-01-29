@@ -10,6 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
@@ -166,11 +167,14 @@ func init() {
 // Returns:
 //   - Fully configured DeploymentConfig ready for deployment
 //   - Error if configuration is invalid
-func buildDeploymentConfig(sourcePath string, verbose bool) (pgmi.DeploymentConfig, error) {
-	// Load .env file if it exists (silent fail if not present)
+func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.DeploymentConfig, error) {
 	_ = godotenv.Load()
 
-	// Resolve connection parameters
+	projectCfg, err := config.Load(sourcePath)
+	if err != nil {
+		return pgmi.DeploymentConfig{}, fmt.Errorf("failed to load pgmi.yaml: %w", err)
+	}
+
 	granularFlags := &db.GranularConnFlags{
 		Host:     deployHost,
 		Port:     deployPort,
@@ -184,7 +188,7 @@ func buildDeploymentConfig(sourcePath string, verbose bool) (pgmi.DeploymentConf
 		ClientID: deployAzureClientID,
 	}
 
-	connConfig, maintenanceDB, err := resolveConnection(deployConnection, granularFlags, azureFlags, verbose)
+	connConfig, maintenanceDB, err := resolveConnection(deployConnection, granularFlags, azureFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
@@ -231,19 +235,36 @@ func buildDeploymentConfig(sourcePath string, verbose bool) (pgmi.DeploymentConf
 		parameters = fileParams
 	}
 
-	// Parse CLI parameters (these override file parameters)
+	// Merge pgmi.yaml params (file params < pgmi.yaml params < CLI params)
+	if projectCfg != nil {
+		for k, v := range projectCfg.Params {
+			if _, exists := parameters[k]; !exists {
+				parameters[k] = v
+			}
+		}
+	}
+
 	cliParams, err := params.ParseKeyValuePairs(deployParams)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, fmt.Errorf("invalid parameter format: %w", err)
 	}
 
-	// Merge CLI params into file params (CLI takes precedence)
 	for k, v := range cliParams {
 		parameters[k] = v
 	}
 
 	if verbose && len(cliParams) > 0 {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParams))
+	}
+
+	// Apply timeout from pgmi.yaml if --timeout wasn't explicitly set
+	timeout := deployTimeout
+	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
+		parsed, parseErr := time.ParseDuration(projectCfg.Timeout)
+		if parseErr != nil {
+			return pgmi.DeploymentConfig{}, fmt.Errorf("invalid timeout in pgmi.yaml: %w", parseErr)
+		}
+		timeout = parsed
 	}
 
 	// Build connection string for deployment
@@ -258,7 +279,7 @@ func buildDeploymentConfig(sourcePath string, verbose bool) (pgmi.DeploymentConf
 		Overwrite:           deployOverwrite,
 		Force:               deployForce,
 		Parameters:          parameters,
-		Timeout:             deployTimeout,
+		Timeout:             timeout,
 		Verbose:             verbose,
 		AuthMethod:          connConfig.AuthMethod,
 		AzureTenantID:       connConfig.AzureTenantID,
@@ -273,8 +294,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
 
-	// Build deployment configuration
-	config, err := buildDeploymentConfig(sourcePath, verbose)
+	config, err := buildDeploymentConfig(cmd, sourcePath, verbose)
 	if err != nil {
 		return err
 	}

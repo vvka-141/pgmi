@@ -1,0 +1,10 @@
+connection:
+  host: localhost
+  port: 5432
+  database: {{PROJECT_NAME}}
+  sslmode: prefer
+
+params:
+  env: development
+
+timeout: 5m

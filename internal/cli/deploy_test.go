@@ -242,7 +242,7 @@ func TestBuildDeploymentConfig(t *testing.T) {
 			tt.setupFlags()
 
 			// Build deployment config
-			config, err := buildDeploymentConfig(tt.sourcePath, tt.verbose)
+			config, err := buildDeploymentConfig(deployCmd, tt.sourcePath, tt.verbose)
 
 			// Check error expectations
 			if (err != nil) != tt.wantErr {
@@ -327,7 +327,7 @@ api_key=file_secret
 	deployTimeout = 3 * time.Minute
 
 	// Build config
-	config, err := buildDeploymentConfig(tempDir, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 			resetDeployFlags()
 			tt.setupFlags()
 
-			_, err := buildDeploymentConfig(tempDir, false)
+			_, err := buildDeploymentConfig(deployCmd, tempDir, false)
 
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -466,7 +466,7 @@ func TestBuildDeploymentConfig_Validate(t *testing.T) {
 	deployParamsFiles = nil
 	deployTimeout = 3 * time.Minute
 
-	config, err := buildDeploymentConfig(tempDir, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}

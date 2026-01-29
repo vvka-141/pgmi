@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -19,23 +20,22 @@ func resolveConnection(
 	connStringFlag string,
 	granularFlags *db.GranularConnFlags,
 	azureFlags *db.AzureFlags,
+	projectConfig *config.ProjectConfig,
 	verbose bool,
 ) (*pgmi.ConnectionConfig, string, error) {
-	// Check for PGMI_CONNECTION_STRING environment variable if flag not provided
 	connString := connStringFlag
 	if connString == "" {
 		connString = os.Getenv("PGMI_CONNECTION_STRING")
 	}
 
-	// Load environment variables
 	envVars := db.LoadFromEnvironment()
 
-	// Resolve connection parameters using the db package resolver
 	connConfig, maintenanceDB, err := db.ResolveConnectionParams(
 		connString,
 		granularFlags,
 		azureFlags,
 		envVars,
+		projectConfig,
 	)
 	if err != nil {
 		return nil, "", err

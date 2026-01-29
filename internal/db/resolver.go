@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -110,6 +111,7 @@ func ResolveConnectionParams(
 	granularFlags *GranularConnFlags,
 	azureFlags *AzureFlags,
 	envVars *EnvVars,
+	projectConfig *config.ProjectConfig,
 ) (*pgmi.ConnectionConfig, string, error) {
 	// Validate inputs
 	if granularFlags == nil {
@@ -145,7 +147,7 @@ func ResolveConnectionParams(
 		config, maintenanceDB, err = resolveFromConnectionString(envVars.DATABASE_URL, envVars)
 	} else {
 		// Path 3: Granular flags + environment variables with precedence
-		config, maintenanceDB, err = resolveFromGranularParams(granularFlags, envVars)
+		config, maintenanceDB, err = resolveFromGranularParams(granularFlags, envVars, projectConfig)
 	}
 
 	if err != nil {
@@ -233,74 +235,87 @@ func resolveFromConnectionString(connStr string, envVars *EnvVars) (*pgmi.Connec
 func resolveFromGranularParams(
 	flags *GranularConnFlags,
 	envVars *EnvVars,
+	projectConfig *config.ProjectConfig,
 ) (*pgmi.ConnectionConfig, string, error) {
-	config := &pgmi.ConnectionConfig{
+	cfg := &pgmi.ConnectionConfig{
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
 	}
 
-	// Host: flag > PGHOST > default
-	config.Host = flags.Host
-	if config.Host == "" {
-		config.Host = envVars.PGHOST
-	}
-	if config.Host == "" {
-		config.Host = "localhost"
+	var pc config.ConnectionConfig
+	if projectConfig != nil {
+		pc = projectConfig.Connection
 	}
 
-	// Port: flag > PGPORT > default
+	// Host: flag > PGHOST > pgmi.yaml > default
+	cfg.Host = flags.Host
+	if cfg.Host == "" {
+		cfg.Host = envVars.PGHOST
+	}
+	if cfg.Host == "" {
+		cfg.Host = pc.Host
+	}
+	if cfg.Host == "" {
+		cfg.Host = "localhost"
+	}
+
+	// Port: flag > PGPORT > pgmi.yaml > default
 	if flags.Port != 0 {
-		config.Port = flags.Port
+		cfg.Port = flags.Port
 	} else if envVars.PGPORT != "" {
 		port, err := strconv.Atoi(envVars.PGPORT)
 		if err != nil {
 			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer", envVars.PGPORT)
 		}
-		config.Port = port
+		cfg.Port = port
+	} else if pc.Port != 0 {
+		cfg.Port = pc.Port
 	} else {
-		config.Port = 5432
+		cfg.Port = 5432
 	}
 
-	// Username: flag > PGUSER > current OS user
-	config.Username = flags.Username
-	if config.Username == "" {
-		config.Username = envVars.PGUSER
+	// Username: flag > PGUSER > pgmi.yaml > current OS user
+	cfg.Username = flags.Username
+	if cfg.Username == "" {
+		cfg.Username = envVars.PGUSER
 	}
-	if config.Username == "" {
-		// Fallback to current OS user (PostgreSQL default behavior)
+	if cfg.Username == "" {
+		cfg.Username = pc.Username
+	}
+	if cfg.Username == "" {
 		if currentUser := os.Getenv("USER"); currentUser != "" {
-			config.Username = currentUser
+			cfg.Username = currentUser
 		} else if currentUser := os.Getenv("USERNAME"); currentUser != "" {
-			config.Username = currentUser
+			cfg.Username = currentUser
 		}
 	}
 
-	// Password: PGPASSWORD environment variable only
-	// Note: No CLI flag for security reasons. Use:
-	//   1. $PGPASSWORD environment variable
-	//   2. .pgpass file (PostgreSQL standard)
-	//   3. Peer authentication
-	config.Password = envVars.PGPASSWORD
+	cfg.Password = envVars.PGPASSWORD
 
-	// Database: flag > PGDATABASE
-	// Note: Will be validated as required at CLI layer
-	config.Database = flags.Database
-	if config.Database == "" {
-		config.Database = envVars.PGDATABASE
+	// Database: flag > PGDATABASE > pgmi.yaml
+	cfg.Database = flags.Database
+	if cfg.Database == "" {
+		cfg.Database = envVars.PGDATABASE
+	}
+	if cfg.Database == "" {
+		cfg.Database = pc.Database
 	}
 
-	// SSLMode: flag > PGSSLMODE > default
-	config.SSLMode = flags.SSLMode
-	if config.SSLMode == "" {
-		config.SSLMode = envVars.PGSSLMODE
+	// SSLMode: flag > PGSSLMODE > pgmi.yaml > default
+	cfg.SSLMode = flags.SSLMode
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = envVars.PGSSLMODE
 	}
-	if config.SSLMode == "" {
-		config.SSLMode = "prefer"
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = pc.SSLMode
+	}
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = "prefer"
 	}
 
 	// For granular parameters, maintenance database is always "postgres"
 	// This is the standard database used for CREATE DATABASE operations
 	maintenanceDB := pgmi.DefaultManagementDB // "postgres"
 
-	return config, maintenanceDB, nil
+	return cfg, maintenanceDB, nil
 }

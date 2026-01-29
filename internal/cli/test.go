@@ -7,6 +7,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
@@ -143,10 +144,13 @@ func init() {
 //   - Fully configured TestConfig ready for test execution
 //   - Error if configuration is invalid
 func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
-	// Load .env file if it exists (silent fail if not present)
 	_ = godotenv.Load()
 
-	// Resolve connection parameters
+	projectCfg, err := config.Load(sourcePath)
+	if err != nil {
+		return pgmi.TestConfig{}, fmt.Errorf("failed to load pgmi.yaml: %w", err)
+	}
+
 	granularFlags := &db.GranularConnFlags{
 		Host:     testHost,
 		Port:     testPort,
@@ -160,7 +164,7 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 		ClientID: testAzureClientID,
 	}
 
-	connConfig, _, err := resolveConnection(testConnection, granularFlags, azureFlags, verbose)
+	connConfig, _, err := resolveConnection(testConnection, granularFlags, azureFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.TestConfig{}, err
 	}
@@ -204,13 +208,20 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 		parameters = fileParams
 	}
 
-	// Parse CLI parameters (these override file parameters)
+	// Merge pgmi.yaml params (file params < pgmi.yaml params < CLI params)
+	if projectCfg != nil {
+		for k, v := range projectCfg.Params {
+			if _, exists := parameters[k]; !exists {
+				parameters[k] = v
+			}
+		}
+	}
+
 	cliParams, err := params.ParseKeyValuePairs(testParams)
 	if err != nil {
 		return pgmi.TestConfig{}, fmt.Errorf("invalid parameter format: %w", err)
 	}
 
-	// Merge CLI params into file params (CLI takes precedence)
 	for k, v := range cliParams {
 		parameters[k] = v
 	}

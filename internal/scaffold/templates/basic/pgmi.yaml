@@ -1,0 +1,5 @@
+connection:
+  database: {{PROJECT_NAME}}
+
+params:
+  env: development

@@ -3,6 +3,8 @@ package db
 import (
 	"os"
 	"testing"
+
+	"github.com/vvka-141/pgmi/internal/config"
 )
 
 func TestGranularConnFlags_IsEmpty(t *testing.T) {
@@ -174,7 +176,7 @@ func TestResolveConnectionParams_ConflictDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			envVars := &EnvVars{}
-			_, _, err := ResolveConnectionParams(tt.connString, tt.granularFlags, nil, envVars)
+			_, _, err := ResolveConnectionParams(tt.connString, tt.granularFlags, nil, envVars, nil)
 
 			if tt.wantError && err == nil {
 				t.Error("expected error but got nil")
@@ -237,6 +239,7 @@ func TestResolveConnectionParams_FromConnectionString(t *testing.T) {
 				&GranularConnFlags{},
 				nil,
 				&EnvVars{},
+				nil,
 			)
 
 			if tt.wantError {
@@ -337,7 +340,7 @@ func TestResolveConnectionParams_FromGranularFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars)
+			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -408,7 +411,7 @@ func TestResolveConnectionParams_DatabaseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars)
+			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -432,7 +435,7 @@ func TestResolveConnectionParams_InvalidPGPORT(t *testing.T) {
 		PGPORT: "not-a-number",
 	}
 
-	_, _, err := ResolveConnectionParams("", flags, nil, envVars)
+	_, _, err := ResolveConnectionParams("", flags, nil, envVars, nil)
 	if err == nil {
 		t.Error("expected error for invalid PGPORT, got nil")
 	}
@@ -440,7 +443,7 @@ func TestResolveConnectionParams_InvalidPGPORT(t *testing.T) {
 
 func TestResolveConnectionParams_NilInputs(t *testing.T) {
 	// Should not panic with nil inputs
-	config, maintenanceDB, err := ResolveConnectionParams("", nil, nil, nil)
+	config, maintenanceDB, err := ResolveConnectionParams("", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -471,7 +474,7 @@ func TestResolveConnectionParams_Precedence(t *testing.T) {
 		PGUSER: "envuser", // Should be used (no flag)
 	}
 
-	config, _, err := ResolveConnectionParams("", flags, nil, envVars)
+	config, _, err := ResolveConnectionParams("", flags, nil, envVars, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -485,4 +488,72 @@ func TestResolveConnectionParams_Precedence(t *testing.T) {
 	if config.Username != "envuser" {
 		t.Errorf("Username = %s, want envuser (from env var)", config.Username)
 	}
+}
+
+func TestResolveConnectionParams_ProjectConfig(t *testing.T) {
+	pc := &config.ProjectConfig{
+		Connection: config.ConnectionConfig{
+			Host:     "yamlhost",
+			Port:     5434,
+			Username: "yamluser",
+			Database: "yamldb",
+			SSLMode:  "require",
+		},
+	}
+
+	t.Run("project config used when no flags or env vars", func(t *testing.T) {
+		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, &EnvVars{}, pc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Host != "yamlhost" {
+			t.Errorf("Host = %s, want yamlhost", cfg.Host)
+		}
+		if cfg.Port != 5434 {
+			t.Errorf("Port = %d, want 5434", cfg.Port)
+		}
+		if cfg.Username != "yamluser" {
+			t.Errorf("Username = %s, want yamluser", cfg.Username)
+		}
+		if cfg.Database != "yamldb" {
+			t.Errorf("Database = %s, want yamldb", cfg.Database)
+		}
+		if cfg.SSLMode != "require" {
+			t.Errorf("SSLMode = %s, want require", cfg.SSLMode)
+		}
+	})
+
+	t.Run("env vars override project config", func(t *testing.T) {
+		envVars := &EnvVars{
+			PGHOST: "envhost",
+			PGPORT: "5433",
+		}
+		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, envVars, pc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Host != "envhost" {
+			t.Errorf("Host = %s, want envhost", cfg.Host)
+		}
+		if cfg.Port != 5433 {
+			t.Errorf("Port = %d, want 5433", cfg.Port)
+		}
+		if cfg.Username != "yamluser" {
+			t.Errorf("Username = %s, want yamluser (from project config)", cfg.Username)
+		}
+	})
+
+	t.Run("flags override project config and env vars", func(t *testing.T) {
+		flags := &GranularConnFlags{Host: "flaghost"}
+		cfg, _, err := ResolveConnectionParams("", flags, nil, &EnvVars{}, pc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Host != "flaghost" {
+			t.Errorf("Host = %s, want flaghost", cfg.Host)
+		}
+		if cfg.Port != 5434 {
+			t.Errorf("Port = %d, want 5434 (from project config)", cfg.Port)
+		}
+	})
 }

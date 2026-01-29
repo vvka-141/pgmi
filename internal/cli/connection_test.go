@@ -228,7 +228,7 @@ func TestResolveConnection_WithEnvironment(t *testing.T) {
 				os.Unsetenv("PGMI_CONNECTION_STRING")
 			}
 
-			connConfig, _, err := resolveConnection(tt.connStringFlag, tt.granularFlags, nil, false)
+			connConfig, _, err := resolveConnection(tt.connStringFlag, tt.granularFlags, nil, nil, false)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
@@ -304,7 +304,7 @@ func TestResolveConnection_GranularFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			connConfig, _, err := resolveConnection("", tt.granularFlags, nil, false)
+			connConfig, _, err := resolveConnection("", tt.granularFlags, nil, nil, false)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
