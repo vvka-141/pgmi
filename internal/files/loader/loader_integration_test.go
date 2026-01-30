@@ -2,6 +2,7 @@ package loader_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -258,5 +259,290 @@ func TestLoadFilesIntoSession_WithMetadata(t *testing.T) {
 
 	if metaCount != 1 {
 		t.Errorf("Expected 1 metadata row, got %d", metaCount)
+	}
+}
+
+func TestLoadFilesIntoSession_VerifyContent(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_content"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	l := loader.NewLoader()
+	files := []pgmi.FileMetadata{
+		{
+			Path:        "./migrations/001_users.sql",
+			Content:     "CREATE TABLE users (id serial PRIMARY KEY);",
+			Checksum:    "aaaa000000000000000000000000000000000000000000000000000000000001",
+			ChecksumRaw: "bbbb000000000000000000000000000000000000000000000000000000000001",
+		},
+	}
+
+	if err := l.LoadFilesIntoSession(ctx, conn, files); err != nil {
+		t.Fatalf("LoadFilesIntoSession failed: %v", err)
+	}
+
+	var path, name, directory, content, checksumRaw, checksumNorm string
+	err = conn.QueryRow(ctx, `
+		SELECT path, name, directory, content, checksum, pgmi_checksum
+		FROM pg_temp.pgmi_source
+		WHERE path = './migrations/001_users.sql'
+	`).Scan(&path, &name, &directory, &content, &checksumRaw, &checksumNorm)
+	if err != nil {
+		t.Fatalf("Failed to query file details: %v", err)
+	}
+
+	if path != "./migrations/001_users.sql" {
+		t.Errorf("Expected path './migrations/001_users.sql', got %q", path)
+	}
+	if name != "001_users.sql" {
+		t.Errorf("Expected name '001_users.sql', got %q", name)
+	}
+	if !strings.Contains(directory, "migrations") {
+		t.Errorf("Expected directory containing 'migrations', got %q", directory)
+	}
+	if content != "CREATE TABLE users (id serial PRIMARY KEY);" {
+		t.Errorf("Content mismatch: got %q", content)
+	}
+	if checksumRaw != "bbbb000000000000000000000000000000000000000000000000000000000001" {
+		t.Errorf("Raw checksum mismatch: got %q", checksumRaw)
+	}
+	if checksumNorm != "aaaa000000000000000000000000000000000000000000000000000000000001" {
+		t.Errorf("Normalized checksum mismatch: got %q", checksumNorm)
+	}
+}
+
+func TestLoadFilesIntoSession_WithAndWithoutMetadata(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_mixed_meta"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	l := loader.NewLoader()
+	files := []pgmi.FileMetadata{
+		{
+			Path:        "./migrations/001.sql",
+			Content:     "CREATE TABLE t1(id int);",
+			Checksum:    "a000000000000000000000000000000000000000000000000000000000000001",
+			ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000001",
+		},
+		{
+			Path:        "./setup/funcs.sql",
+			Content:     "CREATE FUNCTION f1();",
+			Checksum:    "a000000000000000000000000000000000000000000000000000000000000002",
+			ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000002",
+			Metadata: &pgmi.ScriptMetadata{
+				ID:          uuid.MustParse("b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+				Idempotent:  true,
+				SortKeys:    []string{"20-setup/0010"},
+				Description: "Setup function",
+			},
+		},
+		{
+			Path:        "./migrations/002.sql",
+			Content:     "CREATE TABLE t2(id int);",
+			Checksum:    "a000000000000000000000000000000000000000000000000000000000000003",
+			ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000003",
+		},
+	}
+
+	if err := l.LoadFilesIntoSession(ctx, conn, files); err != nil {
+		t.Fatalf("LoadFilesIntoSession failed: %v", err)
+	}
+
+	var fileCount int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&fileCount); err != nil {
+		t.Fatalf("Failed to query file count: %v", err)
+	}
+	if fileCount != 3 {
+		t.Errorf("Expected 3 files, got %d", fileCount)
+	}
+
+	var metaCount int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source_metadata").Scan(&metaCount); err != nil {
+		t.Fatalf("Failed to query metadata count: %v", err)
+	}
+	if metaCount != 1 {
+		t.Errorf("Expected 1 metadata row, got %d", metaCount)
+	}
+}
+
+func TestLoadParametersIntoSession_VerifySessionVars(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_verify_vars"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	l := loader.NewLoader()
+	p := map[string]string{
+		"env":         "staging",
+		"app_version": "2.5.0",
+		"debug":       "true",
+	}
+
+	if err := l.LoadParametersIntoSession(ctx, conn, p); err != nil {
+		t.Fatalf("LoadParametersIntoSession failed: %v", err)
+	}
+
+	checks := map[string]string{
+		"pgmi.env":         "staging",
+		"pgmi.app_version": "2.5.0",
+		"pgmi.debug":       "true",
+	}
+
+	for varName, expected := range checks {
+		var val string
+		if err := conn.QueryRow(ctx, "SELECT current_setting($1)", varName).Scan(&val); err != nil {
+			t.Fatalf("Failed to read session variable %s: %v", varName, err)
+		}
+		if val != expected {
+			t.Errorf("Session var %s: expected %q, got %q", varName, expected, val)
+		}
+	}
+
+	var paramCount int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_parameter").Scan(&paramCount); err != nil {
+		t.Fatalf("Failed to count parameters: %v", err)
+	}
+	if paramCount != 3 {
+		t.Errorf("Expected 3 parameters in table, got %d", paramCount)
+	}
+}
+
+func TestLoadParametersIntoSession_CaseNormalization(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_case_norm"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	l := loader.NewLoader()
+	p := map[string]string{
+		"MyParam":   "value1",
+		"ALL_UPPER": "value2",
+	}
+
+	if err := l.LoadParametersIntoSession(ctx, conn, p); err != nil {
+		t.Fatalf("LoadParametersIntoSession failed: %v", err)
+	}
+
+	var val1, val2 string
+	if err := conn.QueryRow(ctx, "SELECT value FROM pg_temp.pgmi_parameter WHERE key = 'myparam'").Scan(&val1); err != nil {
+		t.Fatalf("Failed to query lowercased key 'myparam': %v", err)
+	}
+	if val1 != "value1" {
+		t.Errorf("Expected 'value1' for lowercased key, got %q", val1)
+	}
+
+	if err := conn.QueryRow(ctx, "SELECT current_setting('pgmi.myparam')").Scan(&val2); err != nil {
+		t.Fatalf("Failed to read session variable pgmi.myparam: %v", err)
+	}
+	if val2 != "value1" {
+		t.Errorf("Expected session var 'value1', got %q", val2)
+	}
+}
+
+func TestLoadFilesIntoSession_LargeContent(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_large"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	largeContent := strings.Repeat("-- This is a large SQL file line\n", 10000)
+
+	l := loader.NewLoader()
+	files := []pgmi.FileMetadata{
+		{
+			Path:        "./migrations/large.sql",
+			Content:     largeContent,
+			Checksum:    "c000000000000000000000000000000000000000000000000000000000000001",
+			ChecksumRaw: "d000000000000000000000000000000000000000000000000000000000000001",
+		},
+	}
+
+	if err := l.LoadFilesIntoSession(ctx, conn, files); err != nil {
+		t.Fatalf("LoadFilesIntoSession failed for large file: %v", err)
+	}
+
+	var storedContent string
+	if err := conn.QueryRow(ctx, "SELECT content FROM pg_temp.pgmi_source WHERE path = './migrations/large.sql'").Scan(&storedContent); err != nil {
+		t.Fatalf("Failed to query large file content: %v", err)
+	}
+	if storedContent != largeContent {
+		t.Errorf("Large file content mismatch: expected %d bytes, got %d bytes", len(largeContent), len(storedContent))
 	}
 }
