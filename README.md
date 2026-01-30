@@ -171,7 +171,6 @@ DECLARE
 BEGIN
     FOR v_file IN (
         SELECT path, content FROM pg_temp.pgmi_source
-        WHERE path != './deploy.sql'
         ORDER BY path
     )
     LOOP
