@@ -23,8 +23,8 @@ DECLARE
 BEGIN
     RAISE DEBUG '→ Setting up API test fixtures';
 
-    v_alice_id := api.upsert_user('google', 'alice-api-test', 'alice@acme.com', 'Alice Chen', true);
-    v_bob_id := api.upsert_user('github', 'bob-api-test', 'bob@acme.com', 'Bob Park', true);
+    v_alice_id := membership.upsert_user('google', 'alice-api-test', 'alice@acme.com', 'Alice Chen', true);
+    v_bob_id := membership.upsert_user('github', 'bob-api-test', 'bob@acme.com', 'Bob Park', true);
 
     INSERT INTO membership.organization (name, slug, owner_user_id, is_personal)
     VALUES ('Acme Corp', 'acme-corp', v_alice_id, false)

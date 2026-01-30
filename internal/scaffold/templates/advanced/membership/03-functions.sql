@@ -106,7 +106,7 @@ $$;
 -- User Provisioning (upsert)
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION api.upsert_user(
+CREATE OR REPLACE FUNCTION membership.upsert_user(
     p_provider TEXT,
     p_subject_id TEXT,
     p_email TEXT,
@@ -181,8 +181,8 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_customer_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_customer_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_customer_role);
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '  ✓ membership functions installed'; END $$;

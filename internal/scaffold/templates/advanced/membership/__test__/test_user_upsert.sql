@@ -39,7 +39,7 @@ BEGIN
     END IF;
     RAISE DEBUG '  ✓ User is active admin member of personal org';
 
-    PERFORM api.upsert_user('google', 'alice-001', 'alice@example.com', 'Alice Updated', true);
+    PERFORM membership.upsert_user('google', 'alice-001', 'alice@example.com', 'Alice Updated', true);
     SELECT * INTO STRICT v_user FROM membership."user" WHERE object_id = v_alice_id;
     IF v_user.display_name != 'Alice Updated' THEN
         RAISE EXCEPTION 'TEST FAILED: display_name not updated on re-upsert';

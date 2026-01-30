@@ -73,7 +73,7 @@ BEGIN
     IF v_email IS NOT NULL AND length(v_email) <= 4096 THEN
         v_provider := api.parse_idp_provider(v_subject);
         v_subject_id := api.parse_idp_subject_id(v_subject);
-        PERFORM api.upsert_user(v_provider, v_subject_id, v_email);
+        PERFORM membership.upsert_user(v_provider, v_subject_id, v_email);
     END IF;
 END;
 $$;

@@ -12,7 +12,7 @@ DECLARE
 BEGIN
     RAISE DEBUG '→ Testing account linking';
 
-    v_linked_id := api.upsert_user('azure-ad', 'alice-azure-001', 'alice@example.com', 'Alice Azure', false);
+    v_linked_id := membership.upsert_user('azure-ad', 'alice-azure-001', 'alice@example.com', 'Alice Azure', false);
     IF v_linked_id != v_alice_id THEN
         RAISE EXCEPTION 'TEST FAILED: auto-link should return existing user %, got %', v_alice_id, v_linked_id;
     END IF;
@@ -25,8 +25,8 @@ BEGIN
     END IF;
     RAISE DEBUG '  ✓ User has 2 linked identities';
 
-    v_unverified_id := api.upsert_user('local', 'unverified-001', 'unverified@example.com', 'Unverified', false);
-    v_unverified_user_id := api.upsert_user('google', 'unverified-google', 'unverified@example.com', 'Unverified Google', false);
+    v_unverified_id := membership.upsert_user('local', 'unverified-001', 'unverified@example.com', 'Unverified', false);
+    v_unverified_user_id := membership.upsert_user('google', 'unverified-google', 'unverified@example.com', 'Unverified Google', false);
     IF v_unverified_user_id != v_unverified_id THEN
         RAISE EXCEPTION 'TEST FAILED: same email should link to existing user';
     END IF;
