@@ -1,7 +1,7 @@
 # pgmi Documentation
 
 ## User Documentation
-- **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for new users
+- **[QUICKSTART.md](QUICKSTART.md)** - Getting started guide (install, configure, deploy, verify — copy-paste ready)
 - **[CONFIGURATION.md](CONFIGURATION.md)** - Project configuration (pgmi.yaml) reference
 - **[METADATA.md](METADATA.md)** - Script metadata guide (optional XML blocks for advanced deployments)
 - **[session-api.md](session-api.md)** - Session tables and helper functions reference
