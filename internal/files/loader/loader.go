@@ -134,13 +134,9 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 		return nil // No parameters to set
 	}
 
-	// Validate all parameter keys before setting any session variables
-	// Pattern: alphanumeric + underscore, 1-63 characters (PostgreSQL identifier limit)
-	keyPattern := regexp.MustCompile(`^[a-zA-Z0-9_]{1,63}$`)
-
 	for key := range params {
-		if !keyPattern.MatchString(key) {
-			return fmt.Errorf("invalid parameter key '%s': must be alphanumeric with underscores, 1-63 characters (PostgreSQL identifier limit)", key)
+		if err := validateParameterKey(key); err != nil {
+			return err
 		}
 	}
 
@@ -227,6 +223,15 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 		insertedCount++
 	}
 
+	return nil
+}
+
+var keyPattern = regexp.MustCompile(`^[a-zA-Z0-9_]{1,63}$`)
+
+func validateParameterKey(key string) error {
+	if !keyPattern.MatchString(key) {
+		return fmt.Errorf("invalid parameter key '%s': must be alphanumeric with underscores, 1-63 characters (PostgreSQL identifier limit)", key)
+	}
 	return nil
 }
 

@@ -11,6 +11,8 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+type managementDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
+
 // DeploymentService implements the Deployer interface.
 // Thread-Safety: NOT safe for concurrent Deploy() calls on the same instance.
 // Create separate instances for concurrent deployments.
@@ -18,9 +20,10 @@ type DeploymentService struct {
 	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error)
 	approver         pgmi.Approver
 	logger           pgmi.Logger
-	sessionManager   *SessionManager
+	sessionManager   pgmi.SessionPreparer
 	fileScanner      pgmi.FileScanner
 	dbManager        pgmi.DatabaseManager
+	mgmtConnector    managementDBConnFunc
 }
 
 // NewDeploymentService creates a new DeploymentService with all dependencies injected.
@@ -39,7 +42,7 @@ func NewDeploymentService(
 	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
 	approver pgmi.Approver,
 	logger pgmi.Logger,
-	sessionManager *SessionManager,
+	sessionManager pgmi.SessionPreparer,
 	fileScanner pgmi.FileScanner,
 	dbManager pgmi.DatabaseManager,
 ) *DeploymentService {
@@ -62,7 +65,7 @@ func NewDeploymentService(
 		panic("dbManager cannot be nil")
 	}
 
-	return &DeploymentService{
+	svc := &DeploymentService{
 		connectorFactory: connectorFactory,
 		approver:         approver,
 		logger:           logger,
@@ -70,6 +73,27 @@ func NewDeploymentService(
 		fileScanner:      fileScanner,
 		dbManager:        dbManager,
 	}
+	svc.mgmtConnector = svc.defaultMgmtConnector
+	return svc
+}
+
+func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+	mgmtConfig := *connConfig
+	mgmtConfig.Database = dbName
+
+	connector, err := s.connectorFactory(&mgmtConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create connector: %w", err)
+	}
+
+	pool, err := connector.Connect(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to management database: %w", err)
+	}
+
+	dbConn := db.NewPoolAdapter(pool)
+	cleanup := func() { pool.Close() }
+	return dbConn, cleanup, nil
 }
 
 // Deploy executes a deployment using the provided configuration.
@@ -231,33 +255,18 @@ func (s *DeploymentService) executePlannedCommands(ctx context.Context, conn *pg
 
 // handleOverwrite handles the database drop and recreate workflow.
 func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
-	// Use maintenance database from config (set by CLI layer)
 	managementDB := config.MaintenanceDatabase
 	if managementDB == "" {
-		managementDB = pgmi.DefaultManagementDB // "postgres"
+		managementDB = pgmi.DefaultManagementDB
 	}
 
 	s.logger.Verbose("Connecting to management database '%s'", managementDB)
 
-	// Create connection config for management database
-	mgmtConfig := *connConfig
-	mgmtConfig.Database = managementDB
-
-	// Create connector for management database
-	connector, err := s.connectorFactory(&mgmtConfig)
+	dbConn, cleanup, err := s.mgmtConnector(ctx, connConfig, managementDB)
 	if err != nil {
-		return fmt.Errorf("failed to create connector: %w", err)
+		return err
 	}
-
-	// Connect to management database
-	pool, err := connector.Connect(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect to management database: %w", err)
-	}
-	defer pool.Close()
-
-	// Wrap pool with adapter to implement DBConnection interface
-	dbConn := db.NewPoolAdapter(pool)
+	defer cleanup()
 
 	// Check if target database exists
 	exists, err := s.dbManager.Exists(ctx, dbConn, config.DatabaseName)
@@ -308,35 +317,19 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 
 // ensureDatabaseExists ensures the target database exists, creating it if necessary.
 func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
-	// Use maintenance database from config (set by CLI layer)
 	managementDB := config.MaintenanceDatabase
 	if managementDB == "" {
-		managementDB = pgmi.DefaultManagementDB // "postgres"
+		managementDB = pgmi.DefaultManagementDB
 	}
 
 	s.logger.Verbose("Connecting to management database '%s' to check if target database exists", managementDB)
 
-	// Create connection config for management database
-	mgmtConfig := *connConfig
-	mgmtConfig.Database = managementDB
-
-	// Create connector for management database
-	connector, err := s.connectorFactory(&mgmtConfig)
+	dbConn, cleanup, err := s.mgmtConnector(ctx, connConfig, managementDB)
 	if err != nil {
-		return fmt.Errorf("failed to create connector: %w", err)
+		return err
 	}
+	defer cleanup()
 
-	// Connect to management database
-	pool, err := connector.Connect(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect to management database: %w", err)
-	}
-	defer pool.Close()
-
-	// Wrap pool with adapter to implement DBConnection interface
-	dbConn := db.NewPoolAdapter(pool)
-
-	// Check if target database exists
 	exists, err := s.dbManager.Exists(ctx, dbConn, config.DatabaseName)
 	if err != nil {
 		return fmt.Errorf("failed to check if database exists: %w", err)

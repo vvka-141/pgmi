@@ -1,8 +1,15 @@
 package pgmi
 
 import (
+	"context"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// SessionPreparer abstracts session preparation for testability.
+type SessionPreparer interface {
+	PrepareSession(ctx context.Context, connConfig *ConnectionConfig, sourcePath string, parameters map[string]string, verbose bool) (*Session, error)
+}
 
 // Session encapsulates a prepared deployment session with database connection,
 // pooled connection, and file scan results.

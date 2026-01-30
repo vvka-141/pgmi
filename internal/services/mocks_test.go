@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -23,6 +24,33 @@ type mockApprover struct {
 
 func (m *mockApprover) RequestApproval(_ context.Context, _ string) (bool, error) {
 	return m.approved, m.err
+}
+
+type mockSessionPreparer struct {
+	session *pgmi.Session
+	err     error
+}
+
+func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ string, _ map[string]string, _ bool) (*pgmi.Session, error) {
+	return m.session, m.err
+}
+
+type mockDBConnection struct {
+	execErr    error
+	queryRow   pgmi.Row
+	acquireErr error
+}
+
+func (m *mockDBConnection) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, m.execErr
+}
+
+func (m *mockDBConnection) QueryRow(_ context.Context, _ string, _ ...any) pgmi.Row {
+	return m.queryRow
+}
+
+func (m *mockDBConnection) Acquire(_ context.Context) (pgmi.PooledConnection, error) {
+	return nil, m.acquireErr
 }
 
 type mockFileScanner struct {

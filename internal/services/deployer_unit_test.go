@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -12,15 +13,59 @@ func validDeps() (
 	func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
 	pgmi.Approver,
 	pgmi.Logger,
-	*SessionManager,
+	pgmi.SessionPreparer,
 	pgmi.FileScanner,
 	pgmi.DatabaseManager,
 ) {
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return &mockConnector{}, nil
 	}
-	sm := NewSessionManager(connFactory, &mockFileScanner{}, &mockFileLoader{}, &mockLogger{})
-	return connFactory, &mockApprover{}, &mockLogger{}, sm, &mockFileScanner{}, &mockDatabaseManager{}
+	return connFactory, &mockApprover{}, &mockLogger{}, &mockSessionPreparer{}, &mockFileScanner{}, &mockDatabaseManager{}
+}
+
+func validConfig() pgmi.DeploymentConfig {
+	return pgmi.DeploymentConfig{
+		SourcePath:       "/src",
+		DatabaseName:     "testdb",
+		ConnectionString: "postgresql://localhost/postgres",
+	}
+}
+
+func newTestService(
+	dbMgr *mockDatabaseManager,
+	approver *mockApprover,
+	sessPreparer *mockSessionPreparer,
+	mgmtConn managementDBConnFunc,
+) *DeploymentService {
+	cf, _, lg, _, fs, _ := validDeps()
+	if approver == nil {
+		approver = &mockApprover{}
+	}
+	if sessPreparer == nil {
+		sessPreparer = &mockSessionPreparer{}
+	}
+	if dbMgr == nil {
+		dbMgr = &mockDatabaseManager{}
+	}
+	svc := NewDeploymentService(cf, approver, lg, sessPreparer, fs, dbMgr)
+	if mgmtConn != nil {
+		svc.mgmtConnector = mgmtConn
+	}
+	return svc
+}
+
+func noop() {}
+
+func successfulMgmtConn() managementDBConnFunc {
+	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+		return &mockDBConnection{}, noop, nil
+	}
+}
+
+func failingMgmtConn(err error) managementDBConnFunc {
+	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+		return nil, nil, err
+	}
 }
 
 func TestNewDeploymentService_NilDeps(t *testing.T) {
@@ -118,4 +163,233 @@ func TestExecuteTests_InvalidConnectionString(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error for invalid connection string")
 	}
+}
+
+// --- Overwrite workflow tests ---
+
+func TestDeploy_OverwriteDBNotExists_Creates(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: false}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil || err.Error() != "mock stop" {
+		t.Fatalf("Expected 'mock stop', got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteApproved_FullCycle(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	approver := &mockApprover{approved: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, approver, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil || err.Error() != "mock stop" {
+		t.Fatalf("Expected 'mock stop', got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteDenied(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	approver := &mockApprover{approved: false}
+	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if !errors.Is(err, pgmi.ErrApprovalDenied) {
+		t.Fatalf("Expected ErrApprovalDenied, got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteTerminateFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, terminateErr: fmt.Errorf("terminate failed")}
+	approver := &mockApprover{approved: true}
+	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "terminate") {
+		t.Fatalf("Expected terminate error, got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteDropFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, dropErr: fmt.Errorf("drop failed")}
+	approver := &mockApprover{approved: true}
+	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "drop") {
+		t.Fatalf("Expected drop error, got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteCreateFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, createErr: fmt.Errorf("create failed")}
+	approver := &mockApprover{approved: true}
+	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "create") {
+		t.Fatalf("Expected create error, got: %v", err)
+	}
+}
+
+// --- ensureDatabaseExists tests ---
+
+func TestDeploy_EnsureDBExists(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil || err.Error() != "mock stop" {
+		t.Fatalf("Expected 'mock stop', got: %v", err)
+	}
+}
+
+func TestDeploy_EnsureDBCreates(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: false}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil || err.Error() != "mock stop" {
+		t.Fatalf("Expected 'mock stop', got: %v", err)
+	}
+}
+
+func TestDeploy_EnsureDBCheckFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsErr: fmt.Errorf("check failed")}
+	svc := newTestService(dbMgr, nil, nil, successfulMgmtConn())
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "check") {
+		t.Fatalf("Expected check error, got: %v", err)
+	}
+}
+
+func TestDeploy_EnsureDBCreateFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: false, createErr: fmt.Errorf("create failed")}
+	svc := newTestService(dbMgr, nil, nil, successfulMgmtConn())
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "create") {
+		t.Fatalf("Expected create error, got: %v", err)
+	}
+}
+
+// --- Management connector failure tests ---
+
+func TestDeploy_MgmtConnectorFails_Overwrite(t *testing.T) {
+	svc := newTestService(nil, nil, nil, failingMgmtConn(fmt.Errorf("conn refused")))
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "conn refused") {
+		t.Fatalf("Expected conn refused error, got: %v", err)
+	}
+}
+
+func TestDeploy_MgmtConnectorFails_Ensure(t *testing.T) {
+	svc := newTestService(nil, nil, nil, failingMgmtConn(fmt.Errorf("conn refused")))
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "conn refused") {
+		t.Fatalf("Expected conn refused error, got: %v", err)
+	}
+}
+
+// --- Session prep failure tests ---
+
+func TestDeploy_PrepareSessionFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("session prep failed")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "session prep failed") {
+		t.Fatalf("Expected session prep error, got: %v", err)
+	}
+}
+
+func TestExecuteTests_PrepareSessionFails(t *testing.T) {
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("session prep failed")}
+	cf, _, lg, _, fs, dm := validDeps()
+	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
+
+	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
+		SourcePath:       "/src",
+		DatabaseName:     "testdb",
+		ConnectionString: "postgresql://localhost/postgres",
+	})
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "session prep failed") {
+		t.Fatalf("Expected session prep error, got: %v", err)
+	}
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains(s, substr))
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
