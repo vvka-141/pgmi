@@ -121,29 +121,16 @@ AS $$
 DECLARE
     v_user_id UUID;
     v_org_id UUID;
-    v_identity membership.user_identity;
+    v_is_new_user BOOLEAN;
 BEGIN
-    v_identity := membership.get_identity(p_provider, p_subject_id);
+    SELECT ui.user_object_id INTO v_user_id
+    FROM membership.user_identity ui
+    WHERE ui.idp_provider = p_provider AND ui.idp_subject_id = p_subject_id;
 
-    IF v_identity.object_id IS NOT NULL THEN
+    IF v_user_id IS NOT NULL THEN
         UPDATE membership."user"
         SET display_name = COALESCE(p_display_name, display_name),
             email_verified = email_verified OR p_email_verified,
-            updated_at = now()
-        WHERE object_id = v_identity.user_object_id;
-        RETURN v_identity.user_object_id;
-    END IF;
-
-    SELECT u.object_id INTO v_user_id
-    FROM membership."user" u
-    WHERE u.email = lower(trim(p_email));
-
-    IF v_user_id IS NOT NULL THEN
-        INSERT INTO membership.user_identity (user_object_id, idp_provider, idp_subject_id)
-        VALUES (v_user_id, p_provider, p_subject_id);
-
-        UPDATE membership."user"
-        SET display_name = COALESCE(p_display_name, display_name),
             updated_at = now()
         WHERE object_id = v_user_id;
         RETURN v_user_id;
@@ -151,22 +138,31 @@ BEGIN
 
     INSERT INTO membership."user" (email, display_name, email_verified)
     VALUES (lower(trim(p_email)), p_display_name, p_email_verified)
-    RETURNING object_id INTO v_user_id;
+    ON CONFLICT (email) DO UPDATE SET
+        display_name = COALESCE(EXCLUDED.display_name, membership."user".display_name),
+        email_verified = membership."user".email_verified OR EXCLUDED.email_verified,
+        updated_at = now()
+    RETURNING object_id, (xmax = 0) INTO v_user_id, v_is_new_user;
 
     INSERT INTO membership.user_identity (user_object_id, idp_provider, idp_subject_id)
-    VALUES (v_user_id, p_provider, p_subject_id);
+    VALUES (v_user_id, p_provider, p_subject_id)
+    ON CONFLICT (idp_provider, idp_subject_id) DO NOTHING;
 
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_personal)
-    VALUES (
-        'Personal',
-        'personal-' || v_user_id::TEXT,
-        v_user_id,
-        true
-    )
-    RETURNING object_id INTO v_org_id;
+    IF NOT FOUND THEN
+        SELECT ui.user_object_id INTO v_user_id
+        FROM membership.user_identity ui
+        WHERE ui.idp_provider = p_provider AND ui.idp_subject_id = p_subject_id;
+        RETURN v_user_id;
+    END IF;
 
-    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
-    VALUES (v_org_id, v_user_id, 'admin', 'active', now());
+    IF v_is_new_user THEN
+        INSERT INTO membership.organization (name, slug, owner_user_id, is_personal)
+        VALUES ('Personal', 'personal-' || v_user_id::TEXT, v_user_id, true)
+        RETURNING object_id INTO v_org_id;
+
+        INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
+        VALUES (v_org_id, v_user_id, 'admin', 'active', now());
+    END IF;
 
     RETURN v_user_id;
 END;
