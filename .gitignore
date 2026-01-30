@@ -53,3 +53,4 @@ docs/archive/
 
 # Test scaffolds (pgmi init output during development)
 test_*/
+.user/
