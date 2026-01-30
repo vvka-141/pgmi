@@ -144,9 +144,12 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	checksumNormalized := s.calculator.CalculateNormalized(content)
 	checksumRaw := s.calculator.CalculateRaw(content)
 
-	// Extract and validate metadata (only for SQL files, skip test files)
+	if err := pgmi.ValidateDunderDirectories(unixPath); err != nil {
+		return pgmi.FileMetadata{}, err
+	}
+
 	var scriptMetadata *pgmi.ScriptMetadata
-	isTestFile := strings.Contains(unixPath, pgmi.TestDirectoryPattern)
+	isTestFile := pgmi.IsTestPath(unixPath)
 	isSQLFile := isSQLExtension(extension)
 
 	if isSQLFile && !isTestFile {

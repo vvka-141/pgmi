@@ -61,8 +61,18 @@ func ExitCodeForError(err error) int {
 		return ExitConfigError
 	}
 
-	// Check for common connection error patterns
 	errStr := err.Error()
+
+	// Check for Cobra usage errors
+	if strings.Contains(errStr, "unknown flag") ||
+		strings.Contains(errStr, "unknown shorthand flag") ||
+		strings.Contains(errStr, "accepts ") ||
+		strings.Contains(errStr, "required flag") ||
+		strings.Contains(errStr, "invalid argument") {
+		return ExitUsageError
+	}
+
+	// Check for common connection error patterns
 	if strings.Contains(errStr, "failed to connect") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "no such host") {

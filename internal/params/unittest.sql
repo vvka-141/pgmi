@@ -369,13 +369,13 @@ INSERT INTO pg_temp.pgmi_unittest_script (path, name, directory, depth, content,
 SELECT path, name, directory, depth, content, size_bytes
 FROM pg_temp.pgmi_source
 WHERE is_sql_file
-  AND directory ~ '/__test__/'
+  AND directory ~ '/__tests?__/'
 ORDER BY path;
 
 -- Remove test files from pgmi_source to prevent accidental execution during deployment
 DELETE FROM pg_temp.pgmi_source
 WHERE is_sql_file
-  AND directory ~ '/__test__/';
+  AND directory ~ '/__tests?__/';
 
 -- ============================================================================
 -- Materialize Unittest Execution Plan

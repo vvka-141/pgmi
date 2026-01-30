@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -70,67 +73,63 @@ Examples:
 	RunE: runTest,
 }
 
-var (
-	// Connection parameters
-	testConnection string
-	testHost       string
-	testPort       int
-	testUsername   string
-	testDatabase   string
-	testSSLMode    string
+type testFlagValues struct {
+	connection, host, username, database, sslMode string
+	port                                          int
+	azureTenantID, azureClientID                  string
+	filter                                        string
+	list                                          bool
+	params                                        []string
+	paramsFiles                                   []string
+	timeout                                       time.Duration
+}
 
-	// Azure Entra ID parameters
-	testAzureTenantID string
-	testAzureClientID string
-
-	// Test options
-	testFilter     string
-	testList       bool
-	testParams     []string
-	testParamsFile string
-)
+var testFlags testFlagValues
 
 func init() {
 	rootCmd.AddCommand(testCmd)
 
 	// Connection string flag (mutually exclusive with granular flags)
-	testCmd.Flags().StringVar(&testConnection, "connection", "",
+	testCmd.Flags().StringVar(&testFlags.connection, "connection", "",
 		"PostgreSQL connection string (URI or ADO.NET format).\n"+
 			"Mutually exclusive with granular flags (--host, --port, --username).\n"+
 			"Alternative: Use PGMI_CONNECTION_STRING or DATABASE_URL environment variable.\n"+
 			"Example: postgresql://user:pass@localhost:5432/test_db")
 
-	// Granular connection flags (PostgreSQL standard)
-	// Precedence: flag > environment variable > default
-	testCmd.Flags().StringVar(&testHost, "host", "",
+	testCmd.Flags().StringVar(&testFlags.host, "host", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
-	testCmd.Flags().IntVarP(&testPort, "port", "p", 0,
+	testCmd.Flags().IntVarP(&testFlags.port, "port", "p", 0,
 		"PostgreSQL server port\n"+
 			"Precedence: --port > $PGPORT > 5432")
-	testCmd.Flags().StringVarP(&testUsername, "username", "U", "",
+	testCmd.Flags().StringVarP(&testFlags.username, "username", "U", "",
 		"PostgreSQL user (default: $PGUSER or current OS user)")
-	testCmd.Flags().StringVarP(&testDatabase, "database", "d", "",
+	testCmd.Flags().StringVarP(&testFlags.database, "database", "d", "",
 		"Target database name (optional if specified in connection string, or $PGDATABASE)")
-	testCmd.Flags().StringVar(&testSSLMode, "sslmode", "",
+	testCmd.Flags().StringVar(&testFlags.sslMode, "sslmode", "",
 		"SSL mode: disable|allow|prefer|require|verify-ca|verify-full\n"+
 			"(default: prefer, or $PGSSLMODE)")
 
-	// Azure Entra ID flags
-	testCmd.Flags().StringVar(&testAzureTenantID, "azure-tenant-id", "",
+	testCmd.Flags().StringVar(&testFlags.azureTenantID, "azure-tenant-id", "",
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
-	testCmd.Flags().StringVar(&testAzureClientID, "azure-client-id", "",
+	testCmd.Flags().StringVar(&testFlags.azureClientID, "azure-client-id", "",
 		"Azure AD application/client ID (overrides $AZURE_CLIENT_ID)")
 
-	// Test options
-	testCmd.Flags().StringVar(&testFilter, "filter", ".*", "POSIX regex pattern to filter tests (default: \".*\" matches all)\n"+
+	testCmd.Flags().StringVar(&testFlags.filter, "filter", ".*", "POSIX regex pattern to filter tests (default: \".*\" matches all)\n"+
 		"Examples:\n"+
 		"  --filter \"/pre-deployment/\"           # Tests in /pre-deployment/ directories\n"+
 		"  --filter \".*_integration\\.sql$\"       # Integration tests\n"+
 		"  --filter \"/__test__/auth/\"             # Tests under __test__/auth/")
-	testCmd.Flags().BoolVar(&testList, "list", false, "List tests without executing them (dry-run mode)")
-	testCmd.Flags().StringSliceVar(&testParams, "param", nil, "Parameters as key=value pairs (for parameterized tests)")
-	testCmd.Flags().StringVar(&testParamsFile, "params-file", "", "Load parameters from .env file")
+	testCmd.Flags().BoolVar(&testFlags.list, "list", false, "List tests without executing them (dry-run mode)")
+	testCmd.Flags().StringSliceVar(&testFlags.params, "param", nil, "Parameters as key=value pairs (for parameterized tests)")
+	testCmd.Flags().StringSliceVar(&testFlags.paramsFiles, "params-file", nil,
+		"Load parameters from .env files (can be specified multiple times)\n"+
+			"Later files override earlier ones, CLI --param overrides all")
+
+	testCmd.Flags().DurationVar(&testFlags.timeout, "timeout", 3*time.Minute,
+		"Catastrophic failure protection timeout (default 3m)\n"+
+			"Prevents indefinite hangs from network issues or deadlocks\n"+
+			"Examples: 30s, 5m, 1h30m")
 }
 
 // buildTestConfig builds a TestConfig from CLI flags and environment.
@@ -143,7 +142,7 @@ func init() {
 // Returns:
 //   - Fully configured TestConfig ready for test execution
 //   - Error if configuration is invalid
-func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
+func buildTestConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 	_ = godotenv.Load()
 
 	projectCfg, err := config.Load(sourcePath)
@@ -152,28 +151,28 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 	}
 
 	granularFlags := &db.GranularConnFlags{
-		Host:     testHost,
-		Port:     testPort,
-		Username: testUsername,
-		Database: testDatabase,
-		SSLMode:  testSSLMode,
+		Host:     testFlags.host,
+		Port:     testFlags.port,
+		Username: testFlags.username,
+		Database: testFlags.database,
+		SSLMode:  testFlags.sslMode,
 	}
 
 	azureFlags := &db.AzureFlags{
-		TenantID: testAzureTenantID,
-		ClientID: testAzureClientID,
+		TenantID: testFlags.azureTenantID,
+		ClientID: testFlags.azureClientID,
 	}
 
-	connConfig, _, err := resolveConnection(testConnection, granularFlags, azureFlags, projectCfg, verbose)
+	connConfig, _, err := resolveConnection(testFlags.connection, granularFlags, azureFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.TestConfig{}, err
 	}
 
 	// Resolve target database: -d flag always takes precedence over connection string
 	targetDB, err := resolveTargetDatabase(
-		testDatabase,
+		testFlags.database,
 		connConfig.Database,
-		true, // require database
+		true,
 		"test",
 		verbose,
 	)
@@ -194,21 +193,20 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 		fmt.Fprintf(os.Stderr, "  SSL Mode: %s\n", connConfig.SSLMode)
 		fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Source path: %s\n", sourcePath)
-		fmt.Fprintf(os.Stderr, "[VERBOSE] Filter pattern: %s\n", testFilter)
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Filter pattern: %s\n", testFlags.filter)
 	}
 
-	// Parse parameters from file (if provided)
 	parameters := make(map[string]string)
-	if testParamsFile != "" {
+	if len(testFlags.paramsFiles) > 0 {
 		fsProvider := filesystem.NewOSFileSystem()
-		fileParams, err := loadParamsFromFiles(fsProvider, []string{testParamsFile}, verbose)
+		fileParams, err := loadParamsFromFiles(fsProvider, testFlags.paramsFiles, verbose)
 		if err != nil {
 			return pgmi.TestConfig{}, err
 		}
 		parameters = fileParams
 	}
 
-	// Merge pgmi.yaml params (file params < pgmi.yaml params < CLI params)
+	// Merge pgmi.yaml params (pgmi.yaml < params-file < CLI --param)
 	if projectCfg != nil {
 		for k, v := range projectCfg.Params {
 			if _, exists := parameters[k]; !exists {
@@ -217,7 +215,7 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 		}
 	}
 
-	cliParams, err := params.ParseKeyValuePairs(testParams)
+	cliParams, err := params.ParseKeyValuePairs(testFlags.params)
 	if err != nil {
 		return pgmi.TestConfig{}, fmt.Errorf("invalid parameter format: %w", err)
 	}
@@ -226,16 +224,26 @@ func buildTestConfig(sourcePath string, verbose bool) (pgmi.TestConfig, error) {
 		parameters[k] = v
 	}
 
+	// Apply timeout from pgmi.yaml if --timeout wasn't explicitly set
+	timeout := testFlags.timeout
+	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
+		parsed, parseErr := time.ParseDuration(projectCfg.Timeout)
+		if parseErr != nil {
+			return pgmi.TestConfig{}, fmt.Errorf("invalid timeout in pgmi.yaml: %w", parseErr)
+		}
+		timeout = parsed
+	}
+
 	// Build connection string for test execution
 	connStr := db.BuildConnectionString(connConfig)
 
-	// Create test configuration
 	config := pgmi.TestConfig{
 		SourcePath:        sourcePath,
 		DatabaseName:      connConfig.Database,
 		ConnectionString:  connStr,
-		FilterPattern:     testFilter,
-		ListOnly:          testList,
+		Timeout:           timeout,
+		FilterPattern:     testFlags.filter,
+		ListOnly:          testFlags.list,
 		Parameters:        parameters,
 		Verbose:           verbose,
 		AuthMethod:        connConfig.AuthMethod,
@@ -252,7 +260,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	verbose := getVerboseFlag(cmd)
 
 	// Build test configuration
-	config, err := buildTestConfig(sourcePath, verbose)
+	config, err := buildTestConfig(cmd, sourcePath, verbose)
 	if err != nil {
 		return err
 	}
@@ -285,8 +293,18 @@ func runTest(cmd *cobra.Command, args []string) error {
 		dbManager,
 	)
 
-	// Execute tests
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling test execution...")
+		cancel()
+	}()
+
 	if err := service.ExecuteTests(ctx, config); err != nil {
 		return fmt.Errorf("test execution failed: %w", err)
 	}

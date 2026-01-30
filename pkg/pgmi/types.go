@@ -87,8 +87,10 @@ type TestConfig struct {
 	DatabaseName string
 
 	// ConnectionString is the PostgreSQL connection string (URI or ADO.NET format)
-	// The database in the connection string is used for server-level operations (CREATE DATABASE, DROP DATABASE)
 	ConnectionString string
+
+	// Timeout is the global timeout for the entire test execution
+	Timeout time.Duration
 
 	// FilterPattern is a POSIX regex to filter tests (default: ".*" matches all)
 	FilterPattern string

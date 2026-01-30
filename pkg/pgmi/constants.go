@@ -1,6 +1,10 @@
 package pgmi
 
-import "time"
+import (
+	"fmt"
+	"regexp"
+	"time"
+)
 
 // Exit codes for semantic error classification.
 // These follow Unix/GNU conventions:
@@ -40,12 +44,38 @@ const (
 
 	// DefaultManagementDB is the default database to connect to for management operations.
 	DefaultManagementDB = "postgres"
-
-	// TestDirectoryPattern is the directory pattern used to identify test files.
-	// Test files must be located in directories matching this pattern (e.g., ./migrations/__test__/test_foo.sql).
-	// This pattern is used for:
-	//   1. File scanning: Automatically moving test files to pg_temp.pgmi_unittest_script
-	//   2. Test discovery: Filtering files for unit test execution
-	//   3. SQL queries: Identifying test files in unittest.sql
-	TestDirectoryPattern = "/__test__/"
 )
+
+var (
+	// DunderDirRegexp matches dunder directories (e.g., /__test__/, /__tests__/) in paths.
+	DunderDirRegexp = regexp.MustCompile(`/__([^/]+)__/`)
+
+	// AllowedDunderDirs lists the dunder directory names that pgmi recognizes.
+	AllowedDunderDirs = map[string]bool{
+		"test":  true,
+		"tests": true,
+	}
+)
+
+// IsTestPath returns true if the path contains a recognized test directory (/__test__/ or /__tests__/).
+func IsTestPath(path string) bool {
+	matches := DunderDirRegexp.FindAllStringSubmatch(path, -1)
+	for _, m := range matches {
+		if m[1] == "test" || m[1] == "tests" {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateDunderDirectories checks that all dunder directories in the path are recognized.
+// Returns an error if an unsupported dunder directory is found.
+func ValidateDunderDirectories(path string) error {
+	matches := DunderDirRegexp.FindAllStringSubmatch(path, -1)
+	for _, m := range matches {
+		if !AllowedDunderDirs[m[1]] {
+			return fmt.Errorf("unsupported directory \"__%s__\" in path %q; only __test__ and __tests__ are allowed", m[1], path)
+		}
+	}
+	return nil
+}

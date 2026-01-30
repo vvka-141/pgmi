@@ -32,8 +32,8 @@ var deployCmd = &cobra.Command{
 The deploy command:
 1. Connects to PostgreSQL using the specified authentication method
 2. Optionally drops and recreates the target database (with --overwrite)
-3. Loads SQL files into pgmi_files temporary table
-4. Loads parameters into pgmi_params temporary table
+3. Loads SQL files into pgmi_source temporary table
+4. Loads parameters into pgmi_parameter temporary table
 5. Executes the deploy.sql file to orchestrate the deployment
 
 Arguments:
@@ -72,32 +72,23 @@ Examples:
 	RunE: runDeploy,
 }
 
-var (
-	// Connection parameters
-	deployConnection string
-	deployHost       string
-	deployPort       int
-	deployUsername   string
-	deployDatabase   string
-	deploySSLMode    string
+type deployFlagValues struct {
+	connection, host, username, database, sslMode string
+	port                                          int
+	azureTenantID, azureClientID                  string
+	overwrite, force                              bool
+	params                                        []string
+	paramsFiles                                   []string
+	timeout                                       time.Duration
+}
 
-	// Azure Entra ID parameters
-	deployAzureTenantID string
-	deployAzureClientID string
-
-	// Deployment options
-	deployOverwrite   bool
-	deployForce       bool
-	deployParams      []string
-	deployParamsFiles []string
-	deployTimeout     time.Duration
-)
+var deployFlags deployFlagValues
 
 func init() {
 	rootCmd.AddCommand(deployCmd)
 
 	// Connection string flag (mutually exclusive with granular flags)
-	deployCmd.Flags().StringVar(&deployConnection, "connection", "",
+	deployCmd.Flags().StringVar(&deployFlags.connection, "connection", "",
 		"PostgreSQL connection string (URI or ADO.NET format).\n"+
 			"The database in the connection string is used for CREATE DATABASE operations.\n"+
 			"Mutually exclusive with granular flags (--host, --port, --username).\n"+
@@ -106,50 +97,50 @@ func init() {
 
 	// Granular connection flags (PostgreSQL standard)
 	// Precedence: flag > environment variable > default
-	deployCmd.Flags().StringVar(&deployHost, "host", "",
+	deployCmd.Flags().StringVar(&deployFlags.host, "host", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
-	deployCmd.Flags().IntVarP(&deployPort, "port", "p", 0,
+	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
 		"PostgreSQL server port\n"+
 			"Precedence: --port > $PGPORT > 5432")
-	deployCmd.Flags().StringVarP(&deployUsername, "username", "U", "",
+	deployCmd.Flags().StringVarP(&deployFlags.username, "username", "U", "",
 		"PostgreSQL user (default: $PGUSER or current OS user)")
-	deployCmd.Flags().StringVarP(&deployDatabase, "database", "d", "",
+	deployCmd.Flags().StringVarP(&deployFlags.database, "database", "d", "",
 		"Target database name (optional if specified in connection string, or $PGDATABASE)\n"+
 			"Examples:\n"+
 			"  -d myapp                          # Deploy to 'myapp' database\n"+
 			"  --connection postgresql://user@host/myapp  # Database from connection string\n"+
 			"  --connection postgresql://user@host/postgres -d myapp  # Override")
-	deployCmd.Flags().StringVar(&deploySSLMode, "sslmode", "",
+	deployCmd.Flags().StringVar(&deployFlags.sslMode, "sslmode", "",
 		"SSL mode: disable|allow|prefer|require|verify-ca|verify-full\n"+
 			"(default: prefer, or $PGSSLMODE)")
 
 	// Azure Entra ID flags
-	deployCmd.Flags().StringVar(&deployAzureTenantID, "azure-tenant-id", "",
+	deployCmd.Flags().StringVar(&deployFlags.azureTenantID, "azure-tenant-id", "",
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
-	deployCmd.Flags().StringVar(&deployAzureClientID, "azure-client-id", "",
+	deployCmd.Flags().StringVar(&deployFlags.azureClientID, "azure-client-id", "",
 		"Azure AD application/client ID (overrides $AZURE_CLIENT_ID)")
 
 	// Deployment workflow flags
-	deployCmd.Flags().BoolVar(&deployOverwrite, "overwrite", false,
+	deployCmd.Flags().BoolVar(&deployFlags.overwrite, "overwrite", false,
 		"Drop and recreate the database\n"+
 			"Requires interactive confirmation unless --force is used")
-	deployCmd.Flags().BoolVar(&deployForce, "force", false,
+	deployCmd.Flags().BoolVar(&deployFlags.force, "force", false,
 		"Skip interactive approval prompt for destructive operations\n"+
 			"Only affects the confirmation dialog, not deployment behavior\n"+
 			"Use with --overwrite for CI/CD pipelines")
 
 	// Parameter flags
-	deployCmd.Flags().StringSliceVar(&deployParams, "param", nil,
+	deployCmd.Flags().StringSliceVar(&deployFlags.params, "param", nil,
 		"Parameters as key=value pairs (can be specified multiple times)\n"+
 			"Available as session variables: current_setting('pgmi.key') during deployment\n"+
 			"Example: --param env=prod --param region=us-west")
-	deployCmd.Flags().StringSliceVar(&deployParamsFiles, "params-file", nil,
+	deployCmd.Flags().StringSliceVar(&deployFlags.paramsFiles, "params-file", nil,
 		"Load parameters from .env files (can be specified multiple times)\n"+
 			"Later files override earlier ones, CLI --param overrides all")
 
 	// Timeout flag - catastrophic failure protection, not normal timeout control
-	deployCmd.Flags().DurationVar(&deployTimeout, "timeout", 3*time.Minute,
+	deployCmd.Flags().DurationVar(&deployFlags.timeout, "timeout", 3*time.Minute,
 		"Catastrophic failure protection timeout (default 3m)\n"+
 			"Prevents indefinite hangs from network issues or deadlocks\n"+
 			"For query-level timeouts, use SET statement_timeout in SQL\n"+
@@ -176,28 +167,28 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 	}
 
 	granularFlags := &db.GranularConnFlags{
-		Host:     deployHost,
-		Port:     deployPort,
-		Username: deployUsername,
-		Database: deployDatabase,
-		SSLMode:  deploySSLMode,
+		Host:     deployFlags.host,
+		Port:     deployFlags.port,
+		Username: deployFlags.username,
+		Database: deployFlags.database,
+		SSLMode:  deployFlags.sslMode,
 	}
 
 	azureFlags := &db.AzureFlags{
-		TenantID: deployAzureTenantID,
-		ClientID: deployAzureClientID,
+		TenantID: deployFlags.azureTenantID,
+		ClientID: deployFlags.azureClientID,
 	}
 
-	connConfig, maintenanceDB, err := resolveConnection(deployConnection, granularFlags, azureFlags, projectCfg, verbose)
+	connConfig, maintenanceDB, err := resolveConnection(deployFlags.connection, granularFlags, azureFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
 	// Resolve target database: -d flag always takes precedence over connection string
 	targetDB, err := resolveTargetDatabase(
-		deployDatabase,
+		deployFlags.database,
 		connConfig.Database,
-		true, // require database
+		true,
 		"deploy",
 		verbose,
 	)
@@ -206,7 +197,7 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 	}
 
 	// Determine maintenance database for CREATE DATABASE operations
-	maintenanceDB = determineMaintenanceDB(deployDatabase, connConfig.Database, maintenanceDB)
+	maintenanceDB = determineMaintenanceDB(deployFlags.database, connConfig.Database, maintenanceDB)
 
 	// Update config with resolved target database
 	connConfig.Database = targetDB
@@ -225,17 +216,16 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 	// Parse parameters from files (if provided)
 	// Later files override earlier ones
 	parameters := make(map[string]string)
-	if len(deployParamsFiles) > 0 {
-		// Use filesystem abstraction for reading params files
+	if len(deployFlags.paramsFiles) > 0 {
 		fsProvider := filesystem.NewOSFileSystem()
-		fileParams, err := loadParamsFromFiles(fsProvider, deployParamsFiles, verbose)
+		fileParams, err := loadParamsFromFiles(fsProvider, deployFlags.paramsFiles, verbose)
 		if err != nil {
 			return pgmi.DeploymentConfig{}, err
 		}
 		parameters = fileParams
 	}
 
-	// Merge pgmi.yaml params (file params < pgmi.yaml params < CLI params)
+	// Merge pgmi.yaml params (pgmi.yaml < params-file < CLI --param)
 	if projectCfg != nil {
 		for k, v := range projectCfg.Params {
 			if _, exists := parameters[k]; !exists {
@@ -244,7 +234,7 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 		}
 	}
 
-	cliParams, err := params.ParseKeyValuePairs(deployParams)
+	cliParams, err := params.ParseKeyValuePairs(deployFlags.params)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, fmt.Errorf("invalid parameter format: %w", err)
 	}
@@ -258,7 +248,7 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 	}
 
 	// Apply timeout from pgmi.yaml if --timeout wasn't explicitly set
-	timeout := deployTimeout
+	timeout := deployFlags.timeout
 	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
 		parsed, parseErr := time.ParseDuration(projectCfg.Timeout)
 		if parseErr != nil {
@@ -276,8 +266,8 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 		DatabaseName:        connConfig.Database,
 		MaintenanceDatabase: maintenanceDB,
 		ConnectionString:    connStr,
-		Overwrite:           deployOverwrite,
-		Force:               deployForce,
+		Overwrite:           deployFlags.overwrite,
+		Force:               deployFlags.force,
 		Parameters:          parameters,
 		Timeout:             timeout,
 		Verbose:             verbose,
@@ -302,7 +292,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// Create dependencies
 	// Select approver implementation based on --force flag
 	var approver pgmi.Approver
-	if deployForce {
+	if deployFlags.force {
 		approver = ui.NewForcedApprover(verbose)
 	} else {
 		approver = ui.NewInteractiveApprover(verbose)
@@ -331,7 +321,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	)
 
 	// Setup context with timeout and signal handling for graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
 	// Handle interrupt signals (Ctrl+C, SIGTERM) for graceful shutdown

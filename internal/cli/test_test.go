@@ -9,16 +9,7 @@ import (
 // resetTestFlags resets all test command-related global flags to their zero values.
 // This is necessary because flags are package-level globals that persist across tests.
 func resetTestFlags() {
-	testConnection = ""
-	testHost = ""
-	testPort = 0
-	testUsername = ""
-	testDatabase = ""
-	testSSLMode = ""
-	testFilter = ""
-	testList = false
-	testParams = nil
-	testParamsFile = ""
+	testFlags = testFlagValues{}
 }
 
 // TestBuildTestConfig tests the test configuration building logic.
@@ -53,14 +44,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "basic test config with database flag",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -73,14 +64,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "test config with custom filter pattern",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = "/pre-deployment/"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = "/pre-deployment/"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -93,14 +84,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "test config with list mode enabled",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = true
-				testParams = nil
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = true
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -113,14 +104,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "test config with CLI parameters",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = []string{"test_mode=fast", "verbose_output=true"}
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = []string{"test_mode=fast", "verbose_output=true"}
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -133,15 +124,15 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "test config with connection string",
 			setupFlags: func() {
-				testConnection = "postgresql://user:pass@testhost:5433/testdb"
-				testDatabase = ""
-				testHost = ""
-				testPort = 0
-				testUsername = ""
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.connection = "postgresql://user:pass@testhost:5433/testdb"
+				testFlags.database = ""
+				testFlags.host = ""
+				testFlags.port = 0
+				testFlags.username = ""
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -154,15 +145,15 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "database flag overrides connection string database",
 			setupFlags: func() {
-				testConnection = "postgresql://user:pass@testhost:5433/conndb"
-				testDatabase = "override_db"
-				testHost = ""
-				testPort = 0
-				testUsername = ""
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.connection = "postgresql://user:pass@testhost:5433/conndb"
+				testFlags.database = "override_db"
+				testFlags.host = ""
+				testFlags.port = 0
+				testFlags.username = ""
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -175,15 +166,15 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "error when no database provided",
 			setupFlags: func() {
-				testConnection = ""
-				testDatabase = ""
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.connection = ""
+				testFlags.database = ""
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:      sourcePath,
 			verbose:         false,
@@ -193,14 +184,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "error with invalid CLI parameter format",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = []string{"invalid_param_no_equals"}
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = []string{"invalid_param_no_equals"}
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:      sourcePath,
 			verbose:         false,
@@ -210,14 +201,14 @@ func TestBuildTestConfig(t *testing.T) {
 		{
 			name: "regex filter for auth tests",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = "^\\./pgitest/auth/"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = "^\\./pgitest/auth/"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -238,7 +229,7 @@ func TestBuildTestConfig(t *testing.T) {
 			tt.setupFlags()
 
 			// Build test config
-			config, err := buildTestConfig(tt.sourcePath, tt.verbose)
+			config, err := buildTestConfig(testCmd, tt.sourcePath, tt.verbose)
 
 			// Check error expectations
 			if (err != nil) != tt.wantErr {
@@ -306,17 +297,17 @@ test_user_id=12345
 	}
 
 	// Setup flags
-	testDatabase = "test_db"
-	testHost = "localhost"
-	testPort = 5432
-	testUsername = "postgres"
-	testFilter = ".*"
-	testList = false
-	testParamsFile = paramsFile
-	testParams = []string{"test_mode=fast", "test_isolation=true"} // Override test_mode, add test_isolation
+	testFlags.database = "test_db"
+	testFlags.host = "localhost"
+	testFlags.port = 5432
+	testFlags.username = "postgres"
+	testFlags.filter = ".*"
+	testFlags.list = false
+	testFlags.paramsFiles = []string{paramsFile}
+	testFlags.params = []string{"test_mode=fast", "test_isolation=true"} // Override test_mode, add test_isolation
 
 	// Build config
-	config, err := buildTestConfig(tempDir, false)
+	config, err := buildTestConfig(testCmd, tempDir, false)
 	if err != nil {
 		t.Fatalf("buildTestConfig() unexpected error: %v", err)
 	}
@@ -365,43 +356,43 @@ func TestBuildTestConfig_ValidationErrors(t *testing.T) {
 		{
 			name: "invalid connection string format",
 			setupFlags: func() {
-				testConnection = "invalid://bad:format"
-				testDatabase = "test_db"
-				testHost = ""
-				testPort = 0
-				testUsername = ""
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = ""
+				testFlags.connection = "invalid://bad:format"
+				testFlags.database = "test_db"
+				testFlags.host = ""
+				testFlags.port = 0
+				testFlags.username = ""
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = nil
 			},
 			wantErrContains: "invalid connection string",
 		},
 		{
 			name: "parameter missing equals sign",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = []string{"badparam"}
-				testParamsFile = ""
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = []string{"badparam"}
+				testFlags.paramsFiles = nil
 			},
 			wantErrContains: "invalid parameter format",
 		},
 		{
 			name: "nonexistent params file",
 			setupFlags: func() {
-				testDatabase = "test_db"
-				testHost = "localhost"
-				testPort = 5432
-				testUsername = "postgres"
-				testFilter = ".*"
-				testList = false
-				testParams = nil
-				testParamsFile = "/path/to/nonexistent/file.env"
+				testFlags.database = "test_db"
+				testFlags.host = "localhost"
+				testFlags.port = 5432
+				testFlags.username = "postgres"
+				testFlags.filter = ".*"
+				testFlags.list = false
+				testFlags.params = nil
+				testFlags.paramsFiles = []string{"/path/to/nonexistent/file.env"}
 			},
 			wantErrContains: "failed to read params file",
 		},
@@ -412,7 +403,7 @@ func TestBuildTestConfig_ValidationErrors(t *testing.T) {
 			resetTestFlags()
 			tt.setupFlags()
 
-			_, err := buildTestConfig(tempDir, false)
+			_, err := buildTestConfig(testCmd, tempDir, false)
 
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -442,16 +433,16 @@ func TestBuildTestConfig_Validate(t *testing.T) {
 
 	// Reset and setup valid flags
 	resetTestFlags()
-	testDatabase = "test_db"
-	testHost = "localhost"
-	testPort = 5432
-	testUsername = "postgres"
-	testFilter = ".*"
-	testList = false
-	testParams = []string{"env=test"}
-	testParamsFile = ""
+	testFlags.database = "test_db"
+	testFlags.host = "localhost"
+	testFlags.port = 5432
+	testFlags.username = "postgres"
+	testFlags.filter = ".*"
+	testFlags.list = false
+	testFlags.params = []string{"env=test"}
+	testFlags.paramsFiles = nil
 
-	config, err := buildTestConfig(tempDir, false)
+	config, err := buildTestConfig(testCmd, tempDir, false)
 	if err != nil {
 		t.Fatalf("buildTestConfig() unexpected error: %v", err)
 	}

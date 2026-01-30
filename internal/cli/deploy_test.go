@@ -10,17 +10,7 @@ import (
 // resetDeployFlags resets all deployment-related global flags to their zero values.
 // This is necessary because flags are package-level globals that persist across tests.
 func resetDeployFlags() {
-	deployConnection = ""
-	deployHost = ""
-	deployPort = 0
-	deployUsername = ""
-	deployDatabase = ""
-	deploySSLMode = ""
-	deployOverwrite = false
-	deployForce = false
-	deployParams = nil
-	deployParamsFiles = nil
-	deployTimeout = 0
+	deployFlags = deployFlagValues{}
 }
 
 // TestBuildDeploymentConfig tests the deployment configuration building logic.
@@ -57,15 +47,15 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "basic deployment with database flag",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -80,15 +70,15 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "deployment with overwrite and force flags",
 			setupFlags: func() {
-				deployDatabase = "testdb"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = true
-				deployForce = true
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 5 * time.Minute
+				deployFlags.database = "testdb"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = true
+				deployFlags.force = true
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 5 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -103,15 +93,15 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "deployment with CLI parameters",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = []string{"env=production", "region=us-west"}
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = []string{"env=production", "region=us-west"}
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -126,16 +116,16 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "deployment with connection string",
 			setupFlags: func() {
-				deployConnection = "postgresql://user:pass@customhost:5433/mydb"
-				deployDatabase = ""
-				deployHost = ""
-				deployPort = 0
-				deployUsername = ""
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.connection = "postgresql://user:pass@customhost:5433/mydb"
+				deployFlags.database = ""
+				deployFlags.host = ""
+				deployFlags.port = 0
+				deployFlags.username = ""
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -150,16 +140,16 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "database flag overrides connection string database",
 			setupFlags: func() {
-				deployConnection = "postgresql://user:pass@customhost:5433/conndb"
-				deployDatabase = "flagdb"
-				deployHost = ""
-				deployPort = 0
-				deployUsername = ""
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.connection = "postgresql://user:pass@customhost:5433/conndb"
+				deployFlags.database = "flagdb"
+				deployFlags.host = ""
+				deployFlags.port = 0
+				deployFlags.username = ""
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -174,16 +164,16 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "error when no database provided",
 			setupFlags: func() {
-				deployConnection = ""
-				deployDatabase = ""
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.connection = ""
+				deployFlags.database = ""
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:      sourcePath,
 			verbose:         false,
@@ -193,15 +183,15 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "error with invalid CLI parameter format",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = []string{"invalid_param_without_equals"}
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = []string{"invalid_param_without_equals"}
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			sourcePath:      sourcePath,
 			verbose:         false,
@@ -211,15 +201,15 @@ func TestBuildDeploymentConfig(t *testing.T) {
 		{
 			name: "custom timeout value",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 10 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 10 * time.Minute
 			},
 			sourcePath:        sourcePath,
 			verbose:           false,
@@ -316,15 +306,15 @@ api_key=file_secret
 	}
 
 	// Setup flags
-	deployDatabase = "myapp"
-	deployHost = "localhost"
-	deployPort = 5432
-	deployUsername = "postgres"
-	deployOverwrite = false
-	deployForce = false
-	deployParamsFiles = []string{paramsFile}
-	deployParams = []string{"env=production", "version=1.2.3"} // Override env, add version
-	deployTimeout = 3 * time.Minute
+	deployFlags.database = "myapp"
+	deployFlags.host = "localhost"
+	deployFlags.port = 5432
+	deployFlags.username = "postgres"
+	deployFlags.overwrite = false
+	deployFlags.force = false
+	deployFlags.paramsFiles = []string{paramsFile}
+	deployFlags.params = []string{"env=production", "version=1.2.3"} // Override env, add version
+	deployFlags.timeout = 3 * time.Minute
 
 	// Build config
 	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
@@ -376,46 +366,46 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 		{
 			name: "invalid connection string format",
 			setupFlags: func() {
-				deployConnection = "invalid://bad:format:here"
-				deployDatabase = "myapp"
-				deployHost = ""
-				deployPort = 0
-				deployUsername = ""
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.connection = "invalid://bad:format:here"
+				deployFlags.database = "myapp"
+				deployFlags.host = ""
+				deployFlags.port = 0
+				deployFlags.username = ""
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			wantErrContains: "invalid connection string",
 		},
 		{
 			name: "parameter missing equals sign",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = []string{"invalidparamwithoutequals"}
-				deployParamsFiles = nil
-				deployTimeout = 3 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = []string{"invalidparamwithoutequals"}
+				deployFlags.paramsFiles = nil
+				deployFlags.timeout = 3 * time.Minute
 			},
 			wantErrContains: "invalid parameter format",
 		},
 		{
 			name: "nonexistent params file",
 			setupFlags: func() {
-				deployDatabase = "myapp"
-				deployHost = "localhost"
-				deployPort = 5432
-				deployUsername = "postgres"
-				deployOverwrite = false
-				deployForce = false
-				deployParams = nil
-				deployParamsFiles = []string{"/nonexistent/params.env"}
-				deployTimeout = 3 * time.Minute
+				deployFlags.database = "myapp"
+				deployFlags.host = "localhost"
+				deployFlags.port = 5432
+				deployFlags.username = "postgres"
+				deployFlags.overwrite = false
+				deployFlags.force = false
+				deployFlags.params = nil
+				deployFlags.paramsFiles = []string{"/nonexistent/params.env"}
+				deployFlags.timeout = 3 * time.Minute
 			},
 			wantErrContains: "failed to read params file",
 		},
@@ -456,15 +446,15 @@ func TestBuildDeploymentConfig_Validate(t *testing.T) {
 
 	// Reset and setup valid flags
 	resetDeployFlags()
-	deployDatabase = "myapp"
-	deployHost = "localhost"
-	deployPort = 5432
-	deployUsername = "postgres"
-	deployOverwrite = false
-	deployForce = false
-	deployParams = []string{"env=test"}
-	deployParamsFiles = nil
-	deployTimeout = 3 * time.Minute
+	deployFlags.database = "myapp"
+	deployFlags.host = "localhost"
+	deployFlags.port = 5432
+	deployFlags.username = "postgres"
+	deployFlags.overwrite = false
+	deployFlags.force = false
+	deployFlags.params = []string{"env=test"}
+	deployFlags.paramsFiles = nil
+	deployFlags.timeout = 3 * time.Minute
 
 	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
 	if err != nil {

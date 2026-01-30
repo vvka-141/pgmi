@@ -27,6 +27,9 @@ func resolveConnection(
 	if connString == "" {
 		connString = os.Getenv("PGMI_CONNECTION_STRING")
 	}
+	if connString == "" {
+		connString = os.Getenv("DATABASE_URL")
+	}
 
 	envVars := db.LoadFromEnvironment()
 
