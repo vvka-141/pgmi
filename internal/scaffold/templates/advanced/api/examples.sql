@@ -426,10 +426,79 @@ BEGIN
     RAISE DEBUG '  → MCP prompt sql_assistant  envelope=%', (v_response).envelope;
 END $$;
 
+-- ============================================================================
+-- REST Example: Current User (Membership Integration)
+-- ============================================================================
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'e1000001-0004-4000-8000-000000000001',
+        'uri', '^/me(\\?.*)?$',
+        'httpMethod', '^GET$',
+        'name', 'get_current_user',
+        'description', 'Get authenticated user profile from membership schema',
+        'requiresAuth', true
+    ),
+    $body$
+DECLARE
+    v_user jsonb;
+BEGIN
+    SELECT jsonb_build_object(
+        'user_id', user_id,
+        'email', email,
+        'display_name', display_name,
+        'email_verified', email_verified,
+        'member_org_ids', member_org_ids,
+        'owner_org_ids', owner_org_ids
+    ) INTO v_user
+    FROM api.vw_current_user;
+
+    IF v_user IS NULL THEN
+        RETURN api.problem_response(404, 'Not Found', 'User not found for current session');
+    END IF;
+
+    RETURN api.json_response(200, v_user);
+END;
+    $body$
+);
+
+-- ============================================================================
+-- REST Example: List Organizations (RLS-Filtered)
+-- ============================================================================
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'e1000001-0005-4000-8000-000000000001',
+        'uri', '^/organizations(\\?.*)?$',
+        'httpMethod', '^GET$',
+        'name', 'list_organizations',
+        'description', 'List organizations the authenticated user belongs to (RLS-filtered)',
+        'requiresAuth', true
+    ),
+    $body$
+DECLARE
+    v_orgs jsonb;
+BEGIN
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'id', o.object_id,
+        'name', o.name,
+        'slug', o.slug,
+        'is_personal', o.is_personal
+    )), '[]'::jsonb) INTO v_orgs
+    FROM membership.vw_active_organizations o
+    WHERE o.object_id = ANY(api.current_member_org_ids());
+
+    RETURN api.json_response(200, jsonb_build_object('organizations', v_orgs));
+END;
+    $body$
+);
+
 DO $$ BEGIN
     RAISE DEBUG '  + REST: GET /hello - Hello world endpoint';
     RAISE DEBUG '  + REST: POST /echo - Echo request body';
     RAISE DEBUG '  + REST: GET /health - Health check (no auth, no logging)';
+    RAISE DEBUG '  + REST: GET /me - Current user profile (membership)';
+    RAISE DEBUG '  + REST: GET /organizations - User organizations (RLS-filtered)';
     RAISE DEBUG '  + RPC: math.sum - Calculate sum of two numbers';
     RAISE DEBUG '  + RPC: system.time - Get server time';
     RAISE DEBUG '  + MCP Tool: database_info - Get database info';

@@ -28,6 +28,7 @@ BEGIN
 
     IF v_user_id IS NOT NULL AND length(v_user_id) <= v_max_len THEN
         PERFORM set_config('auth.user_id', v_user_id, true);
+        PERFORM set_config('auth.idp_subject', v_user_id, true);
     END IF;
 
     IF p_headers->'x-user-email' IS NOT NULL AND length(p_headers->'x-user-email') <= v_max_len THEN
@@ -40,6 +41,39 @@ BEGIN
 
     IF p_headers->'authorization' IS NOT NULL AND length(p_headers->'authorization') <= v_max_len THEN
         PERFORM set_config('auth.token', p_headers->'authorization', true);
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = api, membership, extensions, pg_temp
+AS $$
+DECLARE
+    v_subject text;
+    v_email text;
+    v_provider text;
+    v_subject_id text;
+BEGIN
+    v_subject := COALESCE(p_headers->'x-user-id', p_headers->'user-id');
+    IF v_subject IS NULL OR length(v_subject) > 4096 THEN
+        RETURN;
+    END IF;
+
+    IF position('|' IN v_subject) = 0 THEN
+        RETURN;
+    END IF;
+
+    PERFORM set_config('auth.idp_subject', v_subject, true);
+    PERFORM set_config('auth.user_id', v_subject, true);
+
+    v_email := p_headers->'x-user-email';
+    IF v_email IS NOT NULL AND length(v_email) <= 4096 THEN
+        v_provider := api.parse_idp_provider(v_subject);
+        v_subject_id := api.parse_idp_subject_id(v_subject);
+        PERFORM api.upsert_user(v_provider, v_subject_id, v_email);
     END IF;
 END;
 $$;
@@ -528,4 +562,5 @@ DECLARE
 BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.setup_auth_session(extensions.hstore) TO %I', v_api_role);
 END $$;

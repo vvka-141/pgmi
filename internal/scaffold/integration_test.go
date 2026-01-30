@@ -55,6 +55,7 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	if templateName == "advanced" {
 		params["database_admin_password"] = "TestPassword123!"
 		params["database_api_password"] = "ApiPassword123!"
+		params["database_customer_password"] = "CustomerPassword123!"
 		params["env"] = "test"
 	}
 

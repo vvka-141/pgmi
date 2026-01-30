@@ -22,10 +22,10 @@ DECLARE
     v_owner_role TEXT := pg_temp.pgmi_get_param('database_owner_role');
     v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
     v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
 BEGIN
     RAISE DEBUG '→ Verifying role hierarchy';
 
-    -- Verify all roles exist
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_owner_role) THEN
         RAISE EXCEPTION 'Owner role % not found', v_owner_role;
     END IF;
@@ -38,10 +38,15 @@ BEGIN
         RAISE EXCEPTION 'API role % not found', v_api_role;
     END IF;
 
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_customer_role) THEN
+        RAISE EXCEPTION 'Customer role % not found', v_customer_role;
+    END IF;
+
     RAISE DEBUG '✓ Role hierarchy verified';
-    RAISE DEBUG '  Owner: % (NOLOGIN)', v_owner_role;
-    RAISE DEBUG '  Admin: % (LOGIN, full access)', v_admin_role;
-    RAISE DEBUG '  API:   % (LOGIN, restricted)', v_api_role;
+    RAISE DEBUG '  Owner:    % (NOLOGIN)', v_owner_role;
+    RAISE DEBUG '  Admin:    % (LOGIN, full access)', v_admin_role;
+    RAISE DEBUG '  API:      % (LOGIN, restricted)', v_api_role;
+    RAISE DEBUG '  Customer: % (LOGIN, RLS-restricted)', v_customer_role;
 END $$;
 
 -- ============================================================================
@@ -81,6 +86,7 @@ DECLARE
     v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
     v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
     v_owner_role TEXT := pg_temp.pgmi_get_param('database_owner_role');
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
 BEGIN
     RAISE DEBUG '→ Creating schemas';
 
@@ -102,7 +108,11 @@ BEGIN
     COMMENT ON SCHEMA internal IS
         'Infrastructure and implementation details. Contains migration tracking, HTTP handlers, and internal state.';
 
-    RAISE DEBUG '  ✓ Created schemas: utils, api, core, internal';
+    CREATE SCHEMA IF NOT EXISTS membership;
+    COMMENT ON SCHEMA membership IS
+        'User, organization, and role management. Identity provider integration and RLS policies.';
+
+    RAISE DEBUG '  ✓ Created schemas: utils, api, core, internal, membership';
 
     -- Lock down public schema to prevent accidental use
 
@@ -123,11 +133,17 @@ BEGIN
     REVOKE ALL ON SCHEMA api FROM PUBLIC;
     REVOKE ALL ON SCHEMA core FROM PUBLIC;
     REVOKE ALL ON SCHEMA internal FROM PUBLIC;
+    REVOKE ALL ON SCHEMA membership FROM PUBLIC;
 
     EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I', v_admin_role);
     EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I', v_api_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I', v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA api TO %I', v_api_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA api TO %I', v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA core TO %I', v_api_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I', v_admin_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I', v_api_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I', v_customer_role);
 
     RAISE DEBUG '  ✓ Granted USAGE on utils to all roles (permissive)';
     RAISE DEBUG '  ✓ Granted USAGE on api, core to %', v_api_role;
@@ -137,12 +153,11 @@ BEGIN
 
     -- Configure database-level search_path (fallback for connections without role-specific path)
     EXECUTE format(
-        'ALTER DATABASE %I SET search_path = core, api, internal, extensions, utils, pg_temp',
+        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, utils, pg_temp',
         current_database()
     );
 
-    -- Set session search_path for current deployment
-    SET search_path TO core, api, internal, extensions, utils, pg_temp;
+    SET search_path TO core, api, membership, internal, extensions, utils, pg_temp;
 
     RAISE DEBUG '  ✓ Database search_path configured (default for all connections)';
     RAISE DEBUG '';

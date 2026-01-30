@@ -88,6 +88,8 @@ FROM (VALUES
     ('database_admin_password',      'text', NULL,                                 true,  'Password for database_admin_role (REQUIRED)'),
     ('database_api_role',            'name', current_database()::TEXT || '_api',   false, 'API client role with LOGIN capability'),
     ('database_api_password',        'text', NULL,                                 true,  'Password for database_api_role (REQUIRED)'),
+    ('database_customer_role',       'name', current_database()::TEXT || '_customer', false, 'Customer role with LOGIN capability (RLS-restricted)'),
+    ('database_customer_password',   'text', NULL,                                 true,  'Password for database_customer_role (REQUIRED)'),
 
     -- Environment configuration
     ('env',                          'text', 'development',                        false, 'Deployment environment (development, staging, production)'),
@@ -128,6 +130,7 @@ DECLARE
     v_owner_role TEXT := pg_temp.pgmi_get_param('database_owner_role');
     v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
     v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
 BEGIN
     RAISE DEBUG '═══════════════════════════════════════════════════════════════';
     RAISE DEBUG 'Bootstrap: Creating deployment infrastructure';
@@ -209,7 +212,31 @@ BEGIN
                current_database())
     );
 
-    RAISE NOTICE '  ✓ Role hierarchy created: owner → admin → api';
+    -- Create customer role (LOGIN, RLS-restricted)
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_customer_role) THEN
+        EXECUTE format(
+            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
+            v_customer_role,
+            pg_temp.pgmi_get_param('database_customer_password')
+        );
+        RAISE NOTICE '  ✓ Created customer role: % (LOGIN)', v_customer_role;
+    ELSE
+        EXECUTE format(
+            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
+            v_customer_role,
+            pg_temp.pgmi_get_param('database_customer_password')
+        );
+        RAISE DEBUG '  • Customer role exists (password updated): %', v_customer_role;
+    END IF;
+
+    EXECUTE format(
+        'COMMENT ON ROLE %I IS %L',
+        v_customer_role,
+        format('Customer role for %s with RLS-restricted access to membership data',
+               current_database())
+    );
+
+    RAISE NOTICE '  ✓ Role hierarchy created: owner → admin → api → customer';
 
     -- Configure default search_path for all roles (requires superuser)
     -- Note: Actual schemas don't exist yet, but PostgreSQL allows setting paths to non-existent schemas
@@ -226,6 +253,11 @@ BEGIN
     EXECUTE format(
         'ALTER ROLE %I SET search_path = api, core, extensions, utils, pg_temp',
         v_api_role
+    );
+
+    EXECUTE format(
+        'ALTER ROLE %I SET search_path = api, membership, core, extensions, utils, pg_temp',
+        v_customer_role
     );
 
     RAISE DEBUG '  ✓ Search path configured for all roles (persists across connections)';
