@@ -2,6 +2,7 @@
 
 ## User Documentation
 - **[QUICKSTART.md](QUICKSTART.md)** - Getting started guide (install, configure, deploy, verify — copy-paste ready)
+- **[CLI.md](CLI.md)** - Complete CLI reference (all commands, flags, examples, environment variables)
 - **[CONFIGURATION.md](CONFIGURATION.md)** - Project configuration (pgmi.yaml) reference
 - **[METADATA.md](METADATA.md)** - Script metadata guide (optional XML blocks for advanced deployments)
 - **[session-api.md](session-api.md)** - Session tables and helper functions reference
