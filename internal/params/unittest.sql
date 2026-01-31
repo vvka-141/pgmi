@@ -4,8 +4,8 @@
 -- ============================================================================
 -- This script creates the pg_temp.pgmi_unittest_* objects that pgmi
 -- automatically populates during session initialization. Test files are
--- identified by directory pattern: /__test__/
--- NOTE: This pattern must match pgmi.TestDirectoryPattern constant in pkg/pgmi/constants.go
+-- identified by directory pattern: /__test__/ or /__tests__/
+-- NOTE: This pattern must match pgmi.IsTestPath() in pkg/pgmi/constants.go
 -- ============================================================================
 
 -- ============================================================================
@@ -364,7 +364,7 @@ COMMENT ON FUNCTION pg_temp.pgmi_unittest_pvw_script IS
 -- ============================================================================
 -- Move test files from pg_temp.pgmi_source into pg_temp.pgmi_unittest_script
 -- Test files are identified by directory pattern: /__test__/
--- NOTE: This pattern must match pgmi.TestDirectoryPattern constant in pkg/pgmi/constants.go
+-- NOTE: This pattern must match pgmi.IsTestPath() in pkg/pgmi/constants.go
 INSERT INTO pg_temp.pgmi_unittest_script (path, name, directory, depth, content, size_bytes)
 SELECT path, name, directory, depth, content, size_bytes
 FROM pg_temp.pgmi_source

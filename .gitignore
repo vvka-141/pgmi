@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Windows NUL device artifact
+nul
+
 # Build output
 bin/
 dist/
@@ -37,7 +40,8 @@ go.work.sum
 # Claude instructions (proprietary - keep locally only)
 CLAUDE.md
 
-# Internal planning documents (keep locally only)
+# Code reviews and internal planning documents (keep locally only)
+reviews/
 apt-change-request.md
 code-review.md
 az-entra-id-upgrade.md
