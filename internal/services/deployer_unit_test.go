@@ -363,6 +363,98 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 	}
 }
 
+func TestDeploy_ReadDeploySQLFails(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	fileScanner := &mockFileScanner{readErr: fmt.Errorf("deploy.sql not found: %w", pgmi.ErrDeploySQLNotFound)}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	cf, _, lg, _, _, _ := validDeps()
+	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fileScanner, dbMgr)
+	svc.mgmtConnector = successfulMgmtConn()
+
+	err := svc.Deploy(context.Background(), validConfig())
+
+	if err == nil || !containsStr(err.Error(), "mock stop") {
+		t.Fatalf("Expected mock stop (session prep comes first), got: %v", err)
+	}
+}
+
+func TestDeploy_MaintenanceDBDefault(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.MaintenanceDatabase = ""
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil || !containsStr(err.Error(), "mock stop") {
+		t.Fatalf("Expected mock stop, got: %v", err)
+	}
+}
+
+func TestDeploy_CustomMaintenanceDB(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+
+	var capturedDB string
+	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+		capturedDB = dbName
+		return &mockDBConnection{}, noop, nil
+	}
+
+	svc := newTestService(dbMgr, nil, sessPreparer, customMgmt)
+
+	cfg := validConfig()
+	cfg.MaintenanceDatabase = "custom_maint"
+
+	_ = svc.Deploy(context.Background(), cfg)
+	if capturedDB != "custom_maint" {
+		t.Fatalf("Expected maintenance DB 'custom_maint', got: %q", capturedDB)
+	}
+}
+
+func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: false}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+
+	var capturedDB string
+	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+		capturedDB = dbName
+		return &mockDBConnection{}, noop, nil
+	}
+
+	svc := newTestService(dbMgr, nil, sessPreparer, customMgmt)
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+	cfg.MaintenanceDatabase = "maint_db"
+
+	_ = svc.Deploy(context.Background(), cfg)
+	if capturedDB != "maint_db" {
+		t.Fatalf("Expected maintenance DB 'maint_db', got: %q", capturedDB)
+	}
+}
+
+func TestExecuteTests_FilterPatternDefault(t *testing.T) {
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	cf, _, lg, _, fs, dm := validDeps()
+	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
+
+	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
+		SourcePath:       "/src",
+		DatabaseName:     "testdb",
+		ConnectionString: "postgresql://localhost/postgres",
+		FilterPattern:    "",
+	})
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	if !containsStr(err.Error(), "mock stop") {
+		t.Fatalf("Expected mock stop, got: %v", err)
+	}
+}
+
 func TestExecuteTests_PrepareSessionFails(t *testing.T) {
 	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("session prep failed")}
 	cf, _, lg, _, fs, dm := validDeps()
