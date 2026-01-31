@@ -101,6 +101,14 @@ DECLARE
     v_execution_ms numeric;
 BEGIN
     v_start_time := clock_timestamp();
+
+    IF length(p_method) > 16 THEN
+        RETURN api.problem_response(400, 'Bad Request', 'HTTP method too long');
+    END IF;
+    IF length(p_url) > 8192 THEN
+        RETURN api.problem_response(414, 'URI Too Long', 'URL exceeds maximum length');
+    END IF;
+
     p_method := upper(trim(p_method));
     p_url := trim(p_url);
     p_headers := COALESCE(p_headers, ''::extensions.hstore);

@@ -344,6 +344,9 @@ BEGIN
 
         -- Set session variable for new parameter
         IF v_value IS NOT NULL THEN
+            IF length(v_value) > 8192 THEN
+                RAISE EXCEPTION 'Parameter "%" value exceeds maximum length (8192 characters)', p_key;
+            END IF;
             PERFORM set_config('pgmi.' || p_key, v_value, false);
         END IF;
     ELSE
