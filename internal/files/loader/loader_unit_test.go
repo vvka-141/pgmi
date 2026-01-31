@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"context"
 	"testing"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -8,7 +9,7 @@ import (
 
 func TestLoadFilesIntoSession_NilFiles(t *testing.T) {
 	l := NewLoader()
-	err := l.LoadFilesIntoSession(nil, nil, nil)
+	err := l.LoadFilesIntoSession(context.TODO(), nil, nil)
 	if err != nil {
 		t.Fatalf("Expected nil error for nil files, got: %v", err)
 	}
@@ -16,7 +17,7 @@ func TestLoadFilesIntoSession_NilFiles(t *testing.T) {
 
 func TestLoadFilesIntoSession_EmptyFiles(t *testing.T) {
 	l := NewLoader()
-	err := l.LoadFilesIntoSession(nil, nil, []pgmi.FileMetadata{})
+	err := l.LoadFilesIntoSession(context.TODO(), nil, []pgmi.FileMetadata{})
 	if err != nil {
 		t.Fatalf("Expected nil error for empty files, got: %v", err)
 	}
@@ -24,7 +25,7 @@ func TestLoadFilesIntoSession_EmptyFiles(t *testing.T) {
 
 func TestLoadParametersIntoSession_EmptyParams(t *testing.T) {
 	l := NewLoader()
-	err := l.LoadParametersIntoSession(nil, nil, map[string]string{})
+	err := l.LoadParametersIntoSession(context.TODO(), nil, map[string]string{})
 	if err != nil {
 		t.Fatalf("Expected nil error for empty params, got: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestLoadParametersIntoSession_EmptyParams(t *testing.T) {
 
 func TestLoadParametersIntoSession_NilParams(t *testing.T) {
 	l := NewLoader()
-	err := l.LoadParametersIntoSession(nil, nil, nil)
+	err := l.LoadParametersIntoSession(context.TODO(), nil, nil)
 	if err != nil {
 		t.Fatalf("Expected nil error for nil params, got: %v", err)
 	}
@@ -40,30 +41,30 @@ func TestLoadParametersIntoSession_NilParams(t *testing.T) {
 
 func TestInsertFiles_Empty(t *testing.T) {
 	l := NewLoader()
-	if err := l.insertFiles(nil, nil, nil); err != nil {
+	if err := l.insertFiles(context.TODO(), nil, nil); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
-	if err := l.insertFiles(nil, nil, []pgmi.FileMetadata{}); err != nil {
+	if err := l.insertFiles(context.TODO(), nil, []pgmi.FileMetadata{}); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
 }
 
 func TestInsertParams_Empty(t *testing.T) {
 	l := NewLoader()
-	if err := l.insertParams(nil, nil, nil); err != nil {
+	if err := l.insertParams(context.TODO(), nil, nil); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
-	if err := l.insertParams(nil, nil, map[string]string{}); err != nil {
+	if err := l.insertParams(context.TODO(), nil, map[string]string{}); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
 }
 
 func TestSetSessionVariables_Empty(t *testing.T) {
 	l := NewLoader()
-	if err := l.setSessionVariables(nil, nil, nil); err != nil {
+	if err := l.setSessionVariables(context.TODO(), nil, nil); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
-	if err := l.setSessionVariables(nil, nil, map[string]string{}); err != nil {
+	if err := l.setSessionVariables(context.TODO(), nil, map[string]string{}); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
 }
@@ -84,7 +85,7 @@ func TestSetSessionVariables_InvalidKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := l.setSessionVariables(nil, nil, map[string]string{tt.key: "value"})
+			err := l.setSessionVariables(context.TODO(), nil, map[string]string{tt.key: "value"})
 			if err == nil {
 				t.Fatal("Expected error for invalid key")
 			}
@@ -98,14 +99,14 @@ func TestInsertMetadata_NoMetadataFiles(t *testing.T) {
 		{Path: "a.sql", Content: "SELECT 1;"},
 		{Path: "b.sql", Content: "SELECT 2;"},
 	}
-	if err := l.insertMetadata(nil, nil, files); err != nil {
+	if err := l.insertMetadata(context.TODO(), nil, files); err != nil {
 		t.Fatalf("Expected nil error for files without metadata: %v", err)
 	}
 }
 
 func TestInsertMetadata_NilFiles(t *testing.T) {
 	l := NewLoader()
-	if err := l.insertMetadata(nil, nil, nil); err != nil {
+	if err := l.insertMetadata(context.TODO(), nil, nil); err != nil {
 		t.Fatalf("Expected nil error: %v", err)
 	}
 }
@@ -116,7 +117,7 @@ func TestSetSessionVariables_InvalidKeyBeforeDB(t *testing.T) {
 		"valid_key":   "ok",
 		"invalid key": "bad",
 	}
-	err := l.setSessionVariables(nil, nil, params)
+	err := l.setSessionVariables(context.TODO(), nil, params)
 	if err == nil {
 		t.Fatal("Expected error for invalid parameter key")
 	}

@@ -51,7 +51,7 @@ func TestPrepareSession_ValidateDeploySQLFails(t *testing.T) {
 	scanner := &mockFileScanner{validateErr: fmt.Errorf("deploy.sql missing")}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(nil, &pgmi.ConnectionConfig{}, "/src", nil, false)
+	_, err := sm.PrepareSession(context.TODO(), &pgmi.ConnectionConfig{}, "/src", nil, false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -67,7 +67,7 @@ func TestPrepareSession_ScanDirectoryFails(t *testing.T) {
 	scanner := &mockFileScanner{scanErr: fmt.Errorf("permission denied")}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(nil, &pgmi.ConnectionConfig{}, "/src", nil, false)
+	_, err := sm.PrepareSession(context.TODO(), &pgmi.ConnectionConfig{}, "/src", nil, false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
