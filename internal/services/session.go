@@ -91,23 +91,28 @@ func (sm *SessionManager) PrepareSession(
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 
-	if verbose {
-		if _, err := conn.Exec(ctx, "SET client_min_messages = 'debug'"); err != nil {
+	var success bool
+	defer func() {
+		if !success {
 			conn.Release()
 			pool.Close()
+		}
+	}()
+
+	if verbose {
+		if _, err := conn.Exec(ctx, "SET client_min_messages = 'debug'"); err != nil {
 			return nil, fmt.Errorf("failed to set client_min_messages: %w", err)
 		}
 	}
 
 	// Prepare session (utility functions, files, params, unittest framework)
 	if err := sm.prepareSessionTables(ctx, conn, &scanResult, parameters); err != nil {
-		conn.Release()
-		pool.Close()
 		return nil, fmt.Errorf("session preparation failed: %w", err)
 	}
 
 	// Create Session object to encapsulate resources
 	session := pgmi.NewSession(pool, conn, scanResult)
+	success = true
 	return session, nil
 }
 
