@@ -267,11 +267,12 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     content jsonb,
-    request_id text
+    request_id text,
+    is_error boolean DEFAULT false
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('content', content),
+        jsonb_build_object('content', content, 'isError', is_error),
         request_id
     );
 $$;
@@ -286,11 +287,12 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
-    request_id text
+    request_id text,
+    is_error boolean DEFAULT false
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('contents', contents),
+        jsonb_build_object('contents', contents, 'isError', is_error),
         request_id
     );
 $$;
@@ -305,11 +307,12 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
     messages jsonb,
-    request_id text
+    request_id text,
+    is_error boolean DEFAULT false
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('messages', messages),
+        jsonb_build_object('messages', messages, 'isError', is_error),
         request_id
     );
 $$;
