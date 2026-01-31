@@ -97,7 +97,7 @@ func init() {
 
 	// Granular connection flags (PostgreSQL standard)
 	// Precedence: flag > environment variable > default
-	deployCmd.Flags().StringVar(&deployFlags.host, "host", "",
+	deployCmd.Flags().StringVarP(&deployFlags.host, "host", "h", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
 	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
@@ -144,7 +144,6 @@ func init() {
 		"Catastrophic failure protection timeout (default 3m)\n"+
 			"Prevents indefinite hangs from network issues or deadlocks\n"+
 			"For query-level timeouts, use SET statement_timeout in SQL\n"+
-			"Production: Set based on expected deployment duration\n"+
 			"Examples: 30s, 5m, 1h30m")
 }
 

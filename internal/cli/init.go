@@ -31,33 +31,19 @@ Available templates:
   advanced - Production-ready with metadata-driven deployment
 
 Use 'pgmi templates list' to see all available templates with descriptions.`,
-	Args: cobra.MinimumNArgs(0),
+	Args: cobra.ExactArgs(1),
 	RunE: runInit,
 }
 
-var (
-	initTemplate string
-	initList     bool
-)
+var initTemplate string
 
 func init() {
 	rootCmd.AddCommand(initCmd)
 
 	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "basic", "Template to use (basic, advanced)")
-	initCmd.Flags().BoolVar(&initList, "list", false, "List available templates")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	// Handle --list flag
-	if initList {
-		return runTemplatesList(cmd, args)
-	}
-
-	// Require target path if not listing
-	if len(args) == 0 {
-		return fmt.Errorf("target path required\n\nUsage: pgmi init <target_path> [flags]\n\nExamples:\n  pgmi init .           # Current directory\n  pgmi init ./myproject # Subdirectory\n\nUse 'pgmi init --list' to see available templates")
-	}
-
 	targetPath := args[0]
 	
 	// Determine project name from target path

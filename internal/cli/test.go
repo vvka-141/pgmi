@@ -68,7 +68,10 @@ Examples:
   pgmi test ./myapp -d test_db --list
 
   # Run tests with parameters
-  pgmi test ./myapp -d test_db --param test_user_id=123`,
+  pgmi test ./myapp -d test_db --param test_user_id=123
+
+  # Run tests with Azure Entra ID authentication
+  pgmi test ./myapp -d test_db --azure-tenant-id $AZURE_TENANT_ID --azure-client-id $AZURE_CLIENT_ID`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTest,
 }
@@ -96,7 +99,7 @@ func init() {
 			"Alternative: Use PGMI_CONNECTION_STRING or DATABASE_URL environment variable.\n"+
 			"Example: postgresql://user:pass@localhost:5432/test_db")
 
-	testCmd.Flags().StringVar(&testFlags.host, "host", "",
+	testCmd.Flags().StringVarP(&testFlags.host, "host", "h", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
 	testCmd.Flags().IntVarP(&testFlags.port, "port", "p", 0,
@@ -117,9 +120,9 @@ func init() {
 
 	testCmd.Flags().StringVar(&testFlags.filter, "filter", ".*", "POSIX regex pattern to filter tests (default: \".*\" matches all)\n"+
 		"Examples:\n"+
-		"  --filter \"/pre-deployment/\"           # Tests in /pre-deployment/ directories\n"+
-		"  --filter \".*_integration\\.sql$\"       # Integration tests\n"+
-		"  --filter \"/__test__/auth/\"             # Tests under __test__/auth/")
+		"  --filter auth           # Tests with 'auth' in the path\n"+
+		"  --filter pre-deployment # Tests in pre-deployment directories\n"+
+		"  --filter 001            # Tests matching '001'")
 	testCmd.Flags().BoolVar(&testFlags.list, "list", false, "List tests without executing them (dry-run mode)")
 	testCmd.Flags().StringSliceVar(&testFlags.params, "param", nil, "Parameters as key=value pairs (for parameterized tests)")
 	testCmd.Flags().StringSliceVar(&testFlags.paramsFiles, "params-file", nil,
@@ -129,6 +132,7 @@ func init() {
 	testCmd.Flags().DurationVar(&testFlags.timeout, "timeout", 3*time.Minute,
 		"Catastrophic failure protection timeout (default 3m)\n"+
 			"Prevents indefinite hangs from network issues or deadlocks\n"+
+			"For query-level timeouts, use SET statement_timeout in SQL\n"+
 			"Examples: 30s, 5m, 1h30m")
 }
 

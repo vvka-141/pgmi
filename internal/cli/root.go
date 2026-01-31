@@ -20,11 +20,6 @@ entire deployment using PostgreSQL's procedural languages.
 
 Philosophy: Minimal interference, maximum empowerment.
 
-Shell Completion:
-  Generate shell completion scripts for bash, zsh, fish, or powershell:
-    pgmi completion bash > /etc/bash_completion.d/pgmi
-    pgmi completion zsh > ~/.zsh/completions/_pgmi
-
 Exit Codes:
   0  - Success
   1  - General error (deployment or test failed)
@@ -51,7 +46,7 @@ func Execute() error {
 }
 
 func init() {
-	// Global flags - verbose applies to all commands
+	rootCmd.PersistentFlags().Bool("help", false, "Help for pgmi")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output for all commands")
 }
 
