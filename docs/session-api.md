@@ -84,9 +84,9 @@ FROM pg_temp.pgmi_source
 WHERE directory = './migrations/' AND is_sql_file
 ORDER BY path;
 
--- Find files by pattern
+-- Find SQL files in a specific directory
 SELECT path FROM pg_temp.pgmi_source
-WHERE path ~ '.*/schemas/.*\.sql$';
+WHERE directory = './schemas' AND is_sql_file;
 
 -- Count files by directory
 SELECT directory, count(*)
@@ -448,13 +448,26 @@ END $$;
 ### Dynamic File Selection
 
 ```sql
--- Deploy all SQL files matching a pattern
+-- Deploy SQL files from a specific directory (preferred)
 DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
         SELECT path FROM pg_temp.pgmi_source
-        WHERE path ~ '.*/v2/.*\.sql$'  -- POSIX regex
+        WHERE directory = './migrations/v2' AND is_sql_file
+        ORDER BY path
+    ) LOOP
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
+END $$;
+
+-- Or use POSIX regex for complex patterns (e.g., files in any 'v2' subdirectory)
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    FOR v_file IN (
+        SELECT path FROM pg_temp.pgmi_source
+        WHERE path ~ '.*/v2/.*' AND is_sql_file  -- Combine regex with is_sql_file
         ORDER BY path
     ) LOOP
         PERFORM pg_temp.pgmi_plan_file(v_file.path);

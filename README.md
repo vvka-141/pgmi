@@ -42,7 +42,7 @@ BEGIN
 
     FOR v_file IN (
         SELECT path FROM pg_temp.pgmi_source
-        WHERE path ~ '\.sql$'
+        WHERE is_sql_file
         ORDER BY path
     )
     LOOP

@@ -42,9 +42,42 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 
 | Flag | Description |
 |------|-------------|
-| `--overwrite` | Drop and recreate the target database before deploying |
-| `--force` | Skip interactive confirmation prompt (use with `--overwrite` for CI/CD) |
+| `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
+| `--force` | Replace interactive confirmation with 5-second countdown. Still shows warning, still cancellable with Ctrl+C. |
 | `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
+
+#### Understanding `--overwrite` Safety
+
+The `--overwrite` flag triggers a **destructive operation**: the target database is dropped and recreated. pgmi provides safety mechanisms to prevent accidents:
+
+**Without `--force` (interactive mode):**
+```
+⚠️  WARNING: You are about to DROP and RECREATE the database 'myapp'
+This will permanently delete all data in this database!
+
+To confirm, type the database name 'myapp' and press Enter: _
+```
+You must type the exact database name. Typos cancel the operation.
+
+**With `--force` (countdown mode):**
+```
+╔═══════════════════════════════════════════════════════════════════════╗
+      ______
+   .-'      '-.
+  /            \           ⚠️  DANGER: DESTRUCTIVE OPERATION ⚠️
+ |,  .-.  .-.  ,|       Database 'myapp' will be PERMANENTLY DELETED
+ | )(_o/  \o_)( |                ALL DATA WILL BE LOST
+  \__|IIIIII|__/
+╚═══════════════════════════════════════════════════════════════════════╝
+
+Dropping in: 5 seconds... (Press Ctrl+C to cancel)
+```
+A 5-second countdown gives you time to cancel with Ctrl+C.
+
+**When to use `--overwrite`:**
+- Local development with disposable databases
+- CI/CD pipelines deploying to **ephemeral test databases** (not production!)
+- Never on production or staging databases with real data
 
 ### Parameter Flags
 
@@ -81,8 +114,11 @@ pgmi deploy . --connection "postgresql://user:pass@localhost:5432/postgres" -d m
 # Deploy to a new database
 pgmi deploy ./myproject -d myapp
 
-# Recreate database and deploy (no confirmation prompt)
-pgmi deploy ./myproject -d myapp --overwrite --force
+# Deploy to existing database (incremental deployment)
+pgmi deploy ./myproject -d myapp
+
+# Recreate database for local development (shows 5-second countdown)
+pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
 # Full connection string
 pgmi deploy ./myproject --connection "postgresql://postgres:secret@db.example.com:5432/postgres" -d myapp
@@ -381,21 +417,41 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 
 ## Quick Recipes
 
-### CI/CD Pipeline
+### CI/CD Pipeline (Production)
+
+**Never use `--overwrite` in production.** Deploy incrementally to existing databases:
 
 ```bash
-export PGPASSWORD="$DB_PASSWORD"
+# Production deployment - incremental, no database recreation
 pgmi deploy ./myproject \
   --host db.example.com \
   --username deployer \
-  -d myapp \
-  --overwrite --force \
+  -d myapp_prod \
   --param env=production \
   --timeout 15m
+```
+
+### CI/CD Pipeline (Ephemeral Test Database)
+
+For CI pipelines that create fresh test databases per run:
+
+```bash
+# Create ephemeral test database, run tests, then tear down
+pgmi deploy ./myproject \
+  --host db.example.com \
+  --username deployer \
+  -d "myapp_ci_${CI_JOB_ID}" \
+  --overwrite --force \
+  --param env=ci \
+  --timeout 10m
+
 pgmi test ./myproject \
   --host db.example.com \
   --username deployer \
-  -d myapp
+  -d "myapp_ci_${CI_JOB_ID}"
+
+# Clean up: drop the ephemeral database after tests
+# (Use your CI platform's cleanup mechanism)
 ```
 
 ### Local Development

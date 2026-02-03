@@ -70,7 +70,7 @@ myapp/
        -- Execute all migrations in filename order
        FOR v_file IN (
            SELECT path FROM pg_temp.pgmi_source
-           WHERE path ~ '^./migrations/.*\.sql$'
+           WHERE directory = './migrations' AND is_sql_file
            ORDER BY path
        )
        LOOP
@@ -93,7 +93,7 @@ myapp/
 | `flyway migrate` | `pgmi deploy .` |
 | `flyway info` | Query `pg_temp.pgmi_source` in deploy.sql |
 | `flyway validate` | `pgmi validate .` or `pgmi metadata validate .` |
-| `flyway clean` | `pgmi deploy . --overwrite --force` (recreates DB) |
+| `flyway clean` | `pgmi deploy . --overwrite` (recreates DB; **local development only**) |
 | `flyway_schema_history` | Implement your own tracking table, or use metadata |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
 | Placeholders (`${var}`) | Parameters via `--param` + `pgmi_get_param()` |
@@ -178,7 +178,7 @@ myapp/
 
        FOR v_file IN (
            SELECT path FROM pg_temp.pgmi_source
-           WHERE path ~ '^./migrations/.*\.sql$'
+           WHERE directory = './migrations' AND is_sql_file
            ORDER BY path
        )
        LOOP
@@ -260,7 +260,7 @@ pgmi deploy . --database mydb
    BEGIN
        FOR v_file IN (
            SELECT path FROM pg_temp.pgmi_source
-           WHERE path ~ '\.sql$' AND path != './deploy.sql'
+           WHERE is_sql_file
            ORDER BY path
        )
        LOOP

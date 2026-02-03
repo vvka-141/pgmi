@@ -197,7 +197,9 @@ pgmi deploy . --overwrite --force
 What this does:
 - `.` means "this directory" (where pgmi.yaml and deploy.sql are)
 - `--overwrite` allows dropping and recreating the database if it already exists
-- `--force` skips the confirmation prompt
+- `--force` replaces interactive confirmation with a 5-second countdown (you can still press Ctrl+C to cancel)
+
+**Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
 
 You should see output like:
 
