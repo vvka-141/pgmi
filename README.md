@@ -64,7 +64,12 @@ Your `deploy.sql` queries the loaded files, decides what to execute, and builds 
 
 ## Install
 
-**macOS/Linux (Homebrew):**
+**Go (all platforms):**
+```bash
+go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+```
+
+**Homebrew (macOS/Linux):**
 ```bash
 brew install vvka-141/pgmi/pgmi
 ```
@@ -75,12 +80,7 @@ curl -1sLf 'https://dl.cloudsmith.io/vvka-141/pgmi/setup.deb.sh' | sudo bash
 sudo apt update && sudo apt install pgmi
 ```
 
-**From source (all platforms):**
-```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
-```
-
-**Windows:** Download from [GitHub Releases](https://github.com/vvka-141/pgmi/releases).
+**Windows:** Download from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) or use `go install` above.
 
 ## Get started
 
