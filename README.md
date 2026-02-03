@@ -150,7 +150,7 @@ pgmi deploy . -d staging_db --param env=staging
 
 ## Built-in testing
 
-Tests live in `__test__/` directories and run in transactions with automatic rollback:
+Tests live in `__test__/` or `__tests__/` directories and run in transactions with automatic rollback:
 
 ```bash
 pgmi test ./myapp -d test_db

@@ -163,7 +163,7 @@ Execute database unit tests.
 pgmi test <project_path> [flags]
 ```
 
-Runs test files discovered from `__test__/` directories. The database must already exist — use `pgmi deploy` first.
+Runs test files discovered from `__test__/` or `__tests__/` directories. The database must already exist — use `pgmi deploy` first.
 
 ### Test-Specific Flags
 
@@ -176,7 +176,7 @@ All [connection flags](#connection-flags), [parameter flags](#parameter-flags), 
 
 ### Test Discovery
 
-Tests are SQL files inside `__test__/` directories anywhere in your project:
+Tests are SQL files inside `__test__/` or `__tests__/` directories anywhere in your project:
 
 ```
 myproject/

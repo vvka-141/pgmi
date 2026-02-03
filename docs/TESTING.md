@@ -56,7 +56,7 @@ myapp/
         └── test_users_table.sql
 ```
 
-The name `__test__` is special. pgmi automatically finds these directories and treats everything inside them as test code. Test files are **physically separated** from deployment files — they cannot accidentally run during a real deployment.
+The name `__test__` (or `__tests__`) is special. pgmi automatically finds these directories and treats everything inside them as test code. Test files are **physically separated** from deployment files — they cannot accidentally run during a real deployment.
 
 ### Step 2: Write the test
 
@@ -549,7 +549,7 @@ pgmi test . --list
 
 The `pgmi test` command:
 - Does **not** deploy anything — run `pgmi deploy` first
-- Runs **only** files from `__test__/` directories
+- Runs **only** files from `__test__/` or `__tests__/` directories
 - **Always** rolls back — zero side effects on your database
 - Stops at the **first failure** — no partial results to interpret
 

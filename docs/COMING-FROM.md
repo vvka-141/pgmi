@@ -274,7 +274,7 @@ pgmi deploy . --database mydb
 
 - **Atomic deployments**: Wrap everything in a transaction
 - **Parameterization**: Pass environment-specific values via `--param`
-- **Testing**: Add `__test__/` directories with automatic rollback
+- **Testing**: Add `__test__/` or `__tests__/` directories with automatic rollback
 - **Reproducibility**: Same deploy.sql, same behavior
 
 ## Tracking migration state

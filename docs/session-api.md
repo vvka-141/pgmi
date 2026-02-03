@@ -72,7 +72,7 @@ Every file in your project directory is loaded here with full metadata:
 | `checksum` | text | SHA-256 of original content |
 | `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
 | `path_parts` | text[] | Path split by `/` |
-| `is_sql_file` | boolean | True for `.sql`, `.ddl`, `.pgsql`, etc. |
+| `is_sql_file` | boolean | True for SQL file extensions (`.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql`) |
 | `parent_folder_name` | text | Immediate parent directory name |
 
 **Example queries in deploy.sql:**
@@ -178,7 +178,7 @@ ORDER BY execution_order;
 
 **Test execution plan with setup/teardown lifecycle.**
 
-Files from `__test__/` directories are automatically moved here:
+Files from `__test__/` or `__tests__/` directories are automatically moved here:
 
 | Column | Type | Description |
 |--------|------|-------------|

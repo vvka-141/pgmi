@@ -47,7 +47,7 @@ This is often sufficient. Add metadata only when you need its specific capabilit
 - Simple projects with < 10 SQL files
 - Linear migrations (001_, 002_, 003_ naming works fine)
 - Prototype or throwaway projects
-- Test files (`__test__/` directories - metadata is ignored there anyway)
+- Test files (`__test__/` or `__tests__/` directories - metadata is ignored there anyway)
 
 ---
 
