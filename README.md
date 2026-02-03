@@ -38,8 +38,7 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    -- These functions SCHEDULE commands; pgmi executes them after deploy.sql completes
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
+    PERFORM pg_temp.pgmi_plan_command('BEGIN;');   -- schedule: start transaction
 
     FOR v_file IN (
         SELECT path FROM pg_temp.pgmi_source
@@ -47,10 +46,10 @@ BEGIN
         ORDER BY path
     )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);  -- schedule file for execution
+        PERFORM pg_temp.pgmi_plan_file(v_file.path); -- schedule: execute this file
     END LOOP;
 
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    PERFORM pg_temp.pgmi_plan_command('COMMIT;');  -- schedule: commit transaction
 END $$;
 ```
 
