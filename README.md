@@ -34,6 +34,9 @@ Unlike migration frameworks that decide when to commit and what to run, pgmi loa
 
 ```sql
 -- deploy.sql
+-- pg_temp is PostgreSQL's session-scoped schema; your files and plan exist
+-- only for this session and are automatically dropped when it ends.
+-- The pgmi_plan_* functions SCHEDULE commands; pgmi executes them after deploy.sql completes.
 DO $$
 DECLARE
     v_file RECORD;
