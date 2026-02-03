@@ -285,12 +285,14 @@ Now that you have a working project:
 
 | Want to... | Read |
 |-----------|------|
-| Pass parameters to your deployment (environment names, feature flags) | [Configuration Reference](CONFIGURATION.md) |
-| Write database tests that run inside transactions | [README — Built-in Testing](../README.md#-built-in-testing) |
+| Understand when pgmi makes sense | [Why pgmi?](WHY-PGMI.md) |
+| Migrate from Flyway or Liquibase | [Coming from Other Tools](COMING-FROM.md) |
+| Pass parameters to your deployment | [Configuration Reference](CONFIGURATION.md) |
+| Write database tests that run inside transactions | [Testing Guide](TESTING.md) |
 | Understand the session tables and helper functions | [Session API Reference](session-api.md) |
 | Use metadata for script tracking and ordering | [Metadata Guide](METADATA.md) |
-| Start a production-ready project with schemas and roles | `pgmi init myapp --template advanced` |
-| Understand how passwords and secrets work in CI/CD | [Security Guide](SECURITY.md) |
+| Prepare for production deployment | [Production Guide](PRODUCTION.md) |
+| Handle secrets in CI/CD | [Security Guide](SECURITY.md) |
 
 ---
 
