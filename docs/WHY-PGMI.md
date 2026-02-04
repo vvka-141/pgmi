@@ -91,10 +91,10 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-Consider simpler tools if:
+pgmi handles linear migrations out of the box (the basic template does exactly this). But consider simpler tools if:
 
-**You only need linear migrations.**
-If your deployments are always "run these numbered files in order," Flyway or Liquibase do this with less setup.
+**You'll never need anything beyond linear migrations.**
+If you're certain your deployments will always be "run these numbered files in order" with no conditionals, no custom transaction strategies, and no testing gates — Flyway or Liquibase have a shallower learning curve.
 
 **You prefer framework-managed complexity.**
 Some teams prefer "the tool handles transactions" over "I control transactions." That's valid—pgmi requires you to think about transaction boundaries.

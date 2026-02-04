@@ -224,7 +224,7 @@ ROLLBACK;                               ← undo everything (pgmi closes this)
 
 The `ROLLBACK TO sp_test_1` after `test_insert.sql` is what erases Charlie. The database state returns to exactly what `_setup.sql` created. Then `test_count.sql` runs against that clean state.
 
-The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data. And the final `ROLLBACK` undoes everything else — including any schema changes your deployment created.
+The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data. And the final `ROLLBACK` undoes everything else — the database is identical to before the test run.
 
 **PostgreSQL's transactional savepoints do all the work.** pgmi just generates the right savepoint structure. No cleanup scripts. No teardown hooks. No manual state management.
 

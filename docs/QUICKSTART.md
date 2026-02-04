@@ -172,7 +172,7 @@ params:
 > $env:PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/postgres"
 > ```
 >
-> When `PGMI_CONNECTION_STRING` is set, it provides the host, port, username, and password. The `database` field in `pgmi.yaml` still controls which database pgmi creates and deploys to.
+> When `PGMI_CONNECTION_STRING` is set, it provides the host, port, username, and password. pgmi connects to the database in the connection string first (typically `postgres`) to run `CREATE DATABASE`, then switches to the target database from `pgmi.yaml` to deploy. This is why the connection string points to `postgres` while `pgmi.yaml` says `myapp` — they serve different purposes.
 
 ### deploy.sql — your deployment logic
 
@@ -316,7 +316,7 @@ The password you set via `PGPASSWORD` or `PGMI_CONNECTION_STRING` doesn't match 
 
 ### "database already exists" (without --overwrite)
 
-pgmi won't drop an existing database unless you explicitly pass `--overwrite`. This is a safety feature. Add `--overwrite --force` to recreate, or deploy to a database that doesn't exist yet.
+Without `--overwrite`, pgmi creates the database if it doesn't exist and deploys to it if it does — this is normal incremental deployment. The `--overwrite` flag is only needed when you want to **drop and recreate** the database from scratch (local development, CI).
 
 ### "deploy.sql not found"
 

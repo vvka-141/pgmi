@@ -266,7 +266,7 @@ pgmi deploy . --database mydb
            ORDER BY path
        )
        LOOP
-           RAISE NOTICE 'Executing: %', v_file.path;
+           PERFORM pg_temp.pgmi_plan_notice('Executing: %s', v_file.path);
            PERFORM pg_temp.pgmi_plan_file(v_file.path);
        END LOOP;
    END $$;

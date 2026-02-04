@@ -227,7 +227,7 @@ PERFORM pg_temp.pgmi_plan_file('./migrations/001_init.sql');
 -- Execute files in a loop
 FOR v_file IN (
     SELECT path FROM pg_temp.pgmi_source
-    WHERE directory = './schemas/'
+    WHERE directory = './schemas/' AND is_sql_file
     ORDER BY path
 ) LOOP
     PERFORM pg_temp.pgmi_plan_file(v_file.path);
@@ -435,7 +435,7 @@ END $$;
 ```sql
 DO $$
 BEGIN
-    IF pg_temp.pgmi_get_param('env') = 'development' THEN
+    IF pg_temp.pgmi_get_param('env', 'development') = 'development' THEN
         PERFORM pg_temp.pgmi_plan_file('./seeds/dev_data.sql');
     END IF;
 
