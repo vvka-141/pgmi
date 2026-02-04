@@ -40,8 +40,6 @@ params:                  # Key-value parameters passed to deploy.sql
   max_connections: "100"
 
 timeout: 5m              # Deployment timeout (e.g., 30s, 5m, 1h)
-
-verbose: false           # Enable verbose output (PostgreSQL RAISE DEBUG)
 ```
 
 All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables.
@@ -75,7 +73,7 @@ Result: deploys to `prod_db`.
 Parameters merge from three sources (later wins):
 
 ```
---params-file < pgmi.yaml params < --param
+pgmi.yaml params < --params-file < --param
 ```
 
 Example:
@@ -125,6 +123,7 @@ pgmi.yaml intentionally **excludes**:
 | `password` | Stored in plaintext on disk | `PGMI_CONNECTION_STRING`, `.pgpass`, env vars |
 | `overwrite` | Operational safety flag | `--overwrite` CLI flag |
 | `force` | Operational safety flag | `--force` CLI flag |
+| `azure` | Runtime auth flag, not a project default | `--azure` CLI flag, `AZURE_*` env vars |
 
 pgmi.yaml is safe to commit to version control. Secrets belong in environment variables, `.pgpass`, or your CI/CD secret store.
 

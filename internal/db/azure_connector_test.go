@@ -190,6 +190,46 @@ func TestApplyAzureAuth(t *testing.T) {
 			wantClientID:     "env-client",
 			wantClientSecret: "env-secret",
 		},
+		{
+			name:           "--azure alone activates AzureEntraID",
+			flags:          &AzureFlags{Enabled: true},
+			env:            &EnvVars{},
+			wantAuthMethod: pgmi.AuthMethodAzureEntraID,
+		},
+		{
+			name:  "--azure with env vars",
+			flags: &AzureFlags{Enabled: true},
+			env: &EnvVars{
+				AZURE_TENANT_ID:     "env-tenant",
+				AZURE_CLIENT_ID:     "env-client",
+				AZURE_CLIENT_SECRET: "env-secret",
+			},
+			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
+			wantTenantID:     "env-tenant",
+			wantClientID:     "env-client",
+			wantClientSecret: "env-secret",
+		},
+		{
+			name: "--azure with explicit flags",
+			flags: &AzureFlags{
+				Enabled:  true,
+				TenantID: "flag-tenant",
+				ClientID: "flag-client",
+			},
+			env: &EnvVars{
+				AZURE_CLIENT_SECRET: "env-secret",
+			},
+			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
+			wantTenantID:     "flag-tenant",
+			wantClientID:     "flag-client",
+			wantClientSecret: "env-secret",
+		},
+		{
+			name:           "--azure false with no creds stays Standard",
+			flags:          &AzureFlags{},
+			env:            &EnvVars{},
+			wantAuthMethod: pgmi.AuthMethodStandard,
+		},
 	}
 
 	for _, tt := range tests {
@@ -211,6 +251,29 @@ func TestApplyAzureAuth(t *testing.T) {
 			}
 			if config.AzureClientSecret != tt.wantClientSecret {
 				t.Errorf("AzureClientSecret = %v, want %v", config.AzureClientSecret, tt.wantClientSecret)
+			}
+		})
+	}
+}
+
+func TestAzureFlags_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags *AzureFlags
+		want  bool
+	}{
+		{"nil", nil, true},
+		{"empty struct", &AzureFlags{}, true},
+		{"Enabled only", &AzureFlags{Enabled: true}, false},
+		{"TenantID only", &AzureFlags{TenantID: "t"}, false},
+		{"ClientID only", &AzureFlags{ClientID: "c"}, false},
+		{"Enabled with IDs", &AzureFlags{Enabled: true, TenantID: "t", ClientID: "c"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.flags.IsEmpty(); got != tt.want {
+				t.Errorf("AzureFlags.IsEmpty() = %v, want %v", got, tt.want)
 			}
 		})
 	}

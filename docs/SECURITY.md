@@ -175,6 +175,18 @@ deploy:
       rm -f /tmp/params.env
 ```
 
+### Azure Entra ID: Eliminating Secrets
+
+Managed Identity eliminates the secret-handling problem entirely — no passwords in env vars, no temp files, no process list exposure:
+
+```bash
+pgmi deploy . -d mydb \
+  --host myserver.postgres.database.azure.com \
+  --azure --sslmode require
+```
+
+Service Principal still requires `AZURE_CLIENT_SECRET` as an env var. The same `--params-file` patterns from above apply if you need to pass additional secrets.
+
 ## PostgreSQL Server Hardening
 
 For deployments handling sensitive parameters, ensure your PostgreSQL server is configured appropriately:
@@ -196,3 +208,4 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 | User SQL printing secrets | User-controlled | Not pgmi's domain | Review deploy scripts |
 | Session variable visibility | Low | Session-scoped | Don't persist session vars |
 | Shell history | Low | `--params-file` available | Use `--params-file` or env files |
+| Azure Entra ID (MI) | None | Token-based, no secrets | Use `--azure` with Managed Identity |

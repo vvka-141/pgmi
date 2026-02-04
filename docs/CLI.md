@@ -42,9 +42,42 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 
 | Flag | Description |
 |------|-------------|
-| `--overwrite` | Drop and recreate the target database before deploying |
-| `--force` | Skip interactive confirmation prompt (use with `--overwrite` for CI/CD) |
+| `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
+| `--force` | Replace interactive confirmation with 5-second countdown. Still shows warning, still cancellable with Ctrl+C. |
 | `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
+
+#### Understanding `--overwrite` Safety
+
+The `--overwrite` flag triggers a **destructive operation**: the target database is dropped and recreated. pgmi provides safety mechanisms to prevent accidents:
+
+**Without `--force` (interactive mode):**
+```
+⚠️  WARNING: You are about to DROP and RECREATE the database 'myapp'
+This will permanently delete all data in this database!
+
+To confirm, type the database name 'myapp' and press Enter: _
+```
+You must type the exact database name. Typos cancel the operation.
+
+**With `--force` (countdown mode):**
+```
+╔═══════════════════════════════════════════════════════════════════════╗
+      ______
+   .-'      '-.
+  /            \           ⚠️  DANGER: DESTRUCTIVE OPERATION ⚠️
+ |,  .-.  .-.  ,|       Database 'myapp' will be PERMANENTLY DELETED
+ | )(_o/  \o_)( |                ALL DATA WILL BE LOST
+  \__|IIIIII|__/
+╚═══════════════════════════════════════════════════════════════════════╝
+
+Dropping in: 5 seconds... (Press Ctrl+C to cancel)
+```
+A 5-second countdown gives you time to cancel with Ctrl+C.
+
+**When to use `--overwrite`:**
+- Local development with disposable databases
+- CI/CD pipelines deploying to **ephemeral test databases** (not production!)
+- Never on production or staging databases with real data
 
 ### Parameter Flags
 
@@ -57,6 +90,7 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 
 | Flag | Description |
 |------|-------------|
+| `--azure` | Enable Azure Entra ID authentication. Uses `DefaultAzureCredential` chain (Managed Identity, Azure CLI, etc.) |
 | `--azure-tenant-id` | Azure AD tenant/directory ID (overrides `$AZURE_TENANT_ID`) |
 | `--azure-client-id` | Azure AD application/client ID (overrides `$AZURE_CLIENT_ID`) |
 
@@ -78,11 +112,11 @@ pgmi deploy . --connection "postgresql://user:pass@localhost:5432/postgres" -d m
 ### Examples
 
 ```bash
-# Deploy to a new database
+# Deploy (creates the database if new, deploys incrementally if it exists)
 pgmi deploy ./myproject -d myapp
 
-# Recreate database and deploy (no confirmation prompt)
-pgmi deploy ./myproject -d myapp --overwrite --force
+# Recreate database for local development (shows 5-second countdown)
+pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
 # Full connection string
 pgmi deploy ./myproject --connection "postgresql://postgres:secret@db.example.com:5432/postgres" -d myapp
@@ -102,7 +136,12 @@ pgmi deploy ./myproject -d myapp --timeout 30m
 # Verbose output (see RAISE DEBUG messages)
 pgmi deploy ./myproject -d myapp --verbose
 
-# Azure Entra ID (passwordless)
+# Azure Entra ID with Managed Identity (no credentials needed)
+pgmi deploy ./myproject -d myapp --azure \
+  --host myserver.postgres.database.azure.com \
+  --sslmode require
+
+# Azure Entra ID with Service Principal
 pgmi deploy ./myproject -d myapp \
   --azure-tenant-id "your-tenant-id" \
   --azure-client-id "your-client-id"
@@ -127,7 +166,7 @@ Execute database unit tests.
 pgmi test <project_path> [flags]
 ```
 
-Runs test files discovered from `__test__/` directories. The database must already exist — use `pgmi deploy` first.
+Runs test files discovered from `__test__/` or `__tests__/` directories. The database must already exist — use `pgmi deploy` first.
 
 ### Test-Specific Flags
 
@@ -140,7 +179,7 @@ All [connection flags](#connection-flags), [parameter flags](#parameter-flags), 
 
 ### Test Discovery
 
-Tests are SQL files inside `__test__/` directories anywhere in your project:
+Tests are SQL files inside `__test__/` or `__tests__/` directories anywhere in your project:
 
 ```
 myproject/
@@ -197,7 +236,8 @@ Creates a ready-to-deploy project structure with `deploy.sql`, directory layout,
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-t, --template` | `basic` | Template to use (`basic` or `advanced`) |
-| `--list` | | List available templates |
+
+Use `pgmi templates list` to see all available templates with descriptions.
 
 ### Templates
 
@@ -219,7 +259,7 @@ pgmi init myapp
 pgmi init myapp --template advanced
 
 # See available templates
-pgmi init --list
+pgmi templates list
 ```
 
 ---
@@ -317,26 +357,6 @@ pgmi version
 
 ---
 
-## pgmi completion
-
-Generate shell completion scripts.
-
-```bash
-# Bash
-pgmi completion bash > /etc/bash_completion.d/pgmi
-
-# Zsh
-pgmi completion zsh > ~/.zsh/completions/_pgmi
-
-# Fish
-pgmi completion fish > ~/.config/fish/completions/pgmi.fish
-
-# PowerShell
-pgmi completion powershell > pgmi.ps1
-```
-
----
-
 ## Environment Variables
 
 pgmi respects standard PostgreSQL environment variables and its own:
@@ -381,21 +401,41 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 
 ## Quick Recipes
 
-### CI/CD Pipeline
+### CI/CD Pipeline (Production)
+
+**Never use `--overwrite` in production.** Deploy incrementally to existing databases:
 
 ```bash
-export PGPASSWORD="$DB_PASSWORD"
+# Production deployment - incremental, no database recreation
 pgmi deploy ./myproject \
   --host db.example.com \
   --username deployer \
-  -d myapp \
-  --overwrite --force \
+  -d myapp_prod \
   --param env=production \
   --timeout 15m
+```
+
+### CI/CD Pipeline (Ephemeral Test Database)
+
+For CI pipelines that create fresh test databases per run:
+
+```bash
+# Create ephemeral test database, run tests, then tear down
+pgmi deploy ./myproject \
+  --host db.example.com \
+  --username deployer \
+  -d "myapp_ci_${CI_JOB_ID}" \
+  --overwrite --force \
+  --param env=ci \
+  --timeout 10m
+
 pgmi test ./myproject \
   --host db.example.com \
   --username deployer \
-  -d myapp
+  -d "myapp_ci_${CI_JOB_ID}"
+
+# Clean up: drop the ephemeral database after tests
+# (Use your CI platform's cleanup mechanism)
 ```
 
 ### Local Development
@@ -409,12 +449,25 @@ pgmi test . -d myapp_dev
 ### Azure Entra ID (Passwordless)
 
 ```bash
+# System-assigned Managed Identity (no credentials needed)
+pgmi deploy ./myproject \
+  --host myserver.postgres.database.azure.com \
+  -d myapp --azure \
+  --sslmode require
+
+# User-assigned Managed Identity (specify client ID)
+pgmi deploy ./myproject \
+  --host myserver.postgres.database.azure.com \
+  -d myapp --azure \
+  --azure-client-id "your-managed-identity-client-id" \
+  --sslmode require
+
+# Service Principal (credentials via env vars)
 export AZURE_TENANT_ID="your-tenant-id"
 export AZURE_CLIENT_ID="your-client-id"
 export AZURE_CLIENT_SECRET="your-client-secret"
 pgmi deploy ./myproject \
   --host myserver.postgres.database.azure.com \
-  --username "your-client-id" \
-  -d myapp \
+  -d myapp --azure \
   --sslmode require
 ```

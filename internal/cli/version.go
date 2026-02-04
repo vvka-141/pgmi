@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
 
-// Build-time variables set via ldflags
 var (
 	version = "dev"
 	commit  = "unknown"
@@ -27,16 +27,48 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// printVersionInfo prints version information.
-// Pure version string goes to stdout for pipeline consumption (e.g., pgmi version | cut -d' ' -f2).
-// Decorative content (logo, commit, platform) goes to stderr.
+func resolveVersionInfo() (v, c, d string) {
+	v, c, d = version, commit, date
+
+	if v != "dev" {
+		return
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		v = info.Main.Version
+	}
+
+	settings := make(map[string]string)
+	for _, s := range info.Settings {
+		settings[s.Key] = s.Value
+	}
+
+	if rev, ok := settings["vcs.revision"]; ok && c == "unknown" {
+		c = rev
+		if settings["vcs.modified"] == "true" {
+			c += "-dirty"
+		}
+	}
+
+	if t, ok := settings["vcs.time"]; ok && d == "unknown" {
+		d = t
+	}
+
+	return
+}
+
 func printVersionInfo() {
+	v, c, d := resolveVersionInfo()
+
 	fmt.Fprintln(os.Stderr, asciiLogo)
 	fmt.Fprintln(os.Stderr)
-	// Machine-parseable version to stdout (pure semver for pipelines)
-	fmt.Printf("pgmi %s\n", version)
-	// Decorative info to stderr
-	fmt.Fprintf(os.Stderr, "Commit: %s, Built: %s, Platform: %s/%s\n", commit, date, runtime.GOOS, runtime.GOARCH)
+	fmt.Printf("pgmi %s\n", v)
+	fmt.Fprintf(os.Stderr, "Commit: %s, Built: %s, Platform: %s/%s\n", c, d, runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintln(os.Stderr, "PostgreSQL deployment tool")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Repository: https://github.com/vvka-141/pgmi")

@@ -23,7 +23,6 @@ params:
   region: us-west
 
 timeout: 10m
-verbose: true
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0644))
 
@@ -39,7 +38,6 @@ verbose: true
 	assert.Equal(t, "production", cfg.Params["env"])
 	assert.Equal(t, "us-west", cfg.Params["region"])
 	assert.Equal(t, "10m", cfg.Timeout)
-	assert.True(t, cfg.Verbose)
 }
 
 func TestLoad_MinimalYAML(t *testing.T) {
