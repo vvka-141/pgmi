@@ -4,36 +4,37 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// InteractiveApprover implements the Approver interface for console-based
-// interactive confirmation. It prompts the user to type the database name
-// to confirm destructive operations.
 type InteractiveApprover struct {
 	verbose bool
+	input   io.Reader
+	output  io.Writer
 }
 
-// NewInteractiveApprover creates a new InteractiveApprover.
 func NewInteractiveApprover(verbose bool) pgmi.Approver {
-	return &InteractiveApprover{verbose: verbose}
+	return &InteractiveApprover{
+		verbose: verbose,
+		input:   os.Stdin,
+		output:  os.Stderr,
+	}
 }
 
-// RequestApproval prompts the user to type the database name to confirm.
 func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string) (bool, error) {
-	fmt.Fprintf(os.Stderr, "\n⚠️  WARNING: You are about to DROP and RECREATE the database '%s'\n", dbName)
-	fmt.Fprintln(os.Stderr, "This will permanently delete all data in this database!")
-	fmt.Fprintf(os.Stderr, "\nTo confirm, type the database name '%s' and press Enter: ", dbName)
+	fmt.Fprintf(a.output, "\n⚠️  WARNING: You are about to DROP and RECREATE the database '%s'\n", dbName)
+	fmt.Fprintln(a.output, "This will permanently delete all data in this database!")
+	fmt.Fprintf(a.output, "\nTo confirm, type the database name '%s' and press Enter: ", dbName)
 
-	// Read user input with context cancellation support
 	inputChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
 	go func() {
-		reader := bufio.NewReader(os.Stdin)
+		reader := bufio.NewReader(a.input)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			errChan <- err
@@ -49,10 +50,10 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 		return false, fmt.Errorf("failed to read input: %w", err)
 	case input := <-inputChan:
 		if input == dbName {
-			fmt.Fprintln(os.Stderr, "✓ Confirmed. Proceeding with database overwrite...")
+			fmt.Fprintln(a.output, "✓ Confirmed. Proceeding with database overwrite...")
 			return true, nil
 		}
-		fmt.Fprintf(os.Stderr, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
+		fmt.Fprintf(a.output, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
 		return false, nil
 	}
 }
