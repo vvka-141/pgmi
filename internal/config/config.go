@@ -19,7 +19,6 @@ type ProjectConfig struct {
 	Connection ConnectionConfig  `yaml:"connection"`
 	Params     map[string]string `yaml:"params"`
 	Timeout    string            `yaml:"timeout"`
-	Verbose    bool              `yaml:"verbose"`
 }
 
 const ConfigFileName = "pgmi.yaml"

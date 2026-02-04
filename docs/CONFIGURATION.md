@@ -40,8 +40,6 @@ params:                  # Key-value parameters passed to deploy.sql
   max_connections: "100"
 
 timeout: 5m              # Deployment timeout (e.g., 30s, 5m, 1h)
-
-verbose: false           # Enable verbose output (PostgreSQL RAISE DEBUG)
 ```
 
 All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables.

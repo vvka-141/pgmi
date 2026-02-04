@@ -7,7 +7,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. Ever
 2. Make sure PostgreSQL is reachable
 3. Create a project
 4. Deploy it
-5. See your data in the database
+5. Verify the deployment
 
 **What you need:**
 - PostgreSQL running on `localhost:5432` (the default)
@@ -58,7 +58,7 @@ brew install pgmi
 <summary>Debian/Ubuntu (APT)</summary>
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/vvka-141/pgmi/setup.deb.sh' | sudo bash
+curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
 sudo apt update && sudo apt install pgmi
 ```
 </details>
@@ -114,10 +114,12 @@ This creates a ready-to-deploy project:
 
 ```
 myapp/
-├── deploy.sql          ← Your deployment logic (the brain)
-├── pgmi.yaml           ← Connection defaults (the config)
-├── migrations/         ← Your SQL files go here
-│   └── 001_initial.sql
+├── deploy.sql              ← Your deployment logic (the brain)
+├── pgmi.yaml               ← Connection defaults (the config)
+├── migrations/             ← Your SQL files go here
+│   └── 001_hello_world.sql
+├── __test__/               ← Your test files
+│   └── test_hello_world.sql
 └── README.md
 ```
 
@@ -180,9 +182,9 @@ Open `deploy.sql`. This is the only file that controls what happens during deplo
 
 pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order, by calling `pgmi_plan_*` functions that build a command queue—pgmi runs it afterward.
 
-### migrations/001_initial.sql — your first SQL file
+### migrations/001_hello_world.sql — your first SQL file
 
-This is a regular SQL file. Nothing special about it — no annotations required, no magic comments. It creates a table.
+This is a regular SQL file. Nothing special about it — no annotations required, no magic comments. It creates a `hello_world()` function that demonstrates pgmi's parameter system.
 
 ---
 
@@ -201,46 +203,55 @@ What this does:
 
 **Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
 
-You should see output like:
+You should see output ending with:
 
 ```
-Preparing session...
-Loaded 1 file(s) into session
-Executing deploy.sql...
-Executing plan (N commands)...
-  [1/N] BEGIN
-  ...
-  [N/N] COMMIT
-Deployment completed successfully.
+✓ Migrations complete
+✓ All tests passed (no side effects)
+✓ Deployment complete!
 ```
 
-Your database `myapp` now exists with the tables defined in your migration file.
+Your database `myapp` now exists with the `hello_world()` function and the built-in test has already verified it works.
 
 ---
 
-## Step 5: See your data
+## Step 5: Verify the deployment
 
 ### Using pgAdmin
 
 1. In the left panel, right-click "Databases" → Refresh
 2. You should see a new database called **myapp**
-3. Expand it: myapp → Schemas → public → Tables
-4. You'll see the table(s) created by your migration
-5. Right-click a table → View/Edit Data → All Rows to see its contents
+3. Open the Query Tool (Tools → Query Tool) and run:
+
+```sql
+SELECT hello_world();
+```
+
+You should see: `Hello, World!`
 
 ### Using the terminal
 
 ```bash
-psql -h localhost -U postgres -d myapp -c "\dt"
+psql -h localhost -U postgres -d myapp -c "SELECT hello_world();"
 ```
 
-You should see your table(s) listed:
+```
+  hello_world
+---------------
+ Hello, World!
+```
+
+Try it with a custom parameter:
+
+```bash
+pgmi deploy . --overwrite --force --param name=Alice
+psql -h localhost -U postgres -d myapp -c "SELECT hello_world();"
+```
 
 ```
-          List of relations
- Schema |   Name   | Type  |  Owner
---------+----------+-------+----------
- public | ...      | table | postgres
+   hello_world
+-----------------
+ Hello, Alice!
 ```
 
 You just deployed a PostgreSQL project with pgmi.
@@ -249,13 +260,15 @@ You just deployed a PostgreSQL project with pgmi.
 
 ## Step 6: Add a second migration
 
-Create a new file `migrations/002_add_email.sql`:
+Create a new file `migrations/002_users.sql`:
 
 ```sql
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT
+);
 ```
-
-> Adjust the table name to match what your `001_initial.sql` created.
 
 Deploy again:
 
@@ -263,9 +276,13 @@ Deploy again:
 pgmi deploy . --overwrite --force
 ```
 
-> **Why `--overwrite` again?** The basic template runs all migration files on every deploy, so it works best by recreating the database from scratch. This is simple and reliable for local development. For production, you'd write idempotent scripts (`CREATE TABLE IF NOT EXISTS`) or add tracking logic to `deploy.sql` — see [Production Guide](PRODUCTION.md) and [Metadata Guide](METADATA.md).
+Check the database (pgAdmin: refresh, or terminal):
 
-Check the database again (pgAdmin: refresh the table, or `psql -d myapp -c "\d users"`). The new column is there.
+```bash
+psql -h localhost -U postgres -d myapp -c "\dt"
+```
+
+You should see your new `users` table. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
 
 ---
 

@@ -58,7 +58,7 @@ brew install vvka-141/pgmi/pgmi
 
 **Debian/Ubuntu:**
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/vvka-141/pgmi/setup.deb.sh' | sudo bash
+curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
 sudo apt update && sudo apt install pgmi
 ```
 

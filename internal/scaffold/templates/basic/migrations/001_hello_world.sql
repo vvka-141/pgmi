@@ -5,8 +5,8 @@
 -- Parameters set by pgmi_init_params() in deploy.sql are accessible via
 -- current_setting('pgmi.parameter_name') or pgmi_get_param('parameter_name').
 --
--- Deploy with default:    pgmi deploy . --db mydb
--- Deploy with custom:     pgmi deploy . --db mydb --param name=Alice
+-- Deploy with default:    pgmi deploy . -d mydb
+-- Deploy with custom:     pgmi deploy . -d mydb --param name=Alice
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.hello_world()

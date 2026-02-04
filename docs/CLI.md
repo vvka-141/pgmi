@@ -236,7 +236,8 @@ Creates a ready-to-deploy project structure with `deploy.sql`, directory layout,
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-t, --template` | `basic` | Template to use (`basic` or `advanced`) |
-| `--list` | | List available templates |
+
+Use `pgmi templates list` to see all available templates with descriptions.
 
 ### Templates
 
@@ -258,7 +259,7 @@ pgmi init myapp
 pgmi init myapp --template advanced
 
 # See available templates
-pgmi init --list
+pgmi templates list
 ```
 
 ---
@@ -352,26 +353,6 @@ pgmi templates describe advanced
 
 ```bash
 pgmi version
-```
-
----
-
-## pgmi completion
-
-Generate shell completion scripts.
-
-```bash
-# Bash
-pgmi completion bash > /etc/bash_completion.d/pgmi
-
-# Zsh
-pgmi completion zsh > ~/.zsh/completions/_pgmi
-
-# Fish
-pgmi completion fish > ~/.config/fish/completions/pgmi.fish
-
-# PowerShell
-pgmi completion powershell > pgmi.ps1
 ```
 
 ---
