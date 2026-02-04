@@ -5,10 +5,10 @@
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 
 pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
+Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
 
 ![pgmi deployment flow](pgmi-deploy.png)
 
-Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
 
 ## Quick example
 
