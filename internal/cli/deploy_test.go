@@ -5,26 +5,42 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// resetDeployFlags resets all deployment-related global flags to their zero values.
-// This is necessary because flags are package-level globals that persist across tests.
 func resetDeployFlags() {
 	deployFlags = deployFlagValues{}
 }
 
-// TestBuildDeploymentConfig tests the deployment configuration building logic.
-func TestBuildDeploymentConfig(t *testing.T) {
-	// Save and restore original environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
+var pgEnvVars = []string{
+	"PGMI_CONNECTION_STRING", "DATABASE_URL",
+	"PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE",
+	"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
+}
+
+func clearPGEnv(t *testing.T) {
+	t.Helper()
+	saved := make(map[string]string)
+	for _, k := range pgEnvVars {
+		if v, ok := os.LookupEnv(k); ok {
+			saved[k] = v
 		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+		os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		for _, k := range pgEnvVars {
+			if v, ok := saved[k]; ok {
+				os.Setenv(k, v)
+			} else {
+				os.Unsetenv(k)
+			}
+		}
+	})
+}
+
+func TestBuildDeploymentConfig(t *testing.T) {
+	clearPGEnv(t)
 
 	// Create temporary directory for test files
 	tempDir := t.TempDir()
@@ -276,21 +292,30 @@ func TestBuildDeploymentConfig(t *testing.T) {
 	}
 }
 
-// TestBuildDeploymentConfig_ParameterPrecedence tests that CLI parameters override file parameters.
-func TestBuildDeploymentConfig_ParameterPrecedence(t *testing.T) {
-	// Reset flags
-	resetDeployFlags()
+func TestBuildDeploymentConfig_AzureAuth(t *testing.T) {
+	clearPGEnv(t)
 
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	tempDir := t.TempDir()
+
+	resetDeployFlags()
+	deployFlags.host = "myserver.postgres.database.azure.com"
+	deployFlags.database = "myapp"
+	deployFlags.azure = true
+	deployFlags.timeout = 3 * time.Minute
+
+	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
+	if err != nil {
+		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
+	}
+
+	if config.AuthMethod != pgmi.AuthMethodAzureEntraID {
+		t.Errorf("AuthMethod = %v, want %v", config.AuthMethod, pgmi.AuthMethodAzureEntraID)
+	}
+}
+
+func TestBuildDeploymentConfig_ParameterPrecedence(t *testing.T) {
+	clearPGEnv(t)
+	resetDeployFlags()
 
 	// Create temp directory and params file
 	tempDir := t.TempDir()
@@ -343,18 +368,8 @@ api_key=file_secret
 	}
 }
 
-// TestBuildDeploymentConfig_ValidationErrors tests various validation error scenarios.
 func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	tempDir := t.TempDir()
 
@@ -429,18 +444,8 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 	}
 }
 
-// TestBuildDeploymentConfig_Validate tests that the returned config passes validation.
 func TestBuildDeploymentConfig_Validate(t *testing.T) {
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	tempDir := t.TempDir()
 

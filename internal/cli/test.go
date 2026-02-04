@@ -70,7 +70,10 @@ Examples:
   # Run tests with parameters
   pgmi test ./myapp -d test_db --param test_user_id=123
 
-  # Run tests with Azure Entra ID authentication
+  # Run tests with Azure Entra ID (Managed Identity)
+  pgmi test ./myapp -d test_db --azure
+
+  # Run tests with Azure Entra ID (Service Principal)
   pgmi test ./myapp -d test_db --azure-tenant-id $AZURE_TENANT_ID --azure-client-id $AZURE_CLIENT_ID`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTest,
@@ -79,6 +82,7 @@ Examples:
 type testFlagValues struct {
 	connection, host, username, database, sslMode string
 	port                                          int
+	azure                                         bool
 	azureTenantID, azureClientID                  string
 	filter                                        string
 	list                                          bool
@@ -113,6 +117,9 @@ func init() {
 		"SSL mode: disable|allow|prefer|require|verify-ca|verify-full\n"+
 			"(default: prefer, or $PGSSLMODE)")
 
+	testCmd.Flags().BoolVar(&testFlags.azure, "azure", false,
+		"Enable Azure Entra ID authentication\n"+
+			"Uses DefaultAzureCredential chain (Managed Identity, Azure CLI, etc.)")
 	testCmd.Flags().StringVar(&testFlags.azureTenantID, "azure-tenant-id", "",
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
 	testCmd.Flags().StringVar(&testFlags.azureClientID, "azure-client-id", "",
@@ -163,6 +170,7 @@ func buildTestConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.
 	}
 
 	azureFlags := &db.AzureFlags{
+		Enabled:  testFlags.azure,
 		TenantID: testFlags.azureTenantID,
 		ClientID: testFlags.azureClientID,
 	}
@@ -302,6 +310,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
 	go func() {
 		<-sigChan

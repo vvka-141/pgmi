@@ -30,13 +30,14 @@ type GranularConnFlags struct {
 // Note: Client secret is NOT included as a CLI flag for security reasons.
 // Use AZURE_CLIENT_SECRET environment variable instead.
 type AzureFlags struct {
+	Enabled  bool
 	TenantID string // Overrides AZURE_TENANT_ID
 	ClientID string // Overrides AZURE_CLIENT_ID
 }
 
 // IsEmpty returns true if no Azure flags were provided.
 func (a *AzureFlags) IsEmpty() bool {
-	return a == nil || (a.TenantID == "" && a.ClientID == "")
+	return a == nil || (!a.Enabled && a.TenantID == "" && a.ClientID == "")
 }
 
 // IsEmpty returns true if no connection-related granular flags were provided by the user.
@@ -179,7 +180,7 @@ func applyAzureAuth(config *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVa
 	clientSecret := env.AZURE_CLIENT_SECRET
 
 	// If any Azure credentials are present, switch to Azure auth
-	if tenantID != "" || clientID != "" {
+	if flags.Enabled || tenantID != "" || clientID != "" {
 		config.AuthMethod = pgmi.AuthMethodAzureEntraID
 		config.AzureTenantID = tenantID
 		config.AzureClientID = clientID

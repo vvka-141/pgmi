@@ -75,6 +75,7 @@ Examples:
 type deployFlagValues struct {
 	connection, host, username, database, sslMode string
 	port                                          int
+	azure                                         bool
 	azureTenantID, azureClientID                  string
 	overwrite, force                              bool
 	params                                        []string
@@ -116,6 +117,9 @@ func init() {
 			"(default: prefer, or $PGSSLMODE)")
 
 	// Azure Entra ID flags
+	deployCmd.Flags().BoolVar(&deployFlags.azure, "azure", false,
+		"Enable Azure Entra ID authentication\n"+
+			"Uses DefaultAzureCredential chain (Managed Identity, Azure CLI, etc.)")
 	deployCmd.Flags().StringVar(&deployFlags.azureTenantID, "azure-tenant-id", "",
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
 	deployCmd.Flags().StringVar(&deployFlags.azureClientID, "azure-client-id", "",
@@ -174,6 +178,7 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 	}
 
 	azureFlags := &db.AzureFlags{
+		Enabled:  deployFlags.azure,
 		TenantID: deployFlags.azureTenantID,
 		ClientID: deployFlags.azureClientID,
 	}
@@ -323,11 +328,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
-	// Handle interrupt signals (Ctrl+C, SIGTERM) for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
-	// Create a separate goroutine to handle signals
 	go func() {
 		<-sigChan
 		fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")

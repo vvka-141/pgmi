@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -14,25 +15,25 @@ import (
 //go:embed assets/skull.txt
 var dangerSkull string
 
-// ForcedApprover implements the Approver interface for forced (non-interactive)
-// approval. It displays a countdown and automatically approves after the countdown,
-// used when the --force flag is provided.
 type ForcedApprover struct {
 	verbose bool
+	output  io.Writer
+	sleepFn func(time.Duration)
 }
 
-// NewForcedApprover creates a new ForcedApprover.
 func NewForcedApprover(verbose bool) pgmi.Approver {
-	return &ForcedApprover{verbose: verbose}
+	return &ForcedApprover{
+		verbose: verbose,
+		output:  os.Stderr,
+		sleepFn: time.Sleep,
+	}
 }
 
-// RequestApproval displays a countdown and automatically approves after the countdown.
 func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bool, error) {
-	// Display dramatic warning with skull - substitute database name
 	warningText := strings.ReplaceAll(dangerSkull, "${dbname}", dbName)
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprint(os.Stderr, warningText)
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(a.output)
+	fmt.Fprint(a.output, warningText)
+	fmt.Fprintln(a.output)
 
 	countdownSeconds := int(pgmi.DefaultForceApprovalCountdown.Seconds())
 	for i := countdownSeconds; i > 0; i-- {
@@ -40,12 +41,12 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 		case <-ctx.Done():
 			return false, ctx.Err()
 		default:
-			fmt.Fprintf(os.Stderr, "\rDropping in: %d seconds... (Press Ctrl+C to cancel)", i)
-			time.Sleep(1 * time.Second)
+			fmt.Fprintf(a.output, "\rDropping in: %d seconds... (Press Ctrl+C to cancel)", i)
+			a.sleepFn(1 * time.Second)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\r✓ Proceeding with database overwrite...                              \n")
+	fmt.Fprintf(a.output, "\r✓ Proceeding with database overwrite...                              \n")
 	return true, nil
 }
 

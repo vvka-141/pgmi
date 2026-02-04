@@ -72,7 +72,7 @@ Every file in your project directory is loaded here with full metadata:
 | `checksum` | text | SHA-256 of original content |
 | `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
 | `path_parts` | text[] | Path split by `/` |
-| `is_sql_file` | boolean | True for `.sql`, `.ddl`, `.pgsql`, etc. |
+| `is_sql_file` | boolean | True for SQL file extensions (`.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql`) |
 | `parent_folder_name` | text | Immediate parent directory name |
 
 **Example queries in deploy.sql:**
@@ -84,9 +84,9 @@ FROM pg_temp.pgmi_source
 WHERE directory = './migrations/' AND is_sql_file
 ORDER BY path;
 
--- Find files by pattern
+-- Find SQL files in a specific directory
 SELECT path FROM pg_temp.pgmi_source
-WHERE path ~ '.*/schemas/.*\.sql$';
+WHERE directory = './schemas/' AND is_sql_file;
 
 -- Count files by directory
 SELECT directory, count(*)
@@ -158,7 +158,7 @@ This view joins `pgmi_source` with `pgmi_source_metadata` and provides:
 | `content` | text | File content |
 | `checksum` | text | Normalized checksum |
 | `generic_id` | uuid | Auto-generated UUID from path |
-| `id` | uuid | Explicit ID from `<pgmi-meta>` (NULL if none) |
+| `id` | uuid | Explicit ID from [`<pgmi-meta>`](METADATA.md) (NULL if none) |
 | `idempotent` | boolean | Whether file can be re-executed |
 | `description` | text | From `<pgmi-meta>` |
 | `sort_key` | text | Execution ordering key |
@@ -178,7 +178,7 @@ ORDER BY execution_order;
 
 **Test execution plan with setup/teardown lifecycle.**
 
-Files from `__test__/` directories are automatically moved here:
+Files from `__test__/` or `__tests__/` directories are automatically moved here:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -227,7 +227,7 @@ PERFORM pg_temp.pgmi_plan_file('./migrations/001_init.sql');
 -- Execute files in a loop
 FOR v_file IN (
     SELECT path FROM pg_temp.pgmi_source
-    WHERE directory = './schemas/'
+    WHERE directory = './schemas/' AND is_sql_file
     ORDER BY path
 ) LOOP
     PERFORM pg_temp.pgmi_plan_file(v_file.path);
@@ -435,7 +435,7 @@ END $$;
 ```sql
 DO $$
 BEGIN
-    IF pg_temp.pgmi_get_param('env') = 'development' THEN
+    IF pg_temp.pgmi_get_param('env', 'development') = 'development' THEN
         PERFORM pg_temp.pgmi_plan_file('./seeds/dev_data.sql');
     END IF;
 
@@ -448,13 +448,26 @@ END $$;
 ### Dynamic File Selection
 
 ```sql
--- Deploy all SQL files matching a pattern
+-- Deploy SQL files from a specific directory (preferred)
 DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
         SELECT path FROM pg_temp.pgmi_source
-        WHERE path ~ '.*/v2/.*\.sql$'  -- POSIX regex
+        WHERE directory = './migrations/v2/' AND is_sql_file
+        ORDER BY path
+    ) LOOP
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
+END $$;
+
+-- Or use POSIX regex for complex patterns (e.g., files in any 'v2' subdirectory)
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    FOR v_file IN (
+        SELECT path FROM pg_temp.pgmi_source
+        WHERE path ~ '.*/v2/.*' AND is_sql_file  -- Combine regex with is_sql_file
         ORDER BY path
     ) LOOP
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
@@ -465,20 +478,24 @@ END $$;
 ### Test Isolation with Savepoints
 
 ```sql
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
--- Deploy your schema
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/') LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
+    -- Deploy your schema
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/' AND is_sql_file) LOOP
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
 
--- Run tests in a savepoint (rolled back after)
-PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
-PERFORM pg_temp.pgmi_plan_tests();
-PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
+    -- Run tests in a savepoint (rolled back after)
+    PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
+    PERFORM pg_temp.pgmi_plan_tests();
+    PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
 
--- Tests passed, commit the real changes
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    -- Tests passed, commit the real changes
+    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+END $$;
 ```
 
 ---

@@ -10,7 +10,7 @@ Testing database code is hard because **changes persist**. If a test creates a t
 
 Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXISTS`, teardown hooks. This is fragile. Miss one cleanup step and your test suite breaks in subtle, hard-to-debug ways.
 
-pgmi takes a different approach: **your tests never touch the real database at all.**
+pgmi takes a different approach: **your tests never leave permanent changes in the database.**
 
 ---
 
@@ -56,7 +56,7 @@ myapp/
         └── test_users_table.sql
 ```
 
-The name `__test__` is special. pgmi automatically finds these directories and treats everything inside them as test code. Test files are **physically separated** from deployment files — they cannot accidentally run during a real deployment.
+The name `__test__` (or `__tests__`) is special. pgmi automatically finds these directories and treats everything inside them as test code. Test files are **physically separated** from deployment files — they cannot accidentally run during a real deployment.
 
 ### Step 2: Write the test
 
@@ -224,7 +224,7 @@ ROLLBACK;                               ← undo everything (pgmi closes this)
 
 The `ROLLBACK TO sp_test_1` after `test_insert.sql` is what erases Charlie. The database state returns to exactly what `_setup.sql` created. Then `test_count.sql` runs against that clean state.
 
-The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data. And the final `ROLLBACK` undoes everything else — including any schema changes your deployment created.
+The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data. And the final `ROLLBACK` undoes everything else — the database is identical to before the test run.
 
 **PostgreSQL's transactional savepoints do all the work.** pgmi just generates the right savepoint structure. No cleanup scripts. No teardown hooks. No manual state management.
 
@@ -434,7 +434,7 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 
 ## The gated deployment pattern
 
-So far, you've been running tests *after* deployment with `pgmi test`. But pgmi can also run tests **inside** the deployment itself — so that if any test fails, the entire deployment rolls back and your database is unchanged.
+So far, you've been running tests *after* deployment with `pgmi test`. But pgmi can also run tests **as a gate before committing** — so that if any test fails, the entire deployment rolls back and your database is unchanged.
 
 To understand how this works, you need to know one thing about `deploy.sql`: **it doesn't execute SQL directly. It builds a plan.**
 
@@ -549,7 +549,7 @@ pgmi test . --list
 
 The `pgmi test` command:
 - Does **not** deploy anything — run `pgmi deploy` first
-- Runs **only** files from `__test__/` directories
+- Runs **only** files from `__test__/` or `__tests__/` directories
 - **Always** rolls back — zero side effects on your database
 - Stops at the **first failure** — no partial results to interpret
 
