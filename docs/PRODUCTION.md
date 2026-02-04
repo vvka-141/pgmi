@@ -215,12 +215,12 @@ Usage:
 pgmi deploy . -d mydb --param rollback=true
 ```
 
-### Savepoint-based partial rollback
+### Savepoint-based progress tracking
 
-For fine-grained control within a transaction:
+Savepoints mark progress within a transaction. If any file fails, PostgreSQL aborts the transaction and rolls back everything — but the savepoint names in the error output tell you exactly which migration failed:
 
 ```sql
--- deploy.sql with savepoints
+-- deploy.sql with savepoints for diagnostics
 DO $$
 DECLARE
     v_file RECORD;
@@ -230,13 +230,15 @@ BEGIN
     FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
     LOOP
         PERFORM pg_temp.pgmi_plan_command(format('SAVEPOINT migration_%s;', md5(v_file.path)));
+        PERFORM pg_temp.pgmi_plan_notice('Running: %s', v_file.path);
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
-        -- If this file fails, you can ROLLBACK TO SAVEPOINT migration_xxx
     END LOOP;
 
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
 ```
+
+**Note:** This is still all-or-nothing — if any migration fails, the entire transaction rolls back. For true partial progress, use [per-migration transactions](#per-migration-transactions) instead.
 
 ## Monitoring and observability
 

@@ -111,10 +111,7 @@ pgmi deploy . --connection "postgresql://user:pass@localhost:5432/postgres" -d m
 ### Examples
 
 ```bash
-# Deploy to a new database
-pgmi deploy ./myproject -d myapp
-
-# Deploy to existing database (incremental deployment)
+# Deploy (creates the database if new, deploys incrementally if it exists)
 pgmi deploy ./myproject -d myapp
 
 # Recreate database for local development (shows 5-second countdown)

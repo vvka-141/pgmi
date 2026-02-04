@@ -10,7 +10,7 @@ Testing database code is hard because **changes persist**. If a test creates a t
 
 Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXISTS`, teardown hooks. This is fragile. Miss one cleanup step and your test suite breaks in subtle, hard-to-debug ways.
 
-pgmi takes a different approach: **your tests never touch the real database at all.**
+pgmi takes a different approach: **your tests never leave permanent changes in the database.**
 
 ---
 

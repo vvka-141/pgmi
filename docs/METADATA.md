@@ -284,31 +284,31 @@ A single script can execute at multiple deployment stages by specifying multiple
 <pgmi-meta id="..." idempotent="true">
   <description>Create roles schema, then populate later</description>
   <sortKeys>
-    <key>000/020</key>     <!-- Phase 1: Create schema -->
-    <key>005/010</key>     <!-- Phase 2: Seed data -->
+    <key>000/020</key>     <!-- Early in deployment -->
+    <key>005/010</key>     <!-- Late in deployment -->
   </sortKeys>
 </pgmi-meta>
 */
 
--- Runs in Phase 1 (bootstrap)
+-- Both statements run EACH time the file executes.
+-- The file is idempotent, so re-execution is safe.
 CREATE SCHEMA IF NOT EXISTS roles;
 
--- Runs in Phase 2 (seeding)
 INSERT INTO roles.role (name) VALUES ('admin'), ('user')
 ON CONFLICT (name) DO NOTHING;
 ```
 
 ### How It Works
 
-Each `<key>` generates a separate execution entry:
+Each `<key>` generates a separate execution entry. The **entire file** runs at each stage:
 
 ```
 Execution Plan:
-#5:  sort_key='000/020', path='./roles.sql'  (first execution)
-#47: sort_key='005/010', path='./roles.sql'  (second execution)
+#5:  sort_key='000/020', path='./roles.sql'  (full file runs — schema + data)
+#47: sort_key='005/010', path='./roles.sql'  (full file runs again — both are no-ops)
 ```
 
-The same file content executes twice at different stages.
+This is useful when other scripts between the two stages depend on what this file creates. The file must be idempotent (`idempotent="true"`) since it runs multiple times.
 
 ### Use Cases
 

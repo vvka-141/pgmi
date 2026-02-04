@@ -74,7 +74,7 @@ cd myapp
 pgmi deploy . --database mydb --overwrite --force
 ```
 
-This creates a project with `deploy.sql`, runs it against a fresh database, and executes any SQL files it finds.
+This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
 
 See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough.
 
