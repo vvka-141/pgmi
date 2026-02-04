@@ -321,20 +321,25 @@ CREATE TABLE IF NOT EXISTS migration_history (
     applied_at TIMESTAMPTZ DEFAULT now()
 );
 
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
+DO $$
+DECLARE
+    v_file RECORD;
+BEGIN
+    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
-FOR v_file IN (SELECT path, checksum FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
-LOOP
-    IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
-        PERFORM pg_temp.pgmi_plan_command(format(
-            'INSERT INTO migration_history (filename, checksum) VALUES (%L, %L);',
-            v_file.path, v_file.checksum
-        ));
-    END IF;
-END LOOP;
+    FOR v_file IN (SELECT path, checksum FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN
+            PERFORM pg_temp.pgmi_plan_file(v_file.path);
+            PERFORM pg_temp.pgmi_plan_command(format(
+                'INSERT INTO migration_history (filename, checksum) VALUES (%L, %L);',
+                v_file.path, v_file.checksum
+            ));
+        END IF;
+    END LOOP;
 
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+END $$;
 ```
 
 ## Next steps

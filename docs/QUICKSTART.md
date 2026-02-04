@@ -11,7 +11,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. Ever
 
 **What you need:**
 - PostgreSQL running on `localhost:5432` (the default)
-- A superuser account (typically `postgres`)
+- A PostgreSQL user with database creation rights (typically `postgres`)
 - Go 1.22+ installed ([download here](https://go.dev/dl/))
 
 ---

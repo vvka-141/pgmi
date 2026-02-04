@@ -478,20 +478,24 @@ END $$;
 ### Test Isolation with Savepoints
 
 ```sql
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
--- Deploy your schema
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/' AND is_sql_file) LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
+    -- Deploy your schema
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/' AND is_sql_file) LOOP
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
 
--- Run tests in a savepoint (rolled back after)
-PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
-PERFORM pg_temp.pgmi_plan_tests();
-PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
+    -- Run tests in a savepoint (rolled back after)
+    PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
+    PERFORM pg_temp.pgmi_plan_tests();
+    PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
 
--- Tests passed, commit the real changes
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    -- Tests passed, commit the real changes
+    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+END $$;
 ```
 
 ---
