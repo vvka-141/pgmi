@@ -14,25 +14,21 @@ Unlike migration frameworks that decide when to commit and what to run, pgmi loa
 
 ```sql
 -- deploy.sql
--- pg_temp is PostgreSQL's session-scoped schema; your files and plan exist
--- only for this session and are automatically dropped when it ends.
--- The pgmi_plan_* functions SCHEDULE commands; pgmi executes them after deploy.sql completes.
+-- pg_temp is PostgreSQL's session-scoped schema; your files exist only
+-- for this session and are automatically dropped when it ends.
 DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');   -- schedule: start transaction
-
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
+        SELECT path, content FROM pg_temp.pgmi_source
         WHERE is_sql_file
         ORDER BY path
     )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path); -- schedule: execute this file
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');  -- schedule: commit transaction
 END $$;
 ```
 
@@ -40,7 +36,9 @@ END $$;
 pgmi deploy ./myapp --database mydb
 ```
 
-Your `deploy.sql` queries the loaded files, decides what to execute, and builds a plan. pgmi runs the plan. That's the entire model.
+Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
+
+For production projects, pgmi provides [plan functions](docs/session-api.md) that give you explicit control over transaction boundaries, execution phases, and testing—see the [Session API](docs/session-api.md).
 
 ## Install
 
