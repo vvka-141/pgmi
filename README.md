@@ -16,6 +16,8 @@ Unlike migration frameworks that decide when to commit and what to run, pgmi loa
 -- deploy.sql
 -- pg_temp is PostgreSQL's session-scoped schema; your files exist only
 -- for this session and are automatically dropped when it ends.
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
@@ -30,6 +32,8 @@ BEGIN
         EXECUTE v_file.content;
     END LOOP;
 END $$;
+
+COMMIT;
 ```
 
 ```bash
