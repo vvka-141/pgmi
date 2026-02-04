@@ -75,7 +75,7 @@ Result: deploys to `prod_db`.
 Parameters merge from three sources (later wins):
 
 ```
---params-file < pgmi.yaml params < --param
+pgmi.yaml params < --params-file < --param
 ```
 
 Example:

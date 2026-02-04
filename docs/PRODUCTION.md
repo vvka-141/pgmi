@@ -76,14 +76,14 @@ DECLARE
 BEGIN
     -- Phase 1: Schema extensions (one transaction)
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './extensions' ORDER BY path)
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './extensions/' AND is_sql_file ORDER BY path)
     LOOP
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
     END LOOP;
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 
     -- Phase 2: Migrations (per-file transactions for partial progress)
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations' ORDER BY path)
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
     LOOP
         PERFORM pg_temp.pgmi_plan_command('BEGIN;');
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
@@ -91,7 +91,7 @@ BEGIN
     END LOOP;
 
     -- Phase 3: Idempotent setup (no transaction wrapper)
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './setup' ORDER BY path)
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './setup/' AND is_sql_file ORDER BY path)
     LOOP
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
     END LOOP;
@@ -194,7 +194,7 @@ BEGIN
         -- Execute rollback scripts in reverse order
         FOR v_file IN (
             SELECT path FROM pg_temp.pgmi_source
-            WHERE directory = './rollback'
+            WHERE directory = './rollback/' AND is_sql_file
             ORDER BY path DESC
         )
         LOOP
@@ -202,7 +202,7 @@ BEGIN
         END LOOP;
     ELSE
         -- Normal deployment
-        FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations' ORDER BY path)
+        FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
         LOOP
             PERFORM pg_temp.pgmi_plan_file(v_file.path);
         END LOOP;
@@ -253,15 +253,22 @@ pgmi deploy . -d mydb 2>&1 | tee deployment.log
 Add notices in deploy.sql:
 
 ```sql
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source ORDER BY path)
-LOOP
-    PERFORM pg_temp.pgmi_plan_notice('[%s/%s] Executing: %s',
-        row_number() OVER (),
-        (SELECT count(*) FROM pg_temp.pgmi_source),
-        v_file.path
-    );
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
+DO $$
+DECLARE
+    v_file RECORD;
+    v_total INT;
+    v_count INT := 0;
+BEGIN
+    SELECT count(*) INTO v_total FROM pg_temp.pgmi_source WHERE is_sql_file;
+
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    LOOP
+        v_count := v_count + 1;
+        PERFORM pg_temp.pgmi_plan_notice('[%s/%s] Executing: %s',
+            v_count::text, v_total::text, v_file.path);
+        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    END LOOP;
+END $$;
 ```
 
 ### Audit logging
@@ -270,19 +277,21 @@ Log deployments to a table for historical tracking:
 
 ```sql
 -- deploy.sql: Audit logging
+-- NOTE: pgmi_plan_command() schedules SQL for execution AFTER planning.
+-- Direct INSERT/UPDATE in deploy.sql runs during planning, not execution.
+-- Use pgmi_plan_command() to schedule audit operations at the right time.
 DO $$
 DECLARE
     v_deployment_id UUID := gen_random_uuid();
     v_file RECORD;
 BEGIN
-    -- Record deployment start
-    INSERT INTO audit.deployments (id, started_at, env, files_count)
-    VALUES (
+    -- Schedule deployment start record (runs during execution)
+    PERFORM pg_temp.pgmi_plan_command(format(
+        'INSERT INTO audit.deployments (id, started_at, env, files_count) VALUES (%L, now(), %L, %s);',
         v_deployment_id,
-        now(),
         pg_temp.pgmi_get_param('env', 'unknown'),
         (SELECT count(*) FROM pg_temp.pgmi_source WHERE is_sql_file)
-    );
+    ));
 
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
@@ -290,15 +299,20 @@ BEGIN
     LOOP
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
 
-        -- Log each file execution
-        INSERT INTO audit.deployment_files (deployment_id, file_path, executed_at)
-        VALUES (v_deployment_id, v_file.path, now());
+        -- Schedule file execution log (runs during execution)
+        PERFORM pg_temp.pgmi_plan_command(format(
+            'INSERT INTO audit.deployment_files (deployment_id, file_path, executed_at) VALUES (%L, %L, now());',
+            v_deployment_id, v_file.path
+        ));
     END LOOP;
 
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 
-    -- Record deployment completion
-    UPDATE audit.deployments SET completed_at = now() WHERE id = v_deployment_id;
+    -- Schedule deployment completion record (runs during execution)
+    PERFORM pg_temp.pgmi_plan_command(format(
+        'UPDATE audit.deployments SET completed_at = now() WHERE id = %L;',
+        v_deployment_id
+    ));
 END $$;
 ```
 

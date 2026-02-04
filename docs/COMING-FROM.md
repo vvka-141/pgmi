@@ -70,7 +70,7 @@ myapp/
        -- Execute all migrations in filename order
        FOR v_file IN (
            SELECT path FROM pg_temp.pgmi_source
-           WHERE directory = './migrations' AND is_sql_file
+           WHERE directory = './migrations/' AND is_sql_file
            ORDER BY path
        )
        LOOP
@@ -102,7 +102,7 @@ myapp/
 
 - **Transaction flexibility**: Flyway is all-or-nothing per run. pgmi lets you commit per-migration:
   ```sql
-  FOR v_file IN (SELECT path FROM pg_temp.pgmi_source ORDER BY path)
+  FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
   LOOP
       PERFORM pg_temp.pgmi_plan_command('BEGIN;');
       PERFORM pg_temp.pgmi_plan_file(v_file.path);
@@ -178,7 +178,7 @@ myapp/
 
        FOR v_file IN (
            SELECT path FROM pg_temp.pgmi_source
-           WHERE directory = './migrations' AND is_sql_file
+           WHERE directory = './migrations/' AND is_sql_file
            ORDER BY path
        )
        LOOP
