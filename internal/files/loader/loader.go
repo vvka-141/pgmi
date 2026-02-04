@@ -75,13 +75,16 @@ func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pg
 // This eliminates the need for users to call pgmi_init_params() in deploy.sql.
 // Parameters are immediately accessible via current_setting('pgmi.key').
 func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
-	// Insert parameters into table
+	for key := range params {
+		if err := validateParameterKey(key); err != nil {
+			return err
+		}
+	}
+
 	if err := l.insertParams(ctx, conn, params); err != nil {
 		return fmt.Errorf("failed to insert parameters: %w", err)
 	}
 
-	// Auto-initialize session variables from CLI parameters
-	// This makes parameters immediately accessible without requiring pgmi_init_params() call
 	if err := l.setSessionVariables(ctx, conn, params); err != nil {
 		return fmt.Errorf("failed to set session variables: %w", err)
 	}
@@ -131,7 +134,7 @@ func (l *Loader) insertParams(ctx context.Context, conn *pgxpool.Conn, params ma
 //   - Uses parameterized queries (no SQL injection risk)
 func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
 	if len(params) == 0 {
-		return nil // No parameters to set
+		return nil
 	}
 
 	for key := range params {
@@ -140,7 +143,6 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 		}
 	}
 
-	// Use batch for performance (even though params are typically small)
 	batch := &pgx.Batch{}
 	paramKeys := make([]string, 0, len(params))
 

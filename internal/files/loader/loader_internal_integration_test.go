@@ -549,8 +549,8 @@ func TestLoadParametersIntoSession_InvalidKeyError_Internal(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error for invalid key")
 	}
-	if !strings.Contains(err.Error(), "failed to set session variables") {
-		t.Errorf("Expected error wrapping, got: %v", err)
+	if !strings.Contains(err.Error(), "invalid parameter key") {
+		t.Errorf("Expected invalid parameter key error, got: %v", err)
 	}
 }
 
