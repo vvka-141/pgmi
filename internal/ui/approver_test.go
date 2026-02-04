@@ -192,7 +192,8 @@ func TestInteractiveApprover_ReadError(t *testing.T) {
 
 func TestInteractiveApprover_ContextCancellation(t *testing.T) {
 	var output bytes.Buffer
-	input := &blockingReader{}
+	input := newBlockingReader()
+	t.Cleanup(func() { input.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -281,8 +282,24 @@ func (r *errorReader) Read([]byte) (int, error) {
 	return 0, r.err
 }
 
-type blockingReader struct{}
+type blockingReader struct {
+	done chan struct{}
+}
+
+func newBlockingReader() *blockingReader {
+	return &blockingReader{done: make(chan struct{})}
+}
 
 func (r *blockingReader) Read([]byte) (int, error) {
-	select {}
+	<-r.done
+	return 0, io.EOF
+}
+
+func (r *blockingReader) Close() error {
+	select {
+	case <-r.done:
+	default:
+		close(r.done)
+	}
+	return nil
 }

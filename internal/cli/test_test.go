@@ -14,18 +14,8 @@ func resetTestFlags() {
 	testFlags = testFlagValues{}
 }
 
-// TestBuildTestConfig tests the test configuration building logic.
 func TestBuildTestConfig(t *testing.T) {
-	// Save and restore original environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	// Create temporary directory for test files
 	tempDir := t.TempDir()
@@ -270,15 +260,7 @@ func TestBuildTestConfig(t *testing.T) {
 }
 
 func TestBuildTestConfig_AzureAuth(t *testing.T) {
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	tempDir := t.TempDir()
 
@@ -298,21 +280,9 @@ func TestBuildTestConfig_AzureAuth(t *testing.T) {
 	}
 }
 
-// TestBuildTestConfig_ParameterPrecedence tests that CLI parameters override file parameters.
 func TestBuildTestConfig_ParameterPrecedence(t *testing.T) {
-	// Reset flags
+	clearPGEnv(t)
 	resetTestFlags()
-
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
 
 	// Create temp directory and params file
 	tempDir := t.TempDir()
@@ -364,18 +334,8 @@ test_user_id=12345
 	}
 }
 
-// TestBuildTestConfig_ValidationErrors tests various validation error scenarios.
 func TestBuildTestConfig_ValidationErrors(t *testing.T) {
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	tempDir := t.TempDir()
 
@@ -447,18 +407,8 @@ func TestBuildTestConfig_ValidationErrors(t *testing.T) {
 	}
 }
 
-// TestBuildTestConfig_Validate tests that the returned config passes validation.
 func TestBuildTestConfig_Validate(t *testing.T) {
-	// Clear environment
-	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
-		} else {
-			os.Unsetenv("PGMI_CONNECTION_STRING")
-		}
-	}()
-	os.Unsetenv("PGMI_CONNECTION_STRING")
+	clearPGEnv(t)
 
 	tempDir := t.TempDir()
 

@@ -328,11 +328,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
-	// Handle interrupt signals (Ctrl+C, SIGTERM) for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
-	// Create a separate goroutine to handle signals
 	go func() {
 		<-sigChan
 		fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")

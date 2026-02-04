@@ -45,6 +45,9 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 
 	select {
 	case <-ctx.Done():
+		if closer, ok := a.input.(io.Closer); ok {
+			closer.Close()
+		}
 		return false, ctx.Err()
 	case err := <-errChan:
 		return false, fmt.Errorf("failed to read input: %w", err)
