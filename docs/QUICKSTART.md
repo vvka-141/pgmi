@@ -178,7 +178,7 @@ params:
 
 Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just SQL.
 
-pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order.
+pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order, by calling `pgmi_plan_*` functions that build a command queue—pgmi runs it afterward.
 
 ### migrations/001_initial.sql — your first SQL file
 

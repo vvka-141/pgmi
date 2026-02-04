@@ -2,6 +2,8 @@
 
 This guide helps you migrate to pgmi from other database deployment tools. Each section maps familiar concepts to pgmi equivalents and shows a concrete migration path.
 
+> **How pgmi deploys:** The `deploy.sql` examples below use `pgmi_plan_*` functions to build an execution queue—they don't run SQL immediately. After `deploy.sql` finishes, pgmi runs the queued commands in order. See [Session API](session-api.md) for the full reference.
+
 ## Quick concept mapping
 
 | Concept | Flyway | Liquibase | pgmi |
@@ -92,9 +94,9 @@ myapp/
 |----------------|-----------------|
 | `flyway migrate` | `pgmi deploy .` |
 | `flyway info` | Query `pg_temp.pgmi_source` in deploy.sql |
-| `flyway validate` | `pgmi validate .` or `pgmi metadata validate .` |
+| `flyway validate` | `pgmi metadata validate .` |
 | `flyway clean` | `pgmi deploy . --overwrite` (recreates DB; **local development only**) |
-| `flyway_schema_history` | Implement your own tracking table, or use metadata |
+| `flyway_schema_history` | Implement your own tracking table, or use [pgmi metadata](METADATA.md) |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
 | Placeholders (`${var}`) | Parameters via `--param` + `pgmi_get_param()` |
 
@@ -210,7 +212,7 @@ myapp/
 | `liquibase update` | `pgmi deploy .` |
 | `liquibase status` | `pgmi metadata plan .` or query pgmi_source |
 | `liquibase rollback` | PostgreSQL transaction rollback |
-| `databasechangelog` | Implement tracking table, or use pgmi metadata |
+| `databasechangelog` | Implement tracking table, or use [pgmi metadata](METADATA.md) |
 | Contexts | Parameters + conditionals in deploy.sql |
 | Preconditions | PL/pgSQL conditionals in deploy.sql |
 | Labels | Query file paths/names in deploy.sql |

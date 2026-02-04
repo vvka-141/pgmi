@@ -64,6 +64,8 @@ END $$;
 
 No framework DSL. No YAML conditionals. Just PostgreSQL.
 
+> The `pgmi_plan_*` functions above don't run SQL immediately—they schedule commands for execution after `deploy.sql` finishes. This is what makes the `IF v_env` conditional work: you build completely different execution plans based on runtime conditions, and nothing touches the database until the plan is final. See [Session API](session-api.md).
+
 ## When pgmi makes sense
 
 pgmi is a good fit when:

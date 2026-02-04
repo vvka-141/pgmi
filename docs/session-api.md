@@ -158,7 +158,7 @@ This view joins `pgmi_source` with `pgmi_source_metadata` and provides:
 | `content` | text | File content |
 | `checksum` | text | Normalized checksum |
 | `generic_id` | uuid | Auto-generated UUID from path |
-| `id` | uuid | Explicit ID from `<pgmi-meta>` (NULL if none) |
+| `id` | uuid | Explicit ID from [`<pgmi-meta>`](METADATA.md) (NULL if none) |
 | `idempotent` | boolean | Whether file can be re-executed |
 | `description` | text | From `<pgmi-meta>` |
 | `sort_key` | text | Execution ordering key |

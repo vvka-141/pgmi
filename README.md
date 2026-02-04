@@ -42,7 +42,7 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-For production projects, pgmi provides [plan functions](docs/session-api.md) that give you explicit control over transaction boundaries, execution phases, and testing—see the [Session API](docs/session-api.md).
+The Quick example above executes files directly. The scaffolded templates (`pgmi init`) use [plan functions](docs/session-api.md) instead—helpers that schedule commands into a queue, giving you control over transaction boundaries, execution phases, and [testing](docs/TESTING.md).
 
 ## Install
 
