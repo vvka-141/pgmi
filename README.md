@@ -6,27 +6,7 @@
 
 pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
 
-```
-┌─────────────┐      ┌─────────────┐      ┌─────────────────────┐
-│ Your SQL    │      │   pgmi      │      │    PostgreSQL       │
-│ files       │─────▶│   loads     │─────▶│                     │
-│             │      │   files     │      │  pg_temp.pgmi_source│
-└─────────────┘      └──────┬──────┘      └──────────┬──────────┘
-                            │                        │
-┌─────────────┐             │ runs                   │ queries
-│ deploy.sql  │─────────────┘                        │
-│ (you write) │◀─────────────────────────────────────┘
-└──────┬──────┘
-       │ builds plan
-       ▼
-┌─────────────────────┐
-│  pg_temp.pgmi_plan  │
-└──────────┬──────────┘
-           │
-           │ pgmi executes
-           ▼
-    Your database is deployed
-```
+![pgmi deployment flow](pgmi-deploy.png)
 
 Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
 
