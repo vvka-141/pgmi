@@ -325,7 +325,11 @@ FOR v_file IN (SELECT path, checksum FROM pg_temp.pgmi_source WHERE ...)
 LOOP
     IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN
         PERFORM pg_temp.pgmi_plan_file(v_file.path);
-        INSERT INTO migration_history (filename, checksum) VALUES (v_file.path, v_file.checksum);
+        -- Schedule the tracking INSERT to run AFTER the file executes
+        PERFORM pg_temp.pgmi_plan_command(format(
+            'INSERT INTO migration_history (filename, checksum) VALUES (%L, %L);',
+            v_file.path, v_file.checksum
+        ));
     END IF;
 END LOOP;
 ```

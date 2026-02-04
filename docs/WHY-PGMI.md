@@ -109,7 +109,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 
 | Aspect | pgmi | Traditional tools |
 |--------|------|-------------------|
-| Learning curve | Higher (you write deployment logic) | Lower (conventions handle it) |
+| Learning curve | Low to start (templates work out of the box), higher for custom logic | Lower (conventions handle it) |
 | Flexibility | Maximum (full PL/pgSQL) | Limited (framework DSL) |
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |

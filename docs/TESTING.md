@@ -434,7 +434,7 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 
 ## The gated deployment pattern
 
-So far, you've been running tests *after* deployment with `pgmi test`. But pgmi can also run tests **inside** the deployment itself — so that if any test fails, the entire deployment rolls back and your database is unchanged.
+So far, you've been running tests *after* deployment with `pgmi test`. But pgmi can also run tests **as a gate before committing** — so that if any test fails, the entire deployment rolls back and your database is unchanged.
 
 To understand how this works, you need to know one thing about `deploy.sql`: **it doesn't execute SQL directly. It builds a plan.**
 

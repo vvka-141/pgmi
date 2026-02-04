@@ -176,7 +176,7 @@ params:
 
 ### deploy.sql — your deployment logic
 
-Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just SQL.
+Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just PostgreSQL — the templates use PL/pgSQL, PostgreSQL's procedural language, for loops and conditionals.
 
 pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order, by calling `pgmi_plan_*` functions that build a command queue—pgmi runs it afterward.
 
@@ -262,6 +262,8 @@ Deploy again:
 ```bash
 pgmi deploy . --overwrite --force
 ```
+
+> **Why `--overwrite` again?** The basic template runs all migration files on every deploy, so it works best by recreating the database from scratch. This is simple and reliable for local development. For production, you'd write idempotent scripts (`CREATE TABLE IF NOT EXISTS`) or add tracking logic to `deploy.sql` — see [Production Guide](PRODUCTION.md) and [Metadata Guide](METADATA.md).
 
 Check the database again (pgAdmin: refresh the table, or `psql -d myapp -c "\d users"`). The new column is there.
 

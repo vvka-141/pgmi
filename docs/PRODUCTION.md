@@ -227,7 +227,7 @@ DECLARE
 BEGIN
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source ORDER BY path)
+    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
     LOOP
         PERFORM pg_temp.pgmi_plan_command(format('SAVEPOINT migration_%s;', md5(v_file.path)));
         PERFORM pg_temp.pgmi_plan_file(v_file.path);

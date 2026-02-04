@@ -481,7 +481,7 @@ END $$;
 PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
 -- Deploy your schema
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/') LOOP
+FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/' AND is_sql_file) LOOP
     PERFORM pg_temp.pgmi_plan_file(v_file.path);
 END LOOP;
 

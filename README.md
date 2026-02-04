@@ -86,7 +86,7 @@ pgmi is a good fit when you need:
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
 - **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, leverage `pg_advisory_lock`
 
-Consider simpler tools if you only need linear numbered migrations with framework-managed transactions.
+pgmi handles simple linear migrations out of the box — the basic template does exactly this. Its additional power is there when you need it.
 
 See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 
