@@ -164,10 +164,12 @@ pgmi supports:
 export PGMI_CONNECTION_STRING="postgresql://user:pass@localhost/postgres"
 pgmi deploy . -d mydb
 
-# Azure Entra ID
-export AZURE_TENANT_ID="..."
-export AZURE_CLIENT_ID="..."
-pgmi deploy . --host myserver.postgres.database.azure.com -d mydb
+# Azure Entra ID — Managed Identity (no credentials needed)
+pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslmode require
+
+# Azure Entra ID — Service Principal
+export AZURE_TENANT_ID="..." AZURE_CLIENT_ID="..." AZURE_CLIENT_SECRET="..."
+pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslmode require
 ```
 
 AWS IAM and GCP Cloud SQL support is on the roadmap.

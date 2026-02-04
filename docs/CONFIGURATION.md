@@ -125,6 +125,7 @@ pgmi.yaml intentionally **excludes**:
 | `password` | Stored in plaintext on disk | `PGMI_CONNECTION_STRING`, `.pgpass`, env vars |
 | `overwrite` | Operational safety flag | `--overwrite` CLI flag |
 | `force` | Operational safety flag | `--force` CLI flag |
+| `azure` | Runtime auth flag, not a project default | `--azure` CLI flag, `AZURE_*` env vars |
 
 pgmi.yaml is safe to commit to version control. Secrets belong in environment variables, `.pgpass`, or your CI/CD secret store.
 

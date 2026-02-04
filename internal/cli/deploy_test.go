@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // resetDeployFlags resets all deployment-related global flags to their zero values.
@@ -273,6 +275,35 @@ func TestBuildDeploymentConfig(t *testing.T) {
 				t.Errorf("buildDeploymentConfig() SourcePath = %v, want %v", config.SourcePath, tt.sourcePath)
 			}
 		})
+	}
+}
+
+func TestBuildDeploymentConfig_AzureAuth(t *testing.T) {
+	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
+		} else {
+			os.Unsetenv("PGMI_CONNECTION_STRING")
+		}
+	}()
+	os.Unsetenv("PGMI_CONNECTION_STRING")
+
+	tempDir := t.TempDir()
+
+	resetDeployFlags()
+	deployFlags.host = "myserver.postgres.database.azure.com"
+	deployFlags.database = "myapp"
+	deployFlags.azure = true
+	deployFlags.timeout = 3 * time.Minute
+
+	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
+	if err != nil {
+		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
+	}
+
+	if config.AuthMethod != pgmi.AuthMethodAzureEntraID {
+		t.Errorf("AuthMethod = %v, want %v", config.AuthMethod, pgmi.AuthMethodAzureEntraID)
 	}
 }
 

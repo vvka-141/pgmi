@@ -90,6 +90,7 @@ A 5-second countdown gives you time to cancel with Ctrl+C.
 
 | Flag | Description |
 |------|-------------|
+| `--azure` | Enable Azure Entra ID authentication. Uses `DefaultAzureCredential` chain (Managed Identity, Azure CLI, etc.) |
 | `--azure-tenant-id` | Azure AD tenant/directory ID (overrides `$AZURE_TENANT_ID`) |
 | `--azure-client-id` | Azure AD application/client ID (overrides `$AZURE_CLIENT_ID`) |
 
@@ -135,7 +136,12 @@ pgmi deploy ./myproject -d myapp --timeout 30m
 # Verbose output (see RAISE DEBUG messages)
 pgmi deploy ./myproject -d myapp --verbose
 
-# Azure Entra ID (passwordless)
+# Azure Entra ID with Managed Identity (no credentials needed)
+pgmi deploy ./myproject -d myapp --azure \
+  --host myserver.postgres.database.azure.com \
+  --sslmode require
+
+# Azure Entra ID with Service Principal
 pgmi deploy ./myproject -d myapp \
   --azure-tenant-id "your-tenant-id" \
   --azure-client-id "your-client-id"
@@ -462,12 +468,25 @@ pgmi test . -d myapp_dev
 ### Azure Entra ID (Passwordless)
 
 ```bash
+# System-assigned Managed Identity (no credentials needed)
+pgmi deploy ./myproject \
+  --host myserver.postgres.database.azure.com \
+  -d myapp --azure \
+  --sslmode require
+
+# User-assigned Managed Identity (specify client ID)
+pgmi deploy ./myproject \
+  --host myserver.postgres.database.azure.com \
+  -d myapp --azure \
+  --azure-client-id "your-managed-identity-client-id" \
+  --sslmode require
+
+# Service Principal (credentials via env vars)
 export AZURE_TENANT_ID="your-tenant-id"
 export AZURE_CLIENT_ID="your-client-id"
 export AZURE_CLIENT_SECRET="your-client-secret"
 pgmi deploy ./myproject \
   --host myserver.postgres.database.azure.com \
-  --username "your-client-id" \
-  -d myapp \
+  -d myapp --azure \
   --sslmode require
 ```

@@ -399,6 +399,51 @@ deploy:
     PGMI_CONNECTION_STRING: $DATABASE_URL
 ```
 
+### Azure DevOps
+
+```yaml
+steps:
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: 'my-service-connection'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        pgmi deploy . -d $DATABASE_NAME \
+          --host $PGHOST \
+          --azure \
+          --sslmode require \
+          --param env=production \
+          --timeout 15m
+```
+
+### GitHub Actions (Azure)
+
+```yaml
+deploy:
+  runs-on: ubuntu-latest
+  permissions:
+    id-token: write
+    contents: read
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: azure/login@v2
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Deploy
+      run: |
+        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
+          --host ${{ vars.AZURE_PG_HOST }} \
+          --azure \
+          --sslmode require \
+          --param env=production \
+          --timeout 15m
+```
+
 ### Deployment gates
 
 Use pgmi's exit codes for pipeline control:

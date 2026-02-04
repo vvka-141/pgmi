@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // resetTestFlags resets all test command-related global flags to their zero values.
@@ -264,6 +266,35 @@ func TestBuildTestConfig(t *testing.T) {
 				t.Errorf("buildTestConfig() SourcePath = %v, want %v", config.SourcePath, tt.sourcePath)
 			}
 		})
+	}
+}
+
+func TestBuildTestConfig_AzureAuth(t *testing.T) {
+	originalEnv := os.Getenv("PGMI_CONNECTION_STRING")
+	defer func() {
+		if originalEnv != "" {
+			os.Setenv("PGMI_CONNECTION_STRING", originalEnv)
+		} else {
+			os.Unsetenv("PGMI_CONNECTION_STRING")
+		}
+	}()
+	os.Unsetenv("PGMI_CONNECTION_STRING")
+
+	tempDir := t.TempDir()
+
+	resetTestFlags()
+	testFlags.host = "myserver.postgres.database.azure.com"
+	testFlags.database = "test_db"
+	testFlags.azure = true
+	testFlags.filter = ".*"
+
+	config, err := buildTestConfig(testCmd, tempDir, false)
+	if err != nil {
+		t.Fatalf("buildTestConfig() unexpected error: %v", err)
+	}
+
+	if config.AuthMethod != pgmi.AuthMethodAzureEntraID {
+		t.Errorf("AuthMethod = %v, want %v", config.AuthMethod, pgmi.AuthMethodAzureEntraID)
 	}
 }
 
