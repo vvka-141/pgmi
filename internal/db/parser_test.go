@@ -83,6 +83,24 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:    "URI with SSL cert params",
+			connStr: "postgresql://user@localhost:5432/mydb?sslmode=verify-full&sslcert=/path/client.crt&sslkey=/path/client.key&sslrootcert=/path/ca.crt&sslpassword=keypass",
+			want: &pgmi.ConnectionConfig{
+				Host:             "localhost",
+				Port:             5432,
+				Database:         "mydb",
+				Username:         "user",
+				SSLMode:          "verify-full",
+				SSLCert:          "/path/client.crt",
+				SSLKey:           "/path/client.key",
+				SSLRootCert:      "/path/ca.crt",
+				SSLPassword:      "keypass",
+				AuthMethod:       pgmi.AuthMethodStandard,
+				AdditionalParams: map[string]string{},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -164,6 +182,39 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:    "ADO.NET with SSL cert params",
+			connStr: "Host=localhost;Database=mydb;Username=user;sslcert=/path/client.crt;sslkey=/path/client.key;sslrootcert=/path/ca.crt;sslpassword=keypass",
+			want: &pgmi.ConnectionConfig{
+				Host:             "localhost",
+				Port:             5432,
+				Database:         "mydb",
+				Username:         "user",
+				SSLCert:          "/path/client.crt",
+				SSLKey:           "/path/client.key",
+				SSLRootCert:      "/path/ca.crt",
+				SSLPassword:      "keypass",
+				AuthMethod:       pgmi.AuthMethodStandard,
+				AdditionalParams: map[string]string{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ADO.NET with spaced SSL cert params",
+			connStr: "Host=localhost;Database=mydb;SSL Cert=/path/client.crt;SSL Key=/path/client.key;SSL Root Cert=/path/ca.crt;SSL Password=keypass",
+			want: &pgmi.ConnectionConfig{
+				Host:             "localhost",
+				Port:             5432,
+				Database:         "mydb",
+				SSLCert:          "/path/client.crt",
+				SSLKey:           "/path/client.key",
+				SSLRootCert:      "/path/ca.crt",
+				SSLPassword:      "keypass",
+				AuthMethod:       pgmi.AuthMethodStandard,
+				AdditionalParams: map[string]string{},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -230,6 +281,29 @@ func TestBuildConnectionString(t *testing.T) {
 	compareConfigs(t, parsed, config)
 }
 
+func TestBuildConnectionString_WithCertParams(t *testing.T) {
+	config := &pgmi.ConnectionConfig{
+		Host:        "localhost",
+		Port:        5432,
+		Database:    "mydb",
+		Username:    "user",
+		SSLMode:     "verify-full",
+		SSLCert:     "/path/client.crt",
+		SSLKey:      "/path/client.key",
+		SSLRootCert: "/path/ca.crt",
+		SSLPassword: "keypass",
+	}
+
+	connStr := BuildConnectionString(config)
+
+	parsed, err := ParseConnectionString(connStr)
+	if err != nil {
+		t.Fatalf("BuildConnectionString() produced invalid string: %v", err)
+	}
+
+	compareConfigs(t, parsed, config)
+}
+
 func compareConfigs(t *testing.T, got, want *pgmi.ConnectionConfig) {
 	t.Helper()
 
@@ -253,5 +327,17 @@ func compareConfigs(t *testing.T, got, want *pgmi.ConnectionConfig) {
 	}
 	if got.AppName != want.AppName {
 		t.Errorf("AppName = %v, want %v", got.AppName, want.AppName)
+	}
+	if got.SSLCert != want.SSLCert {
+		t.Errorf("SSLCert = %v, want %v", got.SSLCert, want.SSLCert)
+	}
+	if got.SSLKey != want.SSLKey {
+		t.Errorf("SSLKey = %v, want %v", got.SSLKey, want.SSLKey)
+	}
+	if got.SSLRootCert != want.SSLRootCert {
+		t.Errorf("SSLRootCert = %v, want %v", got.SSLRootCert, want.SSLRootCert)
+	}
+	if got.SSLPassword != want.SSLPassword {
+		t.Errorf("SSLPassword = %v, want %v", got.SSLPassword, want.SSLPassword)
 	}
 }

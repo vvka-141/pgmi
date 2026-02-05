@@ -8,11 +8,14 @@ import (
 )
 
 type ConnectionConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Username string `yaml:"username"`
-	Database string `yaml:"database"`
-	SSLMode  string `yaml:"sslmode"`
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Username    string `yaml:"username"`
+	Database    string `yaml:"database"`
+	SSLMode     string `yaml:"sslmode"`
+	SSLCert     string `yaml:"sslcert"`
+	SSLKey      string `yaml:"sslkey"`
+	SSLRootCert string `yaml:"sslrootcert"`
 }
 
 type ProjectConfig struct {

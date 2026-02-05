@@ -60,6 +60,7 @@ func TestResolveConnectionParams_PartialEnvVars(t *testing.T) {
 				"",
 				&GranularConnFlags{},
 				nil,
+				nil,
 				tt.envVars,
 				nil,
 			)
@@ -126,6 +127,7 @@ func TestResolveConnectionParams_SSLModePrecedence(t *testing.T) {
 				"",
 				tt.flags,
 				nil,
+				nil,
 				tt.envVars,
 				nil,
 			)
@@ -185,7 +187,7 @@ func TestResolveConnectionParams_DatabaseURL_Precedence(t *testing.T) {
 				DATABASE_URL: tt.databaseURL,
 			}
 
-			config, _, err := ResolveConnectionParams(tt.connStr, tt.flags, nil, envVars, nil)
+			config, _, err := ResolveConnectionParams(tt.connStr, tt.flags, nil, nil, envVars, nil)
 
 			if tt.expectError {
 				if err == nil {
@@ -210,6 +212,7 @@ func TestResolveConnectionParams_EmptyDatabaseInConnectionString(t *testing.T) {
 	config, maintenanceDB, err := ResolveConnectionParams(
 		"postgresql://user:pass@localhost:5432",
 		&GranularConnFlags{},
+		nil,
 		nil,
 		&EnvVars{},
 		nil,
@@ -280,6 +283,7 @@ func TestResolveConnectionParams_PGPORTEdgeCases(t *testing.T) {
 				"",
 				&GranularConnFlags{},
 				nil,
+				nil,
 				envVars,
 				nil,
 			)
@@ -311,6 +315,7 @@ func TestResolveConnectionParams_PasswordFromEnvOnly(t *testing.T) {
 	config, _, err := ResolveConnectionParams(
 		"",
 		&GranularConnFlags{},
+		nil,
 		nil,
 		envVars,
 		nil,
@@ -358,6 +363,7 @@ func TestResolveConnectionParams_MaintenanceDatabaseDifference(t *testing.T) {
 			_, maintenanceDB, err := ResolveConnectionParams(
 				tt.connStr,
 				tt.flags,
+				nil,
 				nil,
 				&EnvVars{},
 				nil,

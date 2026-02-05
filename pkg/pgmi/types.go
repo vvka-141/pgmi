@@ -161,17 +161,23 @@ type ConnectionConfig struct {
 	AzureTenantID     string
 	AzureClientID     string
 	AzureClientSecret string
+
+	// TLS client certificate parameters (transport-layer, not auth method)
+	// pgx handles mTLS natively via these connection string parameters
+	SSLCert     string
+	SSLKey      string
+	SSLRootCert string
+	SSLPassword string
 }
 
 // AuthMethod represents the type of authentication to use.
 type AuthMethod int
 
 const (
-	AuthMethodStandard AuthMethod = iota // Username/Password
-	AuthMethodCertificate                // mTLS
-	AuthMethodAWSIAM                     // AWS IAM Database Authentication
-	AuthMethodGoogleIAM                  // Google Cloud SQL IAM
-	AuthMethodAzureEntraID               // Azure Active Directory (Entra ID)
+	AuthMethodStandard     AuthMethod = iota // Username/Password
+	AuthMethodAWSIAM                         // AWS IAM Database Authentication
+	AuthMethodGoogleIAM                      // Google Cloud SQL IAM
+	AuthMethodAzureEntraID                   // Azure Active Directory (Entra ID)
 )
 
 // String returns a human-readable string representation of the AuthMethod.
@@ -179,8 +185,6 @@ func (a AuthMethod) String() string {
 	switch a {
 	case AuthMethodStandard:
 		return "Standard"
-	case AuthMethodCertificate:
-		return "Certificate"
 	case AuthMethodAWSIAM:
 		return "AWS IAM"
 	case AuthMethodGoogleIAM:

@@ -40,6 +40,19 @@ func (a *AzureFlags) IsEmpty() bool {
 	return a == nil || (!a.Enabled && a.TenantID == "" && a.ClientID == "")
 }
 
+// CertFlags represents TLS client certificate CLI flags.
+// These are additive — they can be combined with --connection or granular flags.
+type CertFlags struct {
+	SSLCert     string
+	SSLKey      string
+	SSLRootCert string
+}
+
+// IsEmpty returns true if no certificate flags were provided.
+func (c *CertFlags) IsEmpty() bool {
+	return c == nil || (c.SSLCert == "" && c.SSLKey == "" && c.SSLRootCert == "")
+}
+
 // IsEmpty returns true if no connection-related granular flags were provided by the user.
 // Note: Database flag is excluded from this check because it can be used to override
 // the database specified in a connection string.
@@ -62,6 +75,12 @@ type EnvVars struct {
 	AZURE_TENANT_ID     string // Azure AD tenant/directory ID
 	AZURE_CLIENT_ID     string // Azure AD application/client ID
 	AZURE_CLIENT_SECRET string // Azure AD client secret (for Service Principal auth)
+
+	// TLS client certificate environment variables (PostgreSQL standard)
+	PGSSLCERT     string // Client certificate path
+	PGSSLKEY      string // Client key path
+	PGSSLROOTCERT string // Root CA certificate path
+	PGSSLPASSWORD string // Client key password
 }
 
 // LoadFromEnvironment loads PostgreSQL and cloud provider environment variables.
@@ -78,6 +97,10 @@ func LoadFromEnvironment() *EnvVars {
 		AZURE_TENANT_ID:     os.Getenv("AZURE_TENANT_ID"),
 		AZURE_CLIENT_ID:     os.Getenv("AZURE_CLIENT_ID"),
 		AZURE_CLIENT_SECRET: os.Getenv("AZURE_CLIENT_SECRET"),
+		PGSSLCERT:           os.Getenv("PGSSLCERT"),
+		PGSSLKEY:            os.Getenv("PGSSLKEY"),
+		PGSSLROOTCERT:       os.Getenv("PGSSLROOTCERT"),
+		PGSSLPASSWORD:       os.Getenv("PGSSLPASSWORD"),
 	}
 }
 
@@ -111,6 +134,7 @@ func ResolveConnectionParams(
 	connStringFlag string,
 	granularFlags *GranularConnFlags,
 	azureFlags *AzureFlags,
+	certFlags *CertFlags,
 	envVars *EnvVars,
 	projectConfig *config.ProjectConfig,
 ) (*pgmi.ConnectionConfig, string, error) {
@@ -158,6 +182,9 @@ func ResolveConnectionParams(
 	// Apply Azure Entra ID authentication if configured
 	applyAzureAuth(config, azureFlags, envVars)
 
+	// Apply TLS client certificate parameters
+	applyCertParams(config, certFlags, envVars, projectConfig)
+
 	return config, maintenanceDB, nil
 }
 
@@ -185,6 +212,46 @@ func applyAzureAuth(config *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVa
 		config.AzureTenantID = tenantID
 		config.AzureClientID = clientID
 		config.AzureClientSecret = clientSecret
+	}
+}
+
+// applyCertParams sets TLS client certificate parameters on the config.
+// Precedence: flag > env var > pgmi.yaml > existing (from connection string).
+// SSLPassword is only available from env var (no flag, no yaml — security).
+func applyCertParams(cfg *pgmi.ConnectionConfig, flags *CertFlags, env *EnvVars, pc *config.ProjectConfig) {
+	var yamlCert, yamlKey, yamlRootCert string
+	if pc != nil {
+		yamlCert = pc.Connection.SSLCert
+		yamlKey = pc.Connection.SSLKey
+		yamlRootCert = pc.Connection.SSLRootCert
+	}
+
+	if flags != nil && flags.SSLCert != "" {
+		cfg.SSLCert = flags.SSLCert
+	} else if env != nil && env.PGSSLCERT != "" {
+		cfg.SSLCert = env.PGSSLCERT
+	} else if yamlCert != "" {
+		cfg.SSLCert = yamlCert
+	}
+
+	if flags != nil && flags.SSLKey != "" {
+		cfg.SSLKey = flags.SSLKey
+	} else if env != nil && env.PGSSLKEY != "" {
+		cfg.SSLKey = env.PGSSLKEY
+	} else if yamlKey != "" {
+		cfg.SSLKey = yamlKey
+	}
+
+	if flags != nil && flags.SSLRootCert != "" {
+		cfg.SSLRootCert = flags.SSLRootCert
+	} else if env != nil && env.PGSSLROOTCERT != "" {
+		cfg.SSLRootCert = env.PGSSLROOTCERT
+	} else if yamlRootCert != "" {
+		cfg.SSLRootCert = yamlRootCert
+	}
+
+	if env != nil && env.PGSSLPASSWORD != "" {
+		cfg.SSLPassword = env.PGSSLPASSWORD
 	}
 }
 

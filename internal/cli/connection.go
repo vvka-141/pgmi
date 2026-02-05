@@ -20,6 +20,7 @@ func resolveConnection(
 	connStringFlag string,
 	granularFlags *db.GranularConnFlags,
 	azureFlags *db.AzureFlags,
+	certFlags *db.CertFlags,
 	projectConfig *config.ProjectConfig,
 	verbose bool,
 ) (*pgmi.ConnectionConfig, string, error) {
@@ -37,6 +38,7 @@ func resolveConnection(
 		connString,
 		granularFlags,
 		azureFlags,
+		certFlags,
 		envVars,
 		projectConfig,
 	)

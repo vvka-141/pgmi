@@ -102,8 +102,6 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	switch config.AuthMethod {
 	case pgmi.AuthMethodStandard:
 		return NewStandardConnector(config), nil
-	case pgmi.AuthMethodCertificate:
-		return nil, fmt.Errorf("certificate-based authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodAWSIAM:
 		return nil, fmt.Errorf("AWS IAM authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodGoogleIAM:

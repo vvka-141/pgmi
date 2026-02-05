@@ -77,6 +77,7 @@ type deployFlagValues struct {
 	port                                          int
 	azure                                         bool
 	azureTenantID, azureClientID                  string
+	sslCert, sslKey, sslRootCert                  string
 	overwrite, force                              bool
 	params                                        []string
 	paramsFiles                                   []string
@@ -124,6 +125,17 @@ func init() {
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
 	deployCmd.Flags().StringVar(&deployFlags.azureClientID, "azure-client-id", "",
 		"Azure AD application/client ID (overrides $AZURE_CLIENT_ID)")
+
+	// TLS client certificate flags
+	deployCmd.Flags().StringVar(&deployFlags.sslCert, "sslcert", "",
+		"Path to client SSL certificate file\n"+
+			"Precedence: --sslcert > $PGSSLCERT > pgmi.yaml")
+	deployCmd.Flags().StringVar(&deployFlags.sslKey, "sslkey", "",
+		"Path to client SSL private key file\n"+
+			"Precedence: --sslkey > $PGSSLKEY > pgmi.yaml")
+	deployCmd.Flags().StringVar(&deployFlags.sslRootCert, "sslrootcert", "",
+		"Path to root CA certificate for server verification\n"+
+			"Precedence: --sslrootcert > $PGSSLROOTCERT > pgmi.yaml")
 
 	// Deployment workflow flags
 	deployCmd.Flags().BoolVar(&deployFlags.overwrite, "overwrite", false,
@@ -183,7 +195,13 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 		ClientID: deployFlags.azureClientID,
 	}
 
-	connConfig, maintenanceDB, err := resolveConnection(deployFlags.connection, granularFlags, azureFlags, projectCfg, verbose)
+	certFlags := &db.CertFlags{
+		SSLCert:     deployFlags.sslCert,
+		SSLKey:      deployFlags.sslKey,
+		SSLRootCert: deployFlags.sslRootCert,
+	}
+
+	connConfig, maintenanceDB, err := resolveConnection(deployFlags.connection, granularFlags, azureFlags, certFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
@@ -214,6 +232,15 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) 
 		fmt.Fprintf(os.Stderr, "  Target Database: %s\n", connConfig.Database)
 		fmt.Fprintf(os.Stderr, "  Maintenance Database: %s\n", maintenanceDB)
 		fmt.Fprintf(os.Stderr, "  SSL Mode: %s\n", connConfig.SSLMode)
+		if connConfig.SSLCert != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Cert: %s\n", connConfig.SSLCert)
+		}
+		if connConfig.SSLKey != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Key: %s\n", connConfig.SSLKey)
+		}
+		if connConfig.SSLRootCert != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Root Cert: %s\n", connConfig.SSLRootCert)
+		}
 		fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
 	}
 

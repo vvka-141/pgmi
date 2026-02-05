@@ -84,6 +84,7 @@ type testFlagValues struct {
 	port                                          int
 	azure                                         bool
 	azureTenantID, azureClientID                  string
+	sslCert, sslKey, sslRootCert                  string
 	filter                                        string
 	list                                          bool
 	params                                        []string
@@ -124,6 +125,17 @@ func init() {
 		"Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)")
 	testCmd.Flags().StringVar(&testFlags.azureClientID, "azure-client-id", "",
 		"Azure AD application/client ID (overrides $AZURE_CLIENT_ID)")
+
+	// TLS client certificate flags
+	testCmd.Flags().StringVar(&testFlags.sslCert, "sslcert", "",
+		"Path to client SSL certificate file\n"+
+			"Precedence: --sslcert > $PGSSLCERT > pgmi.yaml")
+	testCmd.Flags().StringVar(&testFlags.sslKey, "sslkey", "",
+		"Path to client SSL private key file\n"+
+			"Precedence: --sslkey > $PGSSLKEY > pgmi.yaml")
+	testCmd.Flags().StringVar(&testFlags.sslRootCert, "sslrootcert", "",
+		"Path to root CA certificate for server verification\n"+
+			"Precedence: --sslrootcert > $PGSSLROOTCERT > pgmi.yaml")
 
 	testCmd.Flags().StringVar(&testFlags.filter, "filter", ".*", "POSIX regex pattern to filter tests (default: \".*\" matches all)\n"+
 		"Examples:\n"+
@@ -175,7 +187,13 @@ func buildTestConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.
 		ClientID: testFlags.azureClientID,
 	}
 
-	connConfig, _, err := resolveConnection(testFlags.connection, granularFlags, azureFlags, projectCfg, verbose)
+	certFlags := &db.CertFlags{
+		SSLCert:     testFlags.sslCert,
+		SSLKey:      testFlags.sslKey,
+		SSLRootCert: testFlags.sslRootCert,
+	}
+
+	connConfig, _, err := resolveConnection(testFlags.connection, granularFlags, azureFlags, certFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.TestConfig{}, err
 	}
@@ -203,6 +221,15 @@ func buildTestConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.
 		fmt.Fprintf(os.Stderr, "  User: %s\n", connConfig.Username)
 		fmt.Fprintf(os.Stderr, "  Target Database: %s\n", connConfig.Database)
 		fmt.Fprintf(os.Stderr, "  SSL Mode: %s\n", connConfig.SSLMode)
+		if connConfig.SSLCert != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Cert: %s\n", connConfig.SSLCert)
+		}
+		if connConfig.SSLKey != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Key: %s\n", connConfig.SSLKey)
+		}
+		if connConfig.SSLRootCert != "" {
+			fmt.Fprintf(os.Stderr, "  SSL Root Cert: %s\n", connConfig.SSLRootCert)
+		}
 		fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Source path: %s\n", sourcePath)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Filter pattern: %s\n", testFlags.filter)

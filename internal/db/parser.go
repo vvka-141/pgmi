@@ -87,6 +87,14 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		switch strings.ToLower(key) {
 		case "sslmode":
 			config.SSLMode = value
+		case "sslcert":
+			config.SSLCert = value
+		case "sslkey":
+			config.SSLKey = value
+		case "sslrootcert":
+			config.SSLRootCert = value
+		case "sslpassword":
+			config.SSLPassword = value
 		case "application_name", "applicationname":
 			config.AppName = value
 		case "connect_timeout", "connecttimeout":
@@ -146,6 +154,14 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 			config.Password = value
 		case "sslmode", "ssl mode":
 			config.SSLMode = value
+		case "sslcert", "ssl cert":
+			config.SSLCert = value
+		case "sslkey", "ssl key":
+			config.SSLKey = value
+		case "sslrootcert", "ssl root cert":
+			config.SSLRootCert = value
+		case "sslpassword", "ssl password":
+			config.SSLPassword = value
 		case "application name", "applicationname":
 			config.AppName = value
 		case "timeout", "connect timeout", "connecttimeout":
@@ -181,6 +197,18 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 	query := url.Values{}
 	if config.SSLMode != "" {
 		query.Set("sslmode", config.SSLMode)
+	}
+	if config.SSLCert != "" {
+		query.Set("sslcert", config.SSLCert)
+	}
+	if config.SSLKey != "" {
+		query.Set("sslkey", config.SSLKey)
+	}
+	if config.SSLRootCert != "" {
+		query.Set("sslrootcert", config.SSLRootCert)
+	}
+	if config.SSLPassword != "" {
+		query.Set("sslpassword", config.SSLPassword)
 	}
 	if config.AppName != "" {
 		query.Set("application_name", config.AppName)
