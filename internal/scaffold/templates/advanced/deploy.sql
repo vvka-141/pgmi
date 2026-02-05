@@ -35,6 +35,7 @@ $msg$, current_setting('server_version');
     END IF;
 END $$;
 
+SELECT pg_temp.pgmi_plan_command($$SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()))$$);
 SELECT pg_temp.pgmi_plan_command($$
     BEGIN;
     SELECT pg_temp.provision();
@@ -463,6 +464,14 @@ BEGIN
     LOOP
 
         v_script_object_id := COALESCE(v_script.id, v_script.generic_id);
+
+        IF NOT v_script.idempotent AND EXISTS (
+            SELECT 1 FROM internal.deployment_script_execution_log
+            WHERE deployment_script_object_id = v_script_object_id
+        ) THEN
+            CONTINUE;
+        END IF;
+
         INSERT INTO internal.deployment_script(object_id)
         VALUES(v_script_object_id)
         ON CONFLICT(object_id) DO NOTHING;
@@ -470,13 +479,6 @@ BEGIN
         INSERT INTO internal.deployment_script_content("checksum", "value")
         VALUES(v_script.checksum, v_script.content)
         ON CONFLICT("checksum") DO NOTHING;
-
-        IF EXISTS (
-            SELECT 1 FROM internal.vw_deployment_script 
-            WHERE object_id = v_script_object_id 
-            AND NOT v_script.idempotent) THEN
-            CONTINUE;
-        END IF;
 
         EXECUTE v_script.content;
 

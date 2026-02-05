@@ -63,6 +63,7 @@ BEGIN
     -- Professional PostgreSQL pattern: Deploy everything in one transaction,
     -- use savepoints to test without persisting test artifacts.
 
+    PERFORM pg_temp.pgmi_plan_command($lock$SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()))$lock$);
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
     -- ========================================================================
