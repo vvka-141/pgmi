@@ -56,6 +56,9 @@ docs/archive/
 # .idea/
 # .vscode/
 
+# Content and articles (local drafts, not tracked)
+content/
+
 # Test scaffolds (pgmi init output during development)
 test_*/
 .user/
