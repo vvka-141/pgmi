@@ -4,11 +4,11 @@ package conntest
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/db"
@@ -70,9 +70,9 @@ func cleanupDB(t *testing.T, connStr, dbName string) {
 	}
 	defer pool.Close()
 
-	_, _ = pool.Exec(ctx, fmt.Sprintf(
-		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName))
-	_, err = pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+	_, _ = pool.Exec(ctx,
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", dbName)
+	_, err = pool.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{dbName}.Sanitize())
 	if err != nil {
 		t.Logf("cleanup: failed to drop %s: %v", dbName, err)
 	}

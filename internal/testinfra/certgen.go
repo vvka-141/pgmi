@@ -101,13 +101,26 @@ func GenerateCertBundle(hosts []string) (*CertBundle, error) {
 		return nil, fmt.Errorf("create client certificate: %w", err)
 	}
 
+	caKeyPEM, err := encodeKeyPEM(caKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode CA key: %w", err)
+	}
+	serverKeyPEM, err := encodeKeyPEM(serverKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode server key: %w", err)
+	}
+	clientKeyPEM, err := encodeKeyPEM(clientKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode client key: %w", err)
+	}
+
 	bundle := &CertBundle{
 		CACert:     encodeCertPEM(caCertDER),
-		CAKey:      encodeKeyPEM(caKey),
+		CAKey:      caKeyPEM,
 		ServerCert: encodeCertPEM(serverCertDER),
-		ServerKey:  encodeKeyPEM(serverKey),
+		ServerKey:  serverKeyPEM,
 		ClientCert: encodeCertPEM(clientCertDER),
-		ClientKey:  encodeKeyPEM(clientKey),
+		ClientKey:  clientKeyPEM,
 	}
 
 	return bundle, nil
@@ -143,7 +156,10 @@ func encodeCertPEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-func encodeKeyPEM(key *ecdsa.PrivateKey) []byte {
-	der, _ := x509.MarshalECPrivateKey(key)
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+func encodeKeyPEM(key *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
 }
