@@ -37,6 +37,9 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 | `-U, --username` | `$PGUSER` or OS user | PostgreSQL user |
 | `-d, --database` | `$PGDATABASE` or from connection string | Target database name |
 | `--sslmode` | `$PGSSLMODE` or `prefer` | SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` |
+| `--sslcert` | `$PGSSLCERT` | Path to client SSL certificate file |
+| `--sslkey` | `$PGSSLKEY` | Path to client SSL private key file |
+| `--sslrootcert` | `$PGSSLROOTCERT` | Path to root CA certificate for server verification |
 
 ### Deployment Flags
 
@@ -145,6 +148,19 @@ pgmi deploy ./myproject -d myapp --azure \
 pgmi deploy ./myproject -d myapp \
   --azure-tenant-id "your-tenant-id" \
   --azure-client-id "your-client-id"
+
+# mTLS with client certificate
+pgmi deploy ./myproject -d myapp \
+  --sslmode verify-full \
+  --sslcert /path/to/client.crt \
+  --sslkey /path/to/client.key \
+  --sslrootcert /path/to/ca.crt
+
+# mTLS combined with connection string
+pgmi deploy ./myproject \
+  --connection "postgresql://user@host/postgres" -d myapp \
+  --sslcert /path/to/client.crt \
+  --sslkey /path/to/client.key
 ```
 
 ### The Two-Database Pattern
@@ -175,7 +191,7 @@ Runs test files discovered from `__test__/` or `__tests__/` directories. The dat
 | `--filter` | POSIX regex to select tests (default: `.*` matches all) |
 | `--list` | List matching tests without executing (dry-run) |
 
-All [connection flags](#connection-flags), [parameter flags](#parameter-flags), and [Azure flags](#azure-entra-id-flags) from `deploy` also apply.
+All [connection flags](#connection-flags) (including SSL certificate flags), [parameter flags](#parameter-flags), and [Azure flags](#azure-entra-id-flags) from `deploy` also apply.
 
 ### Test Discovery
 
@@ -371,6 +387,10 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGPASSWORD` | `deploy`, `test` | Password |
 | `PGDATABASE` | `deploy`, `test` | Database name |
 | `PGSSLMODE` | `deploy`, `test` | SSL mode |
+| `PGSSLCERT` | `deploy`, `test` | Client SSL certificate path |
+| `PGSSLKEY` | `deploy`, `test` | Client SSL private key path |
+| `PGSSLROOTCERT` | `deploy`, `test` | Root CA certificate path |
+| `PGSSLPASSWORD` | `deploy`, `test` | Password for encrypted client key |
 | `AZURE_TENANT_ID` | `deploy`, `test` | Azure AD tenant ID |
 | `AZURE_CLIENT_ID` | `deploy`, `test` | Azure AD client ID |
 | `AZURE_CLIENT_SECRET` | `deploy`, `test` | Azure AD client secret |
@@ -444,6 +464,37 @@ pgmi test ./myproject \
 export PGPASSWORD="postgres"
 pgmi deploy . -d myapp_dev --overwrite --force
 pgmi test . -d myapp_dev
+```
+
+### mTLS Client Certificate
+
+```bash
+# CLI flags (additive — works with connection string or granular flags)
+pgmi deploy ./myproject -d myapp \
+  --sslmode verify-full \
+  --sslcert /path/to/client.crt \
+  --sslkey /path/to/client.key \
+  --sslrootcert /path/to/ca.crt
+
+# Combined with connection string
+pgmi deploy ./myproject \
+  --connection "postgresql://user@host/postgres" -d myapp \
+  --sslcert /path/to/client.crt \
+  --sslkey /path/to/client.key \
+  --sslrootcert /path/to/ca.crt
+
+# Via environment variables
+export PGSSLCERT=/path/to/client.crt
+export PGSSLKEY=/path/to/client.key
+export PGSSLROOTCERT=/path/to/ca.crt
+export PGSSLPASSWORD=keypass  # if key is encrypted
+pgmi deploy ./myproject -d myapp --sslmode verify-full
+
+# Via pgmi.yaml (committed, paths are not secrets)
+# connection:
+#   sslcert: /path/to/client.crt
+#   sslkey: /path/to/client.key
+#   sslrootcert: /path/to/ca.crt
 ```
 
 ### Azure Entra ID (Passwordless)

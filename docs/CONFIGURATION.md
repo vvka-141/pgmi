@@ -34,6 +34,9 @@ connection:
   username: postgres     # PostgreSQL user (default: from libpq)
   database: myapp        # Target database name
   sslmode: prefer        # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  sslcert: /path/to/client.crt    # Client SSL certificate path
+  sslkey: /path/to/client.key     # Client SSL private key path
+  sslrootcert: /path/to/ca.crt    # Root CA certificate path
 
 params:                  # Key-value parameters passed to deploy.sql
   env: development
@@ -121,6 +124,7 @@ pgmi.yaml intentionally **excludes**:
 | Field | Why Excluded | Use Instead |
 |-------|-------------|-------------|
 | `password` | Stored in plaintext on disk | `PGMI_CONNECTION_STRING`, `.pgpass`, env vars |
+| `sslpassword` | Key passphrase is a secret | `PGSSLPASSWORD` env var |
 | `overwrite` | Operational safety flag | `--overwrite` CLI flag |
 | `force` | Operational safety flag | `--force` CLI flag |
 | `azure` | Runtime auth flag, not a project default | `--azure` CLI flag, `AZURE_*` env vars |

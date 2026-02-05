@@ -40,7 +40,7 @@ When reporting a vulnerability, please include:
 
 - Never commit connection strings with passwords to version control
 - Use environment variables (`PGMI_CONNECTION_STRING`) for credentials
-- For production, use Azure Entra ID, AWS IAM, or certificate-based authentication
+- For production, use Azure Entra ID, TLS client certificates (mTLS), or cloud IAM authentication
 
 ### Parameters
 
