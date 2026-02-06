@@ -167,6 +167,40 @@ func TestScanDirectory_TestFiles(t *testing.T) {
 	}
 }
 
+func TestScanDirectory_RootLevelTestFiles(t *testing.T) {
+	s, fs := newTestScanner()
+	fs.AddFile("deploy.sql", "SELECT 1;")
+	fs.AddFile("migrations/001_users.sql", "CREATE TABLE users();")
+	fs.AddFile("__test__/00_fixture.sql", "INSERT INTO users VALUES (1);")
+	fs.AddFile("__test__/test_users.sql", "SELECT * FROM users;")
+
+	result, err := s.ScanDirectory("/project")
+	if err != nil {
+		t.Fatalf("ScanDirectory failed: %v", err)
+	}
+
+	if len(result.Files) != 3 {
+		t.Fatalf("Expected 3 files, got %d", len(result.Files))
+	}
+
+	testFileCount := 0
+	for _, f := range result.Files {
+		if pgmi.IsTestPath(f.Path) {
+			testFileCount++
+			if !strings.HasPrefix(f.Path, "./__test__/") {
+				t.Errorf("Root-level test file should have path ./__test__/*, got %q", f.Path)
+			}
+			if f.Metadata != nil {
+				t.Errorf("Test file %s should not have metadata extracted", f.Path)
+			}
+		}
+	}
+
+	if testFileCount != 2 {
+		t.Errorf("Expected 2 test files detected by IsTestPath, got %d", testFileCount)
+	}
+}
+
 func TestScanDirectory_SQLExtensions(t *testing.T) {
 	extensions := []string{".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql"}
 

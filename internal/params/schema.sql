@@ -194,6 +194,25 @@ CREATE TEMP TABLE pgmi_plan
 GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_plan TO PUBLIC;
 
 -- ============================================================================
+-- Test Source Table (Session-Scoped)
+-- ============================================================================
+-- Stores test file content separately from pgmi_source.
+-- Test files are identified by is_test_file flag and inserted here by Go.
+-- This separation keeps pgmi_source clean for deployment files only.
+CREATE TEMP TABLE pg_temp.pgmi_test_source
+(
+    path         TEXT NOT NULL PRIMARY KEY,
+    content      TEXT NOT NULL,
+    CONSTRAINT chk_test_source_path_format CHECK (path ~ '^\./'),
+    CONSTRAINT chk_test_source_content_not_empty CHECK (content != '')
+);
+
+COMMENT ON TABLE pg_temp.pgmi_test_source IS
+    'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
+
+GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_source TO PUBLIC;
+
+-- ============================================================================
 -- Test Execution Script Table (Session-Scoped)
 -- ============================================================================
 -- Pre-ordered execution plan for test files, populated by Go during preprocessing.
@@ -220,7 +239,7 @@ GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_script TO PUBLIC;
 -- ============================================================================
 -- Test File Executor Function
 -- ============================================================================
--- Executes a test file by retrieving its content from pgmi_source.
+-- Executes a test file by retrieving its content from pgmi_test_source.
 -- Used by the generated SQL from pgmi_test() macro expansion.
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_execute_test_file(p_path TEXT)
 RETURNS VOID
@@ -230,9 +249,8 @@ DECLARE
     v_content TEXT;
 BEGIN
     SELECT content INTO STRICT v_content
-    FROM pg_temp.pgmi_source
-    WHERE path = p_path
-      AND is_test_file = TRUE;
+    FROM pg_temp.pgmi_test_source
+    WHERE path = p_path;
 
     EXECUTE v_content;
 EXCEPTION
@@ -300,7 +318,7 @@ BEGIN
     v_row.checksum           := in_checksum;
     v_row.pgmi_checksum      := in_pgmi_checksum;
     v_row.is_sql_file        := pg_temp.pgmi_is_sql_file(v_row.path);
-    v_row.is_test_file       := v_row.path ~ '/__tests?__/';
+    v_row.is_test_file       := v_row.path ~ '(^|/)__tests?__/';
     v_row.parent_folder_name :=
         CASE WHEN v_row.depth > 0
              THEN v_parts[array_length(v_parts, 1) - 1]

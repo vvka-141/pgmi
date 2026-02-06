@@ -2,4 +2,4 @@ connection:
   database: {{PROJECT_NAME}}
 
 params:
-  env: development
+  admin_email: admin@example.com

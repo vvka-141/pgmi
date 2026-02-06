@@ -200,6 +200,42 @@ func TestDiscoverer_Discover_TestsOrdered(t *testing.T) {
 	}
 }
 
+func TestDiscoverer_Discover_SetupFile(t *testing.T) {
+	d := NewDiscoverer(nil)
+	sources := []Source{
+		{
+			Path:       "./test/__test__/_setup.sql",
+			Directory:  "./test/__test__/",
+			Filename:   "_setup.sql",
+			IsSQLFile:  true,
+			IsTestFile: true,
+		},
+		{
+			Path:       "./test/__test__/test_something.sql",
+			Directory:  "./test/__test__/",
+			Filename:   "test_something.sql",
+			IsSQLFile:  true,
+			IsTestFile: true,
+		},
+	}
+
+	tree, err := d.Discover(sources)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+
+	dir := tree.Directories[0]
+	if !dir.HasFixture() {
+		t.Error("Should detect _setup.sql as fixture")
+	}
+	if dir.Fixture.Filename != "_setup.sql" {
+		t.Errorf("Fixture = %q, expected %q", dir.Fixture.Filename, "_setup.sql")
+	}
+	if len(dir.Tests) != 1 {
+		t.Errorf("Tests count = %d, expected 1", len(dir.Tests))
+	}
+}
+
 func TestDiscoverer_Discover_FixtureBySubstring(t *testing.T) {
 	d := NewDiscoverer(nil)
 	sources := []Source{

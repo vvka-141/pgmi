@@ -20,17 +20,59 @@ func NewLoader() *Loader {
 	return &Loader{}
 }
 
-// LoadFilesIntoSession creates the pg_temp.pgmi_source table and loads file metadata.
+// LoadFilesIntoSession loads file metadata into session-scoped tables.
+// Non-test files go into pg_temp.pgmi_source, test files go into pg_temp.pgmi_test_source.
 // Also loads script metadata (from <pgmi:meta> XML blocks) into pg_temp.pgmi_source_metadata.
 func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
-	// Insert file metadata using the pg_temp.pgmi_register_file function
-	if err := l.insertFiles(ctx, conn, files); err != nil {
-		return fmt.Errorf("failed to insert files: %w", err)
+	// Separate test files from non-test files
+	var sourceFiles, testFiles []pgmi.FileMetadata
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			testFiles = append(testFiles, f)
+		} else {
+			sourceFiles = append(sourceFiles, f)
+		}
 	}
 
-	// Insert script metadata (only for files with metadata)
-	if err := l.insertMetadata(ctx, conn, files); err != nil {
+	// Insert non-test files into pgmi_source
+	if err := l.insertFiles(ctx, conn, sourceFiles); err != nil {
+		return fmt.Errorf("failed to insert source files: %w", err)
+	}
+
+	// Insert test files into pgmi_test_source
+	if err := l.insertTestFiles(ctx, conn, testFiles); err != nil {
+		return fmt.Errorf("failed to insert test files: %w", err)
+	}
+
+	// Insert script metadata (only for non-test files with metadata)
+	if err := l.insertMetadata(ctx, conn, sourceFiles); err != nil {
 		return fmt.Errorf("failed to insert metadata: %w", err)
+	}
+
+	return nil
+}
+
+// insertTestFiles inserts test file content into pg_temp.pgmi_test_source.
+// Uses batch insert for performance.
+func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	insertSQL := `INSERT INTO pg_temp.pgmi_test_source (path, content) VALUES ($1, $2)`
+
+	batch := &pgx.Batch{}
+	for _, file := range files {
+		batch.Queue(insertSQL, file.Path, file.Content)
+	}
+
+	results := conn.SendBatch(ctx, batch)
+	defer results.Close()
+
+	for i := range files {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("failed to insert test file %s: %w", files[i].Path, err)
+		}
 	}
 
 	return nil

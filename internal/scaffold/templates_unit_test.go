@@ -249,6 +249,37 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 
 // TestTemplatePlaceholderExtraction validates placeholder extraction from embedded templates
 
+// TestBasicTemplateTestFilePaths verifies that root-level __test__/ files
+// are scanned with correct paths that will match the SQL is_test_file regex
+func TestBasicTemplateTestFilePaths(t *testing.T) {
+	templateRoot := "templates/basic"
+	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+
+	calc := checksum.New()
+	s := scanner.NewScannerWithFS(calc, efs)
+
+	result, err := s.ScanDirectory(".")
+	require.NoError(t, err)
+
+	// Find test files and verify their paths
+	var testFiles []string
+	for _, file := range result.Files {
+		if strings.Contains(file.Path, "__test__") {
+			testFiles = append(testFiles, file.Path)
+			// Verify path has ./ prefix
+			require.True(t, strings.HasPrefix(file.Path, "./"),
+				"Test file path should have ./ prefix: %s", file.Path)
+			// Verify path matches the pattern for root-level __test__
+			require.True(t, strings.HasPrefix(file.Path, "./__test__/"),
+				"Root-level test file should have path ./__test__/*: %s", file.Path)
+		}
+	}
+
+	require.Len(t, testFiles, 2, "Expected 2 test files in basic template __test__/")
+	require.Contains(t, testFiles, "./__test__/_setup.sql")
+	require.Contains(t, testFiles, "./__test__/test_user_crud.sql")
+}
+
 // TestEmbedFileSystemPerformance validates that EmbedFileSystem performs well
 func TestEmbedFileSystemPerformance(t *testing.T) {
 	if testing.Short() {

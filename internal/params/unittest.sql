@@ -360,22 +360,22 @@ COMMENT ON FUNCTION pg_temp.pgmi_unittest_pvw_script IS
 'Generates ordered execution plan for unit tests with setup/teardown lifecycle management';
 
 -- ============================================================================
--- Populate Test Scripts from pgmi_source
+-- Populate Test Scripts from pgmi_test_source
 -- ============================================================================
--- Move test files from pg_temp.pgmi_source into pg_temp.pgmi_unittest_script
--- Test files are identified by directory pattern: /__test__/
--- NOTE: This pattern must match pgmi.IsTestPath() in pkg/pgmi/constants.go
+-- Copy test files from pg_temp.pgmi_test_source into pg_temp.pgmi_unittest_script
+-- Test files are inserted into pgmi_test_source by Go (separate from pgmi_source)
+-- NOTE: Test file detection uses pgmi.IsTestPath() in pkg/pgmi/constants.go
 INSERT INTO pg_temp.pgmi_unittest_script (path, name, directory, depth, content, size_bytes)
-SELECT path, name, directory, depth, content, size_bytes
-FROM pg_temp.pgmi_source
-WHERE is_sql_file
-  AND directory ~ '/__tests?__/'
+SELECT
+    path,
+    substring(path from '[^/]+$') AS name,
+    regexp_replace(path, '[^/]+$', '') AS directory,
+    array_length(string_to_array(path, '/'), 1) - 2 AS depth,
+    content,
+    octet_length(content) AS size_bytes
+FROM pg_temp.pgmi_test_source
+WHERE path ~ '\.sql$'
 ORDER BY path;
-
--- Remove test files from pgmi_source to prevent accidental execution during deployment
-DELETE FROM pg_temp.pgmi_source
-WHERE is_sql_file
-  AND directory ~ '/__tests?__/';
 
 -- ============================================================================
 -- Materialize Unittest Execution Plan

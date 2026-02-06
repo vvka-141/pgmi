@@ -8,6 +8,7 @@ import (
 
 // DiscoveryConfig configures how fixtures are detected.
 type DiscoveryConfig struct {
+	FixtureNames     []string // Exact filenames that indicate a fixture (default: ["_setup.sql"])
 	FixturePrefixes  []string // Filename prefixes that indicate a fixture (default: ["00_"])
 	FixtureSubstring string   // Substring in filename that indicates a fixture (default: "fixture")
 }
@@ -15,6 +16,7 @@ type DiscoveryConfig struct {
 // DefaultConfig returns the default discovery configuration.
 func DefaultConfig() *DiscoveryConfig {
 	return &DiscoveryConfig{
+		FixtureNames:     []string{"_setup.sql", "_setup.psql"},
 		FixturePrefixes:  []string{"00_"},
 		FixtureSubstring: "fixture",
 	}
@@ -129,14 +131,21 @@ func (d *Discoverer) buildDirectory(dirPath string, files []Source) (*TestDirect
 func (d *Discoverer) isFixture(filename string) bool {
 	lower := strings.ToLower(filename)
 
-	// Check prefixes
+	// Check exact names first (e.g., _setup.sql)
+	for _, name := range d.config.FixtureNames {
+		if lower == strings.ToLower(name) {
+			return true
+		}
+	}
+
+	// Check prefixes (e.g., 00_)
 	for _, prefix := range d.config.FixturePrefixes {
 		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
 			return true
 		}
 	}
 
-	// Check substring
+	// Check substring (e.g., "fixture" in filename)
 	if d.config.FixtureSubstring != "" {
 		if strings.Contains(lower, strings.ToLower(d.config.FixtureSubstring)) {
 			return true

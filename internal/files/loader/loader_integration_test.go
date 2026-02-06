@@ -501,6 +501,76 @@ func TestLoadParametersIntoSession_CaseNormalization(t *testing.T) {
 	}
 }
 
+func TestLoadFilesIntoSession_RootLevelTestFiles(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_loader_root_test"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	defer pool.Close()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Failed to acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	l := loader.NewLoader()
+	files := []pgmi.FileMetadata{
+		{Path: "./migrations/001_users.sql", Content: "CREATE TABLE users();", Checksum: "a000000000000000000000000000000000000000000000000000000000000001", ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000001"},
+		{Path: "./__test__/_setup.sql", Content: "INSERT INTO users VALUES (1);", Checksum: "a000000000000000000000000000000000000000000000000000000000000002", ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000002"},
+		{Path: "./__test__/test_users.sql", Content: "SELECT * FROM users;", Checksum: "a000000000000000000000000000000000000000000000000000000000000003", ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000003"},
+		{Path: "./schema/__test__/nested_test.sql", Content: "SELECT 1;", Checksum: "a000000000000000000000000000000000000000000000000000000000000004", ChecksumRaw: "b000000000000000000000000000000000000000000000000000000000000004"},
+	}
+
+	if err := l.LoadFilesIntoSession(ctx, conn, files); err != nil {
+		t.Fatalf("LoadFilesIntoSession failed: %v", err)
+	}
+
+	// Verify non-test files are in pgmi_source
+	var sourceCount int
+	err = conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&sourceCount)
+	if err != nil {
+		t.Fatalf("Failed to count pgmi_source: %v", err)
+	}
+	if sourceCount != 1 {
+		t.Errorf("Expected 1 file in pgmi_source, got %d", sourceCount)
+	}
+
+	// Verify test files are in pgmi_test_source
+	var testCount int
+	err = conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_test_source").Scan(&testCount)
+	if err != nil {
+		t.Fatalf("Failed to count pgmi_test_source: %v", err)
+	}
+	if testCount != 3 {
+		t.Errorf("Expected 3 files in pgmi_test_source, got %d", testCount)
+	}
+
+	// Verify test file paths in pgmi_test_source
+	testPaths := []string{"./__test__/_setup.sql", "./__test__/test_users.sql", "./schema/__test__/nested_test.sql"}
+	for _, path := range testPaths {
+		var exists bool
+		err := conn.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_temp.pgmi_test_source WHERE path = $1)",
+			path,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("Failed to check test file %s: %v", path, err)
+		}
+		if !exists {
+			t.Errorf("Test file %s not found in pgmi_test_source", path)
+		}
+	}
+}
+
 func TestLoadFilesIntoSession_LargeContent(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 	ctx := context.Background()
