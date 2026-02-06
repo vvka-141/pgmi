@@ -26,8 +26,8 @@ var sessionFoundationTestSQL string
 //
 // The test validates:
 // - Files loaded correctly into pg_temp.pgmi_source
-// - Test files separated into pg_temp.pgmi_unittest_script (then dropped)
-// - Execution plan materialized in pg_temp.pgmi_unittest_plan
+// - Test files separated into pg_temp.pgmi_test_source (then dropped)
+// - Execution plan materialized in pg_temp.pgmi_test_plan
 // - Multi-level directory traversal produces correct execution order
 //
 // This is a SQL-first test: validation logic lives in SQL, not Go.
@@ -171,7 +171,7 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 		t.Fatalf("Failed to count files: %v", err)
 	}
 
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_unittest_plan").Scan(&testCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_test_plan").Scan(&testCount)
 	if err != nil {
 		t.Fatalf("Failed to count tests: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 	}
 
 	if testCount != 0 {
-		t.Errorf("Expected 0 tests in pgmi_unittest_plan, got %d", testCount)
+		t.Errorf("Expected 0 tests in pgmi_test_plan, got %d", testCount)
 	}
 
 	t.Log("✓ Empty project session initialized correctly")
@@ -239,7 +239,7 @@ func TestSessionPreparation_OnlyMigrations(t *testing.T) {
 		t.Fatalf("Failed to count migrations: %v", err)
 	}
 
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_unittest_plan").Scan(&testCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_test_plan").Scan(&testCount)
 	if err != nil {
 		t.Fatalf("Failed to count tests: %v", err)
 	}

@@ -6,7 +6,7 @@
 --
 -- Available session tables:
 --   pg_temp.pgmi_source           - Your SQL files (migrations, schemas, etc.)
---   pg_temp.pgmi_unittest_script  - Your test files (from __test__/ directories)
+--   pg_temp.pgmi_test_source       - Your test files (from __test__/ directories)
 --   pg_temp.pgmi_parameter        - CLI params from --param key=value
 --   pg_temp.pgmi_plan             - Execution plan (populated by helpers below)
 --
@@ -520,7 +520,7 @@ $deployment$;
 -- ============================================================================
 -- STEP 3: Persist Unit Test Metadata (Called Before COMMIT)
 -- ============================================================================
--- Copies test execution plan from session-scoped pg_temp.pgmi_unittest_plan
+-- Copies test execution plan from session-scoped pg_temp.pgmi_test_plan
 -- to persistent internal.unittest_script table. This enables:
 --   - Power users to inspect deployed tests via SQL
 --   - Test execution independent of pgmi via internal.generate_test_script()
@@ -537,13 +537,13 @@ BEGIN
         execution_order, step_type, script_path, script_directory, savepoint_id, content
     )
     SELECT
-        p.execution_order,
-        p.step_type,
+        p.ordinal,
+        CASE WHEN p.step_type = 'fixture' THEN 'setup' ELSE p.step_type END,
         p.script_path,
-        p.script_directory,
-        p.savepoint_id,
-        p.executable_sql
-    FROM pg_temp.pgmi_unittest_plan p
-    ORDER BY p.execution_order;
+        p.directory,
+        'sp_' || p.ordinal::text,
+        p.script_sql
+    FROM pg_temp.pgmi_test_plan p
+    ORDER BY p.ordinal;
 END;
 $$;

@@ -180,6 +180,20 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 		return nil
 	}
 
+	// Validate all keys before touching the database
+	keyPattern := regexp.MustCompile(`^\w+$`)
+	for key := range params {
+		if key == "" {
+			return fmt.Errorf("parameter key cannot be empty")
+		}
+		if len(key) > 63 {
+			return fmt.Errorf("parameter key %q exceeds PostgreSQL identifier limit (63 characters)", key)
+		}
+		if !keyPattern.MatchString(key) {
+			return fmt.Errorf("invalid parameter key %q: keys must be alphanumeric with underscores only", key)
+		}
+	}
+
 	batch := &pgx.Batch{}
 	paramKeys := make([]string, 0, len(params))
 

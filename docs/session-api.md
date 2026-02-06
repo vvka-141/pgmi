@@ -174,20 +174,22 @@ WHERE id IS NOT NULL
 ORDER BY execution_order;
 ```
 
-### pg_temp.pgmi_unittest_plan
+### pg_temp.pgmi_test_plan
 
-**Test execution plan with setup/teardown lifecycle.**
+**Test execution plan with fixture/teardown lifecycle.**
 
 Files from `__test__/` or `__tests__/` directories are automatically moved here:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `execution_order` | integer | Sequential order |
-| `step_type` | text | `setup`, `test`, or `teardown` |
+| `ordinal` | integer | Sequential order |
+| `step_type` | text | `fixture`, `test`, or `teardown` |
 | `script_path` | text | Path to test file |
-| `script_directory` | text | Directory containing test |
-| `savepoint_id` | text | Unique savepoint name |
-| `executable_sql` | text | Ready-to-execute SQL with savepoints |
+| `directory` | text | Directory containing test |
+| `depth` | integer | Nesting level |
+| `pre_exec` | text | SQL before script (e.g., SAVEPOINT) |
+| `script_sql` | text | Embedded SQL content |
+| `post_exec` | text | SQL after script (e.g., ROLLBACK TO) |
 
 ---
 
@@ -531,8 +533,8 @@ ORDER BY ordinal;
 
 ```sql
 SELECT step_type, script_path
-FROM pg_temp.pgmi_unittest_plan
-ORDER BY execution_order;
+FROM pg_temp.pgmi_test_plan
+ORDER BY ordinal;
 ```
 
 ---

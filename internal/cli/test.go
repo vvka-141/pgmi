@@ -32,7 +32,7 @@ var testCmd = &cobra.Command{
 The test command:
 1. Connects to the target database (must already exist)
 2. Loads SQL files into pg_temp.pgmi_source
-3. Loads test files into pg_temp.pgmi_unittest_plan
+3. Loads test files into pg_temp.pgmi_test_plan
 4. Executes tests filtered by the provided pattern
 
 IMPORTANT: The test command does NOT deploy code or modify database schema.
