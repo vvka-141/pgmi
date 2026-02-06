@@ -134,7 +134,8 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	defer session.Close()
 
 	// Execute deploy.sql (populates pg_temp.pgmi_plan table)
-	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
+	// Pass files for tree-level filtering (correct sequential savepoints when filtering tests)
+	if err := s.executeDeploySQLWithFiles(ctx, session.Conn(), config.SourcePath, session.ScanResult().Files); err != nil {
 		return fmt.Errorf("deploy.sql execution failed: %w", err)
 	}
 
@@ -185,6 +186,18 @@ func (s *DeploymentService) executeDeploySQL(
 	conn *pgxpool.Conn,
 	sourcePath string,
 ) error {
+	return s.executeDeploySQLWithFiles(ctx, conn, sourcePath, nil)
+}
+
+// executeDeploySQLWithFiles reads, preprocesses, and executes deploy.sql.
+// If files is provided, uses tree-level filtering for correct savepoint ordering.
+// Otherwise falls back to row-level filtering from pgmi_test_plan.
+func (s *DeploymentService) executeDeploySQLWithFiles(
+	ctx context.Context,
+	conn *pgxpool.Conn,
+	sourcePath string,
+	files []pgmi.FileMetadata,
+) error {
 	s.logger.Verbose("Executing deploy.sql to build execution plan...")
 
 	deploySQL, err := s.fileScanner.ReadDeploySQL(sourcePath)
@@ -192,15 +205,23 @@ func (s *DeploymentService) executeDeploySQL(
 		return fmt.Errorf("failed to read deploy.sql: %w", err)
 	}
 
-	// Fetch test script rows for macro expansion
-	testRows, err := s.fetchTestScriptRows(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("failed to fetch test script rows: %w", err)
+	var result *preprocessor.PreprocessResult
+
+	if files != nil {
+		// Use tree-level filtering (preferred - produces correct sequential savepoints)
+		tree, resolver := s.buildTestTreeAndResolver(files)
+		pipeline := preprocessor.NewPipeline(false)
+		result, err = pipeline.ProcessWithTree(deploySQL, tree, resolver)
+	} else {
+		// Fallback to row-level filtering from pgmi_test_plan
+		testRows, fetchErr := s.fetchTestScriptRows(ctx, conn)
+		if fetchErr != nil {
+			return fmt.Errorf("failed to fetch test script rows: %w", fetchErr)
+		}
+		pipeline := preprocessor.NewPipeline(false)
+		result, err = pipeline.Process(deploySQL, testRows)
 	}
 
-	// Preprocess deploy.sql to expand pgmi_test() and pgmi_plan_test() macros
-	pipeline := preprocessor.NewPipeline(false) // direct mode
-	result, err := pipeline.Process(deploySQL, testRows)
 	if err != nil {
 		return fmt.Errorf("failed to preprocess deploy.sql: %w", err)
 	}
@@ -219,6 +240,32 @@ func (s *DeploymentService) executeDeploySQL(
 
 	s.logger.Info("✓ Execution plan built successfully")
 	return nil
+}
+
+// buildTestTreeAndResolver creates a test tree and content resolver from files.
+func (s *DeploymentService) buildTestTreeAndResolver(files []pgmi.FileMetadata) (*testdiscovery.TestTree, testdiscovery.ContentResolver) {
+	// Build content map from test files
+	contentMap := make(map[string]string)
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			contentMap[f.Path] = f.Content
+		}
+	}
+
+	// Create resolver
+	resolver := func(path string) (string, error) {
+		if content, ok := contentMap[path]; ok {
+			return content, nil
+		}
+		return "", fmt.Errorf("test file not found: %s", path)
+	}
+
+	// Discover test tree
+	sources := testdiscovery.ConvertFromFileMetadata(files)
+	discoverer := testdiscovery.NewDiscoverer(nil)
+	tree, _ := discoverer.Discover(sources)
+
+	return tree, resolver
 }
 
 // attributeError attempts to resolve error line numbers back to original sources.
@@ -476,8 +523,7 @@ func (s *DeploymentService) parseConnectionString(connStr string) (*pgmi.Connect
 }
 
 // ExecuteTests executes tests using the provided configuration.
-// This method reuses deployment infrastructure for session initialization,
-// then directly executes tests from pg_temp.pgmi_unittest_plan.
+// Uses Go-based test discovery and filtering for correct sequential savepoints.
 func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestConfig) error {
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -487,7 +533,6 @@ func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestCo
 	s.logger.Verbose("Starting test execution on database '%s'", config.DatabaseName)
 	s.logger.Verbose("Source path: %s", config.SourcePath)
 	s.logger.Verbose("Filter pattern: %s", config.FilterPattern)
-
 
 	// Parse connection string
 	connConfig, err := s.parseConnectionString(config.ConnectionString)
@@ -507,7 +552,6 @@ func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestCo
 	}
 
 	// Prepare test session (scan files, connect to database, load session tables)
-	// SessionManager handles: file scanning, database connection, utility functions, files, params, unittest framework
 	s.logger.Info("Initializing test session...")
 	targetConfig := *connConfig
 	targetConfig.Database = config.DatabaseName
@@ -517,14 +561,27 @@ func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestCo
 	}
 	defer session.Close()
 
-	// List mode: show tests and exit
-	if config.ListOnly {
-		return s.listTests(ctx, session.Conn(), config.FilterPattern)
+	// Build filtered test tree from session files (Go-based filtering)
+	tree, resolver := s.buildTestTreeAndResolver(session.ScanResult().Files)
+	if config.FilterPattern != "" {
+		tree = tree.FilterByPattern(config.FilterPattern)
 	}
 
-	// Execute tests from pg_temp.pgmi_unittest_plan
+	// Build test plan from filtered tree
+	planBuilder := testdiscovery.NewPlanBuilder(resolver)
+	steps, err := planBuilder.Build(tree)
+	if err != nil {
+		return fmt.Errorf("failed to build test plan: %w", err)
+	}
+
+	// List mode: show tests and exit
+	if config.ListOnly {
+		return s.listTestSteps(steps, config.FilterPattern)
+	}
+
+	// Execute tests
 	s.logger.Info("Executing tests...")
-	if err := s.executeTestPlan(ctx, session.Conn(), config.FilterPattern); err != nil {
+	if err := s.executeTestSteps(ctx, session.Conn(), steps); err != nil {
 		return fmt.Errorf("test execution failed: %w", err)
 	}
 
@@ -532,31 +589,17 @@ func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestCo
 	return nil
 }
 
-// listTests prints the filtered test execution plan without running tests.
-func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, filterPattern string) error {
-	rows, err := conn.Query(ctx, queryTestPlanList, filterPattern)
-	if err != nil {
-		return fmt.Errorf("failed to query test plan: %w", err)
-	}
-	defer rows.Close()
-
+// listTestSteps prints the test execution plan from Go-built rows.
+func (s *DeploymentService) listTestSteps(steps []testdiscovery.TestScriptRow, filterPattern string) error {
 	fmt.Fprintf(os.Stderr, "\nDiscovered tests (filter: %q):\n\n", filterPattern)
 
 	testCount := 0
 	fixtureCount := 0
 	teardownCount := 0
 
-	for rows.Next() {
-		var ordinal int
-		var stepType string
-		var scriptPath *string
-		if err := rows.Scan(&ordinal, &stepType, &scriptPath); err != nil {
-			return fmt.Errorf("failed to scan test row: %w", err)
-		}
-
-		// Format output
+	for _, step := range steps {
 		stepLabel := "Test"
-		switch stepType {
+		switch step.StepType {
 		case "fixture":
 			stepLabel = "Fixture"
 			fixtureCount++
@@ -568,64 +611,25 @@ func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, f
 		}
 
 		pathStr := "(no path)"
-		if scriptPath != nil {
-			pathStr = *scriptPath
+		if step.ScriptPath != nil {
+			pathStr = *step.ScriptPath
 		}
-		fmt.Fprintf(os.Stderr, "%d. %-9s %s\n", ordinal, stepLabel+":", pathStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading test rows: %w", err)
+		fmt.Fprintf(os.Stderr, "%d. %-9s %s\n", step.Ordinal, stepLabel+":", pathStr)
 	}
 
 	fmt.Fprintf(os.Stderr, "\nTotal: %d tests (with %d fixtures, %d teardowns)\n", testCount, fixtureCount, teardownCount)
 	return nil
 }
 
-// executeTestPlan queries pg_temp.pgmi_unittest_pvw_plan and executes tests sequentially.
-// Fails immediately on first test failure (PostgreSQL native fail-fast).
-func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.Conn, filterPattern string) error {
-	// Start a transaction for savepoint support (using SQL BEGIN/ROLLBACK)
+// executeTestSteps executes test steps from Go-built rows.
+func (s *DeploymentService) executeTestSteps(ctx context.Context, conn *pgxpool.Conn, steps []testdiscovery.TestScriptRow) error {
+	// Start a transaction for savepoint support
 	_, err := conn.Exec(ctx, "BEGIN")
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for tests: %w", err)
 	}
-	// Ensure we rollback on exit (tests should have no side effects)
 	defer func() { _, _ = conn.Exec(ctx, "ROLLBACK") }()
 
-	// Query filtered test plan and read all into memory first
-	rows, err := conn.Query(ctx, queryTestPlan, filterPattern)
-	if err != nil {
-		return fmt.Errorf("failed to query test plan: %w", err)
-	}
-
-	// Read all test steps into memory first, then close the query
-	type testStep struct {
-		ordinal    int
-		stepType   string
-		scriptPath *string
-		preExec    *string
-		scriptSQL  *string
-		postExec   *string
-	}
-	var steps []testStep
-
-	for rows.Next() {
-		var step testStep
-		if err := rows.Scan(&step.ordinal, &step.stepType, &step.scriptPath, &step.preExec, &step.scriptSQL, &step.postExec); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to scan test row: %w", err)
-		}
-		steps = append(steps, step)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading test rows: %w", err)
-	}
-
-	// Now execute each test step sequentially
-	// PostgreSQL will stop on first error (native fail-fast)
 	for _, step := range steps {
 		select {
 		case <-ctx.Done():
@@ -635,16 +639,16 @@ func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.C
 
 		// Build combined SQL: pre_exec + script_sql + post_exec
 		var combinedSQL strings.Builder
-		if step.preExec != nil {
-			combinedSQL.WriteString(*step.preExec)
+		if step.PreExec != nil {
+			combinedSQL.WriteString(*step.PreExec)
 			combinedSQL.WriteString("\n")
 		}
-		if step.scriptSQL != nil {
-			combinedSQL.WriteString(*step.scriptSQL)
+		if step.ScriptSQL != nil {
+			combinedSQL.WriteString(*step.ScriptSQL)
 			combinedSQL.WriteString("\n")
 		}
-		if step.postExec != nil {
-			combinedSQL.WriteString(*step.postExec)
+		if step.PostExec != nil {
+			combinedSQL.WriteString(*step.PostExec)
 		}
 
 		sql := combinedSQL.String()
@@ -655,8 +659,8 @@ func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.C
 		_, err := conn.Exec(ctx, sql)
 		if err != nil {
 			pathStr := "(teardown)"
-			if step.scriptPath != nil {
-				pathStr = *step.scriptPath
+			if step.ScriptPath != nil {
+				pathStr = *step.ScriptPath
 			}
 			return fmt.Errorf("test failed in %s: %w", pathStr, err)
 		}

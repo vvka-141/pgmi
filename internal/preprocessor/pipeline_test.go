@@ -202,3 +202,176 @@ func TestPipeline_Process_PreservesNonMacroContent(t *testing.T) {
 		t.Error("Should preserve SELECT 2;")
 	}
 }
+
+// TestPipeline_ProcessWithTree tests the tree-based interface
+
+func TestPipeline_ProcessWithTree_NoMacros(t *testing.T) {
+	p := NewPipeline(false)
+
+	sql := `SELECT 1; SELECT 2;`
+	tree := testdiscovery.NewTestTree()
+	resolver := func(path string) (string, error) { return "", nil }
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	if result.ExpandedSQL != sql {
+		t.Errorf("Expected original SQL, got %q", result.ExpandedSQL)
+	}
+	if result.MacroCount != 0 {
+		t.Errorf("MacroCount = %d, expected 0", result.MacroCount)
+	}
+}
+
+func TestPipeline_ProcessWithTree_FilteredSavepointsAreSequential(t *testing.T) {
+	p := NewPipeline(false)
+
+	// Create tree with two directories
+	tree := testdiscovery.NewTestTree()
+
+	dirA := testdiscovery.NewTestDirectory("./a/__test__", 0)
+	dirA.SetFixture(&testdiscovery.TestFile{Path: "./a/__test__/_setup.sql", IsFixture: true})
+	dirA.AddTest(&testdiscovery.TestFile{Path: "./a/__test__/01_test.sql"})
+	tree.AddDirectory(dirA)
+
+	dirB := testdiscovery.NewTestDirectory("./b/__test__", 0)
+	dirB.SetFixture(&testdiscovery.TestFile{Path: "./b/__test__/_setup.sql", IsFixture: true})
+	dirB.AddTest(&testdiscovery.TestFile{Path: "./b/__test__/01_test.sql"})
+	tree.AddDirectory(dirB)
+
+	resolver := func(path string) (string, error) {
+		return "-- content of " + path, nil
+	}
+
+	// Filter to only ./b/** - savepoints should start at 0, not 1
+	sql := `SELECT pgmi_test('./b/**');`
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	// Should use __pgmi_0__ (sequential from start), not __pgmi_1__
+	if !strings.Contains(result.ExpandedSQL, "__pgmi_0__") {
+		t.Errorf("Filtered result should use __pgmi_0__, got: %s", result.ExpandedSQL)
+	}
+
+	// Should NOT contain ./a content
+	if strings.Contains(result.ExpandedSQL, "./a/__test__") {
+		t.Errorf("Should not contain ./a content, got: %s", result.ExpandedSQL)
+	}
+
+	// Should contain ./b content
+	if !strings.Contains(result.ExpandedSQL, "./b/__test__") {
+		t.Errorf("Should contain ./b content, got: %s", result.ExpandedSQL)
+	}
+}
+
+func TestPipeline_ProcessWithTree_PreservesAncestorFixtures(t *testing.T) {
+	p := NewPipeline(false)
+
+	// Create nested structure
+	tree := testdiscovery.NewTestTree()
+
+	parent := testdiscovery.NewTestDirectory("./a/__test__", 0)
+	parent.SetFixture(&testdiscovery.TestFile{Path: "./a/__test__/_setup.sql", IsFixture: true})
+
+	child := testdiscovery.NewTestDirectory("./a/__test__/nested", 1)
+	child.SetFixture(&testdiscovery.TestFile{Path: "./a/__test__/nested/_setup.sql", IsFixture: true})
+	child.AddTest(&testdiscovery.TestFile{Path: "./a/__test__/nested/01_test.sql"})
+
+	parent.AddChild(child)
+	tree.AddDirectory(parent)
+
+	resolver := func(path string) (string, error) {
+		return "-- content of " + path, nil
+	}
+
+	// Filter for nested only - should include parent fixture
+	sql := `SELECT pgmi_test('./a/__test__/nested/**');`
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	// Should contain both fixtures
+	if !strings.Contains(result.ExpandedSQL, "./a/__test__/_setup.sql") {
+		t.Errorf("Should contain parent fixture, got: %s", result.ExpandedSQL)
+	}
+	if !strings.Contains(result.ExpandedSQL, "./a/__test__/nested/_setup.sql") {
+		t.Errorf("Should contain nested fixture, got: %s", result.ExpandedSQL)
+	}
+}
+
+func TestPipeline_ProcessWithTree_EmptyPatternUsesAllTests(t *testing.T) {
+	p := NewPipeline(false)
+
+	tree := testdiscovery.NewTestTree()
+
+	dir := testdiscovery.NewTestDirectory("./a/__test__", 0)
+	dir.AddTest(&testdiscovery.TestFile{Path: "./a/__test__/01_test.sql"})
+	dir.AddTest(&testdiscovery.TestFile{Path: "./a/__test__/02_test.sql"})
+	tree.AddDirectory(dir)
+
+	resolver := func(path string) (string, error) {
+		return "-- content of " + path, nil
+	}
+
+	sql := `SELECT pgmi_test();`
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	// Should contain both tests
+	if !strings.Contains(result.ExpandedSQL, "01_test.sql") {
+		t.Errorf("Should contain 01_test.sql")
+	}
+	if !strings.Contains(result.ExpandedSQL, "02_test.sql") {
+		t.Errorf("Should contain 02_test.sql")
+	}
+}
+
+func TestPipeline_ProcessWithTree_MultipleMacrosDifferentPatterns(t *testing.T) {
+	p := NewPipeline(false)
+
+	tree := testdiscovery.NewTestTree()
+
+	dirA := testdiscovery.NewTestDirectory("./a/__test__", 0)
+	dirA.AddTest(&testdiscovery.TestFile{Path: "./a/__test__/01_test.sql"})
+	tree.AddDirectory(dirA)
+
+	dirB := testdiscovery.NewTestDirectory("./b/__test__", 0)
+	dirB.AddTest(&testdiscovery.TestFile{Path: "./b/__test__/01_test.sql"})
+	tree.AddDirectory(dirB)
+
+	resolver := func(path string) (string, error) {
+		return "-- test content: " + path, nil
+	}
+
+	sql := `
+		SELECT pgmi_test('./a/**');
+		SELECT pgmi_test('./b/**');
+	`
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	if result.MacroCount != 2 {
+		t.Errorf("MacroCount = %d, expected 2", result.MacroCount)
+	}
+
+	// Both should be in output
+	if !strings.Contains(result.ExpandedSQL, "./a/__test__/01_test.sql") {
+		t.Errorf("Should contain ./a test")
+	}
+	if !strings.Contains(result.ExpandedSQL, "./b/__test__/01_test.sql") {
+		t.Errorf("Should contain ./b test")
+	}
+}
