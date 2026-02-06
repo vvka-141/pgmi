@@ -180,12 +180,6 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 		return nil
 	}
 
-	for key := range params {
-		if err := validateParameterKey(key); err != nil {
-			return err
-		}
-	}
-
 	batch := &pgx.Batch{}
 	paramKeys := make([]string, 0, len(params))
 
@@ -257,7 +251,6 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 	defer results.Close()
 
 	// Check each result for errors
-	insertedCount := 0
 	for _, file := range files {
 		if file.Metadata == nil {
 			continue
@@ -265,7 +258,6 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("failed to insert metadata for file %s: %w", file.Path, err)
 		}
-		insertedCount++
 	}
 
 	return nil
