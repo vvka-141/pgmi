@@ -25,62 +25,69 @@ func TestPlanModeGenerator_Generate_EmptyRows(t *testing.T) {
 	}
 }
 
-func TestPlanModeGenerator_Generate_Savepoint(t *testing.T) {
+func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{
-			SortKey:    1,
-			ScriptType: "savepoint",
-			BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
-			Directory:  "./test/__test__",
-		},
+		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
+
+	// Should have exactly ONE PERFORM statement
+	performCount := strings.Count(result.SQL, "PERFORM")
+	if performCount != 1 {
+		t.Errorf("Should have exactly 1 PERFORM statement, got %d\nSQL: %s", performCount, result.SQL)
+	}
 
 	// Should use pgmi_plan_command
 	if !strings.Contains(result.SQL, "pgmi_plan_command") {
 		t.Errorf("SQL should use pgmi_plan_command, got: %s", result.SQL)
 	}
-	// Should be a PERFORM statement
-	if !strings.Contains(result.SQL, "PERFORM") {
-		t.Errorf("SQL should use PERFORM, got: %s", result.SQL)
+
+	// Should use dollar quoting
+	if !strings.Contains(result.SQL, "$__pgmi__$") {
+		t.Errorf("SQL should use dollar quoting, got: %s", result.SQL)
 	}
-	// Should contain the savepoint
+
+	// Inner SQL should contain savepoint
 	if !strings.Contains(result.SQL, "SAVEPOINT __pgmi_0__") {
 		t.Errorf("SQL should contain savepoint, got: %s", result.SQL)
 	}
-}
 
-func TestPlanModeGenerator_Generate_TestExecution(t *testing.T) {
-	g := NewPlanModeGenerator()
-	rows := []testdiscovery.TestScriptRow{
-		{
-			SortKey:    1,
-			ScriptType: "test",
-			Path:       testdiscovery.Ptr("./test/__test__/01_test.sql"),
-			AfterExec:  testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
-			Directory:  "./test/__test__",
-		},
-	}
-
-	result := g.Generate(rows)
-
-	// Should wrap test file execution in pgmi_plan_command
-	if !strings.Contains(result.SQL, "pgmi_plan_command") {
-		t.Errorf("SQL should use pgmi_plan_command, got: %s", result.SQL)
-	}
-	// Should contain pgmi_execute_test_file
+	// Inner SQL should contain test file execution
 	if !strings.Contains(result.SQL, "pgmi_execute_test_file") {
 		t.Errorf("SQL should contain pgmi_execute_test_file, got: %s", result.SQL)
 	}
-	// Should contain rollback as separate command
+
+	// Inner SQL should contain rollback
 	if !strings.Contains(result.SQL, "ROLLBACK TO SAVEPOINT") {
 		t.Errorf("SQL should contain ROLLBACK, got: %s", result.SQL)
 	}
 }
 
-func TestPlanModeGenerator_Generate_DollarQuoting(t *testing.T) {
+func TestPlanModeGenerator_Generate_Structure(t *testing.T) {
+	g := NewPlanModeGenerator()
+	rows := []testdiscovery.TestScriptRow{
+		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/_setup.sql"), Directory: "./test/__test__"},
+		{SortKey: 3, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+	}
+
+	result := g.Generate(rows)
+
+	// Should start with PERFORM
+	if !strings.HasPrefix(result.SQL, "PERFORM pg_temp.pgmi_plan_command($__pgmi__$") {
+		t.Errorf("SQL should start with PERFORM wrapper, got: %s", result.SQL)
+	}
+
+	// Should end with closing
+	if !strings.HasSuffix(result.SQL, "$__pgmi__$);") {
+		t.Errorf("SQL should end with $__pgmi__$);, got: %s", result.SQL)
+	}
+}
+
+func TestPlanModeGenerator_Generate_PreservesQuotesInPaths(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{
@@ -93,13 +100,9 @@ func TestPlanModeGenerator_Generate_DollarQuoting(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should use dollar quoting for complex strings
-	if !strings.Contains(result.SQL, "$__pgmi__$") {
-		t.Errorf("SQL should use dollar quoting, got: %s", result.SQL)
-	}
-	// Original quotes should be preserved (not escaped)
-	if !strings.Contains(result.SQL, "file'with'quotes.sql") {
-		t.Errorf("SQL should preserve quotes within dollar quoting, got: %s", result.SQL)
+	// Dollar quoting means inner quotes are escaped via EscapeSQLString
+	if !strings.Contains(result.SQL, "file''with''quotes.sql") {
+		t.Errorf("SQL should escape single quotes in paths, got: %s", result.SQL)
 	}
 }
 
@@ -107,7 +110,7 @@ func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/00_fixture.sql"), Directory: "./test/__test__"},
+		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/_setup.sql"), Directory: "./test/__test__"},
 		{SortKey: 3, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
 		{SortKey: 4, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
 		{SortKey: 5, ScriptType: "cleanup", BeforeExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), AfterExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
@@ -115,10 +118,26 @@ func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should have multiple PERFORM statements
+	// Should have exactly ONE PERFORM statement wrapping everything
 	performCount := strings.Count(result.SQL, "PERFORM")
-	if performCount < 5 {
-		t.Errorf("SQL should have at least 5 PERFORM statements, got %d", performCount)
+	if performCount != 1 {
+		t.Errorf("Should have exactly 1 PERFORM statement, got %d", performCount)
+	}
+
+	// All elements should be inside the single command
+	expectedElements := []string{
+		"SAVEPOINT __pgmi_0__",
+		"_setup.sql",
+		"SAVEPOINT __pgmi_1__",
+		"01_test.sql",
+		"ROLLBACK TO SAVEPOINT __pgmi_1__",
+		"ROLLBACK TO SAVEPOINT __pgmi_0__",
+		"RELEASE SAVEPOINT __pgmi_0__",
+	}
+	for _, elem := range expectedElements {
+		if !strings.Contains(result.SQL, elem) {
+			t.Errorf("SQL should contain %q, got: %s", elem, result.SQL)
+		}
 	}
 }
 
@@ -139,6 +158,28 @@ func TestPlanModeGenerator_Generate_SourceMap(t *testing.T) {
 	}
 }
 
+func TestPlanModeGenerator_Generate_SourceMapLineOffset(t *testing.T) {
+	g := NewPlanModeGenerator()
+	rows := []testdiscovery.TestScriptRow{
+		{SortKey: 1, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+	}
+
+	result := g.Generate(rows)
+
+	// The test file execution should be at line 2 (line 1 is PERFORM wrapper)
+	// Check that source map entry exists for the test file
+	entries := result.SourceMap.Entries()
+	if len(entries) == 0 {
+		t.Fatal("SourceMap should have entries")
+	}
+
+	// First entry should be for the test file at line 2
+	entry := entries[0]
+	if entry.ExpandedStart != 2 {
+		t.Errorf("Source map entry should start at line 2, got %d", entry.ExpandedStart)
+	}
+}
+
 func TestPlanModeGenerator_Generate_ValidPLPGSQL(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
@@ -148,18 +189,19 @@ func TestPlanModeGenerator_Generate_ValidPLPGSQL(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	lines := strings.Split(result.SQL, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Each line should be a valid PERFORM statement ending with semicolon
-		if !strings.HasPrefix(line, "PERFORM ") {
-			t.Errorf("Line should start with PERFORM: %s", line)
-		}
-		if !strings.HasSuffix(line, ";") {
-			t.Errorf("Line should end with semicolon: %s", line)
-		}
+	// Should be a single valid PERFORM statement
+	if !strings.HasPrefix(result.SQL, "PERFORM ") {
+		t.Errorf("SQL should start with PERFORM: %s", result.SQL)
+	}
+	if !strings.HasSuffix(result.SQL, ";") {
+		t.Errorf("SQL should end with semicolon: %s", result.SQL)
+	}
+
+	// Should have exactly one semicolon at the end (the PERFORM statement's semicolon)
+	// Inner SQL statements have their own semicolons but those are inside the dollar-quoted string
+	trimmed := strings.TrimSuffix(result.SQL, ";")
+	if strings.HasSuffix(trimmed, ";") {
+		// This would mean double semicolon at the end, which is wrong
+		t.Errorf("SQL should not have double semicolon at end: %s", result.SQL)
 	}
 }
