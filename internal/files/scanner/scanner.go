@@ -124,16 +124,21 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		unixPath = "./" + unixPath
 	}
 
-	// Extract directory (Unix-style, empty string for root)
-	directory := filepath.ToSlash(filepath.Dir(relativePath))
-	if directory == "." {
-		directory = ""
+	// Extract directory from normalized path
+	// Don't use path.Dir as it removes ./ prefix; instead split on last /
+	lastSlash := strings.LastIndex(unixPath, "/")
+	var directory string
+	if lastSlash == -1 {
+		directory = "./"
+	} else {
+		directory = unixPath[:lastSlash+1]
 	}
 
-	// Calculate depth (number of directory separators)
-	depth := 0
-	if directory != "" {
-		depth = strings.Count(directory, "/") + 1
+	// Calculate depth (number of directory segments after ./)
+	// e.g., "./" = 0, "./migrations/" = 1, "./__test__/auth/" = 2
+	depth := strings.Count(directory, "/") - 1
+	if depth < 0 {
+		depth = 0
 	}
 
 	// Extract filename and extension

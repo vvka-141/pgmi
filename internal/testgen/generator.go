@@ -24,6 +24,7 @@ func NewDirectGenerator() *DirectGenerator {
 
 // Generate converts execution plan rows to SQL for direct execution.
 // Outputs embedded SQL content directly instead of calling helper functions.
+// The generated SQL is wrapped in BEGIN/COMMIT for savepoint support.
 func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *GeneratedSQL {
 	result := &GeneratedSQL{
 		SourceMap: sourcemap.New(),
@@ -35,6 +36,10 @@ func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *Generate
 
 	var lines []string
 	lineNum := 1
+
+	// Begin transaction for savepoint support
+	lines = append(lines, "BEGIN;")
+	lineNum++
 
 	for _, row := range rows {
 		startLine := lineNum
@@ -72,6 +77,9 @@ func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *Generate
 			result.SourceMap.Add(startLine, lineNum-1, row.Directory, 0, desc)
 		}
 	}
+
+	// Commit transaction
+	lines = append(lines, "COMMIT;")
 
 	result.SQL = strings.Join(lines, "\n")
 	return result

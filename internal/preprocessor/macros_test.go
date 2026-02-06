@@ -179,6 +179,8 @@ func TestMacroDetector_Detect_WhitespaceVariations(t *testing.T) {
 func TestMacroDetector_Detect_InContext(t *testing.T) {
 	detector := NewMacroDetector()
 
+	// Column numbers now start at SELECT/PERFORM prefix (if present) since the
+	// macro expands to standalone SQL statements, not a value
 	tests := []struct {
 		name         string
 		input        string
@@ -191,21 +193,21 @@ func TestMacroDetector_Detect_InContext(t *testing.T) {
 			input:        "PERFORM pgmi_test();",
 			expectedName: "pgmi_test",
 			expectedLine: 1,
-			expectedCol:  9,
+			expectedCol:  1, // Starts at PERFORM
 		},
 		{
 			name:         "SELECT statement",
 			input:        "SELECT pgmi_test();",
 			expectedName: "pgmi_test",
 			expectedLine: 1,
-			expectedCol:  8,
+			expectedCol:  1, // Starts at SELECT
 		},
 		{
 			name:         "In DO block",
 			input:        "DO $$ BEGIN PERFORM pgmi_test(); END $$;",
 			expectedName: "pgmi_test",
 			expectedLine: 1,
-			expectedCol:  21,
+			expectedCol:  13, // Starts at PERFORM (position 13)
 		},
 		{
 			name:         "On second line",
@@ -315,6 +317,8 @@ func TestMacroDetector_Detect_Positions(t *testing.T) {
 func TestMacroDetector_Detect_PositionsWithPattern(t *testing.T) {
 	detector := NewMacroDetector()
 
+	// SELECT prefix is now included in the match because the macro expands to
+	// standalone SQL statements, not a value that can be SELECTed
 	input := "SELECT pgmi_test('./users/**');"
 	macros := detector.Detect(input)
 
@@ -324,7 +328,7 @@ func TestMacroDetector_Detect_PositionsWithPattern(t *testing.T) {
 
 	m := macros[0]
 	matched := input[m.StartPos:m.EndPos]
-	expected := "pgmi_test('./users/**')"
+	expected := "SELECT pgmi_test('./users/**');"
 	if matched != expected {
 		t.Errorf("Matched text = %q, expected %q", matched, expected)
 	}

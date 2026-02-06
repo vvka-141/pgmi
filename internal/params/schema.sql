@@ -82,8 +82,12 @@ CREATE TEMP TABLE pgmi_source
     ),
     CONSTRAINT chk_parent_folder_no_slash CHECK (parent_folder_name IS NULL OR parent_folder_name !~ '/'),
     -- Relational integrity constraints
-    CONSTRAINT chk_path_directory_match CHECK (path = directory || name)
+    CONSTRAINT chk_path_directory_match CHECK (path = directory || name),
+    CONSTRAINT chk_path_is_not_test CHECK (NOT path ~ '/__tests?__/')
 );
+
+COMMENT ON TABLE pg_temp.pgmi_source IS
+    'Source files loaded by pgmi. Session-scoped (ephemeral after disconnect).';
 
 -- Allow access from any role context
 GRANT SELECT ON TABLE pg_temp.pgmi_source TO PUBLIC;
@@ -203,8 +207,9 @@ CREATE TEMP TABLE pg_temp.pgmi_test_source
 (
     path         TEXT NOT NULL PRIMARY KEY,
     content      TEXT NOT NULL,
-    CONSTRAINT chk_test_source_path_format CHECK (path ~ '^\./'),
-    CONSTRAINT chk_test_source_content_not_empty CHECK (content != '')
+    CONSTRAINT chk_test_source_path_format CHECK (
+        path ~ '^\./' AND
+        path ~ '/__tests?__/')
 );
 
 COMMENT ON TABLE pg_temp.pgmi_test_source IS

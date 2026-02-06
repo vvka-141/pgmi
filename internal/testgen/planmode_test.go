@@ -33,10 +33,20 @@ func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should have exactly ONE PERFORM statement
+	// Should have exactly 3 PERFORM statements: BEGIN, test SQL, COMMIT
 	performCount := strings.Count(result.SQL, "PERFORM")
-	if performCount != 1 {
-		t.Errorf("Should have exactly 1 PERFORM statement, got %d\nSQL: %s", performCount, result.SQL)
+	if performCount != 3 {
+		t.Errorf("Should have exactly 3 PERFORM statements, got %d\nSQL: %s", performCount, result.SQL)
+	}
+
+	// Should schedule BEGIN
+	if !strings.Contains(result.SQL, "pgmi_plan_command('BEGIN;')") {
+		t.Errorf("SQL should schedule BEGIN, got: %s", result.SQL)
+	}
+
+	// Should schedule COMMIT
+	if !strings.Contains(result.SQL, "pgmi_plan_command('COMMIT;')") {
+		t.Errorf("SQL should schedule COMMIT, got: %s", result.SQL)
 	}
 
 	// Should use pgmi_plan_command
@@ -44,7 +54,7 @@ func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 		t.Errorf("SQL should use pgmi_plan_command, got: %s", result.SQL)
 	}
 
-	// Should use dollar quoting
+	// Should use dollar quoting for test SQL
 	if !strings.Contains(result.SQL, "$__pgmi__$") {
 		t.Errorf("SQL should use dollar quoting, got: %s", result.SQL)
 	}
@@ -74,14 +84,14 @@ func TestPlanModeGenerator_Generate_Structure(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should start with PERFORM
-	if !strings.HasPrefix(result.SQL, "PERFORM pg_temp.pgmi_plan_command($__pgmi__$") {
-		t.Errorf("SQL should start with PERFORM wrapper, got: %s", result.SQL)
+	// Should start with BEGIN command
+	if !strings.HasPrefix(result.SQL, "PERFORM pg_temp.pgmi_plan_command('BEGIN;');") {
+		t.Errorf("SQL should start with BEGIN command, got: %s", result.SQL)
 	}
 
-	// Should end with closing
-	if !strings.HasSuffix(result.SQL, "$__pgmi__$);") {
-		t.Errorf("SQL should end with $__pgmi__$);, got: %s", result.SQL)
+	// Should end with COMMIT command
+	if !strings.HasSuffix(result.SQL, "PERFORM pg_temp.pgmi_plan_command('COMMIT;');") {
+		t.Errorf("SQL should end with COMMIT command, got: %s", result.SQL)
 	}
 }
 
@@ -95,13 +105,13 @@ func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should have exactly ONE PERFORM statement wrapping everything
+	// Should have exactly 3 PERFORM statements: BEGIN, test SQL, COMMIT
 	performCount := strings.Count(result.SQL, "PERFORM")
-	if performCount != 1 {
-		t.Errorf("Should have exactly 1 PERFORM statement, got %d", performCount)
+	if performCount != 3 {
+		t.Errorf("Should have exactly 3 PERFORM statements, got %d", performCount)
 	}
 
-	// All elements should be inside the single command
+	// All elements should be inside the middle command
 	expectedElements := []string{
 		"SAVEPOINT __pgmi_0__",
 		"-- fixture content",
@@ -148,10 +158,11 @@ func TestPlanModeGenerator_Generate_SourceMapLineOffset(t *testing.T) {
 		t.Fatal("SourceMap should have entries")
 	}
 
-	// Entry should be for the test file at line 2 (line 1 is PERFORM wrapper)
+	// Entry should be for the test file at line 3
+	// Line 1: BEGIN command, Line 2: PERFORM wrapper, Line 3: inner SQL start
 	entry := entries[0]
-	if entry.ExpandedStart != 2 {
-		t.Errorf("Source map entry should start at line 2, got %d", entry.ExpandedStart)
+	if entry.ExpandedStart != 3 {
+		t.Errorf("Source map entry should start at line 3, got %d", entry.ExpandedStart)
 	}
 }
 
@@ -163,20 +174,20 @@ func TestPlanModeGenerator_Generate_ValidPLPGSQL(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// Should be a single valid PERFORM statement
-	if !strings.HasPrefix(result.SQL, "PERFORM ") {
-		t.Errorf("SQL should start with PERFORM: %s", result.SQL)
-	}
-	if !strings.HasSuffix(result.SQL, ";") {
-		t.Errorf("SQL should end with semicolon: %s", result.SQL)
+	// Should start with BEGIN command
+	if !strings.HasPrefix(result.SQL, "PERFORM pg_temp.pgmi_plan_command('BEGIN;');") {
+		t.Errorf("SQL should start with BEGIN command: %s", result.SQL)
 	}
 
-	// Should have exactly one semicolon at the end (the PERFORM statement's semicolon)
-	// Inner SQL statements have their own semicolons but those are inside the dollar-quoted string
-	trimmed := strings.TrimSuffix(result.SQL, ";")
-	if strings.HasSuffix(trimmed, ";") {
-		// This would mean double semicolon at the end, which is wrong
-		t.Errorf("SQL should not have double semicolon at end: %s", result.SQL)
+	// Should end with COMMIT command
+	if !strings.HasSuffix(result.SQL, "PERFORM pg_temp.pgmi_plan_command('COMMIT;');") {
+		t.Errorf("SQL should end with COMMIT command: %s", result.SQL)
+	}
+
+	// Should have exactly 3 PERFORM statements
+	performCount := strings.Count(result.SQL, "PERFORM pg_temp.pgmi_plan_command")
+	if performCount != 3 {
+		t.Errorf("Should have 3 PERFORM statements, got %d", performCount)
 	}
 }
 

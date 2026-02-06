@@ -539,10 +539,10 @@ BEGIN
     SELECT
         p.ordinal,
         CASE WHEN p.step_type = 'fixture' THEN 'setup' ELSE p.step_type END,
-        p.script_path,
+        COALESCE(p.script_path, p.directory || '_teardown'),
         p.directory,
         'sp_' || p.ordinal::text,
-        p.script_sql
+        COALESCE(p.pre_exec || E'\n', '') || COALESCE(p.script_sql, '') || COALESCE(E'\n' || p.post_exec, '')
     FROM pg_temp.pgmi_test_plan p
     ORDER BY p.ordinal;
 END;

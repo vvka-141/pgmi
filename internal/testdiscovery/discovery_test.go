@@ -66,8 +66,8 @@ func TestDiscoverer_Discover_SingleTest(t *testing.T) {
 	}
 
 	dir := tree.Directories[0]
-	if dir.Path != "./users/__test__" {
-		t.Errorf("Directory path = %q, expected %q", dir.Path, "./users/__test__")
+	if dir.Path != "./users/__test__/" {
+		t.Errorf("Directory path = %q, expected %q", dir.Path, "./users/__test__/")
 	}
 	if dir.HasFixture() {
 		t.Error("Should not have fixture")
@@ -404,8 +404,8 @@ func TestDiscoverer_Discover_NestedDirectories(t *testing.T) {
 	}
 
 	parent := tree.Directories[0]
-	if parent.Path != "./users/__test__" {
-		t.Errorf("Parent path = %q, expected %q", parent.Path, "./users/__test__")
+	if parent.Path != "./users/__test__/" {
+		t.Errorf("Parent path = %q, expected %q", parent.Path, "./users/__test__/")
 	}
 	if !parent.HasFixture() {
 		t.Error("Parent should have fixture")
@@ -419,8 +419,8 @@ func TestDiscoverer_Discover_NestedDirectories(t *testing.T) {
 	}
 
 	child := parent.Children[0]
-	if child.Path != "./users/__test__/admin" {
-		t.Errorf("Child path = %q, expected %q", child.Path, "./users/__test__/admin")
+	if child.Path != "./users/__test__/admin/" {
+		t.Errorf("Child path = %q, expected %q", child.Path, "./users/__test__/admin/")
 	}
 	if !child.HasFixture() {
 		t.Error("Child should have fixture")
@@ -493,7 +493,7 @@ func TestDiscoverer_Discover_DirectoriesOrdered(t *testing.T) {
 	}
 
 	// Should be sorted
-	expected := []string{"./a/__test__", "./m/__test__", "./z/__test__"}
+	expected := []string{"./a/__test__/", "./m/__test__/", "./z/__test__/"}
 	for i, exp := range expected {
 		if tree.Directories[i].Path != exp {
 			t.Errorf("Directories[%d].Path = %q, expected %q", i, tree.Directories[i].Path, exp)

@@ -184,25 +184,34 @@ BEGIN
     RAISE NOTICE '✓ PASSED: Multi-level execution order correct';
 END $$;
 
--- TEST 8: Setup/Teardown Pairing
+-- TEST 8: Teardown Structure
+-- Every directory with tests gets a teardown (to clean up entry savepoints)
 DO $$
 DECLARE
-    v_setup_count INT;
+    v_fixture_count INT;
     v_teardown_count INT;
+    v_directories_with_tests INT;
 BEGIN
     RAISE NOTICE '';
-    RAISE NOTICE 'TEST 8: Setup/Teardown Pairing';
+    RAISE NOTICE 'TEST 8: Teardown Structure';
 
-    -- Count setup and teardown steps
+    -- Count fixtures and teardowns
     SELECT
         COUNT(*) FILTER (WHERE step_type = 'fixture'),
         COUNT(*) FILTER (WHERE step_type = 'teardown')
-    INTO v_setup_count, v_teardown_count
+    INTO v_fixture_count, v_teardown_count
     FROM pg_temp.pgmi_test_plan;
 
-    IF v_setup_count != v_teardown_count THEN
-        RAISE EXCEPTION '✗ FAILED: Setup/teardown mismatch (% setup, % teardown)',
-            v_setup_count, v_teardown_count;
+    -- Count unique directories with tests
+    SELECT COUNT(DISTINCT directory)
+    INTO v_directories_with_tests
+    FROM pg_temp.pgmi_test_plan
+    WHERE step_type = 'test';
+
+    -- Every directory with tests should have a teardown
+    IF v_teardown_count != v_directories_with_tests THEN
+        RAISE EXCEPTION '✗ FAILED: Expected % teardowns (one per directory with tests), got %',
+            v_directories_with_tests, v_teardown_count;
     END IF;
 
     -- Verify each fixture has corresponding teardown with same directory
@@ -220,7 +229,8 @@ BEGIN
         RAISE EXCEPTION '✗ FAILED: Found fixture without matching teardown';
     END IF;
 
-    RAISE NOTICE '✓ PASSED: Setup/teardown pairing correct (% pairs)', v_setup_count;
+    RAISE NOTICE '✓ PASSED: Teardown structure correct (% fixtures, % teardowns, % test directories)',
+        v_fixture_count, v_teardown_count, v_directories_with_tests;
 END $$;
 
 -- TEST 9: Checksum Integrity

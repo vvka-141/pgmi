@@ -98,7 +98,12 @@ func TestSessionPreparation_Foundation(t *testing.T) {
 		t.Fatalf("Failed to load parameters: %v", err)
 	}
 
-	t.Log("Creating unittest framework (separates test files, materializes plan)...")
+	t.Log("Discovering tests and populating pg_temp.pgmi_test_plan...")
+	if err := fileLoader.LoadTestScriptsIntoSession(ctx, conn, scanResult.Files); err != nil {
+		t.Fatalf("Failed to load test scripts: %v", err)
+	}
+
+	t.Log("Creating unittest framework...")
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
 		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
@@ -158,6 +163,10 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 
 	if err := fileLoader.LoadParametersIntoSession(ctx, conn, map[string]string{}); err != nil {
 		t.Fatalf("Failed to load parameters: %v", err)
+	}
+
+	if err := fileLoader.LoadTestScriptsIntoSession(ctx, conn, scanResult.Files); err != nil {
+		t.Fatalf("Failed to load test scripts: %v", err)
 	}
 
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
@@ -226,6 +235,10 @@ func TestSessionPreparation_OnlyMigrations(t *testing.T) {
 
 	if err := fileLoader.LoadParametersIntoSession(ctx, conn, map[string]string{}); err != nil {
 		t.Fatalf("Failed to load parameters: %v", err)
+	}
+
+	if err := fileLoader.LoadTestScriptsIntoSession(ctx, conn, scanResult.Files); err != nil {
+		t.Fatalf("Failed to load test scripts: %v", err)
 	}
 
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {

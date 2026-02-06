@@ -84,9 +84,8 @@ func (d *Discoverer) Discover(sources []Source) (*TestTree, error) {
 
 // buildDirectory creates a TestDirectory from source files.
 func (d *Discoverer) buildDirectory(dirPath string, files []Source) (*TestDirectory, error) {
-	// Remove trailing slash for the directory path
-	path := strings.TrimSuffix(dirPath, "/")
-	dir := NewTestDirectory(path, 0)
+	// Keep directory path as-is (with trailing /)
+	dir := NewTestDirectory(dirPath, 0)
 
 	var fixtures []*TestFile
 	var tests []*TestFile
@@ -200,16 +199,13 @@ func (d *Discoverer) buildHierarchy(allDirs map[string]*TestDirectory) []*TestDi
 }
 
 // isParentPath checks if parentPath is a parent directory of childPath.
+// Both paths are expected to have trailing slashes (e.g., "./__test__/", "./__test__/auth/").
 func isParentPath(parentPath, childPath string) bool {
 	if !strings.HasPrefix(childPath, parentPath) {
 		return false
 	}
-	// Ensure it's a directory boundary
-	if len(childPath) > len(parentPath) {
-		nextChar := childPath[len(parentPath)]
-		return nextChar == '/'
-	}
-	return false
+	// With trailing slashes, parent is a prefix and child is longer
+	return len(childPath) > len(parentPath)
 }
 
 // sortChildren recursively sorts child directories by path.

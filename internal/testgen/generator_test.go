@@ -169,8 +169,8 @@ func TestDirectGenerator_Generate_SourceMap_ResolvesCorrectly(t *testing.T) {
 
 	result := g.Generate(rows)
 
-	// The test content should be at line 2 (after SAVEPOINT on line 1)
-	file, _, desc, found := result.SourceMap.Resolve(2)
+	// The test content should be at line 3 (after BEGIN; on line 1 and SAVEPOINT on line 2)
+	file, _, desc, found := result.SourceMap.Resolve(3)
 	if !found {
 		t.Error("SourceMap should resolve test line")
 	}

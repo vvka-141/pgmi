@@ -194,18 +194,25 @@ func TestTemplateFileMetadata(t *testing.T) {
 			// Extension should match
 			require.Equal(t, filepath.Ext(file.Path), file.Extension)
 
-			// Directory should be the parent path or empty for root
+			// Directory should be the parent path with ./ prefix and trailing /
 			expectedDir := filepath.ToSlash(filepath.Dir(file.Path))
 			if expectedDir == "." {
-				expectedDir = ""
+				expectedDir = "./"
+			} else if !strings.HasPrefix(expectedDir, "./") {
+				expectedDir = "./" + expectedDir + "/"
+			} else {
+				expectedDir = expectedDir + "/"
 			}
 			require.Equal(t, expectedDir, file.Directory)
 
 			// Depth should be consistent with directory structure
-			if file.Directory == "" {
+			if file.Directory == "./" {
 				require.Equal(t, 0, file.Depth)
 			} else {
-				expectedDepth := strings.Count(file.Directory, "/") + 1
+				// Directory format is ./path/to/dir/, depth = number of segments
+				trimmed := strings.TrimPrefix(file.Directory, "./")
+				trimmed = strings.TrimSuffix(trimmed, "/")
+				expectedDepth := strings.Count(trimmed, "/") + 1
 				require.Equal(t, expectedDepth, file.Depth)
 			}
 
