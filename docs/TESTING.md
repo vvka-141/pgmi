@@ -12,6 +12,8 @@ Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXI
 
 pgmi takes a different approach: **your tests never leave permanent changes in the database.**
 
+**Video walkthrough:** [Transactional Testing with pgmi](https://youtu.be/n8Ut40tf2SY)
+
 ---
 
 ## How it works (the short version)
