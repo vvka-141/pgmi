@@ -88,6 +88,30 @@ func TestMacroDetector_Detect_SchemaQualified(t *testing.T) {
 			expectedName: "pgmi_plan_test",
 			expectedPat:  "",
 		},
+		{
+			name:         "SELECT pg_temp.pgmi_test()",
+			input:        "SELECT pg_temp.pgmi_test();",
+			expectedName: "pgmi_test",
+			expectedPat:  "",
+		},
+		{
+			name:         "PERFORM pg_temp.pgmi_test()",
+			input:        "PERFORM pg_temp.pgmi_test();",
+			expectedName: "pgmi_test",
+			expectedPat:  "",
+		},
+		{
+			name:         "SELECT pg_temp.pgmi_test with pattern",
+			input:        "SELECT pg_temp.pgmi_test('./api/**');",
+			expectedName: "pgmi_test",
+			expectedPat:  "./api/**",
+		},
+		{
+			name:         "SELECT pg_temp.pgmi_plan_test()",
+			input:        "SELECT pg_temp.pgmi_plan_test();",
+			expectedName: "pgmi_plan_test",
+			expectedPat:  "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -416,7 +440,7 @@ DO $$ DECLARE v_file RECORD; BEGIN
         EXECUTE v_file.content;
     END LOOP;
 END $$;
-pgmi_test();
+SELECT pgmi_test();
 COMMIT;`,
 			expectedCount: 1,
 			expectedNames: []string{"pgmi_test"},
@@ -426,17 +450,17 @@ COMMIT;`,
 			input: `DO $$
 BEGIN
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    pgmi_plan_test('./api/**');
+    SELECT pgmi_plan_test('./api/**');
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;`,
 			expectedCount: 1,
 			expectedNames: []string{"pgmi_plan_test"},
 		},
 		{
-			name: "Mixed direct and pattern",
-			input: `pgmi_test();
-pgmi_test('./users/**');
-pgmi_test('./api/**');`,
+			name: "Mixed direct and pattern with proper SQL syntax",
+			input: `SELECT pgmi_test();
+SELECT pgmi_test('./users/**');
+PERFORM pg_temp.pgmi_test('./api/**');`,
 			expectedCount: 3,
 			expectedNames: []string{"pgmi_test", "pgmi_test", "pgmi_test"},
 		},

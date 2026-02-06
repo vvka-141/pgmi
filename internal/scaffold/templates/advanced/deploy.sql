@@ -20,13 +20,16 @@
 --   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
 --
 -- Macros (Preprocessor Expansion):
---   pgmi_test()                                - Execute all tests (direct mode, expands inline)
---   pgmi_test('./path/**')                     - Execute tests matching pattern (direct mode)
---   pgmi_plan_test()                           - Schedule tests via PERFORM calls (planning mode)
---   pgmi_plan_test('./path/**')                - Schedule tests matching pattern (planning mode)
+--   SELECT pgmi_test();                        - Execute all tests (direct mode, expands inline)
+--   SELECT pgmi_test('./path/**');             - Execute tests matching pattern (direct mode)
+--   SELECT pgmi_plan_test();                   - Schedule tests via PERFORM calls (planning mode)
+--   SELECT pgmi_plan_test('./path/**');        - Schedule tests matching pattern (planning mode)
+--
+-- Macros look and feel like standard SQL functions. Call them with SELECT or PERFORM.
+-- The schema-qualified form (SELECT pg_temp.pgmi_test();) is also supported.
 --
 -- Note: pgmi_plan_tests() is a SQL function that schedules tests at runtime.
---       pgmi_plan_test() is a macro that expands to PERFORM statements before execution.
+--       pgmi_plan_test() is a preprocessor macro that expands before execution.
 --       Both work in planning mode; choose based on your deployment flow needs.
 -- ============================================================================
 

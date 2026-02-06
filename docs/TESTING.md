@@ -458,7 +458,7 @@ Here are the functions you'll use:
 |----------|-------------------|
 | `pgmi_plan_command('SQL')` | A raw SQL statement (e.g., `BEGIN;`, `COMMIT;`) |
 | `pgmi_plan_file('./path/to/file.sql')` | The contents of a project file |
-| `pgmi_plan_tests()` | All tests with their savepoints and rollbacks |
+| `SELECT pgmi_plan_tests();` | All tests with their savepoints and rollbacks |
 
 ### Why this matters for testing
 
