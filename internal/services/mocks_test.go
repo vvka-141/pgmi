@@ -74,8 +74,9 @@ func (m *mockFileScanner) ReadDeploySQL(_ string) (string, error) {
 }
 
 type mockFileLoader struct {
-	loadFilesErr  error
-	loadParamsErr error
+	loadFilesErr       error
+	loadParamsErr      error
+	loadTestScriptsErr error
 }
 
 func (m *mockFileLoader) LoadFilesIntoSession(_ context.Context, _ *pgxpool.Conn, _ []pgmi.FileMetadata) error {
@@ -84,6 +85,10 @@ func (m *mockFileLoader) LoadFilesIntoSession(_ context.Context, _ *pgxpool.Conn
 
 func (m *mockFileLoader) LoadParametersIntoSession(_ context.Context, _ *pgxpool.Conn, _ map[string]string) error {
 	return m.loadParamsErr
+}
+
+func (m *mockFileLoader) LoadTestScriptsIntoSession(_ context.Context, _ *pgxpool.Conn, _ []pgmi.FileMetadata) error {
+	return m.loadTestScriptsErr
 }
 
 type mockDatabaseManager struct {

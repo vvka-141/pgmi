@@ -30,4 +30,12 @@ const (
 		FROM pg_temp.pgmi_unittest_pvw_plan($1)
 		ORDER BY execution_order
 	`
+
+	// queryTestScriptRows retrieves all test script rows for macro expansion.
+	// Used by the preprocessor to expand pgmi_test() and pgmi_plan_test() macros.
+	queryTestScriptRows = `
+		SELECT sort_key, path, script_type, before_exec, after_exec, directory, depth
+		FROM pg_temp.pgmi_test_script
+		ORDER BY sort_key
+	`
 )

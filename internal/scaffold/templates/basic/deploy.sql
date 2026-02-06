@@ -10,7 +10,7 @@
 --   pg_temp.pgmi_parameter        - CLI params from --param key=value
 --   pg_temp.pgmi_plan             - Execution plan (populated by helpers below)
 --
--- Helper functions:
+-- Helper functions (Plan Mode):
 --   pgmi_declare_param(key, type, ...)         - Declare parameter with type validation and defaults
 --   pgmi_get_param(key, default)               - Get parameter value with fallback
 --   pgmi_plan_command(sql)                     - Add raw SQL to execution plan
@@ -18,6 +18,11 @@
 --   pgmi_plan_file(path)                       - Add file content to plan
 --   pgmi_plan_do(plpgsql_code)                 - Add PL/pgSQL block to plan
 --   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
+--
+-- Macros (Direct Execution Mode):
+--   pgmi_test()                                - Execute all tests inline (expands before SQL runs)
+--   pgmi_test('./path/**')                     - Execute tests matching pattern
+--   pgmi_plan_test()                           - Same as pgmi_test but for use in planning contexts
 -- ============================================================================
 
 DO $$
@@ -98,10 +103,14 @@ BEGIN
     --   • Use .* for "match anything" (not % like SQL LIKE)
     --   • Escape literal dots: \. for file extensions
     --
-    -- Examples:
-    --   pgmi_plan_tests()                           - Run all tests
-    --   pgmi_plan_tests('.*/critical/.*')           - Tests in /critical/ directories
-    --   pgmi_plan_tests('.*_(integration|e2e)\.sql$')  - Integration/E2E tests only
+    -- Test Execution Options:
+    --   pgmi_plan_tests()                    - Run all tests (plan mode)
+    --   pgmi_plan_tests('.*/critical/.*')    - Tests in /critical/ directories
+    --
+    -- Alternative: Direct execution mode with pgmi_test() macro
+    --   For simple deployments, you can use pgmi_test() outside DO blocks.
+    --   This expands to inline SQL that executes tests immediately.
+    --   Example: SELECT pgmi_test(); -- expands before deploy.sql runs
 
     PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
     PERFORM pg_temp.pgmi_plan_tests();  -- Run all tests

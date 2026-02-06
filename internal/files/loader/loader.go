@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/testdiscovery"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -223,6 +224,58 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 			return fmt.Errorf("failed to insert metadata for file %s: %w", file.Path, err)
 		}
 		insertedCount++
+	}
+
+	return nil
+}
+
+// LoadTestScriptsIntoSession discovers tests from the loaded files and populates pgmi_test_script.
+// This enables the pgmi_test() macro to execute tests with proper savepoint structure.
+func (l *Loader) LoadTestScriptsIntoSession(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
+	// Convert FileMetadata to Source for discovery
+	sources := testdiscovery.ConvertFromFileMetadata(files)
+
+	// Discover test tree
+	discoverer := testdiscovery.NewDiscoverer(nil)
+	tree, err := discoverer.Discover(sources)
+	if err != nil {
+		return fmt.Errorf("test discovery failed: %w", err)
+	}
+
+	// Build execution plan
+	planBuilder := testdiscovery.NewPlanBuilder()
+	rows := planBuilder.Build(tree)
+
+	if len(rows) == 0 {
+		return nil // No tests to load
+	}
+
+	// Insert into pgmi_test_script
+	insertSQL := `
+		INSERT INTO pg_temp.pgmi_test_script
+		(sort_key, path, script_type, before_exec, after_exec, directory, depth)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+
+	batch := &pgx.Batch{}
+	for _, row := range rows {
+		batch.Queue(insertSQL,
+			row.SortKey,
+			row.Path,
+			row.ScriptType,
+			row.BeforeExec,
+			row.AfterExec,
+			row.Directory,
+			row.Depth,
+		)
+	}
+
+	results := conn.SendBatch(ctx, batch)
+	defer results.Close()
+
+	for i := range rows {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("failed to insert test script row %d: %w", i, err)
+		}
 	}
 
 	return nil

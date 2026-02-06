@@ -185,6 +185,13 @@ func (sm *SessionManager) prepareSessionTables(
 	}
 	sm.logger.Info("✓ Loaded %d parameters into pg_temp.pgmi_parameter", len(parameters))
 
+	// Discover tests and populate pgmi_test_script (for pgmi_test() macro)
+	sm.logger.Verbose("Discovering tests and populating pg_temp.pgmi_test_script...")
+	if err := sm.fileLoader.LoadTestScriptsIntoSession(ctx, conn, scanResult.Files); err != nil {
+		return fmt.Errorf("failed to load test scripts: %w", err)
+	}
+	sm.logger.Info("✓ Populated pg_temp.pgmi_test_script")
+
 	// Create unittest framework in pg_temp schema (after pgmi_source is populated)
 	// This executes unittest.sql which moves test files from pgmi_source and materializes the execution plan
 	sm.logger.Verbose("Creating unit test framework in pg_temp schema...")

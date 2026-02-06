@@ -17,4 +17,8 @@ type FileLoader interface {
 	// LoadParametersIntoSession creates the pg_temp.pgmi_parameter table and loads parameters.
 	// Must use the provided connection to ensure session-scoped tables are in the same session.
 	LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error
+
+	// LoadTestScriptsIntoSession discovers tests and populates the pg_temp.pgmi_test_script table.
+	// This enables the pgmi_test() macro to execute tests with proper savepoint structure.
+	LoadTestScriptsIntoSession(ctx context.Context, conn *pgxpool.Conn, files []FileMetadata) error
 }

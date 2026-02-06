@@ -5,9 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/preprocessor"
+	"github.com/vvka-141/pgmi/internal/sourcemap"
+	"github.com/vvka-141/pgmi/internal/testdiscovery"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -171,8 +177,9 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	return connConfig, nil
 }
 
-// executeDeploySQL reads, validates, and executes the deploy.sql file.
+// executeDeploySQL reads, preprocesses, and executes the deploy.sql file.
 // deploy.sql populates the pg_temp.pgmi_plan table with commands to be executed.
+// Preprocessing expands pgmi_test() and pgmi_plan_test() macros to executable SQL.
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
@@ -185,15 +192,129 @@ func (s *DeploymentService) executeDeploySQL(
 		return fmt.Errorf("failed to read deploy.sql: %w", err)
 	}
 
-	// Validate deploy.sql follows required workflow
-	// Execute deploy.sql as a single script
-	_, err = conn.Exec(ctx, deploySQL)
+	// Fetch test script rows for macro expansion
+	testRows, err := s.fetchTestScriptRows(ctx, conn)
 	if err != nil {
-		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, err))
+		return fmt.Errorf("failed to fetch test script rows: %w", err)
+	}
+
+	// Preprocess deploy.sql to expand pgmi_test() and pgmi_plan_test() macros
+	pipeline := preprocessor.NewPipeline(false) // direct mode
+	result, err := pipeline.Process(deploySQL, testRows)
+	if err != nil {
+		return fmt.Errorf("failed to preprocess deploy.sql: %w", err)
+	}
+
+	if result.MacroCount > 0 {
+		s.logger.Verbose("Expanded %d test macro(s) in deploy.sql", result.MacroCount)
+	}
+
+	// Execute preprocessed deploy.sql as a single script
+	_, err = conn.Exec(ctx, result.ExpandedSQL)
+	if err != nil {
+		// Try to attribute the error to the original source using the source map
+		attributedErr := s.attributeError(err, result.SourceMap)
+		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, attributedErr))
 	}
 
 	s.logger.Info("✓ Execution plan built successfully")
 	return nil
+}
+
+// attributeError attempts to resolve error line numbers back to original sources.
+// If the error contains line information and the source map has a mapping,
+// returns an enhanced error with the original source context.
+func (s *DeploymentService) attributeError(err error, sm *sourcemap.SourceMap) error {
+	if sm == nil || sm.Len() == 0 {
+		return err
+	}
+
+	// Extract PostgreSQL error
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+
+	// PostgreSQL errors may have line info in the message or Position field
+	line := extractLineFromError(pgErr)
+	if line == 0 {
+		return err
+	}
+
+	// Try to resolve the line using source map
+	file, origLine, desc, found := sm.Resolve(line)
+	if !found {
+		return err
+	}
+
+	// Create enhanced error message
+	return fmt.Errorf("%w\n  → %s (line %d: %s)", err, file, origLine, desc)
+}
+
+// extractLineFromError extracts a line number from a PostgreSQL error.
+// Checks Position field and parses "LINE X:" from the message.
+func extractLineFromError(pgErr *pgconn.PgError) int {
+	// PostgreSQL doesn't have a Line field in pgconn.PgError for query errors,
+	// but the Position field indicates character offset. We can also check
+	// the message for "LINE X:" pattern which appears in syntax errors.
+
+	// Check if message contains "LINE X:" pattern
+	if idx := strings.Index(pgErr.Message, "LINE "); idx != -1 {
+		remaining := pgErr.Message[idx+5:]
+		if colonIdx := strings.Index(remaining, ":"); colonIdx != -1 {
+			if line, err := strconv.Atoi(remaining[:colonIdx]); err == nil {
+				return line
+			}
+		}
+	}
+
+	// For context errors, check Where field
+	if pgErr.Where != "" {
+		if idx := strings.Index(pgErr.Where, "line "); idx != -1 {
+			remaining := pgErr.Where[idx+5:]
+			endIdx := strings.IndexAny(remaining, " ,)")
+			if endIdx == -1 {
+				endIdx = len(remaining)
+			}
+			if line, err := strconv.Atoi(remaining[:endIdx]); err == nil {
+				return line
+			}
+		}
+	}
+
+	return 0
+}
+
+// fetchTestScriptRows queries pg_temp.pgmi_test_script for macro expansion.
+func (s *DeploymentService) fetchTestScriptRows(ctx context.Context, conn *pgxpool.Conn) ([]testdiscovery.TestScriptRow, error) {
+	rows, err := conn.Query(ctx, queryTestScriptRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []testdiscovery.TestScriptRow
+	for rows.Next() {
+		var row testdiscovery.TestScriptRow
+		if err := rows.Scan(
+			&row.SortKey,
+			&row.Path,
+			&row.ScriptType,
+			&row.BeforeExec,
+			&row.AfterExec,
+			&row.Directory,
+			&row.Depth,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // executePlannedCommands reads and executes all commands from pg_temp.pgmi_plan table.

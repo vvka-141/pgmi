@@ -10,7 +10,7 @@
 --   pg_temp.pgmi_parameter        - CLI params from --param key=value
 --   pg_temp.pgmi_plan             - Execution plan (populated by helpers below)
 --
--- Helper functions:
+-- Helper functions (Plan Mode):
 --   pgmi_declare_param(key, type, ...)         - Declare parameter with type validation and defaults
 --   pgmi_get_param(key, default)               - Get parameter value with fallback
 --   pgmi_plan_command(sql)                     - Add raw SQL to execution plan
@@ -18,6 +18,16 @@
 --   pgmi_plan_file(path)                       - Add file content to plan
 --   pgmi_plan_do(plpgsql_code)                 - Add PL/pgSQL block to plan
 --   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
+--
+-- Macros (Preprocessor Expansion):
+--   pgmi_test()                                - Execute all tests (direct mode, expands inline)
+--   pgmi_test('./path/**')                     - Execute tests matching pattern (direct mode)
+--   pgmi_plan_test()                           - Schedule tests via PERFORM calls (planning mode)
+--   pgmi_plan_test('./path/**')                - Schedule tests matching pattern (planning mode)
+--
+-- Note: pgmi_plan_tests() is a SQL function that schedules tests at runtime.
+--       pgmi_plan_test() is a macro that expands to PERFORM statements before execution.
+--       Both work in planning mode; choose based on your deployment flow needs.
 -- ============================================================================
 
 

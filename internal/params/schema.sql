@@ -2,6 +2,7 @@
 DROP TABLE IF EXISTS pg_temp.pgmi_source CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_parameter CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_plan CASCADE;
+DROP TABLE IF EXISTS pg_temp.pgmi_test_script CASCADE;
 
 -- Merged parameters table: CLI loader inserts with value, pgmi_declare_param enriches with metadata
 CREATE TEMP TABLE pg_temp.pgmi_parameter
@@ -35,6 +36,7 @@ CREATE TEMP TABLE pgmi_source
     pgmi_checksum TEXT NOT NULL,
     path_parts TEXT[] NOT NULL,
     is_sql_file BOOLEAN NOT NULL,
+    is_test_file BOOLEAN NOT NULL,
     parent_folder_name TEXT,
     -- Path format constraints
     CONSTRAINT chk_path_format CHECK (path ~ '^\./'),
@@ -191,7 +193,56 @@ CREATE TEMP TABLE pgmi_plan
 -- Simple permission model: no privilege escalation needed for session-scoped temp table
 GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_plan TO PUBLIC;
 
+-- ============================================================================
+-- Test Execution Script Table (Session-Scoped)
+-- ============================================================================
+-- Pre-ordered execution plan for test files, populated by Go during preprocessing.
+-- Contains savepoint commands, test file paths, and rollback instructions.
+-- Used by pgmi_test() macro expansion for direct test execution.
+CREATE TEMP TABLE pg_temp.pgmi_test_script
+(
+    sort_key     INT PRIMARY KEY,
+    path         TEXT,              -- NULL for control rows (savepoint, cleanup)
+    script_type  TEXT NOT NULL,     -- 'savepoint', 'fixture', 'test', 'cleanup'
+    before_exec  TEXT,              -- SQL to execute before file (e.g., SAVEPOINT)
+    after_exec   TEXT,              -- SQL to execute after file (e.g., ROLLBACK TO)
+    directory    TEXT,              -- Parent __test__/ directory
+    depth        INT NOT NULL DEFAULT 0,
+    CONSTRAINT chk_script_type CHECK (script_type IN ('savepoint', 'fixture', 'test', 'cleanup'))
+);
 
+COMMENT ON TABLE pg_temp.pgmi_test_script IS
+    'Pre-ordered test execution plan with savepoint structure. Populated by Go preprocessor.';
+
+-- Allow access from any role context
+GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_script TO PUBLIC;
+
+-- ============================================================================
+-- Test File Executor Function
+-- ============================================================================
+-- Executes a test file by retrieving its content from pgmi_source.
+-- Used by the generated SQL from pgmi_test() macro expansion.
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_execute_test_file(p_path TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_content TEXT;
+BEGIN
+    SELECT content INTO STRICT v_content
+    FROM pg_temp.pgmi_source
+    WHERE path = p_path
+      AND is_test_file = TRUE;
+
+    EXECUTE v_content;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE EXCEPTION 'pgmi: test file not found: %', p_path;
+END;
+$$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_execute_test_file IS
+    'Executes a test file by path. File must be marked as is_test_file in pgmi_source.';
 
 
 
@@ -249,6 +300,7 @@ BEGIN
     v_row.checksum           := in_checksum;
     v_row.pgmi_checksum      := in_pgmi_checksum;
     v_row.is_sql_file        := pg_temp.pgmi_is_sql_file(v_row.path);
+    v_row.is_test_file       := v_row.path ~ '/__tests?__/';
     v_row.parent_folder_name :=
         CASE WHEN v_row.depth > 0
              THEN v_parts[array_length(v_parts, 1) - 1]
@@ -260,7 +312,7 @@ BEGIN
         v_row.path, v_row.name, v_row.directory, v_row.extension,
         v_row.depth, v_row.content, v_row.size_bytes,
         v_row.checksum, v_row.pgmi_checksum,
-        v_row.path_parts, v_row.is_sql_file, v_row.parent_folder_name
+        v_row.path_parts, v_row.is_sql_file, v_row.is_test_file, v_row.parent_folder_name
     )
     RETURNING * INTO v_row;
 
