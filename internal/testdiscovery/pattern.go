@@ -135,7 +135,7 @@ func FilterByPattern(rows []TestScriptRow, pattern string) []TestScriptRow {
 			matchingDirs[row.Directory] = true
 		}
 		// Also check path for test/fixture rows
-		if row.Path != nil && matcher.Matches(pattern, *row.Path) {
+		if row.ScriptPath != nil && matcher.Matches(pattern, *row.ScriptPath) {
 			matchingDirs[row.Directory] = true
 		}
 	}

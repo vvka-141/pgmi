@@ -285,7 +285,7 @@ func extractLineFromError(pgErr *pgconn.PgError) int {
 	return 0
 }
 
-// fetchTestScriptRows queries pg_temp.pgmi_test_script for macro expansion.
+// fetchTestScriptRows queries pg_temp.pgmi_test_plan for macro expansion.
 func (s *DeploymentService) fetchTestScriptRows(ctx context.Context, conn *pgxpool.Conn) ([]testdiscovery.TestScriptRow, error) {
 	rows, err := conn.Query(ctx, queryTestScriptRows)
 	if err != nil {
@@ -297,13 +297,14 @@ func (s *DeploymentService) fetchTestScriptRows(ctx context.Context, conn *pgxpo
 	for rows.Next() {
 		var row testdiscovery.TestScriptRow
 		if err := rows.Scan(
-			&row.SortKey,
-			&row.Path,
-			&row.ScriptType,
-			&row.BeforeExec,
-			&row.AfterExec,
+			&row.Ordinal,
+			&row.StepType,
+			&row.ScriptPath,
 			&row.Directory,
 			&row.Depth,
+			&row.PreExec,
+			&row.ScriptSQL,
+			&row.PostExec,
 		); err != nil {
 			return nil, err
 		}
@@ -542,12 +543,13 @@ func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, f
 	fmt.Fprintf(os.Stderr, "\nDiscovered tests (filter: %q):\n\n", filterPattern)
 
 	testCount := 0
-	setupCount := 0
+	fixtureCount := 0
 	teardownCount := 0
 
 	for rows.Next() {
 		var ordinal int
-		var stepType, scriptPath string
+		var stepType string
+		var scriptPath *string
 		if err := rows.Scan(&ordinal, &stepType, &scriptPath); err != nil {
 			return fmt.Errorf("failed to scan test row: %w", err)
 		}
@@ -555,9 +557,9 @@ func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, f
 		// Format output
 		stepLabel := "Test"
 		switch stepType {
-		case "setup":
-			stepLabel = "Setup"
-			setupCount++
+		case "fixture":
+			stepLabel = "Fixture"
+			fixtureCount++
 		case "teardown":
 			stepLabel = "Teardown"
 			teardownCount++
@@ -565,14 +567,18 @@ func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, f
 			testCount++
 		}
 
-		fmt.Fprintf(os.Stderr, "%d. %-8s %s\n", ordinal, stepLabel+":", scriptPath)
+		pathStr := "(no path)"
+		if scriptPath != nil {
+			pathStr = *scriptPath
+		}
+		fmt.Fprintf(os.Stderr, "%d. %-9s %s\n", ordinal, stepLabel+":", pathStr)
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("error reading test rows: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nTotal: %d tests (with %d setup, %d teardown)\n", testCount, setupCount, teardownCount)
+	fmt.Fprintf(os.Stderr, "\nTotal: %d tests (with %d fixtures, %d teardowns)\n", testCount, fixtureCount, teardownCount)
 	return nil
 }
 
@@ -597,14 +603,16 @@ func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.C
 	type testStep struct {
 		ordinal    int
 		stepType   string
-		scriptPath string
-		sql        string
+		scriptPath *string
+		preExec    *string
+		scriptSQL  *string
+		postExec   *string
 	}
 	var steps []testStep
 
 	for rows.Next() {
 		var step testStep
-		if err := rows.Scan(&step.ordinal, &step.stepType, &step.scriptPath, &step.sql); err != nil {
+		if err := rows.Scan(&step.ordinal, &step.stepType, &step.scriptPath, &step.preExec, &step.scriptSQL, &step.postExec); err != nil {
 			rows.Close()
 			return fmt.Errorf("failed to scan test row: %w", err)
 		}
@@ -625,11 +633,32 @@ func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.C
 		default:
 		}
 
-		_, err := conn.Exec(ctx, step.sql)
+		// Build combined SQL: pre_exec + script_sql + post_exec
+		var combinedSQL strings.Builder
+		if step.preExec != nil {
+			combinedSQL.WriteString(*step.preExec)
+			combinedSQL.WriteString("\n")
+		}
+		if step.scriptSQL != nil {
+			combinedSQL.WriteString(*step.scriptSQL)
+			combinedSQL.WriteString("\n")
+		}
+		if step.postExec != nil {
+			combinedSQL.WriteString(*step.postExec)
+		}
+
+		sql := combinedSQL.String()
+		if sql == "" {
+			continue
+		}
+
+		_, err := conn.Exec(ctx, sql)
 		if err != nil {
-			// PostgreSQL already printed the error context via RAISE NOTICE/EXCEPTION
-			// We just add minimal pgmi context and exit
-			return fmt.Errorf("test failed in %s: %w", step.scriptPath, err)
+			pathStr := "(teardown)"
+			if step.scriptPath != nil {
+				pathStr = *step.scriptPath
+			}
+			return fmt.Errorf("test failed in %s: %w", pathStr, err)
 		}
 	}
 

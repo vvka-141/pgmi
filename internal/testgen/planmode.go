@@ -9,7 +9,7 @@ import (
 )
 
 // PlanModeGenerator produces a single PERFORM pgmi_plan_command() call
-// containing the entire test execution sequence.
+// containing the entire test execution sequence with embedded content.
 type PlanModeGenerator struct{}
 
 // NewPlanModeGenerator creates a new PlanModeGenerator.
@@ -18,6 +18,7 @@ func NewPlanModeGenerator() *PlanModeGenerator {
 }
 
 // Generate converts execution plan rows to a single pgmi_plan_command() call.
+// Outputs embedded SQL content directly instead of calling helper functions.
 func (g *PlanModeGenerator) Generate(rows []testdiscovery.TestScriptRow) *GeneratedSQL {
 	result := &GeneratedSQL{
 		SourceMap: sourcemap.New(),
@@ -35,28 +36,30 @@ func (g *PlanModeGenerator) Generate(rows []testdiscovery.TestScriptRow) *Genera
 	for _, row := range rows {
 		startLine := lineNum
 
-		if row.BeforeExec != nil {
-			innerLines = append(innerLines, *row.BeforeExec)
+		if row.PreExec != nil {
+			innerLines = append(innerLines, *row.PreExec)
 			lineNum++
 		}
 
-		if row.Path != nil {
-			escapedPath := EscapeSQLString(*row.Path)
-			execLine := fmt.Sprintf("SELECT pg_temp.pgmi_execute_test_file('%s');", escapedPath)
-			innerLines = append(innerLines, execLine)
+		if row.ScriptSQL != nil {
+			content := *row.ScriptSQL
+			innerLines = append(innerLines, content)
+			contentLines := strings.Count(content, "\n") + 1
 
-			desc := fmt.Sprintf("%s: %s", row.ScriptType, *row.Path)
-			result.SourceMap.Add(lineNum, lineNum, *row.Path, 1, desc)
+			if row.ScriptPath != nil {
+				desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
+				result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+			}
+			lineNum += contentLines
+		}
+
+		if row.PostExec != nil {
+			innerLines = append(innerLines, *row.PostExec)
 			lineNum++
 		}
 
-		if row.AfterExec != nil {
-			innerLines = append(innerLines, *row.AfterExec)
-			lineNum++
-		}
-
-		if row.Path == nil && (row.BeforeExec != nil || row.AfterExec != nil) {
-			desc := fmt.Sprintf("%s: %s", row.ScriptType, row.Directory)
+		if row.ScriptSQL == nil && (row.PreExec != nil || row.PostExec != nil) {
+			desc := fmt.Sprintf("%s: %s", row.StepType, row.Directory)
 			result.SourceMap.Add(startLine, lineNum-1, row.Directory, 0, desc)
 		}
 	}

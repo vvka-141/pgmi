@@ -23,18 +23,26 @@ func TestSavepointNamer_Next(t *testing.T) {
 	}
 }
 
+// mockResolver returns a content resolver that returns the path as content.
+func mockResolver(path string) (string, error) {
+	return "-- content of " + path, nil
+}
+
 func TestNewPlanBuilder(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	if b == nil {
 		t.Fatal("NewPlanBuilder() returned nil")
 	}
 }
 
 func TestPlanBuilder_Build_EmptyTree(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
-	rows := b.Build(tree)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
 	if len(rows) != 0 {
 		t.Errorf("Expected 0 rows for empty tree, got %d", len(rows))
@@ -42,64 +50,71 @@ func TestPlanBuilder_Build_EmptyTree(t *testing.T) {
 }
 
 func TestPlanBuilder_Build_SingleTest(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir := NewTestDirectory("./test/__test__", 0)
 	dir.AddTest(&TestFile{Path: "./test/__test__/01_test.sql", Filename: "01_test.sql"})
 	tree.AddDirectory(dir)
 
-	rows := b.Build(tree)
-
-	// Expected: SAVEPOINT, test, ROLLBACK TO
-	if len(rows) < 3 {
-		t.Fatalf("Expected at least 3 rows, got %d", len(rows))
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	// First row: savepoint creation
-	if rows[0].ScriptType != "savepoint" {
-		t.Errorf("rows[0].ScriptType = %q, expected %q", rows[0].ScriptType, "savepoint")
-	}
-	if rows[0].BeforeExec == nil || *rows[0].BeforeExec != "SAVEPOINT __pgmi_0__;" {
-		t.Errorf("rows[0].BeforeExec = %v, expected SAVEPOINT __pgmi_0__;", rows[0].BeforeExec)
+	// Expected: test with embedded content, teardown
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
 	}
 
-	// Second row: test execution
-	if rows[1].ScriptType != "test" {
-		t.Errorf("rows[1].ScriptType = %q, expected %q", rows[1].ScriptType, "test")
+	// First row: test execution with pre-exec savepoint
+	if rows[0].StepType != "test" {
+		t.Errorf("rows[0].StepType = %q, expected %q", rows[0].StepType, "test")
 	}
-	if rows[1].Path == nil || *rows[1].Path != "./test/__test__/01_test.sql" {
-		t.Errorf("rows[1].Path = %v, expected ./test/__test__/01_test.sql", rows[1].Path)
+	if rows[0].PreExec == nil || *rows[0].PreExec != "SAVEPOINT __pgmi_0__;" {
+		t.Errorf("rows[0].PreExec = %v, expected SAVEPOINT __pgmi_0__;", rows[0].PreExec)
+	}
+	if rows[0].ScriptPath == nil || *rows[0].ScriptPath != "./test/__test__/01_test.sql" {
+		t.Errorf("rows[0].ScriptPath = %v, expected ./test/__test__/01_test.sql", rows[0].ScriptPath)
+	}
+	if rows[0].ScriptSQL == nil {
+		t.Error("rows[0].ScriptSQL should not be nil")
 	}
 	// Test should rollback after
-	if rows[1].AfterExec == nil || *rows[1].AfterExec != "ROLLBACK TO SAVEPOINT __pgmi_0__;" {
-		t.Errorf("rows[1].AfterExec = %v, expected ROLLBACK TO SAVEPOINT __pgmi_0__;", rows[1].AfterExec)
+	if rows[0].PostExec == nil || *rows[0].PostExec != "ROLLBACK TO SAVEPOINT __pgmi_0__;" {
+		t.Errorf("rows[0].PostExec = %v, expected ROLLBACK TO SAVEPOINT __pgmi_0__;", rows[0].PostExec)
 	}
 
-	// Last row: release savepoint
+	// Last row: teardown
 	lastRow := rows[len(rows)-1]
-	if lastRow.ScriptType != "cleanup" {
-		t.Errorf("last row ScriptType = %q, expected %q", lastRow.ScriptType, "cleanup")
+	if lastRow.StepType != "teardown" {
+		t.Errorf("last row StepType = %q, expected %q", lastRow.StepType, "teardown")
 	}
 }
 
 func TestPlanBuilder_Build_FixtureOnly(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir := NewTestDirectory("./test/__test__", 0)
 	dir.SetFixture(&TestFile{Path: "./test/__test__/00_fixture.sql", Filename: "00_fixture.sql", IsFixture: true})
 	tree.AddDirectory(dir)
 
-	rows := b.Build(tree)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
-	// Expected: SAVEPOINT, fixture, RELEASE or just cleanup
+	// Expected: fixture, teardown
 	hasFixture := false
 	for _, row := range rows {
-		if row.ScriptType == "fixture" {
+		if row.StepType == "fixture" {
 			hasFixture = true
-			if row.Path == nil || *row.Path != "./test/__test__/00_fixture.sql" {
-				t.Errorf("fixture Path = %v, expected ./test/__test__/00_fixture.sql", row.Path)
+			if row.ScriptPath == nil || *row.ScriptPath != "./test/__test__/00_fixture.sql" {
+				t.Errorf("fixture ScriptPath = %v, expected ./test/__test__/00_fixture.sql", row.ScriptPath)
+			}
+			if row.ScriptSQL == nil {
+				t.Error("fixture ScriptSQL should not be nil")
 			}
 		}
 	}
@@ -109,7 +124,7 @@ func TestPlanBuilder_Build_FixtureOnly(t *testing.T) {
 }
 
 func TestPlanBuilder_Build_FixtureAndTests(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir := NewTestDirectory("./test/__test__", 0)
@@ -118,25 +133,28 @@ func TestPlanBuilder_Build_FixtureAndTests(t *testing.T) {
 	dir.AddTest(&TestFile{Path: "./test/__test__/02_test.sql"})
 	tree.AddDirectory(dir)
 
-	rows := b.Build(tree)
-
-	// Verify order: savepoint → fixture → savepoint → test1 (rollback) → test2 (rollback) → cleanup
-	types := make([]string, len(rows))
-	for i, row := range rows {
-		types[i] = row.ScriptType
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	// Should have at least: savepoint, fixture, savepoint, test, test, cleanup
+	// Verify order: fixture, test1 (rollback), test2 (rollback), teardown
+	types := make([]string, len(rows))
+	for i, row := range rows {
+		types[i] = row.StepType
+	}
+
+	// Should have: fixture, test, test, teardown
 	fixtureIdx := -1
 	test1Idx := -1
 	test2Idx := -1
 	for i, row := range rows {
-		if row.ScriptType == "fixture" {
+		if row.StepType == "fixture" {
 			fixtureIdx = i
 		}
-		if row.ScriptType == "test" && test1Idx == -1 {
+		if row.StepType == "test" && test1Idx == -1 {
 			test1Idx = i
-		} else if row.ScriptType == "test" && test1Idx != -1 {
+		} else if row.StepType == "test" && test1Idx != -1 {
 			test2Idx = i
 		}
 	}
@@ -152,16 +170,16 @@ func TestPlanBuilder_Build_FixtureAndTests(t *testing.T) {
 	}
 
 	// Tests should rollback to fixture savepoint
-	if rows[test1Idx].AfterExec == nil {
-		t.Error("test1 should have AfterExec for rollback")
+	if rows[test1Idx].PostExec == nil {
+		t.Error("test1 should have PostExec for rollback")
 	}
-	if rows[test2Idx].AfterExec == nil {
-		t.Error("test2 should have AfterExec for rollback")
+	if rows[test2Idx].PostExec == nil {
+		t.Error("test2 should have PostExec for rollback")
 	}
 }
 
 func TestPlanBuilder_Build_NestedDirectories(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	parent := NewTestDirectory("./test/__test__", 0)
@@ -175,27 +193,23 @@ func TestPlanBuilder_Build_NestedDirectories(t *testing.T) {
 	parent.AddChild(child)
 	tree.AddDirectory(parent)
 
-	rows := b.Build(tree)
-
-	// Verify hierarchy: parent fixture, parent savepoint, parent test (rollback),
-	// child (savepoint, child fixture, child savepoint, child test, rollback, cleanup),
-	// cleanup
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
 	// Count different types
-	savepointCount := 0
 	fixtureCount := 0
 	testCount := 0
-	cleanupCount := 0
+	teardownCount := 0
 	for _, row := range rows {
-		switch row.ScriptType {
-		case "savepoint":
-			savepointCount++
+		switch row.StepType {
 		case "fixture":
 			fixtureCount++
 		case "test":
 			testCount++
-		case "cleanup":
-			cleanupCount++
+		case "teardown":
+			teardownCount++
 		}
 	}
 
@@ -204,6 +218,9 @@ func TestPlanBuilder_Build_NestedDirectories(t *testing.T) {
 	}
 	if testCount != 2 {
 		t.Errorf("Expected 2 tests, got %d", testCount)
+	}
+	if teardownCount != 2 {
+		t.Errorf("Expected 2 teardowns, got %d", teardownCount)
 	}
 
 	// Verify parent depth
@@ -222,7 +239,7 @@ func TestPlanBuilder_Build_NestedDirectories(t *testing.T) {
 }
 
 func TestPlanBuilder_Build_MultipleDirectories(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir1 := NewTestDirectory("./a/__test__", 0)
@@ -234,7 +251,10 @@ func TestPlanBuilder_Build_MultipleDirectories(t *testing.T) {
 	tree.AddDirectory(dir1)
 	tree.AddDirectory(dir2)
 
-	rows := b.Build(tree)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
 	// Both directories should be processed
 	dirs := make(map[string]bool)
@@ -249,8 +269,8 @@ func TestPlanBuilder_Build_MultipleDirectories(t *testing.T) {
 	}
 }
 
-func TestPlanBuilder_Build_SortKeyIncreases(t *testing.T) {
-	b := NewPlanBuilder()
+func TestPlanBuilder_Build_OrdinalIncreases(t *testing.T) {
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir := NewTestDirectory("./test/__test__", 0)
@@ -259,19 +279,22 @@ func TestPlanBuilder_Build_SortKeyIncreases(t *testing.T) {
 	dir.AddTest(&TestFile{Path: "./test/__test__/02_test.sql"})
 	tree.AddDirectory(dir)
 
-	rows := b.Build(tree)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
-	// Verify SortKey increases monotonically
+	// Verify Ordinal increases monotonically
 	for i := 1; i < len(rows); i++ {
-		if rows[i].SortKey <= rows[i-1].SortKey {
-			t.Errorf("SortKey not monotonically increasing: rows[%d].SortKey=%d, rows[%d].SortKey=%d",
-				i-1, rows[i-1].SortKey, i, rows[i].SortKey)
+		if rows[i].Ordinal <= rows[i-1].Ordinal {
+			t.Errorf("Ordinal not monotonically increasing: rows[%d].Ordinal=%d, rows[%d].Ordinal=%d",
+				i-1, rows[i-1].Ordinal, i, rows[i].Ordinal)
 		}
 	}
 }
 
 func TestPlanBuilder_Build_SavepointNaming(t *testing.T) {
-	b := NewPlanBuilder()
+	b := NewPlanBuilder(mockResolver)
 	tree := NewTestTree()
 
 	dir := NewTestDirectory("./test/__test__", 0)
@@ -279,16 +302,48 @@ func TestPlanBuilder_Build_SavepointNaming(t *testing.T) {
 	dir.AddTest(&TestFile{Path: "./test/__test__/01_test.sql"})
 	tree.AddDirectory(dir)
 
-	rows := b.Build(tree)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
 
 	// Verify savepoint names follow __pgmi_N__ convention
 	for _, row := range rows {
-		if row.BeforeExec != nil {
-			cmd := *row.BeforeExec
-			if len(cmd) > 0 && cmd[:9] == "SAVEPOINT" {
+		if row.PreExec != nil {
+			cmd := *row.PreExec
+			if len(cmd) > 9 && cmd[:9] == "SAVEPOINT" {
 				if cmd[10:17] != "__pgmi_" {
 					t.Errorf("Savepoint name doesn't follow convention: %s", cmd)
 				}
+			}
+		}
+	}
+}
+
+func TestPlanBuilder_Build_EmbeddedContent(t *testing.T) {
+	b := NewPlanBuilder(mockResolver)
+	tree := NewTestTree()
+
+	dir := NewTestDirectory("./test/__test__", 0)
+	dir.SetFixture(&TestFile{Path: "./test/__test__/00_fixture.sql", IsFixture: true})
+	dir.AddTest(&TestFile{Path: "./test/__test__/01_test.sql"})
+	tree.AddDirectory(dir)
+
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// Verify all fixture and test rows have embedded content
+	for _, row := range rows {
+		if row.StepType == "fixture" || row.StepType == "test" {
+			if row.ScriptSQL == nil {
+				t.Errorf("Row %d (%s) should have embedded ScriptSQL", row.Ordinal, row.StepType)
+			}
+		}
+		if row.StepType == "teardown" {
+			if row.ScriptSQL != nil {
+				t.Errorf("Teardown row %d should not have ScriptSQL", row.Ordinal)
 			}
 		}
 	}

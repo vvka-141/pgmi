@@ -30,17 +30,18 @@ func TestDirectGenerator_Generate_SingleSavepoint(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{
-			SortKey:    1,
-			ScriptType: "savepoint",
-			BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
-			Directory:  "./test/__test__",
+			Ordinal:   1,
+			StepType:  "teardown",
+			PreExec:   testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
+			PostExec:  testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"),
+			Directory: "./test/__test__",
 		},
 	}
 
 	result := g.Generate(rows)
 
-	if !strings.Contains(result.SQL, "SAVEPOINT __pgmi_0__;") {
-		t.Errorf("SQL should contain SAVEPOINT, got: %s", result.SQL)
+	if !strings.Contains(result.SQL, "ROLLBACK TO SAVEPOINT __pgmi_0__;") {
+		t.Errorf("SQL should contain ROLLBACK, got: %s", result.SQL)
 	}
 }
 
@@ -48,23 +49,25 @@ func TestDirectGenerator_Generate_TestExecution(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{
-			SortKey:    1,
-			ScriptType: "test",
-			Path:       testdiscovery.Ptr("./test/__test__/01_test.sql"),
-			AfterExec:  testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
+			Ordinal:    1,
+			StepType:   "test",
+			ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"),
+			ScriptSQL:  testdiscovery.Ptr("SELECT 1;"),
+			PreExec:    testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
+			PostExec:   testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
 			Directory:  "./test/__test__",
 		},
 	}
 
 	result := g.Generate(rows)
 
-	// Should call pgmi_execute_test_file
-	if !strings.Contains(result.SQL, "pgmi_execute_test_file") {
-		t.Errorf("SQL should call pgmi_execute_test_file, got: %s", result.SQL)
+	// Should contain embedded SQL
+	if !strings.Contains(result.SQL, "SELECT 1;") {
+		t.Errorf("SQL should contain embedded content, got: %s", result.SQL)
 	}
-	// Should contain path
-	if !strings.Contains(result.SQL, "./test/__test__/01_test.sql") {
-		t.Errorf("SQL should contain path, got: %s", result.SQL)
+	// Should have savepoint before
+	if !strings.Contains(result.SQL, "SAVEPOINT __pgmi_0__") {
+		t.Errorf("SQL should contain SAVEPOINT, got: %s", result.SQL)
 	}
 	// Should have rollback after
 	if !strings.Contains(result.SQL, "ROLLBACK TO SAVEPOINT") {
@@ -76,30 +79,32 @@ func TestDirectGenerator_Generate_FixtureExecution(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{
-			SortKey:    1,
-			ScriptType: "fixture",
-			Path:       testdiscovery.Ptr("./test/__test__/00_fixture.sql"),
+			Ordinal:    1,
+			StepType:   "fixture",
+			ScriptPath: testdiscovery.Ptr("./test/__test__/00_fixture.sql"),
+			ScriptSQL:  testdiscovery.Ptr("CREATE TABLE test_data(id int);"),
+			PreExec:    testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
 			Directory:  "./test/__test__",
 		},
 	}
 
 	result := g.Generate(rows)
 
-	// Should call pgmi_execute_test_file for fixture too
-	if !strings.Contains(result.SQL, "pgmi_execute_test_file") {
-		t.Errorf("SQL should call pgmi_execute_test_file for fixture, got: %s", result.SQL)
+	// Should contain embedded fixture SQL
+	if !strings.Contains(result.SQL, "CREATE TABLE test_data(id int);") {
+		t.Errorf("SQL should contain embedded fixture content, got: %s", result.SQL)
 	}
 }
 
-func TestDirectGenerator_Generate_Cleanup(t *testing.T) {
+func TestDirectGenerator_Generate_Teardown(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
 		{
-			SortKey:    1,
-			ScriptType: "cleanup",
-			BeforeExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
-			AfterExec:  testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"),
-			Directory:  "./test/__test__",
+			Ordinal:   1,
+			StepType:  "teardown",
+			PreExec:   testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
+			PostExec:  testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"),
+			Directory: "./test/__test__",
 		},
 	}
 
@@ -113,41 +118,20 @@ func TestDirectGenerator_Generate_Cleanup(t *testing.T) {
 	}
 }
 
-func TestDirectGenerator_Generate_QuotedPath(t *testing.T) {
-	g := NewDirectGenerator()
-	rows := []testdiscovery.TestScriptRow{
-		{
-			SortKey:    1,
-			ScriptType: "test",
-			Path:       testdiscovery.Ptr("./test/__test__/file'with'quotes.sql"),
-			Directory:  "./test/__test__",
-		},
-	}
-
-	result := g.Generate(rows)
-
-	// Single quotes should be escaped
-	if !strings.Contains(result.SQL, "file''with''quotes.sql") {
-		t.Errorf("SQL should escape quotes, got: %s", result.SQL)
-	}
-}
-
 func TestDirectGenerator_Generate_CompleteSequence(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/00_fixture.sql"), Directory: "./test/__test__"},
-		{SortKey: 3, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
-		{SortKey: 4, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
-		{SortKey: 5, ScriptType: "cleanup", BeforeExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), AfterExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./test/__test__/00_fixture.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
+		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
 
 	// Verify order in output
 	savepointIdx := strings.Index(result.SQL, "SAVEPOINT __pgmi_0__")
-	fixtureIdx := strings.Index(result.SQL, "00_fixture.sql")
-	testIdx := strings.Index(result.SQL, "01_test.sql")
+	fixtureIdx := strings.Index(result.SQL, "-- fixture")
+	testIdx := strings.Index(result.SQL, "-- test")
 	cleanupIdx := strings.Index(result.SQL, "RELEASE SAVEPOINT")
 
 	if savepointIdx >= fixtureIdx {
@@ -164,8 +148,7 @@ func TestDirectGenerator_Generate_CompleteSequence(t *testing.T) {
 func TestDirectGenerator_Generate_SourceMap(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -181,27 +164,13 @@ func TestDirectGenerator_Generate_SourceMap(t *testing.T) {
 func TestDirectGenerator_Generate_SourceMap_ResolvesCorrectly(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./a/__test__/01_test.sql"), Directory: "./a/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./a/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
 	}
 
 	result := g.Generate(rows)
 
-	// Find line with test file
-	lines := strings.Split(result.SQL, "\n")
-	testLine := -1
-	for i, line := range lines {
-		if strings.Contains(line, "01_test.sql") {
-			testLine = i + 1 // 1-based
-			break
-		}
-	}
-
-	if testLine == -1 {
-		t.Fatal("Could not find test line in SQL")
-	}
-
-	file, _, desc, found := result.SourceMap.Resolve(testLine)
+	// The test content should be at line 2 (after SAVEPOINT on line 1)
+	file, _, desc, found := result.SourceMap.Resolve(2)
 	if !found {
 		t.Error("SourceMap should resolve test line")
 	}
@@ -210,6 +179,27 @@ func TestDirectGenerator_Generate_SourceMap_ResolvesCorrectly(t *testing.T) {
 	}
 	if desc == "" {
 		t.Error("SourceMap description should not be empty")
+	}
+}
+
+func TestDirectGenerator_Generate_MultilineContent(t *testing.T) {
+	g := NewDirectGenerator()
+	multilineSQL := "SELECT 1;\nSELECT 2;\nSELECT 3;"
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr(multilineSQL), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+	}
+
+	result := g.Generate(rows)
+
+	// Should contain all lines
+	if !strings.Contains(result.SQL, "SELECT 1;") {
+		t.Error("SQL should contain SELECT 1;")
+	}
+	if !strings.Contains(result.SQL, "SELECT 2;") {
+		t.Error("SQL should contain SELECT 2;")
+	}
+	if !strings.Contains(result.SQL, "SELECT 3;") {
+		t.Error("SQL should contain SELECT 3;")
 	}
 }
 

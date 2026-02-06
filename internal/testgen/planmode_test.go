@@ -28,8 +28,7 @@ func TestPlanModeGenerator_Generate_EmptyRows(t *testing.T) {
 func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -55,9 +54,9 @@ func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 		t.Errorf("SQL should contain savepoint, got: %s", result.SQL)
 	}
 
-	// Inner SQL should contain test file execution
-	if !strings.Contains(result.SQL, "pgmi_execute_test_file") {
-		t.Errorf("SQL should contain pgmi_execute_test_file, got: %s", result.SQL)
+	// Inner SQL should contain embedded test content
+	if !strings.Contains(result.SQL, "SELECT 1;") {
+		t.Errorf("SQL should contain embedded content, got: %s", result.SQL)
 	}
 
 	// Inner SQL should contain rollback
@@ -69,9 +68,8 @@ func TestPlanModeGenerator_Generate_SingleCommand(t *testing.T) {
 func TestPlanModeGenerator_Generate_Structure(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/_setup.sql"), Directory: "./test/__test__"},
-		{SortKey: 3, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./test/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- setup"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -87,33 +85,12 @@ func TestPlanModeGenerator_Generate_Structure(t *testing.T) {
 	}
 }
 
-func TestPlanModeGenerator_Generate_PreservesQuotesInPaths(t *testing.T) {
-	g := NewPlanModeGenerator()
-	rows := []testdiscovery.TestScriptRow{
-		{
-			SortKey:    1,
-			ScriptType: "test",
-			Path:       testdiscovery.Ptr("./test/__test__/file'with'quotes.sql"),
-			Directory:  "./test/__test__",
-		},
-	}
-
-	result := g.Generate(rows)
-
-	// Dollar quoting means inner quotes are escaped via EscapeSQLString
-	if !strings.Contains(result.SQL, "file''with''quotes.sql") {
-		t.Errorf("SQL should escape single quotes in paths, got: %s", result.SQL)
-	}
-}
-
 func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "fixture", Path: testdiscovery.Ptr("./test/__test__/_setup.sql"), Directory: "./test/__test__"},
-		{SortKey: 3, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
-		{SortKey: 4, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
-		{SortKey: 5, ScriptType: "cleanup", BeforeExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), AfterExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./test/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture content"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test content"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
+		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -127,9 +104,9 @@ func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 	// All elements should be inside the single command
 	expectedElements := []string{
 		"SAVEPOINT __pgmi_0__",
-		"_setup.sql",
+		"-- fixture content",
 		"SAVEPOINT __pgmi_1__",
-		"01_test.sql",
+		"-- test content",
 		"ROLLBACK TO SAVEPOINT __pgmi_1__",
 		"ROLLBACK TO SAVEPOINT __pgmi_0__",
 		"RELEASE SAVEPOINT __pgmi_0__",
@@ -144,8 +121,7 @@ func TestPlanModeGenerator_Generate_CompleteSequence(t *testing.T) {
 func TestPlanModeGenerator_Generate_SourceMap(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -161,19 +137,18 @@ func TestPlanModeGenerator_Generate_SourceMap(t *testing.T) {
 func TestPlanModeGenerator_Generate_SourceMapLineOffset(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
 
-	// The test file execution should be at line 2 (line 1 is PERFORM wrapper)
 	// Check that source map entry exists for the test file
 	entries := result.SourceMap.Entries()
 	if len(entries) == 0 {
 		t.Fatal("SourceMap should have entries")
 	}
 
-	// First entry should be for the test file at line 2
+	// Entry should be for the test file at line 2 (line 1 is PERFORM wrapper)
 	entry := entries[0]
 	if entry.ExpandedStart != 2 {
 		t.Errorf("Source map entry should start at line 2, got %d", entry.ExpandedStart)
@@ -183,8 +158,7 @@ func TestPlanModeGenerator_Generate_SourceMapLineOffset(t *testing.T) {
 func TestPlanModeGenerator_Generate_ValidPLPGSQL(t *testing.T) {
 	g := NewPlanModeGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -203,5 +177,26 @@ func TestPlanModeGenerator_Generate_ValidPLPGSQL(t *testing.T) {
 	if strings.HasSuffix(trimmed, ";") {
 		// This would mean double semicolon at the end, which is wrong
 		t.Errorf("SQL should not have double semicolon at end: %s", result.SQL)
+	}
+}
+
+func TestPlanModeGenerator_Generate_MultilineContent(t *testing.T) {
+	g := NewPlanModeGenerator()
+	multilineSQL := "SELECT 1;\nSELECT 2;\nSELECT 3;"
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr(multilineSQL), Directory: "./test/__test__"},
+	}
+
+	result := g.Generate(rows)
+
+	// Should contain all lines of embedded content
+	if !strings.Contains(result.SQL, "SELECT 1;") {
+		t.Error("SQL should contain SELECT 1;")
+	}
+	if !strings.Contains(result.SQL, "SELECT 2;") {
+		t.Error("SQL should contain SELECT 2;")
+	}
+	if !strings.Contains(result.SQL, "SELECT 3;") {
+		t.Error("SQL should contain SELECT 3;")
 	}
 }

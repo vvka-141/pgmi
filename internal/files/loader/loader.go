@@ -271,9 +271,30 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 	return nil
 }
 
-// LoadTestScriptsIntoSession discovers tests from the loaded files and populates pgmi_test_script.
+// LoadTestScriptsIntoSession discovers tests from the loaded files and populates pgmi_test_plan.
 // This enables the pgmi_test() macro to execute tests with proper savepoint structure.
+// Content is embedded directly in the plan rows for self-contained execution.
 func (l *Loader) LoadTestScriptsIntoSession(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
+	// Build content map from test files
+	contentMap := make(map[string]string)
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			contentMap[f.Path] = f.Content
+		}
+	}
+
+	if len(contentMap) == 0 {
+		return nil // No test files to process
+	}
+
+	// Create content resolver
+	resolver := func(path string) (string, error) {
+		if content, ok := contentMap[path]; ok {
+			return content, nil
+		}
+		return "", fmt.Errorf("test file not found: %s", path)
+	}
+
 	// Convert FileMetadata to Source for discovery
 	sources := testdiscovery.ConvertFromFileMetadata(files)
 
@@ -284,30 +305,34 @@ func (l *Loader) LoadTestScriptsIntoSession(ctx context.Context, conn *pgxpool.C
 		return fmt.Errorf("test discovery failed: %w", err)
 	}
 
-	// Build execution plan
-	planBuilder := testdiscovery.NewPlanBuilder()
-	rows := planBuilder.Build(tree)
+	// Build execution plan with embedded content
+	planBuilder := testdiscovery.NewPlanBuilder(resolver)
+	rows, err := planBuilder.Build(tree)
+	if err != nil {
+		return fmt.Errorf("test plan build failed: %w", err)
+	}
 
 	if len(rows) == 0 {
 		return nil // No tests to load
 	}
 
-	// Insert into pgmi_test_script
+	// Insert into pgmi_test_plan
 	insertSQL := `
-		INSERT INTO pg_temp.pgmi_test_script
-		(sort_key, path, script_type, before_exec, after_exec, directory, depth)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		INSERT INTO pg_temp.pgmi_test_plan
+		(ordinal, step_type, script_path, directory, depth, pre_exec, script_sql, post_exec)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
 	batch := &pgx.Batch{}
 	for _, row := range rows {
 		batch.Queue(insertSQL,
-			row.SortKey,
-			row.Path,
-			row.ScriptType,
-			row.BeforeExec,
-			row.AfterExec,
+			row.Ordinal,
+			row.StepType,
+			row.ScriptPath,
 			row.Directory,
 			row.Depth,
+			row.PreExec,
+			row.ScriptSQL,
+			row.PostExec,
 		)
 	}
 
@@ -316,7 +341,7 @@ func (l *Loader) LoadTestScriptsIntoSession(ctx context.Context, conn *pgxpool.C
 
 	for i := range rows {
 		if _, err := results.Exec(); err != nil {
-			return fmt.Errorf("failed to insert test script row %d: %w", i, err)
+			return fmt.Errorf("failed to insert test plan row %d: %w", i, err)
 		}
 	}
 

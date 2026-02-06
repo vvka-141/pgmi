@@ -21,100 +21,119 @@ func (n *SavepointNamer) Next() string {
 	return name
 }
 
-// PlanBuilder converts a TestTree to an ordered execution plan.
-type PlanBuilder struct{}
+// ContentResolver retrieves file content by path.
+type ContentResolver func(path string) (string, error)
 
-// NewPlanBuilder creates a new PlanBuilder.
-func NewPlanBuilder() *PlanBuilder {
-	return &PlanBuilder{}
+// PlanBuilder converts a TestTree to an ordered execution plan.
+type PlanBuilder struct {
+	contentResolver ContentResolver
+}
+
+// NewPlanBuilder creates a new PlanBuilder with a content resolver.
+func NewPlanBuilder(resolver ContentResolver) *PlanBuilder {
+	return &PlanBuilder{contentResolver: resolver}
 }
 
 // Build converts a TestTree to an ordered list of TestScriptRows.
-func (b *PlanBuilder) Build(tree *TestTree) []TestScriptRow {
+func (b *PlanBuilder) Build(tree *TestTree) ([]TestScriptRow, error) {
 	if tree == nil || tree.IsEmpty() {
-		return nil
+		return nil, nil
 	}
 
 	var rows []TestScriptRow
-	sortKey := 1
+	ordinal := 1
 	namer := NewSavepointNamer()
 
 	// Process each top-level directory
+	var err error
 	for _, dir := range tree.Directories {
-		rows, sortKey = b.processDirectory(dir, rows, sortKey, namer)
+		rows, ordinal, err = b.processDirectory(dir, rows, ordinal, namer)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return rows
+	return rows, nil
 }
 
 // processDirectory recursively processes a directory and its children.
-// Returns updated rows slice and next sortKey.
-func (b *PlanBuilder) processDirectory(dir *TestDirectory, rows []TestScriptRow, sortKey int, namer *SavepointNamer) ([]TestScriptRow, int) {
+// Returns updated rows slice, next ordinal, and any error.
+func (b *PlanBuilder) processDirectory(dir *TestDirectory, rows []TestScriptRow, ordinal int, namer *SavepointNamer) ([]TestScriptRow, int, error) {
 	// Create entry savepoint for this directory
 	entrySavepoint := namer.Next()
-	rows = append(rows, TestScriptRow{
-		SortKey:    sortKey,
-		ScriptType: "savepoint",
-		BeforeExec: Ptr(fmt.Sprintf("SAVEPOINT %s;", entrySavepoint)),
-		Directory:  dir.Path,
-		Depth:      dir.Depth,
-	})
-	sortKey++
 
-	// Savepoint to rollback to after each test
+	// Savepoint to rollback to after each test (initially the entry savepoint)
 	testRollbackSavepoint := entrySavepoint
 
 	// Execute fixture if present
 	if dir.HasFixture() {
+		content, err := b.contentResolver(dir.Fixture.Path)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to resolve fixture %s: %w", dir.Fixture.Path, err)
+		}
+
 		rows = append(rows, TestScriptRow{
-			SortKey:    sortKey,
-			Path:       Ptr(dir.Fixture.Path),
-			ScriptType: "fixture",
+			Ordinal:    ordinal,
+			StepType:   "fixture",
+			ScriptPath: Ptr(dir.Fixture.Path),
 			Directory:  dir.Path,
 			Depth:      dir.Depth,
+			PreExec:    Ptr(fmt.Sprintf("SAVEPOINT %s;", entrySavepoint)),
+			ScriptSQL:  Ptr(content),
 		})
-		sortKey++
+		ordinal++
 
 		// Create savepoint after fixture for test rollbacks
 		testRollbackSavepoint = namer.Next()
-		rows = append(rows, TestScriptRow{
-			SortKey:    sortKey,
-			ScriptType: "savepoint",
-			BeforeExec: Ptr(fmt.Sprintf("SAVEPOINT %s;", testRollbackSavepoint)),
-			Directory:  dir.Path,
-			Depth:      dir.Depth,
-		})
-		sortKey++
 	}
 
 	// Execute each test, rolling back after each
 	for _, test := range dir.Tests {
+		content, err := b.contentResolver(test.Path)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to resolve test %s: %w", test.Path, err)
+		}
+
+		// Pre-exec: SAVEPOINT only for first test if no fixture (use entry savepoint)
+		var preExec *string
+		if !dir.HasFixture() && test == dir.Tests[0] {
+			preExec = Ptr(fmt.Sprintf("SAVEPOINT %s;", entrySavepoint))
+		} else if dir.HasFixture() && test == dir.Tests[0] {
+			preExec = Ptr(fmt.Sprintf("SAVEPOINT %s;", testRollbackSavepoint))
+		}
+
 		rows = append(rows, TestScriptRow{
-			SortKey:    sortKey,
-			Path:       Ptr(test.Path),
-			ScriptType: "test",
-			AfterExec:  Ptr(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s;", testRollbackSavepoint)),
+			Ordinal:    ordinal,
+			StepType:   "test",
+			ScriptPath: Ptr(test.Path),
 			Directory:  dir.Path,
 			Depth:      dir.Depth,
+			PreExec:    preExec,
+			ScriptSQL:  Ptr(content),
+			PostExec:   Ptr(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s;", testRollbackSavepoint)),
 		})
-		sortKey++
+		ordinal++
 	}
 
 	// Process child directories
+	var err error
 	for _, child := range dir.Children {
-		rows, sortKey = b.processDirectory(child, rows, sortKey, namer)
+		rows, ordinal, err = b.processDirectory(child, rows, ordinal, namer)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
-	// Cleanup: rollback to entry savepoint and release
+	// Teardown: rollback to entry savepoint and release
 	rows = append(rows, TestScriptRow{
-		SortKey:    sortKey,
-		ScriptType: "cleanup",
-		BeforeExec: Ptr(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s;", entrySavepoint)),
-		AfterExec:  Ptr(fmt.Sprintf("RELEASE SAVEPOINT %s;", entrySavepoint)),
-		Directory:  dir.Path,
-		Depth:      dir.Depth,
+		Ordinal:   ordinal,
+		StepType:  "teardown",
+		Directory: dir.Path,
+		Depth:     dir.Depth,
+		PreExec:   Ptr(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s;", entrySavepoint)),
+		PostExec:  Ptr(fmt.Sprintf("RELEASE SAVEPOINT %s;", entrySavepoint)),
 	})
-	sortKey++
+	ordinal++
 
-	return rows, sortKey
+	return rows, ordinal, nil
 }

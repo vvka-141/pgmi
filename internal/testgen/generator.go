@@ -23,6 +23,7 @@ func NewDirectGenerator() *DirectGenerator {
 }
 
 // Generate converts execution plan rows to SQL for direct execution.
+// Outputs embedded SQL content directly instead of calling helper functions.
 func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *GeneratedSQL {
 	result := &GeneratedSQL{
 		SourceMap: sourcemap.New(),
@@ -38,33 +39,36 @@ func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *Generate
 	for _, row := range rows {
 		startLine := lineNum
 
-		// BeforeExec (SAVEPOINT, ROLLBACK TO)
-		if row.BeforeExec != nil {
-			lines = append(lines, *row.BeforeExec)
+		// PreExec (SAVEPOINT)
+		if row.PreExec != nil {
+			lines = append(lines, *row.PreExec)
 			lineNum++
 		}
 
-		// File execution (fixture or test)
-		if row.Path != nil {
-			escapedPath := EscapeSQLString(*row.Path)
-			execLine := fmt.Sprintf("SELECT pg_temp.pgmi_execute_test_file('%s');", escapedPath)
-			lines = append(lines, execLine)
+		// Embedded SQL content (fixture or test)
+		if row.ScriptSQL != nil {
+			// Count lines in embedded content for source map
+			content := *row.ScriptSQL
+			lines = append(lines, content)
+			contentLines := strings.Count(content, "\n") + 1
 
-			// Add source map entry for this line
-			desc := fmt.Sprintf("%s: %s", row.ScriptType, *row.Path)
-			result.SourceMap.Add(lineNum, lineNum, *row.Path, 1, desc)
+			// Add source map entry
+			if row.ScriptPath != nil {
+				desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
+				result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+			}
+			lineNum += contentLines
+		}
+
+		// PostExec (ROLLBACK TO, RELEASE)
+		if row.PostExec != nil {
+			lines = append(lines, *row.PostExec)
 			lineNum++
 		}
 
-		// AfterExec (ROLLBACK TO, RELEASE)
-		if row.AfterExec != nil {
-			lines = append(lines, *row.AfterExec)
-			lineNum++
-		}
-
-		// Add source map entry for control rows (savepoint, cleanup) if no file
-		if row.Path == nil && (row.BeforeExec != nil || row.AfterExec != nil) {
-			desc := fmt.Sprintf("%s: %s", row.ScriptType, row.Directory)
+		// Add source map entry for teardown rows (no file content)
+		if row.ScriptSQL == nil && (row.PreExec != nil || row.PostExec != nil) {
+			desc := fmt.Sprintf("%s: %s", row.StepType, row.Directory)
 			result.SourceMap.Add(startLine, lineNum-1, row.Directory, 0, desc)
 		}
 	}

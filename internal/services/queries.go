@@ -14,28 +14,28 @@ const (
 	`
 
 	// queryTestPlan retrieves the filtered test execution plan including
-	// setup, test, and teardown scripts.
+	// fixture, test, and teardown scripts with embedded content.
 	// Parameter $1: POSIX regex filter pattern
 	queryTestPlan = `
-		SELECT execution_order, step_type, script_path, executable_sql
+		SELECT ordinal, step_type, script_path, pre_exec, script_sql, post_exec
 		FROM pg_temp.pgmi_unittest_pvw_plan($1)
-		ORDER BY execution_order
+		ORDER BY ordinal
 	`
 
 	// queryTestPlanList retrieves the filtered test execution plan metadata
 	// for list-only mode (dry-run without execution).
 	// Parameter $1: POSIX regex filter pattern
 	queryTestPlanList = `
-		SELECT execution_order, step_type, script_path
+		SELECT ordinal, step_type, script_path
 		FROM pg_temp.pgmi_unittest_pvw_plan($1)
-		ORDER BY execution_order
+		ORDER BY ordinal
 	`
 
 	// queryTestScriptRows retrieves all test script rows for macro expansion.
 	// Used by the preprocessor to expand pgmi_test() and pgmi_plan_test() macros.
 	queryTestScriptRows = `
-		SELECT sort_key, path, script_type, before_exec, after_exec, directory, depth
-		FROM pg_temp.pgmi_test_script
-		ORDER BY sort_key
+		SELECT ordinal, step_type, script_path, directory, depth, pre_exec, script_sql, post_exec
+		FROM pg_temp.pgmi_test_plan
+		ORDER BY ordinal
 	`
 )

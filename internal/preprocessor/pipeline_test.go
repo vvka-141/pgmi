@@ -42,9 +42,8 @@ func TestPipeline_Process_DirectMode_SingleMacro(t *testing.T) {
 
 	sql := `SELECT pgmi_test();`
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", BeforeExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), AfterExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 'test';"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 2, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result, err := p.Process(sql, rows)
@@ -61,9 +60,9 @@ func TestPipeline_Process_DirectMode_SingleMacro(t *testing.T) {
 		t.Errorf("ExpandedSQL should contain SAVEPOINT, got: %s", result.ExpandedSQL)
 	}
 
-	// Should contain test file execution
-	if !strings.Contains(result.ExpandedSQL, "pgmi_execute_test_file") {
-		t.Errorf("ExpandedSQL should contain pgmi_execute_test_file, got: %s", result.ExpandedSQL)
+	// Should contain embedded SQL content
+	if !strings.Contains(result.ExpandedSQL, "SELECT 'test'") {
+		t.Errorf("ExpandedSQL should contain embedded content, got: %s", result.ExpandedSQL)
 	}
 }
 
@@ -72,8 +71,7 @@ func TestPipeline_Process_PlanMode_SingleMacro(t *testing.T) {
 
 	sql := `PERFORM pgmi_plan_test();`
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), AfterExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 'test';"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result, err := p.Process(sql, rows)
@@ -96,12 +94,12 @@ func TestPipeline_Process_WithPattern(t *testing.T) {
 
 	sql := `SELECT pgmi_test('./a/__test__/**');`
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./a/__test__/01_test.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
-		{SortKey: 4, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./b/__test__"},
-		{SortKey: 5, ScriptType: "test", Path: testdiscovery.Ptr("./b/__test__/01_test.sql"), Directory: "./b/__test__"},
-		{SortKey: 6, ScriptType: "cleanup", Directory: "./b/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./a/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture a"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./a/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test a"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
+		{Ordinal: 4, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./b/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture b"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./b/__test__"},
+		{Ordinal: 5, StepType: "test", ScriptPath: testdiscovery.Ptr("./b/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test b"), Directory: "./b/__test__"},
+		{Ordinal: 6, StepType: "teardown", Directory: "./b/__test__"},
 	}
 
 	result, err := p.Process(sql, rows)
@@ -110,11 +108,11 @@ func TestPipeline_Process_WithPattern(t *testing.T) {
 	}
 
 	// Should only include ./a/__test__ tests
-	if strings.Contains(result.ExpandedSQL, "./b/__test__") {
-		t.Errorf("ExpandedSQL should not contain ./b/__test__ (filtered out), got: %s", result.ExpandedSQL)
+	if strings.Contains(result.ExpandedSQL, "-- test b") {
+		t.Errorf("ExpandedSQL should not contain test b (filtered out), got: %s", result.ExpandedSQL)
 	}
-	if !strings.Contains(result.ExpandedSQL, "./a/__test__") {
-		t.Errorf("ExpandedSQL should contain ./a/__test__, got: %s", result.ExpandedSQL)
+	if !strings.Contains(result.ExpandedSQL, "-- test a") {
+		t.Errorf("ExpandedSQL should contain test a, got: %s", result.ExpandedSQL)
 	}
 }
 
@@ -140,7 +138,7 @@ func TestPipeline_Process_SourceMap(t *testing.T) {
 
 	sql := `SELECT pgmi_test();`
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "test", Path: testdiscovery.Ptr("./test/__test__/01_test.sql"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), Directory: "./test/__test__"},
 	}
 
 	result, err := p.Process(sql, rows)
@@ -162,12 +160,12 @@ func TestPipeline_Process_MultipleMacros(t *testing.T) {
 		SELECT pgmi_test('./b/**');
 	`
 	rows := []testdiscovery.TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: testdiscovery.Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
-		{SortKey: 4, ScriptType: "savepoint", BeforeExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./b/__test__"},
-		{SortKey: 5, ScriptType: "test", Path: testdiscovery.Ptr("./b/__test__/01.sql"), Directory: "./b/__test__"},
-		{SortKey: 6, ScriptType: "cleanup", Directory: "./b/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./a/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture a"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./a/__test__/01.sql"), ScriptSQL: testdiscovery.Ptr("-- test a"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", Directory: "./a/__test__"},
+		{Ordinal: 4, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./b/__test__/_setup.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture b"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), Directory: "./b/__test__"},
+		{Ordinal: 5, StepType: "test", ScriptPath: testdiscovery.Ptr("./b/__test__/01.sql"), ScriptSQL: testdiscovery.Ptr("-- test b"), Directory: "./b/__test__"},
+		{Ordinal: 6, StepType: "teardown", Directory: "./b/__test__"},
 	}
 
 	result, err := p.Process(sql, rows)

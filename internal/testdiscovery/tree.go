@@ -34,16 +34,17 @@ type TestFile struct {
 	IsFixture bool   // True if this is a fixture file
 }
 
-// TestScriptRow represents a row in the pgmi_test_script table.
-// This is the output of the plan builder - an ordered execution plan.
+// TestScriptRow represents a row in the pgmi_test_plan table.
+// This is the output of the plan builder - an ordered execution plan with embedded content.
 type TestScriptRow struct {
-	SortKey    int     // Execution order (1-based)
-	Path       *string // File path, nil for control-only rows
-	ScriptType string  // "fixture", "test", or "rollback"
-	BeforeExec *string // SQL to execute before file (e.g., SAVEPOINT)
-	AfterExec  *string // SQL to execute after file (e.g., ROLLBACK TO)
+	Ordinal    int     // Execution order (1-based)
+	StepType   string  // "fixture", "test", or "teardown"
+	ScriptPath *string // File path, nil for teardown rows
 	Directory  string  // Parent __test__/ directory
 	Depth      int     // Nesting level
+	PreExec    *string // SQL before script (e.g., SAVEPOINT)
+	ScriptSQL  *string // Embedded SQL content, nil for teardown
+	PostExec   *string // SQL after script (e.g., ROLLBACK TO)
 }
 
 // NewTestTree creates an empty TestTree.

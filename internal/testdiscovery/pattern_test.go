@@ -144,9 +144,9 @@ func TestPatternMatcher_Matches_QuestionMark(t *testing.T) {
 
 func TestFilterByPattern_EmptyPattern(t *testing.T) {
 	rows := []TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: Ptr("./a/__test__/_setup.sql"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", Directory: "./a/__test__"},
 	}
 
 	result := FilterByPattern(rows, "")
@@ -157,12 +157,12 @@ func TestFilterByPattern_EmptyPattern(t *testing.T) {
 
 func TestFilterByPattern_MatchesDirectory(t *testing.T) {
 	rows := []TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
-		{SortKey: 4, ScriptType: "savepoint", Directory: "./b/__test__"},
-		{SortKey: 5, ScriptType: "test", Path: Ptr("./b/__test__/01.sql"), Directory: "./b/__test__"},
-		{SortKey: 6, ScriptType: "cleanup", Directory: "./b/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: Ptr("./a/__test__/_setup.sql"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", Directory: "./a/__test__"},
+		{Ordinal: 4, StepType: "fixture", ScriptPath: Ptr("./b/__test__/_setup.sql"), Directory: "./b/__test__"},
+		{Ordinal: 5, StepType: "test", ScriptPath: Ptr("./b/__test__/01.sql"), Directory: "./b/__test__"},
+		{Ordinal: 6, StepType: "teardown", Directory: "./b/__test__"},
 	}
 
 	result := FilterByPattern(rows, "./a/**")
@@ -175,47 +175,47 @@ func TestFilterByPattern_MatchesDirectory(t *testing.T) {
 	}
 }
 
-func TestFilterByPattern_PreservesSavepointStructure(t *testing.T) {
+func TestFilterByPattern_PreservesStructure(t *testing.T) {
 	rows := []TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: Ptr("./a/__test__/_setup.sql"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", Directory: "./a/__test__"},
 	}
 
 	result := FilterByPattern(rows, "./a/**")
 
-	// Verify structure: savepoint, test, cleanup
+	// Verify structure: fixture, test, teardown
 	if len(result) < 3 {
 		t.Fatalf("Expected at least 3 rows, got %d", len(result))
 	}
 
-	hasSavepoint := false
+	hasFixture := false
 	hasTest := false
-	hasCleanup := false
+	hasTeardown := false
 	for _, row := range result {
-		switch row.ScriptType {
-		case "savepoint":
-			hasSavepoint = true
+		switch row.StepType {
+		case "fixture":
+			hasFixture = true
 		case "test":
 			hasTest = true
-		case "cleanup":
-			hasCleanup = true
+		case "teardown":
+			hasTeardown = true
 		}
 	}
 
-	if !hasSavepoint || !hasTest || !hasCleanup {
-		t.Error("Filtered result should preserve savepoint structure")
+	if !hasFixture || !hasTest || !hasTeardown {
+		t.Error("Filtered result should preserve structure")
 	}
 }
 
 func TestFilterByPattern_NestedDirectories(t *testing.T) {
 	rows := []TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", Directory: "./users/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: Ptr("./users/__test__/01.sql"), Directory: "./users/__test__"},
-		{SortKey: 3, ScriptType: "savepoint", Directory: "./users/__test__/admin"},
-		{SortKey: 4, ScriptType: "test", Path: Ptr("./users/__test__/admin/01.sql"), Directory: "./users/__test__/admin"},
-		{SortKey: 5, ScriptType: "cleanup", Directory: "./users/__test__/admin"},
-		{SortKey: 6, ScriptType: "cleanup", Directory: "./users/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: Ptr("./users/__test__/_setup.sql"), Directory: "./users/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: Ptr("./users/__test__/01.sql"), Directory: "./users/__test__"},
+		{Ordinal: 3, StepType: "fixture", ScriptPath: Ptr("./users/__test__/admin/_setup.sql"), Directory: "./users/__test__/admin"},
+		{Ordinal: 4, StepType: "test", ScriptPath: Ptr("./users/__test__/admin/01.sql"), Directory: "./users/__test__/admin"},
+		{Ordinal: 5, StepType: "teardown", Directory: "./users/__test__/admin"},
+		{Ordinal: 6, StepType: "teardown", Directory: "./users/__test__"},
 	}
 
 	result := FilterByPattern(rows, "./users/__test__/admin/**")
@@ -230,9 +230,9 @@ func TestFilterByPattern_NestedDirectories(t *testing.T) {
 
 func TestFilterByPattern_NoMatches(t *testing.T) {
 	rows := []TestScriptRow{
-		{SortKey: 1, ScriptType: "savepoint", Directory: "./a/__test__"},
-		{SortKey: 2, ScriptType: "test", Path: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
-		{SortKey: 3, ScriptType: "cleanup", Directory: "./a/__test__"},
+		{Ordinal: 1, StepType: "fixture", ScriptPath: Ptr("./a/__test__/_setup.sql"), Directory: "./a/__test__"},
+		{Ordinal: 2, StepType: "test", ScriptPath: Ptr("./a/__test__/01.sql"), Directory: "./a/__test__"},
+		{Ordinal: 3, StepType: "teardown", Directory: "./a/__test__"},
 	}
 
 	result := FilterByPattern(rows, "./nonexistent/**")

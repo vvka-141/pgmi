@@ -2,7 +2,7 @@
 DROP TABLE IF EXISTS pg_temp.pgmi_source CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_parameter CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_plan CASCADE;
-DROP TABLE IF EXISTS pg_temp.pgmi_test_script CASCADE;
+DROP TABLE IF EXISTS pg_temp.pgmi_test_plan CASCADE;
 
 -- Merged parameters table: CLI loader inserts with value, pgmi_declare_param enriches with metadata
 CREATE TEMP TABLE pg_temp.pgmi_parameter
@@ -213,54 +213,28 @@ COMMENT ON TABLE pg_temp.pgmi_test_source IS
 GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_source TO PUBLIC;
 
 -- ============================================================================
--- Test Execution Script Table (Session-Scoped)
+-- Test Execution Plan Table (Session-Scoped)
 -- ============================================================================
 -- Pre-ordered execution plan for test files, populated by Go during preprocessing.
--- Contains savepoint commands, test file paths, and rollback instructions.
--- Used by pgmi_test() macro expansion for direct test execution.
-CREATE TEMP TABLE pg_temp.pgmi_test_script
+-- Contains embedded SQL content for self-contained execution.
+-- Used by both pgmi_test() macro and pgmi test command.
+CREATE TEMP TABLE pg_temp.pgmi_test_plan
 (
-    sort_key     INT PRIMARY KEY,
-    path         TEXT,              -- NULL for control rows (savepoint, cleanup)
-    script_type  TEXT NOT NULL,     -- 'savepoint', 'fixture', 'test', 'cleanup'
-    before_exec  TEXT,              -- SQL to execute before file (e.g., SAVEPOINT)
-    after_exec   TEXT,              -- SQL to execute after file (e.g., ROLLBACK TO)
-    directory    TEXT,              -- Parent __test__/ directory
+    ordinal      INT PRIMARY KEY,
+    step_type    TEXT NOT NULL,     -- 'fixture', 'test', 'teardown'
+    script_path  TEXT,              -- NULL for teardown rows
+    directory    TEXT NOT NULL,
     depth        INT NOT NULL DEFAULT 0,
-    CONSTRAINT chk_script_type CHECK (script_type IN ('savepoint', 'fixture', 'test', 'cleanup'))
+    pre_exec     TEXT,              -- SQL before script (e.g., SAVEPOINT)
+    script_sql   TEXT,              -- Embedded SQL content (NULL for teardown)
+    post_exec    TEXT,              -- SQL after script (e.g., ROLLBACK TO)
+    CONSTRAINT chk_step_type CHECK (step_type IN ('fixture', 'test', 'teardown'))
 );
 
-COMMENT ON TABLE pg_temp.pgmi_test_script IS
-    'Pre-ordered test execution plan with savepoint structure. Populated by Go preprocessor.';
+COMMENT ON TABLE pg_temp.pgmi_test_plan IS
+    'Pre-ordered test execution plan with embedded SQL. Populated by Go, used by macros and pgmi test.';
 
--- Allow access from any role context
-GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_script TO PUBLIC;
-
--- ============================================================================
--- Test File Executor Function
--- ============================================================================
--- Executes a test file by retrieving its content from pgmi_test_source.
--- Used by the generated SQL from pgmi_test() macro expansion.
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_execute_test_file(p_path TEXT)
-RETURNS VOID
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_content TEXT;
-BEGIN
-    SELECT content INTO STRICT v_content
-    FROM pg_temp.pgmi_test_source
-    WHERE path = p_path;
-
-    EXECUTE v_content;
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        RAISE EXCEPTION 'pgmi: test file not found: %', p_path;
-END;
-$$;
-
-COMMENT ON FUNCTION pg_temp.pgmi_execute_test_file IS
-    'Executes a test file by path. File must be marked as is_test_file in pgmi_source.';
+GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_plan TO PUBLIC;
 
 
 
@@ -586,3 +560,22 @@ $$
         '; END $pgmi_notice$;'
     )
 $$ LANGUAGE sql;
+
+-- ============================================================================
+-- Test Plan Persistence Helper
+-- ============================================================================
+-- Allows power users to persist the test plan to a permanent schema
+-- for running tests without pgmi.
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_persist_test_plan(target_schema TEXT)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    EXECUTE format('CREATE TABLE IF NOT EXISTS %I.pgmi_test_plan AS TABLE pg_temp.pgmi_test_plan WITH NO DATA', target_schema);
+    EXECUTE format('TRUNCATE %I.pgmi_test_plan', target_schema);
+    EXECUTE format('INSERT INTO %I.pgmi_test_plan SELECT * FROM pg_temp.pgmi_test_plan', target_schema);
+END;
+$$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_persist_test_plan IS
+'Persists pgmi_test_plan to a permanent schema for running tests without pgmi.';
