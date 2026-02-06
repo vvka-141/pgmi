@@ -340,9 +340,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 	defer signal.Stop(sigChan)
 
 	go func() {
-		<-sigChan
-		fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling test execution...")
-		cancel()
+		select {
+		case <-sigChan:
+			fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling test execution...")
+			cancel()
+		case <-ctx.Done():
+			// Context cancelled (test completed or timeout), exit goroutine cleanly
+		}
 	}()
 
 	if err := service.ExecuteTests(ctx, config); err != nil {

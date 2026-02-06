@@ -360,9 +360,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	defer signal.Stop(sigChan)
 
 	go func() {
-		<-sigChan
-		fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")
-		cancel()
+		select {
+		case <-sigChan:
+			fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")
+			cancel()
+		case <-ctx.Done():
+			// Context cancelled (deployment completed or timeout), exit goroutine cleanly
+		}
 	}()
 
 	if err := deployer.Deploy(ctx, config); err != nil {

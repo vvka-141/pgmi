@@ -519,7 +519,7 @@ AS $$
         jsonb_build_object(
             'name', r.mcp_name,
             'description', h.description,
-            'uri', r.uri_template,
+            'uriTemplate', r.uri_template,
             'mimeType', r.mime_type
         )
     ), '[]'::jsonb))
