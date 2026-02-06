@@ -1,6 +1,6 @@
 DO $$
 DECLARE
-    v_user users;
+    v_user "user";
     v_original_id INT;
 BEGIN
     v_user := get_user('alice@test.com');

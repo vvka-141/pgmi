@@ -136,9 +136,9 @@ func verifyTemplateDeployment(t *testing.T, connString, dbName, templateName str
 	// Template-specific verification
 	switch templateName {
 	case "basic":
-		// Verify users table and upsert_user function were created
+		// Verify user table and upsert_user function were created
 		var adminEmail string
-		err = pool.QueryRow(ctx, "SELECT email FROM users WHERE name = 'Administrator'").Scan(&adminEmail)
+		err = pool.QueryRow(ctx, `SELECT email FROM "user" WHERE name = 'Administrator'`).Scan(&adminEmail)
 		if err != nil {
 			t.Fatalf("Failed to query admin user: %v", err)
 		}
