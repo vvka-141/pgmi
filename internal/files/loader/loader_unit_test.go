@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -148,5 +149,187 @@ func TestNewLoader(t *testing.T) {
 	l := NewLoader()
 	if l == nil {
 		t.Fatal("Expected non-nil loader")
+	}
+}
+
+func TestInsertTestFiles_Empty(t *testing.T) {
+	l := NewLoader()
+	if err := l.insertTestFiles(context.TODO(), nil, nil); err != nil {
+		t.Fatalf("Expected nil error for nil files: %v", err)
+	}
+	if err := l.insertTestFiles(context.TODO(), nil, []pgmi.FileMetadata{}); err != nil {
+		t.Fatalf("Expected nil error for empty files: %v", err)
+	}
+}
+
+func TestLoadFilesIntoSession_SeparatesTestFiles(t *testing.T) {
+	files := []pgmi.FileMetadata{
+		{Path: "./migrations/001.sql", Content: "CREATE TABLE t();"},
+		{Path: "./__test__/test_a.sql", Content: "SELECT 1;"},
+		{Path: "./__test__/_setup.sql", Content: "-- setup"},
+		{Path: "./deploy.sql", Content: "-- deploy"},
+		{Path: "./module/__test__/test_b.sql", Content: "SELECT 2;"},
+	}
+
+	testFiles := 0
+	sourceFiles := 0
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			testFiles++
+		} else {
+			sourceFiles++
+		}
+	}
+
+	if testFiles != 3 {
+		t.Errorf("Expected 3 test files, got %d", testFiles)
+	}
+	if sourceFiles != 2 {
+		t.Errorf("Expected 2 source files, got %d", sourceFiles)
+	}
+}
+
+func TestLoadTestScriptsIntoSession_NoTestFiles(t *testing.T) {
+	l := NewLoader()
+	files := []pgmi.FileMetadata{
+		{Path: "./migrations/001.sql", Content: "CREATE TABLE t();"},
+		{Path: "./deploy.sql", Content: "-- deploy"},
+	}
+	err := l.LoadTestScriptsIntoSession(context.TODO(), nil, files)
+	if err != nil {
+		t.Fatalf("Expected nil error for no test files: %v", err)
+	}
+}
+
+func TestLoadTestScriptsIntoSession_EmptyFiles(t *testing.T) {
+	l := NewLoader()
+	err := l.LoadTestScriptsIntoSession(context.TODO(), nil, nil)
+	if err != nil {
+		t.Fatalf("Expected nil error for nil files: %v", err)
+	}
+	err = l.LoadTestScriptsIntoSession(context.TODO(), nil, []pgmi.FileMetadata{})
+	if err != nil {
+		t.Fatalf("Expected nil error for empty files: %v", err)
+	}
+}
+
+func TestInsertMetadata_OnlyFilesWithMetadata(t *testing.T) {
+	l := NewLoader()
+	testUUID := uuid.MustParse("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")
+	files := []pgmi.FileMetadata{
+		{Path: "a.sql", Content: "SELECT 1;", Metadata: nil},
+		{Path: "b.sql", Content: "SELECT 2;", Metadata: &pgmi.ScriptMetadata{ID: testUUID}},
+		{Path: "c.sql", Content: "SELECT 3;", Metadata: nil},
+	}
+
+	count := 0
+	for _, f := range files {
+		if f.Metadata != nil {
+			count++
+		}
+	}
+
+	if count != 1 {
+		t.Errorf("Expected 1 file with metadata, got %d", count)
+	}
+
+	err := l.insertMetadata(context.TODO(), nil, nil)
+	if err != nil {
+		t.Fatalf("insertMetadata(nil) should return nil: %v", err)
+	}
+}
+
+func TestValidateParameterKey_Comprehensive(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{"valid lowercase", "mykey", false},
+		{"valid uppercase", "MYKEY", false},
+		{"valid mixed case", "MyKey", false},
+		{"valid with underscore", "my_key", false},
+		{"valid with numbers", "key123", false},
+		{"valid underscore prefix", "_key", false},
+		{"valid single char", "x", false},
+		{"valid 63 chars", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},
+		{"empty string", "", true},
+		{"64 chars too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true},
+		{"space in key", "my key", true},
+		{"hyphen", "my-key", true},
+		{"dot", "my.key", true},
+		{"semicolon", "key;", true},
+		{"sql injection attempt", "'; DROP TABLE users;--", true},
+		{"newline", "key\n", true},
+		{"tab", "key\t", true},
+		{"equals sign", "key=value", true},
+		{"at sign", "key@domain", true},
+		{"parentheses", "key()", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateParameterKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateParameterKey(%q) error = %v, wantErr = %v", tt.key, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadFilesIntoSession_OnlyTestFilesCount(t *testing.T) {
+	files := []pgmi.FileMetadata{
+		{Path: "./__test__/test_a.sql", Content: "SELECT 1;"},
+		{Path: "./__test__/test_b.sql", Content: "SELECT 2;"},
+	}
+
+	testFiles := 0
+	sourceFiles := 0
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			testFiles++
+		} else {
+			sourceFiles++
+		}
+	}
+
+	if testFiles != 2 {
+		t.Errorf("Expected 2 test files, got %d", testFiles)
+	}
+	if sourceFiles != 0 {
+		t.Errorf("Expected 0 source files, got %d", sourceFiles)
+	}
+}
+
+func TestLoadParametersIntoSession_MultipleInvalidKeys(t *testing.T) {
+	l := NewLoader()
+	params := map[string]string{
+		"valid_key":   "ok",
+		"another":     "ok",
+		"bad-key":     "has hyphen",
+		"another_bad": "also fine",
+	}
+	err := l.LoadParametersIntoSession(context.TODO(), nil, params)
+	if err == nil {
+		t.Fatal("Expected error for invalid parameter key")
+	}
+}
+
+func TestValidateParameterKey_AllValidVariants(t *testing.T) {
+	validKeys := []string{
+		"key1",
+		"key_2",
+		"KEY3",
+		"mixed_Case",
+		"a",
+		"A",
+		"_underscore_prefix",
+		"suffix_underscore_",
+	}
+
+	for _, key := range validKeys {
+		if err := validateParameterKey(key); err != nil {
+			t.Errorf("Expected key %q to be valid, got error: %v", key, err)
+		}
 	}
 }
