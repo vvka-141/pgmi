@@ -18,6 +18,10 @@ func main() {
 		}
 	}()
 
+	if os.Getenv("PGMI_TEST_PANIC") == "1" {
+		panic("intentional test panic")
+	}
+
 	if err := cli.Execute(); err != nil {
 		os.Exit(pgmi.ExitCodeForError(err))
 	}

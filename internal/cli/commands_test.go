@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -116,5 +119,33 @@ func TestInitCmd_ArgsValidation_TooMany(t *testing.T) {
 	err := initCmd.Args(initCmd, []string{"a", "b"})
 	if err == nil {
 		t.Fatal("Expected error for too many args")
+	}
+}
+
+func TestDeployCmd_UnreachableHost_ExitCode11(t *testing.T) {
+	resetDeployFlags()
+	clearPGEnv(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	deployFlags.host = "nonexistent.invalid"
+	deployFlags.port = 5432
+	deployFlags.database = "testdb"
+	deployFlags.username = "testuser"
+	deployFlags.timeout = 500 * time.Millisecond
+
+	err := runDeploy(deployCmd, []string{tempDir})
+
+	if err == nil {
+		t.Fatal("Expected connection error, got nil")
+	}
+
+	exitCode := pgmi.ExitCodeForError(err)
+	if exitCode != pgmi.ExitConnectionError {
+		t.Errorf("Expected exit code %d (connection error), got %d for: %v",
+			pgmi.ExitConnectionError, exitCode, err)
 	}
 }
