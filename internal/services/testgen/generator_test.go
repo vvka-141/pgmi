@@ -194,3 +194,155 @@ func TestGenerator_Header(t *testing.T) {
 		t.Error("expected generation timestamp in header")
 	}
 }
+
+func TestGenerator_WithCallback_IncludesInfrastructure(t *testing.T) {
+	config := Config{
+		WithTransaction: true,
+		WithNotices:     true,
+		WithDebug:       false,
+		Callback:        "pg_temp.test_observer",
+	}
+	gen := New(config)
+	result := gen.Generate(nil, "./project", ".*")
+
+	// Should include callback in header
+	if !strings.Contains(result.Script, "Callback: pg_temp.test_observer") {
+		t.Error("expected callback in header")
+	}
+
+	// Should include type definition
+	if !strings.Contains(result.Script, "CREATE TYPE pg_temp.pgmi_test_event AS") {
+		t.Error("expected pgmi_test_event type definition")
+	}
+
+	// Should include callback stub
+	if !strings.Contains(result.Script, "CREATE OR REPLACE FUNCTION pg_temp.test_observer") {
+		t.Error("expected callback function definition")
+	}
+
+	// Should include suite callbacks even with no steps
+	if !strings.Contains(result.Script, "suite_start") {
+		t.Error("expected suite_start callback")
+	}
+	if !strings.Contains(result.Script, "suite_end") {
+		t.Error("expected suite_end callback")
+	}
+}
+
+func TestGenerator_WithCallback_EmitsAllEvents(t *testing.T) {
+	config := Config{
+		WithTransaction: true,
+		WithNotices:     true,
+		WithDebug:       false,
+		Callback:        "pg_temp.observer",
+	}
+	gen := New(config)
+	steps := []testdiscovery.TestScriptRow{
+		{
+			Ordinal:    1,
+			StepType:   "fixture",
+			ScriptPath: ptr("./__test__/_setup.sql"),
+			Directory:  "./__test__/",
+			Depth:      0,
+			PreExec:    ptr("SAVEPOINT __pgmi_0__;"),
+			ScriptSQL:  ptr("CREATE TEMP TABLE test_data (id int);"),
+		},
+		{
+			Ordinal:    2,
+			StepType:   "test",
+			ScriptPath: ptr("./__test__/test_example.sql"),
+			Directory:  "./__test__/",
+			Depth:      0,
+			PreExec:    ptr("SAVEPOINT __pgmi_1__;"),
+			ScriptSQL:  ptr("SELECT 1;"),
+			PostExec:   ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"),
+		},
+		{
+			Ordinal:   3,
+			StepType:  "teardown",
+			Directory: "./__test__/",
+			Depth:     0,
+			PreExec:   ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
+			PostExec:  ptr("RELEASE SAVEPOINT __pgmi_0__;"),
+		},
+	}
+
+	result := gen.Generate(steps, "./project", ".*")
+
+	// All event types should be present
+	expectedEvents := []string{
+		"suite_start", "suite_end",
+		"fixture_start", "fixture_end",
+		"test_start", "test_end",
+		"rollback",
+		"teardown_start", "teardown_end",
+	}
+
+	for _, event := range expectedEvents {
+		if !strings.Contains(result.Script, "'"+event+"'") {
+			t.Errorf("expected %s callback event", event)
+		}
+	}
+
+	// Should use the callback function
+	if strings.Count(result.Script, "pg_temp.observer(ROW(") < 9 {
+		t.Error("expected at least 9 callback invocations")
+	}
+
+	// Should NOT have RAISE NOTICE (callback replaces notices)
+	// Fixture/test start callbacks replace the DO $$ RAISE NOTICE blocks
+	if strings.Contains(result.Script, "DO $$ BEGIN RAISE NOTICE 'Fixture:") {
+		t.Error("callback should replace RAISE NOTICE for fixtures")
+	}
+	if strings.Contains(result.Script, "DO $$ BEGIN RAISE NOTICE 'Test:") {
+		t.Error("callback should replace RAISE NOTICE for tests")
+	}
+}
+
+func TestGenerator_WithCallback_TypeCast(t *testing.T) {
+	config := Config{
+		WithTransaction: true,
+		Callback:        "pg_temp.cb",
+	}
+	gen := New(config)
+	steps := []testdiscovery.TestScriptRow{
+		{
+			Ordinal:    1,
+			StepType:   "test",
+			ScriptPath: ptr("./__test__/test.sql"),
+			Directory:  "./__test__/",
+			ScriptSQL:  ptr("SELECT 1;"),
+		},
+	}
+
+	result := gen.Generate(steps, "./project", ".*")
+
+	// Should properly cast to the event type
+	if !strings.Contains(result.Script, "::pg_temp.pgmi_test_event") {
+		t.Error("expected type cast in callback invocations")
+	}
+}
+
+func TestGenerator_WithoutCallback_NoCallbackContent(t *testing.T) {
+	config := DefaultConfig() // No callback
+	gen := New(config)
+	steps := []testdiscovery.TestScriptRow{
+		{
+			Ordinal:    1,
+			StepType:   "test",
+			ScriptPath: ptr("./__test__/test.sql"),
+			Directory:  "./__test__/",
+			ScriptSQL:  ptr("SELECT 1;"),
+		},
+	}
+
+	result := gen.Generate(steps, "./project", ".*")
+
+	// Should NOT include callback infrastructure
+	if strings.Contains(result.Script, "pgmi_test_event") {
+		t.Error("should not include pgmi_test_event without callback")
+	}
+	if strings.Contains(result.Script, "suite_start") {
+		t.Error("should not include suite_start without callback")
+	}
+}

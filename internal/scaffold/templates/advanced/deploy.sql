@@ -60,7 +60,9 @@ SELECT pg_temp.pgmi_plan_command($$
     SELECT pg_temp.deploy();
     SAVEPOINT before_application_tests;
 $$);
-SELECT pg_temp.pgmi_plan_tests();
+-- Run tests with the custom callback defined below (see STEP 4).
+-- Remove the second argument to use the default callback, or replace with your own.
+SELECT pgmi_plan_test(NULL, 'pg_temp.test_observer');
 SELECT pg_temp.pgmi_plan_command($$
     ROLLBACK TO SAVEPOINT before_application_tests;
     SELECT pg_temp.persist_unittest_metadata();
@@ -552,3 +554,62 @@ BEGIN
     ORDER BY p.ordinal;
 END;
 $$;
+
+
+-- ============================================================================
+-- STEP 4: Test Callback (Optional - Customize Test Reporting)
+-- ============================================================================
+-- The callback receives events during test execution. Customize this function
+-- to integrate with your logging, metrics, or CI/CD systems.
+--
+-- Event types:
+--   suite_start    - Test suite beginning (e.ordinal = 0)
+--   suite_end      - Test suite completed (e.ordinal = total step count)
+--   fixture_start  - Fixture script starting (e.path = script path)
+--   fixture_end    - Fixture script completed
+--   test_start     - Test script starting
+--   test_end       - Test script completed (before rollback)
+--   rollback       - About to rollback test savepoint
+--   teardown_start - Teardown starting for a directory
+--   teardown_end   - Teardown completed
+--
+-- Usage in macros:
+--   SELECT pgmi_test('./api/**', 'pg_temp.test_observer');
+--   SELECT pgmi_plan_test('./api/**', 'pg_temp.test_observer');
+
+CREATE OR REPLACE FUNCTION pg_temp.test_observer(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    -- Customize this function to integrate with your observability stack.
+    -- Examples:
+    --   - Log to a persistent table for CI/CD integration
+    --   - Call pg_notify() for real-time test monitoring
+    --   - Collect timing metrics using clock_timestamp()
+    --   - Filter events by e.directory for targeted reporting
+
+    CASE e.event
+        WHEN 'suite_start' THEN
+            RAISE NOTICE '═══════════════════════════════════════════════════════════════';
+            RAISE NOTICE '  TEST SUITE STARTED';
+            RAISE NOTICE '═══════════════════════════════════════════════════════════════';
+
+        WHEN 'suite_end' THEN
+            RAISE NOTICE '═══════════════════════════════════════════════════════════════';
+            RAISE NOTICE '  TEST SUITE COMPLETED (% steps)', e.ordinal;
+            RAISE NOTICE '═══════════════════════════════════════════════════════════════';
+
+        WHEN 'fixture_start' THEN
+            RAISE NOTICE '  [FIXTURE] %', e.path;
+
+        WHEN 'test_start' THEN
+            RAISE NOTICE '  [TEST] %', e.path;
+
+        WHEN 'test_end' THEN
+            RAISE NOTICE '    ✓ passed';
+
+        WHEN 'teardown_start' THEN
+            RAISE DEBUG '  [TEARDOWN] %', e.directory;
+
+        ELSE NULL;
+    END CASE;
+END $$;
