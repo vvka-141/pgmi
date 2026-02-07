@@ -18,8 +18,8 @@ const (
 	PostgresPassword = "postgres"
 	PostgresDB       = "postgres"
 
-	containerCertDir    = "/tmp/testcontainers-go/postgres"
-	sslEntrypointPath   = "/usr/local/bin/docker-entrypoint-ssl.bash"
+	containerCertDir  = "/tmp/testcontainers-go/postgres"
+	sslEntrypointPath = "/usr/local/bin/docker-entrypoint-ssl.bash"
 )
 
 type PostgresContainer struct {
@@ -95,6 +95,31 @@ func StartMTLSPostgres(ctx context.Context, certPaths *CertPaths) (*PostgresCont
 	}
 
 	connStr, err := ctr.ConnectionString(ctx, "sslmode=verify-ca")
+	if err != nil {
+		ctr.Terminate(ctx) //nolint:errcheck
+		return nil, fmt.Errorf("get connection string: %w", err)
+	}
+
+	return &PostgresContainer{PostgresContainer: ctr, ConnString: connStr}, nil
+}
+
+func StartSimplePostgres(ctx context.Context) (*PostgresContainer, error) {
+	ctr, err := postgres.Run(ctx,
+		PostgresImage,
+		postgres.WithUsername(PostgresUser),
+		postgres.WithPassword(PostgresPassword),
+		postgres.WithDatabase(PostgresDB),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("start postgres: %w", err)
+	}
+
+	connStr, err := ctr.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		ctr.Terminate(ctx) //nolint:errcheck
 		return nil, fmt.Errorf("get connection string: %w", err)

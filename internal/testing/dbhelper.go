@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,17 +16,41 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
+	"github.com/vvka-141/pgmi/internal/testinfra"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// GetTestConnectionString returns the test database connection string from environment.
-// If PGMI_TEST_CONN is not set, the test is skipped.
+var (
+	testContainerOnce sync.Once
+	testContainerConn string
+	testContainerErr  error
+)
+
+func getOrStartTestContainer() (string, error) {
+	testContainerOnce.Do(func() {
+		ctx := context.Background()
+		container, err := testinfra.StartSimplePostgres(ctx)
+		if err != nil {
+			testContainerErr = err
+			return
+		}
+		testContainerConn = container.ConnString
+	})
+	return testContainerConn, testContainerErr
+}
+
+// GetTestConnectionString returns the test database connection string.
+// Priority: PGMI_TEST_CONN env var > auto-started testcontainer > skip test.
 func GetTestConnectionString(t *testing.T) string {
 	t.Helper()
 
-	connString := os.Getenv("PGMI_TEST_CONN")
-	if connString == "" {
-		t.Skip("PGMI_TEST_CONN not set, skipping database integration test")
+	if connString := os.Getenv("PGMI_TEST_CONN"); connString != "" {
+		return connString
+	}
+
+	connString, err := getOrStartTestContainer()
+	if err != nil {
+		t.Skipf("PGMI_TEST_CONN not set and Docker unavailable: %v", err)
 	}
 	return connString
 }

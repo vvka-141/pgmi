@@ -6,7 +6,7 @@ test:                  ## Run unit tests (no database required)
 test-short:            ## Run unit tests, skip slow tests
 	go test -short ./...
 
-test-integration:      ## Run all tests including DB integration (requires PGMI_TEST_CONN)
+test-integration:      ## Run all tests including DB integration (uses testcontainers if PGMI_TEST_CONN not set)
 	go test ./...
 
 test-connection:       ## Run connection/security scenario tests (requires Docker)
@@ -33,9 +33,9 @@ doctor:                ## Smoke test development environment
 	@echo "=== pgmi Development Environment ==="
 	@echo ""
 	@printf "Go:           "; go version 2>/dev/null || echo "NOT INSTALLED"
-	@printf "Docker:       "; docker info --format '{{.ServerVersion}}' 2>/dev/null || echo "NOT AVAILABLE (connection tests will fail)"
+	@printf "Docker:       "; docker info --format '{{.ServerVersion}}' 2>/dev/null || echo "NOT AVAILABLE (tests will auto-skip)"
 	@printf "golangci-lint: "; golangci-lint --version 2>/dev/null || echo "NOT INSTALLED (lint will fail)"
-	@printf "PGMI_TEST_CONN: "; if [ -n "$$PGMI_TEST_CONN" ]; then echo "$$PGMI_TEST_CONN"; else echo "NOT SET (integration tests need this)"; fi
+	@printf "PGMI_TEST_CONN: "; if [ -n "$$PGMI_TEST_CONN" ]; then echo "$$PGMI_TEST_CONN"; else echo "NOT SET (will use testcontainers)"; fi
 	@echo ""
 	@echo "go vet:"; go vet ./... && echo "  OK" || echo "  ISSUES FOUND"
 
