@@ -168,6 +168,7 @@ BEGIN
 
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json',
+            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
             'x-route-id', v_route.object_id::text
         ]) || COALESCE(v_response.headers, ''::extensions.hstore);
@@ -309,6 +310,7 @@ BEGIN
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
         v_response.headers := extensions.hstore(ARRAY[
+            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
             'x-rpc-method', v_handler.method_name
         ]) || COALESCE(v_response.headers, ''::extensions.hstore);
@@ -418,7 +420,7 @@ BEGIN
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
     WHERE r.mcp_type = 'resource'
-      AND p_uri ~ ('^' || regexp_replace(r.uri_template, '\{[^}]+\}', '[^/]+', 'g') || '$');
+      AND p_uri ~ api.uri_template_to_regex(r.uri_template);
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Resource not found';
