@@ -244,14 +244,32 @@ GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_plan TO PUBLIC;
 -- ============================================================================
 -- Test Event Type for Callback Support
 -- ============================================================================
+-- Composite type for test lifecycle events. Used by pgmi_test() and pgmi_plan_test()
+-- macros to invoke custom callback functions during test execution.
+--
+-- Events: suite_start, suite_end, fixture_start, fixture_end, test_start,
+--         test_end, rollback, teardown_start, teardown_end
+--
+-- Usage:
+--   SELECT pgmi_test('./path/**', 'pg_temp.my_callback');
+--   SELECT pgmi_plan_test(NULL, 'pg_temp.my_observer');
 CREATE TYPE pg_temp.pgmi_test_event AS (
-    event       TEXT,       -- suite_start, fixture_start, test_end, rollback, etc.
-    path        TEXT,       -- Script path (NULL for suite events)
-    directory   TEXT,       -- Test directory
-    depth       INT,        -- Nesting level
-    ordinal     INT,        -- Execution order
-    context     JSONB       -- Extensible payload
+    event       TEXT,       -- Event name (suite_start, test_end, rollback, etc.)
+    path        TEXT,       -- Script path (NULL for suite/teardown events)
+    directory   TEXT,       -- Test directory containing the script
+    depth       INT,        -- Nesting level (0 = root __test__/)
+    ordinal     INT,        -- Execution order (1-based, monotonically increasing)
+    context     JSONB       -- Extensible payload for custom data
 );
+
+COMMENT ON TYPE pg_temp.pgmi_test_event IS
+'Composite type for test lifecycle callbacks. Fields:
+  event     - suite_start, fixture_start/end, test_start/end, rollback, teardown_start/end
+  path      - Script path (NULL for suite/teardown events)
+  directory - Test directory (e.g., ./__test__/)
+  depth     - Nesting level for hierarchical test directories
+  ordinal   - Execution order within the suite
+  context   - JSONB for extensible custom data';
 
 -- Default callback: emits NOTICE/DEBUG for test visibility
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_callback(e pg_temp.pgmi_test_event)
@@ -270,6 +288,17 @@ BEGIN
         ELSE NULL;
     END CASE;
 END $$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_test_callback IS
+'Default test callback that emits NOTICE/DEBUG messages for visibility.
+Custom callbacks must accept (pg_temp.pgmi_test_event) and return void.
+Example:
+  CREATE FUNCTION pg_temp.my_observer(e pg_temp.pgmi_test_event)
+  RETURNS void AS $$
+  BEGIN
+    INSERT INTO test_log (event, path) VALUES (e.event, e.path);
+  END $$ LANGUAGE plpgsql;
+  SELECT pgmi_test(NULL, ''pg_temp.my_observer'');';
 
 
 -- 1️⃣ SQL file detector
