@@ -185,12 +185,19 @@ func (sm *SessionManager) prepareSessionTables(
 	}
 	sm.logger.Info("✓ Loaded %d parameters into pg_temp.pgmi_parameter", len(parameters))
 
-	// Discover tests and populate pgmi_test_source (for pgmi_test() macro)
-	sm.logger.Verbose("Discovering tests and populating pg_temp.pgmi_test_source...")
+	// Discover tests and populate pgmi_test_plan (with embedded content)
+	sm.logger.Verbose("Discovering tests and populating pg_temp.pgmi_test_plan...")
 	if err := sm.fileLoader.LoadTestScriptsIntoSession(ctx, conn, scanResult.Files); err != nil {
 		return fmt.Errorf("failed to load test scripts: %w", err)
 	}
-	sm.logger.Info("✓ Populated pg_temp.pgmi_test_source")
+	sm.logger.Info("✓ Populated pg_temp.pgmi_test_plan")
+
+	// Drop pgmi_test_source to prevent deploy.sql from accessing raw test files
+	// The test plan now contains embedded SQL, so the source table is no longer needed
+	sm.logger.Verbose("Dropping pg_temp.pgmi_test_source...")
+	if _, err := conn.Exec(ctx, "DROP TABLE IF EXISTS pg_temp.pgmi_test_source"); err != nil {
+		return fmt.Errorf("failed to drop pgmi_test_source: %w", err)
+	}
 
 	// Create unittest framework in pg_temp schema (after pgmi_source is populated)
 	// This executes unittest.sql which moves test files from pgmi_source and materializes the execution plan

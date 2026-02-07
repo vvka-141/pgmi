@@ -11,7 +11,7 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// TestDeploymentService_PlanMode_PassingTests verifies that pgmi_plan_test() macro
+// TestDeploymentService_PlanMode_PassingTests verifies that PERFORM pg_temp.pgmi_plan_tests() macro
 // schedules tests via pgmi_plan_command() and they execute during plan execution phase.
 func TestDeploymentService_PlanMode_PassingTests(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -57,7 +57,7 @@ func TestDeploymentService_PlanMode_PassingTests(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_PlanMode_FailingTests verifies that pgmi_plan_test() macro
+// TestDeploymentService_PlanMode_FailingTests verifies that PERFORM pg_temp.pgmi_plan_tests() macro
 // causes deployment to fail when a scheduled test raises an exception.
 func TestDeploymentService_PlanMode_FailingTests(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -120,7 +120,7 @@ func TestDeploymentService_PlanMode_FilterPattern(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_PlanMode_SavepointStructure verifies that pgmi_plan_test()
+// TestDeploymentService_PlanMode_SavepointStructure verifies that PERFORM pg_temp.pgmi_plan_tests()
 // properly schedules SAVEPOINT and ROLLBACK commands around tests.
 func TestDeploymentService_PlanMode_SavepointStructure(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -162,7 +162,7 @@ func TestDeploymentService_PlanMode_SavepointStructure(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_PlanMode_MixedWithDirectCommands verifies that pgmi_plan_test()
+// TestDeploymentService_PlanMode_MixedWithDirectCommands verifies that PERFORM pg_temp.pgmi_plan_tests()
 // works correctly when mixed with other pgmi_plan_command() calls.
 func TestDeploymentService_PlanMode_MixedWithDirectCommands(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -204,7 +204,7 @@ func TestDeploymentService_PlanMode_MixedWithDirectCommands(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_PlanMode_NoTests verifies that pgmi_plan_test() with no
+// TestDeploymentService_PlanMode_NoTests verifies that PERFORM pg_temp.pgmi_plan_tests() with no
 // matching tests produces no commands and doesn't cause errors.
 func TestDeploymentService_PlanMode_NoTests(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -268,7 +268,7 @@ END $$;
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Create deploy.sql using pgmi_plan_test() macro inside DO block
+	// Create deploy.sql using PERFORM pg_temp.pgmi_plan_tests() macro inside DO block
 	deploySQL := `
 -- Schedule migrations
 DO $$
@@ -290,8 +290,8 @@ BEGIN
     -- Schedule savepoint before tests
     PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
 
-    -- Schedule tests using pgmi_plan_test() macro (expands to PERFORM calls)
-    pgmi_plan_test();
+    -- Schedule tests using PERFORM pg_temp.pgmi_plan_tests() macro (expands to PERFORM calls)
+    PERFORM pg_temp.pgmi_plan_tests();
 
     -- Schedule rollback and commit
     PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
@@ -329,7 +329,7 @@ BEGIN
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
     -- Schedule tests (will fail)
-    pgmi_plan_test();
+    PERFORM pg_temp.pgmi_plan_tests();
 
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
@@ -371,7 +371,7 @@ BEGIN
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
     -- Only schedule tests in passing directory
-    pgmi_plan_test('./passing/**');
+    PERFORM pg_temp.pgmi_plan_tests('/passing/');
 
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
@@ -439,7 +439,7 @@ BEGIN
 
     -- Tests in savepoint
     PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
-    pgmi_plan_test();
+    PERFORM pg_temp.pgmi_plan_tests();
     PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
 
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');
@@ -501,7 +501,7 @@ BEGIN
 
     -- Tests in savepoint
     PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
-    pgmi_plan_test();
+    PERFORM pg_temp.pgmi_plan_tests();
     PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
 
     -- Post-deploy: insert settings
@@ -523,14 +523,14 @@ END $$;
 func createPlanModeProjectNoTests(t *testing.T, projectPath string) {
 	t.Helper()
 
-	// Create deploy.sql with pgmi_plan_test() but no __test__ directory
+	// Create deploy.sql with PERFORM pg_temp.pgmi_plan_tests() but no __test__ directory
 	deploySQL := `
 DO $$
 BEGIN
     PERFORM pg_temp.pgmi_plan_command('BEGIN;');
 
     -- No tests exist, should produce no commands
-    pgmi_plan_test();
+    PERFORM pg_temp.pgmi_plan_tests();
 
     PERFORM pg_temp.pgmi_plan_command('SELECT 1;');
     PERFORM pg_temp.pgmi_plan_command('COMMIT;');

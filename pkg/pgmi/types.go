@@ -130,10 +130,7 @@ func (c *TestConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("ConnectionString is required: %w", ErrInvalidConfig))
 	}
 
-	// FilterPattern defaults to ".*" (match all) if empty
-	if c.FilterPattern == "" {
-		c.FilterPattern = ".*"
-	}
+	// FilterPattern is left empty to match all tests (glob matcher treats empty as match-all)
 
 	return errors.Join(errs...)
 }

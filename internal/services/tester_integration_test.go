@@ -42,7 +42,7 @@ func TestDeploymentService_ExecuteTests_AllPass(t *testing.T) {
 		ConnectionString:    connString,
 		DatabaseName:     testDB,
 		SourcePath:       projectPath,
-		FilterPattern:    ".*",
+		FilterPattern:    "",
 		Verbose:          testing.Verbose(),
 	})
 
@@ -81,7 +81,7 @@ func TestDeploymentService_ExecuteTests_FailFast(t *testing.T) {
 		ConnectionString:    connString,
 		DatabaseName:     testDB,
 		SourcePath:       projectPath,
-		FilterPattern:    ".*",
+		FilterPattern:    "", // Empty pattern matches all tests
 		Verbose:          testing.Verbose(),
 	})
 
@@ -164,7 +164,7 @@ func TestDeploymentService_ExecuteTests_ListMode(t *testing.T) {
 		ConnectionString:    connString,
 		DatabaseName:     testDB,
 		SourcePath:       projectPath,
-		FilterPattern:    ".*",
+		FilterPattern:    "",
 		ListOnly:         true,
 		Verbose:          testing.Verbose(),
 	})

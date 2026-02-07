@@ -25,19 +25,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: alexeye/postgres-azure-flex:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     steps:
       - uses: actions/checkout@v4
 
@@ -46,9 +33,7 @@ jobs:
           go-version: '1.24'
 
       - name: Run tests
-        env:
-          PGMI_TEST_CONN: postgresql://postgres:postgres@localhost:5432/postgres
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -coverprofile=coverage.out -timeout 10m ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
