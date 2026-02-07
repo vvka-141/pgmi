@@ -40,28 +40,6 @@ $msg$, current_setting('server_version');
     END IF;
 END $$;
 
--- Acquire deployment lock
-SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
-
-BEGIN;
-
--- Phase 1: Infrastructure provisioning (superuser → owner handoff)
-SELECT pg_temp.provision();
-
--- Phase 2: Deploy application scripts
-SELECT pg_temp.deploy();
-
--- Phase 3: Run tests (rolled back after)
-SAVEPOINT before_application_tests;
-SELECT pgmi_test(NULL, 'pg_temp.test_observer');
-ROLLBACK TO SAVEPOINT before_application_tests;
-
--- Phase 4: Persist test metadata
-SELECT pg_temp.persist_unittest_metadata();
-
-COMMIT;
-
-
 
 -- ============================================================================
 -- STEP 0: Declare Parameters (Type-Safe Configuration)
@@ -624,3 +602,30 @@ BEGIN
         ELSE NULL;
     END CASE;
 END $$;
+
+
+-- ============================================================================
+-- STEP 5: Execute Deployment
+-- ============================================================================
+-- All functions are now defined. Execute the deployment sequence.
+
+-- Acquire deployment lock (prevents concurrent deployments)
+SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
+
+BEGIN;
+
+-- Phase 1: Infrastructure provisioning (superuser → owner handoff)
+SELECT pg_temp.provision();
+
+-- Phase 2: Deploy application scripts
+SELECT pg_temp.deploy();
+
+COMMIT;
+
+-- Phase 3: Run tests (macro provides its own BEGIN/COMMIT with internal savepoints)
+SELECT pgmi_test(NULL, 'pg_temp.test_observer');
+
+-- Phase 4: Persist test metadata
+BEGIN;
+SELECT pg_temp.persist_unittest_metadata();
+COMMIT;
