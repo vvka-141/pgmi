@@ -151,20 +151,29 @@ BEGIN
     -- Create admin and API roles (LOGIN roles require superuser privileges)
     -- These must be created BEFORE SET ROLE since only superuser can create LOGIN roles
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_admin_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10',
-            v_admin_role,
-            pg_temp.pgmi_get_param('database_admin_password')
-        );
-        RAISE NOTICE '  ✓ Created admin role: % (LOGIN)', v_admin_role;
+        BEGIN
+            EXECUTE format(
+                'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10',
+                v_admin_role,
+                pg_temp.pgmi_get_param('database_admin_password')
+            );
+            RAISE NOTICE '  ✓ Created admin role: % (LOGIN)', v_admin_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to create admin role %: % (SQLSTATE: %)',
+                v_admin_role, SQLERRM, SQLSTATE;
+        END;
     ELSE
-        -- Update password and connection limit if role exists
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10',
-            v_admin_role,
-            pg_temp.pgmi_get_param('database_admin_password')
-        );
-        RAISE DEBUG '  • Admin role exists (password updated): %', v_admin_role;
+        BEGIN
+            EXECUTE format(
+                'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10',
+                v_admin_role,
+                pg_temp.pgmi_get_param('database_admin_password')
+            );
+            RAISE DEBUG '  • Admin role exists (password updated): %', v_admin_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to update admin role %: % (SQLSTATE: %)',
+                v_admin_role, SQLERRM, SQLSTATE;
+        END;
     END IF;
 
     EXECUTE format(
@@ -180,20 +189,29 @@ BEGIN
 
     -- Create API role (LOGIN)
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_api_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
-            v_api_role,
-            pg_temp.pgmi_get_param('database_api_password')
-        );
-        RAISE NOTICE '  ✓ Created API role: % (LOGIN)', v_api_role;
+        BEGIN
+            EXECUTE format(
+                'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
+                v_api_role,
+                pg_temp.pgmi_get_param('database_api_password')
+            );
+            RAISE NOTICE '  ✓ Created API role: % (LOGIN)', v_api_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to create API role %: % (SQLSTATE: %)',
+                v_api_role, SQLERRM, SQLSTATE;
+        END;
     ELSE
-        -- Update password and connection limit if role exists
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
-            v_api_role,
-            pg_temp.pgmi_get_param('database_api_password')
-        );
-        RAISE DEBUG '  • API role exists (password updated): %', v_api_role;
+        BEGIN
+            EXECUTE format(
+                'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
+                v_api_role,
+                pg_temp.pgmi_get_param('database_api_password')
+            );
+            RAISE DEBUG '  • API role exists (password updated): %', v_api_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to update API role %: % (SQLSTATE: %)',
+                v_api_role, SQLERRM, SQLSTATE;
+        END;
     END IF;
 
     EXECUTE format(
@@ -205,19 +223,29 @@ BEGIN
 
     -- Create customer role (LOGIN, RLS-restricted)
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_customer_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
-            v_customer_role,
-            pg_temp.pgmi_get_param('database_customer_password')
-        );
-        RAISE NOTICE '  ✓ Created customer role: % (LOGIN)', v_customer_role;
+        BEGIN
+            EXECUTE format(
+                'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
+                v_customer_role,
+                pg_temp.pgmi_get_param('database_customer_password')
+            );
+            RAISE NOTICE '  ✓ Created customer role: % (LOGIN)', v_customer_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to create customer role %: % (SQLSTATE: %)',
+                v_customer_role, SQLERRM, SQLSTATE;
+        END;
     ELSE
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
-            v_customer_role,
-            pg_temp.pgmi_get_param('database_customer_password')
-        );
-        RAISE DEBUG '  • Customer role exists (password updated): %', v_customer_role;
+        BEGIN
+            EXECUTE format(
+                'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
+                v_customer_role,
+                pg_temp.pgmi_get_param('database_customer_password')
+            );
+            RAISE DEBUG '  • Customer role exists (password updated): %', v_customer_role;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed to update customer role %: % (SQLSTATE: %)',
+                v_customer_role, SQLERRM, SQLSTATE;
+        END;
     END IF;
 
     EXECUTE format(

@@ -19,11 +19,18 @@ DO $$ BEGIN RAISE NOTICE '→ Installing membership RLS policies'; END $$;
 
 ALTER TABLE membership.organization ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS org_member_access ON membership.organization;
-CREATE POLICY org_member_access ON membership.organization
-    FOR SELECT
-    TO current_user
-    USING (object_id = ANY(api.current_member_org_ids()));
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS org_member_access ON membership.organization;
+    EXECUTE format($policy$
+        CREATE POLICY org_member_access ON membership.organization
+            FOR SELECT
+            TO %I
+            USING (object_id = ANY(api.current_member_org_ids()))
+    $policy$, v_customer_role);
+END $$;
 
 DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization'; END $$;
 
@@ -33,11 +40,18 @@ DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization'; END $$;
 
 ALTER TABLE membership.organization_member ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS org_member_see_own_org ON membership.organization_member;
-CREATE POLICY org_member_see_own_org ON membership.organization_member
-    FOR SELECT
-    TO current_user
-    USING (organization_id = ANY(api.current_member_org_ids()));
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS org_member_see_own_org ON membership.organization_member;
+    EXECUTE format($policy$
+        CREATE POLICY org_member_see_own_org ON membership.organization_member
+            FOR SELECT
+            TO %I
+            USING (organization_id = ANY(api.current_member_org_ids()))
+    $policy$, v_customer_role);
+END $$;
 
 DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization_member'; END $$;
 
@@ -47,11 +61,18 @@ DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization_member'; END $$
 
 ALTER TABLE membership.user_identity ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS identity_own_only ON membership.user_identity;
-CREATE POLICY identity_own_only ON membership.user_identity
-    FOR SELECT
-    TO current_user
-    USING (user_object_id = api.current_user_id());
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS identity_own_only ON membership.user_identity;
+    EXECUTE format($policy$
+        CREATE POLICY identity_own_only ON membership.user_identity
+            FOR SELECT
+            TO %I
+            USING (user_object_id = api.current_user_id())
+    $policy$, v_customer_role);
+END $$;
 
 DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user_identity'; END $$;
 
@@ -61,11 +82,18 @@ DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user_identity'; END $$;
 
 ALTER TABLE membership."user" ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS user_see_self ON membership."user";
-CREATE POLICY user_see_self ON membership."user"
-    FOR SELECT
-    TO current_user
-    USING (object_id = api.current_user_id());
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS user_see_self ON membership."user";
+    EXECUTE format($policy$
+        CREATE POLICY user_see_self ON membership."user"
+            FOR SELECT
+            TO %I
+            USING (object_id = api.current_user_id())
+    $policy$, v_customer_role);
+END $$;
 
 DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user'; END $$;
 
