@@ -75,10 +75,10 @@ func (p *Pipeline) Process(sql string, rows []testdiscovery.TestScriptRow) (*Pre
 		var generated *testgen.GeneratedSQL
 		if p.planMode || macro.Name == "pgmi_plan_test" {
 			generator := testgen.NewPlanModeGenerator()
-			generated = generator.Generate(filteredRows)
+			generated = generator.GenerateWithCallback(filteredRows, macro.Callback)
 		} else {
 			generator := testgen.NewDirectGenerator()
-			generated = generator.Generate(filteredRows)
+			generated = generator.GenerateWithCallback(filteredRows, macro.Callback)
 		}
 
 		// Extract macro text from stripped SQL and find it in expandedSQL
@@ -149,10 +149,10 @@ func (p *Pipeline) ProcessWithTree(sql string, tree *testdiscovery.TestTree, res
 		var generated *testgen.GeneratedSQL
 		if p.planMode || macro.Name == "pgmi_plan_test" {
 			generator := testgen.NewPlanModeGenerator()
-			generated = generator.Generate(rows)
+			generated = generator.GenerateWithCallback(rows, macro.Callback)
 		} else {
 			generator := testgen.NewDirectGenerator()
-			generated = generator.Generate(rows)
+			generated = generator.GenerateWithCallback(rows, macro.Callback)
 		}
 
 		// Extract macro text from stripped SQL and find it in expandedSQL

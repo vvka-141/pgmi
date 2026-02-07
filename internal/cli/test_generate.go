@@ -55,6 +55,7 @@ type testGenerateFlagValues struct {
 	withTransaction bool
 	withNotices     bool
 	withDebug       bool
+	callback        string
 }
 
 var testGenerateFlags testGenerateFlagValues
@@ -72,6 +73,9 @@ func init() {
 		"Include RAISE NOTICE for progress output")
 	testGenerateCmd.Flags().BoolVar(&testGenerateFlags.withDebug, "with-debug", false,
 		"Include RAISE DEBUG for savepoint operations")
+	testGenerateCmd.Flags().StringVar(&testGenerateFlags.callback, "callback", "",
+		"Custom callback function for test events (e.g., pg_temp.my_logger)\n"+
+			"When specified, includes the pgmi_test_event type and callback stub in output")
 }
 
 func runTestGenerate(cmd *cobra.Command, args []string) error {
@@ -124,6 +128,7 @@ func runTestGenerate(cmd *cobra.Command, args []string) error {
 		WithTransaction: testGenerateFlags.withTransaction,
 		WithNotices:     testGenerateFlags.withNotices,
 		WithDebug:       testGenerateFlags.withDebug,
+		Callback:        testGenerateFlags.callback,
 	}
 	generator := testgen.New(config)
 	result := generator.Generate(steps, sourcePath, testGenerateFlags.filter)

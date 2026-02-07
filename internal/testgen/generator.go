@@ -26,6 +26,13 @@ func NewDirectGenerator() *DirectGenerator {
 // Outputs embedded SQL content directly instead of calling helper functions.
 // The generated SQL is wrapped in BEGIN/COMMIT for savepoint support.
 func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *GeneratedSQL {
+	return g.GenerateWithCallback(rows, "")
+}
+
+// GenerateWithCallback converts execution plan rows to SQL with optional callback invocations.
+// When callback is empty, behaves exactly as Generate().
+// When callback is specified, emits callback invocations for each test event.
+func (g *DirectGenerator) GenerateWithCallback(rows []testdiscovery.TestScriptRow, callback string) *GeneratedSQL {
 	result := &GeneratedSQL{
 		SourceMap: sourcemap.New(),
 	}
@@ -36,46 +43,157 @@ func (g *DirectGenerator) Generate(rows []testdiscovery.TestScriptRow) *Generate
 
 	var lines []string
 	lineNum := 1
+	ordinal := 0
 
 	// Begin transaction for savepoint support
 	lines = append(lines, "BEGIN;")
 	lineNum++
 
+	// Suite start callback
+	if callback != "" {
+		lines = append(lines, FormatCallbackInvocation(callback, EventSuiteStart, nil, "", 0, 0))
+		lineNum++
+	}
+
 	for _, row := range rows {
+		ordinal++
 		startLine := lineNum
 
-		// PreExec (SAVEPOINT)
-		if row.PreExec != nil {
-			lines = append(lines, *row.PreExec)
-			lineNum++
-		}
-
-		// Embedded SQL content (fixture or test)
-		if row.ScriptSQL != nil {
-			// Count lines in embedded content for source map
-			content := *row.ScriptSQL
-			lines = append(lines, content)
-			contentLines := strings.Count(content, "\n") + 1
-
-			// Add source map entry
-			if row.ScriptPath != nil {
-				desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
-				result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+		switch row.StepType {
+		case "fixture":
+			// Fixture start callback
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventFixtureStart, row.ScriptPath, row.Directory, row.Depth, ordinal))
+				lineNum++
 			}
-			lineNum += contentLines
-		}
 
-		// PostExec (ROLLBACK TO, RELEASE)
-		if row.PostExec != nil {
-			lines = append(lines, *row.PostExec)
-			lineNum++
-		}
+			// PreExec (SAVEPOINT)
+			if row.PreExec != nil {
+				lines = append(lines, *row.PreExec)
+				lineNum++
+			}
 
-		// Add source map entry for teardown rows (no file content)
-		if row.ScriptSQL == nil && (row.PreExec != nil || row.PostExec != nil) {
+			// Embedded SQL content
+			if row.ScriptSQL != nil {
+				content := *row.ScriptSQL
+				lines = append(lines, content)
+				contentLines := strings.Count(content, "\n") + 1
+				if row.ScriptPath != nil {
+					desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
+					result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+				}
+				lineNum += contentLines
+			}
+
+			// PostExec
+			if row.PostExec != nil {
+				lines = append(lines, *row.PostExec)
+				lineNum++
+			}
+
+			// Fixture end callback
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventFixtureEnd, row.ScriptPath, row.Directory, row.Depth, ordinal))
+				lineNum++
+			}
+
+		case "test":
+			// Test start callback
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventTestStart, row.ScriptPath, row.Directory, row.Depth, ordinal))
+				lineNum++
+			}
+
+			// PreExec (SAVEPOINT)
+			if row.PreExec != nil {
+				lines = append(lines, *row.PreExec)
+				lineNum++
+			}
+
+			// Embedded SQL content
+			if row.ScriptSQL != nil {
+				content := *row.ScriptSQL
+				lines = append(lines, content)
+				contentLines := strings.Count(content, "\n") + 1
+				if row.ScriptPath != nil {
+					desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
+					result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+				}
+				lineNum += contentLines
+			}
+
+			// Test end callback (before rollback)
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventTestEnd, row.ScriptPath, row.Directory, row.Depth, ordinal))
+				lineNum++
+			}
+
+			// PostExec (ROLLBACK TO)
+			if row.PostExec != nil {
+				// Rollback callback
+				if callback != "" {
+					lines = append(lines, FormatCallbackInvocation(callback, EventRollback, row.ScriptPath, row.Directory, row.Depth, ordinal))
+					lineNum++
+				}
+				lines = append(lines, *row.PostExec)
+				lineNum++
+			}
+
+		case "teardown":
+			// Teardown start callback
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventTeardownStart, nil, row.Directory, row.Depth, ordinal))
+				lineNum++
+			}
+
+			// PreExec (ROLLBACK TO)
+			if row.PreExec != nil {
+				lines = append(lines, *row.PreExec)
+				lineNum++
+			}
+
+			// PostExec (RELEASE)
+			if row.PostExec != nil {
+				lines = append(lines, *row.PostExec)
+				lineNum++
+			}
+
+			// Source map for teardown
 			desc := fmt.Sprintf("%s: %s", row.StepType, row.Directory)
 			result.SourceMap.Add(startLine, lineNum-1, row.Directory, 0, desc)
+
+			// Teardown end callback
+			if callback != "" {
+				lines = append(lines, FormatCallbackInvocation(callback, EventTeardownEnd, nil, row.Directory, row.Depth, ordinal))
+				lineNum++
+			}
+
+		default:
+			// Unknown step type - handle like original code
+			if row.PreExec != nil {
+				lines = append(lines, *row.PreExec)
+				lineNum++
+			}
+			if row.ScriptSQL != nil {
+				content := *row.ScriptSQL
+				lines = append(lines, content)
+				contentLines := strings.Count(content, "\n") + 1
+				if row.ScriptPath != nil {
+					desc := fmt.Sprintf("%s: %s", row.StepType, *row.ScriptPath)
+					result.SourceMap.Add(lineNum, lineNum+contentLines-1, *row.ScriptPath, 1, desc)
+				}
+				lineNum += contentLines
+			}
+			if row.PostExec != nil {
+				lines = append(lines, *row.PostExec)
+				lineNum++
+			}
 		}
+	}
+
+	// Suite end callback
+	if callback != "" {
+		lines = append(lines, FormatCallbackInvocation(callback, EventSuiteEnd, nil, "", 0, ordinal))
 	}
 
 	// Commit transaction

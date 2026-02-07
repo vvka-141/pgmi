@@ -544,3 +544,90 @@ func BenchmarkMacroDetector_Detect_LargeInput(b *testing.B) {
 		detector.Detect(input)
 	}
 }
+
+func TestMacroDetector_Detect_WithCallback(t *testing.T) {
+	detector := NewMacroDetector()
+
+	tests := []struct {
+		name       string
+		input      string
+		wantName   string
+		wantPat    string
+		wantCb     string
+	}{
+		{
+			name:     "pattern and callback",
+			input:    "pgmi_test('./u/**', 'pg_temp.cb')",
+			wantName: "pgmi_test",
+			wantPat:  "./u/**",
+			wantCb:   "pg_temp.cb",
+		},
+		{
+			name:     "NULL pattern with callback",
+			input:    "pgmi_test(NULL, 'pg_temp.x')",
+			wantName: "pgmi_test",
+			wantPat:  "",
+			wantCb:   "pg_temp.x",
+		},
+		{
+			name:     "pattern only - no callback",
+			input:    "pgmi_test('./a/**')",
+			wantName: "pgmi_test",
+			wantPat:  "./a/**",
+			wantCb:   "",
+		},
+		{
+			name:     "no args - no callback",
+			input:    "pgmi_test()",
+			wantName: "pgmi_test",
+			wantPat:  "",
+			wantCb:   "",
+		},
+		{
+			name:     "plan_test with callback",
+			input:    "SELECT pgmi_plan_test('./t/**', 'pg_temp.obs');",
+			wantName: "pgmi_plan_test",
+			wantPat:  "./t/**",
+			wantCb:   "pg_temp.obs",
+		},
+		{
+			name:     "spaces around args",
+			input:    "pgmi_test( './a/**' , 'pg_temp.cb' )",
+			wantName: "pgmi_test",
+			wantPat:  "./a/**",
+			wantCb:   "pg_temp.cb",
+		},
+		{
+			name:     "schema-qualified callback",
+			input:    "pgmi_test('./x/**', 'myschema.reporter')",
+			wantName: "pgmi_test",
+			wantPat:  "./x/**",
+			wantCb:   "myschema.reporter",
+		},
+		{
+			name:     "callback with NULL pattern",
+			input:    "SELECT pgmi_test(NULL, 'pg_temp.my_callback');",
+			wantName: "pgmi_test",
+			wantPat:  "",
+			wantCb:   "pg_temp.my_callback",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			macros := detector.Detect(tt.input)
+			if len(macros) != 1 {
+				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
+			}
+			if macros[0].Name != tt.wantName {
+				t.Errorf("Name = %q, expected %q", macros[0].Name, tt.wantName)
+			}
+			if macros[0].Pattern != tt.wantPat {
+				t.Errorf("Pattern = %q, expected %q", macros[0].Pattern, tt.wantPat)
+			}
+			if macros[0].Callback != tt.wantCb {
+				t.Errorf("Callback = %q, expected %q", macros[0].Callback, tt.wantCb)
+			}
+		})
+	}
+}

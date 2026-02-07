@@ -211,3 +211,75 @@ func TestPlanModeGenerator_Generate_MultilineContent(t *testing.T) {
 		t.Error("SQL should contain SELECT 3;")
 	}
 }
+
+func TestPlanModeGenerator_GenerateWithCallback_EmptyCallback(t *testing.T) {
+	g := NewPlanModeGenerator()
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+	}
+
+	result := g.GenerateWithCallback(rows, "")
+
+	// Empty callback = no callback invocations
+	if strings.Contains(result.SQL, "pgmi_test_event") {
+		t.Error("Empty callback should not produce callback invocations")
+	}
+
+	// Should still have test content
+	if !strings.Contains(result.SQL, "SELECT 1;") {
+		t.Error("SQL should contain test content")
+	}
+}
+
+func TestPlanModeGenerator_GenerateWithCallback_WithCallback(t *testing.T) {
+	g := NewPlanModeGenerator()
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./t/_setup.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
+		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./t/test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 2;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./t/", Depth: 0},
+		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
+	}
+
+	result := g.GenerateWithCallback(rows, "pg_temp.observer")
+
+	// Callbacks should be inside the dollar-quoted block
+	if !strings.Contains(result.SQL, "ROW('suite_start'") {
+		t.Errorf("Should contain suite_start callback, got: %s", result.SQL)
+	}
+	if !strings.Contains(result.SQL, "ROW('fixture_start'") {
+		t.Errorf("Should contain fixture_start callback, got: %s", result.SQL)
+	}
+	if !strings.Contains(result.SQL, "ROW('test_start'") {
+		t.Errorf("Should contain test_start callback, got: %s", result.SQL)
+	}
+	if !strings.Contains(result.SQL, "ROW('suite_end'") {
+		t.Errorf("Should contain suite_end callback, got: %s", result.SQL)
+	}
+	if !strings.Contains(result.SQL, "pg_temp.observer") {
+		t.Errorf("Should use the provided callback function, got: %s", result.SQL)
+	}
+}
+
+func TestPlanModeGenerator_GenerateWithCallback_EmptyRows(t *testing.T) {
+	g := NewPlanModeGenerator()
+	result := g.GenerateWithCallback(nil, "pg_temp.cb")
+
+	if result.SQL != "" {
+		t.Errorf("Empty rows should produce empty SQL, got %q", result.SQL)
+	}
+}
+
+func TestPlanModeGenerator_Generate_DelegatesToGenerateWithCallback(t *testing.T) {
+	g := NewPlanModeGenerator()
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+	}
+
+	result := g.Generate(rows)
+
+	// Should produce same output as GenerateWithCallback with empty callback
+	resultWithEmpty := g.GenerateWithCallback(rows, "")
+
+	if result.SQL != resultWithEmpty.SQL {
+		t.Errorf("Generate() should produce same SQL as GenerateWithCallback with empty callback\nGenerate: %s\nGenerateWithCallback: %s", result.SQL, resultWithEmpty.SQL)
+	}
+}

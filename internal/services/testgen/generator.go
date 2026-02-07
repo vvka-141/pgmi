@@ -13,6 +13,7 @@ type Config struct {
 	WithTransaction bool
 	WithNotices     bool
 	WithDebug       bool
+	Callback        string // Custom callback function name, empty for no callback
 }
 
 // DefaultConfig returns a default configuration.
@@ -52,26 +53,49 @@ func (g *Generator) Generate(steps []testdiscovery.TestScriptRow, sourcePath, fi
 	sb.WriteString(fmt.Sprintf("-- Source: %s\n", sourcePath))
 	sb.WriteString(fmt.Sprintf("-- Filter: %s\n", filterPattern))
 	sb.WriteString(fmt.Sprintf("-- Generated: %s\n", time.Now().UTC().Format(time.RFC3339)))
+	if g.config.Callback != "" {
+		sb.WriteString(fmt.Sprintf("-- Callback: %s\n", g.config.Callback))
+	}
 	sb.WriteString("\n")
+
+	// If callback is specified, include type and stub definitions
+	if g.config.Callback != "" {
+		g.writeCallbackInfrastructure(&sb)
+	}
 
 	// Optional transaction wrapper
 	if g.config.WithTransaction {
 		sb.WriteString("BEGIN;\n\n")
 	}
 
+	ordinal := 0
+
+	// Suite start callback
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("suite_start", nil, "", 0, 0))
+		sb.WriteString("\n")
+	}
+
 	// Process each step
 	for _, step := range steps {
+		ordinal++
 		switch step.StepType {
 		case "fixture":
 			fixtureCount++
-			g.writeFixture(&sb, step)
+			g.writeFixtureWithCallback(&sb, step, ordinal)
 		case "test":
 			testCount++
-			g.writeTest(&sb, step)
+			g.writeTestWithCallback(&sb, step, ordinal)
 		case "teardown":
 			teardownCount++
-			g.writeTeardown(&sb, step)
+			g.writeTeardownWithCallback(&sb, step, ordinal)
 		}
+	}
+
+	// Suite end callback
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("suite_end", nil, "", 0, ordinal))
+		sb.WriteString("\n")
 	}
 
 	// Optional transaction rollback
@@ -93,7 +117,56 @@ func (g *Generator) Generate(steps []testdiscovery.TestScriptRow, sourcePath, fi
 	}
 }
 
-func (g *Generator) writeFixture(sb *strings.Builder, step testdiscovery.TestScriptRow) {
+// writeCallbackInfrastructure writes the type and callback stub definitions.
+func (g *Generator) writeCallbackInfrastructure(sb *strings.Builder) {
+	sb.WriteString(g.sectionSeparator())
+	sb.WriteString("-- Callback Infrastructure (for standalone execution)\n")
+	sb.WriteString(g.sectionSeparator())
+	sb.WriteString(`
+CREATE TYPE pg_temp.pgmi_test_event AS (
+    event       TEXT,
+    path        TEXT,
+    directory   TEXT,
+    depth       INT,
+    ordinal     INT,
+    context     JSONB
+);
+
+`)
+	sb.WriteString(fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    CASE e.event
+        WHEN 'suite_start'    THEN RAISE NOTICE '[pgmi] Test suite started';
+        WHEN 'suite_end'      THEN RAISE NOTICE '[pgmi] Test suite completed (%% steps)', e.ordinal;
+        WHEN 'fixture_start'  THEN RAISE NOTICE '[pgmi] Fixture: %%', e.path;
+        WHEN 'fixture_end'    THEN NULL;
+        WHEN 'test_start'     THEN RAISE NOTICE '[pgmi] Test: %%', e.path;
+        WHEN 'test_end'       THEN NULL;
+        WHEN 'rollback'       THEN RAISE DEBUG '[pgmi] Rollback: %%', COALESCE(e.path, e.directory);
+        WHEN 'teardown_start' THEN RAISE DEBUG '[pgmi] Teardown: %%', e.directory;
+        WHEN 'teardown_end'   THEN NULL;
+        ELSE NULL;
+    END CASE;
+END $$;
+
+`, g.config.Callback))
+}
+
+// formatCallback generates a callback invocation SQL statement.
+func (g *Generator) formatCallback(event string, path *string, dir string, depth, ordinal int) string {
+	pathSQL := "NULL"
+	if path != nil {
+		pathSQL = pgQuoteLiteral(*path)
+	}
+	return fmt.Sprintf(
+		"SELECT %s(ROW('%s', %s, %s, %d, %d, NULL)::pg_temp.pgmi_test_event);",
+		g.config.Callback, event, pathSQL, pgQuoteLiteral(dir), depth, ordinal,
+	)
+}
+
+// writeFixtureWithCallback writes a fixture step with optional callback invocations.
+func (g *Generator) writeFixtureWithCallback(sb *strings.Builder, step testdiscovery.TestScriptRow, ordinal int) {
 	pathStr := "(no path)"
 	if step.ScriptPath != nil {
 		pathStr = *step.ScriptPath
@@ -103,7 +176,11 @@ func (g *Generator) writeFixture(sb *strings.Builder, step testdiscovery.TestScr
 	sb.WriteString(fmt.Sprintf("-- Fixture: %s\n", pathStr))
 	sb.WriteString(g.sectionSeparator())
 
-	if g.config.WithNotices {
+	// Callback: fixture_start
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("fixture_start", step.ScriptPath, step.Directory, step.Depth, ordinal))
+		sb.WriteString("\n")
+	} else if g.config.WithNotices {
 		sb.WriteString(fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Fixture: %%', %s; END $$;\n",
 			pgQuoteLiteral(pathStr)))
 	}
@@ -125,10 +202,17 @@ func (g *Generator) writeFixture(sb *strings.Builder, step testdiscovery.TestScr
 		}
 	}
 
+	// Callback: fixture_end
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("fixture_end", step.ScriptPath, step.Directory, step.Depth, ordinal))
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("\n")
 }
 
-func (g *Generator) writeTest(sb *strings.Builder, step testdiscovery.TestScriptRow) {
+// writeTestWithCallback writes a test step with optional callback invocations.
+func (g *Generator) writeTestWithCallback(sb *strings.Builder, step testdiscovery.TestScriptRow, ordinal int) {
 	pathStr := "(no path)"
 	if step.ScriptPath != nil {
 		pathStr = *step.ScriptPath
@@ -138,7 +222,11 @@ func (g *Generator) writeTest(sb *strings.Builder, step testdiscovery.TestScript
 	sb.WriteString(fmt.Sprintf("-- Test: %s\n", pathStr))
 	sb.WriteString(g.sectionSeparator())
 
-	if g.config.WithNotices {
+	// Callback: test_start
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("test_start", step.ScriptPath, step.Directory, step.Depth, ordinal))
+		sb.WriteString("\n")
+	} else if g.config.WithNotices {
 		sb.WriteString(fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Test: %%', %s; END $$;\n",
 			pgQuoteLiteral(pathStr)))
 	}
@@ -160,8 +248,18 @@ func (g *Generator) writeTest(sb *strings.Builder, step testdiscovery.TestScript
 		}
 	}
 
+	// Callback: test_end
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("test_end", step.ScriptPath, step.Directory, step.Depth, ordinal))
+		sb.WriteString("\n")
+	}
+
 	if step.PostExec != nil {
-		if g.config.WithDebug && strings.Contains(*step.PostExec, "ROLLBACK TO") {
+		// Callback: rollback
+		if g.config.Callback != "" {
+			sb.WriteString(g.formatCallback("rollback", step.ScriptPath, step.Directory, step.Depth, ordinal))
+			sb.WriteString("\n")
+		} else if g.config.WithDebug && strings.Contains(*step.PostExec, "ROLLBACK TO") {
 			sb.WriteString(fmt.Sprintf("DO $$ BEGIN RAISE DEBUG 'Rolling back savepoint for: %%', %s; END $$;\n",
 				pgQuoteLiteral(pathStr)))
 		}
@@ -172,12 +270,17 @@ func (g *Generator) writeTest(sb *strings.Builder, step testdiscovery.TestScript
 	sb.WriteString("\n")
 }
 
-func (g *Generator) writeTeardown(sb *strings.Builder, step testdiscovery.TestScriptRow) {
+// writeTeardownWithCallback writes a teardown step with optional callback invocations.
+func (g *Generator) writeTeardownWithCallback(sb *strings.Builder, step testdiscovery.TestScriptRow, ordinal int) {
 	sb.WriteString(g.sectionSeparator())
 	sb.WriteString(fmt.Sprintf("-- Teardown: %s\n", step.Directory))
 	sb.WriteString(g.sectionSeparator())
 
-	if g.config.WithNotices {
+	// Callback: teardown_start
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("teardown_start", nil, step.Directory, step.Depth, ordinal))
+		sb.WriteString("\n")
+	} else if g.config.WithNotices {
 		sb.WriteString(fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Teardown: %%', %s; END $$;\n",
 			pgQuoteLiteral(step.Directory)))
 	}
@@ -193,6 +296,12 @@ func (g *Generator) writeTeardown(sb *strings.Builder, step testdiscovery.TestSc
 
 	if step.PostExec != nil {
 		sb.WriteString(*step.PostExec)
+		sb.WriteString("\n")
+	}
+
+	// Callback: teardown_end
+	if g.config.Callback != "" {
+		sb.WriteString(g.formatCallback("teardown_end", nil, step.Directory, step.Depth, ordinal))
 		sb.WriteString("\n")
 	}
 

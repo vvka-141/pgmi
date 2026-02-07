@@ -375,3 +375,82 @@ func TestPipeline_ProcessWithTree_MultipleMacrosDifferentPatterns(t *testing.T) 
 		t.Errorf("Should contain ./b test")
 	}
 }
+
+func TestPipeline_ProcessWithTree_CallbackPropagation(t *testing.T) {
+	p := NewPipeline(false)
+
+	sql := `SELECT pgmi_test('./t/**', 'pg_temp.my_cb');`
+
+	tree := testdiscovery.NewTestTree()
+	dir := testdiscovery.NewTestDirectory("./t/__test__", 0)
+	dir.AddTest(&testdiscovery.TestFile{Path: "./t/__test__/test.sql"})
+	tree.AddDirectory(dir)
+
+	resolver := func(path string) (string, error) { return "SELECT 1;", nil }
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	// Should contain callback function name
+	if !strings.Contains(result.ExpandedSQL, "pg_temp.my_cb") {
+		t.Errorf("Should contain callback function name, got: %s", result.ExpandedSQL)
+	}
+
+	// Should contain suite_start event
+	if !strings.Contains(result.ExpandedSQL, "suite_start") {
+		t.Errorf("Should contain suite_start event, got: %s", result.ExpandedSQL)
+	}
+
+	// Should contain pgmi_test_event type cast
+	if !strings.Contains(result.ExpandedSQL, "::pg_temp.pgmi_test_event") {
+		t.Errorf("Should contain pgmi_test_event type cast, got: %s", result.ExpandedSQL)
+	}
+}
+
+func TestPipeline_ProcessWithTree_NoCallbackNoEvents(t *testing.T) {
+	p := NewPipeline(false)
+
+	// No callback in macro call
+	sql := `SELECT pgmi_test('./t/**');`
+
+	tree := testdiscovery.NewTestTree()
+	dir := testdiscovery.NewTestDirectory("./t/__test__", 0)
+	dir.AddTest(&testdiscovery.TestFile{Path: "./t/__test__/test.sql"})
+	tree.AddDirectory(dir)
+
+	resolver := func(path string) (string, error) { return "SELECT 1;", nil }
+
+	result, err := p.ProcessWithTree(sql, tree, resolver)
+	if err != nil {
+		t.Fatalf("ProcessWithTree() error = %v", err)
+	}
+
+	// Should NOT contain callback-related content
+	if strings.Contains(result.ExpandedSQL, "pgmi_test_event") {
+		t.Errorf("Should not contain pgmi_test_event when no callback, got: %s", result.ExpandedSQL)
+	}
+}
+
+func TestPipeline_Process_CallbackPropagation(t *testing.T) {
+	p := NewPipeline(false)
+
+	sql := `SELECT pgmi_test('./t/**', 'pg_temp.observer');`
+	rows := []testdiscovery.TestScriptRow{
+		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./t/__test__/test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./t/__test__"},
+	}
+
+	result, err := p.Process(sql, rows)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Should contain callback invocations
+	if !strings.Contains(result.ExpandedSQL, "pg_temp.observer") {
+		t.Errorf("Should contain callback function name, got: %s", result.ExpandedSQL)
+	}
+	if !strings.Contains(result.ExpandedSQL, "suite_start") {
+		t.Errorf("Should contain suite_start event, got: %s", result.ExpandedSQL)
+	}
+}

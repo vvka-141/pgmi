@@ -8,6 +8,7 @@ import (
 type MacroCall struct {
 	Name     string // "pgmi_test" or "pgmi_plan_test"
 	Pattern  string // Glob pattern argument, empty if NULL or no arg
+	Callback string // Callback function name, empty if not specified
 	StartPos int    // Byte offset in input (inclusive)
 	EndPos   int    // Byte offset in input (exclusive)
 	Line     int    // 1-based line number
@@ -33,12 +34,13 @@ func NewMacroDetector() MacroDetector {
 	// - Optional pg_temp. prefix
 	// - pgmi_test or pgmi_plan_test
 	// - Parentheses with optional whitespace
-	// - Optional argument: NULL, empty, or 'pattern'
+	// - Optional first argument: NULL, empty, or 'pattern'
+	// - Optional second argument: callback function name
 	// - Optional trailing semicolon
 	// The SELECT/PERFORM prefix must be included because the macro expands to standalone SQL statements,
 	// not to a value that can be SELECTed.
 	pattern := regexp.MustCompile(
-		`(?i)(?:^|[^a-zA-Z0-9_])(?:SELECT\s+|PERFORM\s+)?(?:pg_temp\.)?pgmi_(plan_)?test\s*\(\s*(?:'([^']*)'|NULL)?\s*\)\s*;?`,
+		`(?i)(?:^|[^a-zA-Z0-9_])(?:SELECT\s+|PERFORM\s+)?(?:pg_temp\.)?pgmi_(plan_)?test\s*\(\s*(?:'([^']*)'|NULL)?(?:\s*,\s*'([^']*)')?\s*\)\s*;?`,
 	)
 	return &macroDetector{pattern: pattern}
 }
@@ -58,6 +60,7 @@ func (d *macroDetector) Detect(sql string) []MacroCall {
 		// match[0:2] = full match start:end
 		// match[2:4] = capture group 1 (plan_) start:end, -1 if not matched
 		// match[4:6] = capture group 2 (pattern) start:end, -1 if not matched
+		// match[6:8] = capture group 3 (callback) start:end, -1 if not matched
 
 		startPos := match[0]
 		endPos := match[1]
@@ -90,12 +93,19 @@ func (d *macroDetector) Detect(sql string) []MacroCall {
 			pattern = sql[match[4]:match[5]]
 		}
 
+		// Extract callback if present
+		callback := ""
+		if match[6] != -1 && match[7] != -1 {
+			callback = sql[match[6]:match[7]]
+		}
+
 		// Calculate line and column
 		line, column := d.calculatePosition(sql, startPos)
 
 		macros = append(macros, MacroCall{
 			Name:     name,
 			Pattern:  pattern,
+			Callback: callback,
 			StartPos: startPos,
 			EndPos:   endPos,
 			Line:     line,

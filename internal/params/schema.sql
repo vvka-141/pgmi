@@ -241,6 +241,35 @@ COMMENT ON TABLE pg_temp.pgmi_test_plan IS
 
 GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_plan TO PUBLIC;
 
+-- ============================================================================
+-- Test Event Type for Callback Support
+-- ============================================================================
+CREATE TYPE pg_temp.pgmi_test_event AS (
+    event       TEXT,       -- suite_start, fixture_start, test_end, rollback, etc.
+    path        TEXT,       -- Script path (NULL for suite events)
+    directory   TEXT,       -- Test directory
+    depth       INT,        -- Nesting level
+    ordinal     INT,        -- Execution order
+    context     JSONB       -- Extensible payload
+);
+
+-- Default callback: emits NOTICE/DEBUG for test visibility
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_callback(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    CASE e.event
+        WHEN 'suite_start'    THEN RAISE NOTICE '[pgmi] Test suite started';
+        WHEN 'suite_end'      THEN RAISE NOTICE '[pgmi] Test suite completed (% steps)', e.ordinal;
+        WHEN 'fixture_start'  THEN RAISE NOTICE '[pgmi] Fixture: %', e.path;
+        WHEN 'fixture_end'    THEN NULL; -- silent
+        WHEN 'test_start'     THEN RAISE NOTICE '[pgmi] Test: %', e.path;
+        WHEN 'test_end'       THEN NULL; -- silent (success implicit)
+        WHEN 'rollback'       THEN RAISE DEBUG '[pgmi] Rollback: %', COALESCE(e.path, e.directory);
+        WHEN 'teardown_start' THEN RAISE DEBUG '[pgmi] Teardown: %', e.directory;
+        WHEN 'teardown_end'   THEN NULL;
+        ELSE NULL;
+    END CASE;
+END $$;
 
 
 -- 1️⃣ SQL file detector

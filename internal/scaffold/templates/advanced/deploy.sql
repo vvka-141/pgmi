@@ -20,10 +20,15 @@
 --   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
 --
 -- Macros (Preprocessor Expansion):
---   SELECT pgmi_test();                        - Execute all tests (direct mode, expands inline)
---   SELECT pgmi_test('./path/**');             - Execute tests matching pattern (direct mode)
---   SELECT pgmi_plan_test();                   - Schedule tests via PERFORM calls (planning mode)
---   SELECT pgmi_plan_test('./path/**');        - Schedule tests matching pattern (planning mode)
+--   SELECT pgmi_test();                               - Execute all tests (direct mode, expands inline)
+--   SELECT pgmi_test('./path/**');                    - Execute tests matching pattern (direct mode)
+--   SELECT pgmi_test('./path/**', 'pg_temp.cb');      - Execute tests with custom callback
+--   SELECT pgmi_plan_test();                          - Schedule tests via PERFORM calls (planning mode)
+--   SELECT pgmi_plan_test('./path/**');               - Schedule tests matching pattern (planning mode)
+--   SELECT pgmi_plan_test('./path/**', 'pg_temp.cb'); - Schedule tests with custom callback
+--
+-- Callback Events: suite_start, suite_end, fixture_start, fixture_end,
+--                  test_start, test_end, rollback, teardown_start, teardown_end
 --
 -- Macros look and feel like standard SQL functions. Call them with SELECT or PERFORM.
 -- The schema-qualified form (SELECT pg_temp.pgmi_test();) is also supported.
