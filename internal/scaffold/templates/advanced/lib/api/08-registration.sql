@@ -105,6 +105,8 @@ BEGIN
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
 
+    RAISE DEBUG 'register REST: id=%, uri=%, method=%', v_id, v_uri, v_http_method;
+
     v_accepts := CASE
         WHEN p_metadata->'accepts' IS NOT NULL
         THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'accepts'))
@@ -140,6 +142,8 @@ $%s$ LANGUAGE plpgsql$sql$,
     IF v_handler_oid IS NULL THEN
         RAISE EXCEPTION 'Failed to create REST handler function';
     END IF;
+
+    RAISE DEBUG 'register REST: Created function %.%', v_function_schema, v_function_name;
 
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
@@ -190,6 +194,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         version_regexp = EXCLUDED.version_regexp,
         route_name = EXCLUDED.route_name,
         auto_log = EXCLUDED.auto_log;
+
+    RAISE DEBUG 'register REST: Registered route %', v_name;
 END;
 $func$;
 
@@ -249,6 +255,8 @@ BEGIN
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
 
+    RAISE DEBUG 'register RPC: id=%, method=%', v_id, v_method_name;
+
     v_accepts := CASE
         WHEN p_metadata->'accepts' IS NOT NULL
         THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'accepts'))
@@ -284,6 +292,8 @@ $%s$ LANGUAGE plpgsql$sql$,
     IF v_handler_oid IS NULL THEN
         RAISE EXCEPTION 'Failed to create RPC handler function';
     END IF;
+
+    RAISE DEBUG 'register RPC: Created function %.%', v_function_schema, v_function_name;
 
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
@@ -331,6 +341,8 @@ $%s$ LANGUAGE plpgsql$sql$,
     ON CONFLICT (handler_object_id) DO UPDATE SET
         method_name = EXCLUDED.method_name,
         auto_log = EXCLUDED.auto_log;
+
+    RAISE DEBUG 'register RPC: Registered method %', v_method_name;
 END;
 $func$;
 
@@ -390,6 +402,8 @@ BEGIN
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
 
+    RAISE DEBUG 'register MCP: id=%, type=%, name=%', v_id, v_type, v_name;
+
     v_handler_type := ('mcp_' || v_type)::api.handler_type;
 
     v_function_name := 'mcp_' || v_type || '_' || replace(replace(v_name, '.', '_'), '-', '_');
@@ -415,6 +429,8 @@ $%s$ LANGUAGE plpgsql$sql$,
     IF v_handler_oid IS NULL THEN
         RAISE EXCEPTION 'Failed to create MCP handler function';
     END IF;
+
+    RAISE DEBUG 'register MCP: Created function %.%', v_function_schema, v_function_name;
 
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
@@ -464,6 +480,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         uri_template = EXCLUDED.uri_template,
         mime_type = EXCLUDED.mime_type,
         arguments = EXCLUDED.arguments;
+
+    RAISE DEBUG 'register MCP: Registered % %', v_type, v_name;
 END;
 $func$;
 

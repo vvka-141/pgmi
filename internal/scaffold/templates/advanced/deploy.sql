@@ -6,36 +6,23 @@
 --
 -- Available session tables:
 --   pg_temp.pgmi_source           - Your SQL files (migrations, schemas, etc.)
---   pg_temp.pgmi_test_source       - Your test files (from __test__/ directories)
+--   pg_temp.pgmi_test_source      - Your test files (from __test__/ directories)
 --   pg_temp.pgmi_parameter        - CLI params from --param key=value
---   pg_temp.pgmi_plan             - Execution plan (populated by helpers below)
 --
--- Helper functions (Plan Mode):
+-- Helper functions:
 --   pgmi_declare_param(key, type, ...)         - Declare parameter with type validation and defaults
 --   pgmi_get_param(key, default)               - Get parameter value with fallback
---   pgmi_plan_command(sql)                     - Add raw SQL to execution plan
---   pgmi_plan_notice(msg, args...)             - Add log message to plan
---   pgmi_plan_file(path)                       - Add file content to plan
---   pgmi_plan_do(plpgsql_code)                 - Add PL/pgSQL block to plan
---   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
 --
--- Macros (Preprocessor Expansion):
---   SELECT pgmi_test();                               - Execute all tests (direct mode, expands inline)
---   SELECT pgmi_test('./path/**');                    - Execute tests matching pattern (direct mode)
---   SELECT pgmi_test('./path/**', 'pg_temp.cb');      - Execute tests with custom callback
---   SELECT pgmi_plan_test();                          - Schedule tests via PERFORM calls (planning mode)
---   SELECT pgmi_plan_test('./path/**');               - Schedule tests matching pattern (planning mode)
---   SELECT pgmi_plan_test('./path/**', 'pg_temp.cb'); - Schedule tests with custom callback
+-- Test Macro (Preprocessor Expansion):
+--   SELECT pgmi_test();                          - Execute all tests (expands inline)
+--   SELECT pgmi_test('./path/**');               - Execute tests matching pattern
+--   SELECT pgmi_test('./path/**', 'pg_temp.cb'); - Execute tests with custom callback
 --
 -- Callback Events: suite_start, suite_end, fixture_start, fixture_end,
 --                  test_start, test_end, rollback, teardown_start, teardown_end
 --
--- Macros look and feel like standard SQL functions. Call them with SELECT or PERFORM.
+-- The macro looks and feels like a standard SQL function. Call it with SELECT or PERFORM.
 -- The schema-qualified form (SELECT pg_temp.pgmi_test();) is also supported.
---
--- Note: pgmi_plan_tests() is a SQL function that schedules tests at runtime.
---       pgmi_plan_test() is a preprocessor macro that expands before execution.
---       Both work in planning mode; choose based on your deployment flow needs.
 -- ============================================================================
 
 
@@ -53,21 +40,26 @@ $msg$, current_setting('server_version');
     END IF;
 END $$;
 
-SELECT pg_temp.pgmi_plan_command($$SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()))$$);
-SELECT pg_temp.pgmi_plan_command($$
-    BEGIN;
-    SELECT pg_temp.provision();
-    SELECT pg_temp.deploy();
-    SAVEPOINT before_application_tests;
-$$);
--- Run tests with the custom callback defined below (see STEP 4).
--- Remove the second argument to use the default callback, or replace with your own.
-SELECT pgmi_plan_test(NULL, 'pg_temp.test_observer');
-SELECT pg_temp.pgmi_plan_command($$
-    ROLLBACK TO SAVEPOINT before_application_tests;
-    SELECT pg_temp.persist_unittest_metadata();
-    COMMIT;
-$$);
+-- Acquire deployment lock
+SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
+
+BEGIN;
+
+-- Phase 1: Infrastructure provisioning (superuser → owner handoff)
+SELECT pg_temp.provision();
+
+-- Phase 2: Deploy application scripts
+SELECT pg_temp.deploy();
+
+-- Phase 3: Run tests (rolled back after)
+SAVEPOINT before_application_tests;
+SELECT pgmi_test(NULL, 'pg_temp.test_observer');
+ROLLBACK TO SAVEPOINT before_application_tests;
+
+-- Phase 4: Persist test metadata
+SELECT pg_temp.persist_unittest_metadata();
+
+COMMIT;
 
 
 
@@ -458,27 +450,33 @@ END $infrastructure$;
 
 
 
-CREATE FUNCTION pg_temp.deploy() RETURNS VOID 
+CREATE FUNCTION pg_temp.deploy() RETURNS VOID
 LANGUAGE plpgsql
 AS
 $deployment$
-DECLARE 
+DECLARE
     v_script_object_id uuid;
     v_script RECORD;
+    v_executed_count int := 0;
+    v_skipped_count int := 0;
 BEGIN
+    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
+    RAISE DEBUG 'Deploy: Beginning script execution';
+    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
+
     FOR v_script IN (
-        SELECT 
-            path, 
-            id, 
+        SELECT
+            path,
+            id,
             generic_id,
-            sort_key, 
-            description, 
-            idempotent, 
+            sort_key,
+            description,
+            idempotent,
             execution_order,
             content,
             encode(extensions.digest(convert_to(content, 'UTF8'), 'sha256'), 'hex') AS "checksum"
         FROM pg_temp.pgmi_plan_view
-        WHERE id IS NOT NULL  -- Deploy only scripts with explicit <pgmi:meta> blocks
+        WHERE id IS NOT NULL
         ORDER BY execution_order ASC
     )
     LOOP
@@ -489,6 +487,8 @@ BEGIN
             SELECT 1 FROM internal.deployment_script_execution_log
             WHERE deployment_script_object_id = v_script_object_id
         ) THEN
+            RAISE DEBUG '  [SKIP] % (already executed)', v_script.path;
+            v_skipped_count := v_skipped_count + 1;
             CONTINUE;
         END IF;
 
@@ -500,7 +500,15 @@ BEGIN
         VALUES(v_script.checksum, v_script.content)
         ON CONFLICT("checksum") DO NOTHING;
 
-        EXECUTE v_script.content;
+        RAISE DEBUG '  [EXEC] % (order: %, idempotent: %)', v_script.path, v_script.execution_order, v_script.idempotent;
+
+        BEGIN
+            EXECUTE v_script.content;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'Script failed: %', v_script.path;
+            RAISE DEBUG '  Error: % (SQLSTATE: %)', SQLERRM, SQLSTATE;
+            RAISE;
+        END;
 
         INSERT INTO internal.deployment_script_execution_log(
             deployment_script_object_id,
@@ -517,8 +525,11 @@ BEGIN
             v_script.idempotent,
             v_script.sort_key);
 
+        v_executed_count := v_executed_count + 1;
 
     END LOOP;
+
+    RAISE DEBUG 'Deploy: Complete (% executed, % skipped)', v_executed_count, v_skipped_count;
 
 END;
 $deployment$;

@@ -101,6 +101,7 @@ DECLARE
     v_execution_ms numeric;
 BEGIN
     v_start_time := clock_timestamp();
+    RAISE DEBUG 'rest_invoke: % %', p_method, p_url;
 
     IF length(p_method) > 16 THEN
         RETURN api.problem_response(400, 'Bad Request', 'HTTP method too long');
@@ -131,10 +132,14 @@ BEGIN
     LIMIT 1;
 
     IF v_route.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'rest_invoke: No route matched';
         RETURN api.problem_response(404, 'Not Found', 'No route matches ' || p_method || ' ' || p_url);
     END IF;
 
+    RAISE DEBUG 'rest_invoke: Matched route %', v_route.route_name;
+
     IF v_route.requires_auth AND (p_headers->'x-user-id') IS NULL THEN
+        RAISE DEBUG 'rest_invoke: Auth required but missing';
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required: x-user-id header missing');
     END IF;
 
@@ -156,6 +161,7 @@ BEGIN
     v_request := (p_method, p_url, p_headers, p_content)::api.rest_request;
 
     BEGIN
+        RAISE DEBUG 'rest_invoke: Invoking handler %', v_route.object_id;
         EXECUTE v_route.handler_exec_sql INTO v_response USING v_request;
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
@@ -174,6 +180,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'rest_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
         RETURN api.problem_response(500, 'Internal Server Error', SQLERRM);
     END;
@@ -265,6 +272,7 @@ DECLARE
 BEGIN
     v_start_time := clock_timestamp();
     p_headers := COALESCE(p_headers, ''::extensions.hstore);
+    RAISE DEBUG 'rpc_invoke: route_id=%', p_route_id;
 
     BEGIN
         v_json_id := api.content_json(p_content)->'id';
@@ -279,10 +287,14 @@ BEGIN
     WHERE h.object_id = p_route_id AND h.handler_type = 'rpc';
 
     IF v_handler.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'rpc_invoke: Method not found';
         RETURN api.jsonrpc_error(-32601, 'Method not found', v_json_id);
     END IF;
 
+    RAISE DEBUG 'rpc_invoke: Matched method %', v_handler.method_name;
+
     IF v_handler.requires_auth AND (p_headers->'x-user-id') IS NULL THEN
+        RAISE DEBUG 'rpc_invoke: Auth required but missing';
         RETURN api.jsonrpc_error(-32001, 'Authentication required: x-user-id header missing', v_json_id);
     END IF;
 
@@ -291,6 +303,7 @@ BEGIN
     v_request := (p_route_id, p_headers, p_content)::api.rpc_request;
 
     BEGIN
+        RAISE DEBUG 'rpc_invoke: Invoking handler %', v_handler.object_id;
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
@@ -308,6 +321,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'rpc_invoke: Handler exception: %', SQLERRM;
         RETURN api.jsonrpc_error(-32603, SQLERRM, v_json_id);
     END;
 END;
@@ -332,6 +346,8 @@ DECLARE
     v_response api.mcp_response;
     v_handler record;
 BEGIN
+    RAISE DEBUG 'mcp_call_tool: %', p_name;
+
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
     INTO v_handler
     FROM api.handler h
@@ -339,8 +355,11 @@ BEGIN
     WHERE r.mcp_name = p_name AND r.mcp_type = 'tool';
 
     IF v_handler.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'mcp_call_tool: Tool not found';
         RETURN api.mcp_error(-32601, 'Tool not found: ' || p_name, p_request_id);
     END IF;
+
+    RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
 
     IF p_context IS NOT NULL THEN
         IF p_context->>'user_id' IS NOT NULL THEN
@@ -352,12 +371,14 @@ BEGIN
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RAISE DEBUG 'mcp_call_tool: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
 
     BEGIN
+        RAISE DEBUG 'mcp_call_tool: Invoking handler %', v_handler.object_id;
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
         INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
@@ -366,6 +387,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'mcp_call_tool: Handler exception: %', SQLERRM;
         RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
@@ -389,6 +411,8 @@ DECLARE
     v_response api.mcp_response;
     v_handler record;
 BEGIN
+    RAISE DEBUG 'mcp_read_resource: %', p_uri;
+
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
     INTO v_handler
     FROM api.handler h
@@ -397,8 +421,11 @@ BEGIN
       AND p_uri ~ ('^' || regexp_replace(r.uri_template, '\{[^}]+\}', '[^/]+', 'g') || '$');
 
     IF v_handler.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'mcp_read_resource: Resource not found';
         RETURN api.mcp_error(-32601, 'Resource not found: ' || p_uri, p_request_id);
     END IF;
+
+    RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
 
     IF p_context IS NOT NULL THEN
         IF p_context->>'user_id' IS NOT NULL THEN
@@ -410,12 +437,14 @@ BEGIN
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RAISE DEBUG 'mcp_read_resource: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (NULL, p_uri, p_context, p_request_id)::api.mcp_request;
 
     BEGIN
+        RAISE DEBUG 'mcp_read_resource: Invoking handler %', v_handler.object_id;
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
         INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
@@ -424,6 +453,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'mcp_read_resource: Handler exception: %', SQLERRM;
         RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
@@ -448,6 +478,8 @@ DECLARE
     v_response api.mcp_response;
     v_handler record;
 BEGIN
+    RAISE DEBUG 'mcp_get_prompt: %', p_name;
+
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
     INTO v_handler
     FROM api.handler h
@@ -455,8 +487,11 @@ BEGIN
     WHERE r.mcp_name = p_name AND r.mcp_type = 'prompt';
 
     IF v_handler.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'mcp_get_prompt: Prompt not found';
         RETURN api.mcp_error(-32601, 'Prompt not found: ' || p_name, p_request_id);
     END IF;
+
+    RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
 
     IF p_context IS NOT NULL THEN
         IF p_context->>'user_id' IS NOT NULL THEN
@@ -468,12 +503,14 @@ BEGIN
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RAISE DEBUG 'mcp_get_prompt: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
 
     BEGIN
+        RAISE DEBUG 'mcp_get_prompt: Invoking handler %', v_handler.object_id;
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
         INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
@@ -482,6 +519,7 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'mcp_get_prompt: Handler exception: %', SQLERRM;
         RETURN api.mcp_error(-32603, SQLERRM, p_request_id);
     END;
 END;
