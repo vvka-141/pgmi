@@ -535,3 +535,31 @@ func TestExtractLineFromError_LineInWhere(t *testing.T) {
 		})
 	}
 }
+
+// --- pgQuoteLiteral tests ---
+
+func TestPgQuoteLiteral(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple string", "hello", "'hello'"},
+		{"empty string", "", "''"},
+		{"single quote", "it's", "'it''s'"},
+		{"multiple quotes", "don't say 'hello'", "'don''t say ''hello'''"},
+		{"path with slashes", "./__test__/auth/", "'./__test__/auth/'"},
+		{"unicode", "hello世界", "'hello世界'"},
+		{"newlines", "line1\nline2", "'line1\nline2'"},
+		{"backslash", "path\\to\\file", "'path\\to\\file'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := pgQuoteLiteral(tt.input)
+			if result != tt.expected {
+				t.Errorf("pgQuoteLiteral(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

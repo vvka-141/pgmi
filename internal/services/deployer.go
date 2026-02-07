@@ -637,6 +637,12 @@ func (s *DeploymentService) executeTestSteps(ctx context.Context, conn *pgxpool.
 		default:
 		}
 
+		// Emit step notice
+		s.emitStepNotice(ctx, conn, step)
+
+		// Emit debug for savepoint operations
+		s.emitSavepointDebug(ctx, conn, step)
+
 		// Build combined SQL: pre_exec + script_sql + post_exec
 		var combinedSQL strings.Builder
 		if step.PreExec != nil {
@@ -667,4 +673,46 @@ func (s *DeploymentService) executeTestSteps(ctx context.Context, conn *pgxpool.
 	}
 
 	return nil
+}
+
+// emitStepNotice emits a RAISE NOTICE for the current test step.
+func (s *DeploymentService) emitStepNotice(ctx context.Context, conn *pgxpool.Conn, step testdiscovery.TestScriptRow) {
+	var noticeSQL string
+	switch step.StepType {
+	case "fixture":
+		if step.ScriptPath != nil {
+			noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Fixture: %%', %s; END $$;", pgQuoteLiteral(*step.ScriptPath))
+		}
+	case "test":
+		if step.ScriptPath != nil {
+			noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Test: %%', %s; END $$;", pgQuoteLiteral(*step.ScriptPath))
+		}
+	case "teardown":
+		noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Teardown: %%', %s; END $$;", pgQuoteLiteral(step.Directory))
+	}
+	if noticeSQL != "" {
+		_, _ = conn.Exec(ctx, noticeSQL)
+	}
+}
+
+// emitSavepointDebug emits RAISE DEBUG for savepoint operations.
+func (s *DeploymentService) emitSavepointDebug(ctx context.Context, conn *pgxpool.Conn, step testdiscovery.TestScriptRow) {
+	pathOrDir := step.Directory
+	if step.ScriptPath != nil {
+		pathOrDir = *step.ScriptPath
+	}
+
+	if step.PreExec != nil && strings.Contains(*step.PreExec, "SAVEPOINT") {
+		debugSQL := fmt.Sprintf("DO $$ BEGIN RAISE DEBUG 'Creating savepoint for: %%', %s; END $$;", pgQuoteLiteral(pathOrDir))
+		_, _ = conn.Exec(ctx, debugSQL)
+	}
+	if step.PostExec != nil && strings.Contains(*step.PostExec, "ROLLBACK TO") {
+		debugSQL := fmt.Sprintf("DO $$ BEGIN RAISE DEBUG 'Rolling back savepoint for: %%', %s; END $$;", pgQuoteLiteral(pathOrDir))
+		_, _ = conn.Exec(ctx, debugSQL)
+	}
+}
+
+// pgQuoteLiteral quotes a string for use in PostgreSQL SQL.
+func pgQuoteLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
