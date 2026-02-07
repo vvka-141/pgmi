@@ -69,8 +69,7 @@ func TestSetSessionVariables_Empty(t *testing.T) {
 	}
 }
 
-func TestSetSessionVariables_InvalidKey(t *testing.T) {
-	l := NewLoader()
+func TestValidateParameterKey_InvalidKeys(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
@@ -85,9 +84,31 @@ func TestSetSessionVariables_InvalidKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := l.setSessionVariables(context.TODO(), nil, map[string]string{tt.key: "value"})
+			err := validateParameterKey(tt.key)
 			if err == nil {
 				t.Fatal("Expected error for invalid key")
+			}
+		})
+	}
+}
+
+func TestValidateParameterKey_ValidKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"simple", "mykey"},
+		{"underscore", "my_key"},
+		{"numbers", "key123"},
+		{"mixed", "key_123_test"},
+		{"max length", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, // 63 chars
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateParameterKey(tt.key)
+			if err != nil {
+				t.Fatalf("Expected no error for valid key %q, got: %v", tt.key, err)
 			}
 		})
 	}
@@ -111,13 +132,13 @@ func TestInsertMetadata_NilFiles(t *testing.T) {
 	}
 }
 
-func TestSetSessionVariables_InvalidKeyBeforeDB(t *testing.T) {
+func TestLoadParametersIntoSession_InvalidKey(t *testing.T) {
 	l := NewLoader()
 	params := map[string]string{
 		"valid_key":   "ok",
 		"invalid key": "bad",
 	}
-	err := l.setSessionVariables(context.TODO(), nil, params)
+	err := l.LoadParametersIntoSession(context.TODO(), nil, params)
 	if err == nil {
 		t.Fatal("Expected error for invalid parameter key")
 	}

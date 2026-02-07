@@ -8,20 +8,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
+	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
-	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
-	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/ui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
-	"github.com/spf13/cobra"
 )
 
 var testCmd = &cobra.Command{
@@ -156,142 +152,68 @@ func init() {
 }
 
 // buildTestConfig builds a TestConfig from CLI flags and environment.
-// This function is extracted for testability and separation of concerns.
-//
-// Parameters:
-//   - sourcePath: Path to the test directory
-//   - verbose: Enable verbose logging
-//
-// Returns:
-//   - Fully configured TestConfig ready for test execution
-//   - Error if configuration is invalid
 func buildTestConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.TestConfig, error) {
-	_ = godotenv.Load()
-
-	projectCfg, err := config.Load(sourcePath)
-	if err != nil {
-		return pgmi.TestConfig{}, fmt.Errorf("failed to load pgmi.yaml: %w", err)
-	}
-
-	granularFlags := &db.GranularConnFlags{
-		Host:     testFlags.host,
-		Port:     testFlags.port,
-		Username: testFlags.username,
-		Database: testFlags.database,
-		SSLMode:  testFlags.sslMode,
-	}
-
-	azureFlags := &db.AzureFlags{
-		Enabled:  testFlags.azure,
-		TenantID: testFlags.azureTenantID,
-		ClientID: testFlags.azureClientID,
-	}
-
-	certFlags := &db.CertFlags{
-		SSLCert:     testFlags.sslCert,
-		SSLKey:      testFlags.sslKey,
-		SSLRootCert: testFlags.sslRootCert,
-	}
-
-	connConfig, _, err := resolveConnection(testFlags.connection, granularFlags, azureFlags, certFlags, projectCfg, verbose)
+	projectCfg, err := loadProjectConfig(sourcePath)
 	if err != nil {
 		return pgmi.TestConfig{}, err
 	}
 
-	// Resolve target database: -d flag always takes precedence over connection string
-	targetDB, err := resolveTargetDatabase(
-		testFlags.database,
-		connConfig.Database,
-		true,
-		"test",
-		verbose,
-	)
+	connFlags := connectionFlags{
+		connection:    testFlags.connection,
+		host:          testFlags.host,
+		port:          testFlags.port,
+		username:      testFlags.username,
+		database:      testFlags.database,
+		sslMode:       testFlags.sslMode,
+		azure:         testFlags.azure,
+		azureTenantID: testFlags.azureTenantID,
+		azureClientID: testFlags.azureClientID,
+		sslCert:       testFlags.sslCert,
+		sslKey:        testFlags.sslKey,
+		sslRootCert:   testFlags.sslRootCert,
+	}
+
+	resolved, err := resolveConnectionFromFlags(connFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.TestConfig{}, err
 	}
 
-	// Update config with resolved target database
-	// Note: Test command doesn't need maintenance DB handling since it doesn't create databases
-	connConfig.Database = targetDB
+	targetDB, err := resolveTargetDatabase(testFlags.database, resolved.ConnConfig.Database, true, "test", verbose)
+	if err != nil {
+		return pgmi.TestConfig{}, err
+	}
+	resolved.ConnConfig.Database = targetDB
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] Connection resolved:\n")
-		fmt.Fprintf(os.Stderr, "  Host: %s\n", connConfig.Host)
-		fmt.Fprintf(os.Stderr, "  Port: %d\n", connConfig.Port)
-		fmt.Fprintf(os.Stderr, "  User: %s\n", connConfig.Username)
-		fmt.Fprintf(os.Stderr, "  Target Database: %s\n", connConfig.Database)
-		fmt.Fprintf(os.Stderr, "  SSL Mode: %s\n", connConfig.SSLMode)
-		if connConfig.SSLCert != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Cert: %s\n", connConfig.SSLCert)
-		}
-		if connConfig.SSLKey != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Key: %s\n", connConfig.SSLKey)
-		}
-		if connConfig.SSLRootCert != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Root Cert: %s\n", connConfig.SSLRootCert)
-		}
-		fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
+		logConnectionVerbose(resolved.ConnConfig, "", false)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Source path: %s\n", sourcePath)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Filter pattern: %s\n", testFlags.filter)
 	}
 
-	parameters := make(map[string]string)
-	if len(testFlags.paramsFiles) > 0 {
-		fsProvider := filesystem.NewOSFileSystem()
-		fileParams, err := loadParamsFromFiles(fsProvider, testFlags.paramsFiles, verbose)
-		if err != nil {
-			return pgmi.TestConfig{}, err
-		}
-		parameters = fileParams
-	}
-
-	// Merge pgmi.yaml params (pgmi.yaml < params-file < CLI --param)
-	if projectCfg != nil {
-		for k, v := range projectCfg.Params {
-			if _, exists := parameters[k]; !exists {
-				parameters[k] = v
-			}
-		}
-	}
-
-	cliParams, err := params.ParseKeyValuePairs(testFlags.params)
+	parameters, err := loadMergedParameters(projectCfg, testFlags.paramsFiles, testFlags.params, verbose)
 	if err != nil {
-		return pgmi.TestConfig{}, fmt.Errorf("invalid parameter format: %w", err)
+		return pgmi.TestConfig{}, err
 	}
 
-	for k, v := range cliParams {
-		parameters[k] = v
+	timeout, err := resolveEffectiveTimeout(cmd, projectCfg, testFlags.timeout)
+	if err != nil {
+		return pgmi.TestConfig{}, err
 	}
 
-	// Apply timeout from pgmi.yaml if --timeout wasn't explicitly set
-	timeout := testFlags.timeout
-	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
-		parsed, parseErr := time.ParseDuration(projectCfg.Timeout)
-		if parseErr != nil {
-			return pgmi.TestConfig{}, fmt.Errorf("invalid timeout in pgmi.yaml: %w", parseErr)
-		}
-		timeout = parsed
-	}
-
-	// Build connection string for test execution
-	connStr := db.BuildConnectionString(connConfig)
-
-	config := pgmi.TestConfig{
+	return pgmi.TestConfig{
 		SourcePath:        sourcePath,
-		DatabaseName:      connConfig.Database,
-		ConnectionString:  connStr,
+		DatabaseName:      resolved.ConnConfig.Database,
+		ConnectionString:  db.BuildConnectionString(resolved.ConnConfig),
 		Timeout:           timeout,
 		FilterPattern:     testFlags.filter,
 		ListOnly:          testFlags.list,
 		Parameters:        parameters,
 		Verbose:           verbose,
-		AuthMethod:        connConfig.AuthMethod,
-		AzureTenantID:     connConfig.AzureTenantID,
-		AzureClientID:     connConfig.AzureClientID,
-		AzureClientSecret: connConfig.AzureClientSecret,
-	}
-
-	return config, nil
+		AuthMethod:        resolved.ConnConfig.AuthMethod,
+		AzureTenantID:     resolved.ConnConfig.AzureTenantID,
+		AzureClientID:     resolved.ConnConfig.AzureClientID,
+		AzureClientSecret: resolved.ConnConfig.AzureClientSecret,
+	}, nil
 }
 
 func runTest(cmd *cobra.Command, args []string) error {

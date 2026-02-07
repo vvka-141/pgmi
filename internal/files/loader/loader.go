@@ -170,28 +170,11 @@ func (l *Loader) insertParams(ctx context.Context, conn *pgxpool.Conn, params ma
 // setSessionVariables sets PostgreSQL session variables for all CLI parameters.
 // Each parameter becomes accessible as current_setting('pgmi.key').
 //
-// Security considerations:
-//   - Parameter keys are validated (alphanumeric + underscore only)
-//   - Maximum key length: 63 characters (PostgreSQL identifier limit)
-//   - Session variables are session-scoped (not persisted across connections)
-//   - Uses parameterized queries (no SQL injection risk)
+// Precondition: All keys must be pre-validated via validateParameterKey.
+// LoadParametersIntoSession validates before calling this function.
 func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
 	if len(params) == 0 {
 		return nil
-	}
-
-	// Validate all keys before touching the database
-	keyPattern := regexp.MustCompile(`^\w+$`)
-	for key := range params {
-		if key == "" {
-			return fmt.Errorf("parameter key cannot be empty")
-		}
-		if len(key) > 63 {
-			return fmt.Errorf("parameter key %q exceeds PostgreSQL identifier limit (63 characters)", key)
-		}
-		if !keyPattern.MatchString(key) {
-			return fmt.Errorf("invalid parameter key %q: keys must be alphanumeric with underscores only", key)
-		}
 	}
 
 	batch := &pgx.Batch{}

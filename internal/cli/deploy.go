@@ -8,20 +8,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
+	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
-	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
-	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/ui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
-	"github.com/spf13/cobra"
 )
 
 var deployCmd = &cobra.Command{
@@ -164,151 +160,69 @@ func init() {
 }
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
-// This function is extracted for testability and separation of concerns.
-//
-// Parameters:
-//   - sourcePath: Path to the deployment directory
-//   - verbose: Enable verbose logging
-//
-// Returns:
-//   - Fully configured DeploymentConfig ready for deployment
-//   - Error if configuration is invalid
 func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.DeploymentConfig, error) {
-	_ = godotenv.Load()
-
-	projectCfg, err := config.Load(sourcePath)
-	if err != nil {
-		return pgmi.DeploymentConfig{}, fmt.Errorf("failed to load pgmi.yaml: %w", err)
-	}
-
-	granularFlags := &db.GranularConnFlags{
-		Host:     deployFlags.host,
-		Port:     deployFlags.port,
-		Username: deployFlags.username,
-		Database: deployFlags.database,
-		SSLMode:  deployFlags.sslMode,
-	}
-
-	azureFlags := &db.AzureFlags{
-		Enabled:  deployFlags.azure,
-		TenantID: deployFlags.azureTenantID,
-		ClientID: deployFlags.azureClientID,
-	}
-
-	certFlags := &db.CertFlags{
-		SSLCert:     deployFlags.sslCert,
-		SSLKey:      deployFlags.sslKey,
-		SSLRootCert: deployFlags.sslRootCert,
-	}
-
-	connConfig, maintenanceDB, err := resolveConnection(deployFlags.connection, granularFlags, azureFlags, certFlags, projectCfg, verbose)
+	projectCfg, err := loadProjectConfig(sourcePath)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
-	// Resolve target database: -d flag always takes precedence over connection string
-	targetDB, err := resolveTargetDatabase(
-		deployFlags.database,
-		connConfig.Database,
-		true,
-		"deploy",
-		verbose,
-	)
+	connFlags := connectionFlags{
+		connection:    deployFlags.connection,
+		host:          deployFlags.host,
+		port:          deployFlags.port,
+		username:      deployFlags.username,
+		database:      deployFlags.database,
+		sslMode:       deployFlags.sslMode,
+		azure:         deployFlags.azure,
+		azureTenantID: deployFlags.azureTenantID,
+		azureClientID: deployFlags.azureClientID,
+		sslCert:       deployFlags.sslCert,
+		sslKey:        deployFlags.sslKey,
+		sslRootCert:   deployFlags.sslRootCert,
+	}
+
+	resolved, err := resolveConnectionFromFlags(connFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
-	// Determine maintenance database for CREATE DATABASE operations
-	maintenanceDB = determineMaintenanceDB(deployFlags.database, connConfig.Database, maintenanceDB)
+	targetDB, err := resolveTargetDatabase(deployFlags.database, resolved.ConnConfig.Database, true, "deploy", verbose)
+	if err != nil {
+		return pgmi.DeploymentConfig{}, err
+	}
 
-	// Update config with resolved target database
-	connConfig.Database = targetDB
+	maintenanceDB := determineMaintenanceDB(deployFlags.database, resolved.ConnConfig.Database, resolved.MaintenanceDB)
+	resolved.ConnConfig.Database = targetDB
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] Connection resolved:\n")
-		fmt.Fprintf(os.Stderr, "  Host: %s\n", connConfig.Host)
-		fmt.Fprintf(os.Stderr, "  Port: %d\n", connConfig.Port)
-		fmt.Fprintf(os.Stderr, "  User: %s\n", connConfig.Username)
-		fmt.Fprintf(os.Stderr, "  Target Database: %s\n", connConfig.Database)
-		fmt.Fprintf(os.Stderr, "  Maintenance Database: %s\n", maintenanceDB)
-		fmt.Fprintf(os.Stderr, "  SSL Mode: %s\n", connConfig.SSLMode)
-		if connConfig.SSLCert != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Cert: %s\n", connConfig.SSLCert)
-		}
-		if connConfig.SSLKey != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Key: %s\n", connConfig.SSLKey)
-		}
-		if connConfig.SSLRootCert != "" {
-			fmt.Fprintf(os.Stderr, "  SSL Root Cert: %s\n", connConfig.SSLRootCert)
-		}
-		fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
+		logConnectionVerbose(resolved.ConnConfig, maintenanceDB, true)
 	}
 
-	// Parse parameters from files (if provided)
-	// Later files override earlier ones
-	parameters := make(map[string]string)
-	if len(deployFlags.paramsFiles) > 0 {
-		fsProvider := filesystem.NewOSFileSystem()
-		fileParams, err := loadParamsFromFiles(fsProvider, deployFlags.paramsFiles, verbose)
-		if err != nil {
-			return pgmi.DeploymentConfig{}, err
-		}
-		parameters = fileParams
-	}
-
-	// Merge pgmi.yaml params (pgmi.yaml < params-file < CLI --param)
-	if projectCfg != nil {
-		for k, v := range projectCfg.Params {
-			if _, exists := parameters[k]; !exists {
-				parameters[k] = v
-			}
-		}
-	}
-
-	cliParams, err := params.ParseKeyValuePairs(deployFlags.params)
+	parameters, err := loadMergedParameters(projectCfg, deployFlags.paramsFiles, deployFlags.params, verbose)
 	if err != nil {
-		return pgmi.DeploymentConfig{}, fmt.Errorf("invalid parameter format: %w", err)
+		return pgmi.DeploymentConfig{}, err
 	}
 
-	for k, v := range cliParams {
-		parameters[k] = v
+	timeout, err := resolveEffectiveTimeout(cmd, projectCfg, deployFlags.timeout)
+	if err != nil {
+		return pgmi.DeploymentConfig{}, err
 	}
 
-	if verbose && len(cliParams) > 0 {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParams))
-	}
-
-	// Apply timeout from pgmi.yaml if --timeout wasn't explicitly set
-	timeout := deployFlags.timeout
-	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
-		parsed, parseErr := time.ParseDuration(projectCfg.Timeout)
-		if parseErr != nil {
-			return pgmi.DeploymentConfig{}, fmt.Errorf("invalid timeout in pgmi.yaml: %w", parseErr)
-		}
-		timeout = parsed
-	}
-
-	// Build connection string for deployment
-	connStr := db.BuildConnectionString(connConfig)
-
-	// Create deployment configuration
-	config := pgmi.DeploymentConfig{
+	return pgmi.DeploymentConfig{
 		SourcePath:          sourcePath,
-		DatabaseName:        connConfig.Database,
+		DatabaseName:        resolved.ConnConfig.Database,
 		MaintenanceDatabase: maintenanceDB,
-		ConnectionString:    connStr,
+		ConnectionString:    db.BuildConnectionString(resolved.ConnConfig),
 		Overwrite:           deployFlags.overwrite,
 		Force:               deployFlags.force,
 		Parameters:          parameters,
 		Timeout:             timeout,
 		Verbose:             verbose,
-		AuthMethod:          connConfig.AuthMethod,
-		AzureTenantID:       connConfig.AzureTenantID,
-		AzureClientID:       connConfig.AzureClientID,
-		AzureClientSecret:   connConfig.AzureClientSecret,
-	}
-
-	return config, nil
+		AuthMethod:          resolved.ConnConfig.AuthMethod,
+		AzureTenantID:       resolved.ConnConfig.AzureTenantID,
+		AzureClientID:       resolved.ConnConfig.AzureClientID,
+		AzureClientSecret:   resolved.ConnConfig.AzureClientSecret,
+	}, nil
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -374,40 +288,4 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.
-// Later files override earlier ones. Returns merged parameters map.
-// This function is exported for testing purposes with injectable filesystem.
-func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles []string, verbose bool) (map[string]string, error) {
-	parameters := make(map[string]string)
-
-	for _, paramsFile := range paramsFiles {
-		if verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Loading parameters from file: %s\n", paramsFile)
-		}
-
-		// Read file content using filesystem abstraction
-		fileContent, err := fsProvider.ReadFile(paramsFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy ./migrations --database mydb --param key=value", paramsFile, err)
-		}
-
-		// Parse .env file content
-		fileParams, err := params.ParseEnvFile(fileContent)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse params file '%s': %w\n\nTip: Verify the file format (KEY=VALUE)", paramsFile, err)
-		}
-
-		// Merge params from this file (later files override earlier ones)
-		for k, v := range fileParams {
-			parameters[k] = v
-		}
-
-		if verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameters from file (total: %d)\n", len(fileParams), len(parameters))
-		}
-	}
-
-	return parameters, nil
 }
