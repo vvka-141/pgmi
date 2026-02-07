@@ -65,6 +65,11 @@ func (p *Pipeline) Process(sql string, rows []testdiscovery.TestScriptRow) (*Pre
 	expandedSQL := sql
 
 	for _, macro := range sortedMacros {
+		// Validate callback name format
+		if err := testgen.ValidateCallbackName(macro.Callback); err != nil {
+			return nil, err
+		}
+
 		// Filter rows by pattern if specified
 		filteredRows := rows
 		if macro.Pattern != "" {
@@ -132,6 +137,11 @@ func (p *Pipeline) ProcessWithTree(sql string, tree *testdiscovery.TestTree, res
 	expandedSQL := sql
 
 	for _, macro := range sortedMacros {
+		// Validate callback name format
+		if err := testgen.ValidateCallbackName(macro.Callback); err != nil {
+			return nil, err
+		}
+
 		// Filter tree by pattern
 		filteredTree := tree
 		if macro.Pattern != "" {

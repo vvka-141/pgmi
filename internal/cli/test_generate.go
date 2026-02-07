@@ -9,6 +9,7 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/services/testgen"
 	"github.com/vvka-141/pgmi/internal/testdiscovery"
+	basetestgen "github.com/vvka-141/pgmi/internal/testgen"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -81,6 +82,11 @@ func init() {
 func runTestGenerate(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
+
+	// Validate callback format early
+	if err := basetestgen.ValidateCallbackName(testGenerateFlags.callback); err != nil {
+		return err
+	}
 
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Source path: %s\n", sourcePath)

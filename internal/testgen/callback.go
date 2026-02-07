@@ -23,6 +23,14 @@ func FormatCallbackInvocation(callback, event string, path *string, dir string, 
 	}
 	return fmt.Sprintf(
 		"SELECT %s(ROW('%s', %s, '%s', %d, %d, NULL)::pg_temp.pgmi_test_event);",
-		callback, event, pathSQL, EscapeSQLString(dir), depth, ordinal,
+		EscapeQualifiedName(callback), event, pathSQL, EscapeSQLString(dir), depth, ordinal,
 	)
+}
+
+// FormatCallbackExistenceCheck generates SQL that verifies the callback function exists.
+// Uses regproc cast which fails with a clear error if the function doesn't exist.
+func FormatCallbackExistenceCheck(callback string) string {
+	literal := "'" + EscapeSQLString(callback) + "'"
+	return fmt.Sprintf(`DO $$ BEGIN PERFORM %s::regproc; EXCEPTION WHEN undefined_function THEN RAISE EXCEPTION 'Callback function "%s" does not exist. Expected signature: (pg_temp.pgmi_test_event) RETURNS void'; END $$;`,
+		literal, EscapeSQLString(callback))
 }

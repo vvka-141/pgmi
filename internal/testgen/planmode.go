@@ -52,6 +52,7 @@ func (g *PlanModeGenerator) GenerateWithCallback(rows []testdiscovery.TestScript
 
 	// Suite start callback (inside dollar-quoted block)
 	if callback != "" {
+		innerLines = append(innerLines, FormatCallbackExistenceCheck(callback))
 		innerLines = append(innerLines, FormatCallbackInvocation(callback, EventSuiteStart, nil, "", 0, 0))
 	}
 

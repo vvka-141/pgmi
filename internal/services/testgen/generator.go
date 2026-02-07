@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vvka-141/pgmi/internal/testdiscovery"
+	"github.com/vvka-141/pgmi/internal/testgen"
 )
 
 // Config configures the test script generator.
@@ -150,7 +151,7 @@ BEGIN
     END CASE;
 END $$;
 
-`, g.config.Callback))
+`, testgen.EscapeQualifiedName(g.config.Callback)))
 }
 
 // formatCallback generates a callback invocation SQL statement.
@@ -161,7 +162,7 @@ func (g *Generator) formatCallback(event string, path *string, dir string, depth
 	}
 	return fmt.Sprintf(
 		"SELECT %s(ROW('%s', %s, %s, %d, %d, NULL)::pg_temp.pgmi_test_event);",
-		g.config.Callback, event, pathSQL, pgQuoteLiteral(dir), depth, ordinal,
+		testgen.EscapeQualifiedName(g.config.Callback), event, pathSQL, pgQuoteLiteral(dir), depth, ordinal,
 	)
 }
 

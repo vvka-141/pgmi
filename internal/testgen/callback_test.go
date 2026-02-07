@@ -150,3 +150,51 @@ func TestFormatCallbackInvocation_ValidSQL(t *testing.T) {
 		t.Error("Should cast to pgmi_test_event type")
 	}
 }
+
+func TestFormatCallbackExistenceCheck(t *testing.T) {
+	tests := []struct {
+		name     string
+		callback string
+		wantSQL  string
+	}{
+		{
+			name:     "simple callback",
+			callback: "pg_temp.my_callback",
+			wantSQL:  `DO $$ BEGIN PERFORM 'pg_temp.my_callback'::regproc; EXCEPTION WHEN undefined_function THEN RAISE EXCEPTION 'Callback function "pg_temp.my_callback" does not exist. Expected signature: (pg_temp.pgmi_test_event) RETURNS void'; END $$;`,
+		},
+		{
+			name:     "callback with single quote in name",
+			callback: "pg_temp.cb's",
+			wantSQL:  `DO $$ BEGIN PERFORM 'pg_temp.cb''s'::regproc; EXCEPTION WHEN undefined_function THEN RAISE EXCEPTION 'Callback function "pg_temp.cb''s" does not exist. Expected signature: (pg_temp.pgmi_test_event) RETURNS void'; END $$;`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatCallbackExistenceCheck(tt.callback)
+			if got != tt.wantSQL {
+				t.Errorf("FormatCallbackExistenceCheck() =\n%s\nwant:\n%s", got, tt.wantSQL)
+			}
+		})
+	}
+}
+
+func TestFormatCallbackExistenceCheck_Structure(t *testing.T) {
+	result := FormatCallbackExistenceCheck("pg_temp.test_cb")
+
+	if !strings.HasPrefix(result, "DO $$") {
+		t.Error("Should start with DO $$")
+	}
+	if !strings.HasSuffix(result, "END $$;") {
+		t.Error("Should end with END $$;")
+	}
+	if !strings.Contains(result, "::regproc") {
+		t.Error("Should use regproc cast for function lookup")
+	}
+	if !strings.Contains(result, "EXCEPTION WHEN undefined_function") {
+		t.Error("Should handle undefined_function exception")
+	}
+	if !strings.Contains(result, "Expected signature:") {
+		t.Error("Should include expected signature in error message")
+	}
+}
