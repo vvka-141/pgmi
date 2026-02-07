@@ -5,16 +5,8 @@ package services
 // philosophy of keeping SQL separate from Go code.
 
 const (
-	// queryPlanCommands retrieves all planned commands from the execution plan
-	// ordered by their execution sequence.
-	queryPlanCommands = `
-		SELECT ordinal, command_sql
-		FROM pg_temp.pgmi_plan
-		ORDER BY ordinal
-	`
-
 	// queryTestScriptRows retrieves all test script rows for macro expansion.
-	// Used by the preprocessor to expand pgmi_test() and pgmi_plan_test() macros.
+	// Used by the preprocessor to expand pgmi_test() macros.
 	// Note: This is only used as a fallback when files are not available.
 	queryTestScriptRows = `
 		SELECT ordinal, step_type, script_path, directory, depth, pre_exec, script_sql, post_exec

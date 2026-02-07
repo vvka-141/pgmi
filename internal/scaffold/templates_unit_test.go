@@ -247,9 +247,10 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 			require.NoError(t, err, "ReadDeploySQL should succeed for template %s", templateName)
 			require.NotEmpty(t, content, "deploy.sql content should not be empty")
 
-			// Basic content validation
-			require.Contains(t, content, "pg_temp.pgmi_source",
-				"deploy.sql should reference pg_temp.pgmi_source table")
+			// Basic content validation - templates may use pgmi_source or pgmi_plan_view
+			hasSource := strings.Contains(content, "pg_temp.pgmi_source") || strings.Contains(content, "pg_temp.pgmi_plan_view")
+			require.True(t, hasSource,
+				"deploy.sql should reference pg_temp.pgmi_source or pg_temp.pgmi_plan_view")
 		})
 	}
 }

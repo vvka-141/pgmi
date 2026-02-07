@@ -17,7 +17,6 @@
 // The CreateSchema function installs pg_temp functions that deploy.sql can use:
 //   - pg_temp.pgmi_declare_param(): Declare parameters with type validation
 //   - pg_temp.pgmi_get_param(): Get parameter value with fallback
-//   - Planning helpers: pgmi_plan_command, pgmi_plan_file, pgmi_plan_notice, pgmi_plan_do
 //
 // These functions are session-scoped (pg_temp schema) and disappear when the
 // connection closes, ensuring clean separation between deployments.

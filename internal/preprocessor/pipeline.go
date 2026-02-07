@@ -20,21 +20,17 @@ type PreprocessResult struct {
 type Pipeline struct {
 	commentStripper CommentStripper
 	macroDetector   MacroDetector
-	planMode        bool // true for pgmi_plan_test, false for pgmi_test
 }
 
 // NewPipeline creates a new preprocessing pipeline.
-// If planMode is true, generates PERFORM pgmi_plan_command() calls.
-// If planMode is false, generates direct SQL execution.
-func NewPipeline(planMode bool) *Pipeline {
+func NewPipeline() *Pipeline {
 	return &Pipeline{
 		commentStripper: NewCommentStripper(),
 		macroDetector:   NewMacroDetector(),
-		planMode:        planMode,
 	}
 }
 
-// Process preprocesses SQL by expanding pgmi_test() or pgmi_plan_test() macros.
+// Process preprocesses SQL by expanding pgmi_test() macros.
 // Uses pre-built rows with row-level filtering (legacy interface).
 func (p *Pipeline) Process(sql string, rows []testdiscovery.TestScriptRow) (*PreprocessResult, error) {
 	result := &PreprocessResult{
@@ -76,15 +72,9 @@ func (p *Pipeline) Process(sql string, rows []testdiscovery.TestScriptRow) (*Pre
 			filteredRows = testdiscovery.FilterByPattern(rows, macro.Pattern)
 		}
 
-		// Generate expansion based on mode
-		var generated *testgen.GeneratedSQL
-		if p.planMode || macro.Name == "pgmi_plan_test" {
-			generator := testgen.NewPlanModeGenerator()
-			generated = generator.GenerateWithCallback(filteredRows, macro.Callback)
-		} else {
-			generator := testgen.NewDirectGenerator()
-			generated = generator.GenerateWithCallback(filteredRows, macro.Callback)
-		}
+		// Generate expansion using direct execution
+		generator := testgen.NewDirectGenerator()
+		generated := generator.GenerateWithCallback(filteredRows, macro.Callback)
 
 		// Extract macro text from stripped SQL and find it in expandedSQL
 		// Since we process in reverse order, use LastIndex to find the rightmost occurrence
@@ -155,15 +145,9 @@ func (p *Pipeline) ProcessWithTree(sql string, tree *testdiscovery.TestTree, res
 			return nil, err
 		}
 
-		// Generate expansion based on mode
-		var generated *testgen.GeneratedSQL
-		if p.planMode || macro.Name == "pgmi_plan_test" {
-			generator := testgen.NewPlanModeGenerator()
-			generated = generator.GenerateWithCallback(rows, macro.Callback)
-		} else {
-			generator := testgen.NewDirectGenerator()
-			generated = generator.GenerateWithCallback(rows, macro.Callback)
-		}
+		// Generate expansion using direct execution
+		generator := testgen.NewDirectGenerator()
+		generated := generator.GenerateWithCallback(rows, macro.Callback)
 
 		// Extract macro text from stripped SQL and find it in expandedSQL
 		macroText := strippedSQL[macro.StartPos:macro.EndPos]

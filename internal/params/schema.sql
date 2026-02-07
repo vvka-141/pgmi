@@ -1,7 +1,6 @@
 -- Clean up
 DROP TABLE IF EXISTS pg_temp.pgmi_source CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_parameter CASCADE;
-DROP TABLE IF EXISTS pg_temp.pgmi_plan CASCADE;
 DROP TABLE IF EXISTS pg_temp.pgmi_test_plan CASCADE;
 
 -- Merged parameters table: CLI loader inserts with value, pgmi_declare_param enriches with metadata
@@ -185,18 +184,6 @@ COMMENT ON VIEW pg_temp.pgmi_plan_view IS
 GRANT SELECT ON TABLE pg_temp.pgmi_plan_view TO PUBLIC;
 
 
-
-
-CREATE TEMP TABLE pgmi_plan
-(
-	ordinal INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-	command_sql text NOT NULL
-);
-
--- Grant SELECT and INSERT to allow plan building after role switch
--- Simple permission model: no privilege escalation needed for session-scoped temp table
-GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_plan TO PUBLIC;
-
 -- ============================================================================
 -- Test Source Table (Session-Scoped)
 -- ============================================================================
@@ -245,14 +232,13 @@ GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_plan TO PUBLIC;
 -- Test Event Type for Callback Support
 -- ============================================================================
 -- Composite type for test lifecycle events. Used by pgmi_test() macro
--- and pgmi_plan_tests() function during test execution.
+-- during test execution.
 --
 -- Events: suite_start, suite_end, fixture_start, fixture_end, test_start,
 --         test_end, rollback, teardown_start, teardown_end
 --
 -- Usage:
 --   SELECT pgmi_test('./path/**');  -- Preprocessor macro
---   PERFORM pg_temp.pgmi_plan_tests('.*auth.*');  -- SQL function
 CREATE TYPE pg_temp.pgmi_test_event AS (
     event       TEXT,       -- Event name (suite_start, test_end, rollback, etc.)
     path        TEXT,       -- Script path (NULL for suite/teardown events)
@@ -551,78 +537,6 @@ AS $$
     SELECT COALESCE(current_setting('pgmi.' || p_key, true), p_default);
 $$;
 
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_command(command_sql text) RETURNS pg_temp.pgmi_plan AS
-$$
-	INSERT INTO pg_temp.pgmi_plan(command_sql)
-	VALUES ($1) RETURNING *;
-$$ LANGUAGE sql;
-
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_do(plpgsql_code text) RETURNS pg_temp.pgmi_plan AS
-$$
-	SELECT pg_temp.pgmi_plan_command(
-		'DO ' || txt.boundary || ' ' || $1 || ' ' || txt.boundary || ';'
-	)
-	FROM (SELECT '$pgmi_' || md5($1) || '$') AS txt(boundary)
-$$ LANGUAGE sql;
-
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_do(body text, VARIADIC args text[])
-RETURNS pg_temp.pgmi_plan AS
-$$
-    WITH formatted AS (
-        SELECT format(body, VARIADIC args) AS body_text
-    ),
-    delimited AS (
-        SELECT
-            body_text,
-            '$pgmi_' || md5(body_text) || '$' AS boundary
-        FROM formatted
-    )
-    SELECT pg_temp.pgmi_plan_command(
-        'DO ' || boundary || ' ' || body_text || ' ' || boundary || ';'
-    )
-    FROM delimited
-$$ LANGUAGE sql;
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_file(path text) RETURNS pg_temp.pgmi_plan AS
-$$
-DECLARE
-    v_content TEXT;
-BEGIN
-    SELECT f.content INTO STRICT v_content
-    FROM pg_temp.pgmi_source AS f
-    WHERE f.path = $1;
-
-    RETURN pg_temp.pgmi_plan_command(v_content);
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        RAISE EXCEPTION 'File "%" not found in registered files. Use pgmi_register_file() to register it first.', $1;
-    WHEN TOO_MANY_ROWS THEN
-        RAISE EXCEPTION 'Multiple files found with path "%" (this should not happen - check for duplicates).', $1;
-END;
-$$ LANGUAGE plpgsql;
-
--- Convenience function for simple RAISE NOTICE statements without explicit BEGIN/END blocks
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_notice(message text)
-RETURNS pg_temp.pgmi_plan AS
-$$
-    SELECT pg_temp.pgmi_plan_command(
-        'DO $pgmi_notice$ BEGIN RAISE NOTICE ' || quote_literal(message) || '; END $pgmi_notice$;'
-    )
-$$ LANGUAGE sql;
-
--- Overload with format placeholders (uses format() syntax with %s, %I, %L)
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_notice(message text, VARIADIC args text[])
-RETURNS pg_temp.pgmi_plan AS
-$$
-    SELECT pg_temp.pgmi_plan_command(
-        'DO $pgmi_notice$ BEGIN RAISE NOTICE ' ||
-        quote_literal(format(message, VARIADIC args)) ||
-        '; END $pgmi_notice$;'
-    )
-$$ LANGUAGE sql;
 
 -- ============================================================================
 -- Test Plan Persistence Helper

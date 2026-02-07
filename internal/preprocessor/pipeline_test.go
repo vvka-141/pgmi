@@ -8,14 +8,14 @@ import (
 )
 
 func TestNewPipeline(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 	if p == nil {
 		t.Fatal("NewPipeline() returned nil")
 	}
 }
 
 func TestPipeline_Process_NoMacros(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `
 		SELECT 1;
@@ -38,7 +38,7 @@ func TestPipeline_Process_NoMacros(t *testing.T) {
 }
 
 func TestPipeline_Process_DirectMode_SingleMacro(t *testing.T) {
-	p := NewPipeline(false) // direct mode
+	p := NewPipeline() // direct mode
 
 	sql := `SELECT pgmi_test();`
 	rows := []testdiscovery.TestScriptRow{
@@ -66,31 +66,8 @@ func TestPipeline_Process_DirectMode_SingleMacro(t *testing.T) {
 	}
 }
 
-func TestPipeline_Process_PlanMode_SingleMacro(t *testing.T) {
-	p := NewPipeline(true) // plan mode
-
-	sql := `PERFORM pgmi_plan_test();`
-	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 'test';"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-	}
-
-	result, err := p.Process(sql, rows)
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-
-	if result.MacroCount != 1 {
-		t.Errorf("MacroCount = %d, expected 1", result.MacroCount)
-	}
-
-	// Should contain PERFORM pg_temp.pgmi_plan_command
-	if !strings.Contains(result.ExpandedSQL, "PERFORM pg_temp.pgmi_plan_command") {
-		t.Errorf("ExpandedSQL should contain PERFORM calls, got: %s", result.ExpandedSQL)
-	}
-}
-
 func TestPipeline_Process_WithPattern(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT pgmi_test('./a/__test__/**');`
 	rows := []testdiscovery.TestScriptRow{
@@ -117,7 +94,7 @@ func TestPipeline_Process_WithPattern(t *testing.T) {
 }
 
 func TestPipeline_Process_EmptyRows(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT pgmi_test();`
 	rows := []testdiscovery.TestScriptRow{}
@@ -134,7 +111,7 @@ func TestPipeline_Process_EmptyRows(t *testing.T) {
 }
 
 func TestPipeline_Process_SourceMap(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT pgmi_test();`
 	rows := []testdiscovery.TestScriptRow{
@@ -152,7 +129,7 @@ func TestPipeline_Process_SourceMap(t *testing.T) {
 }
 
 func TestPipeline_Process_MultipleMacros(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `
 		SELECT pgmi_test('./a/**');
@@ -179,7 +156,7 @@ func TestPipeline_Process_MultipleMacros(t *testing.T) {
 }
 
 func TestPipeline_Process_PreservesNonMacroContent(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `
 		-- Header comment
@@ -206,7 +183,7 @@ func TestPipeline_Process_PreservesNonMacroContent(t *testing.T) {
 // TestPipeline_ProcessWithTree tests the tree-based interface
 
 func TestPipeline_ProcessWithTree_NoMacros(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT 1; SELECT 2;`
 	tree := testdiscovery.NewTestTree()
@@ -226,7 +203,7 @@ func TestPipeline_ProcessWithTree_NoMacros(t *testing.T) {
 }
 
 func TestPipeline_ProcessWithTree_FilteredSavepointsAreSequential(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	// Create tree with two directories
 	tree := testdiscovery.NewTestTree()
@@ -270,7 +247,7 @@ func TestPipeline_ProcessWithTree_FilteredSavepointsAreSequential(t *testing.T) 
 }
 
 func TestPipeline_ProcessWithTree_PreservesAncestorFixtures(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	// Create nested structure
 	tree := testdiscovery.NewTestTree()
@@ -307,7 +284,7 @@ func TestPipeline_ProcessWithTree_PreservesAncestorFixtures(t *testing.T) {
 }
 
 func TestPipeline_ProcessWithTree_EmptyPatternUsesAllTests(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	tree := testdiscovery.NewTestTree()
 
@@ -337,7 +314,7 @@ func TestPipeline_ProcessWithTree_EmptyPatternUsesAllTests(t *testing.T) {
 }
 
 func TestPipeline_ProcessWithTree_MultipleMacrosDifferentPatterns(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	tree := testdiscovery.NewTestTree()
 
@@ -377,7 +354,7 @@ func TestPipeline_ProcessWithTree_MultipleMacrosDifferentPatterns(t *testing.T) 
 }
 
 func TestPipeline_ProcessWithTree_CallbackPropagation(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT pgmi_test('./t/**', 'pg_temp.my_cb');`
 
@@ -410,7 +387,7 @@ func TestPipeline_ProcessWithTree_CallbackPropagation(t *testing.T) {
 }
 
 func TestPipeline_ProcessWithTree_NoCallbackNoEvents(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	// No callback in macro call
 	sql := `SELECT pgmi_test('./t/**');`
@@ -434,7 +411,7 @@ func TestPipeline_ProcessWithTree_NoCallbackNoEvents(t *testing.T) {
 }
 
 func TestPipeline_Process_CallbackPropagation(t *testing.T) {
-	p := NewPipeline(false)
+	p := NewPipeline()
 
 	sql := `SELECT pgmi_test('./t/**', 'pg_temp.observer');`
 	rows := []testdiscovery.TestScriptRow{

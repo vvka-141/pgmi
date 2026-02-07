@@ -31,18 +31,6 @@ func TestMacroDetector_Detect_BasicCalls(t *testing.T) {
 			expectedName: "pgmi_test",
 			expectedPat:  "./users/**",
 		},
-		{
-			name:         "pgmi_plan_test with no args",
-			input:        "pgmi_plan_test()",
-			expectedName: "pgmi_plan_test",
-			expectedPat:  "",
-		},
-		{
-			name:         "pgmi_plan_test with pattern",
-			input:        "pgmi_plan_test('./api/*')",
-			expectedName: "pgmi_plan_test",
-			expectedPat:  "./api/*",
-		},
 	}
 
 	for _, tt := range tests {
@@ -83,12 +71,6 @@ func TestMacroDetector_Detect_SchemaQualified(t *testing.T) {
 			expectedPat:  "./migrations/**",
 		},
 		{
-			name:         "pg_temp.pgmi_plan_test()",
-			input:        "pg_temp.pgmi_plan_test()",
-			expectedName: "pgmi_plan_test",
-			expectedPat:  "",
-		},
-		{
 			name:         "SELECT pg_temp.pgmi_test()",
 			input:        "SELECT pg_temp.pgmi_test();",
 			expectedName: "pgmi_test",
@@ -105,12 +87,6 @@ func TestMacroDetector_Detect_SchemaQualified(t *testing.T) {
 			input:        "SELECT pg_temp.pgmi_test('./api/**');",
 			expectedName: "pgmi_test",
 			expectedPat:  "./api/**",
-		},
-		{
-			name:         "SELECT pg_temp.pgmi_plan_test()",
-			input:        "SELECT pg_temp.pgmi_plan_test();",
-			expectedName: "pgmi_plan_test",
-			expectedPat:  "",
 		},
 	}
 
@@ -254,13 +230,13 @@ func TestMacroDetector_Detect_MultipleMacros(t *testing.T) {
 	}{
 		{
 			name:     "Two macros on same line",
-			input:    "pgmi_test(); pgmi_plan_test();",
-			expected: []string{"pgmi_test", "pgmi_plan_test"},
+			input:    "pgmi_test(); pgmi_test('./users/**');",
+			expected: []string{"pgmi_test", "pgmi_test"},
 		},
 		{
 			name:     "Two macros on different lines",
-			input:    "pgmi_test();\npgmi_plan_test();",
-			expected: []string{"pgmi_test", "pgmi_plan_test"},
+			input:    "pgmi_test();\npgmi_test('./api/**');",
+			expected: []string{"pgmi_test", "pgmi_test"},
 		},
 		{
 			name:     "Same macro twice",
@@ -269,8 +245,8 @@ func TestMacroDetector_Detect_MultipleMacros(t *testing.T) {
 		},
 		{
 			name:     "Three macros with patterns",
-			input:    "pgmi_test();\npgmi_test('./api/**');\npgmi_plan_test('./db/**');",
-			expected: []string{"pgmi_test", "pgmi_test", "pgmi_plan_test"},
+			input:    "pgmi_test();\npgmi_test('./api/**');\npgmi_test('./db/**');",
+			expected: []string{"pgmi_test", "pgmi_test", "pgmi_test"},
 		},
 	}
 
@@ -450,15 +426,13 @@ COMMIT;`,
 			expectedNames: []string{"pgmi_test"},
 		},
 		{
-			name: "Advanced template planning mode",
+			name: "Advanced template direct mode",
 			input: `DO $$
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    SELECT pgmi_plan_test('./api/**');
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    SELECT pgmi_test('./api/**');
 END $$;`,
 			expectedCount: 1,
-			expectedNames: []string{"pgmi_plan_test"},
+			expectedNames: []string{"pgmi_test"},
 		},
 		{
 			name: "Mixed direct and pattern with proper SQL syntax",
@@ -515,10 +489,8 @@ func BenchmarkMacroDetector_Detect(b *testing.B) {
 	detector := NewMacroDetector()
 	input := `DO $$
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
     pgmi_test('./users/**');
-    pgmi_plan_test('./api/**');
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+    pgmi_test('./api/**');
 END $$;`
 
 	b.ResetTimer()
@@ -582,13 +554,6 @@ func TestMacroDetector_Detect_WithCallback(t *testing.T) {
 			wantName: "pgmi_test",
 			wantPat:  "",
 			wantCb:   "",
-		},
-		{
-			name:     "plan_test with callback",
-			input:    "SELECT pgmi_plan_test('./t/**', 'pg_temp.obs');",
-			wantName: "pgmi_plan_test",
-			wantPat:  "./t/**",
-			wantCb:   "pg_temp.obs",
 		},
 		{
 			name:     "spaces around args",

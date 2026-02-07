@@ -564,7 +564,6 @@ $$;
 --
 -- Usage in macros:
 --   SELECT pgmi_test('./api/**', 'pg_temp.test_observer');
---   SELECT pgmi_plan_test('./api/**', 'pg_temp.test_observer');
 
 CREATE OR REPLACE FUNCTION pg_temp.test_observer(e pg_temp.pgmi_test_event)
 RETURNS void LANGUAGE plpgsql AS $$

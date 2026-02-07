@@ -133,15 +133,10 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	}
 	defer session.Close()
 
-	// Execute deploy.sql (populates pg_temp.pgmi_plan table)
+	// Execute deploy.sql (direct execution - no deferred plan)
 	// Pass files for tree-level filtering (correct sequential savepoints when filtering tests)
 	if err := s.executeDeploySQLWithFiles(ctx, session.Conn(), config.SourcePath, session.ScanResult().Files); err != nil {
 		return fmt.Errorf("deploy.sql execution failed: %w", err)
-	}
-
-	// Execute commands from pg_temp.pgmi_plan table
-	if err := s.executePlannedCommands(ctx, session.Conn()); err != nil {
-		return fmt.Errorf("command execution failed: %w", err)
 	}
 
 	s.logger.Info("✓ Deployment completed successfully")
@@ -179,8 +174,7 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 }
 
 // executeDeploySQL reads, preprocesses, and executes the deploy.sql file.
-// deploy.sql populates the pg_temp.pgmi_plan table with commands to be executed.
-// Preprocessing expands pgmi_test() and pgmi_plan_test() macros to executable SQL.
+// Preprocessing expands pgmi_test() macros to executable SQL.
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
@@ -210,7 +204,7 @@ func (s *DeploymentService) executeDeploySQLWithFiles(
 	if files != nil {
 		// Use tree-level filtering (preferred - produces correct sequential savepoints)
 		tree, resolver := s.buildTestTreeAndResolver(files)
-		pipeline := preprocessor.NewPipeline(false)
+		pipeline := preprocessor.NewPipeline()
 		result, err = pipeline.ProcessWithTree(deploySQL, tree, resolver)
 	} else {
 		// Fallback to row-level filtering from pgmi_test_plan
@@ -218,7 +212,7 @@ func (s *DeploymentService) executeDeploySQLWithFiles(
 		if fetchErr != nil {
 			return fmt.Errorf("failed to fetch test script rows: %w", fetchErr)
 		}
-		pipeline := preprocessor.NewPipeline(false)
+		pipeline := preprocessor.NewPipeline()
 		result, err = pipeline.Process(deploySQL, testRows)
 	}
 
@@ -363,63 +357,6 @@ func (s *DeploymentService) fetchTestScriptRows(ctx context.Context, conn *pgxpo
 	}
 
 	return result, nil
-}
-
-// executePlannedCommands reads and executes all commands from pg_temp.pgmi_plan table.
-func (s *DeploymentService) executePlannedCommands(ctx context.Context, conn *pgxpool.Conn) error {
-	s.logger.Verbose("Executing planned commands from pg_temp.pgmi_plan...")
-
-	// Query all commands ordered by ordinal
-	rows, err := conn.Query(ctx, queryPlanCommands)
-	if err != nil {
-		return fmt.Errorf("failed to query pg_temp.pgmi_plan: %w", err)
-	}
-
-	// Read all commands into memory first, then close the query
-	type command struct {
-		ordinal int
-		sql     string
-	}
-	var commands []command
-
-	for rows.Next() {
-		var cmd command
-		if err := rows.Scan(&cmd.ordinal, &cmd.sql); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to scan command row: %w", err)
-		}
-		commands = append(commands, cmd)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading command rows: %w", err)
-	}
-
-	// Now execute each command sequentially
-	for _, cmd := range commands {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("deployment cancelled: %w", ctx.Err())
-		default:
-		}
-
-		s.logger.Verbose("Executing command %d...", cmd.ordinal)
-
-		_, err = conn.Exec(ctx, cmd.sql)
-		if err != nil {
-			// Show preview of failed command for debugging
-			preview := cmd.sql
-			if len(preview) > pgmi.MaxErrorPreviewLength {
-				preview = preview[:pgmi.MaxErrorPreviewLength] + "..."
-			}
-			return fmt.Errorf("command %d execution failed (%s): %w",
-				cmd.ordinal, preview, errors.Join(pgmi.ErrExecutionFailed, err))
-		}
-	}
-
-	s.logger.Info("✓ Executed %d command(s) successfully", len(commands))
-	return nil
 }
 
 // handleOverwrite handles the database drop and recreate workflow.
