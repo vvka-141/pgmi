@@ -244,15 +244,15 @@ GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_test_plan TO PUBLIC;
 -- ============================================================================
 -- Test Event Type for Callback Support
 -- ============================================================================
--- Composite type for test lifecycle events. Used by pgmi_test() and pgmi_plan_test()
--- macros to invoke custom callback functions during test execution.
+-- Composite type for test lifecycle events. Used by pgmi_test() macro
+-- and pgmi_plan_tests() function during test execution.
 --
 -- Events: suite_start, suite_end, fixture_start, fixture_end, test_start,
 --         test_end, rollback, teardown_start, teardown_end
 --
 -- Usage:
---   SELECT pgmi_test('./path/**', 'pg_temp.my_callback');
---   SELECT pgmi_plan_test(NULL, 'pg_temp.my_observer');
+--   SELECT pgmi_test('./path/**');  -- Preprocessor macro
+--   PERFORM pg_temp.pgmi_plan_tests('.*auth.*');  -- SQL function
 CREATE TYPE pg_temp.pgmi_test_event AS (
     event       TEXT,       -- Event name (suite_start, test_end, rollback, etc.)
     path        TEXT,       -- Script path (NULL for suite/teardown events)
