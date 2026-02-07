@@ -185,7 +185,10 @@ func buildTestTreeAndResolver(files []pgmi.FileMetadata) (*testdiscovery.TestTre
 
 	sources := testdiscovery.ConvertFromFileMetadata(files)
 	discoverer := testdiscovery.NewDiscoverer(nil)
-	tree, _ := discoverer.Discover(sources)
+	tree, err := discoverer.Discover(sources)
+	if err != nil {
+		return testdiscovery.NewTestTree(), resolver
+	}
 
 	return tree, resolver
 }

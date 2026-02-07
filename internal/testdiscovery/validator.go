@@ -91,15 +91,15 @@ func (v *SavepointValidator) validateDirectoryStructure(rows []TestScriptRow, re
 		dirPresent[row.Directory] = true
 
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			if _, exists := dirFixtures[row.Directory]; !exists {
 				dirFixtures[row.Directory] = row.Ordinal
 			}
-		case "test":
+		case StepTypeTest:
 			if _, exists := dirFirstTest[row.Directory]; !exists {
 				dirFirstTest[row.Directory] = row.Ordinal
 			}
-		case "teardown":
+		case StepTypeTeardown:
 			dirTeardowns[row.Directory]++
 		}
 	}

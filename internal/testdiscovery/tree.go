@@ -1,5 +1,12 @@
 package testdiscovery
 
+// Step type constants for test execution plan.
+const (
+	StepTypeFixture  = "fixture"
+	StepTypeTest     = "test"
+	StepTypeTeardown = "teardown"
+)
+
 // Source represents a file from pgmi_source table.
 // This is the input to the test discovery process.
 type Source struct {

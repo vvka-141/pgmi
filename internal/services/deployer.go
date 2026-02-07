@@ -257,7 +257,10 @@ func (s *DeploymentService) buildTestTreeAndResolver(files []pgmi.FileMetadata) 
 	// Discover test tree
 	sources := testdiscovery.ConvertFromFileMetadata(files)
 	discoverer := testdiscovery.NewDiscoverer(nil)
-	tree, _ := discoverer.Discover(sources)
+	tree, err := discoverer.Discover(sources)
+	if err != nil {
+		return testdiscovery.NewTestTree(), resolver
+	}
 
 	return tree, resolver
 }
@@ -537,13 +540,13 @@ func (s *DeploymentService) listTestSteps(steps []testdiscovery.TestScriptRow, f
 	for _, step := range steps {
 		stepLabel := "Test"
 		switch step.StepType {
-		case "fixture":
+		case testdiscovery.StepTypeFixture:
 			stepLabel = "Fixture"
 			fixtureCount++
-		case "teardown":
+		case testdiscovery.StepTypeTeardown:
 			stepLabel = "Teardown"
 			teardownCount++
-		case "test":
+		case testdiscovery.StepTypeTest:
 			testCount++
 		}
 
@@ -616,15 +619,15 @@ func (s *DeploymentService) executeTestSteps(ctx context.Context, conn *pgxpool.
 func (s *DeploymentService) emitStepNotice(ctx context.Context, conn *pgxpool.Conn, step testdiscovery.TestScriptRow) {
 	var noticeSQL string
 	switch step.StepType {
-	case "fixture":
+	case testdiscovery.StepTypeFixture:
 		if step.ScriptPath != nil {
 			noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Fixture: %%', %s; END $$;", pgQuoteLiteral(*step.ScriptPath))
 		}
-	case "test":
+	case testdiscovery.StepTypeTest:
 		if step.ScriptPath != nil {
 			noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Test: %%', %s; END $$;", pgQuoteLiteral(*step.ScriptPath))
 		}
-	case "teardown":
+	case testdiscovery.StepTypeTeardown:
 		noticeSQL = fmt.Sprintf("DO $$ BEGIN RAISE NOTICE 'Teardown: %%', %s; END $$;", pgQuoteLiteral(step.Directory))
 	}
 	if noticeSQL != "" {

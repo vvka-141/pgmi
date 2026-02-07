@@ -81,13 +81,13 @@ func (g *Generator) Generate(steps []testdiscovery.TestScriptRow, sourcePath, fi
 	for _, step := range steps {
 		ordinal++
 		switch step.StepType {
-		case "fixture":
+		case testdiscovery.StepTypeFixture:
 			fixtureCount++
 			g.writeFixtureWithCallback(&sb, step, ordinal)
-		case "test":
+		case testdiscovery.StepTypeTest:
 			testCount++
 			g.writeTestWithCallback(&sb, step, ordinal)
-		case "teardown":
+		case testdiscovery.StepTypeTeardown:
 			teardownCount++
 			g.writeTeardownWithCallback(&sb, step, ordinal)
 		}

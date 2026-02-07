@@ -38,7 +38,7 @@ func TestGenerator_SingleTest(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "fixture",
+			StepType:   testdiscovery.StepTypeFixture,
 			ScriptPath: ptr("./__test__/_setup.sql"),
 			Directory:  "./__test__/",
 			Depth:      0,
@@ -47,7 +47,7 @@ func TestGenerator_SingleTest(t *testing.T) {
 		},
 		{
 			Ordinal:    2,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test_example.sql"),
 			Directory:  "./__test__/",
 			Depth:      0,
@@ -57,7 +57,7 @@ func TestGenerator_SingleTest(t *testing.T) {
 		},
 		{
 			Ordinal:   3,
-			StepType:  "teardown",
+			StepType:  testdiscovery.StepTypeTeardown,
 			Directory: "./__test__/",
 			Depth:     0,
 			PreExec:   ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
@@ -121,7 +121,7 @@ func TestGenerator_WithoutNotices(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test_example.sql"),
 			Directory:  "./__test__/",
 			ScriptSQL:  ptr("SELECT 1;"),
@@ -145,7 +145,7 @@ func TestGenerator_WithDebug(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test_example.sql"),
 			Directory:  "./__test__/",
 			PreExec:    ptr("SAVEPOINT __pgmi_0__;"),
@@ -166,7 +166,7 @@ func TestGenerator_QuotesSpecialCharacters(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test_with'quote.sql"),
 			Directory:  "./__test__/",
 			ScriptSQL:  ptr("SELECT 1;"),
@@ -240,7 +240,7 @@ func TestGenerator_WithCallback_EmitsAllEvents(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "fixture",
+			StepType:   testdiscovery.StepTypeFixture,
 			ScriptPath: ptr("./__test__/_setup.sql"),
 			Directory:  "./__test__/",
 			Depth:      0,
@@ -249,7 +249,7 @@ func TestGenerator_WithCallback_EmitsAllEvents(t *testing.T) {
 		},
 		{
 			Ordinal:    2,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test_example.sql"),
 			Directory:  "./__test__/",
 			Depth:      0,
@@ -259,7 +259,7 @@ func TestGenerator_WithCallback_EmitsAllEvents(t *testing.T) {
 		},
 		{
 			Ordinal:   3,
-			StepType:  "teardown",
+			StepType:  testdiscovery.StepTypeTeardown,
 			Directory: "./__test__/",
 			Depth:     0,
 			PreExec:   ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
@@ -308,7 +308,7 @@ func TestGenerator_WithCallback_TypeCast(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test.sql"),
 			Directory:  "./__test__/",
 			ScriptSQL:  ptr("SELECT 1;"),
@@ -329,7 +329,7 @@ func TestGenerator_WithoutCallback_NoCallbackContent(t *testing.T) {
 	steps := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: ptr("./__test__/test.sql"),
 			Directory:  "./__test__/",
 			ScriptSQL:  ptr("SELECT 1;"),

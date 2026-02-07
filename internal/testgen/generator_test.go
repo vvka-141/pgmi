@@ -31,7 +31,7 @@ func TestDirectGenerator_Generate_SingleSavepoint(t *testing.T) {
 	rows := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:   1,
-			StepType:  "teardown",
+			StepType:  testdiscovery.StepTypeTeardown,
 			PreExec:   testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
 			PostExec:  testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"),
 			Directory: "./test/__test__",
@@ -50,7 +50,7 @@ func TestDirectGenerator_Generate_TestExecution(t *testing.T) {
 	rows := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "test",
+			StepType:   testdiscovery.StepTypeTest,
 			ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"),
 			ScriptSQL:  testdiscovery.Ptr("SELECT 1;"),
 			PreExec:    testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
@@ -80,7 +80,7 @@ func TestDirectGenerator_Generate_FixtureExecution(t *testing.T) {
 	rows := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:    1,
-			StepType:   "fixture",
+			StepType:   testdiscovery.StepTypeFixture,
 			ScriptPath: testdiscovery.Ptr("./test/__test__/00_fixture.sql"),
 			ScriptSQL:  testdiscovery.Ptr("CREATE TABLE test_data(id int);"),
 			PreExec:    testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"),
@@ -101,7 +101,7 @@ func TestDirectGenerator_Generate_Teardown(t *testing.T) {
 	rows := []testdiscovery.TestScriptRow{
 		{
 			Ordinal:   1,
-			StepType:  "teardown",
+			StepType:  testdiscovery.StepTypeTeardown,
 			PreExec:   testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"),
 			PostExec:  testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"),
 			Directory: "./test/__test__",
@@ -121,9 +121,9 @@ func TestDirectGenerator_Generate_Teardown(t *testing.T) {
 func TestDirectGenerator_Generate_CompleteSequence(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./test/__test__/00_fixture.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
-		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
-		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeFixture, ScriptPath: testdiscovery.Ptr("./test/__test__/00_fixture.sql"), ScriptSQL: testdiscovery.Ptr("-- fixture"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 2, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("-- test"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./test/__test__"},
+		{Ordinal: 3, StepType: testdiscovery.StepTypeTeardown, PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -148,7 +148,7 @@ func TestDirectGenerator_Generate_CompleteSequence(t *testing.T) {
 func TestDirectGenerator_Generate_SourceMap(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -164,7 +164,7 @@ func TestDirectGenerator_Generate_SourceMap(t *testing.T) {
 func TestDirectGenerator_Generate_SourceMap_ResolvesCorrectly(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./a/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./a/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./a/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -186,7 +186,7 @@ func TestDirectGenerator_Generate_MultilineContent(t *testing.T) {
 	g := NewDirectGenerator()
 	multilineSQL := "SELECT 1;\nSELECT 2;\nSELECT 3;"
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr(multilineSQL), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr(multilineSQL), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)
@@ -211,7 +211,7 @@ func getSourceMap() *sourcemap.SourceMap {
 func TestDirectGenerator_GenerateWithCallback_EmptyCallback(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.GenerateWithCallback(rows, "")
@@ -230,9 +230,9 @@ func TestDirectGenerator_GenerateWithCallback_EmptyCallback(t *testing.T) {
 func TestDirectGenerator_GenerateWithCallback_WithCallback(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "fixture", ScriptPath: testdiscovery.Ptr("./t/_setup.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
-		{Ordinal: 2, StepType: "test", ScriptPath: testdiscovery.Ptr("./t/test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 2;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./t/", Depth: 0},
-		{Ordinal: 3, StepType: "teardown", PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeFixture, ScriptPath: testdiscovery.Ptr("./t/_setup.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
+		{Ordinal: 2, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./t/test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 2;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_1__;"), PostExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_1__;"), Directory: "./t/", Depth: 0},
+		{Ordinal: 3, StepType: testdiscovery.StepTypeTeardown, PreExec: testdiscovery.Ptr("ROLLBACK TO SAVEPOINT __pgmi_0__;"), PostExec: testdiscovery.Ptr("RELEASE SAVEPOINT __pgmi_0__;"), Directory: "./t/", Depth: 0},
 	}
 
 	result := g.GenerateWithCallback(rows, "pg_temp.observer")
@@ -305,7 +305,7 @@ func TestDirectGenerator_GenerateWithCallback_EmptyRows(t *testing.T) {
 func TestDirectGenerator_Generate_DelegatesToGenerateWithCallback(t *testing.T) {
 	g := NewDirectGenerator()
 	rows := []testdiscovery.TestScriptRow{
-		{Ordinal: 1, StepType: "test", ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
+		{Ordinal: 1, StepType: testdiscovery.StepTypeTest, ScriptPath: testdiscovery.Ptr("./test/__test__/01_test.sql"), ScriptSQL: testdiscovery.Ptr("SELECT 1;"), PreExec: testdiscovery.Ptr("SAVEPOINT __pgmi_0__;"), Directory: "./test/__test__"},
 	}
 
 	result := g.Generate(rows)

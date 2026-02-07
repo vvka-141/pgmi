@@ -69,8 +69,8 @@ func TestPlanBuilder_Build_SingleTest(t *testing.T) {
 	}
 
 	// First row: test execution with pre-exec savepoint
-	if rows[0].StepType != "test" {
-		t.Errorf("rows[0].StepType = %q, expected %q", rows[0].StepType, "test")
+	if rows[0].StepType != StepTypeTest {
+		t.Errorf("rows[0].StepType = %q, expected %q", rows[0].StepType, StepTypeTest)
 	}
 	if rows[0].PreExec == nil || *rows[0].PreExec != "SAVEPOINT __pgmi_0__;" {
 		t.Errorf("rows[0].PreExec = %v, expected SAVEPOINT __pgmi_0__;", rows[0].PreExec)
@@ -88,8 +88,8 @@ func TestPlanBuilder_Build_SingleTest(t *testing.T) {
 
 	// Last row: teardown
 	lastRow := rows[len(rows)-1]
-	if lastRow.StepType != "teardown" {
-		t.Errorf("last row StepType = %q, expected %q", lastRow.StepType, "teardown")
+	if lastRow.StepType != StepTypeTeardown {
+		t.Errorf("last row StepType = %q, expected %q", lastRow.StepType, StepTypeTeardown)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestPlanBuilder_Build_FixtureOnly(t *testing.T) {
 	// Expected: fixture, teardown
 	hasFixture := false
 	for _, row := range rows {
-		if row.StepType == "fixture" {
+		if row.StepType == StepTypeFixture {
 			hasFixture = true
 			if row.ScriptPath == nil || *row.ScriptPath != "./test/__test__/00_fixture.sql" {
 				t.Errorf("fixture ScriptPath = %v, expected ./test/__test__/00_fixture.sql", row.ScriptPath)
@@ -150,12 +150,12 @@ func TestPlanBuilder_Build_FixtureAndTests(t *testing.T) {
 	test1Idx := -1
 	test2Idx := -1
 	for i, row := range rows {
-		if row.StepType == "fixture" {
+		if row.StepType == StepTypeFixture {
 			fixtureIdx = i
 		}
-		if row.StepType == "test" && test1Idx == -1 {
+		if row.StepType == StepTypeTest && test1Idx == -1 {
 			test1Idx = i
-		} else if row.StepType == "test" && test1Idx != -1 {
+		} else if row.StepType == StepTypeTest && test1Idx != -1 {
 			test2Idx = i
 		}
 	}
@@ -205,11 +205,11 @@ func TestPlanBuilder_Build_NestedDirectories(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}
@@ -337,12 +337,12 @@ func TestPlanBuilder_Build_EmbeddedContent(t *testing.T) {
 
 	// Verify all fixture and test rows have embedded content
 	for _, row := range rows {
-		if row.StepType == "fixture" || row.StepType == "test" {
+		if row.StepType == StepTypeFixture || row.StepType == StepTypeTest {
 			if row.ScriptSQL == nil {
 				t.Errorf("Row %d (%s) should have embedded ScriptSQL", row.Ordinal, row.StepType)
 			}
 		}
-		if row.StepType == "teardown" {
+		if row.StepType == StepTypeTeardown {
 			if row.ScriptSQL != nil {
 				t.Errorf("Teardown row %d should not have ScriptSQL", row.Ordinal)
 			}
@@ -409,11 +409,11 @@ func TestPlanBuilder_Build_DeepHierarchy_5Levels(t *testing.T) {
 
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 		if row.Depth > maxDepth {
@@ -494,7 +494,7 @@ func TestPlanBuilder_Build_DeepHierarchy_FixturesAtAlternatingLevels(t *testing.
 
 	fixtureCount := 0
 	for _, row := range rows {
-		if row.StepType == "fixture" {
+		if row.StepType == StepTypeFixture {
 			fixtureCount++
 		}
 	}
@@ -559,11 +559,11 @@ func TestPlanBuilder_Build_DeepHierarchy_TestsOnlyAtLeaf(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}
@@ -582,10 +582,10 @@ func TestPlanBuilder_Build_DeepHierarchy_TestsOnlyAtLeaf(t *testing.T) {
 	lastFixtureOrdinal := 0
 	firstTestOrdinal := 0
 	for _, row := range rows {
-		if row.StepType == "fixture" && row.Ordinal > lastFixtureOrdinal {
+		if row.StepType == StepTypeFixture && row.Ordinal > lastFixtureOrdinal {
 			lastFixtureOrdinal = row.Ordinal
 		}
-		if row.StepType == "test" && firstTestOrdinal == 0 {
+		if row.StepType == StepTypeTest && firstTestOrdinal == 0 {
 			firstTestOrdinal = row.Ordinal
 		}
 	}
@@ -640,8 +640,8 @@ func TestPlanBuilder_Build_MultipleTopLevelWithDeepChildren(t *testing.T) {
 	}
 
 	// Count per branch
-	branchACounts := map[string]int{"fixture": 0, "test": 0, "teardown": 0}
-	branchBCounts := map[string]int{"fixture": 0, "test": 0, "teardown": 0}
+	branchACounts := map[string]int{StepTypeFixture: 0, StepTypeTest: 0, StepTypeTeardown: 0}
+	branchBCounts := map[string]int{StepTypeFixture: 0, StepTypeTest: 0, StepTypeTeardown: 0}
 
 	for _, row := range rows {
 		if len(row.Directory) >= 4 && row.Directory[:4] == "./a/" {
@@ -652,25 +652,25 @@ func TestPlanBuilder_Build_MultipleTopLevelWithDeepChildren(t *testing.T) {
 	}
 
 	// Branch A: 3 fixtures, 3 tests, 3 teardowns
-	if branchACounts["fixture"] != 3 {
-		t.Errorf("Branch A: expected 3 fixtures, got %d", branchACounts["fixture"])
+	if branchACounts[StepTypeFixture] != 3 {
+		t.Errorf("Branch A: expected 3 fixtures, got %d", branchACounts[StepTypeFixture])
 	}
-	if branchACounts["test"] != 3 {
-		t.Errorf("Branch A: expected 3 tests, got %d", branchACounts["test"])
+	if branchACounts[StepTypeTest] != 3 {
+		t.Errorf("Branch A: expected 3 tests, got %d", branchACounts[StepTypeTest])
 	}
-	if branchACounts["teardown"] != 3 {
-		t.Errorf("Branch A: expected 3 teardowns, got %d", branchACounts["teardown"])
+	if branchACounts[StepTypeTeardown] != 3 {
+		t.Errorf("Branch A: expected 3 teardowns, got %d", branchACounts[StepTypeTeardown])
 	}
 
 	// Branch B: 2 fixtures, 2 tests, 2 teardowns
-	if branchBCounts["fixture"] != 2 {
-		t.Errorf("Branch B: expected 2 fixtures, got %d", branchBCounts["fixture"])
+	if branchBCounts[StepTypeFixture] != 2 {
+		t.Errorf("Branch B: expected 2 fixtures, got %d", branchBCounts[StepTypeFixture])
 	}
-	if branchBCounts["test"] != 2 {
-		t.Errorf("Branch B: expected 2 tests, got %d", branchBCounts["test"])
+	if branchBCounts[StepTypeTest] != 2 {
+		t.Errorf("Branch B: expected 2 tests, got %d", branchBCounts[StepTypeTest])
 	}
-	if branchBCounts["teardown"] != 2 {
-		t.Errorf("Branch B: expected 2 teardowns, got %d", branchBCounts["teardown"])
+	if branchBCounts[StepTypeTeardown] != 2 {
+		t.Errorf("Branch B: expected 2 teardowns, got %d", branchBCounts[StepTypeTeardown])
 	}
 
 	validator := NewSavepointValidator()
@@ -695,11 +695,11 @@ func TestPlanBuilder_Build_NoFixtures_DeepHierarchy(t *testing.T) {
 
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -227,7 +228,7 @@ func TestDeploy_OverwriteTerminateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "terminate") {
+	if !strings.Contains(err.Error(), "terminate") {
 		t.Fatalf("Expected terminate error, got: %v", err)
 	}
 }
@@ -245,7 +246,7 @@ func TestDeploy_OverwriteDropFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "drop") {
+	if !strings.Contains(err.Error(), "drop") {
 		t.Fatalf("Expected drop error, got: %v", err)
 	}
 }
@@ -263,7 +264,7 @@ func TestDeploy_OverwriteCreateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "create") {
+	if !strings.Contains(err.Error(), "create") {
 		t.Fatalf("Expected create error, got: %v", err)
 	}
 }
@@ -300,7 +301,7 @@ func TestDeploy_EnsureDBCheckFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "check") {
+	if !strings.Contains(err.Error(), "check") {
 		t.Fatalf("Expected check error, got: %v", err)
 	}
 }
@@ -313,7 +314,7 @@ func TestDeploy_EnsureDBCreateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "create") {
+	if !strings.Contains(err.Error(), "create") {
 		t.Fatalf("Expected create error, got: %v", err)
 	}
 }
@@ -331,7 +332,7 @@ func TestDeploy_MgmtConnectorFails_Overwrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "conn refused") {
+	if !strings.Contains(err.Error(), "conn refused") {
 		t.Fatalf("Expected conn refused error, got: %v", err)
 	}
 }
@@ -343,7 +344,7 @@ func TestDeploy_MgmtConnectorFails_Ensure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "conn refused") {
+	if !strings.Contains(err.Error(), "conn refused") {
 		t.Fatalf("Expected conn refused error, got: %v", err)
 	}
 }
@@ -359,7 +360,7 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "session prep failed") {
+	if !strings.Contains(err.Error(), "session prep failed") {
 		t.Fatalf("Expected session prep error, got: %v", err)
 	}
 }
@@ -374,7 +375,7 @@ func TestDeploy_ReadDeploySQLFails(t *testing.T) {
 
 	err := svc.Deploy(context.Background(), validConfig())
 
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop (session prep comes first), got: %v", err)
 	}
 }
@@ -388,7 +389,7 @@ func TestDeploy_MaintenanceDBDefault(t *testing.T) {
 	cfg.MaintenanceDatabase = ""
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop, got: %v", err)
 	}
 }
@@ -451,7 +452,7 @@ func TestExecuteTests_FilterPatternDefault(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "mock stop") {
+	if !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop, got: %v", err)
 	}
 }
@@ -469,22 +470,9 @@ func TestExecuteTests_PrepareSessionFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "session prep failed") {
+	if !strings.Contains(err.Error(), "session prep failed") {
 		t.Fatalf("Expected session prep error, got: %v", err)
 	}
-}
-
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains(s, substr))
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Error attribution tests ---

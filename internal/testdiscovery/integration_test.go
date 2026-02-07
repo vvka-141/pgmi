@@ -97,11 +97,11 @@ func TestDiscovery_FullPipeline_FromFilesystem(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}
@@ -171,11 +171,11 @@ func TestDiscovery_FullPipeline_DeepNesting(t *testing.T) {
 	maxDepth := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 		if row.Depth > maxDepth {
@@ -277,11 +277,11 @@ func TestDiscovery_FullPipeline_FixtureOnlyDirectory(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}
@@ -340,11 +340,11 @@ func TestDiscovery_FullPipeline_TestsOnlyNoFixture(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}
@@ -399,7 +399,7 @@ func TestDiscovery_FullPipeline_SpecialCharactersInPaths(t *testing.T) {
 
 	testCount := 0
 	for _, row := range rows {
-		if row.StepType == "test" {
+		if row.StepType == StepTypeTest {
 			testCount++
 		}
 	}
@@ -462,11 +462,11 @@ func TestDiscovery_FullPipeline_MultipleBranches(t *testing.T) {
 	teardownCount := 0
 	for _, row := range rows {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			fixtureCount++
-		case "test":
+		case StepTypeTest:
 			testCount++
-		case "teardown":
+		case StepTypeTeardown:
 			teardownCount++
 		}
 	}

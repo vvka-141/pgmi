@@ -60,7 +60,7 @@ func (g *DirectGenerator) GenerateWithCallback(rows []testdiscovery.TestScriptRo
 		startLine := lineNum
 
 		switch row.StepType {
-		case "fixture":
+		case testdiscovery.StepTypeFixture:
 			// Fixture start callback
 			if callback != "" {
 				lines = append(lines, FormatCallbackInvocation(callback, EventFixtureStart, row.ScriptPath, row.Directory, row.Depth, ordinal))
@@ -97,7 +97,7 @@ func (g *DirectGenerator) GenerateWithCallback(rows []testdiscovery.TestScriptRo
 				lineNum++
 			}
 
-		case "test":
+		case testdiscovery.StepTypeTest:
 			// Test start callback
 			if callback != "" {
 				lines = append(lines, FormatCallbackInvocation(callback, EventTestStart, row.ScriptPath, row.Directory, row.Depth, ordinal))
@@ -139,7 +139,7 @@ func (g *DirectGenerator) GenerateWithCallback(rows []testdiscovery.TestScriptRo
 				lineNum++
 			}
 
-		case "teardown":
+		case testdiscovery.StepTypeTeardown:
 			// Teardown start callback
 			if callback != "" {
 				lines = append(lines, FormatCallbackInvocation(callback, EventTeardownStart, nil, row.Directory, row.Depth, ordinal))

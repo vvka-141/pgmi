@@ -194,11 +194,11 @@ func TestFilterByPattern_PreservesStructure(t *testing.T) {
 	hasTeardown := false
 	for _, row := range result {
 		switch row.StepType {
-		case "fixture":
+		case StepTypeFixture:
 			hasFixture = true
-		case "test":
+		case StepTypeTest:
 			hasTest = true
-		case "teardown":
+		case StepTypeTeardown:
 			hasTeardown = true
 		}
 	}

@@ -74,7 +74,7 @@ func (b *PlanBuilder) processDirectory(dir *TestDirectory, rows []TestScriptRow,
 
 		rows = append(rows, TestScriptRow{
 			Ordinal:    ordinal,
-			StepType:   "fixture",
+			StepType:   StepTypeFixture,
 			ScriptPath: Ptr(dir.Fixture.Path),
 			Directory:  dir.Path,
 			Depth:      dir.Depth,
@@ -104,7 +104,7 @@ func (b *PlanBuilder) processDirectory(dir *TestDirectory, rows []TestScriptRow,
 
 		rows = append(rows, TestScriptRow{
 			Ordinal:    ordinal,
-			StepType:   "test",
+			StepType:   StepTypeTest,
 			ScriptPath: Ptr(test.Path),
 			Directory:  dir.Path,
 			Depth:      dir.Depth,
@@ -127,7 +127,7 @@ func (b *PlanBuilder) processDirectory(dir *TestDirectory, rows []TestScriptRow,
 	// Teardown: rollback to entry savepoint and release
 	rows = append(rows, TestScriptRow{
 		Ordinal:   ordinal,
-		StepType:  "teardown",
+		StepType:  StepTypeTeardown,
 		Directory: dir.Path,
 		Depth:     dir.Depth,
 		PreExec:   Ptr(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s;", entrySavepoint)),
