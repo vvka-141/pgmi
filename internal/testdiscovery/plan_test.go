@@ -1,6 +1,7 @@
 package testdiscovery
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -346,5 +347,376 @@ func TestPlanBuilder_Build_EmbeddedContent(t *testing.T) {
 				t.Errorf("Teardown row %d should not have ScriptSQL", row.Ordinal)
 			}
 		}
+	}
+}
+
+// buildDeepTree creates a tree with nested directories up to maxDepth.
+// Each level has a fixture and one test.
+func buildDeepTree(maxDepth int, withFixtures bool) *TestTree {
+	tree := NewTestTree()
+	if maxDepth < 0 {
+		return tree
+	}
+
+	var buildPath = func(depth int) string {
+		path := "./__test__"
+		for i := 1; i <= depth; i++ {
+			path += fmt.Sprintf("/l%d", i)
+		}
+		return path
+	}
+
+	var current *TestDirectory
+	for depth := 0; depth <= maxDepth; depth++ {
+		path := buildPath(depth)
+		dir := NewTestDirectory(path, depth)
+
+		if withFixtures {
+			dir.SetFixture(&TestFile{
+				Path:      path + "/_setup.sql",
+				Filename:  "_setup.sql",
+				IsFixture: true,
+			})
+		}
+		dir.AddTest(&TestFile{
+			Path:     path + "/test.sql",
+			Filename: "test.sql",
+		})
+
+		if depth == 0 {
+			tree.AddDirectory(dir)
+		} else {
+			current.AddChild(dir)
+		}
+		current = dir
+	}
+	return tree
+}
+
+func TestPlanBuilder_Build_DeepHierarchy_5Levels(t *testing.T) {
+	b := NewPlanBuilder(mockResolver)
+	tree := buildDeepTree(4, true) // depth 0-4 = 5 levels
+
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	fixtureCount := 0
+	testCount := 0
+	teardownCount := 0
+	maxDepth := 0
+
+	for _, row := range rows {
+		switch row.StepType {
+		case "fixture":
+			fixtureCount++
+		case "test":
+			testCount++
+		case "teardown":
+			teardownCount++
+		}
+		if row.Depth > maxDepth {
+			maxDepth = row.Depth
+		}
+	}
+
+	if fixtureCount != 5 {
+		t.Errorf("Expected 5 fixtures, got %d", fixtureCount)
+	}
+	if testCount != 5 {
+		t.Errorf("Expected 5 tests, got %d", testCount)
+	}
+	if teardownCount != 5 {
+		t.Errorf("Expected 5 teardowns, got %d", teardownCount)
+	}
+	if maxDepth != 4 {
+		t.Errorf("Expected max depth 4, got %d", maxDepth)
+	}
+
+	// Verify ordinals are monotonic
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Ordinal <= rows[i-1].Ordinal {
+			t.Errorf("Ordinals not monotonic at index %d: %d <= %d", i, rows[i].Ordinal, rows[i-1].Ordinal)
+		}
+	}
+
+	// Validate with SavepointValidator
+	validator := NewSavepointValidator()
+	result := validator.Validate(rows)
+	if !result.Valid {
+		t.Errorf("Validation failed: %v", result.Errors)
+	}
+}
+
+func TestPlanBuilder_Build_DeepHierarchy_FixturesAtAlternatingLevels(t *testing.T) {
+	tree := NewTestTree()
+
+	var buildPath = func(depth int) string {
+		path := "./__test__"
+		for i := 1; i <= depth; i++ {
+			path += fmt.Sprintf("/l%d", i)
+		}
+		return path
+	}
+
+	var current *TestDirectory
+	for depth := 0; depth <= 4; depth++ {
+		path := buildPath(depth)
+		dir := NewTestDirectory(path, depth)
+
+		// Only add fixtures at even levels (0, 2, 4)
+		if depth%2 == 0 {
+			dir.SetFixture(&TestFile{
+				Path:      path + "/_setup.sql",
+				Filename:  "_setup.sql",
+				IsFixture: true,
+			})
+		}
+		dir.AddTest(&TestFile{
+			Path:     path + "/test.sql",
+			Filename: "test.sql",
+		})
+
+		if depth == 0 {
+			tree.AddDirectory(dir)
+		} else {
+			current.AddChild(dir)
+		}
+		current = dir
+	}
+
+	b := NewPlanBuilder(mockResolver)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	fixtureCount := 0
+	for _, row := range rows {
+		if row.StepType == "fixture" {
+			fixtureCount++
+		}
+	}
+	if fixtureCount != 3 {
+		t.Errorf("Expected 3 fixtures (at levels 0, 2, 4), got %d", fixtureCount)
+	}
+
+	validator := NewSavepointValidator()
+	result := validator.Validate(rows)
+	if !result.Valid {
+		t.Errorf("Validation failed: %v", result.Errors)
+	}
+}
+
+func TestPlanBuilder_Build_DeepHierarchy_TestsOnlyAtLeaf(t *testing.T) {
+	tree := NewTestTree()
+
+	var buildPath = func(depth int) string {
+		path := "./__test__"
+		for i := 1; i <= depth; i++ {
+			path += fmt.Sprintf("/l%d", i)
+		}
+		return path
+	}
+
+	var current *TestDirectory
+	maxDepth := 4
+	for depth := 0; depth <= maxDepth; depth++ {
+		path := buildPath(depth)
+		dir := NewTestDirectory(path, depth)
+
+		// All levels have fixtures
+		dir.SetFixture(&TestFile{
+			Path:      path + "/_setup.sql",
+			Filename:  "_setup.sql",
+			IsFixture: true,
+		})
+
+		// Only leaf level has tests
+		if depth == maxDepth {
+			dir.AddTest(&TestFile{Path: path + "/test1.sql", Filename: "test1.sql"})
+			dir.AddTest(&TestFile{Path: path + "/test2.sql", Filename: "test2.sql"})
+			dir.AddTest(&TestFile{Path: path + "/test3.sql", Filename: "test3.sql"})
+		}
+
+		if depth == 0 {
+			tree.AddDirectory(dir)
+		} else {
+			current.AddChild(dir)
+		}
+		current = dir
+	}
+
+	b := NewPlanBuilder(mockResolver)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	fixtureCount := 0
+	testCount := 0
+	teardownCount := 0
+	for _, row := range rows {
+		switch row.StepType {
+		case "fixture":
+			fixtureCount++
+		case "test":
+			testCount++
+		case "teardown":
+			teardownCount++
+		}
+	}
+
+	if fixtureCount != 5 {
+		t.Errorf("Expected 5 fixtures (one per level), got %d", fixtureCount)
+	}
+	if testCount != 3 {
+		t.Errorf("Expected 3 tests (only at leaf), got %d", testCount)
+	}
+	if teardownCount != 5 {
+		t.Errorf("Expected 5 teardowns, got %d", teardownCount)
+	}
+
+	// Verify all fixtures come before tests
+	lastFixtureOrdinal := 0
+	firstTestOrdinal := 0
+	for _, row := range rows {
+		if row.StepType == "fixture" && row.Ordinal > lastFixtureOrdinal {
+			lastFixtureOrdinal = row.Ordinal
+		}
+		if row.StepType == "test" && firstTestOrdinal == 0 {
+			firstTestOrdinal = row.Ordinal
+		}
+	}
+	if lastFixtureOrdinal >= firstTestOrdinal {
+		t.Errorf("All fixtures should come before tests: last fixture=%d, first test=%d",
+			lastFixtureOrdinal, firstTestOrdinal)
+	}
+
+	validator := NewSavepointValidator()
+	result := validator.Validate(rows)
+	if !result.Valid {
+		t.Errorf("Validation failed: %v", result.Errors)
+	}
+}
+
+func TestPlanBuilder_Build_MultipleTopLevelWithDeepChildren(t *testing.T) {
+	tree := NewTestTree()
+
+	// Branch A: 3 levels deep
+	dirA0 := NewTestDirectory("./a/__test__", 0)
+	dirA0.SetFixture(&TestFile{Path: "./a/__test__/_setup.sql", IsFixture: true})
+	dirA0.AddTest(&TestFile{Path: "./a/__test__/test.sql"})
+
+	dirA1 := NewTestDirectory("./a/__test__/l1", 1)
+	dirA1.SetFixture(&TestFile{Path: "./a/__test__/l1/_setup.sql", IsFixture: true})
+	dirA1.AddTest(&TestFile{Path: "./a/__test__/l1/test.sql"})
+
+	dirA2 := NewTestDirectory("./a/__test__/l1/l2", 2)
+	dirA2.SetFixture(&TestFile{Path: "./a/__test__/l1/l2/_setup.sql", IsFixture: true})
+	dirA2.AddTest(&TestFile{Path: "./a/__test__/l1/l2/test.sql"})
+
+	dirA1.AddChild(dirA2)
+	dirA0.AddChild(dirA1)
+	tree.AddDirectory(dirA0)
+
+	// Branch B: 2 levels deep
+	dirB0 := NewTestDirectory("./b/__test__", 0)
+	dirB0.SetFixture(&TestFile{Path: "./b/__test__/_setup.sql", IsFixture: true})
+	dirB0.AddTest(&TestFile{Path: "./b/__test__/test.sql"})
+
+	dirB1 := NewTestDirectory("./b/__test__/l1", 1)
+	dirB1.SetFixture(&TestFile{Path: "./b/__test__/l1/_setup.sql", IsFixture: true})
+	dirB1.AddTest(&TestFile{Path: "./b/__test__/l1/test.sql"})
+
+	dirB0.AddChild(dirB1)
+	tree.AddDirectory(dirB0)
+
+	b := NewPlanBuilder(mockResolver)
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// Count per branch
+	branchACounts := map[string]int{"fixture": 0, "test": 0, "teardown": 0}
+	branchBCounts := map[string]int{"fixture": 0, "test": 0, "teardown": 0}
+
+	for _, row := range rows {
+		if len(row.Directory) >= 4 && row.Directory[:4] == "./a/" {
+			branchACounts[row.StepType]++
+		} else if len(row.Directory) >= 4 && row.Directory[:4] == "./b/" {
+			branchBCounts[row.StepType]++
+		}
+	}
+
+	// Branch A: 3 fixtures, 3 tests, 3 teardowns
+	if branchACounts["fixture"] != 3 {
+		t.Errorf("Branch A: expected 3 fixtures, got %d", branchACounts["fixture"])
+	}
+	if branchACounts["test"] != 3 {
+		t.Errorf("Branch A: expected 3 tests, got %d", branchACounts["test"])
+	}
+	if branchACounts["teardown"] != 3 {
+		t.Errorf("Branch A: expected 3 teardowns, got %d", branchACounts["teardown"])
+	}
+
+	// Branch B: 2 fixtures, 2 tests, 2 teardowns
+	if branchBCounts["fixture"] != 2 {
+		t.Errorf("Branch B: expected 2 fixtures, got %d", branchBCounts["fixture"])
+	}
+	if branchBCounts["test"] != 2 {
+		t.Errorf("Branch B: expected 2 tests, got %d", branchBCounts["test"])
+	}
+	if branchBCounts["teardown"] != 2 {
+		t.Errorf("Branch B: expected 2 teardowns, got %d", branchBCounts["teardown"])
+	}
+
+	validator := NewSavepointValidator()
+	result := validator.Validate(rows)
+	if !result.Valid {
+		t.Errorf("Validation failed: %v", result.Errors)
+	}
+}
+
+func TestPlanBuilder_Build_NoFixtures_DeepHierarchy(t *testing.T) {
+	b := NewPlanBuilder(mockResolver)
+	tree := buildDeepTree(4, false) // 5 levels, no fixtures
+
+	rows, err := b.Build(tree)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	fixtureCount := 0
+	testCount := 0
+	teardownCount := 0
+
+	for _, row := range rows {
+		switch row.StepType {
+		case "fixture":
+			fixtureCount++
+		case "test":
+			testCount++
+		case "teardown":
+			teardownCount++
+		}
+	}
+
+	if fixtureCount != 0 {
+		t.Errorf("Expected 0 fixtures, got %d", fixtureCount)
+	}
+	if testCount != 5 {
+		t.Errorf("Expected 5 tests, got %d", testCount)
+	}
+	if teardownCount != 5 {
+		t.Errorf("Expected 5 teardowns, got %d", teardownCount)
+	}
+
+	validator := NewSavepointValidator()
+	result := validator.Validate(rows)
+	if !result.Valid {
+		t.Errorf("Validation failed: %v", result.Errors)
 	}
 }
