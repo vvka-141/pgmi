@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -28,45 +29,8 @@ func TestDeploy_ReadDeploySQLFails_AfterSessionPrep(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "session prep reached") {
+	if !strings.Contains(err.Error(), "session prep reached") {
 		t.Fatalf("Expected session prep error, got: %v", err)
-	}
-}
-
-func TestExecuteTests_SessionPrepSuccess_RequiresRealConn(t *testing.T) {
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
-	cf, _, lg, _, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
-
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
-		SourcePath:       "/src",
-		DatabaseName:     "testdb",
-		ConnectionString: "postgresql://localhost/postgres",
-		ListOnly:         true,
-	})
-	if err == nil {
-		t.Fatal("Expected error")
-	}
-	if !containsStr(err.Error(), "mock stop") {
-		t.Fatalf("Expected mock stop, got: %v", err)
-	}
-}
-
-func TestExecuteTests_AzureCredentialsCopied(t *testing.T) {
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
-	cf, _, lg, _, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
-
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
-		SourcePath:       "/src",
-		DatabaseName:     "testdb",
-		ConnectionString: "postgresql://localhost/postgres",
-		AuthMethod:       pgmi.AuthMethodAzureEntraID,
-		AzureTenantID:    "tenant-123",
-		AzureClientID:    "client-456",
-	})
-	if err == nil {
-		t.Fatal("Expected error")
 	}
 }
 
@@ -77,7 +41,7 @@ func TestDeploy_AppNameDefault(t *testing.T) {
 
 	cfg := validConfig()
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop, got: %v", err)
 	}
 }
@@ -94,7 +58,7 @@ func TestDeploy_OverwriteApproverError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "approval") {
+	if !strings.Contains(err.Error(), "approval") {
 		t.Fatalf("Expected approval error, got: %v", err)
 	}
 }
@@ -111,7 +75,7 @@ func TestDeploy_AuthMethodCopiedToConnConfig(t *testing.T) {
 	cfg.AzureClientSecret = "secret"
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop, got: %v", err)
 	}
 }

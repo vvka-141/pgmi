@@ -102,17 +102,40 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	switch config.AuthMethod {
 	case pgmi.AuthMethodStandard:
 		return NewStandardConnector(config), nil
-	case pgmi.AuthMethodCertificate:
-		return nil, fmt.Errorf("certificate-based authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodAWSIAM:
-		return nil, fmt.Errorf("AWS IAM authentication: %w", pgmi.ErrNotImplemented)
+		return newAWSConnector(config)
 	case pgmi.AuthMethodGoogleIAM:
-		return nil, fmt.Errorf("google cloud IAM authentication: %w", pgmi.ErrNotImplemented)
+		return newGoogleConnector(config)
 	case pgmi.AuthMethodAzureEntraID:
 		return newAzureConnector(config)
 	default:
 		return nil, fmt.Errorf("unsupported auth method %v: %w", config.AuthMethod, pgmi.ErrUnsupportedAuthMethod)
 	}
+}
+
+// newAWSConnector creates an AWSIAMConnector with the appropriate token provider.
+func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	// Build endpoint from host:port
+	endpoint := fmt.Sprintf("%s:%d", config.Host, config.Port)
+
+	tokenProvider, err := NewAWSIAMTokenProvider(endpoint, config.AWSRegion, config.Username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AWS IAM token provider: %w", err)
+	}
+
+	return NewAWSIAMConnector(config, tokenProvider), nil
+}
+
+// newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
+func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	if config.GoogleInstance == "" {
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires --google-instance (project:region:instance)")
+	}
+	if config.Username == "" {
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires username (-U)")
+	}
+
+	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
 }
 
 // newAzureConnector creates an AzureEntraIDConnector with the appropriate token provider.

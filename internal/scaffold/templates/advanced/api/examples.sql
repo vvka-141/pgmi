@@ -493,6 +493,153 @@ END;
     $body$
 );
 
+-- ============================================================================
+-- MCP Example: List Tables Tool
+-- ============================================================================
+-- Lists all tables in a given schema.
+
+SELECT api.create_or_replace_mcp_handler(
+    jsonb_build_object(
+        'id', 'e3000001-0004-4000-8000-000000000001',
+        'type', 'tool',
+        'name', 'list_tables',
+        'description', 'List tables in a schema with row counts',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'schema', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'Schema name (default: public)'
+                )
+            ),
+            'required', jsonb_build_array()
+        ),
+        'requiresAuth', false
+    ),
+    $body$
+DECLARE
+    v_schema text;
+    v_tables jsonb;
+BEGIN
+    v_schema := COALESCE((request).arguments->>'schema', 'public');
+
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'table_name', t.tablename,
+        'table_type', CASE WHEN v.viewname IS NOT NULL THEN 'view' ELSE 'table' END,
+        'estimated_rows', COALESCE(s.n_live_tup, 0)
+    ) ORDER BY t.tablename), '[]'::jsonb)
+    INTO v_tables
+    FROM pg_tables t
+    LEFT JOIN pg_views v ON v.schemaname = t.schemaname AND v.viewname = t.tablename
+    LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.schemaname AND s.relname = t.tablename
+    WHERE t.schemaname = v_schema;
+
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(api.mcp_text(format(
+            'Tables in schema "%s":%s%s',
+            v_schema,
+            E'\n',
+            v_tables::text
+        ))),
+        (request).request_id
+    );
+END;
+    $body$
+);
+
+-- Invoke list_tables tool:
+DO $$
+DECLARE
+    v_response api.mcp_response;
+BEGIN
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, 'demo-4');
+    RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
+END $$;
+
+-- ============================================================================
+-- MCP Example: Execute Query Tool (Read-Only)
+-- ============================================================================
+-- Executes SELECT queries only. Useful for AI assistants to explore data.
+
+SELECT api.create_or_replace_mcp_handler(
+    jsonb_build_object(
+        'id', 'e3000001-0005-4000-8000-000000000001',
+        'type', 'tool',
+        'name', 'execute_query',
+        'description', 'Execute a read-only SQL query (SELECT only)',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'query', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'SQL SELECT query to execute'
+                ),
+                'limit', jsonb_build_object(
+                    'type', 'integer',
+                    'description', 'Maximum rows to return (default: 100, max: 1000)'
+                )
+            ),
+            'required', jsonb_build_array('query')
+        ),
+        'requiresAuth', true
+    ),
+    $body$
+DECLARE
+    v_query text;
+    v_limit int;
+    v_result jsonb;
+    v_row_count int;
+BEGIN
+    v_query := (request).arguments->>'query';
+    v_limit := LEAST(COALESCE(((request).arguments->>'limit')::int, 100), 1000);
+
+    IF v_query IS NULL OR trim(v_query) = '' THEN
+        RETURN api.mcp_tool_error('Query is required', (request).request_id);
+    END IF;
+
+    IF NOT (upper(trim(v_query)) ~ '^(SELECT|WITH)') THEN
+        RETURN api.mcp_tool_error('Only SELECT queries are allowed', (request).request_id);
+    END IF;
+
+    IF v_query ~* '\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE)\b' THEN
+        RETURN api.mcp_tool_error('Query contains disallowed keywords', (request).request_id);
+    END IF;
+
+    BEGIN
+        EXECUTE format('SELECT jsonb_agg(row_to_json(t)) FROM (SELECT * FROM (%s) sub LIMIT %s) t', v_query, v_limit)
+        INTO v_result;
+
+        v_result := COALESCE(v_result, '[]'::jsonb);
+        v_row_count := jsonb_array_length(v_result);
+
+        RETURN api.mcp_tool_result(
+            jsonb_build_array(
+                api.mcp_text(format('Query returned %s row(s)', v_row_count)),
+                jsonb_build_object('type', 'text', 'text', v_result::text)
+            ),
+            (request).request_id
+        );
+    EXCEPTION WHEN OTHERS THEN
+        RETURN api.mcp_tool_error('Query error: ' || SQLERRM, (request).request_id);
+    END;
+END;
+    $body$
+);
+
+-- Invoke execute_query tool:
+DO $$
+DECLARE
+    v_response api.mcp_response;
+BEGIN
+    v_response := api.mcp_call_tool(
+        'execute_query',
+        '{"query":"SELECT table_name FROM information_schema.tables WHERE table_schema = ''api'' LIMIT 5"}'::jsonb,
+        '{"user_id":"test|123"}'::jsonb,
+        'demo-5'
+    );
+    RAISE DEBUG '  -> MCP tool execute_query  envelope=%', (v_response).envelope;
+END $$;
+
 DO $$ BEGIN
     RAISE DEBUG '  + REST: GET /hello - Hello world endpoint';
     RAISE DEBUG '  + REST: POST /echo - Echo request body';
@@ -502,6 +649,8 @@ DO $$ BEGIN
     RAISE DEBUG '  + RPC: math.sum - Calculate sum of two numbers';
     RAISE DEBUG '  + RPC: system.time - Get server time';
     RAISE DEBUG '  + MCP Tool: database_info - Get database info';
+    RAISE DEBUG '  + MCP Tool: list_tables - List tables in a schema';
+    RAISE DEBUG '  + MCP Tool: execute_query - Execute read-only SQL queries';
     RAISE DEBUG '  + MCP Resource: table_schema - Get table schema';
     RAISE DEBUG '  + MCP Prompt: sql_assistant - SQL query assistant';
 END $$;

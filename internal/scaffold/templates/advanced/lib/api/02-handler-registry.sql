@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS api.handler (
     language_name text NOT NULL,
     owner_name name NOT NULL,
 
+    title text,
     description text
 ) INHERITS (core.entity);
 

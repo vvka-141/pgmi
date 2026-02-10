@@ -134,7 +134,7 @@ func testTemplateStructure(t *testing.T, templateName string) {
 				require.True(t, info.IsDir(), "%s should be a directory", dirName)
 			}
 			// Verify lib/ contains the expected nested directories
-			libDirs := []string{"lib/api", "lib/core", "lib/internal", "lib/utils"}
+			libDirs := []string{"lib/api", "lib/core", "lib/utils"}
 			for _, dirPath := range libDirs {
 				info, err := efs.Stat(dirPath)
 				require.NoError(t, err, "Advanced template should have %s directory", dirPath)
@@ -194,18 +194,25 @@ func TestTemplateFileMetadata(t *testing.T) {
 			// Extension should match
 			require.Equal(t, filepath.Ext(file.Path), file.Extension)
 
-			// Directory should be the parent path or empty for root
+			// Directory should be the parent path with ./ prefix and trailing /
 			expectedDir := filepath.ToSlash(filepath.Dir(file.Path))
 			if expectedDir == "." {
-				expectedDir = ""
+				expectedDir = "./"
+			} else if !strings.HasPrefix(expectedDir, "./") {
+				expectedDir = "./" + expectedDir + "/"
+			} else {
+				expectedDir = expectedDir + "/"
 			}
 			require.Equal(t, expectedDir, file.Directory)
 
 			// Depth should be consistent with directory structure
-			if file.Directory == "" {
+			if file.Directory == "./" {
 				require.Equal(t, 0, file.Depth)
 			} else {
-				expectedDepth := strings.Count(file.Directory, "/") + 1
+				// Directory format is ./path/to/dir/, depth = number of segments
+				trimmed := strings.TrimPrefix(file.Directory, "./")
+				trimmed = strings.TrimSuffix(trimmed, "/")
+				expectedDepth := strings.Count(trimmed, "/") + 1
 				require.Equal(t, expectedDepth, file.Depth)
 			}
 
@@ -240,14 +247,46 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 			require.NoError(t, err, "ReadDeploySQL should succeed for template %s", templateName)
 			require.NotEmpty(t, content, "deploy.sql content should not be empty")
 
-			// Basic content validation
-			require.Contains(t, content, "pg_temp.pgmi_source",
-				"deploy.sql should reference pg_temp.pgmi_source table")
+			// Basic content validation - templates may use pgmi_source_view or pgmi_plan_view
+			hasSource := strings.Contains(content, "pg_temp.pgmi_source_view") || strings.Contains(content, "pg_temp.pgmi_plan_view")
+			require.True(t, hasSource,
+				"deploy.sql should reference pg_temp.pgmi_source_view or pg_temp.pgmi_plan_view")
 		})
 	}
 }
 
 // TestTemplatePlaceholderExtraction validates placeholder extraction from embedded templates
+
+// TestBasicTemplateTestFilePaths verifies that root-level __test__/ files
+// are scanned with correct paths that will match the SQL is_test_file regex
+func TestBasicTemplateTestFilePaths(t *testing.T) {
+	templateRoot := "templates/basic"
+	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+
+	calc := checksum.New()
+	s := scanner.NewScannerWithFS(calc, efs)
+
+	result, err := s.ScanDirectory(".")
+	require.NoError(t, err)
+
+	// Find test files and verify their paths
+	var testFiles []string
+	for _, file := range result.Files {
+		if strings.Contains(file.Path, "__test__") {
+			testFiles = append(testFiles, file.Path)
+			// Verify path has ./ prefix
+			require.True(t, strings.HasPrefix(file.Path, "./"),
+				"Test file path should have ./ prefix: %s", file.Path)
+			// Verify path matches the pattern for root-level __test__
+			require.True(t, strings.HasPrefix(file.Path, "./__test__/"),
+				"Root-level test file should have path ./__test__/*: %s", file.Path)
+		}
+	}
+
+	require.Len(t, testFiles, 2, "Expected 2 test files in basic template __test__/")
+	require.Contains(t, testFiles, "./__test__/_setup.sql")
+	require.Contains(t, testFiles, "./__test__/test_user_crud.sql")
+}
 
 // TestEmbedFileSystemPerformance validates that EmbedFileSystem performs well
 func TestEmbedFileSystemPerformance(t *testing.T) {

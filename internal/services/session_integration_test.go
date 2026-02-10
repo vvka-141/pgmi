@@ -37,7 +37,7 @@ func TestPrepareSession_FullLifecycle(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	session, err := sm.PrepareSession(ctx, connConfig, "/", map[string]string{"env": "test"}, false)
+	session, err := sm.PrepareSession(ctx, connConfig, "/", map[string]string{"env": "test"}, "", false)
 	if err != nil {
 		t.Fatalf("PrepareSession failed: %v", err)
 	}
@@ -51,8 +51,8 @@ func TestPrepareSession_FullLifecycle(t *testing.T) {
 	}
 
 	var count int
-	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&count); err != nil {
-		t.Fatalf("Failed to query pgmi_source: %v", err)
+	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source_view").Scan(&count); err != nil {
+		t.Fatalf("Failed to query pgmi_source_view: %v", err)
 	}
 	if count == 0 {
 		t.Error("Expected files in pgmi_source")
@@ -80,7 +80,7 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	session, err := sm.PrepareSession(ctx, connConfig, "/", nil, true)
+	session, err := sm.PrepareSession(ctx, connConfig, "/", nil, "", true)
 	if err != nil {
 		t.Fatalf("PrepareSession with verbose failed: %v", err)
 	}
@@ -117,14 +117,14 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
 	params := map[string]string{"env": "staging", "version": "3.0"}
-	session, err := sm.PrepareSession(ctx, connConfig, "/", params, false)
+	session, err := sm.PrepareSession(ctx, connConfig, "/", params, "", false)
 	if err != nil {
 		t.Fatalf("PrepareSession failed: %v", err)
 	}
 	defer session.Close()
 
 	var fileCount int
-	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&fileCount); err != nil {
+	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source_view").Scan(&fileCount); err != nil {
 		t.Fatalf("Failed to count files: %v", err)
 	}
 	if fileCount != 2 {
@@ -132,7 +132,7 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 	}
 
 	var paramCount int
-	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_parameter").Scan(&paramCount); err != nil {
+	if err := session.Conn().QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_parameter_view").Scan(&paramCount); err != nil {
 		t.Fatalf("Failed to count params: %v", err)
 	}
 	if paramCount != 2 {
@@ -167,7 +167,7 @@ func TestPrepareSession_CleanupOnError(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	_, err := sm.PrepareSession(context.Background(), connConfig, "/", nil, false)
+	_, err := sm.PrepareSession(context.Background(), connConfig, "/", nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error for invalid connection")
 	}

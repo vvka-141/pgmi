@@ -14,6 +14,7 @@ nul
 # Build output
 bin/
 dist/
+pgmi
 
 # Test binary, built with `go test -c`
 *.test
@@ -54,6 +55,9 @@ docs/archive/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Content and articles (local drafts, not tracked)
+content/
 
 # Test scaffolds (pgmi init output during development)
 test_*/

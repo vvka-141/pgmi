@@ -2,11 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
+	"github.com/vvka-141/pgmi/internal/contract"
 )
 
 var (
@@ -65,11 +65,11 @@ func resolveVersionInfo() (v, c, d string) {
 func printVersionInfo() {
 	v, c, d := resolveVersionInfo()
 
-	fmt.Fprintln(os.Stderr, asciiLogo)
-	fmt.Fprintln(os.Stderr)
-	fmt.Printf("pgmi %s\n", v)
-	fmt.Fprintf(os.Stderr, "Commit: %s, Built: %s, Platform: %s/%s\n", c, d, runtime.GOOS, runtime.GOARCH)
-	fmt.Fprintln(os.Stderr, "PostgreSQL deployment tool")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "Repository: https://github.com/vvka-141/pgmi")
+	fmt.Println(asciiLogo)
+	fmt.Println()
+	fmt.Printf("pgmi %s (compat %s)\n", v, contract.LatestVersion())
+	fmt.Printf("Commit: %s, Built: %s, Platform: %s/%s\n", c, d, runtime.GOOS, runtime.GOARCH)
+	fmt.Println("PostgreSQL deployment tool")
+	fmt.Println()
+	fmt.Println("Repository: https://github.com/vvka-141/pgmi")
 }

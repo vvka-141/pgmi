@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/db"
@@ -228,7 +229,7 @@ func TestResolveConnection_WithEnvironment(t *testing.T) {
 				os.Unsetenv("PGMI_CONNECTION_STRING")
 			}
 
-			connConfig, _, err := resolveConnection(tt.connStringFlag, tt.granularFlags, nil, nil, false)
+			connConfig, _, err := resolveConnection(tt.connStringFlag, tt.granularFlags, nil, nil, nil, nil, nil, false)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
@@ -304,7 +305,7 @@ func TestResolveConnection_GranularFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			connConfig, _, err := resolveConnection("", tt.granularFlags, nil, nil, false)
+			connConfig, _, err := resolveConnection("", tt.granularFlags, nil, nil, nil, nil, nil, false)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
@@ -350,23 +351,8 @@ func TestResolveTargetDatabase_ErrorMessages(t *testing.T) {
 	}
 
 	for _, phrase := range expectedPhrases {
-		if !contains(errMsg, phrase) {
+		if !strings.Contains(errMsg, phrase) {
 			t.Errorf("error message missing expected phrase %q\nGot: %s", phrase, errMsg)
 		}
 	}
-}
-
-// Helper function to check if string contains substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

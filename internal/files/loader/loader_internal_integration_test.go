@@ -106,7 +106,7 @@ func TestInsertFiles_BatchExecution_Internal(t *testing.T) {
 	}
 
 	var count int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&count); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_source").Scan(&count); err != nil {
 		t.Fatalf("Failed to query pgmi_source: %v", err)
 	}
 	if count != 3 {
@@ -144,7 +144,7 @@ func TestInsertFiles_ManyFiles_Internal(t *testing.T) {
 	}
 
 	var count int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&count); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_source").Scan(&count); err != nil {
 		t.Fatalf("Failed to query pgmi_source: %v", err)
 	}
 	if count != 50 {
@@ -178,7 +178,7 @@ func TestInsertParams_BatchExecution_Internal(t *testing.T) {
 	}
 
 	var count int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_parameter").Scan(&count); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_parameter").Scan(&count); err != nil {
 		t.Fatalf("Failed to query pgmi_parameter: %v", err)
 	}
 	if count != 3 {
@@ -186,7 +186,7 @@ func TestInsertParams_BatchExecution_Internal(t *testing.T) {
 	}
 
 	var val string
-	if err := conn.QueryRow(ctx, "SELECT value FROM pg_temp.pgmi_parameter WHERE key = 'env'").Scan(&val); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT value FROM pg_temp._pgmi_parameter WHERE key = 'env'").Scan(&val); err != nil {
 		t.Fatalf("Failed to query env parameter: %v", err)
 	}
 	if val != "staging" {
@@ -231,7 +231,7 @@ func TestInsertParams_SpecialValues_Internal(t *testing.T) {
 
 	for key, expected := range checks {
 		var val string
-		if err := conn.QueryRow(ctx, "SELECT value FROM pg_temp.pgmi_parameter WHERE key = $1", key).Scan(&val); err != nil {
+		if err := conn.QueryRow(ctx, "SELECT value FROM pg_temp._pgmi_parameter WHERE key = $1", key).Scan(&val); err != nil {
 			t.Fatalf("Failed to query parameter %s: %v", key, err)
 		}
 		if val != expected {
@@ -364,7 +364,7 @@ func TestInsertMetadata_BatchExecution_Internal(t *testing.T) {
 	}
 
 	var metaCount int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source_metadata").Scan(&metaCount); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_source_metadata").Scan(&metaCount); err != nil {
 		t.Fatalf("Failed to query metadata count: %v", err)
 	}
 	if metaCount != 2 {
@@ -414,7 +414,7 @@ func TestInsertMetadata_FieldVerification_Internal(t *testing.T) {
 
 	err := conn.QueryRow(ctx, `
 		SELECT path, id, idempotent, sort_keys, description
-		FROM pg_temp.pgmi_source_metadata
+		FROM pg_temp._pgmi_source_metadata
 		WHERE path = './lib/core/init.sql'
 	`).Scan(&storedPath, &storedID, &storedIdempotent, &storedSortKeys, &storedDesc)
 	if err != nil {
@@ -476,7 +476,7 @@ func TestLoadFilesIntoSession_FullPath_Internal(t *testing.T) {
 	}
 
 	var fileCount int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source").Scan(&fileCount); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_source").Scan(&fileCount); err != nil {
 		t.Fatalf("Failed to query file count: %v", err)
 	}
 	if fileCount != 2 {
@@ -484,7 +484,7 @@ func TestLoadFilesIntoSession_FullPath_Internal(t *testing.T) {
 	}
 
 	var metaCount int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_source_metadata").Scan(&metaCount); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_source_metadata").Scan(&metaCount); err != nil {
 		t.Fatalf("Failed to query metadata count: %v", err)
 	}
 	if metaCount != 1 {
@@ -514,7 +514,7 @@ func TestLoadParametersIntoSession_FullPath_Internal(t *testing.T) {
 	}
 
 	var paramCount int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_parameter").Scan(&paramCount); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp._pgmi_parameter").Scan(&paramCount); err != nil {
 		t.Fatalf("Failed to query parameter count: %v", err)
 	}
 	if paramCount != 2 {
@@ -583,7 +583,7 @@ func TestInsertFiles_ContentPreservation_Internal(t *testing.T) {
 	}
 
 	var stored string
-	if err := conn.QueryRow(ctx, "SELECT content FROM pg_temp.pgmi_source WHERE path = './large.sql'").Scan(&stored); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT content FROM pg_temp._pgmi_source WHERE path = './large.sql'").Scan(&stored); err != nil {
 		t.Fatalf("Failed to query content: %v", err)
 	}
 	if stored != largeContent {

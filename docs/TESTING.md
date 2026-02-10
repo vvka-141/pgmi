@@ -12,21 +12,23 @@ Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXI
 
 pgmi takes a different approach: **your tests never leave permanent changes in the database.**
 
+**Video walkthrough:** [Transactional Testing with pgmi](https://youtu.be/n8Ut40tf2SY)
+
 ---
 
 ## How it works (the short version)
 
-When you run `pgmi test`, pgmi:
+When you use the `CALL pgmi_test()` macro in your `deploy.sql`, pgmi:
 
-1. Opens a transaction
-2. Runs your fixtures and tests inside that transaction
-3. Rolls the entire transaction back when done
+1. Expands the macro into inline SQL with savepoint management
+2. Runs your fixtures and tests inside savepoints
+3. Rolls back each test's changes via savepoint rollback
 
-Nothing persists. Your database is identical before and after the test run. Every time.
+Test data never persists. Your migrations commit, but test state is isolated. Every time.
 
-Inside that transaction, pgmi uses PostgreSQL **savepoints** to isolate each test from every other test. Each test gets a clean copy of the fixture state, regardless of what previous tests did.
+PostgreSQL **savepoints** isolate each test from every other test. Each test gets a clean copy of the fixture state, regardless of what previous tests did.
 
-You don't manage any of this. You write SQL. pgmi handles the rest.
+You don't manage any of this. You write SQL in `__test__/` directories and call `CALL pgmi_test()` in your deploy.sql.
 
 ---
 
@@ -84,21 +86,39 @@ END $$;
 
 Tests are plain SQL. If something is wrong, `RAISE EXCEPTION` stops execution immediately with a clear message. If everything is fine, the test completes silently (or with a `RAISE NOTICE` for your own visibility).
 
-### Step 3: Deploy, then test
+### Step 3: Add CALL pgmi_test() to deploy.sql
+
+Update your `deploy.sql` to include the test macro:
+
+```sql
+-- deploy.sql
+BEGIN;
+
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_source_view WHERE is_sql_file ORDER BY path)
+    LOOP
+        EXECUTE v_file.content;
+    END LOOP;
+END $$;
+
+-- Run tests with savepoint isolation
+CALL pgmi_test();
+
+COMMIT;
+```
+
+Then deploy:
 
 ```bash
-# First, deploy your schema
 pgmi deploy . --overwrite --force
-
-# Then, run tests
-pgmi test .
 ```
 
 You should see:
 
 ```
 PASS: users table works correctly
-All tests passed.
 ```
 
 ### Step 4: Check your database
@@ -181,19 +201,18 @@ BEGIN
 END $$;
 ```
 
-Run it:
+Deploy (with `pgmi_test()` in your deploy.sql):
 
 ```bash
-pgmi test .
+pgmi deploy . --overwrite --force
 ```
 
 ```
 PASS: insert works (3 users after insert)
 PASS: fixture provides exactly 2 users
-All tests passed.
 ```
 
-Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.sql` added a third. pgmi rolled back `test_insert.sql` before running `test_count.sql`.
+Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.sql` added a third. The savepoint rollback erased Charlie before running `test_count.sql`.
 
 **This is the core guarantee: every test starts from the exact fixture state, no matter what.**
 
@@ -330,20 +349,22 @@ Each subdirectory gets its parent's fixture plus its own. Tests in `orders/` see
 
 ## Filtering tests
 
-You don't have to run everything every time:
+You don't have to run everything every time. Pass a pattern to `CALL pgmi_test()`:
 
-```bash
-# Run only order-related tests
-pgmi test . --filter "/orders/"
+```sql
+-- In deploy.sql
 
-# Run only a specific test file
-pgmi test . --filter "test_admin_access"
+-- Run only order-related tests
+CALL pgmi_test('.*/orders/.*');
 
-# List all tests without running them
-pgmi test . --list
+-- Run only a specific test file
+CALL pgmi_test('.*test_admin_access.*');
+
+-- Run all tests (default)
+CALL pgmi_test();
 ```
 
-When you filter, pgmi automatically includes all ancestor fixtures. If you run `--filter "/orders/"`, pgmi still runs the root `_setup.sql` (because `orders/_setup.sql` depends on it) — you don't need to think about this.
+When you filter, pgmi automatically includes all ancestor fixtures. If you run `pgmi_test('.*/orders/.*')`, pgmi still runs the root `_setup.sql` (because `orders/_setup.sql` depends on it) — you don't need to think about this.
 
 ---
 
@@ -434,124 +455,99 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 
 ## The gated deployment pattern
 
-So far, you've been running tests *after* deployment with `pgmi test`. But pgmi can also run tests **as a gate before committing** — so that if any test fails, the entire deployment rolls back and your database is unchanged.
+The `CALL pgmi_test()` macro runs tests **as a gate before committing** — if any test fails, the entire deployment rolls back and your database is unchanged.
 
-To understand how this works, you need to know one thing about `deploy.sql`: **it doesn't execute SQL directly. It builds a plan.**
+### How it works
 
-### Why deploy.sql builds a plan
-
-When pgmi runs `deploy.sql`, your script doesn't execute migrations immediately. Instead, it schedules commands into a queue (`pg_temp.pgmi_plan`). After `deploy.sql` finishes, pgmi reads that queue and executes it step by step.
-
-This is why `deploy.sql` uses `pgmi_plan_*` functions instead of running SQL directly:
-
-```sql
--- This does NOT run BEGIN immediately.
--- It adds "BEGIN;" to the execution queue.
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-```
-
-Think of it like writing a recipe vs. cooking. `deploy.sql` writes the recipe. pgmi follows it afterward.
-
-Here are the functions you'll use:
-
-| Function | What it schedules |
-|----------|-------------------|
-| `pgmi_plan_command('SQL')` | A raw SQL statement (e.g., `BEGIN;`, `COMMIT;`) |
-| `pgmi_plan_file('./path/to/file.sql')` | The contents of a project file |
-| `pgmi_plan_tests()` | All tests with their savepoints and rollbacks |
-
-### Why this matters for testing
-
-`pgmi_plan_tests()` is the key. When you call it inside `deploy.sql`, pgmi generates the entire savepoint structure you saw in the earlier sections — every fixture setup, every test wrapped in its own savepoint, every rollback — and inserts all of it into the execution queue. You don't manage savepoints yourself. You just call `pgmi_plan_tests()` and pgmi takes care of the rest.
-
-### Putting it together
+pgmi uses a **direct execution model**: your `deploy.sql` queries files from `pgmi_plan_view` and executes them directly with `EXECUTE`. The `pgmi_test()` preprocessor macro expands into inline SQL that handles test execution with automatic savepoints.
 
 Here's a `deploy.sql` that deploys your schema and gates the commit on tests passing:
 
 ```sql
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    -- Schedule: start a transaction
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
-    -- Schedule: execute each migration file
+    -- Execute each migration file directly
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE is_sql_file ORDER BY path
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
     )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    -- Schedule: run all tests (with automatic savepoints)
-    PERFORM pg_temp.pgmi_plan_tests();
-
-    -- Schedule: commit only if everything above succeeded
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
+
+-- Run all tests (preprocessor macro expands to test execution with savepoints)
+CALL pgmi_test();
+
+COMMIT;
 ```
 
-After `deploy.sql` finishes, the execution queue looks like this:
+The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreSQL. It generates the entire savepoint structure — every fixture setup, every test wrapped in its own savepoint, every rollback.
+
+### What happens at runtime
 
 ```
 1.  BEGIN;
-2.  <contents of 001_initial.sql>
-3.  <contents of 002_add_email.sql>
-4.  SAVEPOINT sp_setup_root;           ┐
-5.  <_setup.sql contents>              │
-6.  SAVEPOINT sp_test_1;               │
-7.  <test_insert.sql contents>         │  generated by
-8.  ROLLBACK TO sp_test_1;             │  pgmi_plan_tests()
-9.  SAVEPOINT sp_test_2;               │
-10. <test_count.sql contents>          │
-11. ROLLBACK TO sp_test_2;             │
-12. ROLLBACK TO sp_setup_root;         ┘
+2.  <contents of 001_initial.sql>       ← EXECUTE v_file.content
+3.  <contents of 002_add_email.sql>     ← EXECUTE v_file.content
+4.  SAVEPOINT sp_setup_root;            ┐
+5.  <_setup.sql contents>               │
+6.  SAVEPOINT sp_test_1;                │
+7.  <test_insert.sql contents>          │  expanded from
+8.  ROLLBACK TO sp_test_1;              │  pgmi_test()
+9.  SAVEPOINT sp_test_2;                │
+10. <test_count.sql contents>           │
+11. ROLLBACK TO sp_test_2;              │
+12. ROLLBACK TO sp_setup_root;          ┘
 13. COMMIT;
 ```
 
-pgmi executes this queue top to bottom. If any test raises an exception at step 6–11, PostgreSQL aborts the transaction and `COMMIT` at step 13 never runs. Your migrations from steps 2–3 are rolled back. **The database is unchanged.**
+If any test raises an exception (steps 6–11), PostgreSQL aborts the transaction and `COMMIT` at step 13 never runs. Your migrations from steps 2–3 are rolled back. **The database is unchanged.**
 
 If all tests pass, the savepoints roll back the test data (so it doesn't persist), but the migrations remain, and `COMMIT` makes them permanent.
 
 **Successful deployment implies all tests passed. Failed tests mean zero changes to your database.**
 
-### How this differs from `pgmi test`
-
-| | `pgmi test` | Gated deployment |
-|---|-------------|-----------------|
-| When to use | After deployment, for verification | During deployment, as a safety gate |
-| Who controls the transaction | pgmi (always rolls back) | You (via `deploy.sql`) |
-| What happens on success | Everything rolls back | Migrations commit, test data rolls back |
-| What happens on failure | Everything rolls back | Everything rolls back (including migrations) |
-
 ---
 
 ## Running tests
 
-```bash
-# Deploy first (tests need the schema to exist)
-pgmi deploy . --overwrite --force
+Tests run as part of deployment via the `CALL pgmi_test()` macro in your `deploy.sql`:
 
-# Run all tests
-pgmi test .
+```sql
+-- deploy.sql
+BEGIN;
 
-# Run with verbose output (shows PostgreSQL DEBUG messages)
-pgmi test . --verbose
+-- ... your migrations ...
 
-# Filter by path pattern (POSIX regex)
-pgmi test . --filter "/orders/"
+-- Run all tests
+CALL pgmi_test();
 
-# List tests without executing
-pgmi test . --list
+-- Or filter by pattern
+-- CALL pgmi_test('.*/orders/.*');
+
+COMMIT;
 ```
 
-The `pgmi test` command:
-- Does **not** deploy anything — run `pgmi deploy` first
+```bash
+# Deploy with tests
+pgmi deploy . --overwrite --force
+
+# Verbose output (shows PostgreSQL DEBUG messages)
+pgmi deploy . --overwrite --force --verbose
+```
+
+The `CALL pgmi_test()` macro:
 - Runs **only** files from `__test__/` or `__tests__/` directories
-- **Always** rolls back — zero side effects on your database
+- Uses **savepoints** to isolate each test — test data never persists
 - Stops at the **first failure** — no partial results to interpret
+- Gates the `COMMIT` — failed tests mean zero changes to your database
 
 ---
 
@@ -559,7 +555,7 @@ The `pgmi test` command:
 
 ### "relation does not exist"
 
-Your test references a table that hasn't been deployed yet. Run `pgmi deploy . --overwrite --force` before running tests.
+Your test references a table that hasn't been deployed yet. Ensure your migrations run before `pgmi_test()` in your deploy.sql.
 
 ### Test passes alone but fails with others
 

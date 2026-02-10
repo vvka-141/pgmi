@@ -15,6 +15,8 @@ func FuzzParseConnectionString(f *testing.F) {
 	f.Add("Server=localhost;Port=5432;Database=db;User ID=user;Password=pass")
 	f.Add("postgresql://user:p@ss%20w0rd@localhost:5432/db?sslmode=require")
 	f.Add("postgresql://user@localhost:5432/db?application_name=pgmi")
+	f.Add("postgresql://user@localhost:5432/db?sslcert=/path/client.crt&sslkey=/path/client.key&sslrootcert=/path/ca.crt&sslpassword=keypass")
+	f.Add("Host=localhost;Database=db;sslcert=/path/client.crt;sslkey=/path/client.key;sslrootcert=/path/ca.crt")
 
 	// Seed with edge cases
 	f.Add("")

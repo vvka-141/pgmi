@@ -40,6 +40,42 @@ func (a *AzureFlags) IsEmpty() bool {
 	return a == nil || (!a.Enabled && a.TenantID == "" && a.ClientID == "")
 }
 
+// AWSFlags represents AWS IAM authentication CLI flags.
+// These override the corresponding AWS_* environment variables.
+type AWSFlags struct {
+	Enabled bool
+	Region  string // Overrides AWS_REGION or AWS_DEFAULT_REGION
+}
+
+// IsEmpty returns true if no AWS flags were provided.
+func (a *AWSFlags) IsEmpty() bool {
+	return a == nil || (!a.Enabled && a.Region == "")
+}
+
+// GoogleFlags represents Google Cloud SQL IAM authentication CLI flags.
+type GoogleFlags struct {
+	Enabled  bool
+	Instance string // Instance connection name: project:region:instance
+}
+
+// IsEmpty returns true if no Google flags were provided.
+func (g *GoogleFlags) IsEmpty() bool {
+	return g == nil || (!g.Enabled && g.Instance == "")
+}
+
+// CertFlags represents TLS client certificate CLI flags.
+// These are additive — they can be combined with --connection or granular flags.
+type CertFlags struct {
+	SSLCert     string
+	SSLKey      string
+	SSLRootCert string
+}
+
+// IsEmpty returns true if no certificate flags were provided.
+func (c *CertFlags) IsEmpty() bool {
+	return c == nil || (c.SSLCert == "" && c.SSLKey == "" && c.SSLRootCert == "")
+}
+
 // IsEmpty returns true if no connection-related granular flags were provided by the user.
 // Note: Database flag is excluded from this check because it can be used to override
 // the database specified in a connection string.
@@ -62,10 +98,20 @@ type EnvVars struct {
 	AZURE_TENANT_ID     string // Azure AD tenant/directory ID
 	AZURE_CLIENT_ID     string // Azure AD application/client ID
 	AZURE_CLIENT_SECRET string // Azure AD client secret (for Service Principal auth)
+
+	// AWS IAM environment variables (AWS SDK standard names)
+	AWS_REGION         string // AWS region for RDS IAM auth
+	AWS_DEFAULT_REGION string // Fallback region (AWS SDK convention)
+
+	// TLS client certificate environment variables (PostgreSQL standard)
+	PGSSLCERT     string // Client certificate path
+	PGSSLKEY      string // Client key path
+	PGSSLROOTCERT string // Root CA certificate path
+	PGSSLPASSWORD string // Client key password
 }
 
 // LoadFromEnvironment loads PostgreSQL and cloud provider environment variables.
-// This follows standard PostgreSQL client behavior and Azure SDK conventions.
+// This follows standard PostgreSQL client behavior and Azure/AWS SDK conventions.
 func LoadFromEnvironment() *EnvVars {
 	return &EnvVars{
 		PGHOST:              os.Getenv("PGHOST"),
@@ -78,6 +124,12 @@ func LoadFromEnvironment() *EnvVars {
 		AZURE_TENANT_ID:     os.Getenv("AZURE_TENANT_ID"),
 		AZURE_CLIENT_ID:     os.Getenv("AZURE_CLIENT_ID"),
 		AZURE_CLIENT_SECRET: os.Getenv("AZURE_CLIENT_SECRET"),
+		AWS_REGION:          os.Getenv("AWS_REGION"),
+		AWS_DEFAULT_REGION:  os.Getenv("AWS_DEFAULT_REGION"),
+		PGSSLCERT:           os.Getenv("PGSSLCERT"),
+		PGSSLKEY:            os.Getenv("PGSSLKEY"),
+		PGSSLROOTCERT:       os.Getenv("PGSSLROOTCERT"),
+		PGSSLPASSWORD:       os.Getenv("PGSSLPASSWORD"),
 	}
 }
 
@@ -94,10 +146,11 @@ func (e *EnvVars) HasAzureCredentials() bool {
 // 4. DATABASE_URL environment variable - fallback if no granular params
 // 5. Defaults (localhost:5432, prefer SSL)
 //
-// Azure Entra ID Authentication:
-// If azureFlags are provided OR Azure environment variables are set (AZURE_TENANT_ID, etc.),
-// the AuthMethod is set to AzureEntraID and credentials are attached to the config.
+// Cloud Authentication:
+// If azureFlags/awsFlags/googleFlags are provided OR corresponding environment variables are set,
+// the AuthMethod is set accordingly and credentials are attached to the config.
 // CLI flags take precedence over environment variables.
+// Azure, AWS, and Google flags are mutually exclusive.
 //
 // Returns:
 //   - ConnectionConfig with all parameters resolved
@@ -111,6 +164,9 @@ func ResolveConnectionParams(
 	connStringFlag string,
 	granularFlags *GranularConnFlags,
 	azureFlags *AzureFlags,
+	awsFlags *AWSFlags,
+	googleFlags *GoogleFlags,
+	certFlags *CertFlags,
 	envVars *EnvVars,
 	projectConfig *config.ProjectConfig,
 ) (*pgmi.ConnectionConfig, string, error) {
@@ -121,8 +177,29 @@ func ResolveConnectionParams(
 	if azureFlags == nil {
 		azureFlags = &AzureFlags{}
 	}
+	if awsFlags == nil {
+		awsFlags = &AWSFlags{}
+	}
+	if googleFlags == nil {
+		googleFlags = &GoogleFlags{}
+	}
 	if envVars == nil {
 		envVars = &EnvVars{}
+	}
+
+	// Check for conflicts: cannot use multiple cloud auth methods
+	enabledCount := 0
+	if !azureFlags.IsEmpty() {
+		enabledCount++
+	}
+	if !awsFlags.IsEmpty() {
+		enabledCount++
+	}
+	if !googleFlags.IsEmpty() {
+		enabledCount++
+	}
+	if enabledCount > 1 {
+		return nil, "", fmt.Errorf("cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google")
 	}
 
 	// Check for conflicts: connection string XOR granular flags
@@ -158,6 +235,15 @@ func ResolveConnectionParams(
 	// Apply Azure Entra ID authentication if configured
 	applyAzureAuth(config, azureFlags, envVars)
 
+	// Apply AWS IAM authentication if configured
+	applyAWSAuth(config, awsFlags, envVars)
+
+	// Apply Google Cloud SQL IAM authentication if configured
+	applyGoogleAuth(config, googleFlags)
+
+	// Apply TLS client certificate parameters
+	applyCertParams(config, certFlags, envVars, projectConfig)
+
 	return config, maintenanceDB, nil
 }
 
@@ -185,6 +271,73 @@ func applyAzureAuth(config *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVa
 		config.AzureTenantID = tenantID
 		config.AzureClientID = clientID
 		config.AzureClientSecret = clientSecret
+	}
+}
+
+// applyAWSAuth sets AWS IAM authentication on the config if enabled.
+// CLI flags take precedence over environment variables.
+func applyAWSAuth(config *pgmi.ConnectionConfig, flags *AWSFlags, env *EnvVars) {
+	// Determine region: flag > AWS_REGION > AWS_DEFAULT_REGION
+	region := flags.Region
+	if region == "" {
+		region = env.AWS_REGION
+	}
+	if region == "" {
+		region = env.AWS_DEFAULT_REGION
+	}
+
+	// If AWS auth is enabled (via flag), switch to AWS IAM auth
+	if flags.Enabled {
+		config.AuthMethod = pgmi.AuthMethodAWSIAM
+		config.AWSRegion = region
+	}
+}
+
+// applyGoogleAuth sets Google Cloud SQL IAM authentication on the config if enabled.
+func applyGoogleAuth(config *pgmi.ConnectionConfig, flags *GoogleFlags) {
+	if flags.Enabled {
+		config.AuthMethod = pgmi.AuthMethodGoogleIAM
+		config.GoogleInstance = flags.Instance
+	}
+}
+
+// applyCertParams sets TLS client certificate parameters on the config.
+// Precedence: flag > env var > pgmi.yaml > existing (from connection string).
+// SSLPassword is only available from env var (no flag, no yaml — security).
+func applyCertParams(cfg *pgmi.ConnectionConfig, flags *CertFlags, env *EnvVars, pc *config.ProjectConfig) {
+	var yamlCert, yamlKey, yamlRootCert string
+	if pc != nil {
+		yamlCert = pc.Connection.SSLCert
+		yamlKey = pc.Connection.SSLKey
+		yamlRootCert = pc.Connection.SSLRootCert
+	}
+
+	if flags != nil && flags.SSLCert != "" {
+		cfg.SSLCert = flags.SSLCert
+	} else if env != nil && env.PGSSLCERT != "" {
+		cfg.SSLCert = env.PGSSLCERT
+	} else if yamlCert != "" {
+		cfg.SSLCert = yamlCert
+	}
+
+	if flags != nil && flags.SSLKey != "" {
+		cfg.SSLKey = flags.SSLKey
+	} else if env != nil && env.PGSSLKEY != "" {
+		cfg.SSLKey = env.PGSSLKEY
+	} else if yamlKey != "" {
+		cfg.SSLKey = yamlKey
+	}
+
+	if flags != nil && flags.SSLRootCert != "" {
+		cfg.SSLRootCert = flags.SSLRootCert
+	} else if env != nil && env.PGSSLROOTCERT != "" {
+		cfg.SSLRootCert = env.PGSSLROOTCERT
+	} else if yamlRootCert != "" {
+		cfg.SSLRootCert = yamlRootCert
+	}
+
+	if env != nil && env.PGSSLPASSWORD != "" {
+		cfg.SSLPassword = env.PGSSLPASSWORD
 	}
 }
 

@@ -117,9 +117,8 @@ myproject/
 ├── api/                      # YOUR API HANDLERS
 │   └── examples.sql          # Starting point - modify/replace this
 ├── __test__/                 # YOUR TESTS
-├── deploy.sql                # Deployment orchestrator
+├── deploy.sql                # Deployment orchestrator (includes infrastructure bootstrap)
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
-├── init.sql                  # Infrastructure bootstrap (roles, schemas)
 └── README.md
 ```
 
@@ -130,8 +129,7 @@ myproject/
 | `lib/` | Framework code (HTTP routing, types, utilities) | Rarely - extend in root dirs instead |
 | `api/` | Your HTTP handlers (REST, RPC, MCP) | Yes - your application code |
 | `__test__/` | Your application tests | Yes - add tests here |
-| `deploy.sql` | Deployment phases and transaction control | Yes - customize deployment |
-| `init.sql` | Roles, schemas, extensions | Yes - customize infrastructure |
+| `deploy.sql` | Deployment phases, transaction control, infrastructure bootstrap | Yes - customize deployment |
 
 ## Quick Start
 
@@ -140,15 +138,12 @@ myproject/
 ```bash
 pgmi deploy . --database myapp_dev \
   --param database_admin_password="AdminPass123!" \
-  --param database_api_password="ApiPass123!"
+  --param database_customer_password="CustomerPass123!"
 ```
 
 ### 2. Test the Examples
 
-```bash
-# Run all tests
-pgmi test . -d myapp_dev
-```
+Tests run automatically as part of deployment via the `pgmi_test()` macro in deploy.sql. If all tests pass, the deployment commits. If any test fails, the deployment rolls back.
 
 ### 3. Add Your Own Handler
 
@@ -334,20 +329,29 @@ END;
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
 | `database_admin_password` | - | **Yes** | Admin role password |
-| `database_api_password` | - | **Yes** | API role password |
+| `database_customer_password` | - | **Yes** | Customer role password |
 | `database_owner_role` | `<dbname>_owner` | No | Owner role (NOLOGIN) |
-| `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN) |
-| `database_api_role` | `<dbname>_api` | No | API role (LOGIN) |
+| `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN, full access) |
+| `database_api_role` | `<dbname>_api` | No | API group role (NOLOGIN, permission bundle) |
+| `database_customer_role` | `<dbname>_customer` | No | Customer role (LOGIN, RLS-restricted) |
 | `env` | `development` | No | Environment name |
 
 ## Role Hierarchy
 
 ```
 database_owner_role (NOLOGIN)
-    ↑ INHERIT TRUE
-database_admin_role (LOGIN) ← For administrators
+  └── owns all database objects
 
-database_api_role (LOGIN) ← For API clients (EXECUTE only)
+database_api_role (NOLOGIN)
+  └── permission bundle for API access
+
+database_admin_role (LOGIN)
+  └── inherits: owner + api
+  └── full database access
+
+database_customer_role (LOGIN)
+  └── inherits: api
+  └── RLS-restricted access
 ```
 
 ## Four-Schema Design
@@ -379,14 +383,13 @@ Your files execute after framework files (use sortKeys `005/xxx` or higher).
 
 ## Testing
 
-Tests run in a transaction that automatically rolls back:
+Tests run as part of deployment via the `pgmi_test()` macro in deploy.sql. Each test runs in a savepoint that rolls back, so test data never persists while your migrations commit.
 
-```bash
-# Run all tests
-pgmi test . -d myapp_dev
+To filter tests, pass a pattern to the macro in deploy.sql:
 
-# Run filtered tests
-pgmi test . -d myapp_dev --filter "/api/"
+```sql
+-- Run only API tests
+pgmi_test('.*/api/.*');
 ```
 
 ## Troubleshooting
@@ -395,7 +398,7 @@ pgmi test . -d myapp_dev --filter "/api/"
 ```bash
 pgmi deploy . -d mydb \
   --param database_admin_password="..." \
-  --param database_api_password="..."
+  --param database_customer_password="..."
 ```
 
 ### Script execution order issues

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -69,6 +70,7 @@ func (sm *SessionManager) PrepareSession(
 	connConfig *pgmi.ConnectionConfig,
 	sourcePath string,
 	parameters map[string]string,
+	compat string,
 	verbose bool,
 ) (*pgmi.Session, error) {
 	// Scan and validate source files
@@ -105,8 +107,8 @@ func (sm *SessionManager) PrepareSession(
 		}
 	}
 
-	// Prepare session (utility functions, files, params, unittest framework)
-	if err := sm.prepareSessionTables(ctx, conn, &scanResult, parameters); err != nil {
+	// Prepare session (utility functions, files, params, API contract)
+	if err := sm.prepareSessionTables(ctx, conn, &scanResult, parameters, compat); err != nil {
 		return nil, fmt.Errorf("session preparation failed: %w", err)
 	}
 
@@ -163,35 +165,36 @@ func (sm *SessionManager) prepareSessionTables(
 	conn *pgxpool.Conn,
 	scanResult *pgmi.FileScanResult,
 	parameters map[string]string,
+	compat string,
 ) error {
-	// Create utility functions in pg_temp schema
-	sm.logger.Verbose("Creating utility functions in pg_temp schema...")
+	// Create internal tables and functions in pg_temp schema
+	sm.logger.Verbose("Creating internal tables in pg_temp schema...")
 	if err := params.CreateSchema(ctx, conn); err != nil {
-		return fmt.Errorf("failed to create utility functions: %w", err)
+		return fmt.Errorf("failed to create internal tables: %w", err)
 	}
-	sm.logger.Info("✓ Created utility functions in pg_temp schema")
+	sm.logger.Info("✓ Created internal tables in pg_temp schema")
 
-	// Load files into pg_temp.pgmi_source table
-	sm.logger.Verbose("Loading files into pg_temp.pgmi_source table...")
+	// Load files into pg_temp._pgmi_source table
+	sm.logger.Verbose("Loading files into pg_temp._pgmi_source table...")
 	if err := sm.fileLoader.LoadFilesIntoSession(ctx, conn, scanResult.Files); err != nil {
 		return fmt.Errorf("failed to load files: %w", err)
 	}
-	sm.logger.Info("✓ Loaded %d files into pg_temp.pgmi_source", len(scanResult.Files))
+	sm.logger.Info("✓ Loaded %d files into pg_temp._pgmi_source", len(scanResult.Files))
 
-	// Load parameters into pg_temp.pgmi_parameter table
-	sm.logger.Verbose("Loading parameters into pg_temp.pgmi_parameter table...")
+	// Load parameters into pg_temp._pgmi_parameter table
+	sm.logger.Verbose("Loading parameters into pg_temp._pgmi_parameter table...")
 	if err := sm.fileLoader.LoadParametersIntoSession(ctx, conn, parameters); err != nil {
 		return fmt.Errorf("failed to load parameters: %w", err)
 	}
-	sm.logger.Info("✓ Loaded %d parameters into pg_temp.pgmi_parameter", len(parameters))
+	sm.logger.Info("✓ Loaded %d parameters into pg_temp._pgmi_parameter", len(parameters))
 
-	// Create unittest framework in pg_temp schema (after pgmi_source is populated)
-	// This executes unittest.sql which moves test files from pgmi_source and materializes the execution plan
-	sm.logger.Verbose("Creating unit test framework in pg_temp schema...")
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		return fmt.Errorf("failed to create unittest framework: %w", err)
+	// Apply API contract (creates views and pgmi_test_generate)
+	sm.logger.Verbose("Applying API contract...")
+	appliedVersion, err := contract.Apply(ctx, conn, compat)
+	if err != nil {
+		return fmt.Errorf("failed to apply API contract: %w", err)
 	}
-	sm.logger.Info("✓ Created unit test framework in pg_temp schema")
+	sm.logger.Info("✓ Applied API contract v%s", appliedVersion)
 
 	return nil
 }

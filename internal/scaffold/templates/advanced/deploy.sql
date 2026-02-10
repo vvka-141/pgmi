@@ -1,534 +1,439 @@
 -- ============================================================================
 -- deploy.sql - Deployment Orchestrator (Advanced Template)
 -- ============================================================================
--- This file controls HOW your SQL gets executed. pgmi loads your files
--- into session-scoped temporary tables and lets YOU decide execution order.
+-- This file controls HOW your SQL gets executed. pgmi loads your files into
+-- session-scoped temporary tables, then hands control to this script.
 --
--- Available session tables:
---   pg_temp.pgmi_source           - Your SQL files (migrations, schemas, etc.)
---   pg_temp.pgmi_unittest_script  - Your test files (from __test__/ directories)
---   pg_temp.pgmi_parameter        - CLI params from --param key=value
---   pg_temp.pgmi_plan             - Execution plan (populated by helpers below)
+-- Available:
+--   pg_temp.pgmi_plan_view    - Your SQL files in execution order
+--   pg_temp.pgmi_source_view  - Source files
+--   pg_temp.pgmi_parameter    - CLI params (--param key=value)
+--   pg_temp.pgmi_test_source  - Test files from __test__/ directories
+--   CALL pgmi_test()                 - Run tests with savepoint isolation
+--   CALL pgmi_test(pattern, callback) - Run filtered tests with callback
 --
--- Helper functions:
---   pgmi_declare_param(key, type, ...)         - Declare parameter with type validation and defaults
---   pgmi_get_param(key, default)               - Get parameter value with fallback
---   pgmi_plan_command(sql)                     - Add raw SQL to execution plan
---   pgmi_plan_notice(msg, args...)             - Add log message to plan
---   pgmi_plan_file(path)                       - Add file content to plan
---   pgmi_plan_do(plpgsql_code)                 - Add PL/pgSQL block to plan
---   pgmi_plan_tests(pattern)                   - Execute unit tests with optional path filtering
+-- Parameters are declared in session.xml and accessed via:
+--   current_setting('deployment.<key>') - Direct PostgreSQL session variable
+--   pg_temp.deployment_setting(key)     - Helper with error handling
 -- ============================================================================
+
+DROP TABLE IF EXISTS pg_temp.deployment_parameter;
+CREATE TEMPORARY TABLE deployment_parameter (
+    key TEXT PRIMARY KEY,
+    original_key TEXT NOT NULL,
+    value TEXT,
+    description TEXT,
+    is_redundant BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+DO $$
+DECLARE
+    v_xml XML;
+BEGIN
+    SELECT content::xml INTO v_xml
+    FROM pg_temp.pgmi_source_view
+    WHERE path = './session.xml';
+
+    IF v_xml IS NULL THEN
+        RAISE EXCEPTION 'session.xml not found in project. Create it to declare deployment parameters.';
+    END IF;
+
+    INSERT INTO pg_temp.deployment_parameter (key, original_key, value, description, is_redundant)
+    SELECT
+        COALESCE(xml.normalized_key, cli.normalized_key),
+        COALESCE(xml.original_key, cli.key),
+        cli.value,
+        xml.description,
+        xml.original_key IS NULL
+    FROM (
+        SELECT
+            trim(param_key) AS original_key,
+            regexp_replace(lower(trim(param_key)), '[^a-z0-9]+', '_', 'g') AS normalized_key,
+            NULLIF(trim(COALESCE(param_desc, '')), '') AS description
+        FROM XMLTABLE('/session/parameter' PASSING v_xml
+            COLUMNS param_key TEXT PATH '@key', param_desc TEXT PATH '@description')
+        WHERE param_key IS NOT NULL AND trim(param_key) != ''
+    ) xml
+    FULL OUTER JOIN (
+        SELECT key, value, regexp_replace(lower(key), '[^a-z0-9]+', '_', 'g') AS normalized_key
+        FROM pg_temp.pgmi_parameter_view
+    ) cli ON xml.normalized_key = cli.normalized_key;
+END $$;
+
+
+
+UPDATE pg_temp.deployment_parameter
+SET value = CASE key
+    WHEN 'env' THEN 'dev'
+    WHEN 'database_owner_role' THEN current_database()::text || '_owner'
+    WHEN 'database_admin_role' THEN current_database()::text || '_admin'
+    WHEN 'database_api_role' THEN current_database()::text || '_api'
+    WHEN 'database_customer_role' THEN current_database()::text || '_customer'
+    ELSE NULL
+END
+WHERE value IS NULL;
+
+UPDATE pg_temp.deployment_parameter
+SET value = 'postgres'
+WHERE value IS NULL
+  AND key ~ 'password$'
+  AND EXISTS (SELECT 1 FROM pg_temp.deployment_parameter WHERE key = 'env' AND value = 'dev');
 
 
 DO $$
+DECLARE
+    v_param pg_temp.deployment_parameter;
+    v_missing TEXT;
+    v_redundant TEXT;
 BEGIN
-    IF current_setting('server_version_num')::int < 160000 THEN
-        RAISE WARNING $msg$
-════════════════════════════════════════════════════════════════════════
-  PostgreSQL % detected. This template targets PostgreSQL 16+.
-  Some SQL features may not be available on your server version.
-  If deployment fails, review the error and adjust the SQL to match
-  your PostgreSQL version. See: https://www.postgresql.org/docs/release/
-════════════════════════════════════════════════════════════════════════
-$msg$, current_setting('server_version');
+    SELECT
+        string_agg(original_key, ', ') FILTER (WHERE value IS NULL),
+        string_agg(original_key, ', ') FILTER (WHERE is_redundant)
+    INTO v_missing, v_redundant
+    FROM pg_temp.deployment_parameter;
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Missing required parameters: %. Provide via: pgmi deploy --param <key>=<value>', v_missing;
     END IF;
+
+    IF v_redundant IS NOT NULL THEN
+        RAISE EXCEPTION 'Unknown parameters: %. These are not declared in session.xml', v_redundant;
+    END IF;
+
+    FOR v_param IN SELECT * FROM pg_temp.deployment_parameter ORDER BY key LOOP
+        PERFORM set_config('deployment.' || v_param.key, v_param.value, false);
+        PERFORM set_config('pgmi.' || v_param.key, v_param.value, false);
+        RAISE NOTICE '[pgmi] Parameter: % = %',
+            v_param.original_key,
+            CASE WHEN v_param.key ~ 'password' THEN '********' ELSE v_param.value END;
+    END LOOP;
 END $$;
 
-SELECT pg_temp.pgmi_plan_command($$
-    BEGIN;
-    SELECT pg_temp.provision();
-    SELECT pg_temp.deploy();
-    SAVEPOINT before_application_tests;
-$$);
-SELECT pg_temp.pgmi_plan_tests();
-SELECT pg_temp.pgmi_plan_command($$
-    ROLLBACK TO SAVEPOINT before_application_tests;
-    SELECT pg_temp.persist_unittest_metadata();
-    COMMIT;
-$$);
 
-
-
--- ============================================================================
--- STEP 0: Declare Parameters (Type-Safe Configuration)
--- ============================================================================
--- Parameters are automatically available as PostgreSQL session variables
--- with the 'pgmi.' namespace prefix (no manual initialization needed).
---
--- Parameter Contract:
---   database_owner_role      - Database owner role (NOLOGIN) - defaults to <dbname>_owner
---   database_admin_role      - Admin role (LOGIN) - defaults to <dbname>_admin
---   database_admin_password  - Admin password - REQUIRED (no default)
---   database_api_role        - API client role (LOGIN) - defaults to <dbname>_api
---   database_api_password    - API password - REQUIRED (no default)
---   env                      - Deployment environment - defaults to 'development'
---   httpincomingqueuepartitions - HTTP framework queue partitions - defaults to 30
---
--- Example:
---   pgmi deploy . \
---     --param database_admin_password=SecureAdminP@ss \
---     --param database_api_password=SecureApiP@ss
---
--- Note: CLI parameters (--param) are already loaded as session variables.
---       Declarations add defaults and type validation.
-
--- Declare deployment parameters using compact VALUES+SELECT pattern
-SELECT pg_temp.pgmi_declare_param(
-    p_key => declarations.key,
-    p_type => declarations.type,
-    p_default_value => declarations.default_value,
-    p_required => declarations.required,
-    p_description => declarations.description
-)
-FROM (VALUES
-    -- Database role configuration
-    ('database_owner_role',          'name', current_database()::TEXT || '_owner', false, 'Database owner role (NOLOGIN)'),
-    ('database_admin_role',          'name', current_database()::TEXT || '_admin', false, 'Admin role with LOGIN capability'),
-    ('database_admin_password',      'text', NULL,                                 true,  'Password for database_admin_role (REQUIRED)'),
-    ('database_api_role',            'name', current_database()::TEXT || '_api',   false, 'API client role with LOGIN capability'),
-    ('database_api_password',        'text', NULL,                                 true,  'Password for database_api_role (REQUIRED)'),
-    ('database_customer_role',       'name', current_database()::TEXT || '_customer', false, 'Customer role with LOGIN capability (RLS-restricted)'),
-    ('database_customer_password',   'text', NULL,                                 true,  'Password for database_customer_role (REQUIRED)'),
-
-    -- Environment configuration
-    ('env',                          'text', 'development',                        false, 'Deployment environment (development, staging, production)'),
-
-    -- HTTP framework configuration
-    ('httpincomingqueuepartitions',  'int',  '30',                                 false, 'HTTP incoming request queue partition count')
-) AS declarations(key, type, default_value, required, description);
-
-
--- ============================================================================
--- STEP 1: Bootstrap Infrastructure (Single Superuser Phase)
--- ============================================================================
--- Consolidates ALL privileged operations into one block, then performs
--- a SINGLE handoff to the database owner role. After the SET ROLE command,
--- the deployment NEVER returns to superuser context.
---
--- Superuser Responsibilities (BEFORE SET ROLE):
---   1. Create role hierarchy (owner, admin, api)
---   2. Create extensions schema (owned by superuser)
---   3. Install PostgreSQL extensions
---   4. Assign database ownership to owner_role
---
--- Owner Role Responsibilities (AFTER SET ROLE):
---   5. Create internal schema
---   6. Create tracking table
---   7. All remaining deployment operations
---
--- This single-handoff model ensures:
---   - Minimal privilege escalation surface
---   - Clear security boundaries
---   - No role switching during deployment
-
-CREATE FUNCTION pg_temp.provision() RETURNS VOID 
-LANGUAGE plpgsql
-AS 
-$infrastructure$
+CREATE FUNCTION pg_temp.deployment_setting(p_key text, p_required boolean DEFAULT true)
+RETURNS TEXT LANGUAGE plpgsql AS $$
 DECLARE
-    v_owner_role TEXT := pg_temp.pgmi_get_param('database_owner_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_normalized TEXT := 'deployment.' || regexp_replace(lower(p_key), '[^a-z0-9]+', '_', 'g');
+    v_value TEXT;
 BEGIN
-    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
-    RAISE DEBUG 'Bootstrap: Creating deployment infrastructure';
-    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
+    v_value := current_setting(v_normalized, true);
+    IF v_value IS NULL AND p_required THEN
+        RAISE EXCEPTION 'Required deployment parameter "%" not set. Check session.xml and --param flags.', p_key;
+    END IF;
+    RETURN v_value;
+END;
+$$;
 
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- SUPERUSER PHASE: Privileged Operations
-    -- ═══════════════════════════════════════════════════════════════════════
 
-    RAISE DEBUG '';
-    RAISE DEBUG '→ Phase 1: Superuser Provisioning';
 
-    -- Create database owner role if it doesn't exist
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_owner_role) THEN
+-- ============================================================================
+-- SUPERUSER PHASE: Roles, Extensions, Ownership
+-- ============================================================================
+DO $superuser$
+DECLARE
+    v_owner_role TEXT := pg_temp.deployment_setting('database-owner-role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database-admin-role');
+    v_admin_password TEXT := pg_temp.deployment_setting('database-admin-password');
+    v_api_role TEXT := pg_temp.deployment_setting('database-api-role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database-customer-role');
+    v_customer_password TEXT := pg_temp.deployment_setting('database-customer-password');
+BEGIN
+    -- Owner role (NOLOGIN) - owns all database objects
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_owner_role) THEN
         EXECUTE format('CREATE ROLE %I NOLOGIN', v_owner_role);
-        RAISE NOTICE '  ✓ Created owner role: %', v_owner_role;
-    ELSE
-        RAISE DEBUG '  • Owner role exists: %', v_owner_role;
+        RAISE NOTICE '[pgmi] Created owner role: %', v_owner_role;
     END IF;
 
-    -- Grant owner role to current user (allows SET ROLE to owner)
-    -- INHERIT FALSE prevents cross-database interference
-    -- SET TRUE allows switching to this role via SET ROLE
-    EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
-    RAISE DEBUG '  ✓ Granted % to %', v_owner_role, CURRENT_USER;
-
-    -- Create admin and API roles (LOGIN roles require superuser privileges)
-    -- These must be created BEFORE SET ROLE since only superuser can create LOGIN roles
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_admin_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10',
-            v_admin_role,
-            pg_temp.pgmi_get_param('database_admin_password')
-        );
-        RAISE NOTICE '  ✓ Created admin role: % (LOGIN)', v_admin_role;
-    ELSE
-        -- Update password and connection limit if role exists
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10',
-            v_admin_role,
-            pg_temp.pgmi_get_param('database_admin_password')
-        );
-        RAISE DEBUG '  • Admin role exists (password updated): %', v_admin_role;
+    -- API role (NOLOGIN group) - permission bundle for API access
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_api_role) THEN
+        EXECUTE format('CREATE ROLE %I NOLOGIN', v_api_role);
+        RAISE NOTICE '[pgmi] Created API role: %', v_api_role;
     END IF;
 
-    EXECUTE format(
-        'COMMENT ON ROLE %I IS %L',
-        v_admin_role,
-        format('Database administrator for %s with LOGIN capability and owner privileges',
-               current_database())
-    );
+    -- Admin role (LOGIN) - inherits owner + api
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
+        RAISE NOTICE '[pgmi] Created admin role: %', v_admin_role;
+    ELSE
+        EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
+    END IF;
 
-    -- Grant owner to admin (INHERIT TRUE for automatic permissions)
+    -- Customer role (LOGIN) - inherits api, RLS-restricted
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_customer_role) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100', v_customer_role, v_customer_password);
+        RAISE NOTICE '[pgmi] Created customer role: %', v_customer_role;
+    ELSE
+        EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100', v_customer_role, v_customer_password);
+    END IF;
+
+    -- Role hierarchy
     EXECUTE format('GRANT %I TO %I', v_owner_role, v_admin_role);
-    RAISE NOTICE '  ✓ Granted % to %', v_owner_role, v_admin_role;
+    EXECUTE format('GRANT %I TO %I', v_api_role, v_admin_role);
+    EXECUTE format('GRANT %I TO %I', v_api_role, v_customer_role);
 
-    -- Create API role (LOGIN)
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_api_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
-            v_api_role,
-            pg_temp.pgmi_get_param('database_api_password')
-        );
-        RAISE NOTICE '  ✓ Created API role: % (LOGIN)', v_api_role;
-    ELSE
-        -- Update password and connection limit if role exists
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
-            v_api_role,
-            pg_temp.pgmi_get_param('database_api_password')
-        );
-        RAISE DEBUG '  • API role exists (password updated): %', v_api_role;
-    END IF;
+    -- Grant owner to current_user for SET ROLE
+    EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
 
-    EXECUTE format(
-        'COMMENT ON ROLE %I IS %L',
-        v_api_role,
-        format('API client role for %s with restricted EXECUTE-only permissions on api schema',
-               current_database())
-    );
+    -- Configure search_path for each role
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_owner_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_admin_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, core, extensions, utils, pg_temp', v_api_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, membership, core, extensions, utils, pg_temp', v_customer_role);
 
-    -- Create customer role (LOGIN, RLS-restricted)
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_customer_role) THEN
-        EXECUTE format(
-            'CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100',
-            v_customer_role,
-            pg_temp.pgmi_get_param('database_customer_password')
-        );
-        RAISE NOTICE '  ✓ Created customer role: % (LOGIN)', v_customer_role;
-    ELSE
-        EXECUTE format(
-            'ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100',
-            v_customer_role,
-            pg_temp.pgmi_get_param('database_customer_password')
-        );
-        RAISE DEBUG '  • Customer role exists (password updated): %', v_customer_role;
-    END IF;
-
-    EXECUTE format(
-        'COMMENT ON ROLE %I IS %L',
-        v_customer_role,
-        format('Customer role for %s with RLS-restricted access to membership data',
-               current_database())
-    );
-
-    RAISE NOTICE '  ✓ Role hierarchy created: owner → admin → api → customer';
-
-    -- Configure default search_path for all roles (requires superuser)
-    -- Note: Actual schemas don't exist yet, but PostgreSQL allows setting paths to non-existent schemas
-    EXECUTE format(
-        'ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp',
-        v_owner_role
-    );
-
-    EXECUTE format(
-        'ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp',
-        v_admin_role
-    );
-
-    EXECUTE format(
-        'ALTER ROLE %I SET search_path = api, core, extensions, utils, pg_temp',
-        v_api_role
-    );
-
-    EXECUTE format(
-        'ALTER ROLE %I SET search_path = api, membership, core, extensions, utils, pg_temp',
-        v_customer_role
-    );
-
-    RAISE DEBUG '  ✓ Search path configured for all roles (persists across connections)';
-
-    -- Create extensions schema AS SUPERUSER
-    -- Extension schemas typically remain owned by the superuser role
-    CREATE SCHEMA IF NOT EXISTS extensions;
-    COMMENT ON SCHEMA extensions IS 'PostgreSQL extensions installed by superuser';
-    RAISE DEBUG '  ✓ Created extensions schema (owner: %)', CURRENT_USER;
-
-    -- Grant USAGE + CREATE to owner role (allows extension function deployment)
-    EXECUTE format('GRANT USAGE, CREATE ON SCHEMA extensions TO %I', v_owner_role);
-    RAISE DEBUG '  ✓ Granted USAGE, CREATE on extensions schema to %', v_owner_role;
-
-    GRANT USAGE ON SCHEMA extensions TO PUBLIC;
-    RAISE DEBUG '  ✓ Granted USAGE on extensions schema to PUBLIC';
-
-    -- Install PostgreSQL extensions AS SUPERUSER
-    -- Extension installation requires superuser privileges
-    RAISE DEBUG '  → Installing PostgreSQL extensions...';
-
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
-    CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
-    CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
-    CREATE EXTENSION IF NOT EXISTS hstore SCHEMA extensions;
-    CREATE EXTENSION IF NOT EXISTS plv8;  -- PL/V8 must be in pg_catalog (procedural language)
-
-    RAISE DEBUG '  ✓ Installed 5 extensions (4 in extensions, plv8 in pg_catalog)';
-
-    -- Transfer database ownership to owner role (requires superuser)
+    -- Transfer database ownership
     EXECUTE format('ALTER DATABASE %I OWNER TO %I', current_database(), v_owner_role);
-    RAISE NOTICE '  ✓ Database ownership transferred to: %', v_owner_role;
-
-    RAISE NOTICE '';
-    RAISE NOTICE '→ Phase 2: Superuser Handoff (SINGLE SWITCH - NO RETURN)';
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- HANDOFF: Switch to owner role PERMANENTLY
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- After this SET ROLE command:
-    --   - ALL subsequent operations execute as owner_role
-    --   - NO RESET ROLE occurs
-    --   - NO privilege escalation
-    --   - Deployment completes entirely in owner context
+    RAISE NOTICE '[pgmi] Database % owned by %', current_database(), v_owner_role;
+END $superuser$;
 
 
-    CREATE OR REPLACE FUNCTION pg_temp.set_dbowner_role() RETURNS VOID
-    LANGUAGE plpgsql
-    AS $body$
-    BEGIN
-        EXECUTE format('SET ROLE %I', current_setting('pgmi.database_owner_role'));
-    END;
-    $body$;
+-- Extensions (still superuser context)
+CREATE SCHEMA IF NOT EXISTS extensions;
+COMMENT ON SCHEMA extensions IS 'PostgreSQL extensions isolated from application schemas. Keeps extension objects out of search_path conflicts.';
+GRANT USAGE ON SCHEMA extensions TO PUBLIC;
 
-    PERFORM pg_temp.set_dbowner_role();
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS hstore SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS plv8;
 
-    RAISE DEBUG '  ✓ Switched to owner role: %', current_setting('role');
-    RAISE DEBUG '  ⚠ All subsequent operations execute as owner (no privilege escalation)';
 
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- OWNER PHASE: Standard Operations
-    -- ═══════════════════════════════════════════════════════════════════════
+-- ============================================================================
+-- OWNER PHASE: SET ROLE and Create Schemas
+-- ============================================================================
+DO $owner_phase$
+BEGIN
+    EXECUTE format('SET ROLE %I', pg_temp.deployment_setting('database-owner-role'));
+    RAISE NOTICE '[pgmi] Switched to owner role: %', pg_temp.deployment_setting('database-owner-role');
+END $owner_phase$;
 
-    RAISE DEBUG '';
-    RAISE DEBUG '→ Phase 3: Owner Role Operations';
 
-    -- Create internal schema AS OWNER
+-- Schemas
+DO $schemas$
+DECLARE
+    v_admin_role TEXT := pg_temp.deployment_setting('database-admin-role');
+    v_api_role TEXT := pg_temp.deployment_setting('database-api-role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database-customer-role');
+BEGIN
     CREATE SCHEMA IF NOT EXISTS internal;
-    COMMENT ON SCHEMA internal IS 'Infrastructure and deployment tracking';
-    RAISE DEBUG '  ✓ Created internal schema (owner: %)', v_owner_role;
+    CREATE SCHEMA IF NOT EXISTS core;
+    CREATE SCHEMA IF NOT EXISTS api;
+    CREATE SCHEMA IF NOT EXISTS utils;
+    CREATE SCHEMA IF NOT EXISTS membership;
 
-    CREATE OR REPLACE FUNCTION internal.is_relative_file_path(text) RETURNS BOOLEAN
-    LANGUAGE sql
-    IMMUTABLE
-    AS $$SELECT $1 ~* '^\./' $$;
+    COMMENT ON SCHEMA internal IS 'Deployment infrastructure and system tables. Not for application use.';
+    COMMENT ON SCHEMA core IS 'Core domain entities and business logic. The heart of your application.';
+    COMMENT ON SCHEMA api IS 'Public API layer. Functions and views exposed to applications and external clients.';
+    COMMENT ON SCHEMA utils IS 'Shared utility functions available to all roles.';
+    COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
+    REVOKE ALL ON SCHEMA public FROM PUBLIC;
+    REVOKE ALL ON SCHEMA utils, api, core, internal, membership FROM PUBLIC;
 
-    CREATE TABLE IF NOT EXISTS internal.deployment_script(
-        object_id uuid PRIMARY KEY,
-        registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        registered_by TEXT NOT NULL DEFAULT CURRENT_USER
+    EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA api TO %I, %I', v_api_role, v_customer_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA core TO %I', v_api_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
+
+    EXECUTE format(
+        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, utils, pg_temp',
+        current_database()
     );
+    SET search_path TO core, api, membership, internal, extensions, utils, pg_temp;
+
+    RAISE NOTICE '[pgmi] Schemas configured';
+END $schemas$;
 
 
-    CREATE TABLE IF NOT EXISTS internal.deployment_script_content(
-        "checksum" text NOT NULL PRIMARY KEY,
-        "value" text NOT NULL,
-        registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        registered_by TEXT NOT NULL DEFAULT CURRENT_USER,
-        CONSTRAINT checksum_is_sha256_of_value CHECK("checksum" = encode(extensions.digest(convert_to("value", 'UTF8'), 'sha256'), 'hex'))
-    );
+-- ============================================================================
+-- TRACKING TABLES
+-- ============================================================================
+-- These tables track which scripts have been executed. They must exist
+-- before the deploy loop runs so it can log executions.
 
-    CREATE TABLE IF NOT EXISTS internal.deployment_script_execution_log(
-        deployment_script_object_id uuid NOT NULL REFERENCES internal.deployment_script(object_id),
-        deployment_script_content_checksum TEXT NOT NULL REFERENCES internal.deployment_script_content("checksum"),
-        xact_id xid8 NOT NULL,
-        id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        file_path TEXT NOT NULL,
-        idempotent BOOLEAN NOT NULL,
-        sort_key TEXT,
-        executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        executed_by TEXT NOT NULL DEFAULT CURRENT_USER,
-        CONSTRAINT is_relative_file_path CHECK (internal.is_relative_file_path(file_path))
-    );
+CREATE TABLE IF NOT EXISTS internal.deployment_script(
+    object_id uuid PRIMARY KEY,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    registered_by TEXT NOT NULL DEFAULT CURRENT_USER
+);
 
-    CREATE INDEX IF NOT EXISTS ix_deployment_script_execution_log_object_id
-        ON internal.deployment_script_execution_log(deployment_script_object_id, idempotent)
-        WHERE idempotent = false;
+COMMENT ON TABLE internal.deployment_script IS 'Registry of unique script identities for idempotency tracking. Each script gets a stable UUID that persists across deployments.';
+COMMENT ON COLUMN internal.deployment_script.object_id IS 'Unique script identifier. From <pgmi-meta id="..."> or auto-generated from file path. Stable across content changes.';
+COMMENT ON COLUMN internal.deployment_script.registered_at IS 'Timestamp when this script was first seen by the deployment system.';
+COMMENT ON COLUMN internal.deployment_script.registered_by IS 'Database role that first deployed this script.';
 
-    CREATE OR REPLACE VIEW internal.vw_deployment_script AS
-    SELECT
-        c_deployment_script.object_id,
-        FIRST_VALUE(c_deployment_script_execution_log) OVER w_desc AS last_log,
-        FIRST_VALUE(c_deployment_script_content) OVER w_desc AS last_content,
-        ARRAY_AGG(c_deployment_script_execution_log.file_path) OVER w_desc AS file_path_history,
-        COUNT(*) OVER w_desc AS times_executed_count,
-        (SELECT COUNT(DISTINCT log.deployment_script_content_checksum)
-         FROM internal.deployment_script_execution_log log
-         WHERE log.deployment_script_object_id = c_deployment_script.object_id) AS total_changed
-    FROM internal.deployment_script AS c_deployment_script
-    LEFT JOIN internal.deployment_script_execution_log AS c_deployment_script_execution_log
-        ON c_deployment_script_execution_log.deployment_script_object_id = c_deployment_script.object_id
-    LEFT JOIN internal.deployment_script_content AS c_deployment_script_content
-        ON c_deployment_script_content.checksum = c_deployment_script_execution_log.deployment_script_content_checksum
-    WINDOW w_desc AS (PARTITION BY c_deployment_script.object_id
-                      ORDER BY c_deployment_script_execution_log.executed_at DESC
-                      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING);
+CREATE TABLE IF NOT EXISTS internal.deployment_script_content(
+    checksum text PRIMARY KEY,
+    value text NOT NULL,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    registered_by TEXT NOT NULL DEFAULT CURRENT_USER,
+    CONSTRAINT checksum_is_sha256 CHECK(checksum = encode(extensions.digest(convert_to(value, 'UTF8'), 'sha256'), 'hex'))
+);
 
+COMMENT ON TABLE internal.deployment_script_content IS 'Content-addressable storage for script versions. Deduplicates identical content across scripts and deployments.';
+COMMENT ON COLUMN internal.deployment_script_content.checksum IS 'SHA-256 hash of script content. Primary key enables content deduplication.';
+COMMENT ON COLUMN internal.deployment_script_content.value IS 'Full script content. Immutable once stored (enforced by checksum constraint).';
+COMMENT ON COLUMN internal.deployment_script_content.registered_at IS 'Timestamp when this content version was first deployed.';
+COMMENT ON COLUMN internal.deployment_script_content.registered_by IS 'Database role that first deployed this content version.';
+COMMENT ON CONSTRAINT checksum_is_sha256 ON internal.deployment_script_content IS 'Ensures checksum matches actual content. Prevents tampering and guarantees content integrity.';
 
+CREATE TABLE IF NOT EXISTS internal.deployment_script_execution_log(
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    deployment_script_object_id uuid NOT NULL REFERENCES internal.deployment_script(object_id),
+    deployment_script_content_checksum TEXT NOT NULL REFERENCES internal.deployment_script_content(checksum),
+    xact_id xid8 NOT NULL,
+    file_path TEXT NOT NULL,
+    idempotent BOOLEAN NOT NULL,
+    sort_key TEXT,
+    executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    executed_by TEXT NOT NULL DEFAULT CURRENT_USER
+);
 
-    -- Restrict permissions: only database owner role can modify tracking table
+COMMENT ON TABLE internal.deployment_script_execution_log IS 'Audit log of every script execution. Used for idempotency checks, deployment history, and debugging.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.id IS 'Auto-incrementing execution ID. Provides total ordering of all executions.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_object_id IS 'References the script identity. Links execution to its logical script.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_content_checksum IS 'References the specific content version executed. Enables content diffing across deployments.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.xact_id IS 'PostgreSQL transaction ID (xid8). Correlates with pg_stat_activity and WAL for debugging.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.file_path IS 'Original file path at execution time. May change if files are renamed.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script is re-runnable. Non-idempotent scripts execute only once per object_id.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.sort_key IS 'Execution ordering key from <pgmi-meta sortKeys="...">. NULL for path-ordered scripts.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.executed_at IS 'Timestamp when execution completed successfully.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.executed_by IS 'Database role that executed the script (usually the owner role).';
+
+CREATE INDEX IF NOT EXISTS ix_deployment_script_execution_log_object_id
+    ON internal.deployment_script_execution_log(deployment_script_object_id, idempotent)
+    WHERE idempotent = false;
+
+COMMENT ON INDEX internal.ix_deployment_script_execution_log_object_id IS 'Partial index for fast idempotency checks. Only indexes non-idempotent scripts since idempotent scripts always re-run.';
+
+-- Tracking view (for querying deployment history)
+CREATE OR REPLACE VIEW internal.vw_deployment_script AS
+SELECT
+    s.object_id,
+    (SELECT l FROM internal.deployment_script_execution_log l
+     WHERE l.deployment_script_object_id = s.object_id
+     ORDER BY l.executed_at DESC LIMIT 1) AS last_execution,
+    (SELECT COUNT(*) FROM internal.deployment_script_execution_log l
+     WHERE l.deployment_script_object_id = s.object_id) AS execution_count
+FROM internal.deployment_script s;
+
+COMMENT ON VIEW internal.vw_deployment_script IS 'Deployment status overview. Shows each script''s last execution details and total run count.';
+COMMENT ON COLUMN internal.vw_deployment_script.object_id IS 'Script identity UUID.';
+COMMENT ON COLUMN internal.vw_deployment_script.last_execution IS 'Most recent execution record (composite type). Access fields via (last_execution).executed_at, etc.';
+COMMENT ON COLUMN internal.vw_deployment_script.execution_count IS 'Total number of times this script has been executed across all deployments.';
+
+-- Tracking table permissions
+DO $permissions$
+DECLARE
+    v_owner_role TEXT := pg_temp.deployment_setting('database-owner-role');
+BEGIN
     REVOKE ALL ON TABLE internal.deployment_script_execution_log FROM PUBLIC;
     GRANT SELECT ON TABLE internal.deployment_script_execution_log TO PUBLIC;
     EXECUTE format('GRANT INSERT, UPDATE, DELETE ON TABLE internal.deployment_script_execution_log TO %I', v_owner_role);
-
-    -- Grant USAGE on sequence to owner role (allows nextval() in deploy_script function)
     EXECUTE format('GRANT USAGE ON SEQUENCE internal.deployment_script_execution_log_id_seq TO %I', v_owner_role);
-
-    RAISE DEBUG '  ✓ Created deployment tracking tables (owner: %)', v_owner_role;
-
-    CREATE TABLE IF NOT EXISTS internal.unittest_script (
-        execution_order INT NOT NULL PRIMARY KEY,
-        step_type TEXT NOT NULL CHECK (step_type IN ('setup', 'test', 'teardown')),
-        script_path TEXT NOT NULL,
-        script_directory TEXT NOT NULL,
-        savepoint_id TEXT NOT NULL,
-        content TEXT NOT NULL,
-        deployed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        deployed_by TEXT NOT NULL DEFAULT CURRENT_USER
-    );
-
-    CREATE INDEX IF NOT EXISTS ix_unittest_script_step_type
-        ON internal.unittest_script(step_type);
-
-    COMMENT ON TABLE internal.unittest_script IS
-    'Persisted test scripts from last deployment. Query this to inspect tests. Use internal.generate_test_script() to generate executable SQL.';
-
-    REVOKE ALL ON TABLE internal.unittest_script FROM PUBLIC;
-    GRANT SELECT ON TABLE internal.unittest_script TO PUBLIC;
-    EXECUTE format('GRANT INSERT, UPDATE, DELETE ON TABLE internal.unittest_script TO %I', v_owner_role);
-
-    RAISE DEBUG '  ✓ Created unittest tracking table (owner: %)', v_owner_role;
-    RAISE DEBUG '  ✓ Tracking table permissions: owner-only writes, public reads';
-
-    RAISE DEBUG '';
-    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
-    RAISE DEBUG 'Bootstrap Complete: Single-Handoff Model Active';
-    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
-    RAISE DEBUG '  Current role: %', current_setting('role');
-    RAISE DEBUG '  Database owner: %', v_owner_role;
-    RAISE DEBUG '  All remaining deployment executes as: %', v_owner_role;
-    RAISE DEBUG '═══════════════════════════════════════════════════════════════';
-    RAISE DEBUG '';
-END $infrastructure$;
+END $permissions$;
 
 
+-- ****************************************************************************
+--
+--                    PHASE 2: DEPLOYMENT
+--
+--     Runs tracked files from lib/ and your application code.
+--     Everything below is executed within a transaction with advisory lock.
+--
+-- ****************************************************************************
 
 
-
-CREATE FUNCTION pg_temp.deploy() RETURNS VOID 
-LANGUAGE plpgsql
-AS
-$deployment$
-DECLARE 
-    v_script_object_id uuid;
+-- ============================================================================
+-- DEPLOY FUNCTION
+-- ============================================================================
+CREATE FUNCTION pg_temp.deploy() RETURNS VOID
+LANGUAGE plpgsql AS $fn$
+DECLARE
     v_script RECORD;
+    v_object_id uuid;
+    v_executed int := 0;
+    v_skipped int := 0;
 BEGIN
     FOR v_script IN (
-        SELECT 
-            path, 
-            id, 
-            generic_id,
-            sort_key, 
-            description, 
-            idempotent, 
-            execution_order,
-            content,
-            encode(extensions.digest(convert_to(content, 'UTF8'), 'sha256'), 'hex') AS "checksum"
-        FROM pg_temp.pgmi_plan_view
-        WHERE id IS NOT NULL  -- Deploy only scripts with explicit <pgmi:meta> blocks
-        ORDER BY execution_order ASC
+        SELECT
+            p.path, p.id, p.generic_id, p.sort_key, p.idempotent, p.execution_order, p.content,
+            encode(extensions.digest(convert_to(p.content, 'UTF8'), 'sha256'), 'hex') AS checksum
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND s.path != './session.xml'
+        ORDER BY p.execution_order
     )
     LOOP
+        v_object_id := COALESCE(v_script.id, v_script.generic_id);
 
-        v_script_object_id := COALESCE(v_script.id, v_script.generic_id);
-        INSERT INTO internal.deployment_script(object_id)
-        VALUES(v_script_object_id)
-        ON CONFLICT(object_id) DO NOTHING;
-
-        INSERT INTO internal.deployment_script_content("checksum", "value")
-        VALUES(v_script.checksum, v_script.content)
-        ON CONFLICT("checksum") DO NOTHING;
-
-        IF EXISTS (
-            SELECT 1 FROM internal.vw_deployment_script 
-            WHERE object_id = v_script_object_id 
-            AND NOT v_script.idempotent) THEN
+        IF NOT v_script.idempotent AND EXISTS (
+            SELECT 1 FROM internal.deployment_script_execution_log
+            WHERE deployment_script_object_id = v_object_id
+        ) THEN
+            v_skipped := v_skipped + 1;
             CONTINUE;
         END IF;
 
-        EXECUTE v_script.content;
+        INSERT INTO internal.deployment_script(object_id)
+        VALUES (v_object_id) ON CONFLICT DO NOTHING;
+
+        INSERT INTO internal.deployment_script_content(checksum, value)
+        VALUES (v_script.checksum, v_script.content) ON CONFLICT DO NOTHING;
+
+        RAISE NOTICE '[pgmi] Executing: %', v_script.path;
+        BEGIN
+            EXECUTE v_script.content;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM;
+        END;
 
         INSERT INTO internal.deployment_script_execution_log(
-            deployment_script_object_id,
-            deployment_script_content_checksum,
-            xact_id,
-            file_path,
-            idempotent,
-            sort_key)
-        VALUES(
-            v_script_object_id,
-            v_script.checksum,
-            pg_current_xact_id(),
-            v_script.path,
-            v_script.idempotent,
-            v_script.sort_key);
+            deployment_script_object_id, deployment_script_content_checksum,
+            xact_id, file_path, idempotent, sort_key
+        ) VALUES (
+            v_object_id, v_script.checksum,
+            pg_current_xact_id(), v_script.path, v_script.idempotent, v_script.sort_key
+        );
 
-
+        v_executed := v_executed + 1;
     END LOOP;
 
-END;
-$deployment$;
+    RAISE NOTICE '[pgmi] Deployment complete: % executed, % skipped', v_executed, v_skipped;
+END $fn$;
 
 
 -- ============================================================================
--- STEP 3: Persist Unit Test Metadata (Called Before COMMIT)
+-- TEST CALLBACK
 -- ============================================================================
--- Copies test execution plan from session-scoped pg_temp.pgmi_unittest_plan
--- to persistent internal.unittest_script table. This enables:
---   - Power users to inspect deployed tests via SQL
---   - Test execution independent of pgmi via internal.generate_test_script()
---   - Audit trail of what tests were deployed
-
-CREATE OR REPLACE FUNCTION pg_temp.persist_unittest_metadata()
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION pg_temp.test_observer(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
-    TRUNCATE internal.unittest_script;
+    CASE e.event
+        WHEN 'suite_start' THEN RAISE NOTICE '[pgmi] Test suite started';
+        WHEN 'suite_end' THEN RAISE NOTICE '[pgmi] Test suite completed (% steps)', e.ordinal;
+        WHEN 'fixture_start' THEN RAISE NOTICE '[pgmi] Fixture: %', e.path;
+        WHEN 'test_start' THEN RAISE NOTICE '[pgmi] Test: %', e.path;
+        WHEN 'test_end' THEN NULL;
+        WHEN 'teardown_start' THEN RAISE DEBUG '[pgmi] Teardown: %', e.directory;
+        ELSE NULL;
+    END CASE;
+END $$;
 
-    INSERT INTO internal.unittest_script (
-        execution_order, step_type, script_path, script_directory, savepoint_id, content
-    )
-    SELECT
-        p.execution_order,
-        p.step_type,
-        p.script_path,
-        p.script_directory,
-        p.savepoint_id,
-        p.executable_sql
-    FROM pg_temp.pgmi_unittest_plan p
-    ORDER BY p.execution_order;
-END;
-$$;
+
+-- ============================================================================
+-- EXECUTE DEPLOYMENT
+-- ============================================================================
+DO $$ BEGIN RAISE NOTICE '[pgmi] Acquiring deployment lock...'; END $$;
+SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
+
+BEGIN;
+    SELECT pg_temp.deploy();
+
+    SAVEPOINT _tests;
+    CALL pgmi_test(NULL, 'pg_temp.test_observer');
+    ROLLBACK TO SAVEPOINT _tests;
+COMMIT;
+
+SELECT pg_advisory_unlock(hashtext('pgmi_deploy_' || current_database()));
+DO $$ BEGIN RAISE NOTICE '[pgmi] Deployment lock released'; END $$;

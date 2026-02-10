@@ -174,19 +174,17 @@ SELECT
         AND i.inhparent = 'core.managed_entity'::regclass
     ) AS is_managed,
 
-    (SELECT m.deleted_at
-     FROM core.managed_entity m
-     WHERE m.object_id = e.object_id) AS deleted_at,
+    m.deleted_at,
+    m.deleted_at IS NOT NULL AS is_deleted,
+    COALESCE(ap_counts.attached_count, 0) AS attached_count
 
-    (SELECT m.deleted_at IS NOT NULL
-     FROM core.managed_entity m
-     WHERE m.object_id = e.object_id) AS is_deleted,
-
-    (SELECT count(*)::int
-     FROM core.attached_property ap
-     WHERE ap.weakref_object_id = e.object_id) AS attached_count
-
-FROM core.entity e;
+FROM core.entity e
+LEFT JOIN core.managed_entity m ON m.object_id = e.object_id
+LEFT JOIN LATERAL (
+    SELECT count(*)::int AS attached_count
+    FROM core.attached_property ap
+    WHERE ap.weakref_object_id = e.object_id
+) ap_counts ON true;
 
 COMMENT ON VIEW core.vw_entity_info IS
     'Power-user analysis view for all entities. Shows lifecycle age, actual table (via tableoid), managed status, deletion state, and attached properties count.';
@@ -206,14 +204,16 @@ WITH entity_base AS (
             WHERE i.inhrelid = e.tableoid
             AND i.inhparent = 'core.managed_entity'::regclass
         ) AS is_managed,
-        (SELECT m.deleted_at IS NOT NULL
-         FROM core.managed_entity m
-         WHERE m.object_id = e.object_id) AS is_deleted,
-        EXISTS (
-            SELECT 1 FROM core.attached_property ap
-            WHERE ap.weakref_object_id = e.object_id
-        ) AS has_attached
+        m.deleted_at IS NOT NULL AS is_deleted,
+        ap.weakref_object_id IS NOT NULL AS has_attached
     FROM core.entity e
+    LEFT JOIN core.managed_entity m ON m.object_id = e.object_id
+    LEFT JOIN LATERAL (
+        SELECT ap.weakref_object_id
+        FROM core.attached_property ap
+        WHERE ap.weakref_object_id = e.object_id
+        LIMIT 1
+    ) ap ON true
 )
 SELECT
     actual_table,
@@ -249,6 +249,16 @@ COMMENT ON VIEW core.vw_entity_stats IS
 -- ============================================================================
 
 CREATE OR REPLACE VIEW core.vw_entity_summary AS
+WITH
+    deleted_ids AS (
+        SELECT object_id FROM core.managed_entity WHERE deleted_at IS NOT NULL
+    ),
+    attached_ids AS (
+        SELECT DISTINCT weakref_object_id FROM core.attached_property
+    ),
+    attached_total AS (
+        SELECT count(*)::bigint AS cnt FROM core.attached_property
+    )
 SELECT
     count(*) AS total_entities,
     count(DISTINCT e.tableoid) AS distinct_types,
@@ -259,17 +269,10 @@ SELECT
         AND i.inhparent = 'core.managed_entity'::regclass
     )) AS managed_entities,
 
-    count(*) FILTER (WHERE EXISTS (
-        SELECT 1 FROM core.managed_entity m
-        WHERE m.object_id = e.object_id AND m.deleted_at IS NOT NULL
-    )) AS deleted_entities,
+    count(*) FILTER (WHERE e.object_id IN (SELECT object_id FROM deleted_ids)) AS deleted_entities,
+    count(*) FILTER (WHERE e.object_id IN (SELECT weakref_object_id FROM attached_ids)) AS entities_with_attached,
 
-    count(*) FILTER (WHERE EXISTS (
-        SELECT 1 FROM core.attached_property ap
-        WHERE ap.weakref_object_id = e.object_id
-    )) AS entities_with_attached,
-
-    (SELECT count(*) FROM core.attached_property)::bigint AS total_attached_properties,
+    (SELECT cnt FROM attached_total) AS total_attached_properties,
 
     min(e.created_at) AS oldest_entity_at,
     max(e.created_at) AS newest_entity_at

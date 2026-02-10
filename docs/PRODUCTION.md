@@ -10,19 +10,23 @@ All changes succeed or fail together. Maximum safety, but holds locks longer.
 
 ```sql
 -- deploy.sql
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
+
+COMMIT;
 ```
 
 **When to use:**
@@ -45,11 +49,17 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
-        PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+        RAISE NOTICE 'Executing: %', v_file.path;
+        BEGIN
+            EXECUTE v_file.content;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
+        END;
     END LOOP;
 END $$;
 ```
@@ -66,7 +76,7 @@ END $$;
 
 ### Phased deployment
 
-Different transaction strategies for different phases.
+Different handling for different phases.
 
 ```sql
 -- deploy.sql
@@ -74,26 +84,40 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    -- Phase 1: Schema extensions (one transaction)
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './extensions/' AND is_sql_file ORDER BY path)
+    -- Phase 1: Extensions
+    RAISE NOTICE '=== Phase 1: Extensions ===';
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './extensions/%'
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
-    END LOOP;
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
-
-    -- Phase 2: Migrations (per-file transactions for partial progress)
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
-    LOOP
-        PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
-        PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
 
-    -- Phase 3: Idempotent setup (no transaction wrapper)
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './setup/' AND is_sql_file ORDER BY path)
+    -- Phase 2: Migrations
+    RAISE NOTICE '=== Phase 2: Migrations ===';
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
+    END LOOP;
+
+    -- Phase 3: Idempotent setup
+    RAISE NOTICE '=== Phase 3: Setup ===';
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './setup/%'
+        ORDER BY execution_order
+    )
+    LOOP
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
@@ -129,12 +153,12 @@ ALTER TABLE users ADD COLUMN phone TEXT;
 RESET lock_timeout;
 ```
 
-Or globally in deploy.sql:
+Or at the start of deploy.sql:
 
 ```sql
-PERFORM pg_temp.pgmi_plan_command('SET lock_timeout = ''10s'';');
+SET lock_timeout = '10s';
 -- ... migrations ...
-PERFORM pg_temp.pgmi_plan_command('RESET lock_timeout;');
+RESET lock_timeout;
 ```
 
 ### Concurrent index creation
@@ -146,13 +170,22 @@ For large tables, use `CONCURRENTLY` to avoid blocking:
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email);
 ```
 
-**Note:** `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. Plan accordingly:
+**Note:** `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. Structure your deploy.sql accordingly:
 
 ```sql
 -- deploy.sql: Handle concurrent index separately
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');  -- End current transaction
-PERFORM pg_temp.pgmi_plan_file('./migrations/003_add_user_email_index.sql');  -- Runs outside transaction
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');  -- Start new transaction for remaining work
+-- First, run regular migrations in a transaction
+BEGIN;
+-- ... regular migrations ...
+COMMIT;
+
+-- Then run the concurrent index (outside transaction)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email);
+
+-- Finally, continue with remaining work
+BEGIN;
+-- ... remaining migrations ...
+COMMIT;
 ```
 
 ## Rollback strategies
@@ -163,9 +196,9 @@ If you use single-transaction deployment, PostgreSQL rolls back automatically on
 
 ```sql
 -- deploy.sql
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
--- ... all migrations ...
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+BEGIN;
+-- ... all migrations via EXECUTE v_file.content ...
+COMMIT;
 -- If any migration fails, nothing is committed
 ```
 
@@ -193,18 +226,24 @@ BEGIN
     IF v_rollback THEN
         -- Execute rollback scripts in reverse order
         FOR v_file IN (
-            SELECT path FROM pg_temp.pgmi_source
-            WHERE directory = './rollback/' AND is_sql_file
+            SELECT path, content FROM pg_temp.pgmi_source_view
+            WHERE path LIKE './rollback/%' AND is_sql_file
             ORDER BY path DESC
         )
         LOOP
-            PERFORM pg_temp.pgmi_plan_file(v_file.path);
+            RAISE NOTICE 'Rolling back: %', v_file.path;
+            EXECUTE v_file.content;
         END LOOP;
     ELSE
         -- Normal deployment
-        FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
+        FOR v_file IN (
+            SELECT path, content FROM pg_temp.pgmi_plan_view
+            WHERE path LIKE './migrations/%'
+            ORDER BY execution_order
+        )
         LOOP
-            PERFORM pg_temp.pgmi_plan_file(v_file.path);
+            RAISE NOTICE 'Executing: %', v_file.path;
+            EXECUTE v_file.content;
         END LOOP;
     END IF;
 END $$;
@@ -221,21 +260,26 @@ Savepoints mark progress within a transaction. If any file fails, PostgreSQL abo
 
 ```sql
 -- deploy.sql with savepoints for diagnostics
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
+    v_savepoint TEXT;
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_command(format('SAVEPOINT migration_%s;', md5(v_file.path)));
-        PERFORM pg_temp.pgmi_plan_notice('Running: %s', v_file.path);
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        v_savepoint := 'migration_' || md5(v_file.path);
+        EXECUTE format('SAVEPOINT %I', v_savepoint);
+        RAISE NOTICE 'Running: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
+
+COMMIT;
 ```
 
 **Note:** This is still all-or-nothing — if any migration fails, the entire transaction rolls back. For true partial progress, use [per-migration transactions](#per-migration-transactions) instead.
@@ -261,14 +305,16 @@ DECLARE
     v_total INT;
     v_count INT := 0;
 BEGIN
-    SELECT count(*) INTO v_total FROM pg_temp.pgmi_source WHERE is_sql_file;
+    SELECT count(*) INTO v_total FROM pg_temp.pgmi_plan_view;
 
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        ORDER BY execution_order
+    )
     LOOP
         v_count := v_count + 1;
-        PERFORM pg_temp.pgmi_plan_notice('[%s/%s] Executing: %s',
-            v_count::text, v_total::text, v_file.path);
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE '[%/%] Executing: %', v_count, v_total, v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
@@ -279,42 +325,34 @@ Log deployments to a table for historical tracking:
 
 ```sql
 -- deploy.sql: Audit logging
--- NOTE: pgmi_plan_command() schedules SQL for execution AFTER planning.
--- Direct INSERT/UPDATE in deploy.sql runs during planning, not execution.
--- Use pgmi_plan_command() to schedule audit operations at the right time.
 DO $$
 DECLARE
     v_deployment_id UUID := gen_random_uuid();
     v_file RECORD;
+    v_env TEXT := pg_temp.pgmi_get_param('env', 'unknown');
+    v_files_count INT;
 BEGIN
-    -- Schedule deployment start record (runs during execution)
-    PERFORM pg_temp.pgmi_plan_command(format(
-        'INSERT INTO audit.deployments (id, started_at, env, files_count) VALUES (%L, now(), %L, %s);',
-        v_deployment_id,
-        pg_temp.pgmi_get_param('env', 'unknown'),
-        (SELECT count(*) FROM pg_temp.pgmi_source WHERE is_sql_file)
-    ));
+    SELECT count(*) INTO v_files_count FROM pg_temp.pgmi_plan_view;
 
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
+    -- Record deployment start
+    INSERT INTO audit.deployments (id, started_at, env, files_count)
+    VALUES (v_deployment_id, now(), v_env, v_files_count);
 
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
 
-        -- Schedule file execution log (runs during execution)
-        PERFORM pg_temp.pgmi_plan_command(format(
-            'INSERT INTO audit.deployment_files (deployment_id, file_path, executed_at) VALUES (%L, %L, now());',
-            v_deployment_id, v_file.path
-        ));
+        -- Log file execution
+        INSERT INTO audit.deployment_files (deployment_id, file_path, executed_at)
+        VALUES (v_deployment_id, v_file.path, now());
     END LOOP;
 
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
-
-    -- Schedule deployment completion record (runs during execution)
-    PERFORM pg_temp.pgmi_plan_command(format(
-        'UPDATE audit.deployments SET completed_at = now() WHERE id = %L;',
-        v_deployment_id
-    ));
+    -- Record deployment completion
+    UPDATE audit.deployments SET completed_at = now() WHERE id = v_deployment_id;
 END $$;
 ```
 
@@ -444,6 +482,64 @@ deploy:
           --timeout 15m
 ```
 
+### GitHub Actions (AWS)
+
+```yaml
+deploy:
+  runs-on: ubuntu-latest
+  permissions:
+    id-token: write
+    contents: read
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Install pgmi
+      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+
+    - name: Deploy
+      run: |
+        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
+          --host ${{ vars.RDS_HOST }} \
+          -U ${{ vars.RDS_USER }} \
+          --aws --aws-region ${{ vars.AWS_REGION }} \
+          --sslmode require \
+          --param env=production \
+          --timeout 15m
+```
+
+### GitHub Actions (GCP)
+
+```yaml
+deploy:
+  runs-on: ubuntu-latest
+  permissions:
+    id-token: write
+    contents: read
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - name: Install pgmi
+      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+
+    - name: Deploy
+      run: |
+        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
+          -U ${{ vars.CLOUDSQL_USER }} \
+          --google --google-instance ${{ vars.CLOUDSQL_INSTANCE }} \
+          --param env=production \
+          --timeout 15m
+```
+
 ### Deployment gates
 
 Use pgmi's exit codes for pipeline control:
@@ -514,16 +610,15 @@ SELECT pg_current_wal_lsn();
 Deploy to a standby database, then switch:
 
 ```bash
-# 1. Deploy to blue (standby)
+# 1. Deploy to blue (standby) with tests gating the commit
 pgmi deploy . -d mydb_blue --param env=production
 
-# 2. Run smoke tests against blue
-pgmi test . -d mydb_blue
+# 2. If deployment succeeds (tests passed), switch traffic (application config or DNS)
 
-# 3. Switch traffic (application config or DNS)
-
-# 4. Blue becomes production, green becomes standby
+# 3. Blue becomes production, green becomes standby
 ```
+
+Tests run as part of deployment via `CALL pgmi_test()` in your deploy.sql. If any test fails, the deployment rolls back and traffic stays on the current production database.
 
 ## Next steps
 

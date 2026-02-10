@@ -1,0 +1,13 @@
+<session>
+    <!-- 
+    Deployment session parameters are provided via the pgmi cli params command line option
+    -->
+    <parameter key="database-owner-role" description="Database owner role (NOLOGIN)" />
+    <parameter key="database-admin-role" description="Database admin role (LOGIN, full access)" />
+    <parameter key="database-admin-password" description="Database admin password"/>
+    <parameter key="database-api-role" description="API group role (NOLOGIN, permission bundle)" />
+    <parameter key="database-api-password" description="Password for API role (if LOGIN)" />
+    <parameter key="database-customer-role" description="Customer role (LOGIN, RLS-restricted)" />
+    <parameter key="database-customer-password" description="Password for customer role (REQUIRED)"/>
+    <parameter key="env" description="Deployment environment"/>
+</session>

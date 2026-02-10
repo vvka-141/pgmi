@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'feature-*']
+    branches: [main, develop, 'feature/**', 'feature-*', 'features/**']
   pull_request:
     branches: [main, develop]
 
@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
@@ -25,30 +25,15 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
 
       - name: Run tests
-        env:
-          PGMI_TEST_CONN: postgresql://postgres:postgres@localhost:5432/postgres
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -coverprofile=coverage.out -timeout 10m ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -56,10 +41,23 @@ jobs:
           files: ./coverage.out
         continue-on-error: true
 
+  connection-tests:
+    name: Connection & Security Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run connection tests
+        run: go test -race -tags conntest -timeout 5m ./internal/db/conntest/...
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, connection-tests]
     strategy:
       matrix:
         goos: [linux, darwin, windows]
@@ -70,7 +68,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
 
       - name: Build
         env:

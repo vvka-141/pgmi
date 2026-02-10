@@ -40,6 +40,8 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+DO $$ BEGIN RAISE DEBUG 'membership: Created enums (member_role, invitation_status)'; END $$;
+
 -- ============================================================================
 -- Tables
 -- ============================================================================
@@ -113,6 +115,8 @@ CREATE TABLE IF NOT EXISTS membership.organization_member (
 CREATE INDEX IF NOT EXISTS ix_org_member_user
     ON membership.organization_member(user_id);
 
+DO $$ BEGIN RAISE DEBUG 'membership: Created tables (user, user_identity, role, organization, organization_member)'; END $$;
+
 -- ============================================================================
 -- Seed: superuser role
 -- ============================================================================
@@ -122,6 +126,8 @@ USING (VALUES ('superuser', 'Full system access')) AS source(name, description)
 ON target.name = source.name
 WHEN NOT MATCHED THEN
     INSERT (name, description) VALUES (source.name, source.description);
+
+DO $$ BEGIN RAISE DEBUG 'membership: Applied seed data (superuser role)'; END $$;
 
 -- ============================================================================
 -- Views

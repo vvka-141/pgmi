@@ -180,7 +180,7 @@ params:
 
 Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just PostgreSQL — the templates use PL/pgSQL, PostgreSQL's procedural language, for loops and conditionals.
 
-pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order, by calling `pgmi_plan_*` functions that build a command queue—pgmi runs it afterward.
+pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source_view`, then runs `deploy.sql`. Your job in `deploy.sql` is to query files from `pgmi_plan_view` (which orders them by metadata) and execute them directly with `EXECUTE`.
 
 ### migrations/001_hello_world.sql — your first SQL file
 
@@ -288,13 +288,12 @@ You should see your new `users` table. The basic template uses `CREATE OR REPLAC
 
 ## What just happened?
 
-Here's the entire model in five points:
+Here's the entire model in four points:
 
-1. **pgmi loaded your files** (everything in the project folder) into a PostgreSQL temporary table called `pg_temp.pgmi_source`
-2. **pgmi ran `deploy.sql`**, which read those files and built an execution plan (a queue of SQL commands)
-3. **pgmi executed the plan** — running each queued command in order
-4. **Your SQL files are regular SQL** — no framework magic, no special syntax
-5. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
+1. **pgmi loaded your files** (everything in the project folder) into PostgreSQL temporary tables and views (`pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`)
+2. **pgmi ran `deploy.sql`**, which queries those views and directly executes files using `EXECUTE v_file.content`
+3. **Your SQL files are regular SQL** — no framework magic, no special syntax
+4. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
 
 This is what makes pgmi different from migration tools: PostgreSQL itself is the deployment engine. You write the logic in SQL, and pgmi just provides the infrastructure to get your files into the database session.
 

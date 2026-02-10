@@ -95,9 +95,9 @@ func newServiceWithReadContent(content string) *DeploymentService {
 	)
 }
 
-func TestExecuteDeploySQL_PopulatesPlan_Internal(t *testing.T) {
+func TestExecuteDeploySQL_DirectExecution_Internal(t *testing.T) {
 	connString := requireTestDB(t)
-	testDB := "pgmi_itest_deploy_plan"
+	testDB := "pgmi_itest_deploy_direct"
 	cleanup := createTestDB(t, connString, testDB)
 	defer cleanup()
 
@@ -114,8 +114,8 @@ func TestExecuteDeploySQL_PopulatesPlan_Internal(t *testing.T) {
 	prepareSessionTables(t, ctx, conn)
 
 	deploySQL := `
-		SELECT pg_temp.pgmi_plan_command('SELECT 1;');
-		SELECT pg_temp.pgmi_plan_command('SELECT 2;');
+		CREATE TABLE direct_exec_test(id int);
+		INSERT INTO direct_exec_test VALUES (1), (2), (3);
 	`
 	svc := newServiceWithReadContent(deploySQL)
 
@@ -123,12 +123,12 @@ func TestExecuteDeploySQL_PopulatesPlan_Internal(t *testing.T) {
 		t.Fatalf("executeDeploySQL failed: %v", err)
 	}
 
-	var planCount int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp.pgmi_plan").Scan(&planCount); err != nil {
-		t.Fatalf("Failed to query plan: %v", err)
+	var count int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM direct_exec_test").Scan(&count); err != nil {
+		t.Fatalf("Failed to query table: %v", err)
 	}
-	if planCount != 2 {
-		t.Errorf("Expected 2 plan entries, got %d", planCount)
+	if count != 3 {
+		t.Errorf("Expected 3 rows, got %d", count)
 	}
 }
 
@@ -178,240 +178,5 @@ func TestExecuteDeploySQL_ReadError_Internal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to read deploy.sql") {
 		t.Errorf("Expected read error wrapper, got: %v", err)
-	}
-}
-
-func TestExecutePlannedCommands_MultipleCommands_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_multi"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	_, err = conn.Exec(ctx, `
-		SELECT pg_temp.pgmi_plan_command('CREATE TABLE exec_t1(id int);');
-		SELECT pg_temp.pgmi_plan_command('CREATE TABLE exec_t2(id int);');
-		SELECT pg_temp.pgmi_plan_command('CREATE TABLE exec_t3(id int);');
-	`)
-	if err != nil {
-		t.Fatalf("Failed to populate plan: %v", err)
-	}
-
-	svc := newServiceWithReadContent("")
-	if err := svc.executePlannedCommands(ctx, conn); err != nil {
-		t.Fatalf("executePlannedCommands failed: %v", err)
-	}
-
-	for _, table := range []string{"exec_t1", "exec_t2", "exec_t3"} {
-		var exists bool
-		if err := conn.QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-			table,
-		).Scan(&exists); err != nil {
-			t.Fatalf("Failed to check table %s: %v", table, err)
-		}
-		if !exists {
-			t.Errorf("Expected table %s to exist", table)
-		}
-	}
-}
-
-func TestExecutePlannedCommands_EmptyPlan_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_empty"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	svc := newServiceWithReadContent("")
-	if err := svc.executePlannedCommands(ctx, conn); err != nil {
-		t.Fatalf("Expected success for empty plan, got: %v", err)
-	}
-}
-
-func TestExecutePlannedCommands_FailingCommand_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_fail"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	_, err = conn.Exec(ctx, `
-		SELECT pg_temp.pgmi_plan_command('CREATE TABLE before_fail(id int);');
-		SELECT pg_temp.pgmi_plan_command('SELECT * FROM nonexistent_table_xyz;');
-	`)
-	if err != nil {
-		t.Fatalf("Failed to populate plan: %v", err)
-	}
-
-	svc := newServiceWithReadContent("")
-	err = svc.executePlannedCommands(ctx, conn)
-	if err == nil {
-		t.Fatal("Expected error from failing command")
-	}
-	if !strings.Contains(err.Error(), "execution failed") {
-		t.Errorf("Expected execution failed wrapper, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "nonexistent_table_xyz") {
-		t.Errorf("Expected error preview with table name, got: %v", err)
-	}
-}
-
-func TestExecutePlannedCommands_LongSQLTruncated_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_trunc"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	longSQL := "SELECT * FROM " + strings.Repeat("x", 300) + ";"
-	_, err = conn.Exec(ctx, "SELECT pg_temp.pgmi_plan_command($1)", longSQL)
-	if err != nil {
-		t.Fatalf("Failed to populate plan: %v", err)
-	}
-
-	svc := newServiceWithReadContent("")
-	err = svc.executePlannedCommands(ctx, conn)
-	if err == nil {
-		t.Fatal("Expected error from failing command")
-	}
-	if !strings.Contains(err.Error(), "...") {
-		t.Errorf("Expected truncated preview with '...', got: %v", err)
-	}
-}
-
-func TestExecutePlannedCommands_ContextCancelled_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_cancel"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	_, err = conn.Exec(ctx, "SELECT pg_temp.pgmi_plan_command('SELECT pg_sleep(10);')")
-	if err != nil {
-		t.Fatalf("Failed to populate plan: %v", err)
-	}
-
-	cancel()
-
-	svc := newServiceWithReadContent("")
-	err = svc.executePlannedCommands(ctx, conn)
-	if err == nil {
-		t.Fatal("Expected error from cancelled context")
-	}
-	if !strings.Contains(err.Error(), "cancel") {
-		t.Errorf("Expected cancellation error, got: %v", err)
-	}
-}
-
-func TestExecutePlannedCommands_OrderPreserved_Internal(t *testing.T) {
-	connString := requireTestDB(t)
-	testDB := "pgmi_itest_exec_order"
-	cleanup := createTestDB(t, connString, testDB)
-	defer cleanup()
-
-	pool := connectToTestDB(t, connString, testDB)
-	defer pool.Close()
-
-	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("Failed to acquire connection: %v", err)
-	}
-	defer conn.Release()
-
-	prepareSessionTables(t, ctx, conn)
-
-	_, err = conn.Exec(ctx, `
-		SELECT pg_temp.pgmi_plan_command('CREATE TABLE order_log(step int);');
-		SELECT pg_temp.pgmi_plan_command('INSERT INTO order_log VALUES (1);');
-		SELECT pg_temp.pgmi_plan_command('INSERT INTO order_log VALUES (2);');
-		SELECT pg_temp.pgmi_plan_command('INSERT INTO order_log VALUES (3);');
-	`)
-	if err != nil {
-		t.Fatalf("Failed to populate plan: %v", err)
-	}
-
-	svc := newServiceWithReadContent("")
-	if err := svc.executePlannedCommands(ctx, conn); err != nil {
-		t.Fatalf("executePlannedCommands failed: %v", err)
-	}
-
-	rows, err := conn.Query(ctx, "SELECT step FROM order_log ORDER BY step")
-	if err != nil {
-		t.Fatalf("Failed to query order log: %v", err)
-	}
-	var steps []int
-	for rows.Next() {
-		var step int
-		if err := rows.Scan(&step); err != nil {
-			t.Fatalf("Failed to scan: %v", err)
-		}
-		steps = append(steps, step)
-	}
-	rows.Close()
-
-	if len(steps) != 3 {
-		t.Fatalf("Expected 3 steps, got %d", len(steps))
-	}
-	for i, step := range steps {
-		if step != i+1 {
-			t.Errorf("Expected step %d at position %d, got %d", i+1, i, step)
-		}
 	}
 }

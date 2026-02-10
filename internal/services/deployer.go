@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"strconv"
+	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/preprocessor"
+	"github.com/vvka-141/pgmi/internal/sourcemap"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -121,20 +125,15 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
 	targetConfig := *connConfig
 	targetConfig.Database = config.DatabaseName
-	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Verbose)
+	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
 	defer session.Close()
 
-	// Execute deploy.sql (populates pg_temp.pgmi_plan table)
+	// Execute deploy.sql (macro expansion queries pgmi_test_plan() from SQL)
 	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
 		return fmt.Errorf("deploy.sql execution failed: %w", err)
-	}
-
-	// Execute commands from pg_temp.pgmi_plan table
-	if err := s.executePlannedCommands(ctx, session.Conn()); err != nil {
-		return fmt.Errorf("command execution failed: %w", err)
 	}
 
 	s.logger.Info("✓ Deployment completed successfully")
@@ -171,86 +170,105 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	return connConfig, nil
 }
 
-// executeDeploySQL reads, validates, and executes the deploy.sql file.
-// deploy.sql populates the pg_temp.pgmi_plan table with commands to be executed.
+// executeDeploySQL reads, preprocesses, and executes the deploy.sql file.
+// Preprocessing expands CALL pgmi_test() macros by querying pgmi_test_plan() from SQL.
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
 	sourcePath string,
 ) error {
-	s.logger.Verbose("Executing deploy.sql to build execution plan...")
+	s.logger.Verbose("Executing deploy.sql...")
 
 	deploySQL, err := s.fileScanner.ReadDeploySQL(sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to read deploy.sql: %w", err)
 	}
 
-	// Validate deploy.sql follows required workflow
-	// Execute deploy.sql as a single script
-	_, err = conn.Exec(ctx, deploySQL)
+	// Preprocess: expand CALL pgmi_test() macros by querying pgmi_test_plan() from SQL
+	pipeline := preprocessor.NewPipeline()
+	result, err := pipeline.Process(ctx, conn, deploySQL)
 	if err != nil {
-		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, err))
+		return fmt.Errorf("failed to preprocess deploy.sql: %w", err)
+	}
+
+	if result.MacroCount > 0 {
+		s.logger.Verbose("Expanded %d test macro(s) in deploy.sql", result.MacroCount)
+	}
+
+	// Execute preprocessed deploy.sql as a single script
+	_, err = conn.Exec(ctx, result.ExpandedSQL)
+	if err != nil {
+		// Try to attribute the error to the original source using the source map
+		attributedErr := s.attributeError(err, result.SourceMap)
+		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, attributedErr))
 	}
 
 	s.logger.Info("✓ Execution plan built successfully")
 	return nil
 }
 
-// executePlannedCommands reads and executes all commands from pg_temp.pgmi_plan table.
-func (s *DeploymentService) executePlannedCommands(ctx context.Context, conn *pgxpool.Conn) error {
-	s.logger.Verbose("Executing planned commands from pg_temp.pgmi_plan...")
-
-	// Query all commands ordered by ordinal
-	rows, err := conn.Query(ctx, queryPlanCommands)
-	if err != nil {
-		return fmt.Errorf("failed to query pg_temp.pgmi_plan: %w", err)
+// attributeError attempts to resolve error line numbers back to original sources.
+// If the error contains line information and the source map has a mapping,
+// returns an enhanced error with the original source context.
+func (s *DeploymentService) attributeError(err error, sm *sourcemap.SourceMap) error {
+	if sm == nil || sm.Len() == 0 {
+		return err
 	}
 
-	// Read all commands into memory first, then close the query
-	type command struct {
-		ordinal int
-		sql     string
-	}
-	var commands []command
-
-	for rows.Next() {
-		var cmd command
-		if err := rows.Scan(&cmd.ordinal, &cmd.sql); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to scan command row: %w", err)
-		}
-		commands = append(commands, cmd)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading command rows: %w", err)
+	// Extract PostgreSQL error
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
 	}
 
-	// Now execute each command sequentially
-	for _, cmd := range commands {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("deployment cancelled: %w", ctx.Err())
-		default:
-		}
+	// PostgreSQL errors may have line info in the message or Position field
+	line := extractLineFromError(pgErr)
+	if line == 0 {
+		return err
+	}
 
-		s.logger.Verbose("Executing command %d...", cmd.ordinal)
+	// Try to resolve the line using source map
+	file, origLine, desc, found := sm.Resolve(line)
+	if !found {
+		return err
+	}
 
-		_, err = conn.Exec(ctx, cmd.sql)
-		if err != nil {
-			// Show preview of failed command for debugging
-			preview := cmd.sql
-			if len(preview) > pgmi.MaxErrorPreviewLength {
-				preview = preview[:pgmi.MaxErrorPreviewLength] + "..."
+	// Create enhanced error message
+	return fmt.Errorf("%w\n  → %s (line %d: %s)", err, file, origLine, desc)
+}
+
+// extractLineFromError extracts a line number from a PostgreSQL error.
+// Checks Position field and parses "LINE X:" from the message.
+func extractLineFromError(pgErr *pgconn.PgError) int {
+	// PostgreSQL doesn't have a Line field in pgconn.PgError for query errors,
+	// but the Position field indicates character offset. We can also check
+	// the message for "LINE X:" pattern which appears in syntax errors.
+
+	// Check if message contains "LINE X:" pattern
+	if idx := strings.Index(pgErr.Message, "LINE "); idx != -1 {
+		remaining := pgErr.Message[idx+5:]
+		if colonIdx := strings.Index(remaining, ":"); colonIdx != -1 {
+			if line, err := strconv.Atoi(remaining[:colonIdx]); err == nil {
+				return line
 			}
-			return fmt.Errorf("command %d execution failed (%s): %w",
-				cmd.ordinal, preview, errors.Join(pgmi.ErrExecutionFailed, err))
 		}
 	}
 
-	s.logger.Info("✓ Executed %d command(s) successfully", len(commands))
-	return nil
+	// For context errors, check Where field
+	if pgErr.Where != "" {
+		if idx := strings.Index(pgErr.Where, "line "); idx != -1 {
+			remaining := pgErr.Where[idx+5:]
+			endIdx := strings.IndexAny(remaining, " ,)")
+			if endIdx == -1 {
+				endIdx = len(remaining)
+			}
+			if line, err := strconv.Atoi(remaining[:endIdx]); err == nil {
+				return line
+			}
+		}
+	}
+
+	return 0
 }
 
 // handleOverwrite handles the database drop and recreate workflow.
@@ -351,166 +369,4 @@ func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig
 // parseConnectionString parses a connection string using the db package parser.
 func (s *DeploymentService) parseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
 	return db.ParseConnectionString(connStr)
-}
-
-// ExecuteTests executes tests using the provided configuration.
-// This method reuses deployment infrastructure for session initialization,
-// then directly executes tests from pg_temp.pgmi_unittest_plan.
-func (s *DeploymentService) ExecuteTests(ctx context.Context, config pgmi.TestConfig) error {
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
-	}
-
-	s.logger.Verbose("Starting test execution on database '%s'", config.DatabaseName)
-	s.logger.Verbose("Source path: %s", config.SourcePath)
-	s.logger.Verbose("Filter pattern: %s", config.FilterPattern)
-
-
-	// Parse connection string
-	connConfig, err := s.parseConnectionString(config.ConnectionString)
-	if err != nil {
-		return fmt.Errorf("failed to parse connection string: %w", err)
-	}
-
-	// Copy Azure credentials from TestConfig (resolved by CLI layer)
-	connConfig.AuthMethod = config.AuthMethod
-	connConfig.AzureTenantID = config.AzureTenantID
-	connConfig.AzureClientID = config.AzureClientID
-	connConfig.AzureClientSecret = config.AzureClientSecret
-
-	// Set application name
-	if connConfig.AppName == "" {
-		connConfig.AppName = "pgmi-test"
-	}
-
-	// Prepare test session (scan files, connect to database, load session tables)
-	// SessionManager handles: file scanning, database connection, utility functions, files, params, unittest framework
-	s.logger.Info("Initializing test session...")
-	targetConfig := *connConfig
-	targetConfig.Database = config.DatabaseName
-	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Verbose)
-	if err != nil {
-		return err // Error already wrapped by SessionManager
-	}
-	defer session.Close()
-
-	// List mode: show tests and exit
-	if config.ListOnly {
-		return s.listTests(ctx, session.Conn(), config.FilterPattern)
-	}
-
-	// Execute tests from pg_temp.pgmi_unittest_plan
-	s.logger.Info("Executing tests...")
-	if err := s.executeTestPlan(ctx, session.Conn(), config.FilterPattern); err != nil {
-		return fmt.Errorf("test execution failed: %w", err)
-	}
-
-	s.logger.Info("✓ All tests passed")
-	return nil
-}
-
-// listTests prints the filtered test execution plan without running tests.
-func (s *DeploymentService) listTests(ctx context.Context, conn *pgxpool.Conn, filterPattern string) error {
-	rows, err := conn.Query(ctx, queryTestPlanList, filterPattern)
-	if err != nil {
-		return fmt.Errorf("failed to query test plan: %w", err)
-	}
-	defer rows.Close()
-
-	fmt.Fprintf(os.Stderr, "\nDiscovered tests (filter: %q):\n\n", filterPattern)
-
-	testCount := 0
-	setupCount := 0
-	teardownCount := 0
-
-	for rows.Next() {
-		var ordinal int
-		var stepType, scriptPath string
-		if err := rows.Scan(&ordinal, &stepType, &scriptPath); err != nil {
-			return fmt.Errorf("failed to scan test row: %w", err)
-		}
-
-		// Format output
-		stepLabel := "Test"
-		switch stepType {
-		case "setup":
-			stepLabel = "Setup"
-			setupCount++
-		case "teardown":
-			stepLabel = "Teardown"
-			teardownCount++
-		case "test":
-			testCount++
-		}
-
-		fmt.Fprintf(os.Stderr, "%d. %-8s %s\n", ordinal, stepLabel+":", scriptPath)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading test rows: %w", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "\nTotal: %d tests (with %d setup, %d teardown)\n", testCount, setupCount, teardownCount)
-	return nil
-}
-
-// executeTestPlan queries pg_temp.pgmi_unittest_pvw_plan and executes tests sequentially.
-// Fails immediately on first test failure (PostgreSQL native fail-fast).
-func (s *DeploymentService) executeTestPlan(ctx context.Context, conn *pgxpool.Conn, filterPattern string) error {
-	// Start a transaction for savepoint support (using SQL BEGIN/ROLLBACK)
-	_, err := conn.Exec(ctx, "BEGIN")
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction for tests: %w", err)
-	}
-	// Ensure we rollback on exit (tests should have no side effects)
-	defer func() { _, _ = conn.Exec(ctx, "ROLLBACK") }()
-
-	// Query filtered test plan and read all into memory first
-	rows, err := conn.Query(ctx, queryTestPlan, filterPattern)
-	if err != nil {
-		return fmt.Errorf("failed to query test plan: %w", err)
-	}
-
-	// Read all test steps into memory first, then close the query
-	type testStep struct {
-		ordinal    int
-		stepType   string
-		scriptPath string
-		sql        string
-	}
-	var steps []testStep
-
-	for rows.Next() {
-		var step testStep
-		if err := rows.Scan(&step.ordinal, &step.stepType, &step.scriptPath, &step.sql); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to scan test row: %w", err)
-		}
-		steps = append(steps, step)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading test rows: %w", err)
-	}
-
-	// Now execute each test step sequentially
-	// PostgreSQL will stop on first error (native fail-fast)
-	for _, step := range steps {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("test execution cancelled: %w", ctx.Err())
-		default:
-		}
-
-		_, err := conn.Exec(ctx, step.sql)
-		if err != nil {
-			// PostgreSQL already printed the error context via RAISE NOTICE/EXCEPTION
-			// We just add minimal pgmi context and exit
-			return fmt.Errorf("test failed in %s: %w", step.scriptPath, err)
-		}
-	}
-
-	return nil
 }

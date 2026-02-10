@@ -37,6 +37,10 @@ END $$;
 
 ## Running Tests
 
+Tests run as part of deployment via the `pgmi_test()` macro in deploy.sql:
+
 ```bash
-pgmi test . -d your_database
+pgmi deploy . -d your_database
 ```
+
+If all tests pass, the deployment commits. If any test fails, everything rolls back.

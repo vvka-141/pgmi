@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,9 @@ func TestLoad_AllFields(t *testing.T) {
   username: myuser
   database: mydb
   sslmode: require
+  sslcert: /path/client.crt
+  sslkey: /path/client.key
+  sslrootcert: /path/ca.crt
 
 params:
   env: production
@@ -35,6 +39,9 @@ timeout: 10m
 	assert.Equal(t, "myuser", cfg.Connection.Username)
 	assert.Equal(t, "mydb", cfg.Connection.Database)
 	assert.Equal(t, "require", cfg.Connection.SSLMode)
+	assert.Equal(t, "/path/client.crt", cfg.Connection.SSLCert)
+	assert.Equal(t, "/path/client.key", cfg.Connection.SSLKey)
+	assert.Equal(t, "/path/ca.crt", cfg.Connection.SSLRootCert)
 	assert.Equal(t, "production", cfg.Params["env"])
 	assert.Equal(t, "us-west", cfg.Params["region"])
 	assert.Equal(t, "10m", cfg.Timeout)
@@ -58,7 +65,7 @@ func TestLoad_MinimalYAML(t *testing.T) {
 
 func TestLoad_FileNotFound(t *testing.T) {
 	cfg, err := Load(t.TempDir())
-	assert.NoError(t, err)
+	assert.True(t, errors.Is(err, ErrConfigNotFound), "expected ErrConfigNotFound, got: %v", err)
 	assert.Nil(t, cfg)
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,7 +258,7 @@ func TestBuildDeploymentConfig(t *testing.T) {
 			}
 
 			if tt.wantErr {
-				if tt.wantErrContains != "" && !contains(err.Error(), tt.wantErrContains) {
+				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
 					t.Errorf("buildDeploymentConfig() error = %v, want error containing %q", err, tt.wantErrContains)
 				}
 				return
@@ -437,7 +438,7 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 				t.Fatal("expected error, got nil")
 			}
 
-			if !contains(err.Error(), tt.wantErrContains) {
+			if !strings.Contains(err.Error(), tt.wantErrContains) {
 				t.Errorf("error = %v, want error containing %q", err, tt.wantErrContains)
 			}
 		})
