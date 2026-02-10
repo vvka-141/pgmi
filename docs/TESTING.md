@@ -220,30 +220,33 @@ Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.
 
 ## What happens under the hood
 
-Here's the exact sequence pgmi executes for the example above. Understanding this is optional, but it explains why the guarantee works.
+Here's the structure pgmi generates for the example above. Understanding this is optional, but it explains why the guarantee works.
 
 ```
-BEGIN;                                  ← outer transaction (pgmi opens this)
+BEGIN;                                  ← outer transaction
 
-    SAVEPOINT sp_setup_root;            ← fixture boundary
-    INSERT INTO users ... (fixture);    ← _setup.sql runs
+    SAVEPOINT sp_setup_root;            ← fixture boundary (top-level SQL)
+    DO $$ ... _setup.sql content ... $$ ← fixture runs via EXECUTE
 
-        SAVEPOINT sp_test_1;            ← test boundary
-        ... test_insert.sql runs ...
+        SAVEPOINT sp_test_1;            ← test boundary (top-level SQL)
+        DO $$ ... test_insert.sql ... $$ ← test runs via EXECUTE
         ROLLBACK TO sp_test_1;          ← undo test_insert.sql changes
 
-        SAVEPOINT sp_test_2;            ← test boundary
-        ... test_count.sql runs ...
+        SAVEPOINT sp_test_2;            ← test boundary (top-level SQL)
+        DO $$ ... test_count.sql ... $$ ← test runs via EXECUTE
         ROLLBACK TO sp_test_2;          ← undo test_count.sql changes
 
     ROLLBACK TO sp_setup_root;          ← undo fixture (Alice, Bob gone)
+    RELEASE SAVEPOINT sp_setup_root;    ← clean up savepoint
 
-ROLLBACK;                               ← undo everything (pgmi closes this)
+COMMIT;                                 ← migrations persist, test data gone
 ```
 
 The `ROLLBACK TO sp_test_1` after `test_insert.sql` is what erases Charlie. The database state returns to exactly what `_setup.sql` created. Then `test_count.sql` runs against that clean state.
 
-The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data. And the final `ROLLBACK` undoes everything else — the database is identical to before the test run.
+The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data.
+
+**Key implementation detail:** The SAVEPOINT commands are generated as **top-level SQL statements**, not inside PL/pgSQL blocks. PostgreSQL's PL/pgSQL does not support savepoints directly — you cannot use `EXECUTE 'SAVEPOINT ...'` inside a DO block. pgmi's `pgmi_test_generate()` function produces inline SQL where savepoints are at the top level, with test content wrapped in separate DO blocks that use EXECUTE.
 
 **PostgreSQL's transactional savepoints do all the work.** pgmi just generates the right savepoint structure. No cleanup scripts. No teardown hooks. No manual state management.
 

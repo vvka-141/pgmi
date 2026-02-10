@@ -223,6 +223,8 @@ Called by Go preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
+> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and test content is wrapped in separate DO blocks using EXECUTE. See `internal/contract/api-v1.sql` for the working implementation.
+
 ### Updated Go Preprocessor Flow
 
 ```go

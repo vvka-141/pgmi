@@ -48,6 +48,7 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 | `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
 | `--force` | Replace interactive confirmation with 5-second countdown. Still shows warning, still cancellable with Ctrl+C. |
 | `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
+| `--compat` | API compatibility version (default: latest). Pin to a specific version for stable CI/CD pipelines. Example: `--compat=1` |
 
 #### Understanding `--overwrite` Safety
 
@@ -137,6 +138,9 @@ pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
 # Full connection string
 pgmi deploy ./myproject --connection "postgresql://postgres:secret@db.example.com:5432/postgres" -d myapp
+
+# Pin to specific API version for CI/CD stability
+pgmi deploy ./myproject -d myapp --compat=1
 
 # With parameters
 pgmi deploy ./myproject -d myapp --param env=production --param version=2.1.0

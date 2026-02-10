@@ -254,35 +254,40 @@ Usage:
 pgmi deploy . -d mydb --param rollback=true
 ```
 
-### Savepoint-based progress tracking
+### Exception blocks for error context
 
-Savepoints mark progress within a transaction. If any file fails, PostgreSQL aborts the transaction and rolls back everything — but the savepoint names in the error output tell you exactly which migration failed:
+Use PL/pgSQL exception blocks to capture which file failed and provide diagnostic context:
 
 ```sql
--- deploy.sql with savepoints for diagnostics
+-- deploy.sql with error context
 BEGIN;
 
 DO $$
 DECLARE
     v_file RECORD;
-    v_savepoint TEXT;
+    v_current_path TEXT;
 BEGIN
     FOR v_file IN (
         SELECT path, content FROM pg_temp.pgmi_plan_view
         ORDER BY execution_order
     )
     LOOP
-        v_savepoint := 'migration_' || md5(v_file.path);
-        EXECUTE format('SAVEPOINT %I', v_savepoint);
+        v_current_path := v_file.path;
         RAISE NOTICE 'Running: %', v_file.path;
-        EXECUTE v_file.content;
+        BEGIN
+            EXECUTE v_file.content;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Migration failed on %: %', v_current_path, SQLERRM;
+        END;
     END LOOP;
 END $$;
 
 COMMIT;
 ```
 
-**Note:** This is still all-or-nothing — if any migration fails, the entire transaction rolls back. For true partial progress, use [per-migration transactions](#per-migration-transactions) instead.
+**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, use [per-migration transactions](#per-migration-transactions) instead.
+
+**Important:** PL/pgSQL does not support direct SAVEPOINT commands. If you need savepoint-based isolation (like the test framework provides), use top-level SQL outside of DO blocks, or use `BEGIN...EXCEPTION...END` blocks which create implicit savepoints for error recovery.
 
 ## Monitoring and observability
 
