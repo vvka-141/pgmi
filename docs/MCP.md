@@ -485,7 +485,7 @@ The advanced template includes these example handlers:
 |------|------|-------------|
 | `database_info` | Tool | Get database version and connection info |
 | `list_tables` | Tool | List tables in a schema with row counts |
-| `execute_query` | Tool | Execute read-only SQL queries (SELECT only) |
+| `describe_table` | Tool | Get column definitions for a table |
 | `table_schema` | Resource | Get table column metadata via URI |
 | `sql_assistant` | Prompt | Generate SQL query assistant prompts |
 

@@ -557,87 +557,93 @@ BEGIN
 END $$;
 
 -- ============================================================================
--- MCP Example: Execute Query Tool (Read-Only)
+-- MCP Example: Describe Table Tool
 -- ============================================================================
--- Executes SELECT queries only. Useful for AI assistants to explore data.
+-- Returns column metadata for a table. Demonstrates safe parameterized queries.
+--
+-- SECURITY NOTE: This tool queries information_schema (designed for introspection)
+-- with parameterized inputs. Unlike arbitrary SQL execution, this pattern is safe
+-- because the query structure is fixed and user input is only used as parameters.
 
 SELECT api.create_or_replace_mcp_handler(
     jsonb_build_object(
         'id', 'e3000001-0005-4000-8000-000000000001',
         'type', 'tool',
-        'name', 'execute_query',
-        'description', 'Execute a read-only SQL query (SELECT only)',
+        'name', 'describe_table',
+        'description', 'Get column definitions for a table',
         'inputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
-                'query', jsonb_build_object(
+                'table', jsonb_build_object(
                     'type', 'string',
-                    'description', 'SQL SELECT query to execute'
+                    'description', 'Table name to describe'
                 ),
-                'limit', jsonb_build_object(
-                    'type', 'integer',
-                    'description', 'Maximum rows to return (default: 100, max: 1000)'
+                'schema', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'Schema name (default: api)'
                 )
             ),
-            'required', jsonb_build_array('query')
+            'required', jsonb_build_array('table')
         ),
         'requiresAuth', true
     ),
     $body$
 DECLARE
-    v_query text;
-    v_limit int;
-    v_result jsonb;
-    v_row_count int;
+    v_schema text;
+    v_table text;
+    v_columns jsonb;
+    v_col_count int;
 BEGIN
-    v_query := (request).arguments->>'query';
-    v_limit := LEAST(COALESCE(((request).arguments->>'limit')::int, 100), 1000);
+    v_table := (request).arguments->>'table';
+    v_schema := COALESCE((request).arguments->>'schema', 'api');
 
-    IF v_query IS NULL OR trim(v_query) = '' THEN
-        RETURN api.mcp_tool_error('Query is required', (request).request_id);
+    IF v_table IS NULL OR trim(v_table) = '' THEN
+        RETURN api.mcp_tool_error('Table name is required', (request).request_id);
     END IF;
 
-    IF NOT (upper(trim(v_query)) ~ '^(SELECT|WITH)') THEN
-        RETURN api.mcp_tool_error('Only SELECT queries are allowed', (request).request_id);
-    END IF;
+    SELECT jsonb_agg(jsonb_build_object(
+        'column', column_name,
+        'type', data_type,
+        'nullable', is_nullable = 'YES',
+        'default', column_default
+    ) ORDER BY ordinal_position)
+    INTO v_columns
+    FROM information_schema.columns
+    WHERE table_schema = v_schema
+      AND table_name = v_table;
 
-    IF v_query ~* '\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE)\b' THEN
-        RETURN api.mcp_tool_error('Query contains disallowed keywords', (request).request_id);
-    END IF;
-
-    BEGIN
-        EXECUTE format('SELECT jsonb_agg(row_to_json(t)) FROM (SELECT * FROM (%s) sub LIMIT %s) t', v_query, v_limit)
-        INTO v_result;
-
-        v_result := COALESCE(v_result, '[]'::jsonb);
-        v_row_count := jsonb_array_length(v_result);
-
-        RETURN api.mcp_tool_result(
-            jsonb_build_array(
-                api.mcp_text(format('Query returned %s row(s)', v_row_count)),
-                jsonb_build_object('type', 'text', 'text', v_result::text)
-            ),
+    IF v_columns IS NULL THEN
+        RETURN api.mcp_tool_error(
+            format('Table %I.%I not found or not accessible', v_schema, v_table),
             (request).request_id
         );
-    EXCEPTION WHEN OTHERS THEN
-        RETURN api.mcp_tool_error('Query error: ' || SQLERRM, (request).request_id);
-    END;
+    END IF;
+
+    v_col_count := jsonb_array_length(v_columns);
+
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(
+            api.mcp_text(format('%I.%I has %s column(s)', v_schema, v_table, v_col_count)),
+            jsonb_build_object('type', 'text', 'text', v_columns::text)
+        ),
+        (request).request_id
+    );
 END;
     $body$
 );
 
--- Invoke execute_query tool:
+-- Invoke describe_table tool:
 DO $$
 DECLARE
     v_response api.mcp_response;
 BEGIN
     v_response := api.mcp_call_tool(
-        'execute_query',
-        '{"query":"SELECT table_name FROM information_schema.tables WHERE table_schema = ''api'' LIMIT 5"}'::jsonb,
+        'describe_table',
+        '{"table":"handler","schema":"api"}'::jsonb,
         '{"user_id":"test|123"}'::jsonb,
         'demo-5'
     );
-    RAISE DEBUG '  -> MCP tool execute_query  envelope=%', (v_response).envelope;
+    RAISE DEBUG '  -> MCP tool describe_table  envelope=%', (v_response).envelope;
 END $$;
 
 DO $$ BEGIN
@@ -650,7 +656,7 @@ DO $$ BEGIN
     RAISE DEBUG '  + RPC: system.time - Get server time';
     RAISE DEBUG '  + MCP Tool: database_info - Get database info';
     RAISE DEBUG '  + MCP Tool: list_tables - List tables in a schema';
-    RAISE DEBUG '  + MCP Tool: execute_query - Execute read-only SQL queries';
+    RAISE DEBUG '  + MCP Tool: describe_table - Get table column definitions';
     RAISE DEBUG '  + MCP Resource: table_schema - Get table schema';
     RAISE DEBUG '  + MCP Prompt: sql_assistant - SQL query assistant';
 END $$;
