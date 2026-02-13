@@ -8,8 +8,15 @@ connection:
   sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
   # username: postgres        # PostgreSQL user (default: current OS user)
 
-# Parameters passed to deploy.sql (accessible via pgmi_get_param())
+# Parameters passed to deploy.sql
+# See session.xml for all declared parameters and their descriptions.
+# With env=dev, role names default to <database>_owner/admin/api/customer
+# and passwords default to 'postgres'.
 params:
-  env: development
+  env: dev                    # dev = safe defaults, prod = require explicit passwords
+
+  # Production overrides (uncomment for non-dev deployments):
+  # database-admin-password: <secure-password>
+  # database-customer-password: <secure-password>
 
 timeout: 5m                   # Deployment timeout
