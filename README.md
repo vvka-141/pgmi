@@ -105,6 +105,7 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
+| [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
 
 ## AI assistant support
 

@@ -34,8 +34,3 @@ See [CLI.md#pgmi-ai](CLI.md#pgmi-ai) for complete reference.
 ## Operations
 
 - **[PRODUCTION.md](PRODUCTION.md)** — Performance, rollback strategies, lock management, monitoring
-- **[retry-timeout-behavior.md](retry-timeout-behavior.md)** — Timeout configuration and retry mechanics
-
-## Archive
-
-The `archive/` directory contains historical development notes and design decisions.
