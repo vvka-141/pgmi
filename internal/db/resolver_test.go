@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestGranularConnFlags_IsEmpty(t *testing.T) {
@@ -69,13 +70,17 @@ func TestGranularConnFlags_IsEmpty(t *testing.T) {
 func TestLoadFromEnvironment(t *testing.T) {
 	// Save current env and restore after test
 	originalEnv := map[string]string{
-		"PGHOST":       os.Getenv("PGHOST"),
-		"PGPORT":       os.Getenv("PGPORT"),
-		"PGUSER":       os.Getenv("PGUSER"),
-		"PGPASSWORD":   os.Getenv("PGPASSWORD"),
-		"PGDATABASE":   os.Getenv("PGDATABASE"),
-		"PGSSLMODE":    os.Getenv("PGSSLMODE"),
-		"DATABASE_URL": os.Getenv("DATABASE_URL"),
+		"PGHOST":        os.Getenv("PGHOST"),
+		"PGPORT":        os.Getenv("PGPORT"),
+		"PGUSER":        os.Getenv("PGUSER"),
+		"PGPASSWORD":    os.Getenv("PGPASSWORD"),
+		"PGDATABASE":    os.Getenv("PGDATABASE"),
+		"PGSSLMODE":     os.Getenv("PGSSLMODE"),
+		"DATABASE_URL":  os.Getenv("DATABASE_URL"),
+		"PGSSLCERT":     os.Getenv("PGSSLCERT"),
+		"PGSSLKEY":      os.Getenv("PGSSLKEY"),
+		"PGSSLROOTCERT": os.Getenv("PGSSLROOTCERT"),
+		"PGSSLPASSWORD": os.Getenv("PGSSLPASSWORD"),
 	}
 	defer func() {
 		for key, val := range originalEnv {
@@ -100,6 +105,10 @@ func TestLoadFromEnvironment(t *testing.T) {
 	os.Setenv("PGDATABASE", "testdb")
 	os.Setenv("PGSSLMODE", "require")
 	os.Setenv("DATABASE_URL", "postgresql://user@host/db")
+	os.Setenv("PGSSLCERT", "/path/client.crt")
+	os.Setenv("PGSSLKEY", "/path/client.key")
+	os.Setenv("PGSSLROOTCERT", "/path/ca.crt")
+	os.Setenv("PGSSLPASSWORD", "keypass")
 
 	envVars := LoadFromEnvironment()
 
@@ -123,6 +132,18 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if envVars.DATABASE_URL != "postgresql://user@host/db" {
 		t.Errorf("DATABASE_URL = %s, want postgresql://user@host/db", envVars.DATABASE_URL)
+	}
+	if envVars.PGSSLCERT != "/path/client.crt" {
+		t.Errorf("PGSSLCERT = %s, want /path/client.crt", envVars.PGSSLCERT)
+	}
+	if envVars.PGSSLKEY != "/path/client.key" {
+		t.Errorf("PGSSLKEY = %s, want /path/client.key", envVars.PGSSLKEY)
+	}
+	if envVars.PGSSLROOTCERT != "/path/ca.crt" {
+		t.Errorf("PGSSLROOTCERT = %s, want /path/ca.crt", envVars.PGSSLROOTCERT)
+	}
+	if envVars.PGSSLPASSWORD != "keypass" {
+		t.Errorf("PGSSLPASSWORD = %s, want keypass", envVars.PGSSLPASSWORD)
 	}
 }
 
@@ -176,7 +197,7 @@ func TestResolveConnectionParams_ConflictDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			envVars := &EnvVars{}
-			_, _, err := ResolveConnectionParams(tt.connString, tt.granularFlags, nil, envVars, nil)
+			_, _, err := ResolveConnectionParams(tt.connString, tt.granularFlags, nil, nil, nil, nil, envVars, nil)
 
 			if tt.wantError && err == nil {
 				t.Error("expected error but got nil")
@@ -237,7 +258,10 @@ func TestResolveConnectionParams_FromConnectionString(t *testing.T) {
 			config, maintenanceDB, err := ResolveConnectionParams(
 				tt.connString,
 				&GranularConnFlags{},
-				nil,
+				nil, // Azure flags
+				nil, // AWS flags
+				nil, // Google flags
+				nil, // Cert flags
 				&EnvVars{},
 				nil,
 			)
@@ -340,7 +364,7 @@ func TestResolveConnectionParams_FromGranularFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars, nil)
+			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, nil, nil, nil, tt.envVars, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -411,7 +435,7 @@ func TestResolveConnectionParams_DatabaseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, tt.envVars, nil)
+			config, maintenanceDB, err := ResolveConnectionParams("", tt.flags, nil, nil, nil, nil, tt.envVars, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -435,7 +459,7 @@ func TestResolveConnectionParams_InvalidPGPORT(t *testing.T) {
 		PGPORT: "not-a-number",
 	}
 
-	_, _, err := ResolveConnectionParams("", flags, nil, envVars, nil)
+	_, _, err := ResolveConnectionParams("", flags, nil, nil, nil, nil, envVars, nil)
 	if err == nil {
 		t.Error("expected error for invalid PGPORT, got nil")
 	}
@@ -443,7 +467,7 @@ func TestResolveConnectionParams_InvalidPGPORT(t *testing.T) {
 
 func TestResolveConnectionParams_NilInputs(t *testing.T) {
 	// Should not panic with nil inputs
-	config, maintenanceDB, err := ResolveConnectionParams("", nil, nil, nil, nil)
+	config, maintenanceDB, err := ResolveConnectionParams("", nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -474,7 +498,7 @@ func TestResolveConnectionParams_Precedence(t *testing.T) {
 		PGUSER: "envuser", // Should be used (no flag)
 	}
 
-	config, _, err := ResolveConnectionParams("", flags, nil, envVars, nil)
+	config, _, err := ResolveConnectionParams("", flags, nil, nil, nil, nil, envVars, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -502,7 +526,7 @@ func TestResolveConnectionParams_ProjectConfig(t *testing.T) {
 	}
 
 	t.Run("project config used when no flags or env vars", func(t *testing.T) {
-		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, &EnvVars{}, pc)
+		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, nil, nil, nil, &EnvVars{}, pc)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -528,7 +552,7 @@ func TestResolveConnectionParams_ProjectConfig(t *testing.T) {
 			PGHOST: "envhost",
 			PGPORT: "5433",
 		}
-		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, envVars, pc)
+		cfg, _, err := ResolveConnectionParams("", &GranularConnFlags{}, nil, nil, nil, nil, envVars, pc)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -545,7 +569,7 @@ func TestResolveConnectionParams_ProjectConfig(t *testing.T) {
 
 	t.Run("flags override project config and env vars", func(t *testing.T) {
 		flags := &GranularConnFlags{Host: "flaghost"}
-		cfg, _, err := ResolveConnectionParams("", flags, nil, &EnvVars{}, pc)
+		cfg, _, err := ResolveConnectionParams("", flags, nil, nil, nil, nil, &EnvVars{}, pc)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -556,4 +580,192 @@ func TestResolveConnectionParams_ProjectConfig(t *testing.T) {
 			t.Errorf("Port = %d, want 5434 (from project config)", cfg.Port)
 		}
 	})
+}
+
+func TestCertFlags_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags *CertFlags
+		want  bool
+	}{
+		{"nil", nil, true},
+		{"empty struct", &CertFlags{}, true},
+		{"SSLCert only", &CertFlags{SSLCert: "/path/client.crt"}, false},
+		{"SSLKey only", &CertFlags{SSLKey: "/path/client.key"}, false},
+		{"SSLRootCert only", &CertFlags{SSLRootCert: "/path/ca.crt"}, false},
+		{"all fields", &CertFlags{SSLCert: "c", SSLKey: "k", SSLRootCert: "r"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.flags.IsEmpty(); got != tt.want {
+				t.Errorf("CertFlags.IsEmpty() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyCertParams(t *testing.T) {
+	tests := []struct {
+		name            string
+		flags           *CertFlags
+		env             *EnvVars
+		pc              *config.ProjectConfig
+		wantSSLCert     string
+		wantSSLKey      string
+		wantSSLRootCert string
+		wantSSLPassword string
+	}{
+		{
+			name:  "all from flags",
+			flags: &CertFlags{SSLCert: "flag.crt", SSLKey: "flag.key", SSLRootCert: "flag-ca.crt"},
+			env:   &EnvVars{PGSSLCERT: "env.crt", PGSSLKEY: "env.key", PGSSLROOTCERT: "env-ca.crt"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				SSLCert: "yaml.crt", SSLKey: "yaml.key", SSLRootCert: "yaml-ca.crt",
+			}},
+			wantSSLCert:     "flag.crt",
+			wantSSLKey:      "flag.key",
+			wantSSLRootCert: "flag-ca.crt",
+		},
+		{
+			name:  "env overrides yaml",
+			flags: &CertFlags{},
+			env:   &EnvVars{PGSSLCERT: "env.crt", PGSSLKEY: "env.key"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				SSLCert: "yaml.crt", SSLKey: "yaml.key", SSLRootCert: "yaml-ca.crt",
+			}},
+			wantSSLCert:     "env.crt",
+			wantSSLKey:      "env.key",
+			wantSSLRootCert: "yaml-ca.crt",
+		},
+		{
+			name:  "yaml used when no flags or env",
+			flags: &CertFlags{},
+			env:   &EnvVars{},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				SSLCert: "yaml.crt", SSLKey: "yaml.key", SSLRootCert: "yaml-ca.crt",
+			}},
+			wantSSLCert:     "yaml.crt",
+			wantSSLKey:      "yaml.key",
+			wantSSLRootCert: "yaml-ca.crt",
+		},
+		{
+			name:            "SSLPassword only from env",
+			flags:           &CertFlags{},
+			env:             &EnvVars{PGSSLPASSWORD: "env-pass"},
+			pc:              nil,
+			wantSSLPassword: "env-pass",
+		},
+		{
+			name:  "nil flags and pc",
+			flags: nil,
+			env:   &EnvVars{PGSSLCERT: "env.crt"},
+			pc:    nil,
+			wantSSLCert: "env.crt",
+		},
+		{
+			name:  "existing value preserved when no override",
+			flags: nil,
+			env:   &EnvVars{},
+			pc:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &pgmi.ConnectionConfig{}
+			applyCertParams(cfg, tt.flags, tt.env, tt.pc)
+
+			if cfg.SSLCert != tt.wantSSLCert {
+				t.Errorf("SSLCert = %q, want %q", cfg.SSLCert, tt.wantSSLCert)
+			}
+			if cfg.SSLKey != tt.wantSSLKey {
+				t.Errorf("SSLKey = %q, want %q", cfg.SSLKey, tt.wantSSLKey)
+			}
+			if cfg.SSLRootCert != tt.wantSSLRootCert {
+				t.Errorf("SSLRootCert = %q, want %q", cfg.SSLRootCert, tt.wantSSLRootCert)
+			}
+			if cfg.SSLPassword != tt.wantSSLPassword {
+				t.Errorf("SSLPassword = %q, want %q", cfg.SSLPassword, tt.wantSSLPassword)
+			}
+		})
+	}
+}
+
+func TestResolveConnectionParams_CertFlagsNoConflictWithConnection(t *testing.T) {
+	certFlags := &CertFlags{
+		SSLCert:     "/path/client.crt",
+		SSLKey:      "/path/client.key",
+		SSLRootCert: "/path/ca.crt",
+	}
+
+	cfg, _, err := ResolveConnectionParams(
+		"postgresql://user@localhost/db",
+		&GranularConnFlags{},
+		nil, // Azure flags
+		nil, // AWS flags
+		nil, // Google flags
+		certFlags,
+		&EnvVars{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.SSLCert != "/path/client.crt" {
+		t.Errorf("SSLCert = %q, want /path/client.crt", cfg.SSLCert)
+	}
+	if cfg.SSLKey != "/path/client.key" {
+		t.Errorf("SSLKey = %q, want /path/client.key", cfg.SSLKey)
+	}
+	if cfg.SSLRootCert != "/path/ca.crt" {
+		t.Errorf("SSLRootCert = %q, want /path/ca.crt", cfg.SSLRootCert)
+	}
+}
+
+func TestResolveConnectionParams_CertFlagsPrecedence(t *testing.T) {
+	certFlags := &CertFlags{
+		SSLCert: "flag.crt",
+	}
+	envVars := &EnvVars{
+		PGSSLCERT:     "env.crt",
+		PGSSLKEY:      "env.key",
+		PGSSLROOTCERT: "env-ca.crt",
+		PGSSLPASSWORD: "env-pass",
+	}
+	pc := &config.ProjectConfig{
+		Connection: config.ConnectionConfig{
+			SSLCert:     "yaml.crt",
+			SSLKey:      "yaml.key",
+			SSLRootCert: "yaml-ca.crt",
+		},
+	}
+
+	cfg, _, err := ResolveConnectionParams(
+		"",
+		&GranularConnFlags{Host: "localhost"},
+		nil, // Azure flags
+		nil, // AWS flags
+		nil, // Google flags
+		certFlags,
+		envVars,
+		pc,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.SSLCert != "flag.crt" {
+		t.Errorf("SSLCert = %q, want flag.crt (flag overrides env and yaml)", cfg.SSLCert)
+	}
+	if cfg.SSLKey != "env.key" {
+		t.Errorf("SSLKey = %q, want env.key (env overrides yaml)", cfg.SSLKey)
+	}
+	if cfg.SSLRootCert != "env-ca.crt" {
+		t.Errorf("SSLRootCert = %q, want env-ca.crt (env overrides yaml)", cfg.SSLRootCert)
+	}
+	if cfg.SSLPassword != "env-pass" {
+		t.Errorf("SSLPassword = %q, want env-pass (env only)", cfg.SSLPassword)
+	}
 }

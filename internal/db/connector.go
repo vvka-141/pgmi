@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -77,13 +78,13 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
-			return fmt.Errorf("failed to connect to database: %w", err)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		// Test the connection
 		if err := pool.Ping(ctx); err != nil {
 			pool.Close()
-			return fmt.Errorf("failed to ping database: %w", err)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		return nil
@@ -102,17 +103,124 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	switch config.AuthMethod {
 	case pgmi.AuthMethodStandard:
 		return NewStandardConnector(config), nil
-	case pgmi.AuthMethodCertificate:
-		return nil, fmt.Errorf("certificate-based authentication: %w", pgmi.ErrNotImplemented)
 	case pgmi.AuthMethodAWSIAM:
-		return nil, fmt.Errorf("AWS IAM authentication: %w", pgmi.ErrNotImplemented)
+		return newAWSConnector(config)
 	case pgmi.AuthMethodGoogleIAM:
-		return nil, fmt.Errorf("google cloud IAM authentication: %w", pgmi.ErrNotImplemented)
+		return newGoogleConnector(config)
 	case pgmi.AuthMethodAzureEntraID:
 		return newAzureConnector(config)
 	default:
 		return nil, fmt.Errorf("unsupported auth method %v: %w", config.AuthMethod, pgmi.ErrUnsupportedAuthMethod)
 	}
+}
+
+// wrapConnectionError wraps raw pgx connection errors with actionable guidance.
+func wrapConnectionError(err error, host string, port int, database string) error {
+	errStr := strings.ToLower(err.Error())
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	switch {
+	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "actively refused"):
+		return fmt.Errorf(`connection refused to %s
+
+Possible causes:
+  - PostgreSQL is not running (check: pg_isready -h %s -p %d)
+  - Wrong host or port
+  - Firewall blocking the connection
+
+Original error: %w`, addr, host, port, err)
+
+	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "no host"):
+		return fmt.Errorf(`cannot resolve host "%s"
+
+Possible causes:
+  - Hostname is misspelled
+  - DNS is not configured or reachable
+  - Network connection issue
+
+Original error: %w`, host, err)
+
+	case strings.Contains(errStr, "password authentication failed"):
+		return fmt.Errorf(`password authentication failed for database "%s"
+
+Possible causes:
+  - Wrong password (check $PGPASSWORD or ~/.pgpass)
+  - Wrong username
+  - User does not have access to the database
+
+Original error: %w`, database, err)
+
+	case strings.Contains(errStr, "does not exist"):
+		return fmt.Errorf(`database "%s" does not exist
+
+To create it:
+  createdb %s
+
+Or use --overwrite to let pgmi create it.
+
+Original error: %w`, database, database, err)
+
+	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out"):
+		return fmt.Errorf(`connection timed out to %s
+
+Possible causes:
+  - Server is overloaded or unresponsive
+  - Network latency or packet loss
+  - Firewall silently dropping packets
+  - Wrong host/port (server not listening)
+
+Original error: %w`, addr, err)
+
+	case strings.Contains(errStr, "ssl") || strings.Contains(errStr, "tls"):
+		return fmt.Errorf(`SSL/TLS connection error
+
+Possible causes:
+  - Server requires SSL but --sslmode is wrong
+  - Certificate verification failed (try --sslmode=require)
+  - Client certificates missing (check --sslcert, --sslkey)
+
+Original error: %w`, err)
+
+	case strings.Contains(errStr, "too many connections"):
+		return fmt.Errorf(`too many connections to database "%s"
+
+Possible causes:
+  - Connection pool exhausted on server
+  - max_connections limit reached in postgresql.conf
+  - Stale connections from previous deployments
+
+Try: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';
+
+Original error: %w`, database, database, err)
+
+	default:
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+}
+
+// newAWSConnector creates an AWSIAMConnector with the appropriate token provider.
+func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	// Build endpoint from host:port
+	endpoint := fmt.Sprintf("%s:%d", config.Host, config.Port)
+
+	tokenProvider, err := NewAWSIAMTokenProvider(endpoint, config.AWSRegion, config.Username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AWS IAM token provider: %w", err)
+	}
+
+	return NewAWSIAMConnector(config, tokenProvider), nil
+}
+
+// newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
+func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	if config.GoogleInstance == "" {
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires --google-instance (project:region:instance)")
+	}
+	if config.Username == "" {
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires username (-U)")
+	}
+
+	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
 }
 
 // newAzureConnector creates an AzureEntraIDConnector with the appropriate token provider.

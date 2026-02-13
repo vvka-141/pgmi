@@ -20,13 +20,13 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API helper functions'; END $$;
 CREATE OR REPLACE FUNCTION api.content_json(content bytea)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT convert_from(content, 'UTF8')::jsonb;
+    SELECT content::utils.utf8::jsonb;
 $$;
 
 CREATE OR REPLACE FUNCTION api.content_text(content bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT convert_from(content, 'UTF8');
+    SELECT content::utils.utf8::text;
 $$;
 
 CREATE OR REPLACE FUNCTION api.header(headers extensions.hstore, name text)
@@ -64,6 +64,49 @@ END $$;
 -- URL Parsing
 -- ============================================================================
 
+CREATE OR REPLACE FUNCTION api.url_decode(p_encoded text)
+RETURNS text
+LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE
+    v_result text := replace(p_encoded, '+', ' ');
+    v_pos int;
+    v_hex text;
+BEGIN
+    LOOP
+        v_pos := position('%' IN v_result);
+        EXIT WHEN v_pos = 0 OR v_pos > length(v_result) - 2;
+
+        v_hex := substring(v_result FROM v_pos + 1 FOR 2);
+        EXIT WHEN v_hex !~ '^[0-9A-Fa-f]{2}$';
+
+        v_result := substring(v_result FROM 1 FOR v_pos - 1)
+                 || chr(('x' || v_hex)::bit(8)::int)
+                 || substring(v_result FROM v_pos + 3);
+    END LOOP;
+
+    RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION api.regexp_quote(p_text text)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT regexp_replace(p_text, '([\\.^$|?*+()[\]{}])', '\\\1', 'g');
+$$;
+
+CREATE OR REPLACE FUNCTION api.uri_template_to_regex(p_template text)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT '^' || regexp_replace(
+        api.regexp_quote(
+            regexp_replace(p_template, '\{[^}]+\}', '<<<PLACEHOLDER>>>', 'g')
+        ),
+        '<<<PLACEHOLDER>>>',
+        '[^/]+',
+        'g'
+    ) || '$';
+$$;
+
 CREATE OR REPLACE FUNCTION api.query_params(url text)
 RETURNS extensions.hstore
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
@@ -72,8 +115,8 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     )
     SELECT COALESCE(
         extensions.hstore(
-            array_agg(split_part(param, '=', 1)),
-            array_agg(COALESCE(nullif(split_part(param, '=', 2), ''), ''))
+            array_agg(api.url_decode(split_part(param, '=', 1))),
+            array_agg(api.url_decode(COALESCE(nullif(split_part(param, '=', 2), ''), '')))
         ),
         ''::extensions.hstore
     )
@@ -91,10 +134,62 @@ DO $$
 DECLARE
     v_params extensions.hstore;
     v_path text;
+    v_decoded text;
+    v_quoted text;
 BEGIN
+    -- Test url_decode
+    v_decoded := api.url_decode('John%20Doe');
+    IF v_decoded != 'John Doe' THEN
+        RAISE EXCEPTION 'url_decode percent failed: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('hello+world');
+    IF v_decoded != 'hello world' THEN
+        RAISE EXCEPTION 'url_decode plus failed: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('100%25+complete');
+    IF v_decoded != '100% complete' THEN
+        RAISE EXCEPTION 'url_decode mixed failed: got %', v_decoded;
+    END IF;
+
+    -- Test regexp_quote
+    v_quoted := api.regexp_quote('file.json');
+    IF v_quoted != 'file\.json' THEN
+        RAISE EXCEPTION 'regexp_quote dot failed: got %', v_quoted;
+    END IF;
+
+    v_quoted := api.regexp_quote('a+b*c?');
+    IF v_quoted != 'a\+b\*c\?' THEN
+        RAISE EXCEPTION 'regexp_quote metachar failed: got %', v_quoted;
+    END IF;
+
+    -- Test uri_template_to_regex
+    v_quoted := api.uri_template_to_regex('/api/resource.json/{id}');
+    IF v_quoted != '^/api/resource\.json/[^/]+$' THEN
+        RAISE EXCEPTION 'uri_template_to_regex failed: got %', v_quoted;
+    END IF;
+
+    IF NOT '/api/resource.json/123' ~ api.uri_template_to_regex('/api/resource.json/{id}') THEN
+        RAISE EXCEPTION 'uri_template_to_regex match failed';
+    END IF;
+
+    IF '/api/resourceXjson/123' ~ api.uri_template_to_regex('/api/resource.json/{id}') THEN
+        RAISE EXCEPTION 'uri_template_to_regex should not match unescaped dot';
+    END IF;
+
+    -- Test query_params with URL encoding
     v_params := api.query_params('/api/users?name=john&age=30');
     IF v_params->'name' != 'john' OR v_params->'age' != '30' THEN
-        RAISE EXCEPTION 'query_params failed';
+        RAISE EXCEPTION 'query_params basic failed';
+    END IF;
+
+    v_params := api.query_params('/search?q=hello%20world&filter=a%2Bb');
+    IF v_params->'q' != 'hello world' THEN
+        RAISE EXCEPTION 'query_params url decode failed: got %', v_params->'q';
+    END IF;
+    IF v_params->'filter' != 'a+b' THEN
+        RAISE EXCEPTION 'query_params url decode plus failed: got %', v_params->'filter';
     END IF;
 
     v_path := api.url_path('/api/users?name=john');
@@ -287,12 +382,11 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
-    request_id text,
-    is_error boolean DEFAULT false
+    request_id text
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('contents', contents, 'isError', is_error),
+        jsonb_build_object('contents', contents),
         request_id
     );
 $$;
@@ -307,12 +401,11 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
     messages jsonb,
-    request_id text,
-    is_error boolean DEFAULT false
+    request_id text
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('messages', messages, 'isError', is_error),
+        jsonb_build_object('messages', messages),
         request_id
     );
 $$;
@@ -391,7 +484,10 @@ END $$;
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.content_json/text - bytea content parsing';
     RAISE NOTICE '  ✓ api.header - case-insensitive header lookup';
-    RAISE NOTICE '  ✓ api.query_params/url_path - URL parsing';
+    RAISE NOTICE '  ✓ api.url_decode - percent-encoding decoder';
+    RAISE NOTICE '  ✓ api.regexp_quote - regex metacharacter escaping';
+    RAISE NOTICE '  ✓ api.uri_template_to_regex - URI template to regex conversion';
+    RAISE NOTICE '  ✓ api.query_params/url_path - URL parsing with decoding';
     RAISE NOTICE '  ✓ api.json_response - JSON response builder';
     RAISE NOTICE '  ✓ api.problem_response - RFC 7807 error response';
     RAISE NOTICE '  ✓ api.jsonrpc_success/error - JSON-RPC 2.0 responses';
@@ -407,8 +503,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);

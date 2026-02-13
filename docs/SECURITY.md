@@ -10,7 +10,7 @@ CLI (--param / --params-file)
         ▼
 Go process (in-memory map)
         │
-        ├──► pg_temp.pgmi_parameter table (session-scoped, INSERT via $1/$2)
+        ├──► pg_temp.pgmi_parameter_view (session-scoped, INSERT via $1/$2)
         │
         └──► PostgreSQL session variables (set_config($1, $2, false))
         │
@@ -27,7 +27,7 @@ pgmi logs **parameter counts only**, never keys or values — even in `--verbose
 Note: `--verbose` also sets `client_min_messages = 'debug'` on the PostgreSQL session, which enables `RAISE DEBUG` output from SQL scripts. Ensure your SQL scripts do not leak secrets via `RAISE DEBUG`.
 
 ```
-✓ Loaded 3 parameters into pg_temp.pgmi_parameter
+✓ Loaded 3 parameters into pg_temp._pgmi_parameter
 [VERBOSE] CLI parameters override 2 value(s)
 ```
 

@@ -2,9 +2,9 @@
 -- pgmi Session Foundation Tests
 -- ============================================================================
 -- Validates complete session initialization including:
--- - File loading into pg_temp.pgmi_source
--- - Test file separation into pg_temp.pgmi_unittest_script (dropped after materialization)
--- - Execution plan materialization in pg_temp.pgmi_unittest_plan
+-- - File loading into pg_temp.pgmi_source_view
+-- - Test file separation into pg_temp.pgmi_test_source (dropped after materialization)
+-- - Execution plan materialization in pg_temp.pgmi_test_plan
 -- - Multi-level directory traversal correctness
 -- ============================================================================
 
@@ -21,11 +21,11 @@ DECLARE
     v_test_files_in_source INT;
 BEGIN
     RAISE NOTICE '';
-    RAISE NOTICE 'TEST 1: File Separation (pgmi_source vs pgmi_unittest_plan)';
+    RAISE NOTICE 'TEST 1: File Separation (pgmi_source vs pgmi_test_plan)';
 
     -- Check: pgmi_source should have NO test files (they should have been moved to unittest tables)
     SELECT COUNT(*) INTO v_test_files_in_source
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE directory ~ '/pgitest/';
 
     IF v_test_files_in_source > 0 THEN
@@ -48,12 +48,12 @@ BEGIN
 
     -- Count regular files (excluding deploy.sql which is not in pgmi_source)
     SELECT COUNT(*) INTO v_regular_file_count
-    FROM pg_temp.pgmi_source;
+    FROM pg_temp.pgmi_source_view;
 
     -- Count test steps in unittest plan (excludes teardown steps)
     SELECT COUNT(*) INTO v_test_step_count
-    FROM pg_temp.pgmi_unittest_plan
-    WHERE step_type IN ('setup', 'test');
+    FROM pg_temp.pgmi_test_plan()
+    WHERE step_type IN ('fixture', 'test');
 
     IF v_regular_file_count != v_expected_regular THEN
         RAISE EXCEPTION '✗ FAILED: Expected % regular files, found %', v_expected_regular, v_regular_file_count;
@@ -76,7 +76,7 @@ BEGIN
 
     -- Check: All paths should use Unix-style separators and start with ./
     SELECT COUNT(*) INTO v_invalid_paths
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE path !~ '^\./';
 
     IF v_invalid_paths > 0 THEN
@@ -98,7 +98,7 @@ BEGIN
     -- migrations/*.sql should have depth=1
     -- setup/*.sql should have depth=1
     SELECT COUNT(*) INTO v_invalid_depth
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE (directory = './migrations/' AND depth != 1)
        OR (directory = './setup/' AND depth != 1);
 
@@ -119,8 +119,8 @@ BEGIN
 
     -- All items in unittest_plan should have pgitest in their path
     SELECT COUNT(*) INTO v_test_steps
-    FROM pg_temp.pgmi_unittest_plan
-    WHERE script_directory !~ '/pgitest/';
+    FROM pg_temp.pgmi_test_plan()
+    WHERE directory !~ '/pgitest/';
 
     IF v_test_steps > 0 THEN
         RAISE EXCEPTION '✗ FAILED: Found % unittest plan entries without /pgitest/ in path', v_test_steps;
@@ -140,8 +140,8 @@ BEGIN
 
     -- Count setup steps in plan
     SELECT COUNT(*) INTO v_setup_count
-    FROM pg_temp.pgmi_unittest_plan
-    WHERE step_type = 'setup';
+    FROM pg_temp.pgmi_test_plan()
+    WHERE step_type = 'fixture';
 
     IF v_setup_count != v_expected_setup THEN
         RAISE EXCEPTION '✗ FAILED: Expected % setup files, found %', v_expected_setup, v_setup_count;
@@ -153,17 +153,17 @@ END $$;
 -- TEST 7: Multi-Level Execution Order
 DO $$
 DECLARE
-    v_execution_order TEXT[];
+    v_ordinal TEXT[];
     v_expected_order TEXT[];
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE 'TEST 7: Multi-Level Execution Order';
 
     -- Get actual execution order (only setup and test, not teardown)
-    SELECT array_agg(script_path ORDER BY execution_order)
-    INTO v_execution_order
-    FROM pg_temp.pgmi_unittest_plan
-    WHERE step_type IN ('setup', 'test');
+    SELECT array_agg(script_path ORDER BY ordinal)
+    INTO v_ordinal
+    FROM pg_temp.pgmi_test_plan()
+    WHERE step_type IN ('fixture', 'test');
 
     -- Expected order based on directory traversal (depth-first)
     v_expected_order := ARRAY[
@@ -175,10 +175,10 @@ BEGIN
         './pgitest/billing/test_stripe.sql'         -- Level 1 test (billing sibling)
     ];
 
-    IF v_execution_order != v_expected_order THEN
+    IF v_ordinal != v_expected_order THEN
         RAISE EXCEPTION E'✗ FAILED: Execution order incorrect\nExpected: %\nGot: %',
             array_to_string(v_expected_order, ', '),
-            array_to_string(v_execution_order, ', ');
+            array_to_string(v_ordinal, ', ');
     END IF;
 
     RAISE NOTICE '✓ PASSED: Multi-level execution order correct';
@@ -195,29 +195,29 @@ BEGIN
 
     -- Count setup and teardown steps
     SELECT
-        COUNT(*) FILTER (WHERE step_type = 'setup'),
+        COUNT(*) FILTER (WHERE step_type = 'fixture'),
         COUNT(*) FILTER (WHERE step_type = 'teardown')
     INTO v_setup_count, v_teardown_count
-    FROM pg_temp.pgmi_unittest_plan;
+    FROM pg_temp.pgmi_test_plan();
 
     IF v_setup_count != v_teardown_count THEN
         RAISE EXCEPTION '✗ FAILED: Setup/teardown mismatch (% setup, % teardown)',
             v_setup_count, v_teardown_count;
     END IF;
 
-    -- Verify each setup has corresponding teardown with same savepoint_id
+    -- Verify each fixture has corresponding teardown with same directory
     IF EXISTS (
         SELECT 1
-        FROM pg_temp.pgmi_unittest_plan setup_step
-        WHERE setup_step.step_type = 'setup'
+        FROM pg_temp.pgmi_test_plan() fixture_step
+        WHERE fixture_step.step_type = 'fixture'
           AND NOT EXISTS (
               SELECT 1
-              FROM pg_temp.pgmi_unittest_plan teardown_step
+              FROM pg_temp.pgmi_test_plan() teardown_step
               WHERE teardown_step.step_type = 'teardown'
-                AND teardown_step.savepoint_id = setup_step.savepoint_id
+                AND teardown_step.directory = fixture_step.directory
           )
     ) THEN
-        RAISE EXCEPTION '✗ FAILED: Found setup without matching teardown';
+        RAISE EXCEPTION '✗ FAILED: Found fixture without matching teardown';
     END IF;
 
     RAISE NOTICE '✓ PASSED: Setup/teardown pairing correct (% pairs)', v_setup_count;
@@ -233,7 +233,7 @@ BEGIN
 
     -- Verify checksums are valid hex strings
     SELECT COUNT(*) INTO v_invalid_checksums
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE checksum !~ '^[a-fA-F0-9]{32,64}$'
        OR pgmi_checksum !~ '^[a-fA-F0-9]{32,64}$';
 
@@ -258,7 +258,7 @@ BEGIN
 
     -- Verify path = directory || name
     SELECT COUNT(*) INTO v_constraint_violations
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE path != directory || name;
 
     IF v_constraint_violations > 0 THEN
@@ -267,7 +267,7 @@ BEGIN
 
     -- Verify content size matches size_bytes
     SELECT COUNT(*) INTO v_constraint_violations
-    FROM pg_temp.pgmi_source
+    FROM pg_temp.pgmi_source_view
     WHERE octet_length(content) != size_bytes;
 
     IF v_constraint_violations > 0 THEN

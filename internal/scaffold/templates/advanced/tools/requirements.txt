@@ -1,0 +1,2 @@
+# MCP Gateway Dependencies
+psycopg[binary]>=3.0

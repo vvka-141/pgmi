@@ -8,7 +8,7 @@ import (
 
 // SessionPreparer abstracts session preparation for testability.
 type SessionPreparer interface {
-	PrepareSession(ctx context.Context, connConfig *ConnectionConfig, sourcePath string, parameters map[string]string, verbose bool) (*Session, error)
+	PrepareSession(ctx context.Context, connConfig *ConnectionConfig, sourcePath string, parameters map[string]string, compat string, verbose bool) (*Session, error)
 }
 
 // Session encapsulates a prepared deployment session with database connection,

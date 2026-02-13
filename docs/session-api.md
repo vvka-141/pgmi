@@ -10,55 +10,77 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  1. CONNECT                                                              │
 │     pgmi connects to PostgreSQL                                         │
-└────────────────────────────────────────────────┬────────────────────────┘
-                                                 │
-                                                 ▼
+└────────────────────────────────────────────┬────────────────────────────┘
+                                             │
+                                             ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  2. PREPARE SESSION                                                      │
-│     pgmi creates temporary tables and loads your project files:          │
+│     pgmi creates temporary tables and views (two-tier API):              │
 │                                                                          │
-│     pg_temp.pgmi_source      ← All your .sql, .json, .yaml files        │
-│     pg_temp.pgmi_parameter   ← CLI parameters (--param key=value)        │
-│     pg_temp.pgmi_plan        ← Empty execution queue                     │
-│     pg_temp.pgmi_plan_view   ← Pre-computed execution plan view          │
+│     Internal tables: _pgmi_source, _pgmi_parameter, _pgmi_test_source    │
+│     Public views:    pgmi_source_view, pgmi_parameter_view, pgmi_plan_view│
+│                      pgmi_test_source_view, pgmi_test_directory_view     │
 │                                                                          │
-│     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG) │
-│     Also creates helper functions: pgmi_plan_command(), pgmi_plan_file() │
-└────────────────────────────────────────────────┬────────────────────────┘
-                                                 │
-                                                 ▼
+│     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG)│
+│     Functions: pgmi_test_plan(), pgmi_test_generate()                    │
+└────────────────────────────────────────────┬────────────────────────────┘
+                                             │
+                                             ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  3. EXECUTE deploy.sql (PLANNING PHASE)                                  │
-│     YOUR deploy.sql runs and populates pg_temp.pgmi_plan                 │
-│     by calling helper functions like pgmi_plan_file()                    │
+│  3. EXECUTE deploy.sql                                                   │
+│     YOUR deploy.sql runs and directly executes files using:              │
 │                                                                          │
-│     ⚠️  These functions DON'T execute SQL—they INSERT into pgmi_plan    │
-└────────────────────────────────────────────────┬────────────────────────┘
-                                                 │
-                                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  4. EXECUTE THE PLAN (EXECUTION PHASE)                                   │
-│     pgmi reads pg_temp.pgmi_plan in order and executes each command      │
+│     FOR v_file IN (SELECT * FROM pgmi_plan_view ORDER BY execution_order)│
+│     LOOP                                                                 │
+│         EXECUTE v_file.content;                                          │
+│     END LOOP;                                                            │
 │                                                                          │
-│     ordinal=1: EXECUTE "BEGIN;"                                          │
-│     ordinal=2: EXECUTE "CREATE TABLE users (...);"                       │
-│     ordinal=3: EXECUTE "COMMIT;"                                         │
+│     Transaction boundaries, error handling, execution order—all yours.   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**The key insight:** deploy.sql is a *planning script*, not a deployment script. It builds a queue of commands. pgmi then executes that queue.
+**The key insight:** deploy.sql is the deployment script. It queries `pgmi_plan_view` and uses `EXECUTE` to run files directly. You control everything.
 
 ---
 
-## Session Tables
+## Two-Tier API Design
 
-These tables exist only for the duration of your deployment session. They're created in the `pg_temp` schema (PostgreSQL's session-local temporary namespace).
+pgmi uses a two-tier naming convention for session objects:
 
-### pg_temp.pgmi_source
+| Tier | Naming | Purpose | Example |
+|------|--------|---------|---------|
+| **Internal** | `_pgmi_*` prefix | Used by pgmi Go code | `_pgmi_source`, `_pgmi_parameter` |
+| **Public** | `*_view` suffix | Stable API for deploy.sql | `pgmi_source_view`, `pgmi_plan_view` |
 
-**Your entire project, in a table.**
+**Why this matters:**
+- Internal tables may change between versions
+- Public views provide a stable contract for deploy.sql
+- Always use views (`pgmi_source_view`, `pgmi_plan_view`) in your SQL
 
-Every file in your project directory is loaded here with full metadata:
+---
+
+## Public Interface (Stable API)
+
+These views and functions are the stable API for deploy.sql. Use these instead of querying internal tables directly.
+
+### Which View Should I Use?
+
+| Use Case | View | Why |
+|----------|------|-----|
+| **Deploying files** | `pgmi_plan_view` | Pre-sorted by execution order, includes metadata |
+| **Introspection/debugging** | `pgmi_source_view` | Raw file access, all columns available |
+| **Custom ordering** | `pgmi_source_view` | Apply your own `ORDER BY` logic |
+| **Metadata-driven deployment** | `pgmi_plan_view` | Respects `<pgmi-meta>` sort keys |
+
+**Rule of thumb:** Use `pgmi_plan_view` for deployment loops. Use `pgmi_source_view` when you need raw access or custom filtering beyond what the plan provides.
+
+### File Access
+
+#### pgmi_source_view
+
+**All project source files (excludes deploy.sql and `__test__/` files).**
+
+This view provides direct access to all discovered files. For most use cases, prefer `pgmi_plan_view` which adds execution ordering via metadata.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -68,89 +90,26 @@ Every file in your project directory is loaded here with full metadata:
 | `extension` | text | File extension (e.g., `.sql`) |
 | `depth` | integer | Nesting level (0 = root) |
 | `content` | text | Full file content |
-| `size_bytes` | bigint | File size |
+| `size_bytes` | bigint | File size in bytes |
 | `checksum` | text | SHA-256 of original content |
-| `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
+| `pgmi_checksum` | text | SHA-256 of normalized content |
 | `path_parts` | text[] | Path split by `/` |
-| `is_sql_file` | boolean | True for SQL file extensions (`.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql`) |
+| `is_sql_file` | boolean | True for recognized SQL extensions |
+| `is_test_file` | boolean | True if path contains `__test__/` |
 | `parent_folder_name` | text | Immediate parent directory name |
 
-**Example queries in deploy.sql:**
-
 ```sql
--- Find all migrations
-SELECT path, content
-FROM pg_temp.pgmi_source
+-- List all SQL files in migrations/
+SELECT path, name FROM pg_temp.pgmi_source_view
 WHERE directory = './migrations/' AND is_sql_file
 ORDER BY path;
-
--- Find SQL files in a specific directory
-SELECT path FROM pg_temp.pgmi_source
-WHERE directory = './schemas/' AND is_sql_file;
-
--- Count files by directory
-SELECT directory, count(*)
-FROM pg_temp.pgmi_source
-GROUP BY directory;
-
--- Dynamic deployment based on environment
-DO $$
-DECLARE v_file RECORD;
-BEGIN
-    FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE directory LIKE './seeds/' || current_setting('pgmi.env', true) || '/%'
-    ) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
-    END LOOP;
-END $$;
 ```
 
-### pg_temp.pgmi_parameter
-
-**CLI parameters as a queryable table.**
-
-Parameters from `--param key=value` are stored here and also set as session variables:
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `key` | text | Parameter name (alphanumeric + underscores) |
-| `value` | text | Parameter value (always text, cast as needed) |
-| `type` | text | Declared type (`text`, `int`, `boolean`, `uuid`, etc.) |
-| `required` | boolean | Whether parameter is required |
-| `default_value` | text | Default if not provided |
-| `description` | text | Human-readable description |
-
-**Accessing parameters:**
-
-```sql
--- Method 1: Direct session variable (fastest)
-SELECT current_setting('pgmi.env');           -- Returns value or error
-SELECT current_setting('pgmi.env', true);     -- Returns value or NULL
-
--- Method 2: Convenience wrapper with default
-SELECT pg_temp.pgmi_get_param('env', 'development');
-
--- Method 3: Query the table (for introspection)
-SELECT * FROM pg_temp.pgmi_parameter;
-```
-
-### pg_temp.pgmi_plan
-
-**The execution queue your deploy.sql builds.**
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `ordinal` | integer | Auto-incrementing execution order |
-| `command_sql` | text | SQL to execute |
-
-This table starts empty. Your deploy.sql populates it by calling helper functions. After deploy.sql completes, pgmi reads this table in `ordinal` order and executes each command.
-
-### pg_temp.pgmi_plan_view
+#### pgmi_plan_view
 
 **Pre-computed execution plan with metadata.**
 
-This view joins `pgmi_source` with `pgmi_source_metadata` and provides:
+This view joins `_pgmi_source` with `_pgmi_source_metadata` and provides a clean interface for file access:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -164,231 +123,418 @@ This view joins `pgmi_source` with `pgmi_source_metadata` and provides:
 | `sort_key` | text | Execution ordering key |
 | `execution_order` | bigint | Sequential execution number |
 
-**Use this view for metadata-driven deployment:**
+**Recommended usage:**
 
 ```sql
--- Deploy only files with explicit metadata
-SELECT path, id, sort_key
-FROM pg_temp.pgmi_plan_view
-WHERE id IS NOT NULL
-ORDER BY execution_order;
+-- Deploy files in metadata-driven order using direct execution
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    FOR v_file IN (
+        SELECT path, content
+        FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    ) LOOP
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
+    END LOOP;
+END $$;
 ```
 
-### pg_temp.pgmi_unittest_plan
+### Parameters
 
-**Test execution plan with setup/teardown lifecycle.**
+CLI parameters (passed via `--param key=value`) are accessible in multiple ways. This section consolidates all parameter access patterns.
 
-Files from `__test__/` or `__tests__/` directories are automatically moved here:
+#### Method 1: Session Variables (Recommended)
+
+pgmi automatically sets session variables with the `pgmi.` prefix. This is the simplest and most common approach:
+
+```sql
+-- Get parameter with default (the true argument prevents errors if not set)
+v_env := COALESCE(current_setting('pgmi.env', true), 'development');
+
+-- In conditional logic
+IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+    -- Production-specific logic
+END IF;
+
+-- Check if parameter was provided
+IF current_setting('pgmi.feature_flag', true) IS NOT NULL THEN
+    -- Parameter was explicitly set
+END IF;
+```
+
+**Important:** Always pass `true` as the second argument to `current_setting()`. This returns NULL instead of raising an error when the variable is not set.
+
+#### Method 2: pgmi_parameter_view (Introspection)
+
+For iterating over parameters or building dynamic logic:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `execution_order` | integer | Sequential order |
-| `step_type` | text | `setup`, `test`, or `teardown` |
-| `script_path` | text | Path to test file |
-| `script_directory` | text | Directory containing test |
-| `savepoint_id` | text | Unique savepoint name |
-| `executable_sql` | text | Ready-to-execute SQL with savepoints |
-
----
-
-## Helper Functions
-
-All helper functions are created in `pg_temp` schema and available immediately in deploy.sql.
-
-### pgmi_plan_command(sql text)
-
-**Adds raw SQL to the execution plan.**
+| `key` | text | Parameter name (e.g., `env`, `version`) |
+| `value` | text | Parameter value (always text, cast as needed) |
+| `type` | text | Declared type hint (`text`, `int`, `boolean`, etc.) |
+| `required` | boolean | Whether parameter was marked required |
+| `default_value` | text | Default value if not provided |
+| `description` | text | Human-readable description |
 
 ```sql
--- Transaction control
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+-- List all parameters
+SELECT key, value, description FROM pg_temp.pgmi_parameter_view;
 
--- DDL statements
-PERFORM pg_temp.pgmi_plan_command('CREATE SCHEMA IF NOT EXISTS app;');
-
--- Any valid SQL
-PERFORM pg_temp.pgmi_plan_command($sql$
-    CREATE TABLE users (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        email text UNIQUE NOT NULL
-    );
-$sql$);
-```
-
-### pgmi_plan_file(path text)
-
-**Adds a file's content to the execution plan.**
-
-```sql
--- Execute a specific file
-PERFORM pg_temp.pgmi_plan_file('./migrations/001_init.sql');
-
--- Execute files in a loop
-FOR v_file IN (
-    SELECT path FROM pg_temp.pgmi_source
-    WHERE directory = './schemas/' AND is_sql_file
-    ORDER BY path
-) LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
-```
-
-**Error handling:** Raises exception if file not found in `pgmi_source`.
-
-### pgmi_plan_do(plpgsql_code text, VARIADIC args text[])
-
-**Adds a PL/pgSQL anonymous block to the execution plan.**
-
-```sql
--- Simple block
-PERFORM pg_temp.pgmi_plan_do($$
+-- Iterate over parameters dynamically
+DO $$
+DECLARE
+    v_param RECORD;
 BEGIN
-    RAISE NOTICE 'Deployment starting...';
-END;
-$$);
-
--- With format() placeholders (%s = string, %I = identifier, %L = literal)
-PERFORM pg_temp.pgmi_plan_do(
-    $$BEGIN RAISE NOTICE 'Deploying to: %s'; END;$$,
-    current_setting('pgmi.env')
-);
-
--- Dynamic DDL
-PERFORM pg_temp.pgmi_plan_do(
-    $$BEGIN EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', %L); END;$$,
-    pg_temp.pgmi_get_param('app_schema', 'app')
-);
+    FOR v_param IN SELECT key, value FROM pg_temp.pgmi_parameter_view LOOP
+        RAISE NOTICE 'Parameter: % = %', v_param.key, v_param.value;
+    END LOOP;
+END $$;
 ```
 
-### pgmi_plan_notice(message text, VARIADIC args text[])
+#### Method 3: deployment_setting() Helper (Advanced Template Only)
 
-**Adds a RAISE NOTICE to the execution plan (simpler than pgmi_plan_do).**
+The advanced template provides a helper function with error handling:
 
 ```sql
--- Simple message
-PERFORM pg_temp.pgmi_plan_notice('Starting phase 1...');
+-- Get required parameter (raises exception if missing)
+v_admin_role := pg_temp.deployment_setting('database_admin_role');
 
--- With formatting
-PERFORM pg_temp.pgmi_plan_notice('Executing: %s', v_file.path);
-PERFORM pg_temp.pgmi_plan_notice('Environment: %s, Version: %s',
-    current_setting('pgmi.env'),
-    current_setting('pgmi.version', true)
-);
+-- Get optional parameter (returns NULL if missing)
+v_optional := pg_temp.deployment_setting('optional_key', false);
 ```
 
-### pgmi_plan_tests(pattern text DEFAULT '.*')
+**Note:** This function uses a `deployment.` prefix internally and normalizes key names. It's defined in the advanced template's `deploy.sql`, not in pgmi core.
 
-**Adds test execution to the plan with automatic setup/teardown.**
+#### Parameter Precedence
+
+Parameters merge from multiple sources (later wins):
+
+```
+pgmi.yaml params < --params-file < --param CLI flag
+```
+
+See [Configuration Reference](CONFIGURATION.md) for details.
+
+#### Type Coercion
+
+All parameter values are stored as text. Cast them as needed:
 
 ```sql
--- Run all tests
-PERFORM pg_temp.pgmi_plan_tests();
+-- Boolean
+v_enabled := COALESCE(current_setting('pgmi.feature_enabled', true), 'false')::boolean;
+
+-- Integer
+v_limit := COALESCE(current_setting('pgmi.max_rows', true), '100')::int;
+
+-- Timestamp
+v_cutoff := COALESCE(current_setting('pgmi.since', true), '2024-01-01')::timestamp;
+```
+
+#### Template Responsibility
+
+pgmi core provides raw parameter storage. Templates handle:
+- Declaring expected parameters (advanced template uses `session.xml`)
+- Validating required parameters
+- Providing default values
+- Type validation and coercion
+
+### Direct Execution Pattern
+
+pgmi uses a **direct execution** model: your deploy.sql queries `pgmi_plan_view` and uses `EXECUTE` to run files. This gives you full control over transaction boundaries, execution order, and conditional logic.
+
+**Basic pattern:**
+
+```sql
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    -- Transaction control is in your hands
+    FOR v_file IN (
+        SELECT path, content
+        FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './schemas/%'
+        ORDER BY execution_order
+    ) LOOP
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
+    END LOOP;
+END $$;
+```
+
+**With explicit transaction boundaries:**
+
+```sql
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    -- Phase 1: Schema changes in one transaction
+    BEGIN
+        FOR v_file IN (
+            SELECT path, content FROM pg_temp.pgmi_plan_view
+            WHERE path LIKE './schemas/%' ORDER BY execution_order
+        ) LOOP
+            EXECUTE v_file.content;
+        END LOOP;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'Schema phase failed: %', SQLERRM;
+    END;
+
+    -- Phase 2: Migrations
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%' ORDER BY execution_order
+    ) LOOP
+        EXECUTE v_file.content;
+    END LOOP;
+END $$;
+```
+
+**Conditional execution:**
+
+```sql
+DO $$
+DECLARE
+    v_file RECORD;
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+BEGIN
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%' ORDER BY execution_order
+    ) LOOP
+        EXECUTE v_file.content;
+    END LOOP;
+
+    -- Only seed data in development
+    IF v_env = 'development' THEN
+        FOR v_file IN (
+            SELECT path, content FROM pg_temp.pgmi_plan_view
+            WHERE path LIKE './seeds/%' ORDER BY execution_order
+        ) LOOP
+            EXECUTE v_file.content;
+        END LOOP;
+    END IF;
+END $$;
+```
+
+### Metadata
+
+#### pgmi_source_metadata_view
+
+**Parsed `<pgmi-meta>` XML blocks from SQL files.**
+
+Files without metadata are not in this view (use `pgmi_plan_view` which handles fallbacks).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | File path (references `pgmi_source_view.path`) |
+| `id` | uuid | Explicit script UUID from metadata |
+| `idempotent` | boolean | Whether script can be re-executed safely |
+| `sort_keys` | text[] | Array of execution ordering keys |
+| `description` | text | Human-readable description |
+
+```sql
+-- List files with metadata
+SELECT path, id, idempotent, sort_keys
+FROM pg_temp.pgmi_source_metadata_view;
+
+-- Find non-idempotent migrations
+SELECT path FROM pg_temp.pgmi_source_metadata_view
+WHERE NOT idempotent;
+```
+
+See [Metadata Guide](METADATA.md) for syntax and usage patterns.
+
+### Test Views
+
+#### pgmi_test_source_view
+
+**Test file content from `__test__/` or `__tests__/` directories.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Full path to test file |
+| `directory` | text | Parent test directory (ending with `/`) |
+| `filename` | text | Filename without directory |
+| `content` | text | Full file content |
+| `is_fixture` | boolean | True for `_setup.sql` files |
+
+```sql
+-- List all test files
+SELECT path, is_fixture FROM pg_temp.pgmi_test_source_view
+ORDER BY directory, filename;
+
+-- Get fixture files only
+SELECT path FROM pg_temp.pgmi_test_source_view
+WHERE is_fixture;
+```
+
+#### pgmi_test_directory_view
+
+**Hierarchical test directory structure.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Directory path (ending with `/`) |
+| `parent_path` | text | Parent directory path (NULL for root) |
+| `depth` | integer | Nesting level (0 = root `__test__/`) |
+
+```sql
+-- See test directory hierarchy
+SELECT path, parent_path, depth
+FROM pg_temp.pgmi_test_directory_view
+ORDER BY depth, path;
+
+-- Find nested test directories
+SELECT path FROM pg_temp.pgmi_test_directory_view
+WHERE depth > 0;
+```
+
+### Testing
+
+#### CALL pgmi_test() Preprocessor Macro
+
+**Executes tests with automatic savepoint isolation.**
+
+The `CALL pgmi_test()` is a **preprocessor macro** that Go expands before sending SQL to PostgreSQL:
+
+```sql
+-- Run all tests with default callback
+CALL pgmi_test();
 
 -- Run tests matching a pattern (POSIX regex)
-PERFORM pg_temp.pgmi_plan_tests('.*/integration/.*');
-PERFORM pg_temp.pgmi_plan_tests('.*_critical\.sql$');
+CALL pgmi_test('.*/integration/.*');
+CALL pgmi_test('.*_critical\.sql$');
 
--- Run tests for a specific feature
-PERFORM pg_temp.pgmi_plan_tests('.*/auth/.*');
+-- Run tests with custom callback function
+CALL pgmi_test('.*/auth/.*', 'my_custom_callback');
 ```
 
 **Automatic behavior:**
 - Creates SAVEPOINTs before each `_setup.sql`
-- Executes tests in order
+- Executes tests in lexicographic order
 - Rolls back to SAVEPOINT after tests (no side effects)
 - Includes ancestor `_setup.sql` files needed by matching tests
+- Calls `pgmi_test_generate()` internally to produce inline SQL
 
-### pgmi_declare_param(...)
+#### pgmi_test_plan(pattern) Function
 
-**Declares a parameter with type validation, defaults, and documentation.**
+**Returns the test execution plan as a table (for introspection).**
 
-```sql
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'env',
-    p_type => 'text',
-    p_default_value => 'development',
-    p_required => false,
-    p_description => 'Deployment environment'
-);
+This is a TABLE-returning function (not a view). Files from `__test__/` or `__tests__/` directories are automatically organized into a depth-first execution plan with fixture/test/teardown lifecycle.
 
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'max_connections',
-    p_type => 'int',
-    p_default_value => '100'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'admin_password',
-    p_type => 'text',
-    p_required => true  -- Fails if not provided
-);
-```
-
-**Supported types:** `text`, `int`, `integer`, `bigint`, `numeric`, `boolean`, `bool`, `uuid`, `timestamp`, `timestamptz`, `name`
-
-### pgmi_get_param(key text, default text)
-
-**Gets a parameter value with fallback.**
+| Column | Type | Description |
+|--------|------|-------------|
+| `ordinal` | integer | Sequential execution order (1-based) |
+| `step_type` | text | `'fixture'`, `'test'`, or `'teardown'` |
+| `script_path` | text | Path to test file (NULL for teardown) |
+| `directory` | text | Test directory containing the script |
+| `depth` | integer | Nesting level (0 = root `__test__/`) |
 
 ```sql
--- With default
-SELECT pg_temp.pgmi_get_param('env', 'development');
+-- See what tests would run
+SELECT * FROM pg_temp.pgmi_test_plan();
 
--- In conditional logic
-IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
-    -- Production-specific logic
-END IF;
+-- Filter by pattern (POSIX regex on script_path)
+SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 ```
+
+**Test execution emits notices:**
+- `NOTICE: [pgmi] Fixture: ./path/to/_setup.sql`
+- `NOTICE: [pgmi] Test: ./path/to/test_example.sql`
+- `NOTICE: [pgmi] Teardown: ./path/to/__test__/`
+
+With `--verbose`, DEBUG messages show savepoint operations (`ROLLBACK TO SAVEPOINT`, `RELEASE SAVEPOINT`).
+
+#### pgmi_test_generate(pattern, callback) Function
+
+**Generates the SQL code for `pgmi_test()` macro expansion.**
+
+This is an internal function called by the Go preprocessor. It returns the complete SQL text that replaces the `CALL pgmi_test()` macro.
+
+```sql
+-- See what SQL the macro generates (for debugging)
+SELECT pg_temp.pgmi_test_generate();
+SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'my_callback');
+```
+
+**Critical implementation detail:** The generated SQL uses **top-level SAVEPOINT commands**, not PL/pgSQL savepoints. PostgreSQL's PL/pgSQL does not support `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, or `RELEASE SAVEPOINT` commands directly — they must be issued as top-level SQL statements.
+
+The generated structure looks like:
+```sql
+SAVEPOINT pgmi_fixture_1;           -- Top-level SQL
+DO $$ ... EXECUTE fixture ... $$;   -- Test content via EXECUTE
+SAVEPOINT pgmi_test_1;              -- Top-level SQL
+DO $$ ... EXECUTE test ... $$;      -- Test content via EXECUTE
+ROLLBACK TO SAVEPOINT pgmi_test_1;  -- Top-level SQL (undoes test)
+ROLLBACK TO SAVEPOINT pgmi_fixture_1; -- Top-level SQL (undoes fixture)
+```
+
+This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, not inside a DO block.
+
+#### pgmi_persist_test_plan(schema, pattern) Function
+
+**Exports the test plan to a permanent table for external tooling.**
+
+```sql
+-- Create a permanent copy of the test plan
+SELECT pg_temp.pgmi_persist_test_plan('public', NULL);
+-- Creates: public.pgmi_test_plan_snapshot
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `schema` | text | Target schema for the snapshot table |
+| `pattern` | text | Optional POSIX regex filter (NULL = all tests) |
+
+This is useful for CI/CD pipelines that need to inspect the test plan before running, or for generating test reports.
 
 ---
 
-## The Two-Phase Model (Critical Concept)
+## The Direct Execution Model (Critical Concept)
 
 **This is the most important thing to understand about pgmi.**
 
 ```
-deploy.sql runs          pgmi reads pgmi_plan
+pgmi prepares session    deploy.sql runs
       │                         │
       ▼                         ▼
 ┌─────────────┐           ┌─────────────┐
-│   PHASE 1   │           │   PHASE 2   │
-│  PLANNING   │           │  EXECUTION  │
+│   SETUP     │           │  EXECUTION  │
 │             │           │             │
-│ Calls to    │           │ Actually    │
-│ pgmi_plan_* │──────────▶│ runs the    │
-│ INSERT into │           │ SQL         │
-│ pgmi_plan   │           │             │
+│ Create temp │           │ Query files │
+│ tables with │──────────▶│ from views  │
+│ your files  │           │ EXECUTE     │
+│             │           │ directly    │
 └─────────────┘           └─────────────┘
 ```
 
-### The Common Mistake
+**Your deploy.sql has full control.** You query `pgmi_plan_view`, loop through files, and use `EXECUTE` to run them. Transaction boundaries, error handling, execution order—all in your hands.
+
+### The Basic Pattern
 
 ```sql
--- ❌ WRONG: This doesn't work as expected
-BEGIN;  -- This runs NOW, during planning
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source) LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);  -- This just INSERTs a row
-END LOOP;
-COMMIT;  -- This commits the INSERTs, not your deployment
-```
-
-**What happened:** You wrapped the *planning* in a transaction, not the *execution*.
-
-### The Correct Pattern
-
-```sql
--- ✅ CORRECT: Schedule BEGIN/COMMIT as commands to be executed
-PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-FOR v_file IN (SELECT path FROM pg_temp.pgmi_source) LOOP
-    PERFORM pg_temp.pgmi_plan_file(v_file.path);
-END LOOP;
-PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+DO $$
+DECLARE v_file RECORD;
+BEGIN
+    FOR v_file IN (
+        SELECT path, content
+        FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    ) LOOP
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
+    END LOOP;
+END $$;
 ```
 
 **What happens:**
-1. deploy.sql runs, populating pgmi_plan with: `BEGIN;`, file1, file2, ..., `COMMIT;`
-2. pgmi reads pgmi_plan and executes: `BEGIN;` → file1 → file2 → ... → `COMMIT;`
+1. pgmi loads your files into internal tables and creates public views
+2. Your deploy.sql queries `pgmi_plan_view` (or `pgmi_source_view`) and executes files directly with `EXECUTE`
 
 ---
 
@@ -401,32 +547,26 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     -- Phase 1: Schema changes
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    PERFORM pg_temp.pgmi_plan_notice('=== Phase 1: Schema ===');
-
+    RAISE NOTICE '=== Phase 1: Schema ===';
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE directory = './schemas/' AND is_sql_file
-        ORDER BY path
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './schemas/%'
+        ORDER BY execution_order
     ) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 
     -- Phase 2: Migrations
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    PERFORM pg_temp.pgmi_plan_notice('=== Phase 2: Migrations ===');
-
+    RAISE NOTICE '=== Phase 2: Migrations ===';
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE directory = './migrations/' AND is_sql_file
-        ORDER BY path
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
     ) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
 ```
 
@@ -434,13 +574,33 @@ END $$;
 
 ```sql
 DO $$
+DECLARE
+    v_file RECORD;
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
-    IF pg_temp.pgmi_get_param('env', 'development') = 'development' THEN
-        PERFORM pg_temp.pgmi_plan_file('./seeds/dev_data.sql');
+    -- Always run migrations
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    ) LOOP
+        EXECUTE v_file.content;
+    END LOOP;
+
+    -- Only seed data in development
+    IF v_env = 'development' THEN
+        FOR v_file IN (
+            SELECT path, content FROM pg_temp.pgmi_plan_view
+            WHERE path LIKE './seeds/%'
+            ORDER BY execution_order
+        ) LOOP
+            EXECUTE v_file.content;
+        END LOOP;
     END IF;
 
-    IF pg_temp.pgmi_get_param('include_tests', 'true')::boolean THEN
-        PERFORM pg_temp.pgmi_plan_tests();
+    -- Optionally run tests
+    IF COALESCE(current_setting('pgmi.include_tests', true), 'true')::boolean THEN
+        CALL pgmi_test();
     END IF;
 END $$;
 ```
@@ -448,29 +608,29 @@ END $$;
 ### Dynamic File Selection
 
 ```sql
--- Deploy SQL files from a specific directory (preferred)
+-- Deploy SQL files from a specific directory
 DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE directory = './migrations/v2/' AND is_sql_file
-        ORDER BY path
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/v2/%'
+        ORDER BY execution_order
     ) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 
--- Or use POSIX regex for complex patterns (e.g., files in any 'v2' subdirectory)
+-- Or use POSIX regex for complex patterns
 DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path FROM pg_temp.pgmi_source
-        WHERE path ~ '.*/v2/.*' AND is_sql_file  -- Combine regex with is_sql_file
+        SELECT path, content FROM pg_temp.pgmi_source_view
+        WHERE path ~ '.*/v2/.*' AND is_sql_file
         ORDER BY path
     ) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
@@ -481,22 +641,97 @@ END $$;
 DO $$
 DECLARE v_file RECORD;
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
     -- Deploy your schema
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE directory = './schemas/' AND is_sql_file) LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './schemas/%'
+        ORDER BY execution_order
+    ) LOOP
+        EXECUTE v_file.content;
     END LOOP;
 
-    -- Run tests in a savepoint (rolled back after)
-    PERFORM pg_temp.pgmi_plan_command('SAVEPOINT before_tests;');
-    PERFORM pg_temp.pgmi_plan_tests();
-    PERFORM pg_temp.pgmi_plan_command('ROLLBACK TO SAVEPOINT before_tests;');
-
-    -- Tests passed, commit the real changes
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
+
+-- Run tests (preprocessor macro handles savepoint isolation)
+CALL pgmi_test();
+
+COMMIT;
 ```
+
+---
+
+## Internal Tables (Implementation Details)
+
+These tables are the underlying storage for the session API. Users should use the public views above rather than querying these internal tables directly.
+
+**Naming convention:** Internal tables use underscore prefix (`_pgmi_*`)
+
+### pg_temp._pgmi_source
+
+**Raw file storage.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Normalized path (always starts with `./`) |
+| `name` | text | Filename without directory |
+| `directory` | text | Directory path ending with `/` |
+| `extension` | text | File extension (e.g., `.sql`) |
+| `depth` | integer | Nesting level (0 = root) |
+| `content` | text | Full file content |
+| `size_bytes` | bigint | File size |
+| `checksum` | text | SHA-256 of original content |
+| `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
+| `path_parts` | text[] | Path split by `/` |
+| `is_sql_file` | boolean | True for SQL file extensions |
+| `is_test_file` | boolean | True if path contains `__test__/` |
+| `parent_folder_name` | text | Immediate parent directory name |
+
+### pg_temp._pgmi_parameter
+
+**Raw parameter storage.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | text | Parameter name |
+| `value` | text | Parameter value |
+| `type` | text | Declared type hint |
+| `required` | boolean | Whether parameter is required |
+| `default_value` | text | Default if not provided |
+| `description` | text | Human-readable description |
+
+### pg_temp._pgmi_source_metadata
+
+**Parsed XML metadata from `<pgmi-meta>` blocks.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | File path (FK to `_pgmi_source.path`) |
+| `id` | uuid | Explicit script UUID |
+| `idempotent` | boolean | Whether script can be re-executed |
+| `sort_keys` | text[] | Execution ordering keys (defaults to `{}`) |
+| `description` | text | Human-readable description |
+
+### pg_temp._pgmi_test_directory
+
+**Test directory hierarchy.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Directory path (ending with `/`) |
+| `parent_path` | text | Parent directory (NULL for root) |
+| `depth` | integer | Nesting level |
+
+### pg_temp._pgmi_test_source
+
+**Test file content.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Full file path |
+| `directory` | text | Parent test directory (FK to `_pgmi_test_directory.path`) |
+| `filename` | text | Filename only |
+| `content` | text | Full file content |
+| `is_fixture` | boolean | True for `_setup.sql` files |
 
 ---
 
@@ -505,34 +740,34 @@ END $$;
 ### See What Files Are Loaded
 
 ```sql
--- In deploy.sql or via psql
-SELECT path, size_bytes, is_sql_file
-FROM pg_temp.pgmi_source
-ORDER BY path;
+-- Use the view for clean access
+SELECT path, execution_order, idempotent
+FROM pg_temp.pgmi_plan_view
+ORDER BY execution_order;
 ```
 
 ### See What Parameters Are Available
 
 ```sql
-SELECT key, value, type, required, description
-FROM pg_temp.pgmi_parameter;
+SELECT key, value, type, required, default_value, description
+FROM pg_temp.pgmi_parameter_view;
 ```
 
 ### Preview the Execution Plan
 
 ```sql
--- After your planning logic runs
-SELECT ordinal, left(command_sql, 80) AS preview
-FROM pg_temp.pgmi_plan
-ORDER BY ordinal;
+-- See files in execution order
+SELECT execution_order, path, left(content, 80) AS preview
+FROM pg_temp.pgmi_plan_view
+ORDER BY execution_order;
 ```
 
 ### See Available Tests
 
 ```sql
 SELECT step_type, script_path
-FROM pg_temp.pgmi_unittest_plan
-ORDER BY execution_order;
+FROM pg_temp.pgmi_test_plan()
+ORDER BY ordinal;
 ```
 
 ---
@@ -553,12 +788,19 @@ pgmi is not a migration framework. It's an **execution fabric**.
 1. Connect to PostgreSQL
 2. Load your files into session tables
 3. Run your deploy.sql
-4. Execute what your deploy.sql planned
 
 **Your job is to:**
-1. Query `pgmi_source` to find your files
-2. Use `pgmi_plan_*` functions to build an execution plan
-3. Control transaction boundaries with `BEGIN`/`COMMIT`
+1. Query `pgmi_plan_view` to find your files
+2. Use `EXECUTE` to run them directly
+3. Control transaction boundaries and error handling
 4. Decide which files run in what order
 
 **The result:** Complete control. No magic. PostgreSQL is the deployment engine—pgmi just provides infrastructure.
+
+---
+
+## See Also
+
+- [Testing Guide](TESTING.md) — Database testing with automatic rollback
+- [Metadata Guide](METADATA.md) — Script tracking and execution ordering
+- [MCP Integration](MCP.md) — Model Context Protocol for AI assistants (advanced template)

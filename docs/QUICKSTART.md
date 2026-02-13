@@ -49,8 +49,7 @@ pgmi version 0.x.x
 <summary>macOS (Homebrew)</summary>
 
 ```bash
-brew tap vvka-141/pgmi
-brew install pgmi
+brew install vvka-141/pgmi/pgmi
 ```
 </details>
 
@@ -118,10 +117,12 @@ myapp/
 ├── pgmi.yaml               ← Connection defaults (the config)
 ├── migrations/             ← Your SQL files go here
 │   └── 001_hello_world.sql
-├── __test__/               ← Your test files
+├── __test__/               ← Your test files (or __tests__/)
 │   └── test_hello_world.sql
 └── README.md
 ```
+
+> **Note:** Both `__test__/` and `__tests__/` work identically. Use whichever matches your team's convention.
 
 Let's look at what was generated.
 
@@ -180,7 +181,11 @@ params:
 
 Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just PostgreSQL — the templates use PL/pgSQL, PostgreSQL's procedural language, for loops and conditionals.
 
-pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source`, then runs `deploy.sql`. Your job in `deploy.sql` is to decide which files to execute and in what order, by calling `pgmi_plan_*` functions that build a command queue—pgmi runs it afterward.
+pgmi loads your project files into session-scoped views, then runs `deploy.sql`:
+- **`pg_temp.pgmi_source_view`** — raw access to all files (for introspection)
+- **`pg_temp.pgmi_plan_view`** — files sorted by execution order (for deployment)
+
+Your job in `deploy.sql` is to query files from `pg_temp.pgmi_plan_view` and execute them with `EXECUTE`. The templates do exactly this.
 
 ### migrations/001_hello_world.sql — your first SQL file
 
@@ -288,15 +293,57 @@ You should see your new `users` table. The basic template uses `CREATE OR REPLAC
 
 ## What just happened?
 
-Here's the entire model in five points:
+Here's the entire model in four points:
 
-1. **pgmi loaded your files** (everything in the project folder) into a PostgreSQL temporary table called `pg_temp.pgmi_source`
-2. **pgmi ran `deploy.sql`**, which read those files and built an execution plan (a queue of SQL commands)
-3. **pgmi executed the plan** — running each queued command in order
-4. **Your SQL files are regular SQL** — no framework magic, no special syntax
-5. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
+1. **pgmi loaded your files** (everything in the project folder) into PostgreSQL temporary tables and views (`pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`)
+2. **pgmi ran `deploy.sql`**, which queries those views and directly executes files using `EXECUTE v_file.content`
+3. **Your SQL files are regular SQL** — no framework magic, no special syntax
+4. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
 
 This is what makes pgmi different from migration tools: PostgreSQL itself is the deployment engine. You write the logic in SQL, and pgmi just provides the infrastructure to get your files into the database session.
+
+---
+
+## Choosing a template
+
+pgmi provides two templates for `pgmi init`. Start with **basic** for learning, graduate to **advanced** for production.
+
+| Feature | Basic | Advanced |
+|---------|-------|----------|
+| **Learning curve** | Minimal — read the code, understand it | Moderate — more moving parts |
+| **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
+| **Execution view** | `pg_temp.pgmi_source_view` | `pg_temp.pgmi_plan_view` (with multi-phase support) |
+| **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
+| **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
+| **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
+| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-schema: `api`, `internal`, `utils`, `core`, `membership` |
+| **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |
+| **MCP integration** | None | Full MCP server for AI assistants |
+
+**When to use basic:**
+- Learning pgmi
+- Simple projects with < 20 SQL files
+- Linear migrations without complex ordering needs
+
+**When to use advanced:**
+- Production deployments with idempotency requirements
+- Large projects with explicit execution phases
+- Teams that benefit from script tracking and audit logging
+- Projects integrating with AI assistants via MCP
+
+**Advanced template requirements:**
+- PostgreSQL superuser for initial role setup (creates owner, admin, api, customer roles)
+- `plv8` extension (JavaScript in PostgreSQL) — optional but included by default
+- Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`
+
+**Switching templates:**
+
+You can migrate from basic to advanced later:
+1. Run `pgmi metadata scaffold . --write` to add metadata blocks to existing files
+2. Adjust `idempotent` flags (migrations → false, functions → true)
+3. Update `deploy.sql` to query `pg_temp.pgmi_plan_view` instead of `pg_temp.pgmi_source_view`
+
+See [Metadata Guide](METADATA.md) for details on the migration process.
 
 ---
 

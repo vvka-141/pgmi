@@ -71,6 +71,7 @@ DECLARE
     v_http_method text;
     v_version text;
     v_name text;
+    v_title text;
     v_description text;
     v_accepts text[];
     v_produces text[];
@@ -101,9 +102,12 @@ BEGIN
     v_http_method := COALESCE(p_metadata->>'httpMethod', '^(GET|POST|PUT|DELETE|PATCH)$');
     v_version := COALESCE(p_metadata->>'version', '.*');
     v_name := p_metadata->>'name';
+    v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
+
+    RAISE DEBUG 'register REST: id=%, uri=%, method=%', v_id, v_uri, v_http_method;
 
     v_accepts := CASE
         WHEN p_metadata->'accepts' IS NOT NULL
@@ -141,6 +145,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         RAISE EXCEPTION 'Failed to create REST handler function';
     END IF;
 
+    RAISE DEBUG 'register REST: Created function %.%', v_function_schema, v_function_name;
+
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
     v_handler_exec_sql := format('SELECT * FROM %I.%I($1::api.rest_request)', v_function_schema, v_function_name);
@@ -151,7 +157,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        description
+        title, description
     ) VALUES (
         v_id, 'rest', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
@@ -159,7 +165,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_description
+        v_title, v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -180,6 +186,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
+        title = EXCLUDED.title,
         description = EXCLUDED.description;
 
     INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log)
@@ -190,6 +197,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         version_regexp = EXCLUDED.version_regexp,
         route_name = EXCLUDED.route_name,
         auto_log = EXCLUDED.auto_log;
+
+    RAISE DEBUG 'register REST: Registered route %', v_name;
 END;
 $func$;
 
@@ -208,6 +217,7 @@ AS $func$
 DECLARE
     v_id uuid;
     v_method_name text;
+    v_title text;
     v_description text;
     v_accepts text[];
     v_produces text[];
@@ -245,9 +255,12 @@ BEGIN
         RAISE EXCEPTION 'RPC method name "%" already registered to handler %', v_method_name, v_existing_handler;
     END IF;
 
+    v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
+
+    RAISE DEBUG 'register RPC: id=%, method=%', v_id, v_method_name;
 
     v_accepts := CASE
         WHEN p_metadata->'accepts' IS NOT NULL
@@ -285,6 +298,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         RAISE EXCEPTION 'Failed to create RPC handler function';
     END IF;
 
+    RAISE DEBUG 'register RPC: Created function %.%', v_function_schema, v_function_name;
+
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
     v_handler_exec_sql := format('SELECT * FROM %I.%I($1::api.rpc_request)', v_function_schema, v_function_name);
@@ -295,7 +310,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        description
+        title, description
     ) VALUES (
         v_id, 'rpc', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
@@ -303,7 +318,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_description
+        v_title, v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -324,6 +339,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
+        title = EXCLUDED.title,
         description = EXCLUDED.description;
 
     INSERT INTO api.rpc_route (handler_object_id, method_name, auto_log)
@@ -331,6 +347,8 @@ $%s$ LANGUAGE plpgsql$sql$,
     ON CONFLICT (handler_object_id) DO UPDATE SET
         method_name = EXCLUDED.method_name,
         auto_log = EXCLUDED.auto_log;
+
+    RAISE DEBUG 'register RPC: Registered method %', v_method_name;
 END;
 $func$;
 
@@ -350,6 +368,7 @@ DECLARE
     v_id uuid;
     v_type text;
     v_name text;
+    v_title text;
     v_description text;
     v_input_schema jsonb;
     v_uri_template text;
@@ -383,12 +402,15 @@ BEGIN
         RAISE EXCEPTION 'MCP handler metadata requires "name"';
     END IF;
 
+    v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     v_input_schema := p_metadata->'inputSchema';
     v_uri_template := p_metadata->>'uriTemplate';
     v_mime_type := COALESCE(p_metadata->>'mimeType', 'application/json');
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
+
+    RAISE DEBUG 'register MCP: id=%, type=%, name=%', v_id, v_type, v_name;
 
     v_handler_type := ('mcp_' || v_type)::api.handler_type;
 
@@ -416,6 +438,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         RAISE EXCEPTION 'Failed to create MCP handler function';
     END IF;
 
+    RAISE DEBUG 'register MCP: Created function %.%', v_function_schema, v_function_name;
+
     SELECT * INTO v_snapshot FROM internal.capture_handler_proc_snapshot(v_handler_oid);
 
     v_handler_exec_sql := format('SELECT * FROM %I.%I($1::api.mcp_request)', v_function_schema, v_function_name);
@@ -426,7 +450,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        description
+        title, description
     ) VALUES (
         v_id, v_handler_type, v_handler_oid::regprocedure, v_function_name,
         ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth,
@@ -434,7 +458,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_description
+        v_title, v_description
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_type = EXCLUDED.handler_type,
@@ -453,6 +477,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         security = EXCLUDED.security,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
+        title = EXCLUDED.title,
         description = EXCLUDED.description;
 
     INSERT INTO api.mcp_route (handler_object_id, mcp_type, mcp_name, input_schema, uri_template, mime_type, arguments)
@@ -464,6 +489,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         uri_template = EXCLUDED.uri_template,
         mime_type = EXCLUDED.mime_type,
         arguments = EXCLUDED.arguments;
+
+    RAISE DEBUG 'register MCP: Registered % %', v_type, v_name;
 END;
 $func$;
 

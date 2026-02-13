@@ -14,6 +14,7 @@ nul
 # Build output
 bin/
 dist/
+pgmi
 
 # Test binary, built with `go test -c`
 *.test
@@ -40,20 +41,15 @@ go.work.sum
 # Claude instructions (proprietary - keep locally only)
 CLAUDE.md
 
-# Code reviews and internal planning documents (keep locally only)
-reviews/
-apt-change-request.md
-code-review.md
-az-entra-id-upgrade.md
-docs/advanced-api-redesign.md
-docs/PARAMETER_DECLARATION_IMPLEMENTATION_PLAN.md
-docs/TEMPLATE_REMOVAL_PLAN.md
-docs/retry-timeout-behavior.md
-docs/archive/
+# Private assets (code reviews, design docs, change requests)
+.private/
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Content and articles (local drafts, not tracked)
+content/
 
 # Test scaffolds (pgmi init output during development)
 test_*/

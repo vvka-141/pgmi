@@ -3,6 +3,7 @@
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
+[![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
 pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
 Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
@@ -23,7 +24,7 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_source
+        SELECT path, content FROM pg_temp.pgmi_source_view
         WHERE is_sql_file
         ORDER BY path
     )
@@ -42,7 +43,7 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-The Quick example above executes files directly. The scaffolded templates (`pgmi init`) use [plan functions](docs/session-api.md) instead—helpers that schedule commands into a queue, giving you control over transaction boundaries, execution phases, and [testing](docs/TESTING.md).
+The Quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
 
 ## Install
 
@@ -104,6 +105,34 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
+| [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
+
+## Templates
+
+pgmi ships with ready-to-use project templates:
+
+```bash
+pgmi templates list              # See available templates
+pgmi templates describe basic    # See what a template includes
+pgmi init myapp --template basic # Create a project
+```
+
+| Template | Purpose |
+|----------|---------|
+| `basic` | Learning and simple projects. Linear migrations, minimal structure. |
+| `advanced` | Production. Multi-schema, role hierarchy, MCP integration, metadata-driven. |
+
+## AI assistant support
+
+pgmi embeds AI-digestible documentation directly in the binary. AI coding assistants (Claude Code, GitHub Copilot, Gemini CLI) can discover and learn pgmi patterns:
+
+```bash
+pgmi ai                    # Overview for AI assistants
+pgmi ai skills             # List embedded skills
+pgmi ai skill pgmi-sql     # Load SQL conventions
+```
+
+When you tell an AI assistant "use pgmi for this project", it can query these commands to understand pgmi's philosophy, conventions, and best practices.
 
 ## Zero-flag deployments
 
@@ -132,11 +161,23 @@ pgmi deploy . -d staging_db --param env=staging
 
 ## Built-in testing
 
-Tests live in `__test__/` or `__tests__/` directories and run in transactions with automatic rollback:
+Tests live in `__test__/` or `__tests__/` directories. Use the `CALL pgmi_test()` macro in your `deploy.sql` to run them with automatic savepoint isolation:
 
-```bash
-pgmi test ./myapp -d test_db
+```sql
+-- deploy.sql
+BEGIN;
+
+-- ... your migrations ...
+
+-- Run tests with automatic savepoint isolation
+-- Each test runs in its own savepoint and rolls back automatically
+-- Test failures raise exceptions, aborting the transaction
+CALL pgmi_test();
+
+COMMIT;
 ```
+
+The macro automatically wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails (via `RAISE EXCEPTION`), the entire transaction aborts and your database remains unchanged.
 
 Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
 
@@ -158,6 +199,8 @@ pgmi supports:
 
 - **Standard PostgreSQL** — connection strings, `PGPASSWORD`, `.pgpass`
 - **Azure Entra ID** — passwordless auth to Azure Database for PostgreSQL
+- **AWS IAM** — token-based auth to Amazon RDS
+- **Google Cloud SQL IAM** — passwordless auth via Cloud SQL Go Connector
 
 ```bash
 # Standard
@@ -170,9 +213,13 @@ pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslm
 # Azure Entra ID — Service Principal
 export AZURE_TENANT_ID="..." AZURE_CLIENT_ID="..." AZURE_CLIENT_SECRET="..."
 pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslmode require
-```
 
-AWS IAM and GCP Cloud SQL support is on the roadmap.
+# AWS IAM — uses default credential chain (env vars, ~/.aws/credentials, IAM role)
+pgmi deploy . --host mydb.abc123.us-west-2.rds.amazonaws.com -d mydb -U myuser --aws --aws-region us-west-2 --sslmode require
+
+# Google Cloud SQL — uses Application Default Credentials (gcloud auth, service account)
+pgmi deploy . -d mydb -U myuser@myproject.iam --google --google-instance myproject:us-central1:myinstance
+```
 
 ## Contributing
 

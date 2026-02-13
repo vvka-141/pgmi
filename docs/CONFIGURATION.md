@@ -34,6 +34,9 @@ connection:
   username: postgres     # PostgreSQL user (default: from libpq)
   database: myapp        # Target database name
   sslmode: prefer        # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  sslcert: /path/to/client.crt    # Client SSL certificate path
+  sslkey: /path/to/client.key     # Client SSL private key path
+  sslrootcert: /path/to/ca.crt    # Root CA certificate path
 
 params:                  # Key-value parameters passed to deploy.sql
   env: development
@@ -121,9 +124,12 @@ pgmi.yaml intentionally **excludes**:
 | Field | Why Excluded | Use Instead |
 |-------|-------------|-------------|
 | `password` | Stored in plaintext on disk | `PGMI_CONNECTION_STRING`, `.pgpass`, env vars |
+| `sslpassword` | Key passphrase is a secret | `PGSSLPASSWORD` env var |
 | `overwrite` | Operational safety flag | `--overwrite` CLI flag |
 | `force` | Operational safety flag | `--force` CLI flag |
 | `azure` | Runtime auth flag, not a project default | `--azure` CLI flag, `AZURE_*` env vars |
+| `aws` | Runtime auth flag, not a project default | `--aws` CLI flag, `AWS_*` env vars |
+| `google` | Runtime auth flag, not a project default | `--google` CLI flag, `GOOGLE_APPLICATION_CREDENTIALS` |
 
 pgmi.yaml is safe to commit to version control. Secrets belong in environment variables, `.pgpass`, or your CI/CD secret store.
 

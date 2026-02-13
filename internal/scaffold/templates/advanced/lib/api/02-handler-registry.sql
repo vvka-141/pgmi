@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS api.handler (
     language_name text NOT NULL,
     owner_name name NOT NULL,
 
+    title text,
     description text
 ) INHERITS (core.entity);
 
@@ -133,8 +134,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON api.handler TO %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.handler TO %I', v_admin_role);

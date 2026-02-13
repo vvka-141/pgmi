@@ -8,7 +8,6 @@ import (
 )
 
 func resetMetadataFlags() {
-	scaffoldDryRun = true
 	scaffoldWrite = false
 	scaffoldIdempotent = true
 	validateJSON = false

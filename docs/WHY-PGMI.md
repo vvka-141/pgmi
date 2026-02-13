@@ -36,35 +36,36 @@ Suppose you need environment-specific deployment behavior:
 -- deploy.sql
 DO $$
 DECLARE
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'development');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
     v_file RECORD;
 BEGIN
     IF v_env = 'development' THEN
         -- Recreate everything
-        PERFORM pg_temp.pgmi_plan_command('DROP SCHEMA IF EXISTS app CASCADE;');
-        PERFORM pg_temp.pgmi_plan_command('CREATE SCHEMA app;');
+        EXECUTE 'DROP SCHEMA IF EXISTS app CASCADE';
+        EXECUTE 'CREATE SCHEMA app';
     END IF;
 
     -- Always run migrations
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-    FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE path ~ '^./migrations' AND is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    )
     LOOP
-        PERFORM pg_temp.pgmi_plan_file(v_file.path);
+        RAISE NOTICE 'Executing: %', v_file.path;
+        EXECUTE v_file.content;
     END LOOP;
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 
     IF v_env = 'production' THEN
         -- Log deployment for audit
-        PERFORM pg_temp.pgmi_plan_command(
-            format('INSERT INTO audit.deployments (deployed_at, env) VALUES (now(), %L);', v_env)
-        );
+        INSERT INTO audit.deployments (deployed_at, env) VALUES (now(), v_env);
     END IF;
 END $$;
 ```
 
 No framework DSL. No YAML conditionals. Just PostgreSQL.
 
-> The `pgmi_plan_*` functions above don't run SQL immediately—they schedule commands for execution after `deploy.sql` finishes. This is what makes the `IF v_env` conditional work: you build completely different execution plans based on runtime conditions, and nothing touches the database until the plan is final. See [Session API](session-api.md).
+> Your `deploy.sql` queries `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and uses `EXECUTE` to run files directly. The `IF v_env` conditional controls what SQL runs based on runtime conditions. See [Session API](session-api.md).
 
 ## When pgmi makes sense
 
@@ -91,7 +92,9 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template does exactly this). But consider simpler tools if:
+pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic** for learning and simple projects, **advanced** for production with metadata-driven deployment. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for details.
+
+But consider simpler tools if:
 
 **You'll never need anything beyond linear migrations.**
 If you're certain your deployments will always be "run these numbered files in order" with no conditionals, no custom transaction strategies, and no testing gates — Flyway or Liquibase have a shallower learning curve.
@@ -134,7 +137,7 @@ pgmi provides:
 
 pgmi does NOT decide:
 - Transaction boundaries (you write `BEGIN`/`COMMIT`)
-- Execution order (you query and sort `pgmi_source`)
+- Execution order (you query and sort `pg_temp.pgmi_source_view`)
 - Retry logic (you use `EXCEPTION` blocks)
 - Idempotency (you write `IF NOT EXISTS`, `ON CONFLICT`)
 
@@ -150,7 +153,7 @@ For detailed migration guides, see [Coming from Other Tools](COMING-FROM.md).
 
 | Tool | How it works | pgmi equivalent |
 |------|--------------|-----------------|
-| Flyway | Numbered files, framework runs in order | You query `pgmi_source`, sort as needed |
+| Flyway | Numbered files, framework runs in order | You query `pg_temp.pgmi_source_view`, sort as needed |
 | Liquibase | Changelog XML/YAML, framework interprets | Your `deploy.sql` interprets |
 | Raw psql scripts | Manual execution order | `deploy.sql` automates the ordering |
 | Sqitch | Dependency graph in plan file | You implement dependencies in `deploy.sql` |

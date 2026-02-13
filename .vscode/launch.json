@@ -168,7 +168,7 @@
             }
         },
         {
-            "name": "Debug Standard Template Manual Deploy",
+            "name": "Debug Advanced Template Manual Deploy",
             "type": "go",
             "request": "launch",
             "mode": "auto",

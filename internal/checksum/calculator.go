@@ -8,6 +8,12 @@ import (
 	"unicode"
 )
 
+// Compiled regex patterns for comment removal (compiled once at package init).
+var (
+	multiLineCommentRegex  = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	singleLineCommentRegex = regexp.MustCompile(`--[^\n]*`)
+)
+
 // Calculator is an interface for computing file checksums.
 // This abstraction allows for different checksum strategies and algorithms.
 type Calculator interface {
@@ -76,14 +82,10 @@ func (c SHA256) normalize(content string) string {
 
 // removeComments removes both single-line (--) and multi-line (/* */) SQL comments.
 func (c SHA256) removeComments(content string) string {
-	// Remove multi-line comments /* ... */
-	// Non-greedy match to handle multiple comments
-	multiLineCommentRegex := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	// Remove multi-line comments /* ... */ (non-greedy match)
 	content = multiLineCommentRegex.ReplaceAllString(content, " ")
 
-	// Remove single-line comments -- ...
-	// Match from -- to end of line
-	singleLineCommentRegex := regexp.MustCompile(`--[^\n]*`)
+	// Remove single-line comments -- ... (to end of line)
 	content = singleLineCommentRegex.ReplaceAllString(content, " ")
 
 	return content

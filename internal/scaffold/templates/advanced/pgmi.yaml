@@ -1,10 +1,22 @@
+# pgmi project configuration
+# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
+
 connection:
-  host: localhost
-  port: 5432
-  database: {{PROJECT_NAME}}
-  sslmode: prefer
+  database: mydb              # Target database (change this!)
+  host: localhost             # PostgreSQL host
+  port: 5432                  # PostgreSQL port
+  sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  # username: postgres        # PostgreSQL user (default: current OS user)
 
+# Parameters passed to deploy.sql
+# See session.xml for all declared parameters and their descriptions.
+# With env=dev, role names default to <database>_owner/admin/api/customer
+# and passwords default to 'postgres'.
 params:
-  env: development
+  env: dev                    # dev = safe defaults, prod = require explicit passwords
 
-timeout: 5m
+  # Production overrides (uncomment for non-dev deployments):
+  # database_admin_password: <secure-password>
+  # database_customer_password: <secure-password>
+
+timeout: 5m                   # Deployment timeout

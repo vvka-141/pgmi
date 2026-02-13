@@ -10,7 +10,6 @@ This directory contains the framework code that powers the advanced template. It
 lib/
 ├── api/                    # HTTP framework (REST, RPC, MCP)
 ├── core/                   # Entity hierarchy and domain patterns
-├── internal/               # Deployment tracking infrastructure
 ├── utils/                  # Type casting and text utilities
 └── __test__/               # Framework tests
 ```
@@ -70,22 +69,6 @@ CREATE TABLE core.customer (
 
 -- Automatically has: object_id, created_at, deleted_at
 ```
-
-### `internal/` - Deployment Tracking
-
-Infrastructure for pgmi deployment and test execution.
-
-| File | Purpose |
-|------|---------|
-| `foundation.sql` | Test script generation (`generate_test_script()`) |
-
-**Key Functions:**
-- `internal.generate_test_script(pattern)` - Generate executable test SQL
-- `internal.pvw_unittest_script(pattern)` - Parameterized view of test scripts
-
-**Key Tables:**
-- `internal.deployment_script_execution_log` - Tracks deployed scripts
-- `internal.unittest_script` - Persisted test execution plan
 
 ### `utils/` - Utility Functions
 

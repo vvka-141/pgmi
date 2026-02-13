@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -33,32 +34,50 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 	inputChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	go func() {
+		defer wg.Done()
 		reader := bufio.NewReader(a.input)
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			errChan <- err
+			select {
+			case errChan <- err:
+			default:
+			}
 			return
 		}
-		inputChan <- strings.TrimSpace(input)
+		select {
+		case inputChan <- strings.TrimSpace(input):
+		default:
+		}
 	}()
+
+	var approved bool
+	var resultErr error
 
 	select {
 	case <-ctx.Done():
-		if closer, ok := a.input.(io.Closer); ok {
-			closer.Close()
-		}
-		return false, ctx.Err()
+		approved, resultErr = false, ctx.Err()
 	case err := <-errChan:
-		return false, fmt.Errorf("failed to read input: %w", err)
+		approved, resultErr = false, fmt.Errorf("failed to read input: %w", err)
 	case input := <-inputChan:
 		if input == dbName {
 			fmt.Fprintln(a.output, "✓ Confirmed. Proceeding with database overwrite...")
-			return true, nil
+			approved, resultErr = true, nil
+		} else {
+			fmt.Fprintf(a.output, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
+			approved, resultErr = false, nil
 		}
-		fmt.Fprintf(a.output, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
-		return false, nil
 	}
+
+	if closer, ok := a.input.(io.Closer); ok {
+		closer.Close()
+	}
+	wg.Wait()
+
+	return approved, resultErr
 }
 
 // Verify InteractiveApprover implements the Approver interface at compile time

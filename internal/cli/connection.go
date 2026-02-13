@@ -10,7 +10,7 @@ import (
 )
 
 // resolveConnection consolidates connection resolution logic for both deploy and test commands.
-// It handles connection string flags, granular flags, Azure flags, and environment variables.
+// It handles connection string flags, granular flags, Azure/AWS/Google flags, and environment variables.
 //
 // Returns:
 //   - ConnectionConfig with all parameters resolved
@@ -20,6 +20,9 @@ func resolveConnection(
 	connStringFlag string,
 	granularFlags *db.GranularConnFlags,
 	azureFlags *db.AzureFlags,
+	awsFlags *db.AWSFlags,
+	googleFlags *db.GoogleFlags,
+	certFlags *db.CertFlags,
 	projectConfig *config.ProjectConfig,
 	verbose bool,
 ) (*pgmi.ConnectionConfig, string, error) {
@@ -37,6 +40,9 @@ func resolveConnection(
 		connString,
 		granularFlags,
 		azureFlags,
+		awsFlags,
+		googleFlags,
+		certFlags,
 		envVars,
 		projectConfig,
 	)

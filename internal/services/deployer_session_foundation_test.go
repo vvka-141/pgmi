@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/params"
@@ -25,9 +26,9 @@ var sessionFoundationTestSQL string
 // 4. Executes SQL validation suite to verify post-conditions
 //
 // The test validates:
-// - Files loaded correctly into pg_temp.pgmi_source
-// - Test files separated into pg_temp.pgmi_unittest_script (then dropped)
-// - Execution plan materialized in pg_temp.pgmi_unittest_plan
+// - Files loaded correctly into pg_temp._pgmi_source (accessed via pgmi_source_view)
+// - Test files separated into pg_temp._pgmi_test_source
+// - Execution plan materialized via pg_temp.pgmi_test_plan()
 // - Multi-level directory traversal produces correct execution order
 //
 // This is a SQL-first test: validation logic lives in SQL, not Go.
@@ -83,13 +84,13 @@ func TestSessionPreparation_Foundation(t *testing.T) {
 		t.Fatalf("Failed to create schema: %v", err)
 	}
 
-	t.Log("Loading files into pg_temp.pgmi_source...")
+	t.Log("Loading files into pg_temp._pgmi_source...")
 	fileLoader := loader.NewLoader()
 	if err := fileLoader.LoadFilesIntoSession(ctx, conn, scanResult.Files); err != nil {
 		t.Fatalf("Failed to load files: %v", err)
 	}
 
-	t.Log("Loading parameters into pg_temp.pgmi_parameter...")
+	t.Log("Loading parameters into pg_temp._pgmi_parameter...")
 	testParams := map[string]string{
 		"env":     "test",
 		"version": "1.0.0",
@@ -98,7 +99,12 @@ func TestSessionPreparation_Foundation(t *testing.T) {
 		t.Fatalf("Failed to load parameters: %v", err)
 	}
 
-	t.Log("Creating unittest framework (separates test files, materializes plan)...")
+	t.Log("Applying API contract...")
+	if _, err := contract.Apply(ctx, conn, ""); err != nil {
+		t.Fatalf("Failed to apply contract: %v", err)
+	}
+
+	t.Log("Creating unittest framework...")
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
 		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
@@ -160,18 +166,22 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 		t.Fatalf("Failed to load parameters: %v", err)
 	}
 
+	if _, err := contract.Apply(ctx, conn, ""); err != nil {
+		t.Fatalf("Failed to apply contract: %v", err)
+	}
+
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
 		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
 
 	// Verify empty state
 	var fileCount, testCount int
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_source").Scan(&fileCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_source_view").Scan(&fileCount)
 	if err != nil {
 		t.Fatalf("Failed to count files: %v", err)
 	}
 
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_unittest_plan").Scan(&testCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_test_plan()").Scan(&testCount)
 	if err != nil {
 		t.Fatalf("Failed to count tests: %v", err)
 	}
@@ -181,7 +191,7 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 	}
 
 	if testCount != 0 {
-		t.Errorf("Expected 0 tests in pgmi_unittest_plan, got %d", testCount)
+		t.Errorf("Expected 0 tests in pgmi_test_plan, got %d", testCount)
 	}
 
 	t.Log("✓ Empty project session initialized correctly")
@@ -228,18 +238,22 @@ func TestSessionPreparation_OnlyMigrations(t *testing.T) {
 		t.Fatalf("Failed to load parameters: %v", err)
 	}
 
+	if _, err := contract.Apply(ctx, conn, ""); err != nil {
+		t.Fatalf("Failed to apply contract: %v", err)
+	}
+
 	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
 		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
 
 	// Verify: migrations in pgmi_source, no tests
 	var migrationCount, testCount int
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_source WHERE directory ~ 'migrations'").Scan(&migrationCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_source_view WHERE directory ~ 'migrations'").Scan(&migrationCount)
 	if err != nil {
 		t.Fatalf("Failed to count migrations: %v", err)
 	}
 
-	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_unittest_plan").Scan(&testCount)
+	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_test_plan()").Scan(&testCount)
 	if err != nil {
 		t.Fatalf("Failed to count tests: %v", err)
 	}

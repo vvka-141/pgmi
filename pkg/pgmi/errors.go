@@ -68,7 +68,8 @@ func ExitCodeForError(err error) int {
 		strings.Contains(errStr, "unknown shorthand flag") ||
 		strings.Contains(errStr, "accepts ") ||
 		strings.Contains(errStr, "required flag") ||
-		strings.Contains(errStr, "invalid argument") {
+		strings.Contains(errStr, "invalid argument") ||
+		strings.Contains(errStr, "missing required argument") {
 		return ExitUsageError
 	}
 

@@ -17,9 +17,9 @@ CREATE SCHEMA IF NOT EXISTS membership;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I', v_api_role);
@@ -39,6 +39,8 @@ DO $$ BEGIN
     CREATE TYPE membership.invitation_status AS ENUM ('pending', 'active', 'declined', 'removed');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+DO $$ BEGIN RAISE DEBUG 'membership: Created enums (member_role, invitation_status)'; END $$;
 
 -- ============================================================================
 -- Tables
@@ -113,6 +115,8 @@ CREATE TABLE IF NOT EXISTS membership.organization_member (
 CREATE INDEX IF NOT EXISTS ix_org_member_user
     ON membership.organization_member(user_id);
 
+DO $$ BEGIN RAISE DEBUG 'membership: Created tables (user, user_identity, role, organization, organization_member)'; END $$;
+
 -- ============================================================================
 -- Seed: superuser role
 -- ============================================================================
@@ -122,6 +126,8 @@ USING (VALUES ('superuser', 'Full system access')) AS source(name, description)
 ON target.name = source.name
 WHEN NOT MATCHED THEN
     INSERT (name, description) VALUES (source.name, source.description);
+
+DO $$ BEGIN RAISE DEBUG 'membership: Applied seed data (superuser role)'; END $$;
 
 -- ============================================================================
 -- Views
@@ -225,9 +231,9 @@ $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA membership TO %I', v_api_role);

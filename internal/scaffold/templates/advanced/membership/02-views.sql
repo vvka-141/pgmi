@@ -52,7 +52,7 @@ WHERE status = 'pending';
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA membership TO %I', v_customer_role);
 END $$;

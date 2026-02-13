@@ -136,21 +136,16 @@ func verifyTemplateDeployment(t *testing.T, connString, dbName, templateName str
 	// Template-specific verification
 	switch templateName {
 	case "basic":
-		// Verify hello_world() function was created and works correctly
-		var greeting string
-		err = pool.QueryRow(ctx, "SELECT public.hello_world()").Scan(&greeting)
+		// Verify user table and upsert_user function were created
+		var adminEmail string
+		err = pool.QueryRow(ctx, `SELECT email FROM "user" WHERE name = 'Administrator'`).Scan(&adminEmail)
 		if err != nil {
-			t.Fatalf("Failed to call hello_world() function: %v", err)
+			t.Fatalf("Failed to query admin user: %v", err)
 		}
-		expectedGreeting := "Hello, World!" // Default parameter value
-		if greeting != expectedGreeting {
-			t.Errorf("Expected greeting '%s', got '%s'", expectedGreeting, greeting)
+		if adminEmail != "admin@example.com" {
+			t.Errorf("Expected admin email 'admin@example.com', got '%s'", adminEmail)
 		}
-		t.Logf("✓ Basic template deployment verified: hello_world() = '%s'", greeting)
-
-		// Note: Session variables (pgi.*) are session-scoped and don't persist across connections.
-		// They exist only during the deployment session. To verify session variables work,
-		// see TestSessionVariablesWithCustomParams which tests within the deployment session.
+		t.Logf("✓ Basic template deployment verified: admin user exists with email '%s'", adminEmail)
 
 	case "advanced":
 		// Advanced template may have additional structures

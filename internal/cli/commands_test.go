@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -79,32 +82,6 @@ func TestDeployCmd_ForceWithoutOverwrite(t *testing.T) {
 	}
 }
 
-func TestTestCmd_ArgsValidation(t *testing.T) {
-	err := testCmd.Args(testCmd, []string{})
-	if err == nil {
-		t.Fatal("Expected error for missing args")
-	}
-	exitCode := pgmi.ExitCodeForError(err)
-	if exitCode != pgmi.ExitUsageError {
-		t.Errorf("Expected exit code %d (usage), got %d for: %v", pgmi.ExitUsageError, exitCode, err)
-	}
-}
-
-func TestTestCmd_MissingConnectionInfo(t *testing.T) {
-	resetTestFlags()
-	tempDir := t.TempDir()
-	testFlags.database = "testdb"
-
-	for _, envVar := range []string{"PGMI_CONNECTION_STRING", "DATABASE_URL", "PGHOST"} {
-		t.Setenv(envVar, "")
-	}
-
-	err := runTest(testCmd, []string{tempDir})
-	if err == nil {
-		t.Fatal("Expected error for missing connection info")
-	}
-}
-
 func TestInitCmd_ArgsValidation(t *testing.T) {
 	err := initCmd.Args(initCmd, []string{})
 	if err == nil {
@@ -116,5 +93,33 @@ func TestInitCmd_ArgsValidation_TooMany(t *testing.T) {
 	err := initCmd.Args(initCmd, []string{"a", "b"})
 	if err == nil {
 		t.Fatal("Expected error for too many args")
+	}
+}
+
+func TestDeployCmd_UnreachableHost_ExitCode11(t *testing.T) {
+	resetDeployFlags()
+	clearPGEnv(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	deployFlags.host = "nonexistent.invalid"
+	deployFlags.port = 5432
+	deployFlags.database = "testdb"
+	deployFlags.username = "testuser"
+	deployFlags.timeout = 500 * time.Millisecond
+
+	err := runDeploy(deployCmd, []string{tempDir})
+
+	if err == nil {
+		t.Fatal("Expected connection error, got nil")
+	}
+
+	exitCode := pgmi.ExitCodeForError(err)
+	if exitCode != pgmi.ExitConnectionError {
+		t.Errorf("Expected exit code %d (connection error), got %d for: %v",
+			pgmi.ExitConnectionError, exitCode, err)
 	}
 }

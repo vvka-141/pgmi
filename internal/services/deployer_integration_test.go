@@ -288,9 +288,9 @@ DECLARE
     v_app_name TEXT;
     v_app_version TEXT;
 BEGIN
-    -- Read parameters from pg_temp.pgmi_parameter
-    SELECT value INTO v_app_name FROM pg_temp.pgmi_parameter WHERE key = 'app_name';
-    SELECT value INTO v_app_version FROM pg_temp.pgmi_parameter WHERE key = 'app_version';
+    -- Read parameters from pg_temp.pgmi_parameter_view
+    SELECT value INTO v_app_name FROM pg_temp.pgmi_parameter_view WHERE key = 'app_name';
+    SELECT value INTO v_app_version FROM pg_temp.pgmi_parameter_view WHERE key = 'app_version';
 
     -- Insert into persistent table for verification
     INSERT INTO deployment_info (app_name, app_version)
@@ -348,7 +348,7 @@ DECLARE
 BEGIN
     FOR file_record IN
         SELECT content
-        FROM pg_temp.pgmi_source
+        FROM pg_temp.pgmi_source_view
         WHERE path LIKE '%migrations%'
         ORDER BY path
     LOOP

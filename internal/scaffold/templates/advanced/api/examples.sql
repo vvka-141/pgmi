@@ -493,6 +493,159 @@ END;
     $body$
 );
 
+-- ============================================================================
+-- MCP Example: List Tables Tool
+-- ============================================================================
+-- Lists all tables in a given schema.
+
+SELECT api.create_or_replace_mcp_handler(
+    jsonb_build_object(
+        'id', 'e3000001-0004-4000-8000-000000000001',
+        'type', 'tool',
+        'name', 'list_tables',
+        'description', 'List tables in a schema with row counts',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'schema', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'Schema name (default: public)'
+                )
+            ),
+            'required', jsonb_build_array()
+        ),
+        'requiresAuth', false
+    ),
+    $body$
+DECLARE
+    v_schema text;
+    v_tables jsonb;
+BEGIN
+    v_schema := COALESCE((request).arguments->>'schema', 'public');
+
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'table_name', t.tablename,
+        'table_type', CASE WHEN v.viewname IS NOT NULL THEN 'view' ELSE 'table' END,
+        'estimated_rows', COALESCE(s.n_live_tup, 0)
+    ) ORDER BY t.tablename), '[]'::jsonb)
+    INTO v_tables
+    FROM pg_tables t
+    LEFT JOIN pg_views v ON v.schemaname = t.schemaname AND v.viewname = t.tablename
+    LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.schemaname AND s.relname = t.tablename
+    WHERE t.schemaname = v_schema;
+
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(api.mcp_text(format(
+            'Tables in schema "%s":%s%s',
+            v_schema,
+            E'\n',
+            v_tables::text
+        ))),
+        (request).request_id
+    );
+END;
+    $body$
+);
+
+-- Invoke list_tables tool:
+DO $$
+DECLARE
+    v_response api.mcp_response;
+BEGIN
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, 'demo-4');
+    RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
+END $$;
+
+-- ============================================================================
+-- MCP Example: Describe Table Tool
+-- ============================================================================
+-- Returns column metadata for a table. Demonstrates safe parameterized queries.
+--
+-- SECURITY NOTE: This tool queries information_schema (designed for introspection)
+-- with parameterized inputs. Unlike arbitrary SQL execution, this pattern is safe
+-- because the query structure is fixed and user input is only used as parameters.
+
+SELECT api.create_or_replace_mcp_handler(
+    jsonb_build_object(
+        'id', 'e3000001-0005-4000-8000-000000000001',
+        'type', 'tool',
+        'name', 'describe_table',
+        'description', 'Get column definitions for a table',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'table', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'Table name to describe'
+                ),
+                'schema', jsonb_build_object(
+                    'type', 'string',
+                    'description', 'Schema name (default: api)'
+                )
+            ),
+            'required', jsonb_build_array('table')
+        ),
+        'requiresAuth', true
+    ),
+    $body$
+DECLARE
+    v_schema text;
+    v_table text;
+    v_columns jsonb;
+    v_col_count int;
+BEGIN
+    v_table := (request).arguments->>'table';
+    v_schema := COALESCE((request).arguments->>'schema', 'api');
+
+    IF v_table IS NULL OR trim(v_table) = '' THEN
+        RETURN api.mcp_tool_error('Table name is required', (request).request_id);
+    END IF;
+
+    SELECT jsonb_agg(jsonb_build_object(
+        'column', column_name,
+        'type', data_type,
+        'nullable', is_nullable = 'YES',
+        'default', column_default
+    ) ORDER BY ordinal_position)
+    INTO v_columns
+    FROM information_schema.columns
+    WHERE table_schema = v_schema
+      AND table_name = v_table;
+
+    IF v_columns IS NULL THEN
+        RETURN api.mcp_tool_error(
+            format('Table %I.%I not found or not accessible', v_schema, v_table),
+            (request).request_id
+        );
+    END IF;
+
+    v_col_count := jsonb_array_length(v_columns);
+
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(
+            api.mcp_text(format('%I.%I has %s column(s)', v_schema, v_table, v_col_count)),
+            jsonb_build_object('type', 'text', 'text', v_columns::text)
+        ),
+        (request).request_id
+    );
+END;
+    $body$
+);
+
+-- Invoke describe_table tool:
+DO $$
+DECLARE
+    v_response api.mcp_response;
+BEGIN
+    v_response := api.mcp_call_tool(
+        'describe_table',
+        '{"table":"handler","schema":"api"}'::jsonb,
+        '{"user_id":"test|123"}'::jsonb,
+        'demo-5'
+    );
+    RAISE DEBUG '  -> MCP tool describe_table  envelope=%', (v_response).envelope;
+END $$;
+
 DO $$ BEGIN
     RAISE DEBUG '  + REST: GET /hello - Hello world endpoint';
     RAISE DEBUG '  + REST: POST /echo - Echo request body';
@@ -502,6 +655,8 @@ DO $$ BEGIN
     RAISE DEBUG '  + RPC: math.sum - Calculate sum of two numbers';
     RAISE DEBUG '  + RPC: system.time - Get server time';
     RAISE DEBUG '  + MCP Tool: database_info - Get database info';
+    RAISE DEBUG '  + MCP Tool: list_tables - List tables in a schema';
+    RAISE DEBUG '  + MCP Tool: describe_table - Get table column definitions';
     RAISE DEBUG '  + MCP Resource: table_schema - Get table schema';
     RAISE DEBUG '  + MCP Prompt: sql_assistant - SQL query assistant';
 END $$;

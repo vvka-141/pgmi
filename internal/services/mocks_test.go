@@ -31,7 +31,7 @@ type mockSessionPreparer struct {
 	err     error
 }
 
-func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ string, _ map[string]string, _ bool) (*pgmi.Session, error) {
+func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ string, _ map[string]string, _ string, _ bool) (*pgmi.Session, error) {
 	return m.session, m.err
 }
 

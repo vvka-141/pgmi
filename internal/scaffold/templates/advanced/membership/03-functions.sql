@@ -123,11 +123,14 @@ DECLARE
     v_org_id UUID;
     v_is_new_user BOOLEAN;
 BEGIN
+    RAISE DEBUG 'upsert_user: provider=%, subject=%', p_provider, p_subject_id;
+
     SELECT ui.user_object_id INTO v_user_id
     FROM membership.user_identity ui
     WHERE ui.idp_provider = p_provider AND ui.idp_subject_id = p_subject_id;
 
     IF v_user_id IS NOT NULL THEN
+        RAISE DEBUG 'upsert_user: Found existing user %, updating', v_user_id;
         UPDATE membership."user"
         SET display_name = COALESCE(p_display_name, display_name),
             email_verified = email_verified OR p_email_verified,
@@ -135,6 +138,8 @@ BEGIN
         WHERE object_id = v_user_id;
         RETURN v_user_id;
     END IF;
+
+    RAISE DEBUG 'upsert_user: No existing identity, creating user';
 
     INSERT INTO membership."user" (email, display_name, email_verified)
     VALUES (lower(trim(p_email)), p_display_name, p_email_verified)
@@ -144,11 +149,14 @@ BEGIN
         updated_at = now()
     RETURNING object_id, (xmax = 0) INTO v_user_id, v_is_new_user;
 
+    RAISE DEBUG 'upsert_user: User % (is_new: %)', v_user_id, v_is_new_user;
+
     INSERT INTO membership.user_identity (user_object_id, idp_provider, idp_subject_id)
     VALUES (v_user_id, p_provider, p_subject_id)
     ON CONFLICT (idp_provider, idp_subject_id) DO NOTHING;
 
     IF NOT FOUND THEN
+        RAISE DEBUG 'upsert_user: Identity conflict, fetching existing';
         SELECT ui.user_object_id INTO v_user_id
         FROM membership.user_identity ui
         WHERE ui.idp_provider = p_provider AND ui.idp_subject_id = p_subject_id;
@@ -162,6 +170,8 @@ BEGIN
 
         INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
         VALUES (v_org_id, v_user_id, 'admin', 'active', now());
+
+        RAISE DEBUG 'upsert_user: Created personal org %', v_org_id;
     END IF;
 
     RETURN v_user_id;
@@ -170,9 +180,9 @@ $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);

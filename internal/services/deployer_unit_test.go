@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -137,34 +139,6 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 	}
 }
 
-func TestExecuteTests_InvalidConfig(t *testing.T) {
-	cf, ap, lg, sm, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
-
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{})
-	if err == nil {
-		t.Fatal("Expected error")
-	}
-	if !errors.Is(err, pgmi.ErrInvalidConfig) {
-		t.Errorf("Expected ErrInvalidConfig, got: %v", err)
-	}
-}
-
-func TestExecuteTests_InvalidConnectionString(t *testing.T) {
-	cf, ap, lg, sm, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
-
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
-		SourcePath:       "/src",
-		DatabaseName:     "db",
-		ConnectionString: "not-valid",
-	})
-
-	if err == nil {
-		t.Fatal("Expected error for invalid connection string")
-	}
-}
-
 // --- Overwrite workflow tests ---
 
 func TestDeploy_OverwriteDBNotExists_Creates(t *testing.T) {
@@ -226,7 +200,7 @@ func TestDeploy_OverwriteTerminateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "terminate") {
+	if !strings.Contains(err.Error(), "terminate") {
 		t.Fatalf("Expected terminate error, got: %v", err)
 	}
 }
@@ -244,7 +218,7 @@ func TestDeploy_OverwriteDropFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "drop") {
+	if !strings.Contains(err.Error(), "drop") {
 		t.Fatalf("Expected drop error, got: %v", err)
 	}
 }
@@ -262,7 +236,7 @@ func TestDeploy_OverwriteCreateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "create") {
+	if !strings.Contains(err.Error(), "create") {
 		t.Fatalf("Expected create error, got: %v", err)
 	}
 }
@@ -299,7 +273,7 @@ func TestDeploy_EnsureDBCheckFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "check") {
+	if !strings.Contains(err.Error(), "check") {
 		t.Fatalf("Expected check error, got: %v", err)
 	}
 }
@@ -312,7 +286,7 @@ func TestDeploy_EnsureDBCreateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "create") {
+	if !strings.Contains(err.Error(), "create") {
 		t.Fatalf("Expected create error, got: %v", err)
 	}
 }
@@ -330,7 +304,7 @@ func TestDeploy_MgmtConnectorFails_Overwrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "conn refused") {
+	if !strings.Contains(err.Error(), "conn refused") {
 		t.Fatalf("Expected conn refused error, got: %v", err)
 	}
 }
@@ -342,7 +316,7 @@ func TestDeploy_MgmtConnectorFails_Ensure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "conn refused") {
+	if !strings.Contains(err.Error(), "conn refused") {
 		t.Fatalf("Expected conn refused error, got: %v", err)
 	}
 }
@@ -358,7 +332,7 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !containsStr(err.Error(), "session prep failed") {
+	if !strings.Contains(err.Error(), "session prep failed") {
 		t.Fatalf("Expected session prep error, got: %v", err)
 	}
 }
@@ -373,7 +347,7 @@ func TestDeploy_ReadDeploySQLFails(t *testing.T) {
 
 	err := svc.Deploy(context.Background(), validConfig())
 
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop (session prep comes first), got: %v", err)
 	}
 }
@@ -387,7 +361,7 @@ func TestDeploy_MaintenanceDBDefault(t *testing.T) {
 	cfg.MaintenanceDatabase = ""
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || !containsStr(err.Error(), "mock stop") {
+	if err == nil || !strings.Contains(err.Error(), "mock stop") {
 		t.Fatalf("Expected mock stop, got: %v", err)
 	}
 }
@@ -436,52 +410,52 @@ func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
 	}
 }
 
-func TestExecuteTests_FilterPatternDefault(t *testing.T) {
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
-	cf, _, lg, _, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
+// --- Error attribution tests ---
 
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
-		SourcePath:       "/src",
-		DatabaseName:     "testdb",
-		ConnectionString: "postgresql://localhost/postgres",
-		FilterPattern:    "",
-	})
-	if err == nil {
-		t.Fatal("Expected error")
+func TestExtractLineFromError_LineInMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		message  string
+		expected int
+	}{
+		{"syntax error with line", "syntax error at or near \"foo\" at LINE 42:", 42},
+		{"LINE at start", "LINE 1: SELECT * FROM nonexistent;", 1},
+		{"LINE in middle", "ERROR: syntax error at LINE 15: unexpected token", 15},
+		{"no LINE marker", "ERROR: something went wrong", 0},
+		{"LINE without colon", "LINE 5 is problematic", 0},
 	}
-	if !containsStr(err.Error(), "mock stop") {
-		t.Fatalf("Expected mock stop, got: %v", err)
-	}
-}
 
-func TestExecuteTests_PrepareSessionFails(t *testing.T) {
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("session prep failed")}
-	cf, _, lg, _, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fs, dm)
-
-	err := svc.ExecuteTests(context.Background(), pgmi.TestConfig{
-		SourcePath:       "/src",
-		DatabaseName:     "testdb",
-		ConnectionString: "postgresql://localhost/postgres",
-	})
-	if err == nil {
-		t.Fatal("Expected error")
-	}
-	if !containsStr(err.Error(), "session prep failed") {
-		t.Fatalf("Expected session prep error, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgErr := &pgconn.PgError{Message: tt.message}
+			result := extractLineFromError(pgErr)
+			if result != tt.expected {
+				t.Errorf("extractLineFromError(%q) = %d, expected %d", tt.message, result, tt.expected)
+			}
+		})
 	}
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains(s, substr))
+func TestExtractLineFromError_LineInWhere(t *testing.T) {
+	tests := []struct {
+		name     string
+		where    string
+		expected int
+	}{
+		{"PL/pgSQL line", "PL/pgSQL function my_func() line 5 at RAISE", 5},
+		{"line with comma", "line 10, column 5", 10},
+		{"line with paren", "line 3) RAISE EXCEPTION", 3},
+		{"no line marker", "at RAISE EXCEPTION", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgErr := &pgconn.PgError{Where: tt.where}
+			result := extractLineFromError(pgErr)
+			if result != tt.expected {
+				t.Errorf("extractLineFromError(where=%q) = %d, expected %d", tt.where, result, tt.expected)
+			}
+		})
+	}
 }
 
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

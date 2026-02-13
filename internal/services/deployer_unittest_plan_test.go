@@ -11,8 +11,8 @@ import (
 )
 
 // TestDeploymentService_UnittestPlanMaterialization verifies that:
-// 1. pg_temp.pgmi_unittest_plan is created with correct execution_order
-// 2. pg_temp.pgmi_unittest_script is dropped after materialization
+// 1. pg_temp.pgmi_test_plan is created with correct ordinal
+// 2. pg_temp._pgmi_test_source is dropped after materialization
 // 3. Tests execute in the correct order (not lexicographic path order)
 func TestDeploymentService_UnittestPlanMaterialization(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
@@ -94,9 +94,9 @@ func TestDeploymentService_UnittestPlanMaterialization(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_UnittestPlanDropsRawTable verifies that
-// pg_temp.pgmi_unittest_script is dropped and cannot be accessed
-func TestDeploymentService_UnittestPlanDropsRawTable(t *testing.T) {
+// TestDeploymentService_UnittestTablesExist verifies that
+// pg_temp.pgmi_test_plan() function and pgmi_test_source table exist during deploy.sql
+func TestDeploymentService_UnittestTablesExist(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
 	ctx := context.Background()
@@ -105,7 +105,7 @@ func TestDeploymentService_UnittestPlanDropsRawTable(t *testing.T) {
 	projectPath := t.TempDir()
 	createProjectThatChecksUnittestTables(t, projectPath)
 
-	testDB := "pgmi_test_unittest_drop"
+	testDB := "pgmi_test_unittest_tables"
 	defer testhelpers.CleanupTestDB(t, connString, testDB)
 
 	// Deploy with tests
@@ -126,22 +126,22 @@ func TestDeploymentService_UnittestPlanDropsRawTable(t *testing.T) {
 	// Verify the results
 	pool := testhelpers.GetTestPool(t, connString, testDB)
 
-	var planExists, scriptExists bool
+	var planFunctionExists, sourceTableExists bool
 	err = pool.QueryRow(ctx, `
-		SELECT plan_table_exists, script_table_exists
+		SELECT plan_function_exists, source_table_exists
 		FROM unittest_table_check
-	`).Scan(&planExists, &scriptExists)
+	`).Scan(&planFunctionExists, &sourceTableExists)
 
 	if err != nil {
 		t.Fatalf("Failed to read table check results: %v", err)
 	}
 
-	if !planExists {
-		t.Error("Expected pg_temp.pgmi_unittest_plan to exist during deploy.sql execution")
+	if !planFunctionExists {
+		t.Error("Expected pg_temp.pgmi_test_plan() function to exist during deploy.sql execution")
 	}
 
-	if scriptExists {
-		t.Error("Expected pg_temp.pgmi_unittest_script to be dropped before deploy.sql execution")
+	if !sourceTableExists {
+		t.Error("Expected pg_temp._pgmi_test_source table to exist during deploy.sql execution")
 	}
 }
 
@@ -195,7 +195,7 @@ INSERT INTO test_execution_log (execution_log) VALUES ('test_003');
 		t.Fatalf("Failed to create test_003.sql: %v", err)
 	}
 
-	// Create deploy.sql that uses pgmi_unittest_plan
+	// Create deploy.sql that uses pgmi_test_plan
 	deploySQL := `
 -- Load schema first
 DO $$
@@ -204,7 +204,7 @@ DECLARE
 BEGIN
     FOR v_file IN
         SELECT content
-        FROM pg_temp.pgmi_source
+        FROM pg_temp.pgmi_source_view
         WHERE path LIKE '%schema.sql'
     LOOP
         EXECUTE v_file.content;
@@ -214,7 +214,7 @@ END $$;
 -- Begin transaction for test execution
 BEGIN;
 
--- Execute tests from pgmi_unittest_plan which contains embedded SQL with correct ordering
+-- Execute tests from pgmi_test_plan() function which returns the execution plan
 -- Note: the tests insert into test_execution_log, and each test is wrapped in SAVEPOINT/ROLLBACK
 -- So the INSERTs will be rolled back, but we capture the execution order by doing inserts OUTSIDE savepoints
 DO $$
@@ -223,10 +223,10 @@ DECLARE
     v_test_name TEXT;
 BEGIN
     FOR v_test IN
-        SELECT execution_order, script_path, step_type
-        FROM pg_temp.pgmi_unittest_plan
+        SELECT ordinal, script_path, step_type
+        FROM pg_temp.pgmi_test_plan()
         WHERE step_type = 'test'  -- Only execute test steps
-        ORDER BY execution_order
+        ORDER BY ordinal
     LOOP
         -- Extract test name from path (e.g., './__test__/test_001.sql' -> 'test_001')
         v_test_name := regexp_replace(v_test.script_path, '^.*/([^/]+)\.sql$', '\1');
@@ -270,25 +270,25 @@ func createProjectThatChecksUnittestTables(t *testing.T, projectPath string) {
 		t.Fatalf("Failed to create test_simple.sql: %v", err)
 	}
 
-	// Create deploy.sql that checks which tables exist
+	// Create deploy.sql that checks which objects exist
 	deploySQL := `
 CREATE TABLE unittest_table_check (
-    plan_table_exists BOOLEAN,
-    script_table_exists BOOLEAN
+    plan_function_exists BOOLEAN,
+    source_table_exists BOOLEAN
 );
 
--- Check if temp tables exist using pg_class
--- Temp tables have relnamespace matching pg_my_temp_schema()
-INSERT INTO unittest_table_check (plan_table_exists, script_table_exists)
+-- Check if pgmi_test_plan function exists (it's a function, not a table)
+-- and if pgmi_test_source table exists (stores test content for runtime EXECUTE)
+INSERT INTO unittest_table_check (plan_function_exists, source_table_exists)
 SELECT
     EXISTS (
-        SELECT 1 FROM pg_class
-        WHERE relname = 'pgmi_unittest_plan'
-          AND relnamespace = pg_my_temp_schema()
+        SELECT 1 FROM pg_proc
+        WHERE proname = 'pgmi_test_plan'
+          AND pronamespace = pg_my_temp_schema()
     ),
     EXISTS (
         SELECT 1 FROM pg_class
-        WHERE relname = 'pgmi_unittest_script'
+        WHERE relname = '_pgmi_test_source'
           AND relnamespace = pg_my_temp_schema()
     );
 `

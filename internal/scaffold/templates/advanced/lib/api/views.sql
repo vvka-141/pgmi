@@ -449,30 +449,43 @@ COMMENT ON VIEW api.vw_exchange_stats IS
 -- ============================================================================
 
 CREATE OR REPLACE VIEW api.vw_exchange_summary AS
+WITH
+    rest_stats AS (
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE response IS NULL) AS pending,
+            count(*) FILTER (WHERE (response).status_code >= 400) AS errors,
+            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration,
+            min(enqueued_at) FILTER (WHERE response IS NULL) AS oldest_pending
+        FROM api.rest_exchange
+    ),
+    rpc_stats AS (
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE response IS NULL) AS pending,
+            count(*) FILTER (WHERE (response).status_code >= 400) AS errors,
+            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration,
+            min(enqueued_at) FILTER (WHERE response IS NULL) AS oldest_pending
+        FROM api.rpc_exchange
+    ),
+    mcp_stats AS (
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE (response).envelope->>'error' IS NOT NULL) AS errors,
+            avg(completed_at - enqueued_at) AS avg_duration
+        FROM api.mcp_exchange
+    )
 SELECT
-    (SELECT count(*) FROM api.rest_exchange) +
-    (SELECT count(*) FROM api.rpc_exchange) +
-    (SELECT count(*) FROM api.mcp_exchange) AS total_exchanges,
-
-    (SELECT count(*) FROM api.rest_exchange) AS rest_exchanges,
-    (SELECT count(*) FROM api.rpc_exchange) AS rpc_exchanges,
-    (SELECT count(*) FROM api.mcp_exchange) AS mcp_exchanges,
-
-    (SELECT count(*) FROM api.rest_exchange WHERE response IS NULL) +
-    (SELECT count(*) FROM api.rpc_exchange WHERE response IS NULL) AS pending_count,
-
-    (SELECT count(*) FROM api.rest_exchange WHERE (response).status_code >= 400) +
-    (SELECT count(*) FROM api.rpc_exchange WHERE (response).status_code >= 400) +
-    (SELECT count(*) FROM api.mcp_exchange WHERE (response).envelope->>'error' IS NOT NULL) AS error_count,
-
-    (SELECT avg(completed_at - enqueued_at) FROM api.rest_exchange WHERE completed_at IS NOT NULL) AS rest_avg_duration,
-    (SELECT avg(completed_at - enqueued_at) FROM api.rpc_exchange WHERE completed_at IS NOT NULL) AS rpc_avg_duration,
-    (SELECT avg(completed_at - enqueued_at) FROM api.mcp_exchange) AS mcp_avg_duration,
-
-    LEAST(
-        (SELECT min(enqueued_at) FROM api.rest_exchange WHERE response IS NULL),
-        (SELECT min(enqueued_at) FROM api.rpc_exchange WHERE response IS NULL)
-    ) AS oldest_pending_at;
+    (SELECT total FROM rest_stats) + (SELECT total FROM rpc_stats) + (SELECT total FROM mcp_stats) AS total_exchanges,
+    (SELECT total FROM rest_stats) AS rest_exchanges,
+    (SELECT total FROM rpc_stats) AS rpc_exchanges,
+    (SELECT total FROM mcp_stats) AS mcp_exchanges,
+    (SELECT pending FROM rest_stats) + (SELECT pending FROM rpc_stats) AS pending_count,
+    (SELECT errors FROM rest_stats) + (SELECT errors FROM rpc_stats) + (SELECT errors FROM mcp_stats) AS error_count,
+    (SELECT avg_duration FROM rest_stats) AS rest_avg_duration,
+    (SELECT avg_duration FROM rpc_stats) AS rpc_avg_duration,
+    (SELECT avg_duration FROM mcp_stats) AS mcp_avg_duration,
+    LEAST((SELECT oldest_pending FROM rest_stats), (SELECT oldest_pending FROM rpc_stats)) AS oldest_pending_at;
 
 COMMENT ON VIEW api.vw_exchange_summary IS
     'Single-row dashboard showing exchange counts, pending/error counts, and average durations by protocol.';
@@ -491,8 +504,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     -- Handler views
     EXECUTE format('GRANT SELECT ON api.vw_handler_info TO %I', v_api_role);

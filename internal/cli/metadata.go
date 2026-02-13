@@ -47,10 +47,10 @@ This command:
 3. Generates metadata with fallback UUIDs and default settings
 4. Optionally writes metadata to files (with --write flag)
 
-By default, runs in dry-run mode (no files modified).
+By default, previews changes without modifying files.
 
 Examples:
-  # Preview metadata generation (dry-run)
+  # Preview metadata generation
   pgmi metadata scaffold ./myproject
 
   # Write metadata to files
@@ -58,8 +58,9 @@ Examples:
 
   # Customize generated metadata
   pgmi metadata scaffold ./myproject --idempotent=true --write`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataScaffold,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataScaffold,
 }
 
 // Validate command
@@ -82,8 +83,9 @@ Examples:
 
   # Validate with JSON output
   pgmi metadata validate ./myproject --json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataValidate,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataValidate,
 }
 
 // Plan command
@@ -108,13 +110,13 @@ Examples:
 
   # Show plan with verbose details
   pgmi metadata plan ./myproject --verbose`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataPlan,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataPlan,
 }
 
 var (
 	// Scaffold flags
-	scaffoldDryRun     bool
 	scaffoldIdempotent bool
 	scaffoldWrite      bool
 
@@ -132,8 +134,7 @@ func init() {
 	metadataCmd.AddCommand(metadataPlanCmd)
 
 	// Scaffold flags
-	metadataScaffoldCmd.Flags().BoolVar(&scaffoldDryRun, "dry-run", true, "Preview changes without modifying files (default: true)")
-	metadataScaffoldCmd.Flags().BoolVar(&scaffoldWrite, "write", false, "Write generated metadata to files (overrides --dry-run)")
+	metadataScaffoldCmd.Flags().BoolVar(&scaffoldWrite, "write", false, "Write generated metadata to files (default: preview only)")
 	metadataScaffoldCmd.Flags().BoolVar(&scaffoldIdempotent, "idempotent", true, "Mark generated scripts as idempotent (default: true)")
 
 	// Validate flags
@@ -148,12 +149,12 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 	projectPath := args[0]
 	verbose := getVerboseFlag(cmd)
 
-	// Normalize dry-run flag (--write overrides --dry-run)
-	dryRun := !scaffoldWrite
+	// Preview mode unless --write is specified
+	previewOnly := !scaffoldWrite
 
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Project path: %s\n", projectPath)
-		fmt.Fprintf(os.Stderr, "[VERBOSE] Dry-run mode: %v\n", dryRun)
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Preview only: %v\n", previewOnly)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Default idempotent: %v\n", scaffoldIdempotent)
 	}
 
@@ -212,7 +213,7 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "    ID: %s (fallback)\n", fallbackID)
 		fmt.Fprintf(os.Stderr, "    Idempotent: %v\n", scaffoldIdempotent)
 
-		if !dryRun {
+		if !previewOnly {
 			// Read existing file content
 			absPath := filePath
 			if !filepath.IsAbs(filePath) {
@@ -236,8 +237,8 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr)
 	}
 
-	if dryRun {
-		fmt.Fprintln(os.Stderr, "ℹ Dry-run mode: No files were modified")
+	if previewOnly {
+		fmt.Fprintln(os.Stderr, "ℹ Preview mode: No files were modified")
 		fmt.Fprintln(os.Stderr, "  Use --write flag to apply changes")
 	} else {
 		fmt.Fprintf(os.Stderr, "✓ Generated metadata for %d file(s)\n", len(filesWithoutMetadata))

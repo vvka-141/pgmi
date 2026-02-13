@@ -18,7 +18,7 @@ func ParseKeyValuePairs(pairs []string) (map[string]string, error) {
 	for _, pair := range pairs {
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
-			return nil, fmt.Errorf("parameter %q is not in key=value format", pair)
+			return nil, fmt.Errorf("parameter %q is not in key=value format (example: --param env=production)", pair)
 		}
 
 		if key == "" {

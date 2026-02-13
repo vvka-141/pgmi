@@ -2,7 +2,7 @@
 
 This guide helps you migrate to pgmi from other database deployment tools. Each section maps familiar concepts to pgmi equivalents and shows a concrete migration path.
 
-> **How pgmi deploys:** The `deploy.sql` examples below use `pgmi_plan_*` functions to build an execution queue—they don't run SQL immediately. After `deploy.sql` finishes, pgmi runs the queued commands in order. See [Session API](session-api.md) for the full reference.
+> **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
 ## Quick concept mapping
 
@@ -62,25 +62,25 @@ myapp/
 3. **Create `deploy.sql`** that mimics Flyway's behavior:
    ```sql
    -- deploy.sql: Flyway-like linear execution
+   BEGIN;
+
    DO $$
    DECLARE
        v_file RECORD;
    BEGIN
-       -- Single transaction (like Flyway's default)
-       PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
        -- Execute all migrations in filename order
        FOR v_file IN (
-           SELECT path FROM pg_temp.pgmi_source
-           WHERE directory = './migrations/' AND is_sql_file
-           ORDER BY path
+           SELECT path, content FROM pg_temp.pgmi_plan_view
+           WHERE path LIKE './migrations/%'
+           ORDER BY execution_order
        )
        LOOP
-           PERFORM pg_temp.pgmi_plan_file(v_file.path);
+           RAISE NOTICE 'Executing: %', v_file.path;
+           EXECUTE v_file.content;
        END LOOP;
-
-       PERFORM pg_temp.pgmi_plan_command('COMMIT;');
    END $$;
+
+   COMMIT;
    ```
 
 4. **Deploy**:
@@ -93,29 +93,37 @@ myapp/
 | Flyway feature | pgmi equivalent |
 |----------------|-----------------|
 | `flyway migrate` | `pgmi deploy .` |
-| `flyway info` | Query `pg_temp.pgmi_source` in deploy.sql |
+| `flyway info` | Query `pg_temp.pgmi_source_view` in deploy.sql |
 | `flyway validate` | `pgmi metadata validate .` |
-| `flyway clean` | `pgmi deploy . --overwrite` (recreates DB; **local development only**) |
+| `flyway clean` | `pgmi deploy . --overwrite` drops and recreates the *entire database* (not just schema objects). For true "clean" behavior, implement `DROP SCHEMA ... CASCADE` in deploy.sql. |
 | `flyway_schema_history` | Implement your own tracking table, or use [pgmi metadata](METADATA.md) |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
-| Placeholders (`${var}`) | Parameters via `--param` + `pgmi_get_param()` |
+| Placeholders (`${var}`) | Parameters via `--param` + `current_setting('pgmi.key', true)` |
 
 ### What you gain
 
-- **Transaction flexibility**: Flyway is all-or-nothing per run. pgmi lets you commit per-migration:
+- **Transaction control**: You decide transaction boundaries. Want all-or-nothing? Use `BEGIN...COMMIT`. Want error context per file? Use exception blocks:
   ```sql
-  FOR v_file IN (SELECT path FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path)
+  FOR v_file IN (
+      SELECT path, content FROM pg_temp.pgmi_plan_view
+      WHERE path LIKE './migrations/%' ORDER BY execution_order
+  )
   LOOP
-      PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-      PERFORM pg_temp.pgmi_plan_file(v_file.path);
-      PERFORM pg_temp.pgmi_plan_command('COMMIT;');
+      BEGIN
+          EXECUTE v_file.content;
+      EXCEPTION WHEN OTHERS THEN
+          RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
+      END;
   END LOOP;
   ```
+  See [Production Guide](PRODUCTION.md#deployment-strategies) for transaction strategy options.
 
 - **Conditional logic**: Skip migrations based on environment, feature flags, or database state:
   ```sql
-  IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
-      -- Production-only migrations
+  IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+      FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_plan_view WHERE path LIKE './production/%') LOOP
+          EXECUTE v_file.content;
+      END LOOP;
   END IF;
   ```
 
@@ -172,23 +180,24 @@ myapp/
 
 2. **Create `deploy.sql`**:
    ```sql
+   BEGIN;
+
    DO $$
    DECLARE
        v_file RECORD;
    BEGIN
-       PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
        FOR v_file IN (
-           SELECT path FROM pg_temp.pgmi_source
-           WHERE directory = './migrations/' AND is_sql_file
-           ORDER BY path
+           SELECT path, content FROM pg_temp.pgmi_plan_view
+           WHERE path LIKE './migrations/%'
+           ORDER BY execution_order
        )
        LOOP
-           PERFORM pg_temp.pgmi_plan_file(v_file.path);
+           RAISE NOTICE 'Executing: %', v_file.path;
+           EXECUTE v_file.content;
        END LOOP;
-
-       PERFORM pg_temp.pgmi_plan_command('COMMIT;');
    END $$;
+
+   COMMIT;
    ```
 
 3. **Map Liquibase contexts to parameters**:
@@ -200,8 +209,10 @@ myapp/
 
    **After (pgmi):**
    ```sql
-   IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
-       PERFORM pg_temp.pgmi_plan_file('./migrations/production_only.sql');
+   IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+       FOR v_file IN (SELECT content FROM pg_temp.pgmi_source_view WHERE path = './migrations/production_only.sql') LOOP
+           EXECUTE v_file.content;
+       END LOOP;
    END IF;
    ```
 
@@ -210,7 +221,7 @@ myapp/
 | Liquibase feature | pgmi equivalent |
 |-------------------|-----------------|
 | `liquibase update` | `pgmi deploy .` |
-| `liquibase status` | `pgmi metadata plan .` or query pgmi_source |
+| `liquibase status` | `pgmi metadata plan .` or query `pg_temp.pgmi_source_view` |
 | `liquibase rollback` | PostgreSQL transaction rollback |
 | `databasechangelog` | Implement tracking table, or use [pgmi metadata](METADATA.md) |
 | Contexts | Parameters + conditionals in deploy.sql |
@@ -261,13 +272,12 @@ pgmi deploy . --database mydb
        v_file RECORD;
    BEGIN
        FOR v_file IN (
-           SELECT path FROM pg_temp.pgmi_source
-           WHERE is_sql_file
-           ORDER BY path
+           SELECT path, content FROM pg_temp.pgmi_plan_view
+           ORDER BY execution_order
        )
        LOOP
-           PERFORM pg_temp.pgmi_plan_notice('Executing: %s', v_file.path);
-           PERFORM pg_temp.pgmi_plan_file(v_file.path);
+           RAISE NOTICE 'Executing: %', v_file.path;
+           EXECUTE v_file.content;
        END LOOP;
    END $$;
    ```
@@ -321,25 +331,29 @@ CREATE TABLE IF NOT EXISTS migration_history (
     applied_at TIMESTAMPTZ DEFAULT now()
 );
 
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    PERFORM pg_temp.pgmi_plan_command('BEGIN;');
-
-    FOR v_file IN (SELECT path, checksum FROM pg_temp.pgmi_source WHERE directory = './migrations/' AND is_sql_file ORDER BY path)
+    FOR v_file IN (
+        SELECT path, content, checksum FROM pg_temp.pgmi_plan_view
+        WHERE path LIKE './migrations/%'
+        ORDER BY execution_order
+    )
     LOOP
         IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN
-            PERFORM pg_temp.pgmi_plan_file(v_file.path);
-            PERFORM pg_temp.pgmi_plan_command(format(
-                'INSERT INTO migration_history (filename, checksum) VALUES (%L, %L);',
-                v_file.path, v_file.checksum
-            ));
+            RAISE NOTICE 'Executing: %', v_file.path;
+            EXECUTE v_file.content;
+            INSERT INTO migration_history (filename, checksum) VALUES (v_file.path, v_file.checksum);
+        ELSE
+            RAISE NOTICE 'Skipping (already applied): %', v_file.path;
         END IF;
     END LOOP;
-
-    PERFORM pg_temp.pgmi_plan_command('COMMIT;');
 END $$;
+
+COMMIT;
 ```
 
 ## Next steps

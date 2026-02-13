@@ -1,10 +1,44 @@
--- Clean up
-DROP TABLE IF EXISTS pg_temp.pgmi_source CASCADE;
-DROP TABLE IF EXISTS pg_temp.pgmi_parameter CASCADE;
-DROP TABLE IF EXISTS pg_temp.pgmi_plan CASCADE;
+-- ============================================================================
+-- PGMI Session Schema (Internal Tables)
+-- ============================================================================
+-- Executed once per session by Go before deploy.sql runs.
+-- Creates internal temp tables (prefixed with _) and helper functions.
+-- Public API views are created by api-v1.sql after file loading.
+--
+-- DATA FLOW:
+--   CLI flags ──► Go ──► _pgmi_parameter (--param key=value)
+--   Project files ──► Go ──► _pgmi_source (via pgmi_register_file)
+--   Test files ──► Go ──► _pgmi_test_directory + _pgmi_test_source
+--   api-v1.sql ──► Creates public views (pgmi_source_view, pgmi_plan_view, etc.)
+--   deploy.sql ──► queries views ──► EXECUTE content
+--
+-- OBJECT INDEX (search: "§" + name):
+--   §_pgmi_parameter       - CLI parameters with type validation
+--   §_pgmi_source          - Project files (non-test)
+--   §_pgmi_source_metadata - Parsed <pgmi-meta> XML blocks
+--   §_pgmi_test_directory  - Test directory hierarchy
+--   §_pgmi_test_source     - Test file content
+--   §pgmi_test_event       - Callback composite type
+--   §pgmi_test_callback    - Default test event handler
+--   §pgmi_validate_pattern - Regex validation
+--   §pgmi_has_tests        - Recursive test discovery
+--   §pgmi_test_plan        - Depth-first test execution order
+--   §pgmi_is_sql_file      - Extension detection
+--   §pgmi_register_file    - File normalization + insert
+--   §pgmi_persist_test_plan - Export test plan to permanent schema
+-- ============================================================================
 
--- Merged parameters table: CLI loader inserts with value, pgmi_declare_param enriches with metadata
-CREATE TEMP TABLE pg_temp.pgmi_parameter
+-- Clean up (allows re-running during development)
+DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
+DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
+DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
+DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+
+
+-- §_pgmi_parameter ───────────────────────────────────────────────────────────
+-- Populated by: Go CLI (--param k=v)
+-- Used by: deploy.sql via pgmi_parameter_view or current_setting('pgmi.key', true)
+CREATE TEMP TABLE pg_temp._pgmi_parameter
 (
 	"key" TEXT PRIMARY KEY,
 	"value" TEXT,
@@ -19,10 +53,14 @@ CREATE TEMP TABLE pg_temp.pgmi_parameter
 	))
 );
 
-GRANT SELECT ON TABLE pg_temp.pgmi_parameter TO PUBLIC;
+GRANT SELECT ON TABLE pg_temp._pgmi_parameter TO PUBLIC;
 
--- 2️⃣ Table definition
-CREATE TEMP TABLE pgmi_source
+
+-- §_pgmi_source ──────────────────────────────────────────────────────────────
+-- Populated by: Go via pgmi_register_file() for each discovered file
+-- Used by: pgmi_plan_view, deploy.sql queries
+-- Excludes: deploy.sql itself and __test__/ files (see chk_path_is_not_test)
+CREATE TEMP TABLE _pgmi_source
 (
     path TEXT NOT NULL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -35,6 +73,7 @@ CREATE TEMP TABLE pgmi_source
     pgmi_checksum TEXT NOT NULL,
     path_parts TEXT[] NOT NULL,
     is_sql_file BOOLEAN NOT NULL,
+    is_test_file BOOLEAN NOT NULL,
     parent_folder_name TEXT,
     -- Path format constraints
     CONSTRAINT chk_path_format CHECK (path ~ '^\./'),
@@ -80,25 +119,23 @@ CREATE TEMP TABLE pgmi_source
     ),
     CONSTRAINT chk_parent_folder_no_slash CHECK (parent_folder_name IS NULL OR parent_folder_name !~ '/'),
     -- Relational integrity constraints
-    CONSTRAINT chk_path_directory_match CHECK (path = directory || name)
+    CONSTRAINT chk_path_directory_match CHECK (path = directory || name),
+    CONSTRAINT chk_path_is_not_test CHECK (NOT path ~ '/__tests?__/')
 );
 
+COMMENT ON TABLE pg_temp._pgmi_source IS
+    'Source files loaded by pgmi. Session-scoped (ephemeral after disconnect).';
+
 -- Allow access from any role context
-GRANT SELECT ON TABLE pg_temp.pgmi_source TO PUBLIC;
+GRANT SELECT ON TABLE pg_temp._pgmi_source TO PUBLIC;
 
 
--- ============================================================================
--- Script Metadata Table (Session-Scoped)
--- ============================================================================
--- Stores parsed metadata from <pgmi:meta> XML blocks in SQL files.
--- Only populated for files that have metadata; files without metadata
--- use deterministic fallback identity in the plan view.
---
--- Namespace UUID for fallback identity generation: e8c72c3e-7b4a-5f9d-b8e1-4c6d8a2e5f7c
--- (derived from "pgmi.com/file-identity/v1" using UUID v5 with URL namespace)
-
-CREATE TEMP TABLE pgmi_source_metadata (
-    path TEXT PRIMARY KEY REFERENCES pg_temp.pgmi_source(path),
+-- §_pgmi_source_metadata ──────────────────────────────────────────────────────
+-- Populated by: Go parser when <pgmi-meta> XML blocks found in SQL files
+-- Used by: pgmi_plan_view (LEFT JOIN for optional metadata)
+-- Files without metadata: use path as fallback sort key (see plan view)
+CREATE TEMP TABLE _pgmi_source_metadata (
+    path TEXT PRIMARY KEY REFERENCES pg_temp._pgmi_source(path),
     id UUID NOT NULL,
     idempotent BOOLEAN NOT NULL,
     sort_keys TEXT[] NOT NULL DEFAULT '{}',
@@ -107,95 +144,239 @@ CREATE TEMP TABLE pgmi_source_metadata (
 
 -- GIN index for array operations on sort_keys
 CREATE INDEX ix_pgmi_source_metadata_sort_keys
-    ON pg_temp.pgmi_source_metadata USING GIN (sort_keys);
+    ON pg_temp._pgmi_source_metadata USING GIN (sort_keys);
 
-COMMENT ON TABLE pg_temp.pgmi_source_metadata IS
+COMMENT ON TABLE pg_temp._pgmi_source_metadata IS
     'Parsed metadata from SQL file <pgmi-meta> blocks. Session-scoped (ephemeral).
      Each file can specify multiple sort keys for multi-phase execution.
      Files without metadata use path as fallback sort key.';
 
--- Allow access from any role context
-GRANT SELECT ON TABLE pg_temp.pgmi_source_metadata TO PUBLIC;
+GRANT SELECT ON TABLE pg_temp._pgmi_source_metadata TO PUBLIC;
 
-
-
-
-
-
-
--- ============================================================================
--- Execution Plan View (Multi-Phase Execution via Sort Keys)
--- ============================================================================
--- Joins pgmi_source with pgmi_source_metadata (LEFT JOIN), computes:
---   - final_id: Explicit ID or deterministic fallback UUID v5
---   - Unnests sort_keys array for multi-phase execution
---   - Assigns sequential execution_order
---
--- Files are ordered by: sort_key ASC, path ASC (deterministic)
--- Files with multiple sort keys execute multiple times at different stages.
-
-CREATE OR REPLACE TEMP VIEW pgmi_plan_view AS
-SELECT
-    -- File identity
-    s.path,
-    s.content,
-    s.pgmi_checksum AS checksum,
-
-    -- Metadata (with fallback for files without metadata)
-    -- Fallback uses MD5 hash cast to UUID (built-in, no extension required)
-    -- Note: Not RFC 4122 compliant, but consistent with deploy.sql and available during session init
-    md5(s.path::bytea)::uuid AS generic_id,
-    m.id,  -- NULL for files without metadata
-    COALESCE(m.idempotent, true) AS idempotent,
-    COALESCE(m.description, '') AS description,
-
-    -- UNNEST sort keys: each key becomes a separate execution entry
-    unnested.sort_key,
-
-    -- Assign sequential execution order (deterministic tie-breaking with path)
-    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
-
-FROM pg_temp.pgmi_source s
-LEFT JOIN pg_temp.pgmi_source_metadata m ON s.path = m.path
-
--- CROSS JOIN LATERAL: For each file, expand sort_keys array
--- If no metadata: use path as fallback sort key
-CROSS JOIN LATERAL UNNEST(
-    COALESCE(
-        NULLIF(m.sort_keys, '{}'),  -- Use metadata sort keys if present
-        ARRAY[s.path]               -- Fallback: lexicographic path order
-    )
-) AS unnested(sort_key)
-
-ORDER BY unnested.sort_key, s.path;
-
-COMMENT ON VIEW pg_temp.pgmi_plan_view IS
-    'Execution plan with multi-phase support via UNNEST(sort_keys).
-     Files with multiple sort keys execute multiple times at different stages.
-     Order: sort_key ASC, path ASC (deterministic).
-     Files without metadata use path as sort key (lexicographic order).';
-
--- Allow access from any role context
-GRANT SELECT ON TABLE pg_temp.pgmi_plan_view TO PUBLIC;
-
-
-
-
-CREATE TEMP TABLE pgmi_plan
+-- §_pgmi_test_directory ───────────────────────────────────────────────────────
+-- Populated by: Go when discovering __test__/ directories
+-- Used by: pgmi_test_plan() for depth-first traversal via parent_path
+CREATE TEMP TABLE pg_temp._pgmi_test_directory
 (
-	ordinal INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-	command_sql text NOT NULL
+    path         TEXT PRIMARY KEY,
+    parent_path  TEXT,
+    depth        INT NOT NULL DEFAULT 0,
+    CONSTRAINT chk_test_dir_path_format CHECK (path ~ '^\./' AND path ~ '/__tests?__/'),
+    CONSTRAINT chk_test_dir_ends_slash CHECK (path ~ '/$')
 );
 
--- Grant SELECT and INSERT to allow plan building after role switch
--- Simple permission model: no privilege escalation needed for session-scoped temp table
-GRANT SELECT, INSERT ON TABLE pg_temp.pgmi_plan TO PUBLIC;
+CREATE INDEX ix_pgmi_test_directory_parent ON pg_temp._pgmi_test_directory(parent_path);
+GRANT SELECT, INSERT ON TABLE pg_temp._pgmi_test_directory TO PUBLIC;
+
+COMMENT ON TABLE pg_temp._pgmi_test_directory IS
+    'Hierarchical test directory structure. Populated by Go, used by pgmi_test_plan() function.';
+
+-- §_pgmi_test_source ──────────────────────────────────────────────────────────
+-- Populated by: Go for files inside __test__/ directories
+-- Used by: pgmi_test_plan() and pgmi_test() macro execution
+-- is_fixture: true for _setup.sql files (run before tests in same directory)
+CREATE TEMP TABLE pg_temp._pgmi_test_source
+(
+    path         TEXT NOT NULL PRIMARY KEY,
+    directory    TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    is_fixture   BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT chk_test_source_path_format CHECK (path ~ '^\./'),
+    CONSTRAINT fk_test_source_directory FOREIGN KEY (directory)
+        REFERENCES pg_temp._pgmi_test_directory(path)
+);
+
+CREATE INDEX ix_pgmi_test_source_directory ON pg_temp._pgmi_test_source(directory);
+GRANT SELECT, INSERT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
+
+COMMENT ON TABLE pg_temp._pgmi_test_source IS
+    'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
+
+-- §pgmi_test_event ────────────────────────────────────────────────────────────
+-- Composite type passed to test callbacks during pgmi_test() execution
+-- Events: suite_start/end, fixture_start/end, test_start/end, rollback, teardown_start/end
+CREATE TYPE pg_temp.pgmi_test_event AS (
+    event       TEXT,       -- Event name (suite_start, test_end, rollback, etc.)
+    path        TEXT,       -- Script path (NULL for suite/teardown events)
+    directory   TEXT,       -- Test directory containing the script
+    depth       INT,        -- Nesting level (0 = root __test__/)
+    ordinal     INT,        -- Execution order (1-based, monotonically increasing)
+    context     JSONB       -- Extensible payload for custom data
+);
+
+COMMENT ON TYPE pg_temp.pgmi_test_event IS
+'Composite type for test lifecycle callbacks. Fields:
+  event     - suite_start, fixture_start/end, test_start/end, rollback, teardown_start/end
+  path      - Script path (NULL for suite/teardown events)
+  directory - Test directory (e.g., ./__test__/)
+  depth     - Nesting level for hierarchical test directories
+  ordinal   - Execution order within the suite
+  context   - JSONB for extensible custom data';
+
+-- §pgmi_test_callback ─────────────────────────────────────────────────────────
+-- Default callback: emits NOTICE for fixtures/tests, DEBUG for rollback/teardown
+-- Override by passing custom function name to pgmi_test() macro
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_callback(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    CASE e.event
+        WHEN 'suite_start'    THEN RAISE NOTICE '[pgmi] Test suite started';
+        WHEN 'suite_end'      THEN RAISE NOTICE '[pgmi] Test suite completed (% steps)', e.ordinal;
+        WHEN 'fixture_start'  THEN RAISE NOTICE '[pgmi] Fixture: %', e.path;
+        WHEN 'fixture_end'    THEN NULL; -- silent
+        WHEN 'test_start'     THEN RAISE NOTICE '[pgmi] Test: %', e.path;
+        WHEN 'test_end'       THEN NULL; -- silent (success implicit)
+        WHEN 'rollback'       THEN RAISE DEBUG '[pgmi] Rollback: %', COALESCE(e.path, e.directory);
+        WHEN 'teardown_start' THEN RAISE DEBUG '[pgmi] Teardown: %', e.directory;
+        WHEN 'teardown_end'   THEN NULL;
+        ELSE NULL;
+    END CASE;
+END $$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_test_callback IS
+'Default test callback that emits NOTICE/DEBUG messages for visibility.
+Custom callbacks must accept (pg_temp.pgmi_test_event) and return void.
+Example:
+  CREATE FUNCTION pg_temp.my_observer(e pg_temp.pgmi_test_event)
+  RETURNS void AS $$
+  BEGIN
+    INSERT INTO test_log (event, path) VALUES (e.event, e.path);
+  END $$ LANGUAGE plpgsql;
+  CALL pgmi_test(NULL, ''pg_temp.my_observer'');';
 
 
+-- §pgmi_validate_pattern ──────────────────────────────────────────────────────
+-- Validates regex syntax before use in test filtering (fail-fast on bad patterns)
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_validate_pattern(p_pattern TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE
+AS $$
+BEGIN
+    IF p_pattern IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- Test pattern validity by attempting match against empty string
+    BEGIN
+        PERFORM '' ~ p_pattern;
+    EXCEPTION WHEN invalid_regular_expression THEN
+        RAISE EXCEPTION 'Invalid regex pattern: %', p_pattern
+        USING HINT = 'Pattern must be a valid PostgreSQL POSIX regular expression';
+    END;
+
+    RETURN p_pattern;
+END;
+$$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_validate_pattern IS
+'Validates regex pattern syntax for test filtering.
+Returns pattern unchanged if valid, raises exception with helpful message if invalid.
+Prevents cryptic PostgreSQL regex errors and potential ReDoS from malformed patterns.';
 
 
+-- §pgmi_has_tests ─────────────────────────────────────────────────────────────
+-- Recursive check: does this directory or its children have matching tests?
+-- Used by: pgmi_test_plan() to prune empty branches from traversal
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_has_tests(
+    p_directory TEXT,
+    p_pattern TEXT DEFAULT NULL
+) RETURNS BOOLEAN
+LANGUAGE sql STABLE
+AS $$
+    WITH RECURSIVE dir_tree AS (
+        SELECT path
+        FROM pg_temp._pgmi_test_directory
+        WHERE path = p_directory
+        UNION ALL
+        SELECT d.path
+        FROM pg_temp._pgmi_test_directory d
+        INNER JOIN dir_tree dt ON d.parent_path = dt.path
+    )
+    SELECT EXISTS (
+        SELECT 1
+        FROM pg_temp._pgmi_test_source ts
+        INNER JOIN dir_tree dt ON ts.directory = dt.path
+        WHERE NOT ts.is_fixture
+          AND (p_pattern IS NULL OR ts.path ~ pg_temp.pgmi_validate_pattern(p_pattern))
+    );
+$$;
 
--- 1️⃣ SQL file detector
+COMMENT ON FUNCTION pg_temp.pgmi_has_tests IS
+'Recursively checks if directory subtree contains tests matching pattern.
+Returns TRUE if any non-fixture test file exists in the directory or its descendants.';
+
+
+-- §pgmi_test_plan ─────────────────────────────────────────────────────────────
+-- Returns depth-first execution plan: fixture → tests → recurse → teardown
+-- Algorithm: ancestry arrays with sentinel chars ('' entry, '~' exit) produce DFS
+-- Why COLLATE "C": ensures byte-order comparison ('~' > all paths) regardless of locale
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_plan(p_pattern TEXT DEFAULT NULL)
+RETURNS TABLE (ordinal INT, step_type TEXT, script_path TEXT, directory TEXT, depth INT)
+LANGUAGE sql STABLE
+AS $$
+WITH RECURSIVE
+-- Step 1: Directories containing matching tests (via pgmi_has_tests)
+relevant AS (
+    SELECT d.path, d.parent_path, d.depth
+    FROM pg_temp._pgmi_test_directory d
+    WHERE pg_temp.pgmi_has_tests(d.path, p_pattern)
+),
+-- Step 2: Build tree with ancestry path for DFS ordering
+tree AS (
+    SELECT path, depth, ARRAY[path] AS ancestry
+    FROM relevant
+    WHERE parent_path IS NULL OR parent_path NOT IN (SELECT path FROM relevant)
+    UNION ALL
+    SELECT r.path, r.depth, t.ancestry || r.path
+    FROM relevant r JOIN tree t ON r.parent_path = t.path
+),
+-- Step 3: Create entry/exit visits with DFS sort keys
+-- Entry: append '' (empty string sorts before any path continuation)
+-- Exit:  append '~' (tilde ASCII 126 sorts after all alphanumeric paths in C collation)
+-- IMPORTANT: Uses COLLATE "C" to ensure byte-order comparison regardless of database collation.
+-- Without "C" collation, locales like en_US.utf8 sort '~' before '.' breaking DFS order.
+visits AS (
+    SELECT path, depth, array_append(ancestry, ''::text) AS sort_key, false AS is_exit FROM tree
+    UNION ALL
+    SELECT path, depth, array_append(ancestry, '~'::text), true FROM tree
+)
+-- Step 4: Expand visits to fixture/test/teardown steps via LATERAL join
+-- NOTE: ORDER BY uses array_to_string with COLLATE "C" because PostgreSQL arrays
+-- use database collation by default, which may not be byte-ordered.
+SELECT
+    ROW_NUMBER() OVER (ORDER BY array_to_string(v.sort_key, E'\x01') COLLATE "C", s.sub_ord)::INT AS ordinal,
+    s.step_type,
+    s.script_path,
+    v.path AS directory,
+    v.depth
+FROM visits v
+CROSS JOIN LATERAL (
+    -- Entry visit: fixture (sub_ord=0) then tests (sub_ord=1,2,...)
+    -- Pre-order DFS: each level runs fixture+tests before descending to children
+    SELECT 0 AS sub_ord, 'fixture' AS step_type, ts.path AS script_path
+    FROM pg_temp._pgmi_test_source ts
+    WHERE NOT v.is_exit AND ts.directory = v.path AND ts.is_fixture
+    UNION ALL
+    SELECT ROW_NUMBER() OVER (ORDER BY ts.filename)::INT, 'test', ts.path
+    FROM pg_temp._pgmi_test_source ts
+    WHERE NOT v.is_exit AND ts.directory = v.path AND NOT ts.is_fixture
+      AND (p_pattern IS NULL OR ts.path ~ pg_temp.pgmi_validate_pattern(p_pattern))
+    UNION ALL
+    -- Exit visit: teardown only (after all children have completed)
+    SELECT 0, 'teardown', NULL WHERE v.is_exit
+) s
+WHERE s.script_path IS NOT NULL OR s.step_type = 'teardown';
+$$;
+
+COMMENT ON FUNCTION pg_temp.pgmi_test_plan IS
+'Returns pre-order depth-first test execution plan using pure SQL.
+Each level: fixture → tests → children → teardown. Parent tests run before child tests.
+Algorithm: ancestry arrays with sentinel chars produce DFS ordering without mutable state.
+Use p_pattern to filter tests by regex pattern on script_path.';
+
+
+-- §pgmi_is_sql_file ───────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_is_sql_file(filename TEXT)
 RETURNS BOOLEAN
 IMMUTABLE
@@ -204,18 +385,20 @@ AS $$
     SELECT filename ~* E'\\.(sql|ddl|dml|dql|dcl|psql|pgsql|plpgsql)$';
 $$;
 
--- 3️⃣ File registration helper
+-- §pgmi_register_file ─────────────────────────────────────────────────────────
+-- Called by: Go for each discovered file
+-- Does: normalize path (backslash→/, ensure ./), compute derived fields, INSERT
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_register_file(
     in_path TEXT,
     in_content TEXT,
     in_checksum TEXT,
     in_pgmi_checksum TEXT
 )
-RETURNS pg_temp.pgmi_source
+RETURNS pg_temp._pgmi_source
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_row pg_temp.pgmi_source;
+    v_row pg_temp._pgmi_source;
     v_path TEXT;
     v_parts TEXT[];
 BEGIN
@@ -223,7 +406,7 @@ BEGIN
     v_path := trim(both ' ' from in_path);
     v_path := replace(v_path, E'\\', '/');                              -- convert backslashes
     IF v_path !~ '^\./' THEN
-        v_path := './' || regexp_replace(v_path, '^(\./|/)*', '');      -- ensure leading ./ 
+        v_path := './' || regexp_replace(v_path, '^(\./|/)*', '');      -- ensure leading ./
     END IF;
     v_path := regexp_replace(v_path, '/{2,}', '/', 'g');                -- collapse duplicate slashes
 
@@ -249,6 +432,7 @@ BEGIN
     v_row.checksum           := in_checksum;
     v_row.pgmi_checksum      := in_pgmi_checksum;
     v_row.is_sql_file        := pg_temp.pgmi_is_sql_file(v_row.path);
+    v_row.is_test_file       := v_row.path ~ '(^|/)__tests?__/';
     v_row.parent_folder_name :=
         CASE WHEN v_row.depth > 0
              THEN v_parts[array_length(v_parts, 1) - 1]
@@ -256,11 +440,11 @@ BEGIN
         END;
 
     -- 🧩 3. Insert & return the row
-    INSERT INTO pg_temp.pgmi_source VALUES (
+    INSERT INTO pg_temp._pgmi_source VALUES (
         v_row.path, v_row.name, v_row.directory, v_row.extension,
         v_row.depth, v_row.content, v_row.size_bytes,
         v_row.checksum, v_row.pgmi_checksum,
-        v_row.path_parts, v_row.is_sql_file, v_row.parent_folder_name
+        v_row.path_parts, v_row.is_sql_file, v_row.is_test_file, v_row.parent_folder_name
     )
     RETURNING * INTO v_row;
 
@@ -268,251 +452,25 @@ BEGIN
 END;
 $$;
 
-
-
-
--- Convenience function for accessing session variables with optional default values
-
--- Declares a parameter with optional type validation, default value, and documentation
--- This is the NEW recommended way to configure parameters (replaces pgmi_init_params)
---
--- Features:
---   - Self-documenting: deploy.sql becomes parameter schema
---   - Type validation: int, uuid, boolean, timestamp, etc.
---   - Required checks: fail-fast if missing
---   - Default values: applied if not provided via CLI
---   - AI-friendly: schema stored in pg_temp.pgmi_parameter for introspection
---
--- Usage:
---   SELECT pgmi_declare_param('database_admin_password', required => true);
---   SELECT pgmi_declare_param('max_connections', type => 'int', default_value => '100');
---   SELECT pgmi_declare_param('env', default_value => 'development', description => 'Deployment environment');
---
--- Supported types: text, int, integer, bigint, numeric, boolean, bool, uuid, timestamp, timestamptz, name
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_declare_param(
-    p_key TEXT,
-    p_type TEXT DEFAULT 'text',
-    p_default_value TEXT DEFAULT NULL,
-    p_required BOOLEAN DEFAULT false,
-    p_description TEXT DEFAULT NULL
-)
-RETURNS VOID
+-- §pgmi_persist_test_plan ─────────────────────────────────────────────────────
+-- Exports test plan to permanent table for running tests outside pgmi session
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_persist_test_plan(target_schema TEXT, p_pattern TEXT DEFAULT NULL)
+RETURNS void
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    v_value TEXT;
-    v_exists BOOLEAN;
 BEGIN
-    -- Validate parameter key format
-    IF p_key IS NULL OR trim(p_key) = '' THEN
-        RAISE EXCEPTION 'Parameter key cannot be null or empty';
-    END IF;
-
-    IF p_key !~ '^\w+$' THEN
-        RAISE EXCEPTION 'Invalid parameter key: "%". Keys must be alphanumeric with underscores only', p_key;
-    END IF;
-
-    IF length(p_key) > 63 THEN
-        RAISE EXCEPTION 'Parameter key "%" exceeds PostgreSQL identifier limit (63 characters)', p_key;
-    END IF;
-
-    -- Validate type is supported
-    IF p_type NOT IN ('text', 'int', 'integer', 'bigint', 'numeric', 'boolean', 'bool', 'uuid', 'timestamp', 'timestamptz', 'name') THEN
-        RAISE EXCEPTION 'Unsupported parameter type: "%". Supported types: text, int, bigint, numeric, boolean, uuid, timestamp, timestamptz, name', p_type;
-    END IF;
-
-    -- Check if parameter exists (from CLI via auto-initialization)
-    SELECT value INTO v_value
-    FROM pg_temp.pgmi_parameter
-    WHERE key = p_key;
-
-    v_exists := FOUND;
-
-    -- Handle missing parameters
-    IF NOT v_exists THEN
-        IF p_required AND p_default_value IS NULL THEN
-            RAISE EXCEPTION 'Required parameter "%" not provided. Use: pgmi deploy . --param %=<value>', p_key, p_key
-            USING HINT = format('Available parameters: %s',
-                (SELECT string_agg(key, ', ' ORDER BY key) FROM pg_temp.pgmi_parameter));
-        END IF;
-
-        v_value := p_default_value;
-
-        -- Insert new parameter with all metadata
-        INSERT INTO pg_temp.pgmi_parameter (key, value, type, required, default_value, description)
-        VALUES (p_key, v_value, p_type, p_required, p_default_value, p_description);
-
-        -- Set session variable for new parameter
-        IF v_value IS NOT NULL THEN
-            IF length(v_value) > 8192 THEN
-                RAISE EXCEPTION 'Parameter "%" value exceeds maximum length (8192 characters)', p_key;
-            END IF;
-            PERFORM set_config('pgmi.' || p_key, v_value, false);
-        END IF;
-    ELSE
-        -- CLI provided value: update metadata columns only (CLI value wins)
-        UPDATE pg_temp.pgmi_parameter
-        SET type = p_type,
-            required = p_required,
-            default_value = p_default_value,
-            description = p_description
-        WHERE key = p_key;
-    END IF;
-
-    -- Type validation (if value exists)
-    IF v_value IS NOT NULL THEN
-        CASE p_type
-            WHEN 'int', 'integer' THEN
-                BEGIN
-                    PERFORM v_value::INTEGER;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE EXCEPTION 'Parameter "%" must be integer, got: "%"', p_key, v_value
-                    USING HINT = format('Provide numeric value like: --param %s=100', p_key);
-                END;
-
-            WHEN 'bigint' THEN
-                BEGIN
-                    PERFORM v_value::BIGINT;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE EXCEPTION 'Parameter "%" must be bigint, got: "%"', p_key, v_value
-                    USING HINT = format('Provide numeric value like: --param %s=1000000', p_key);
-                END;
-
-            WHEN 'numeric' THEN
-                BEGIN
-                    PERFORM v_value::NUMERIC;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE EXCEPTION 'Parameter "%" must be numeric, got: "%"', p_key, v_value
-                    USING HINT = format('Provide numeric value like: --param %s=123.45', p_key);
-                END;
-
-            WHEN 'boolean', 'bool' THEN
-                IF LOWER(v_value) NOT IN ('true', 'false', 't', 'f', 'yes', 'no', 'on', 'off', '1', '0') THEN
-                    RAISE EXCEPTION 'Parameter "%" must be boolean (true/false), got: "%"', p_key, v_value
-                    USING HINT = format('Provide boolean value like: --param %s=true', p_key);
-                END IF;
-
-            WHEN 'uuid' THEN
-                BEGIN
-                    PERFORM v_value::UUID;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE EXCEPTION 'Parameter "%" must be valid UUID, got: "%"', p_key, v_value
-                    USING HINT = format('Provide UUID like: --param %s=550e8400-e29b-41d4-a716-446655440000', p_key);
-                END;
-
-            WHEN 'timestamp', 'timestamptz' THEN
-                BEGIN
-                    PERFORM v_value::TIMESTAMPTZ;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE EXCEPTION 'Parameter "%" must be valid timestamp, got: "%"', p_key, v_value
-                    USING HINT = format('Provide timestamp like: --param %s=2024-01-15T10:30:00Z', p_key);
-                END;
-
-            WHEN 'name' THEN
-                -- PostgreSQL identifier (table/schema/role names)
-                IF length(v_value) > 63 THEN
-                    RAISE EXCEPTION 'Parameter "%" exceeds PostgreSQL identifier limit (63 characters)', p_key;
-                END IF;
-                -- Note: PostgreSQL allows any character in identifiers if quoted, so minimal validation
-
-            WHEN 'text' THEN
-                -- No validation needed (any string is valid)
-                NULL;
-
-            ELSE
-                RAISE EXCEPTION 'Unsupported type: "%"', p_type;
-        END CASE;
-    END IF;
-
-    RAISE DEBUG 'Parameter declared: "%" (type: %, required: %, value: %)',
-        p_key, p_type, p_required, COALESCE(v_value, 'NULL');
+    EXECUTE format('CREATE TABLE IF NOT EXISTS %I.pgmi_test_plan (
+        ordinal INT PRIMARY KEY,
+        step_type TEXT NOT NULL,
+        script_path TEXT,
+        directory TEXT NOT NULL,
+        depth INT NOT NULL
+    )', target_schema);
+    EXECUTE format('TRUNCATE %I.pgmi_test_plan', target_schema);
+    EXECUTE format('INSERT INTO %I.pgmi_test_plan SELECT * FROM pg_temp.pgmi_test_plan($1)', target_schema)
+    USING p_pattern;
 END;
 $$;
 
-
--- Returns the value of a parameter from session variables, or the default if not set
--- Parameters are automatically loaded from CLI (--param key=value) or declared via pgmi_declare_param()
--- Usage: SELECT pgmi_get_param('env', 'development');
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_get_param(
-    p_key TEXT,
-    p_default TEXT DEFAULT NULL
-)
-RETURNS TEXT
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT COALESCE(current_setting('pgmi.' || p_key, true), p_default);
-$$;
-
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_command(command_sql text) RETURNS pg_temp.pgmi_plan AS
-$$
-	INSERT INTO pg_temp.pgmi_plan(command_sql)
-	VALUES ($1) RETURNING *;
-$$ LANGUAGE sql;
-
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_do(plpgsql_code text) RETURNS pg_temp.pgmi_plan AS
-$$
-	SELECT pg_temp.pgmi_plan_command(
-		'DO ' || txt.boundary || ' ' || $1 || ' ' || txt.boundary || ';'
-	)
-	FROM (SELECT '$pgmi_' || md5($1) || '$') AS txt(boundary)
-$$ LANGUAGE sql;
-
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_do(body text, VARIADIC args text[])
-RETURNS pg_temp.pgmi_plan AS
-$$
-    WITH formatted AS (
-        SELECT format(body, VARIADIC args) AS body_text
-    ),
-    delimited AS (
-        SELECT
-            body_text,
-            '$pgmi_' || md5(body_text) || '$' AS boundary
-        FROM formatted
-    )
-    SELECT pg_temp.pgmi_plan_command(
-        'DO ' || boundary || ' ' || body_text || ' ' || boundary || ';'
-    )
-    FROM delimited
-$$ LANGUAGE sql;
-
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_file(path text) RETURNS pg_temp.pgmi_plan AS
-$$
-DECLARE
-    v_content TEXT;
-BEGIN
-    SELECT f.content INTO STRICT v_content
-    FROM pg_temp.pgmi_source AS f
-    WHERE f.path = $1;
-
-    RETURN pg_temp.pgmi_plan_command(v_content);
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        RAISE EXCEPTION 'File "%" not found in registered files. Use pgmi_register_file() to register it first.', $1;
-    WHEN TOO_MANY_ROWS THEN
-        RAISE EXCEPTION 'Multiple files found with path "%" (this should not happen - check for duplicates).', $1;
-END;
-$$ LANGUAGE plpgsql;
-
--- Convenience function for simple RAISE NOTICE statements without explicit BEGIN/END blocks
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_notice(message text)
-RETURNS pg_temp.pgmi_plan AS
-$$
-    SELECT pg_temp.pgmi_plan_command(
-        'DO $pgmi_notice$ BEGIN RAISE NOTICE ' || quote_literal(message) || '; END $pgmi_notice$;'
-    )
-$$ LANGUAGE sql;
-
--- Overload with format placeholders (uses format() syntax with %s, %I, %L)
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_plan_notice(message text, VARIADIC args text[])
-RETURNS pg_temp.pgmi_plan AS
-$$
-    SELECT pg_temp.pgmi_plan_command(
-        'DO $pgmi_notice$ BEGIN RAISE NOTICE ' ||
-        quote_literal(format(message, VARIADIC args)) ||
-        '; END $pgmi_notice$;'
-    )
-$$ LANGUAGE sql;
+COMMENT ON FUNCTION pg_temp.pgmi_persist_test_plan IS
+'Persists pgmi_test_plan() results to a permanent schema for running tests without pgmi.';
