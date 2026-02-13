@@ -65,6 +65,35 @@ These views and functions are the stable API for deploy.sql. Use these instead o
 
 ### File Access
 
+#### pgmi_source_view
+
+**All project source files (excludes deploy.sql and `__test__/` files).**
+
+This view provides direct access to all discovered files. For most use cases, prefer `pgmi_plan_view` which adds execution ordering via metadata.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Normalized path (always starts with `./`) |
+| `name` | text | Filename without directory |
+| `directory` | text | Directory path ending with `/` |
+| `extension` | text | File extension (e.g., `.sql`) |
+| `depth` | integer | Nesting level (0 = root) |
+| `content` | text | Full file content |
+| `size_bytes` | bigint | File size in bytes |
+| `checksum` | text | SHA-256 of original content |
+| `pgmi_checksum` | text | SHA-256 of normalized content |
+| `path_parts` | text[] | Path split by `/` |
+| `is_sql_file` | boolean | True for recognized SQL extensions |
+| `is_test_file` | boolean | True if path contains `__test__/` |
+| `parent_folder_name` | text | Immediate parent directory name |
+
+```sql
+-- List all SQL files in migrations/
+SELECT path, name FROM pg_temp.pgmi_source_view
+WHERE directory = './migrations/' AND is_sql_file
+ORDER BY path;
+```
+
 #### pgmi_plan_view
 
 **Pre-computed execution plan with metadata.**
@@ -104,33 +133,103 @@ END $$;
 
 ### Parameters
 
-CLI parameters (passed via `--param key=value`) are accessible in two ways:
+CLI parameters (passed via `--param key=value`) are accessible in multiple ways. This section consolidates all parameter access patterns.
 
-#### Session Variables (Recommended)
+#### Method 1: Session Variables (Recommended)
 
-pgmi automatically sets session variables with the `pgmi.` prefix:
+pgmi automatically sets session variables with the `pgmi.` prefix. This is the simplest and most common approach:
 
 ```sql
--- Get parameter with default
+-- Get parameter with default (the true argument prevents errors if not set)
 v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- In conditional logic
 IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
     -- Production-specific logic
 END IF;
+
+-- Check if parameter was provided
+IF current_setting('pgmi.feature_flag', true) IS NOT NULL THEN
+    -- Parameter was explicitly set
+END IF;
 ```
 
-**Note:** The second argument `true` to `current_setting()` is important—it returns NULL instead of raising an error when the variable is not set.
+**Important:** Always pass `true` as the second argument to `current_setting()`. This returns NULL instead of raising an error when the variable is not set.
 
-#### pgmi_parameter_view
+#### Method 2: pgmi_parameter_view (Introspection)
 
-For introspection, you can query the raw parameters:
+For iterating over parameters or building dynamic logic:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | text | Parameter name (e.g., `env`, `version`) |
+| `value` | text | Parameter value (always text, cast as needed) |
+| `type` | text | Declared type hint (`text`, `int`, `boolean`, etc.) |
+| `required` | boolean | Whether parameter was marked required |
+| `default_value` | text | Default value if not provided |
+| `description` | text | Human-readable description |
 
 ```sql
-SELECT key, value FROM pg_temp.pgmi_parameter_view;
+-- List all parameters
+SELECT key, value, description FROM pg_temp.pgmi_parameter_view;
+
+-- Iterate over parameters dynamically
+DO $$
+DECLARE
+    v_param RECORD;
+BEGIN
+    FOR v_param IN SELECT key, value FROM pg_temp.pgmi_parameter_view LOOP
+        RAISE NOTICE 'Parameter: % = %', v_param.key, v_param.value;
+    END LOOP;
+END $$;
 ```
 
-**Template responsibility:** Type validation, required parameter checking, and default values are handled by templates, not pgmi core. The advanced template provides its own `deployment_setting()` helper function. Simple templates can use `COALESCE(current_setting(...), 'default')` directly.
+#### Method 3: deployment_setting() Helper (Advanced Template Only)
+
+The advanced template provides a helper function with error handling:
+
+```sql
+-- Get required parameter (raises exception if missing)
+v_admin_role := pg_temp.deployment_setting('database_admin_role');
+
+-- Get optional parameter (returns NULL if missing)
+v_optional := pg_temp.deployment_setting('optional_key', false);
+```
+
+**Note:** This function uses a `deployment.` prefix internally and normalizes key names. It's defined in the advanced template's `deploy.sql`, not in pgmi core.
+
+#### Parameter Precedence
+
+Parameters merge from multiple sources (later wins):
+
+```
+pgmi.yaml params < --params-file < --param CLI flag
+```
+
+See [Configuration Reference](CONFIGURATION.md) for details.
+
+#### Type Coercion
+
+All parameter values are stored as text. Cast them as needed:
+
+```sql
+-- Boolean
+v_enabled := COALESCE(current_setting('pgmi.feature_enabled', true), 'false')::boolean;
+
+-- Integer
+v_limit := COALESCE(current_setting('pgmi.max_rows', true), '100')::int;
+
+-- Timestamp
+v_cutoff := COALESCE(current_setting('pgmi.since', true), '2024-01-01')::timestamp;
+```
+
+#### Template Responsibility
+
+pgmi core provides raw parameter storage. Templates handle:
+- Declaring expected parameters (advanced template uses `session.xml`)
+- Validating required parameters
+- Providing default values
+- Type validation and coercion
 
 ### Direct Execution Pattern
 
@@ -208,6 +307,79 @@ BEGIN
         END LOOP;
     END IF;
 END $$;
+```
+
+### Metadata
+
+#### pgmi_source_metadata_view
+
+**Parsed `<pgmi-meta>` XML blocks from SQL files.**
+
+Files without metadata are not in this view (use `pgmi_plan_view` which handles fallbacks).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | File path (references `pgmi_source_view.path`) |
+| `id` | uuid | Explicit script UUID from metadata |
+| `idempotent` | boolean | Whether script can be re-executed safely |
+| `sort_keys` | text[] | Array of execution ordering keys |
+| `description` | text | Human-readable description |
+
+```sql
+-- List files with metadata
+SELECT path, id, idempotent, sort_keys
+FROM pg_temp.pgmi_source_metadata_view;
+
+-- Find non-idempotent migrations
+SELECT path FROM pg_temp.pgmi_source_metadata_view
+WHERE NOT idempotent;
+```
+
+See [Metadata Guide](METADATA.md) for syntax and usage patterns.
+
+### Test Views
+
+#### pgmi_test_source_view
+
+**Test file content from `__test__/` or `__tests__/` directories.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Full path to test file |
+| `directory` | text | Parent test directory (ending with `/`) |
+| `filename` | text | Filename without directory |
+| `content` | text | Full file content |
+| `is_fixture` | boolean | True for `_setup.sql` files |
+
+```sql
+-- List all test files
+SELECT path, is_fixture FROM pg_temp.pgmi_test_source_view
+ORDER BY directory, filename;
+
+-- Get fixture files only
+SELECT path FROM pg_temp.pgmi_test_source_view
+WHERE is_fixture;
+```
+
+#### pgmi_test_directory_view
+
+**Hierarchical test directory structure.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Directory path (ending with `/`) |
+| `parent_path` | text | Parent directory path (NULL for root) |
+| `depth` | integer | Nesting level (0 = root `__test__/`) |
+
+```sql
+-- See test directory hierarchy
+SELECT path, parent_path, depth
+FROM pg_temp.pgmi_test_directory_view
+ORDER BY depth, path;
+
+-- Find nested test directories
+SELECT path FROM pg_temp.pgmi_test_directory_view
+WHERE depth > 0;
 ```
 
 ### Testing
@@ -457,6 +629,7 @@ These tables are the underlying storage for the session API. Users should use th
 | `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
 | `path_parts` | text[] | Path split by `/` |
 | `is_sql_file` | boolean | True for SQL file extensions |
+| `is_test_file` | boolean | True if path contains `__test__/` |
 | `parent_folder_name` | text | Immediate parent directory name |
 
 ### pg_temp._pgmi_parameter
@@ -467,7 +640,7 @@ These tables are the underlying storage for the session API. Users should use th
 |--------|------|-------------|
 | `key` | text | Parameter name |
 | `value` | text | Parameter value |
-| `type` | text | Declared type |
+| `type` | text | Declared type hint |
 | `required` | boolean | Whether parameter is required |
 | `default_value` | text | Default if not provided |
 | `description` | text | Human-readable description |
@@ -475,6 +648,36 @@ These tables are the underlying storage for the session API. Users should use th
 ### pg_temp._pgmi_source_metadata
 
 **Parsed XML metadata from `<pgmi-meta>` blocks.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | File path (FK to `_pgmi_source.path`) |
+| `id` | uuid | Explicit script UUID |
+| `idempotent` | boolean | Whether script can be re-executed |
+| `sort_keys` | text[] | Execution ordering keys (defaults to `{}`) |
+| `description` | text | Human-readable description |
+
+### pg_temp._pgmi_test_directory
+
+**Test directory hierarchy.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Directory path (ending with `/`) |
+| `parent_path` | text | Parent directory (NULL for root) |
+| `depth` | integer | Nesting level |
+
+### pg_temp._pgmi_test_source
+
+**Test file content.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | text | Full file path |
+| `directory` | text | Parent test directory (FK to `_pgmi_test_directory.path`) |
+| `filename` | text | Filename only |
+| `content` | text | Full file content |
+| `is_fixture` | boolean | True for `_setup.sql` files |
 
 ---
 
@@ -492,7 +695,7 @@ ORDER BY execution_order;
 ### See What Parameters Are Available
 
 ```sql
-SELECT key, value, type, required, description
+SELECT key, value, type, required, default_value, description
 FROM pg_temp.pgmi_parameter_view;
 ```
 

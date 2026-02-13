@@ -179,7 +179,7 @@ params:
 
 Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just PostgreSQL — the templates use PL/pgSQL, PostgreSQL's procedural language, for loops and conditionals.
 
-pgmi loads all your project files into a temporary table called `pg_temp.pgmi_source_view`, then runs `deploy.sql`. Your job in `deploy.sql` is to query files from `pgmi_plan_view` (which orders them by metadata) and execute them directly with `EXECUTE`.
+pgmi loads all your project files into a temporary view called `pg_temp.pgmi_source_view`, then runs `deploy.sql`. Your job in `deploy.sql` is to query files from `pg_temp.pgmi_plan_view` (which orders them by metadata) and execute them directly with `EXECUTE`.
 
 ### migrations/001_hello_world.sql — your first SQL file
 
@@ -306,7 +306,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** for learning, 
 |---------|-------|----------|
 | **Learning curve** | Minimal — read the code, understand it | Moderate — more moving parts |
 | **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
-| **Execution view** | `pgmi_source_view` | `pgmi_plan_view` (with multi-phase support) |
+| **Execution view** | `pg_temp.pgmi_source_view` | `pg_temp.pgmi_plan_view` (with multi-phase support) |
 | **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
 | **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
 | **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
@@ -325,12 +325,17 @@ pgmi provides two templates for `pgmi init`. Start with **basic** for learning, 
 - Teams that benefit from script tracking and audit logging
 - Projects integrating with AI assistants via MCP
 
+**Advanced template requirements:**
+- PostgreSQL superuser for initial role setup (creates owner, admin, api, customer roles)
+- `plv8` extension (JavaScript in PostgreSQL) — optional but included by default
+- Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`
+
 **Switching templates:**
 
 You can migrate from basic to advanced later:
 1. Run `pgmi metadata scaffold . --write` to add metadata blocks to existing files
 2. Adjust `idempotent` flags (migrations → false, functions → true)
-3. Update `deploy.sql` to query `pgmi_plan_view` instead of `pgmi_source_view`
+3. Update `deploy.sql` to query `pg_temp.pgmi_plan_view` instead of `pg_temp.pgmi_source_view`
 
 See [Metadata Guide](METADATA.md) for details on the migration process.
 

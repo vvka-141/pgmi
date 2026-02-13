@@ -436,13 +436,18 @@ END $$;
 
 ## HTTP Gateway
 
-The included Python gateway (`tools/mcp-gateway.py`) bridges HTTP to PostgreSQL:
+The advanced template includes a Python gateway (`tools/mcp-gateway.py`) that bridges HTTP to PostgreSQL. This file is generated when you run `pgmi init --template advanced`.
+
+**Requirements:**
+- Python 3.8+
+- `psycopg2` or `psycopg` (PostgreSQL adapter)
+- `flask` (HTTP server)
 
 ### Starting the Gateway
 
 ```bash
-cd tools
-pip install -r requirements.txt
+cd myproject/tools
+pip install psycopg2-binary flask
 export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
 python mcp-gateway.py
 ```

@@ -71,8 +71,8 @@ pgmi deploy . -d myapp
 ```
 
 **What the API version controls:**
-- Session views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, etc.
-- Public functions: `pgmi_test_plan()`, `pgmi_test_generate()`
+- Session views: `pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`, `pg_temp.pgmi_parameter_view`, etc.
+- Public functions: `pg_temp.pgmi_test_plan()`, `pg_temp.pgmi_test_generate()`
 - Column names and types in views
 
 **What it does NOT control:**
@@ -88,6 +88,16 @@ Error: unsupported API version "99"; supported: [1]
 ```
 
 **Best practice:** Pin `--compat` in CI/CD pipelines for stability. When upgrading pgmi, test with the new default version before updating your pinned version.
+
+#### API Version Changelog
+
+**Version 1** (Current)
+- Initial stable API release
+- Views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view`
+- Functions: `pgmi_test_plan()`, `pgmi_test_generate()`, `pgmi_is_sql_file()`, `pgmi_persist_test_plan()`
+- Preprocessor macro: `CALL pgmi_test()`
+
+See [session-api.md](session-api.md) for complete API documentation.
 
 #### Understanding `--overwrite` Safety
 
@@ -511,6 +521,53 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 | `12` | User denied overwrite approval |
 | `13` | SQL execution failed |
 | `14` | `deploy.sql` not found |
+
+---
+
+## Common Error Messages
+
+### Connection Errors (Exit Code 11)
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `connection refused` | PostgreSQL not running or wrong port | Check `pg_isready -h <host> -p <port>` |
+| `password authentication failed` | Wrong credentials | Verify username/password, check `pg_hba.conf` |
+| `database "X" does not exist` | Database not created | Create with `createdb X` or use `--overwrite` for fresh setup |
+| `SSL connection required` | Server requires SSL | Add `?sslmode=require` to connection string |
+| `no pg_hba.conf entry` | Client IP not allowed | Add entry to `pg_hba.conf` or use SSH tunnel |
+
+### SQL Execution Errors (Exit Code 13)
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `relation "X" does not exist` | Table/view not found | Check execution order, ensure dependencies run first |
+| `function "X" does not exist` | Missing function | Run schema files before files that call functions |
+| `permission denied for schema` | Role lacks privileges | Grant permissions or run as superuser for setup |
+| `current transaction is aborted` | Earlier error in transaction | Fix the root cause; check `RAISE EXCEPTION` in your SQL |
+| `syntax error at or near` | Invalid SQL | Check the file path in error message, fix syntax |
+
+### Configuration Errors (Exit Code 10)
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `missing required parameter` | CLI param not provided | Add `--param key=value` |
+| `unknown parameter` | Param not declared in session.xml | Declare in session.xml or remove from CLI |
+| `invalid regex pattern` | Bad pattern in `pgmi_test()` | Fix POSIX regex syntax |
+| `unsupported API version` | Invalid `--compat` value | Use `--compat=1` (currently only v1 supported) |
+
+### File Errors (Exit Code 14)
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `deploy.sql not found` | Missing orchestrator | Run `pgmi init` or create deploy.sql manually |
+| `no SQL files found` | Empty project | Add `.sql` files to your project directory |
+
+### Debugging Tips
+
+1. **Add `--verbose`** to see DEBUG-level PostgreSQL notices
+2. **Check the file path** in error messages — it tells you which file failed
+3. **Run deploy.sql manually** with `psql -f deploy.sql` to isolate issues
+4. **Use `RAISE NOTICE`** in your SQL to trace execution flow
 
 ---
 

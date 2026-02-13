@@ -65,7 +65,7 @@ END $$;
 
 No framework DSL. No YAML conditionals. Just PostgreSQL.
 
-> Your `deploy.sql` queries `pgmi_plan_view` (or `pgmi_source_view`) and uses `EXECUTE` to run files directly. The `IF v_env` conditional controls what SQL runs based on runtime conditions. See [Session API](session-api.md).
+> Your `deploy.sql` queries `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and uses `EXECUTE` to run files directly. The `IF v_env` conditional controls what SQL runs based on runtime conditions. See [Session API](session-api.md).
 
 ## When pgmi makes sense
 
@@ -135,7 +135,7 @@ pgmi provides:
 
 pgmi does NOT decide:
 - Transaction boundaries (you write `BEGIN`/`COMMIT`)
-- Execution order (you query and sort `pgmi_source_view`)
+- Execution order (you query and sort `pg_temp.pgmi_source_view`)
 - Retry logic (you use `EXCEPTION` blocks)
 - Idempotency (you write `IF NOT EXISTS`, `ON CONFLICT`)
 
@@ -151,7 +151,7 @@ For detailed migration guides, see [Coming from Other Tools](COMING-FROM.md).
 
 | Tool | How it works | pgmi equivalent |
 |------|--------------|-----------------|
-| Flyway | Numbered files, framework runs in order | You query `pgmi_source_view`, sort as needed |
+| Flyway | Numbered files, framework runs in order | You query `pg_temp.pgmi_source_view`, sort as needed |
 | Liquibase | Changelog XML/YAML, framework interprets | Your `deploy.sql` interprets |
 | Raw psql scripts | Manual execution order | `deploy.sql` automates the ordering |
 | Sqitch | Dependency graph in plan file | You implement dependencies in `deploy.sql` |

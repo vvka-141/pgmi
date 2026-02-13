@@ -1,5 +1,8 @@
 # Change Request: API Versioning for pgmi Session Interface
 
+> **Status: IMPLEMENTED**
+> This design document describes changes that have been completed. The "Current State" section reflects the pre-implementation state for historical context. The "Target State" is now the actual implementation. See [session-api.md](../session-api.md) for current API documentation.
+
 ## Overview
 
 Introduce versioned API contracts for pgmi's session-scoped interface (temp tables, views, functions). This enables:
@@ -30,7 +33,7 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 
 ---
 
-## Current State
+## Pre-Implementation State (Historical)
 
 ### Internal Tables (in `internal/params/schema.sql`)
 
@@ -63,7 +66,7 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 
 ---
 
-## Target State
+## Implemented State
 
 ### File Structure
 
@@ -502,7 +505,7 @@ make test-integration
 
 ---
 
-## Implementation Order
+## Implementation History
 
 ### Phase 1: SQL Refactoring
 
@@ -580,33 +583,33 @@ make test-integration
 
 ---
 
-## Acceptance Criteria
+## Acceptance Criteria (Completed)
 
 ### CLI & Versioning
-- [ ] `--compat=1` flag accepted by `pgmi deploy`
-- [ ] Omitting `--compat` uses latest stable version
-- [ ] `--compat=99` returns clear error with supported versions list
+- [x] `--compat=1` flag accepted by `pgmi deploy`
+- [x] Omitting `--compat` uses latest stable version
+- [x] `--compat=99` returns clear error with supported versions list
 
 ### Schema Structure
-- [ ] Internal tables prefixed with `_` (`_pgmi_source`, `_pgmi_parameter`, etc.)
-- [ ] Public views created (`pgmi_source_view`, `pgmi_parameter_view`, etc.)
-- [ ] `pgmi_plan_view` in `api-v1.sql`, references internal tables
-- [ ] `pgmi_test_generate()` function exists and returns valid SQL
+- [x] Internal tables prefixed with `_` (`_pgmi_source`, `_pgmi_parameter`, etc.)
+- [x] Public views created (`pgmi_source_view`, `pgmi_parameter_view`, etc.)
+- [x] `pgmi_plan_view` in `api-v1.sql`, references internal tables
+- [x] `pgmi_test_generate()` function exists and returns valid SQL
 
 ### Macro Expansion
-- [ ] `CALL pgmi_test()` expands via `pgmi_test_generate()` function call
-- [ ] Go preprocessor no longer contains inline SQL generation
-- [ ] Generated code references internal tables (`_pgmi_test_source`)
+- [x] `CALL pgmi_test()` expands via `pgmi_test_generate()` function call
+- [x] Go preprocessor no longer contains inline SQL generation
+- [x] Generated code references internal tables (`_pgmi_test_source`)
 
 ### Templates
-- [ ] Advanced template uses `pgmi_source_view` (not `pgmi_source`)
-- [ ] Basic template uses `pgmi_source_view` (not `pgmi_source`)
-- [ ] `TestTemplateDeployment` passes for both templates
+- [x] Advanced template uses `pgmi_source_view` (not `pgmi_source`)
+- [x] Basic template uses `pgmi_source_view` (not `pgmi_source`)
+- [x] `TestTemplateDeployment` passes for both templates
 
 ### Documentation
-- [ ] `pgmi ai` output only references public API (views, public functions)
-- [ ] CLAUDE.md references views, not tables
-- [ ] No references to `_pgmi_*` tables in user-facing documentation
+- [x] `pgmi ai` output only references public API (views, public functions)
+- [x] CLAUDE.md references views, not tables
+- [x] No references to `_pgmi_*` tables in user-facing documentation
 
 ---
 

@@ -2,7 +2,7 @@
 
 This guide helps you migrate to pgmi from other database deployment tools. Each section maps familiar concepts to pgmi equivalents and shows a concrete migration path.
 
-> **How pgmi deploys:** The `deploy.sql` examples below query files from `pgmi_plan_view` (or `pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
+> **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
 ## Quick concept mapping
 
@@ -220,7 +220,7 @@ myapp/
 | Liquibase feature | pgmi equivalent |
 |-------------------|-----------------|
 | `liquibase update` | `pgmi deploy .` |
-| `liquibase status` | `pgmi metadata plan .` or query pgmi_source_view |
+| `liquibase status` | `pgmi metadata plan .` or query `pg_temp.pgmi_source_view` |
 | `liquibase rollback` | PostgreSQL transaction rollback |
 | `databasechangelog` | Implement tracking table, or use [pgmi metadata](METADATA.md) |
 | Contexts | Parameters + conditionals in deploy.sql |
