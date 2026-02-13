@@ -9,14 +9,14 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "pgmi",
-	Short: "PostgreSQL-native deployment and migration tool",
+	Short: "PostgreSQL-native execution fabric",
 	Long: asciiLogo + `
 
-pgmi is a PostgreSQL-first deployment tool that empowers database experts.
+pgmi loads project files and parameters into session-scoped temporary tables,
+then executes your deploy.sql—where you control transactions, execution order,
+and all deployment logic using PostgreSQL's procedural languages.
 
-It loads SQL files and runtime parameters into PostgreSQL temporary tables,
-then hands control to a user-provided deploy.sql script that orchestrates the
-entire deployment using PostgreSQL's procedural languages.
+No proprietary DSL. No migration framework. Just SQL in control.
 
 Philosophy: Minimal interference, maximum empowerment.
 
