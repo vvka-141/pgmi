@@ -49,7 +49,7 @@ CLAUDE.md
 # .vscode/
 
 # Content and articles (local drafts, not tracked)
-content/
+/content/
 
 # Test scaffolds (pgmi init output during development)
 test_*/
