@@ -92,7 +92,9 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template does exactly this). But consider simpler tools if:
+pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic** for learning and simple projects, **advanced** for production with metadata-driven deployment. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for details.
+
+But consider simpler tools if:
 
 **You'll never need anything beyond linear migrations.**
 If you're certain your deployments will always be "run these numbered files in order" with no conditionals, no custom transaction strategies, and no testing gates — Flyway or Liquibase have a shallower learning curve.

@@ -39,12 +39,14 @@ COMMIT;
 - Long-running migrations block other operations
 - Failure in any file rolls back everything
 
-### Per-migration transactions
+### Error context with exception blocks
 
-Each migration commits independently. Allows partial progress, but no atomic rollback.
+Wrap each file execution in an exception block to capture which file failed. The outer transaction still rolls back entirely on failure, but you get clear diagnostics.
 
 ```sql
 -- deploy.sql
+BEGIN;
+
 DO $$
 DECLARE
     v_file RECORD;
@@ -58,21 +60,37 @@ BEGIN
         BEGIN
             EXECUTE v_file.content;
         EXCEPTION WHEN OTHERS THEN
+            -- Capture context before re-raising
             RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
         END;
     END LOOP;
 END $$;
+
+COMMIT;
 ```
 
 **When to use:**
-- Large deployments with many files
-- Migrations that can run independently
-- You can tolerate partial completion
+- Any deployment where you need clear error context
+- Debugging which file caused a failure
 
-**Tradeoffs:**
-- Failure leaves database in intermediate state
-- You need compensating logic for rollback
-- Easier to debug (smaller transaction scope)
+**Note:** This is still all-or-nothing. The `BEGIN...EXCEPTION...END` block creates an implicit savepoint for error recovery, not separate transactions. If any file fails, the entire deployment rolls back.
+
+### Per-file commits (when you really need them)
+
+True per-file commits are complex in pgmi's model because:
+1. pgmi's temp tables (`pg_temp.*`) disappear after COMMIT
+2. You can't use COMMIT inside PL/pgSQL DO blocks
+3. Each top-level SQL statement auto-commits when not in a transaction
+
+**Recommended approach:** Use idempotent migrations with single-transaction deployment. If deployment fails, fix the issue and redeploy — pgmi will re-run idempotent scripts safely.
+
+If you genuinely need per-file commits (e.g., very large data migrations that can't fit in one transaction), consider:
+
+1. **External orchestration:** Run `pgmi deploy` multiple times with different `--param` values to control which phase runs
+2. **Idempotent scripts with tracking:** Each script checks a tracking table before running (see [Metadata Guide](METADATA.md) for UUID-based tracking)
+3. **Split into separate projects:** One pgmi project per logical phase, deployed sequentially
+
+**Why this matters:** pgmi's session-based model intentionally keeps everything in one transaction for atomicity. Breaking this requires moving orchestration outside of deploy.sql.
 
 ### Phased deployment
 
@@ -204,7 +222,7 @@ COMMIT;
 
 ### Compensating transactions
 
-For per-migration deployments, you need explicit rollback logic:
+For deployments where you need to undo specific migrations, create matching rollback scripts:
 
 ```sql
 -- migrations/002_add_email_column.sql
@@ -285,7 +303,7 @@ END $$;
 COMMIT;
 ```
 
-**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, use [per-migration transactions](#per-migration-transactions) instead.
+**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, see [Per-file commits](#per-file-commits-when-you-really-need-them).
 
 **Important:** PL/pgSQL does not support direct SAVEPOINT commands. If you need savepoint-based isolation (like the test framework provides), use top-level SQL outside of DO blocks, or use `BEGIN...EXCEPTION...END` blocks which create implicit savepoints for error recovery.
 

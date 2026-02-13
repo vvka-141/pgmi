@@ -117,10 +117,12 @@ myapp/
 ├── pgmi.yaml               ← Connection defaults (the config)
 ├── migrations/             ← Your SQL files go here
 │   └── 001_hello_world.sql
-├── __test__/               ← Your test files
+├── __test__/               ← Your test files (or __tests__/)
 │   └── test_hello_world.sql
 └── README.md
 ```
+
+> **Note:** Both `__test__/` and `__tests__/` work identically. Use whichever matches your team's convention.
 
 Let's look at what was generated.
 
@@ -179,7 +181,11 @@ params:
 
 Open `deploy.sql`. This is the only file that controls what happens during deployment. Not a config file. Not a framework. Just PostgreSQL — the templates use PL/pgSQL, PostgreSQL's procedural language, for loops and conditionals.
 
-pgmi loads all your project files into a temporary view called `pg_temp.pgmi_source_view`, then runs `deploy.sql`. Your job in `deploy.sql` is to query files from `pg_temp.pgmi_plan_view` (which orders them by metadata) and execute them directly with `EXECUTE`.
+pgmi loads your project files into session-scoped views, then runs `deploy.sql`:
+- **`pg_temp.pgmi_source_view`** — raw access to all files (for introspection)
+- **`pg_temp.pgmi_plan_view`** — files sorted by execution order (for deployment)
+
+Your job in `deploy.sql` is to query files from `pg_temp.pgmi_plan_view` and execute them with `EXECUTE`. The templates do exactly this.
 
 ### migrations/001_hello_world.sql — your first SQL file
 

@@ -29,6 +29,8 @@ pgmi deploy --connection "postgresql://user:pass@localhost:5432/mydb"
 
 ### 2. Start the HTTP Gateway
 
+The `pgmi init --template advanced` command generates a `tools/` directory with the Python gateway:
+
 ```bash
 cd tools
 pip install -r requirements.txt

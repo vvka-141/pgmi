@@ -95,14 +95,14 @@ myapp/
 | `flyway migrate` | `pgmi deploy .` |
 | `flyway info` | Query `pg_temp.pgmi_source_view` in deploy.sql |
 | `flyway validate` | `pgmi metadata validate .` |
-| `flyway clean` | `pgmi deploy . --overwrite` (recreates DB; **local development only**) |
+| `flyway clean` | `pgmi deploy . --overwrite` drops and recreates the *entire database* (not just schema objects). For true "clean" behavior, implement `DROP SCHEMA ... CASCADE` in deploy.sql. |
 | `flyway_schema_history` | Implement your own tracking table, or use [pgmi metadata](METADATA.md) |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
 | Placeholders (`${var}`) | Parameters via `--param` + `current_setting('pgmi.key', true)` |
 
 ### What you gain
 
-- **Transaction flexibility**: Flyway is all-or-nothing per run. pgmi lets you commit per-migration:
+- **Transaction control**: You decide transaction boundaries. Want all-or-nothing? Use `BEGIN...COMMIT`. Want error context per file? Use exception blocks:
   ```sql
   FOR v_file IN (
       SELECT path, content FROM pg_temp.pgmi_plan_view
@@ -116,6 +116,7 @@ myapp/
       END;
   END LOOP;
   ```
+  See [Production Guide](PRODUCTION.md#deployment-strategies) for transaction strategy options.
 
 - **Conditional logic**: Skip migrations based on environment, feature flags, or database state:
   ```sql

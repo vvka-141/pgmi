@@ -43,7 +43,7 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-The Quick example above shows the core pattern: query files from `pgmi_source_view`, execute them with `EXECUTE`. The scaffolded templates (`pgmi init`) add structure for transaction boundaries, execution phases, and [testing](docs/TESTING.md). See [Session API](docs/session-api.md) for all available session objects.
+The Quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
 
 ## Install
 
@@ -106,6 +106,21 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
+
+## Templates
+
+pgmi ships with ready-to-use project templates:
+
+```bash
+pgmi templates list              # See available templates
+pgmi templates describe basic    # See what a template includes
+pgmi init myapp --template basic # Create a project
+```
+
+| Template | Purpose |
+|----------|---------|
+| `basic` | Learning and simple projects. Linear migrations, minimal structure. |
+| `advanced` | Production. Multi-schema, role hierarchy, MCP integration, metadata-driven. |
 
 ## AI assistant support
 

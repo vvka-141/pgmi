@@ -63,6 +63,17 @@ pgmi uses a two-tier naming convention for session objects:
 
 These views and functions are the stable API for deploy.sql. Use these instead of querying internal tables directly.
 
+### Which View Should I Use?
+
+| Use Case | View | Why |
+|----------|------|-----|
+| **Deploying files** | `pgmi_plan_view` | Pre-sorted by execution order, includes metadata |
+| **Introspection/debugging** | `pgmi_source_view` | Raw file access, all columns available |
+| **Custom ordering** | `pgmi_source_view` | Apply your own `ORDER BY` logic |
+| **Metadata-driven deployment** | `pgmi_plan_view` | Respects `<pgmi-meta>` sort keys |
+
+**Rule of thumb:** Use `pgmi_plan_view` for deployment loops. Use `pgmi_source_view` when you need raw access or custom filtering beyond what the plan provides.
+
 ### File Access
 
 #### pgmi_source_view
@@ -437,6 +448,49 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 - `NOTICE: [pgmi] Teardown: ./path/to/__test__/`
 
 With `--verbose`, DEBUG messages show savepoint operations (`ROLLBACK TO SAVEPOINT`, `RELEASE SAVEPOINT`).
+
+#### pgmi_test_generate(pattern, callback) Function
+
+**Generates the SQL code for `pgmi_test()` macro expansion.**
+
+This is an internal function called by the Go preprocessor. It returns the complete SQL text that replaces the `CALL pgmi_test()` macro.
+
+```sql
+-- See what SQL the macro generates (for debugging)
+SELECT pg_temp.pgmi_test_generate();
+SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'my_callback');
+```
+
+**Critical implementation detail:** The generated SQL uses **top-level SAVEPOINT commands**, not PL/pgSQL savepoints. PostgreSQL's PL/pgSQL does not support `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, or `RELEASE SAVEPOINT` commands directly — they must be issued as top-level SQL statements.
+
+The generated structure looks like:
+```sql
+SAVEPOINT pgmi_fixture_1;           -- Top-level SQL
+DO $$ ... EXECUTE fixture ... $$;   -- Test content via EXECUTE
+SAVEPOINT pgmi_test_1;              -- Top-level SQL
+DO $$ ... EXECUTE test ... $$;      -- Test content via EXECUTE
+ROLLBACK TO SAVEPOINT pgmi_test_1;  -- Top-level SQL (undoes test)
+ROLLBACK TO SAVEPOINT pgmi_fixture_1; -- Top-level SQL (undoes fixture)
+```
+
+This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, not inside a DO block.
+
+#### pgmi_persist_test_plan(schema, pattern) Function
+
+**Exports the test plan to a permanent table for external tooling.**
+
+```sql
+-- Create a permanent copy of the test plan
+SELECT pg_temp.pgmi_persist_test_plan('public', NULL);
+-- Creates: public.pgmi_test_plan_snapshot
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `schema` | text | Target schema for the snapshot table |
+| `pattern` | text | Optional POSIX regex filter (NULL = all tests) |
+
+This is useful for CI/CD pipelines that need to inspect the test plan before running, or for generating test reports.
 
 ---
 
