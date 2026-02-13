@@ -50,3 +50,13 @@ CALL pgmi_test();
 ROLLBACK TO SAVEPOINT _tests;
 
 COMMIT;
+
+DO $$ 
+BEGIN 
+    RAISE NOTICE $ascii$
+  ___   ___  _  _ ___ 
+ |   \ / _ \| \| | __|
+ | |) | (_) | .` | _| 
+ |___/ \___/|_|\_|___|                          
+    $ascii$; 
+END $$;

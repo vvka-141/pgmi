@@ -155,10 +155,14 @@ BEGIN;
 -- ... your migrations ...
 
 -- Run tests with automatic savepoint isolation
+-- Each test runs in its own savepoint and rolls back automatically
+-- Test failures raise exceptions, aborting the transaction
 CALL pgmi_test();
 
 COMMIT;
 ```
+
+The macro automatically wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails (via `RAISE EXCEPTION`), the entire transaction aborts and your database remains unchanged.
 
 Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
 

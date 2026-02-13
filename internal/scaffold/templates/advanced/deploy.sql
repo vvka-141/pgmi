@@ -17,6 +17,7 @@
 --   pg_temp.deployment_setting(key)     - Helper with error handling
 -- ============================================================================
 
+
 DROP TABLE IF EXISTS pg_temp.deployment_parameter;
 CREATE TEMPORARY TABLE deployment_parameter (
     key TEXT PRIMARY KEY,
@@ -429,11 +430,20 @@ SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
 
 BEGIN;
     SELECT pg_temp.deploy();
-
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;
 COMMIT;
 
 SELECT pg_advisory_unlock(hashtext('pgmi_deploy_' || current_database()));
-DO $$ BEGIN RAISE NOTICE '[pgmi] Deployment lock released'; END $$;
+DO $$ 
+BEGIN 
+    RAISE NOTICE '[pgmi] Deployment lock released'; 
+    RAISE NOTICE $ascii$
+  ___   ___  _  _ ___ 
+ |   \ / _ \| \| | __|
+ | |) | (_) | .` | _| 
+ |___/ \___/|_|\_|___|                          
+    $ascii$; 
+END;
+$$;

@@ -48,7 +48,46 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 | `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
 | `--force` | Replace interactive confirmation with 5-second countdown. Still shows warning, still cancellable with Ctrl+C. |
 | `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
-| `--compat` | API compatibility version (default: latest). Pin to a specific version for stable CI/CD pipelines. Example: `--compat=1` |
+| `--compat` | API compatibility version (default: latest). Pin to a specific version for stable CI/CD pipelines. |
+
+#### Understanding `--compat` (API Versioning)
+
+The `--compat` flag pins your deployment to a specific pgmi session API version. This ensures your `deploy.sql` continues working even when pgmi upgrades introduce new features or internal changes.
+
+**Currently supported versions:**
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| `1` | **Current / Latest** | Initial stable API |
+
+**When to use `--compat`:**
+
+```bash
+# CI/CD pipelines: pin to a specific version for reproducibility
+pgmi deploy . -d myapp --compat=1
+
+# Local development: use latest (default, no flag needed)
+pgmi deploy . -d myapp
+```
+
+**What the API version controls:**
+- Session views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, etc.
+- Public functions: `pgmi_test_plan()`, `pgmi_test_generate()`
+- Column names and types in views
+
+**What it does NOT control:**
+- CLI flags and behavior (CLI versioning is separate)
+- Internal tables (`_pgmi_*`) — these are implementation details
+
+**Error handling:**
+
+```bash
+# Invalid version returns clear error with supported versions
+$ pgmi deploy . --compat=99
+Error: unsupported API version "99"; supported: [1]
+```
+
+**Best practice:** Pin `--compat` in CI/CD pipelines for stability. When upgrading pgmi, test with the new default version before updating your pinned version.
 
 #### Understanding `--overwrite` Safety
 

@@ -298,6 +298,44 @@ This is what makes pgmi different from migration tools: PostgreSQL itself is the
 
 ---
 
+## Choosing a template
+
+pgmi provides two templates for `pgmi init`. Start with **basic** for learning, graduate to **advanced** for production.
+
+| Feature | Basic | Advanced |
+|---------|-------|----------|
+| **Learning curve** | Minimal — read the code, understand it | Moderate — more moving parts |
+| **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
+| **Execution view** | `pgmi_source_view` | `pgmi_plan_view` (with multi-phase support) |
+| **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
+| **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
+| **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
+| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-schema: `api`, `internal`, `utils`, `core`, `membership` |
+| **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |
+| **MCP integration** | None | Full MCP server for AI assistants |
+
+**When to use basic:**
+- Learning pgmi
+- Simple projects with < 20 SQL files
+- Linear migrations without complex ordering needs
+
+**When to use advanced:**
+- Production deployments with idempotency requirements
+- Large projects with explicit execution phases
+- Teams that benefit from script tracking and audit logging
+- Projects integrating with AI assistants via MCP
+
+**Switching templates:**
+
+You can migrate from basic to advanced later:
+1. Run `pgmi metadata scaffold . --write` to add metadata blocks to existing files
+2. Adjust `idempotent` flags (migrations → false, functions → true)
+3. Update `deploy.sql` to query `pgmi_plan_view` instead of `pgmi_source_view`
+
+See [Metadata Guide](METADATA.md) for details on the migration process.
+
+---
+
 ## Next steps
 
 Now that you have a working project:

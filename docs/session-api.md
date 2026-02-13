@@ -241,36 +241,30 @@ CALL pgmi_test('.*/auth/.*', 'my_custom_callback');
 
 **Returns the test execution plan as a table (for introspection).**
 
+This is a TABLE-returning function (not a view). Files from `__test__/` or `__tests__/` directories are automatically organized into a depth-first execution plan with fixture/test/teardown lifecycle.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ordinal` | integer | Sequential execution order (1-based) |
+| `step_type` | text | `'fixture'`, `'test'`, or `'teardown'` |
+| `script_path` | text | Path to test file (NULL for teardown) |
+| `directory` | text | Test directory containing the script |
+| `depth` | integer | Nesting level (0 = root `__test__/`) |
+
 ```sql
 -- See what tests would run
 SELECT * FROM pg_temp.pgmi_test_plan();
 
--- Filter by pattern
+-- Filter by pattern (POSIX regex on script_path)
 SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 ```
 
-Returns: `ordinal`, `step_type` (fixture/test/teardown), `script_path`, `directory`, `depth`
-
-#### pgmi_test_plan (function)
-
-**Returns the test execution plan with fixture/teardown lifecycle.**
-
-This is a TABLE-returning function (not a view). Files from `__test__/` or `__tests__/` directories are automatically organized:
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `ordinal` | integer | Sequential order |
-| `step_type` | text | `fixture`, `test`, or `teardown` |
-| `script_path` | text | Path to test file |
-| `directory` | text | Directory containing test |
-| `depth` | integer | Nesting level |
-
 **Test execution emits notices:**
-- `NOTICE: Fixture: ./path/to/_setup.sql`
-- `NOTICE: Test: ./path/to/test_example.sql`
-- `NOTICE: Teardown: ./path/to/__test__/`
+- `NOTICE: [pgmi] Fixture: ./path/to/_setup.sql`
+- `NOTICE: [pgmi] Test: ./path/to/test_example.sql`
+- `NOTICE: [pgmi] Teardown: ./path/to/__test__/`
 
-With `--verbose`, DEBUG messages show savepoint operations.
+With `--verbose`, DEBUG messages show savepoint operations (`ROLLBACK TO SAVEPOINT`, `RELEASE SAVEPOINT`).
 
 ---
 
