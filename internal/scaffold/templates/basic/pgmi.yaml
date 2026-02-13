@@ -2,14 +2,14 @@
 # CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
 
 connection:
-  # database: mydb        # Target database (or use -d flag)
-  # host: localhost       # PostgreSQL host (default: localhost)
-  # port: 5432            # PostgreSQL port (default: 5432)
-  # sslmode: prefer       # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  database: mydb              # Target database (change this!)
+  host: localhost             # PostgreSQL host
+  port: 5432                  # PostgreSQL port
+  sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  # username: postgres        # PostgreSQL user (default: current OS user)
 
 # Parameters passed to deploy.sql (accessible via pgmi_get_param())
 params:
-  # env: development
-  # version: 1.0.0
+  env: development
 
-# timeout: 3m             # Deployment timeout (default: 3m)
+timeout: 3m                   # Deployment timeout
