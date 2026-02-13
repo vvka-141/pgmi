@@ -16,7 +16,7 @@ params:
   env: dev                    # dev = safe defaults, prod = require explicit passwords
 
   # Production overrides (uncomment for non-dev deployments):
-  # database-admin-password: <secure-password>
-  # database-customer-password: <secure-password>
+  # database_admin_password: <secure-password>
+  # database_customer_password: <secure-password>
 
 timeout: 5m                   # Deployment timeout

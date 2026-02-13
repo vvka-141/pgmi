@@ -131,12 +131,12 @@ $$;
 -- ============================================================================
 DO $superuser$
 DECLARE
-    v_owner_role TEXT := pg_temp.deployment_setting('database-owner-role');
-    v_admin_role TEXT := pg_temp.deployment_setting('database-admin-role');
-    v_admin_password TEXT := pg_temp.deployment_setting('database-admin-password');
-    v_api_role TEXT := pg_temp.deployment_setting('database-api-role');
-    v_customer_role TEXT := pg_temp.deployment_setting('database-customer-role');
-    v_customer_password TEXT := pg_temp.deployment_setting('database-customer-password');
+    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+    v_customer_password TEXT := pg_temp.deployment_setting('database_customer_password');
 BEGIN
     -- Owner role (NOLOGIN) - owns all database objects
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_owner_role) THEN
@@ -203,17 +203,17 @@ CREATE EXTENSION IF NOT EXISTS plv8;
 -- ============================================================================
 DO $owner_phase$
 BEGIN
-    EXECUTE format('SET ROLE %I', pg_temp.deployment_setting('database-owner-role'));
-    RAISE NOTICE '[pgmi] Switched to owner role: %', pg_temp.deployment_setting('database-owner-role');
+    EXECUTE format('SET ROLE %I', pg_temp.deployment_setting('database_owner_role'));
+    RAISE NOTICE '[pgmi] Switched to owner role: %', pg_temp.deployment_setting('database_owner_role');
 END $owner_phase$;
 
 
 -- Schemas
 DO $schemas$
 DECLARE
-    v_admin_role TEXT := pg_temp.deployment_setting('database-admin-role');
-    v_api_role TEXT := pg_temp.deployment_setting('database-api-role');
-    v_customer_role TEXT := pg_temp.deployment_setting('database-customer-role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     CREATE SCHEMA IF NOT EXISTS internal;
     CREATE SCHEMA IF NOT EXISTS core;
@@ -325,7 +325,7 @@ COMMENT ON COLUMN internal.vw_deployment_script.execution_count IS 'Total number
 -- Tracking table permissions
 DO $permissions$
 DECLARE
-    v_owner_role TEXT := pg_temp.deployment_setting('database-owner-role');
+    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
 BEGIN
     REVOKE ALL ON TABLE internal.deployment_script_execution_log FROM PUBLIC;
     GRANT SELECT ON TABLE internal.deployment_script_execution_log TO PUBLIC;
