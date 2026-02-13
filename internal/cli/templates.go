@@ -25,11 +25,12 @@ var templatesListCmd = &cobra.Command{
 }
 
 var templatesDescribeCmd = &cobra.Command{
-	Use:   "describe <template_name>",
-	Short: "Show detailed information about a template",
-	Long:  `Show detailed information about a specific template including structure and features.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTemplatesDescribe,
+	Use:               "describe <template_name>",
+	Short:             "Show detailed information about a template",
+	Long:              `Show detailed information about a specific template including structure and features.`,
+	Args:              RequireTemplateName,
+	ValidArgsFunction: completeTemplateNames,
+	RunE:              runTemplatesDescribe,
 }
 
 func init() {

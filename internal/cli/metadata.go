@@ -58,8 +58,9 @@ Examples:
 
   # Customize generated metadata
   pgmi metadata scaffold ./myproject --idempotent=true --write`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataScaffold,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataScaffold,
 }
 
 // Validate command
@@ -82,8 +83,9 @@ Examples:
 
   # Validate with JSON output
   pgmi metadata validate ./myproject --json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataValidate,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataValidate,
 }
 
 // Plan command
@@ -108,8 +110,9 @@ Examples:
 
   # Show plan with verbose details
   pgmi metadata plan ./myproject --verbose`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMetadataPlan,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runMetadataPlan,
 }
 
 var (

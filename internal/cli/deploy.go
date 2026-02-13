@@ -64,8 +64,9 @@ Examples:
     --params-file prod.env \
     --param environment=staging \
     --param version=1.2.3`,
-	Args: cobra.ExactArgs(1),
-	RunE: runDeploy,
+	Args:              RequireProjectPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runDeploy,
 }
 
 type deployFlagValues struct {
@@ -89,6 +90,9 @@ var deployFlags deployFlagValues
 
 func init() {
 	rootCmd.AddCommand(deployCmd)
+
+	// Register shell completions for flag values
+	_ = deployCmd.RegisterFlagCompletionFunc("sslmode", completeSSLModes)
 
 	// Connection string flag (mutually exclusive with granular flags)
 	deployCmd.Flags().StringVar(&deployFlags.connection, "connection", "",

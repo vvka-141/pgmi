@@ -35,11 +35,12 @@ var aiSkillsCmd = &cobra.Command{
 }
 
 var aiSkillCmd = &cobra.Command{
-	Use:   "skill <name>",
-	Short: "Show content of a specific skill",
-	Long:  `Output the full content of a skill for AI consumption.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runAISkill,
+	Use:               "skill <name>",
+	Short:             "Show content of a specific skill",
+	Long:              `Output the full content of a skill for AI consumption.`,
+	Args:              RequireSkillName,
+	ValidArgsFunction: completeSkillNames,
+	RunE:              runAISkill,
 }
 
 var aiTemplatesCmd = &cobra.Command{
@@ -50,11 +51,12 @@ var aiTemplatesCmd = &cobra.Command{
 }
 
 var aiTemplateCmd = &cobra.Command{
-	Use:   "template <name>",
-	Short: "Show AI documentation for a template",
-	Long:  `Output template-specific documentation and skills.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runAITemplate,
+	Use:               "template <name>",
+	Short:             "Show AI documentation for a template",
+	Long:              `Output template-specific documentation and skills.`,
+	Args:              RequireTemplateName,
+	ValidArgsFunction: completeAITemplateNames,
+	RunE:              runAITemplate,
 }
 
 func init() {

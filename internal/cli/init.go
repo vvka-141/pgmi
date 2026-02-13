@@ -31,8 +31,9 @@ Available templates:
   advanced - Production-ready with metadata-driven deployment
 
 Use 'pgmi templates list' to see all available templates with descriptions.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runInit,
+	Args:              RequireTargetPath,
+	ValidArgsFunction: completeDirectories,
+	RunE:              runInit,
 }
 
 var initTemplate string
@@ -41,6 +42,9 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 
 	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "basic", "Template to use (basic, advanced)")
+
+	// Register shell completions for flag values
+	_ = initCmd.RegisterFlagCompletionFunc("template", completeTemplateNames)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
