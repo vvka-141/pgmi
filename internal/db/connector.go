@@ -120,7 +120,7 @@ func wrapConnectionError(err error, host string, port int, database string) erro
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	switch {
-	case strings.Contains(errStr, "connection refused"):
+	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "actively refused"):
 		return fmt.Errorf(`connection refused to %s
 
 Possible causes:
