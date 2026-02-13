@@ -629,4 +629,4 @@ Tests run as part of deployment via `CALL pgmi_test()` in your deploy.sql. If an
 
 - [Security Guide](SECURITY.md) — Secrets handling in CI/CD
 - [Testing Guide](TESTING.md) — Pre-deployment testing patterns
-- [Retry and Timeout Behavior](retry-timeout-behavior.md) — Detailed timeout mechanics
+- [Configuration Reference](CONFIGURATION.md) — Timeout configuration and precedence

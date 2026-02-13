@@ -559,3 +559,11 @@ pgmi is not a migration framework. It's an **execution fabric**.
 4. Decide which files run in what order
 
 **The result:** Complete control. No magic. PostgreSQL is the deployment engine—pgmi just provides infrastructure.
+
+---
+
+## See Also
+
+- [Testing Guide](TESTING.md) — Database testing with automatic rollback
+- [Metadata Guide](METADATA.md) — Script tracking and execution ordering
+- [MCP Integration](MCP.md) — Model Context Protocol for AI assistants (advanced template)

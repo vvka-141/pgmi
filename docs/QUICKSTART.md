@@ -49,8 +49,7 @@ pgmi version 0.x.x
 <summary>macOS (Homebrew)</summary>
 
 ```bash
-brew tap vvka-141/pgmi
-brew install pgmi
+brew install vvka-141/pgmi/pgmi
 ```
 </details>
 

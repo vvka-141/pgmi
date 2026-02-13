@@ -5,11 +5,11 @@
 -- session-scoped temporary tables, then hands control to this script.
 --
 -- Available:
---   pg_temp.pgmi_plan_view    - Your SQL files in execution order
---   pg_temp.pgmi_source_view  - Source files
---   pg_temp.pgmi_parameter    - CLI params (--param key=value)
---   pg_temp.pgmi_test_source  - Test files from __test__/ directories
---   CALL pgmi_test()                 - Run tests with savepoint isolation
+--   pg_temp.pgmi_plan_view         - Your SQL files in execution order
+--   pg_temp.pgmi_source_view       - Source files
+--   pg_temp.pgmi_parameter_view    - CLI params (--param key=value)
+--   pg_temp.pgmi_test_source_view  - Test files from __test__/ directories
+--   CALL pgmi_test()               - Run tests with savepoint isolation
 --   CALL pgmi_test(pattern, callback) - Run filtered tests with callback
 --
 -- Parameters are declared in session.xml and accessed via:
