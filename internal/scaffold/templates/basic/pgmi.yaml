@@ -1,5 +1,15 @@
-connection:
-  database: {{PROJECT_NAME}}
+# pgmi project configuration
+# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
 
+connection:
+  # database: mydb        # Target database (or use -d flag)
+  # host: localhost       # PostgreSQL host (default: localhost)
+  # port: 5432            # PostgreSQL port (default: 5432)
+  # sslmode: prefer       # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+
+# Parameters passed to deploy.sql (accessible via pgmi_get_param())
 params:
-  admin_email: admin@example.com
+  # env: development
+  # version: 1.0.0
+
+# timeout: 3m             # Deployment timeout (default: 3m)
