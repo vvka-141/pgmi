@@ -126,8 +126,8 @@ CREATE INDEX IF NOT EXISTS ix_org_member_user_status
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON api.vw_current_user TO %I', v_api_role);
     EXECUTE format('GRANT SELECT ON api.vw_current_user TO %I', v_customer_role);

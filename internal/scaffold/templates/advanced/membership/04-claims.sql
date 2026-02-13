@@ -38,7 +38,7 @@ GROUP BY u.object_id, u.email, u.display_name, u.email_verified, u.is_active;
 
 DO $$
 DECLARE
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON membership.vw_user_claims TO %I', v_admin_role);
 END $$;

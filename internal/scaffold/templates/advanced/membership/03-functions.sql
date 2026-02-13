@@ -180,9 +180,9 @@ $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);

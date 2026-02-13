@@ -316,8 +316,8 @@ END $test$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     -- Grant usage on types
     EXECUTE format('GRANT USAGE ON TYPE utils.utf8 TO %I, %I', v_admin_role, v_api_role);

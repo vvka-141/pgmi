@@ -220,7 +220,7 @@ Then in deploy.sql, implement rollback capability:
 -- deploy.sql with rollback support
 DO $$
 DECLARE
-    v_rollback BOOLEAN := pg_temp.pgmi_get_param('rollback', 'false')::boolean;
+    v_rollback BOOLEAN := COALESCE(current_setting('pgmi.rollback', true), 'false')::boolean;
     v_file RECORD;
 BEGIN
     IF v_rollback THEN
@@ -334,7 +334,7 @@ DO $$
 DECLARE
     v_deployment_id UUID := gen_random_uuid();
     v_file RECORD;
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'unknown');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'unknown');
     v_files_count INT;
 BEGIN
     SELECT count(*) INTO v_files_count FROM pg_temp.pgmi_plan_view;

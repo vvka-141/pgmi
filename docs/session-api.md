@@ -22,7 +22,7 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 │                      pgmi_test_source_view, pgmi_test_directory_view     │
 │                                                                          │
 │     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG)│
-│     Functions: pgmi_declare_param(), pgmi_get_param(), pgmi_test_plan()  │
+│     Functions: pgmi_test_plan(), pgmi_test_generate()                    │
 └────────────────────────────────────────────┬────────────────────────────┘
                                              │
                                              ▼
@@ -104,47 +104,33 @@ END $$;
 
 ### Parameters
 
-#### pgmi_declare_param(...)
+CLI parameters (passed via `--param key=value`) are accessible in two ways:
 
-**Declares a parameter with type validation, defaults, and documentation.**
+#### Session Variables (Recommended)
 
-```sql
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'env',
-    p_type => 'text',
-    p_default_value => 'development',
-    p_required => false,
-    p_description => 'Deployment environment'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'max_connections',
-    p_type => 'int',
-    p_default_value => '100'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'admin_password',
-    p_type => 'text',
-    p_required => true  -- Fails if not provided
-);
-```
-
-**Supported types:** `text`, `int`, `integer`, `bigint`, `numeric`, `boolean`, `bool`, `uuid`, `timestamp`, `timestamptz`, `name`
-
-#### pgmi_get_param(key text, default text)
-
-**Gets a parameter value with fallback.**
+pgmi automatically sets session variables with the `pgmi.` prefix:
 
 ```sql
--- With default
-SELECT pg_temp.pgmi_get_param('env', 'development');
+-- Get parameter with default
+v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- In conditional logic
-IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
+IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
     -- Production-specific logic
 END IF;
 ```
+
+**Note:** The second argument `true` to `current_setting()` is important—it returns NULL instead of raising an error when the variable is not set.
+
+#### pgmi_parameter_view
+
+For introspection, you can query the raw parameters:
+
+```sql
+SELECT key, value FROM pg_temp.pgmi_parameter_view;
+```
+
+**Template responsibility:** Type validation, required parameter checking, and default values are handled by templates, not pgmi core. The advanced template provides its own `deployment_setting()` helper function. Simple templates can use `COALESCE(current_setting(...), 'default')` directly.
 
 ### Direct Execution Pattern
 
@@ -203,7 +189,7 @@ END $$;
 DO $$
 DECLARE
     v_file RECORD;
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'development');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
     FOR v_file IN (
         SELECT path, content FROM pg_temp.pgmi_plan_view
@@ -370,7 +356,7 @@ END $$;
 DO $$
 DECLARE
     v_file RECORD;
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'development');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
     -- Always run migrations
     FOR v_file IN (
@@ -393,7 +379,7 @@ BEGIN
     END IF;
 
     -- Optionally run tests
-    IF pg_temp.pgmi_get_param('include_tests', 'true')::boolean THEN
+    IF COALESCE(current_setting('pgmi.include_tests', true), 'true')::boolean THEN
         CALL pgmi_test();
     END IF;
 END $$;

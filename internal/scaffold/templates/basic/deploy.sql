@@ -7,24 +7,9 @@
 -- Available:
 --   pg_temp.pgmi_source_view     - Your SQL files (path, content, directory, etc.)
 --   pg_temp.pgmi_parameter_view  - CLI params (--param key=value)
---   pgmi_get_param(key, default) - Get parameter value
---   pgmi_declare_param(key, ...) - Declare expected parameters
+--   current_setting('pgmi.key', true) - Get parameter value (NULL if not set)
 --   CALL pgmi_test()             - Run tests with savepoint isolation
 -- ============================================================================
-
-
--- ============================================================================
--- PARAMETERS
--- ============================================================================
--- Declare expected parameters with types and defaults.
--- Users pass values via: pgmi deploy . --param admin_email=you@example.com
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'admin_email',
-    p_type => 'text',
-    p_default_value => 'admin@example.com',
-    p_description => 'Email for the admin user (seeded after migrations)'
-);
 
 
 -- ============================================================================
@@ -52,7 +37,8 @@ BEGIN
     END LOOP;
 
     -- Seed admin user using the parameter
-    v_admin_email := pg_temp.pgmi_get_param('admin_email', 'admin@example.com');
+    -- Parameters are passed via: pgmi deploy . --param admin_email=you@example.com
+    v_admin_email := COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com');
     EXECUTE format('SELECT * FROM upsert_user(%L, %L)', v_admin_email, 'Administrator')
         INTO v_user;
     RAISE NOTICE 'Admin user ready: % (id=%)', v_user.email, v_user.id;

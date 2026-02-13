@@ -38,7 +38,7 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 |-------|---------|---------|
 | `pgmi_source` | Non-test source files | deploy.sql queries, `pgmi_plan_view` |
 | `pgmi_source_metadata` | Parsed `<pgmi-meta>` XML | `pgmi_plan_view` JOIN |
-| `pgmi_parameter` | CLI parameters | `pgmi_get_param()`, `pgmi_declare_param()` |
+| `pgmi_parameter` | CLI parameters | `current_setting('pgmi.key', true)` |
 | `pgmi_test_directory` | Test directory hierarchy | `pgmi_test_plan()` |
 | `pgmi_test_source` | Test file content | `pgmi_test_plan()`, `pgmi_test()` macro |
 
@@ -52,14 +52,14 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 
 | Function | Purpose |
 |----------|---------|
-| `pgmi_get_param(key, default)` | Retrieve parameter value |
-| `pgmi_declare_param(...)` | Declare parameter with type/validation |
 | `pgmi_test_plan(pattern)` | Return test execution plan |
 | `pgmi_is_sql_file(filename)` | Check SQL file extension |
 | `pgmi_register_file(...)` | Internal: Go calls to insert files |
 | `pgmi_validate_pattern(pattern)` | Internal: Regex validation |
 | `pgmi_has_tests(dir, pattern)` | Internal: Recursive test discovery |
 | `pgmi_persist_test_plan(schema, pattern)` | Export test plan to permanent table |
+
+**Note:** Parameter access is via `current_setting('pgmi.key', true)`. Templates handle their own declaration, validation, and defaults.
 
 ---
 
@@ -99,14 +99,14 @@ internal/params/
 
 ### V1 API Functions (in `api-v1.sql`)
 
-Functions remain unchanged but are explicitly part of the v1 contract:
-- `pgmi_get_param(key, default)`
-- `pgmi_declare_param(...)`
+Functions that are part of the v1 contract:
 - `pgmi_test_plan(pattern)`
 - `pgmi_is_sql_file(filename)`
 - `pgmi_persist_test_plan(schema, pattern)`
 - `pgmi_test_callback(event)` - default callback
-- `pgmi_test_generate(pattern, callback)` - **NEW:** generates macro replacement code
+- `pgmi_test_generate(pattern, callback)` - generates macro replacement code
+
+**Note:** Parameter functions (`pgmi_declare_param`, `pgmi_get_param`) were removed. Parameters are accessed via `current_setting('pgmi.key', true)`. Templates handle declaration, validation, and defaults.
 
 Internal functions (not part of public API, stay in `schema.sql`):
 - `pgmi_register_file(...)` - called by Go only
@@ -414,7 +414,8 @@ Similar changes - update `pgmi_source` to `pgmi_source_view`.
 
 Only document the public API:
 - Views: `pgmi_source_view`, `pgmi_parameter_view`, `pgmi_plan_view`, `pgmi_test_source_view`
-- Functions: `pgmi_get_param()`, `pgmi_declare_param()`, `pgmi_test_plan()`
+- Functions: `pgmi_test_plan()`, `pgmi_test_generate()`
+- Parameter access: `current_setting('pgmi.key', true)`
 
 Do NOT document:
 - Internal tables (`_pgmi_*`)
@@ -517,12 +518,12 @@ make test-integration
 2. **Update internal function references in `schema.sql`:**
    - `pgmi_has_tests()` → reference `_pgmi_test_directory`, `_pgmi_test_source`
    - `pgmi_test_plan()` → reference `_pgmi_test_directory`, `_pgmi_test_source`
-   - `pgmi_declare_param()` → reference `_pgmi_parameter`
+   - ~~`pgmi_declare_param()` → reference `_pgmi_parameter`~~ (Removed - templates handle parameters)
 
 3. **Create `api-v1.sql`:**
    - Move `pgmi_plan_view` from `schema.sql` (update to reference `_pgmi_*`)
    - Add simple views: `pgmi_source_view`, `pgmi_parameter_view`, etc.
-   - Move public functions: `pgmi_get_param()`, `pgmi_declare_param()`, `pgmi_test_plan()`, etc.
+   - Move public functions: `pgmi_test_plan()`, etc. (Note: `pgmi_get_param()` and `pgmi_declare_param()` were removed)
    - Add `pgmi_test_generate()` function (migrate logic from Go preprocessor)
    - Add `pgmi_test_callback()` default callback
 

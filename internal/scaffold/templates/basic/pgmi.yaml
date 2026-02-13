@@ -8,7 +8,7 @@ connection:
   sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
   # username: postgres        # PostgreSQL user (default: current OS user)
 
-# Parameters passed to deploy.sql (accessible via pgmi_get_param())
+# Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
 params:
   env: development
 

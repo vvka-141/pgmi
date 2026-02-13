@@ -98,7 +98,7 @@ myapp/
 | `flyway clean` | `pgmi deploy . --overwrite` (recreates DB; **local development only**) |
 | `flyway_schema_history` | Implement your own tracking table, or use [pgmi metadata](METADATA.md) |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
-| Placeholders (`${var}`) | Parameters via `--param` + `pgmi_get_param()` |
+| Placeholders (`${var}`) | Parameters via `--param` + `current_setting('pgmi.key', true)` |
 
 ### What you gain
 
@@ -119,7 +119,7 @@ myapp/
 
 - **Conditional logic**: Skip migrations based on environment, feature flags, or database state:
   ```sql
-  IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
+  IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
       FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_plan_view WHERE path LIKE './production/%') LOOP
           EXECUTE v_file.content;
       END LOOP;
@@ -208,7 +208,7 @@ myapp/
 
    **After (pgmi):**
    ```sql
-   IF pg_temp.pgmi_get_param('env', 'dev') = 'production' THEN
+   IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
        FOR v_file IN (SELECT content FROM pg_temp.pgmi_source_view WHERE path = './migrations/production_only.sql') LOOP
            EXECUTE v_file.content;
        END LOOP;

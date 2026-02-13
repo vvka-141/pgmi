@@ -148,8 +148,8 @@ COMMENT ON VIEW api.inbound_queue_with_protocol IS
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT USAGE ON SEQUENCE api.inbound_queue_seq TO %I', v_api_role);
     EXECUTE format('GRANT USAGE ON SEQUENCE api.inbound_queue_seq TO %I', v_admin_role);

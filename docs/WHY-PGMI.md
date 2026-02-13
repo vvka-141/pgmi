@@ -36,7 +36,7 @@ Suppose you need environment-specific deployment behavior:
 -- deploy.sql
 DO $$
 DECLARE
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'development');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
     v_file RECORD;
 BEGIN
     IF v_env = 'development' THEN

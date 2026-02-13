@@ -504,8 +504,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     -- Handler views
     EXECUTE format('GRANT SELECT ON api.vw_handler_info TO %I', v_api_role);

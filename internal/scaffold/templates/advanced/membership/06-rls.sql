@@ -21,7 +21,7 @@ ALTER TABLE membership.organization ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     DROP POLICY IF EXISTS org_member_access ON membership.organization;
     EXECUTE format($policy$
@@ -42,7 +42,7 @@ ALTER TABLE membership.organization_member ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     DROP POLICY IF EXISTS org_member_see_own_org ON membership.organization_member;
     EXECUTE format($policy$
@@ -63,7 +63,7 @@ ALTER TABLE membership.user_identity ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     DROP POLICY IF EXISTS identity_own_only ON membership.user_identity;
     EXECUTE format($policy$
@@ -84,7 +84,7 @@ ALTER TABLE membership."user" ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     DROP POLICY IF EXISTS user_see_self ON membership."user";
     EXECUTE format($policy$
@@ -103,7 +103,7 @@ DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user'; END $$;
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.pgmi_get_param('database_customer_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON membership.organization TO %I', v_customer_role);
     EXECUTE format('GRANT SELECT ON membership.organization_member TO %I', v_customer_role);

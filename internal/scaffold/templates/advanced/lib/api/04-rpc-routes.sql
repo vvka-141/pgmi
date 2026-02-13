@@ -34,8 +34,8 @@ CREATE INDEX IF NOT EXISTS ix_rpc_route_method
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON api.rpc_route TO %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.rpc_route TO %I', v_admin_role);

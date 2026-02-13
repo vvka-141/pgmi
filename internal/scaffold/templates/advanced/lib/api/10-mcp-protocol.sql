@@ -396,8 +396,8 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.pgmi_get_param('database_api_role');
-    v_admin_role TEXT := pg_temp.pgmi_get_param('database_admin_role');
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_info() TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_capabilities() TO %I', v_api_role);

@@ -19,7 +19,7 @@ import (
 )
 
 // TestSessionVariableSystem tests the complete session variable workflow
-// including parameter initialization, access patterns, and validation.
+// including parameter initialization and access patterns.
 func TestSessionVariableSystem(t *testing.T) {
 	connStr := getTestConnectionString(t)
 	if connStr == "" {
@@ -40,134 +40,96 @@ func TestSessionVariableSystem(t *testing.T) {
 			files: map[string]string{
 				"migrations/001_test.sql": "SELECT 1;",
 			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('default_env', p_default_value => 'development');
-			`,
+			deploySQL: `SELECT 1;`,
 			cliParams: map[string]string{
 				"env":     "production",
 				"db_name": "myapp",
 			},
 			expectError: false,
 			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
-				var envValue, dbNameValue, defaultEnvValue string
+				var envValue, dbNameValue string
 				err := conn.QueryRow(context.Background(),
 					`SELECT
 						current_setting('pgmi.env', true),
-						current_setting('pgmi.db_name', true),
-						current_setting('pgmi.default_env', true)`).Scan(&envValue, &dbNameValue, &defaultEnvValue)
+						current_setting('pgmi.db_name', true)`).Scan(&envValue, &dbNameValue)
 				require.NoError(t, err)
 				require.Equal(t, "production", envValue)
 				require.Equal(t, "myapp", dbNameValue)
-				require.Equal(t, "development", defaultEnvValue)
 			},
 		},
 		{
-			name: "CLI parameters take precedence over defaults",
+			name: "CLI parameters accessible via pgmi_parameter_view",
 			files: map[string]string{
 				"migrations/001_test.sql": "SELECT 1;",
 			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('env', p_default_value => 'development');
-				SELECT pg_temp.pgmi_declare_param('api_port', p_default_value => '8080');
-			`,
+			deploySQL: `SELECT 1;`,
+			cliParams: map[string]string{
+				"env":      "staging",
+				"api_port": "8080",
+			},
+			expectError: false,
+			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
+				var count int
+				err := conn.QueryRow(context.Background(),
+					`SELECT COUNT(*) FROM pg_temp.pgmi_parameter_view WHERE key IN ('env', 'api_port')`).Scan(&count)
+				require.NoError(t, err)
+				require.Equal(t, 2, count)
+
+				var envValue string
+				err = conn.QueryRow(context.Background(),
+					`SELECT value FROM pg_temp.pgmi_parameter_view WHERE key = 'env'`).Scan(&envValue)
+				require.NoError(t, err)
+				require.Equal(t, "staging", envValue)
+			},
+		},
+		{
+			name: "Missing parameters return NULL via current_setting",
+			files: map[string]string{
+				"migrations/001_test.sql": "SELECT 1;",
+			},
+			deploySQL:   `SELECT 1;`,
+			cliParams:   map[string]string{},
+			expectError: false,
+			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
+				var missingValue *string
+				err := conn.QueryRow(context.Background(),
+					`SELECT current_setting('pgmi.nonexistent', true)`).Scan(&missingValue)
+				require.NoError(t, err)
+				require.Nil(t, missingValue)
+			},
+		},
+		{
+			name: "COALESCE provides default for missing parameters",
+			files: map[string]string{
+				"migrations/001_test.sql": "SELECT 1;",
+			},
+			deploySQL:   `SELECT 1;`,
+			cliParams:   map[string]string{},
+			expectError: false,
+			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
+				var value string
+				err := conn.QueryRow(context.Background(),
+					`SELECT COALESCE(current_setting('pgmi.env', true), 'development')`).Scan(&value)
+				require.NoError(t, err)
+				require.Equal(t, "development", value)
+			},
+		},
+		{
+			name: "CLI parameter overrides COALESCE default",
+			files: map[string]string{
+				"migrations/001_test.sql": "SELECT 1;",
+			},
+			deploySQL: `SELECT 1;`,
 			cliParams: map[string]string{
 				"env": "production",
 			},
 			expectError: false,
 			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
-				var envValue, apiPortValue string
-				err := conn.QueryRow(context.Background(),
-					`SELECT
-						current_setting('pgmi.env', true),
-						current_setting('pgmi.api_port', true)`).Scan(&envValue, &apiPortValue)
-				require.NoError(t, err)
-				require.Equal(t, "production", envValue)
-				require.Equal(t, "8080", apiPortValue)
-			},
-		},
-		{
-			name: "pgmi_get_param returns values with defaults",
-			files: map[string]string{
-				"migrations/001_test.sql": "SELECT 1;",
-			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('existing_param', p_default_value => 'value1');
-			`,
-			cliParams:   map[string]string{},
-			expectError: false,
-			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
-				var existingValue, missingWithDefault string
-				var missingValue *string
-				err := conn.QueryRow(context.Background(),
-					`SELECT
-						pg_temp.pgmi_get_param('existing_param', 'default1'),
-						pg_temp.pgmi_get_param('missing_param', NULL),
-						pg_temp.pgmi_get_param('missing_param', 'default2')`).
-					Scan(&existingValue, &missingValue, &missingWithDefault)
-				require.NoError(t, err)
-				require.Equal(t, "value1", existingValue)
-				require.Nil(t, missingValue)
-				require.Equal(t, "default2", missingWithDefault)
-			},
-		},
-		{
-			name: "pgmi_declare_param validates type - integer",
-			files: map[string]string{
-				"migrations/001_test.sql": "SELECT 1;",
-			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('port', p_type => 'int');
-			`,
-			cliParams: map[string]string{
-				"port": "not_a_number",
-			},
-			expectError:   true,
-			errorContains: "must be integer",
-		},
-		{
-			name: "pgmi_declare_param validates type - uuid",
-			files: map[string]string{
-				"migrations/001_test.sql": "SELECT 1;",
-			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('request_id', p_type => 'uuid');
-			`,
-			cliParams: map[string]string{
-				"request_id": "not-a-uuid",
-			},
-			expectError:   true,
-			errorContains: "must be valid UUID",
-		},
-		{
-			name: "pgmi_declare_param required without default fails",
-			files: map[string]string{
-				"migrations/001_test.sql": "SELECT 1;",
-			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('api_key', p_required => true);
-			`,
-			cliParams:     map[string]string{},
-			expectError:   true,
-			errorContains: "not provided",
-		},
-		{
-			name: "pgmi_declare_param required with CLI value succeeds",
-			files: map[string]string{
-				"migrations/001_test.sql": "SELECT 1;",
-			},
-			deploySQL: `
-				SELECT pg_temp.pgmi_declare_param('api_key', p_required => true);
-			`,
-			cliParams: map[string]string{
-				"api_key": "secret123",
-			},
-			expectError: false,
-			verifyFunc: func(t *testing.T, conn *pgxpool.Conn) {
 				var value string
 				err := conn.QueryRow(context.Background(),
-					`SELECT current_setting('pgmi.api_key', true)`).Scan(&value)
+					`SELECT COALESCE(current_setting('pgmi.env', true), 'development')`).Scan(&value)
 				require.NoError(t, err)
-				require.Equal(t, "secret123", value)
+				require.Equal(t, "production", value)
 			},
 		},
 	}
