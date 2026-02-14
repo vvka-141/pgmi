@@ -30,7 +30,7 @@ func init() {
 func resolveVersionInfo() (v, c, d string) {
 	v, c, d = version, commit, date
 
-	if v != "dev" {
+	if v != "dev" && c != "unknown" && d != "unknown" {
 		return
 	}
 
@@ -39,7 +39,7 @@ func resolveVersionInfo() (v, c, d string) {
 		return
 	}
 
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if v == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		v = info.Main.Version
 	}
 
