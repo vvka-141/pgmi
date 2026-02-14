@@ -54,10 +54,10 @@ END $$;
 
 ```sql
 -- Access parameters with defaults
-v_env := pg_temp.pgmi_get_param('env', 'development');
+v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- Conditional logic based on parameters
-IF pg_temp.pgmi_get_param('run_tests', 'false') = 'true' THEN
+IF COALESCE(current_setting('pgmi.run_tests', true), 'false') = 'true' THEN
     pgmi_test();
 END IF;
 ```

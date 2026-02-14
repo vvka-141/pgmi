@@ -25,9 +25,9 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 - **CLI:** `pgmi init`, `pgmi templates list`, `pgmi templates describe`
 
 **Key Files:**
-- `internal/scaffold/scaffold.go` - Main scaffolder (251 lines)
-- `internal/cli/init.go` - CLI command (123 lines)
-- `internal/cli/templates.go` - Template discovery (178 lines)
+- `internal/scaffold/scaffold.go` - Main scaffolder
+- `internal/cli/init.go` - CLI command
+- `internal/cli/templates.go` - Template discovery
 
 ---
 
@@ -134,8 +134,7 @@ advanced/
 - Authentication enforcement via handler metadata
 - Inline testing patterns (in lib/utils/)
 - Comprehensive deployment history
-- Persistent test script tracking (`internal.unittest_script`)
-- pgmi-independent test execution via `internal.generate_test_script()`
+- Optional test plan persistence via `pgmi_persist_test_plan()`
 
 **Parameter Contract:**
 - `database_admin_password` (REQUIRED) - Password for admin role
@@ -166,7 +165,7 @@ internal/scaffold/templates/my-template/
 ```
 
 **Required Files:**
-- `deploy.sql` - Must exist. Orchestrates deployment by populating `pg_temp.pgmi_plan`.
+- `deploy.sql` - Must exist. Orchestrates deployment by populating `pg_temp.pgmi_plan_view`.
 
 **Recommended Files:**
 - `README.md` - User guide explaining template purpose, parameter contracts, usage examples.
@@ -220,8 +219,9 @@ pgmi deploy . \
 - Roadmap: Template-level parameter contracts with CLI validation
 
 **Best Practice:**
-- Use `pgmi_get_param('key', 'default')` in deploy.sql for optional params
+- Use `COALESCE(current_setting('pgmi.key', true), 'default')` for optional params
 - Use `current_setting('pgmi.key')` for required params (fails if missing)
+- Templates can define their own helper functions for parameter access (e.g., `deployment_setting()` in the advanced template)
 
 ### Step 4: Write deploy.sql
 
@@ -299,7 +299,7 @@ cmd := exec.Command("pgmi", "deploy", tmpDir, ...)
 ```
 
 **Validation Checklist:**
-- [ ] deploy.sql populates `pg_temp.pgmi_plan` successfully
+- [ ] deploy.sql populates `pg_temp.pgmi_plan_view` successfully
 - [ ] Deployment completes without errors
 - [ ] Idempotent redeployment succeeds
 - [ ] Test files execute correctly (if applicable)
@@ -480,11 +480,12 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- Inline test (non-transactional, runs immediately)
-SELECT CASE
-    WHEN utils.slugify('Hello World!') = 'hello-world-'
-    THEN true
-    ELSE (SELECT error('Slugify test failed'))
-END;
+DO $$
+BEGIN
+    IF utils.slugify('Hello World!') != 'hello-world-' THEN
+        RAISE EXCEPTION 'Slugify test failed';
+    END IF;
+END $$;
 ```
 
 ---
@@ -526,7 +527,7 @@ The advanced template's `deploy.sql` implements topological sorting to determine
 
 4. **Assign Execution Order**
    ```sql
-   -- Populate pg_temp.pgmi_plan with scripts in topological order
+   -- Populate pg_temp.pgmi_plan_view with scripts in topological order
    -- execution_order: 1, 2, 3, ... N
    ```
 
@@ -751,51 +752,39 @@ INSERT INTO api.http_route (
 - Transactional API handlers (ACID guarantees)
 - Versioned API evolution (routes in version control)
 
-**See:** `api/foundation.sql`, `api/hello-world.sql` for complete examples.
+**See:** `api/examples.sql` for complete examples.
 
-### Test Script Persistence
+### Test Plan Persistence
 
-The advanced template persists test scripts to `internal.unittest_script` during deployment, enabling pgmi-independent test execution.
+pgmi provides `pgmi_persist_test_plan()` to persist the test execution plan to a permanent schema for CI/CD integration or auditing.
 
-**Table Structure:**
+**Usage in deploy.sql:**
 ```sql
-CREATE TABLE internal.unittest_script (
-    execution_order INT NOT NULL PRIMARY KEY,
-    step_type TEXT NOT NULL CHECK (step_type IN ('setup', 'test', 'teardown')),
-    script_path TEXT NOT NULL,
-    script_directory TEXT NOT NULL,
-    savepoint_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    deployed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deployed_by TEXT NOT NULL DEFAULT CURRENT_USER
+-- Persist test plan during deployment
+SELECT pg_temp.pgmi_persist_test_plan('internal', NULL);  -- All tests
+SELECT pg_temp.pgmi_persist_test_plan('internal', '/api/');  -- Filtered
+```
+
+**Auto-created Table Structure:**
+```sql
+CREATE TABLE <schema>.pgmi_test_plan (
+    ordinal INT PRIMARY KEY,
+    step_type TEXT NOT NULL,  -- 'fixture', 'test', 'teardown'
+    script_path TEXT,         -- NULL for teardown steps
+    directory TEXT NOT NULL,
+    depth INT NOT NULL
 );
 ```
 
-**Generator Function:**
-```sql
--- Generate executable test script for all tests
-SELECT internal.generate_test_script();
-
--- Generate script for filtered tests (POSIX regex)
-SELECT internal.generate_test_script('/api/');
-```
-
-**Power User Workflow:**
+**Query persisted test plan:**
 ```bash
-# Inspect deployed tests
-psql -d mydb -c "SELECT execution_order, step_type, script_path FROM internal.unittest_script ORDER BY execution_order;"
-
-# Generate and execute all tests (shows NOTICE messages)
-psql -d mydb -tA -c "SELECT internal.generate_test_script();" | psql -d mydb
+psql -d mydb -c "SELECT ordinal, step_type, script_path FROM internal.pgmi_test_plan ORDER BY ordinal;"
 ```
 
-**Benefits:**
-- Decouple deployed databases from pgmi tooling
-- Use standard psql for test execution
-- Integrate with CI/CD pipelines without pgmi
-- Debug with PostgreSQL's native error messages
-
-**See:** `internal/foundation.sql` for generator implementation, `deploy.sql` for persistence logic.
+**Use Cases:**
+- CI/CD visibility into test execution order
+- Audit trail of deployed tests
+- External tooling integration
 
 ### HTTP Framework: Error Handling & Observability
 
@@ -1237,7 +1226,7 @@ END;
 
 **Transactional Tests (in __test__/):**
 ```sql
--- Executed during `pgmi test`, rolled back after
+-- Executed via pgmi_test() macro, rolled back via savepoint
 DO $$
 DECLARE
     v_result UUID;
@@ -1363,7 +1352,7 @@ migrations/
 migrations/
 ├── 001_schema.sql
 └── __test__/
-    └── test_schema.sql  ← Isolated, only executed via `pgmi test`
+    └── test_schema.sql  ← Isolated, only executed via pgmi_test() macro
 ```
 
 ---
@@ -1413,10 +1402,9 @@ pgmi templates describe advanced
 # Initialize project
 pgmi init myproject --template advanced
 
-# Test template (after init)
+# Test template (after init) - tests run via pgmi_test() in deploy.sql
 cd myproject
 ../pgmi deploy . -d test_db --param key=value --overwrite --force
-../pgmi test . -d test_db
 ```
 
 ---

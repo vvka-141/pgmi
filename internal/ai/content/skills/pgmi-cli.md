@@ -92,8 +92,8 @@ pgmi deploy ./migrations --skip-tests
 ✅ **GOOD (deploy.sql):**
 ```sql
 -- User controls what executes via parameter
-IF pg_temp.pgmi_get_param('run_tests', 'true') = 'true' THEN
-    pgmi_test();  -- preprocessor macro
+IF COALESCE(current_setting('pgmi.run_tests', true), 'true') = 'true' THEN
+    CALL pgmi_test();  -- preprocessor macro
 END IF;
 ```
 
@@ -165,7 +165,6 @@ cmd/pgmi/
 internal/cli/
 ├── root.go                    # Root command setup
 ├── deploy.go                  # pgmi deploy command
-├── test.go                    # pgmi test command
 ├── init.go                    # pgmi init command
 ├── templates.go               # pgmi templates command (list, describe)
 └── version.go                 # pgmi version command
@@ -199,7 +198,6 @@ func Execute() error {
 func init() {
     // Add subcommands
     rootCmd.AddCommand(deployCmd)
-    rootCmd.AddCommand(testCmd)
     rootCmd.AddCommand(initCmd)
     rootCmd.AddCommand(templatesCmd)
     rootCmd.AddCommand(versionCmd)
@@ -257,51 +255,6 @@ pgmi deploy ./migrations -d mydb --timeout 30m
 ```
 
 **Implementation:** `internal/cli/deploy.go`
-
----
-
-### test Command
-
-**Purpose:** Execute test files from `__test__/` directories
-
-**Signature:**
-```bash
-pgmi test <path> [flags]
-```
-
-**Flags:**
-```
-    --connection string     Connection string
--d, --database string       Target database (must already exist)
-    --filter string         POSIX regex filter for test paths
-    --list                  List tests without executing (dry-run)
--v, --verbose               Verbose output
-```
-
-**Philosophy:**
-- Does NOT deploy code or modify database schema
-- Executes ONLY test files from `__test__/` directories
-- Runs tests in transaction with automatic rollback (no side effects)
-- Fails immediately on first test failure (PostgreSQL native fail-fast)
-- Output is mostly PostgreSQL `RAISE NOTICE` messages
-
-**Examples:**
-```bash
-# Run all tests
-pgmi test ./myapp -d test_db
-
-# Run specific tests (regex filter)
-pgmi test ./myapp -d test_db --filter "/auth/"
-
-# List tests without running
-pgmi test ./myapp -d test_db --list
-
-# Typical workflow: deploy then test
-pgmi deploy ./myapp -d test_db --overwrite --force
-pgmi test ./myapp -d test_db
-```
-
-**Implementation:** `internal/cli/test.go`
 
 ---
 
@@ -493,7 +446,7 @@ deployCmd.MarkFlagRequired("connection")
 // Available to all subcommands
 rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 
-// Usage: pgmi deploy --verbose, pgmi test --verbose, etc.
+// Usage: pgmi deploy --verbose, pgmi metadata validate --verbose, etc.
 // When enabled, also sets PostgreSQL session variable: SET client_min_messages = 'debug'
 // This makes RAISE DEBUG messages from SQL scripts visible in output.
 ```

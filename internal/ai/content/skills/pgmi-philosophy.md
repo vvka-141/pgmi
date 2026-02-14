@@ -25,8 +25,7 @@ This distinction is fundamental to all design decisions:
 ### What pgmi DOES (Execution Fabric)
 - Connect to PostgreSQL using specified credentials
 - Prepare session-scoped temp tables with files and parameters
-- Execute `deploy.sql` to build the execution plan
-- Execute commands from `pg_temp.pgmi_plan` sequentially
+- Execute `deploy.sql` which orchestrates deployment via `pg_temp.pgmi_plan_view`
 - Provide CLI for connection/parameter management
 
 ### What pgmi NEVER Does (User's Domain)
@@ -48,12 +47,13 @@ This distinction is fundamental to all design decisions:
 **Workflow**:
 ```
 1. pgmi connects to PostgreSQL
-2. Creates session-scoped temporary tables and helper functions:
-   - pg_temp.pgmi_source (SQL files and metadata)
+2. Creates session-scoped temporary tables, views, and helper functions:
+   - pg_temp._pgmi_source (SQL files and metadata)
    - pg_temp.pgmi_plan_view (VIEW ordering files for execution)
-   - pg_temp.pgmi_parameter (CLI-supplied parameters, auto-initialized)
-   - pg_temp.pgmi_test_source (test files isolated from deployment)
-   - Helper functions: pgmi_declare_param(), pgmi_get_param(), pgmi_test_plan()
+   - pg_temp.pgmi_parameter_view (CLI-supplied parameters)
+   - pg_temp.pgmi_test_source_view (test files isolated from deployment)
+   - Parameters accessible via current_setting('pgmi.key', true)
+   - Helper functions: pgmi_test_plan(), pgmi_test_generate()
 3. Executes deploy.sql, which queries files and executes them directly
 ```
 
@@ -94,33 +94,33 @@ END $$;
 COMMIT;
 ```
 
-### 3. Parameter System: Auto-Initialized Session Variables
+### 3. Parameter System: Session Configuration Variables
 
 **Automatic Initialization**:
-- CLI parameters (`--param key=value`) automatically become session variables
+- CLI parameters (`--param key=value`) automatically become session configuration variables
 - No manual initialization needed - parameters are immediately accessible
 - Session variables use `pgmi.` namespace prefix
-- Accessible via `current_setting('pgmi.key')` or `pgmi_get_param('key', 'default')`
+- Accessible via `current_setting('pgmi.key', true)` with COALESCE for defaults
 
-**Optional Declaration** (for defaults, validation, documentation):
-- Use `pgmi_declare_param()` to document parameter contracts and set defaults
-- Supports types: text, int, bigint, numeric, boolean, uuid, timestamp, timestamptz, name
-- Required parameters fail-fast with clear error messages
+**Parameter Access**:
+Use PostgreSQL's native `current_setting()` function:
+- `COALESCE(current_setting('pgmi.key', true), 'default')` for optional parameters
+- `current_setting('pgmi.key')` for required parameters (fails if not set)
+
+**Template-Specific Helpers**:
+Templates can define their own helper functions for parameter access with defaults, validation, and type coercion (e.g., `deployment_setting()` in the advanced template).
 
 **Example**:
 ```sql
--- Declare parameters with defaults and validation (optional)
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'env',
-    p_type => 'text',
-    p_default_value => 'development',
-    p_description => 'Deployment environment'
-);
-
 -- Parameters are immediately accessible
-IF pg_temp.pgmi_get_param('env', 'development') = 'production' THEN
-    RAISE NOTICE 'Production deployment detected';
-END IF;
+DO $$
+DECLARE
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+BEGIN
+    IF v_env = 'production' THEN
+        RAISE NOTICE 'Production deployment detected';
+    END IF;
+END $$;
 ```
 
 **Security Note**: Never pass secrets as parameters (passwords, API keys, tokens). Use PostgreSQL connection strings or environment variables.
@@ -287,9 +287,9 @@ LOOP
 END LOOP;
 ```
 
-**`pgmi_get_param(key, default)`** - Access parameter with optional fallback:
+**Parameter Access** - Use PostgreSQL's native `current_setting()` with COALESCE:
 ```sql
-v_env := pg_temp.pgmi_get_param('env', 'development');
+v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 ```
 
 **`pgmi_test_plan(pattern)`** - Returns test execution plan (TABLE function):
@@ -383,7 +383,7 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    IF pg_temp.pgmi_get_param('skip_migrations', 'false') = 'false' THEN
+    IF COALESCE(current_setting('pgmi.skip_migrations', true), 'false') = 'false' THEN
         RAISE NOTICE 'Running migrations...';
         FOR v_file IN (
             SELECT path, content FROM pg_temp.pgmi_plan_view

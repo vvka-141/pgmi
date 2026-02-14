@@ -15,8 +15,8 @@ user_invocable: false
 **Depends On**: pgmi-api-architecture (HTTP-first principle), pgmi-postgres-review (SQL patterns)
 
 **Auto-Load With**:
-- File patterns: `**/mcp*.sql`, `**/*_mcp_*.sql`, `**/05-mcp-routes.sql`
-- Keywords: "MCP", "tool", "resource", "prompt", "mcp_call_tool", "mcp_response"
+- File patterns: `**/mcp*.sql`, `**/*_mcp_*.sql`, `**/05-mcp-routes.sql`, `**/10-mcp-protocol.sql`
+- Keywords: "MCP", "tool", "resource", "prompt", "mcp_call_tool", "mcp_response", "mcp_handle_request"
 
 ---
 
@@ -50,6 +50,88 @@ MCP defines three handler types for AI agent communication:
 | **Prompt** | Message templates | `name`, `description`, `arguments` |
 
 **Always consult context7 for complete spec details.**
+
+---
+
+## Protocol Layer (10-mcp-protocol.sql)
+
+The protocol layer provides the core MCP server functionality:
+
+### Server Info & Capabilities
+
+```sql
+-- Returns server identity (configurable via session settings)
+api.mcp_server_info() RETURNS jsonb
+-- {"name": "database_name", "version": "1.0.0"}
+
+-- Configure via:
+SET mcp.server_name = 'my-server';
+SET mcp.server_version = '2.0.0';
+
+-- Returns declared capabilities
+api.mcp_server_capabilities() RETURNS jsonb
+-- {"tools": {}, "resources": {}, "prompts": {}}
+```
+
+### Initialize Handshake
+
+```sql
+-- Handles MCP handshake (MUST be called first by clients)
+api.mcp_initialize(p_params jsonb, p_request_id text) RETURNS api.mcp_response
+
+-- Supported protocol versions: '2024-11-05', '2025-03-26'
+
+-- Success response:
+-- {jsonrpc: "2.0", id: "...", result: {protocolVersion, serverInfo, capabilities}}
+
+-- Error (invalid version):
+-- {jsonrpc: "2.0", id: "...", error: {code: -32602, message: "..."}}
+```
+
+### Ping Keepalive
+
+```sql
+-- Responds to liveness checks
+api.mcp_ping(p_request_id text) RETURNS api.mcp_response
+-- Returns: {jsonrpc: "2.0", id: "...", result: {}}
+```
+
+### Unified Dispatcher
+
+```sql
+-- Main entry point - routes all MCP requests
+api.mcp_handle_request(p_request jsonb, p_context jsonb DEFAULT NULL) RETURNS api.mcp_response
+```
+
+**Method routing table:**
+
+| Method | Handler |
+|--------|---------|
+| `initialize` | `api.mcp_initialize()` |
+| `notifications/initialized` | No-op (returns empty success) |
+| `ping` | `api.mcp_ping()` |
+| `tools/list` | `api.mcp_success(api.mcp_list_tools(), id)` |
+| `tools/call` | `api.mcp_call_tool()` |
+| `resources/list` | `api.mcp_success(api.mcp_list_resources(), id)` |
+| `resources/read` | `api.mcp_read_resource()` |
+| `prompts/list` | `api.mcp_success(api.mcp_list_prompts(), id)` |
+| `prompts/get` | `api.mcp_get_prompt()` |
+| Unknown | Error -32601 (Method not found) |
+
+**Usage from HTTP gateway:**
+```python
+result = conn.execute(
+    "SELECT (api.mcp_handle_request(%s, %s)).envelope",
+    [request_json, context_json]
+)
+```
+
+**Usage from psql:**
+```sql
+SELECT (api.mcp_handle_request(
+    '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb
+)).envelope;
+```
 
 ---
 
@@ -174,8 +256,8 @@ DECLARE
 BEGIN
     v_task := (request).arguments->>'task';
 
-    RETURN (
-        jsonb_build_object('messages', jsonb_build_array(
+    RETURN api.mcp_prompt_result(
+        jsonb_build_array(
             jsonb_build_object(
                 'role', 'user',
                 'content', jsonb_build_object(
@@ -183,9 +265,9 @@ BEGIN
                     'text', 'Help me with: ' || v_task
                 )
             )
-        )),
+        ),
         (request).request_id
-    )::api.mcp_response;
+    );
 END;
     $body$
 );
@@ -287,6 +369,9 @@ api.mcp_resource_result(contents jsonb, request_id text) RETURNS api.mcp_respons
 
 -- Prompt success (messages array in result)
 api.mcp_prompt_result(messages jsonb, request_id text) RETURNS api.mcp_response
+
+-- Generic success (any result)
+api.mcp_success(result jsonb, request_id text) RETURNS api.mcp_response
 ```
 
 ### Error Builders
@@ -330,6 +415,34 @@ RETURN api.mcp_error(-32603, 'Error: ' || SQLERRM, (request).request_id);
 
 ---
 
+## HTTP Gateway
+
+The Python gateway (`tools/mcp-gateway.py`) bridges HTTP to PostgreSQL:
+
+```python
+# Gateway calls:
+result = conn.execute(
+    "SELECT (api.mcp_handle_request(%s, %s)).envelope",
+    [json.dumps(request), json.dumps(context) if context else None]
+)
+```
+
+**Authentication mapping:**
+| HTTP Header | Context Field |
+|-------------|---------------|
+| `X-User-Id` | `user_id` |
+| `X-Tenant-Id` | `tenant_id` |
+
+**Starting the gateway:**
+```bash
+cd tools
+pip install -r requirements.txt
+export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
+python mcp-gateway.py
+```
+
+---
+
 ## Error Handling
 
 ### MCP Error Convention
@@ -347,6 +460,17 @@ RETURN api.mcp_tool_error('Tool not found: ' || p_name, p_request_id);
 -- ❌ WRONG: HTTP error for MCP
 RETURN api.problem_response(404, 'Not Found', 'Tool not found');
 ```
+
+### JSON-RPC Error Codes
+
+| Code | Meaning |
+|------|---------|
+| -32700 | Parse error (invalid JSON) |
+| -32600 | Invalid Request (missing jsonrpc, method) |
+| -32601 | Method not found |
+| -32602 | Invalid params |
+| -32603 | Internal error |
+| -32001 | Authentication required (custom) |
 
 ### Exception Handling in Gateways
 
@@ -431,6 +555,23 @@ END;
 END $$;
 ```
 
+### Testing via Dispatcher
+
+```sql
+-- Full round-trip test
+SELECT (api.mcp_handle_request(
+    '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb
+)).envelope;
+
+SELECT (api.mcp_handle_request(
+    '{"jsonrpc":"2.0","id":"2","method":"tools/list"}'::jsonb
+)).envelope;
+
+SELECT (api.mcp_handle_request(
+    '{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"database_info","arguments":{}}}'::jsonb
+)).envelope;
+```
+
 ### Testing Authentication
 
 ```sql
@@ -510,11 +651,12 @@ Tools should validate arguments against their inputSchema. Use context7 to verif
 ## See Also
 
 - **`pgmi-api-architecture`**: HTTP-first protocol design principles
-- **`pgmi-http-review`**: HTTP compliance (for REST/RPC)
+- **`pgmi-mcp-review`**: MCP code review checklist
+- **`docs/MCP.md`**: Full MCP documentation for users
 - **MCP Specification**: Fetch via context7 for current details
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-02-10
 **Note**: MCP is evolving - always verify patterns against current spec via context7
 

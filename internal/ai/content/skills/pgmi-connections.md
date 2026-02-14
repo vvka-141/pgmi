@@ -303,8 +303,7 @@ func (p *ConnectionProvider) GetConnector() (Connector, error) {
         return NewAzureEntraIdConnector(p.config)
     case pgmi.AuthMethodAWSIAM:
         return NewAWSIAMConnector(p.config)
-    case pgmi.AuthMethodGoogleIAM:
-        return NewGoogleCloudSQLConnector(p.config)
+    // Roadmap: AuthMethodGoogleIAM
     default:
         return nil, fmt.Errorf("unsupported auth method: %s", p.config.AuthMethod)
     }
@@ -796,12 +795,6 @@ pgmi deploy ./migrations -d mydb
 - `AZURE_CLIENT_ID` - Azure AD application/client ID
 - `AZURE_CLIENT_SECRET` - Azure AD client secret (Service Principal auth)
 
-**AWS Variables:**
-- `AWS_REGION` - AWS region for RDS IAM auth
-- `AWS_DEFAULT_REGION` - Fallback AWS region
-- `AWS_ACCESS_KEY_ID` - AWS access key (optional, uses credential chain)
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key (optional, uses credential chain)
-
 ---
 
 ## Troubleshooting
@@ -1066,3 +1059,4 @@ pgmi deploy ./migrations -d myapp --sslmode verify-full
 - **pgmi-cli skill:** CLI design philosophy, flags, parameters
 - **CLAUDE.md:** Two-database pattern, CLI design implications
 - **PostgreSQL Connection Strings:** https://www.postgresql.org/docs/current/libpq-connect.html
+
