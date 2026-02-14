@@ -155,7 +155,7 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 
 	var scriptMetadata *pgmi.ScriptMetadata
 	isTestFile := pgmi.IsTestPath(unixPath)
-	isSQLFile := isSQLExtension(extension)
+	isSQLFile := pgmi.IsSQLExtension(extension)
 
 	if isSQLFile && !isTestFile {
 		meta, err := metadata.ExtractAndValidate(string(content), unixPath)
@@ -190,17 +190,6 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		ModifiedAt:      info.ModTime(),
 		Metadata:        scriptMetadata,
 	}, nil
-}
-
-// isSQLExtension checks if the file extension indicates a SQL file.
-// Matches the pattern used in pg_temp.pgmi_is_sql_file().
-func isSQLExtension(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql":
-		return true
-	default:
-		return false
-	}
 }
 
 // ValidateDeploySQL checks if deploy.sql exists in the source directory.

@@ -218,7 +218,7 @@ func TestScanDirectory_SQLExtensions(t *testing.T) {
 
 	sqlCount := 0
 	for _, f := range result.Files {
-		if isSQLExtension(f.Extension) {
+		if pgmi.IsSQLExtension(f.Extension) {
 			sqlCount++
 		}
 	}

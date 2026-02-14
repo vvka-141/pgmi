@@ -3,6 +3,7 @@ package pgmi
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -78,4 +79,23 @@ func ValidateDunderDirectories(path string) error {
 		}
 	}
 	return nil
+}
+
+// SQLExtensions lists recognized SQL file extensions.
+// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
+var SQLExtensions = map[string]bool{
+	".sql":     true,
+	".ddl":     true,
+	".dml":     true,
+	".dql":     true,
+	".dcl":     true,
+	".psql":    true,
+	".pgsql":   true,
+	".plpgsql": true,
+}
+
+// IsSQLExtension returns true if the extension indicates a SQL file.
+// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
+func IsSQLExtension(ext string) bool {
+	return SQLExtensions[strings.ToLower(ext)]
 }

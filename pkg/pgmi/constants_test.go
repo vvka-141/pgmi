@@ -51,3 +51,35 @@ func TestValidateDunderDirectories(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSQLExtension(t *testing.T) {
+	tests := []struct {
+		ext  string
+		want bool
+	}{
+		{".sql", true},
+		{".SQL", true},
+		{".ddl", true},
+		{".dml", true},
+		{".dql", true},
+		{".dcl", true},
+		{".psql", true},
+		{".pgsql", true},
+		{".plpgsql", true},
+		{".PLPGSQL", true},
+		{".go", false},
+		{".py", false},
+		{".txt", false},
+		{".md", false},
+		{"", false},
+		{".sqlx", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ext, func(t *testing.T) {
+			if got := pgmi.IsSQLExtension(tt.ext); got != tt.want {
+				t.Errorf("IsSQLExtension(%q) = %v, want %v", tt.ext, got, tt.want)
+			}
+		})
+	}
+}

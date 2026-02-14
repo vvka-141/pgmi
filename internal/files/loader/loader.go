@@ -71,7 +71,7 @@ func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files 
 	// Filter to SQL files only
 	var sqlFiles []pgmi.FileMetadata
 	for _, file := range files {
-		if isSQLExtension(file.Extension) {
+		if pgmi.IsSQLExtension(file.Extension) {
 			sqlFiles = append(sqlFiles, file)
 		}
 	}
@@ -102,16 +102,6 @@ func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files 
 	}
 
 	return nil
-}
-
-// isSQLExtension checks if the file extension indicates a SQL file.
-func isSQLExtension(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql":
-		return true
-	default:
-		return false
-	}
 }
 
 // insertTestDirectories extracts unique test directories from file paths and inserts them.
