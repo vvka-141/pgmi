@@ -5,17 +5,23 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
+	"github.com/vvka-141/pgmi/internal/tui"
+	"github.com/vvka-141/pgmi/internal/tui/wizards"
 	"github.com/vvka-141/pgmi/internal/ui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -263,6 +269,20 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
 
+	// Check if we need to run the connection wizard
+	if needsConnectionWizard(sourcePath) && tui.IsInteractive() && !deployFlags.force {
+		wizardConfig, err := runDeployWizard(sourcePath)
+		if err != nil {
+			return err
+		}
+		if wizardConfig == nil {
+			// User cancelled
+			return nil
+		}
+		// Merge wizard results into flags for buildDeploymentConfig
+		applyWizardConfig(wizardConfig)
+	}
+
 	config, err := buildDeploymentConfig(cmd, sourcePath, verbose)
 	if err != nil {
 		return err
@@ -322,4 +342,139 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// needsConnectionWizard checks if we have enough connection info to proceed.
+// Returns true if NO connection info is available from any source.
+func needsConnectionWizard(sourcePath string) bool {
+	// Check CLI flags
+	if deployFlags.connection != "" || deployFlags.host != "" || deployFlags.database != "" {
+		return false
+	}
+
+	// Check environment variables
+	if os.Getenv("DATABASE_URL") != "" || os.Getenv("PGMI_CONNECTION_STRING") != "" {
+		return false
+	}
+	if os.Getenv("PGHOST") != "" && os.Getenv("PGDATABASE") != "" {
+		return false
+	}
+
+	// Check pgmi.yaml
+	cfg, err := config.Load(sourcePath)
+	if err == nil && cfg != nil {
+		if cfg.Connection.Host != "" || cfg.Connection.Database != "" {
+			return false
+		}
+	}
+
+	return true
+}
+
+// runDeployWizard runs the interactive connection wizard for deploy.
+// Returns the config to use, or nil if user cancelled.
+func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "No database connection configured.")
+	fmt.Fprintln(os.Stderr, "")
+
+	// Run connection wizard
+	connResult, err := wizards.RunConnectionWizard()
+	if err != nil {
+		return nil, fmt.Errorf("connection wizard failed: %w", err)
+	}
+	if connResult.Cancelled {
+		fmt.Fprintln(os.Stderr, "Cancelled.")
+		return nil, nil
+	}
+
+	// Ask if user wants to save config
+	saveChoice := connResult.Tested // If tested successfully, default to asking about save
+
+	if saveChoice && tui.IsInteractive() {
+		fmt.Fprintln(os.Stderr, "")
+		if tui.PromptContinue("Save this connection to pgmi.yaml for future use?") {
+			if err := saveConnectionToConfig(sourcePath, &connResult.Config); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "✓ Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
+			}
+		}
+	}
+
+	return &connResult.Config, nil
+}
+
+// saveConnectionToConfig saves connection config to pgmi.yaml.
+func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig) error {
+	configPath := filepath.Join(sourcePath, "pgmi.yaml")
+
+	// Load existing config or create new
+	cfg, err := config.Load(sourcePath)
+	if err != nil {
+		cfg = &config.ProjectConfig{}
+	}
+
+	// Update connection
+	cfg.Connection = config.ConnectionConfig{
+		Host:     connConfig.Host,
+		Port:     connConfig.Port,
+		Username: connConfig.Username,
+		Database: connConfig.Database,
+		SSLMode:  connConfig.SSLMode,
+	}
+
+	// Marshal and write
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// applyWizardConfig applies wizard results to deploy flags.
+func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
+	if cfg == nil {
+		return
+	}
+
+	// Only set if not already set by CLI flags
+	if deployFlags.host == "" {
+		deployFlags.host = cfg.Host
+	}
+	if deployFlags.port == 0 && cfg.Port != 0 {
+		deployFlags.port = cfg.Port
+	}
+	if deployFlags.username == "" {
+		deployFlags.username = cfg.Username
+	}
+	if deployFlags.database == "" {
+		deployFlags.database = cfg.Database
+	}
+	if deployFlags.sslMode == "" {
+		deployFlags.sslMode = cfg.SSLMode
+	}
+
+	// Cloud provider settings
+	switch cfg.AuthMethod {
+	case pgmi.AuthMethodAzureEntraID:
+		deployFlags.azure = true
+		if deployFlags.azureTenantID == "" {
+			deployFlags.azureTenantID = cfg.AzureTenantID
+		}
+		if deployFlags.azureClientID == "" {
+			deployFlags.azureClientID = cfg.AzureClientID
+		}
+	case pgmi.AuthMethodAWSIAM:
+		deployFlags.aws = true
+		if deployFlags.awsRegion == "" {
+			deployFlags.awsRegion = cfg.AWSRegion
+		}
+	case pgmi.AuthMethodGoogleIAM:
+		deployFlags.google = true
+		if deployFlags.googleInstance == "" {
+			deployFlags.googleInstance = cfg.GoogleInstance
+		}
+	}
 }

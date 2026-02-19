@@ -5,8 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
+	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/internal/scaffold"
+	"github.com/vvka-141/pgmi/internal/tui"
+	"github.com/vvka-141/pgmi/internal/tui/wizards"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var initCmd = &cobra.Command{
@@ -49,7 +55,28 @@ func init() {
 
 func runInit(cmd *cobra.Command, args []string) error {
 	targetPath := args[0]
-	
+	verbose := getVerboseFlag(cmd)
+
+	// Check if we should run the interactive wizard
+	// Run wizard if: interactive AND template flag was not explicitly set
+	templateFlagChanged := cmd.Flags().Changed("template")
+	selectedTemplate := initTemplate
+	setupConnection := false
+
+	if tui.IsInteractive() && !templateFlagChanged {
+		// Run interactive init wizard
+		result, err := wizards.RunInitWizard(targetPath)
+		if err != nil {
+			return fmt.Errorf("init wizard failed: %w", err)
+		}
+		if result.Cancelled {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+		selectedTemplate = result.Template
+		setupConnection = result.SetupConfig
+	}
+
 	// Determine project name from target path
 	projectName := filepath.Base(targetPath)
 	if projectName == "." || projectName == ".." {
@@ -60,7 +87,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 			projectName = "project"
 		}
 	}
-	verbose := getVerboseFlag(cmd)
 
 	// Validate template
 	templates, err := scaffold.ListTemplates()
@@ -70,21 +96,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	validTemplate := false
 	for _, t := range templates {
-		if t == initTemplate {
+		if t == selectedTemplate {
 			validTemplate = true
 			break
 		}
 	}
 
 	if !validTemplate {
-		return fmt.Errorf("invalid template '%s'. Available templates: %v\n\nUse 'pgmi templates list' for detailed descriptions", initTemplate, templates)
+		return fmt.Errorf("invalid template '%s'. Available templates: %v\n\nUse 'pgmi templates list' for detailed descriptions", selectedTemplate, templates)
 	}
 
 	// Create scaffolder
 	scaffolder := scaffold.NewScaffolder(verbose)
 
 	// Create project
-	if err := scaffolder.CreateProject(projectName, initTemplate, targetPath); err != nil {
+	if err := scaffolder.CreateProject(projectName, selectedTemplate, targetPath); err != nil {
 		return fmt.Errorf("failed to create project: %w", err)
 	}
 
@@ -92,11 +118,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 	tree, err := scaffold.BuildFileTree(targetPath)
 	if err != nil {
 		// Non-fatal - just skip tree display
-		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully in '%s' using template '%s'\n\n", targetPath, initTemplate)
+		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
 	} else {
-		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully using template '%s'\n\n", initTemplate)
+		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully using template '%s'\n\n", selectedTemplate)
 		fmt.Fprintln(os.Stderr, "Created structure:")
 		fmt.Fprint(os.Stderr, tree)
+	}
+
+	// If user wants to setup connection, run wizard now
+	if setupConnection {
+		fmt.Fprintln(os.Stderr, "")
+		if err := runInitConnectionSetup(targetPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
+		}
 	}
 
 	// Next steps
@@ -108,5 +142,52 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr, "  # Or with parameters:")
 	fmt.Fprintln(os.Stderr, "  pgmi deploy . --database mydb --param key=value")
 
+	return nil
+}
+
+// runInitConnectionSetup runs the connection wizard after project init.
+func runInitConnectionSetup(targetPath string) error {
+	connResult, err := wizards.RunConnectionWizard()
+	if err != nil {
+		return err
+	}
+	if connResult.Cancelled {
+		return nil
+	}
+
+	// Save to pgmi.yaml
+	return saveInitConfig(targetPath, &connResult.Config)
+}
+
+// saveInitConfig saves connection config to the newly created pgmi.yaml.
+func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig) error {
+	configPath := filepath.Join(targetPath, "pgmi.yaml")
+
+	// Load existing config (created by scaffold)
+	cfg, err := config.Load(targetPath)
+	if err != nil {
+		cfg = &config.ProjectConfig{}
+	}
+
+	// Update connection
+	cfg.Connection = config.ConnectionConfig{
+		Host:     connConfig.Host,
+		Port:     connConfig.Port,
+		Username: connConfig.Username,
+		Database: connConfig.Database,
+		SSLMode:  connConfig.SSLMode,
+	}
+
+	// Marshal and write
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "✓ Connection saved to %s\n", configPath)
 	return nil
 }
