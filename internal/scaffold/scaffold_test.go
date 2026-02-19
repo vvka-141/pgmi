@@ -83,6 +83,57 @@ func TestIsDirectoryEmpty(t *testing.T) {
 			expectedEmpty: false,
 			expectedError: false,
 		},
+		{
+			name: "directory with only pgmi.yaml",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "pgmionly")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("connection:\n  host: localhost"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: true,
+			expectedError: false,
+		},
+		{
+			name: "directory with pgmi.yaml and .env",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "managed")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("{}"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("KEY=val"), 0644); err != nil {
+					t.Fatalf("Failed to create .env: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: true,
+			expectedError: false,
+		},
+		{
+			name: "directory with pgmi.yaml and other files",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "mixed")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("{}"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("data"), 0644); err != nil {
+					t.Fatalf("Failed to create other file: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: false,
+			expectedError: false,
+		},
 	}
 
 	for _, tt := range tests {

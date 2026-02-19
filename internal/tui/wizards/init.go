@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -24,6 +25,12 @@ func DefaultTemplates() []TemplateInfo {
 	}
 }
 
+// pgmiManagedInitFiles are files that pgmi creates/manages and don't block init.
+var pgmiManagedInitFiles = map[string]bool{
+	"pgmi.yaml": true,
+	".env":      true,
+}
+
 // InitResult holds the result of the init wizard.
 type InitResult struct {
 	Cancelled    bool
@@ -38,19 +45,16 @@ type InitResult struct {
 type InitWizard struct {
 	step initStep
 
+	// Directory input
+	dirInput textinput.Model
+	dirError string
+
 	// Template selection
 	templates   []TemplateInfo
 	templateIdx int
 
-	// Target directory
-	targetDir string
-
 	// Config setup choice
 	setupConfig bool
-
-	// Sub-wizards results
-	connResult   ConnectionResult
-	configResult ConfigResult
 
 	// Result
 	result InitResult
@@ -67,21 +71,26 @@ type InitWizard struct {
 type initStep int
 
 const (
-	initStepTemplate initStep = iota
+	initStepDirectory initStep = iota
+	initStepTemplate
 	initStepSetupChoice
-	initStepConnection
-	initStepConfig
-	initStepComplete
 )
 
 // NewInitWizard creates a new init wizard.
+// If targetDir is non-empty, the directory step is pre-filled but still shown for confirmation.
 func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
-	if targetDir == "" {
-		targetDir = "."
+	di := textinput.New()
+	di.Placeholder = "."
+	di.CharLimit = 256
+	di.Width = 50
+	if targetDir != "" {
+		di.SetValue(targetDir)
 	}
+	di.Focus() // Must focus here — Init() has value receiver, state changes there are lost
+
 	return InitWizard{
-		step:      initStepTemplate,
-		targetDir: targetDir,
+		step:      initStepDirectory,
+		dirInput:  di,
 		templates: templates,
 		width:     80,
 		height:    24,
@@ -92,7 +101,7 @@ func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 
 // Init implements tea.Model.
 func (w InitWizard) Init() tea.Cmd {
-	return nil
+	return textinput.Blink
 }
 
 // Update implements tea.Model.
@@ -104,22 +113,163 @@ func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, nil
 
 	case tea.KeyMsg:
-		if key.Matches(msg, w.keys.Quit) {
+		// ctrl+c always quits
+		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
 			return w, tea.Quit
 		}
 
 		switch w.step {
+		case initStepDirectory:
+			return w.updateDirectory(msg)
 		case initStepTemplate:
 			return w.updateTemplate(msg)
 		case initStepSetupChoice:
 			return w.updateSetupChoice(msg)
-		case initStepComplete:
-			return w.updateComplete(msg)
+		}
+
+	default:
+		// Forward non-key messages (e.g. focus, blink) to the active text input
+		if w.step == initStepDirectory {
+			var cmd tea.Cmd
+			w.dirInput, cmd = w.dirInput.Update(msg)
+			return w, cmd
 		}
 	}
 
 	return w, nil
+}
+
+func (w InitWizard) resolveDir() string {
+	dir := w.dirInput.Value()
+	if dir == "" {
+		dir = "."
+	}
+	return dir
+}
+
+func (w InitWizard) updateDirectory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, w.keys.Select):
+		dir := w.resolveDir()
+
+		// Validate: check for blocking files
+		if blocking := checkDirBlocking(dir); len(blocking) > 0 {
+			absPath, _ := filepath.Abs(dir)
+			w.dirError = fmt.Sprintf("'%s' contains: %s", absPath, strings.Join(blocking, ", "))
+			return w, nil
+		}
+
+		w.dirError = ""
+		w.result.TargetDir = dir
+		w.step = initStepTemplate
+		return w, nil
+
+	case msg.String() == "tab":
+		completed := completeDirectoryPath(w.dirInput.Value())
+		if completed != w.dirInput.Value() {
+			w.dirInput.SetValue(completed)
+			w.dirInput.CursorEnd()
+			w.dirError = ""
+		}
+		return w, nil
+
+	case key.Matches(msg, w.keys.Back):
+		w.result.Cancelled = true
+		return w, tea.Quit
+
+	default:
+		w.dirError = ""
+		var cmd tea.Cmd
+		w.dirInput, cmd = w.dirInput.Update(msg)
+		return w, cmd
+	}
+}
+
+// completeDirectoryPath performs tab-completion on a partial directory path.
+func completeDirectoryPath(input string) string {
+	if input == "" {
+		input = "."
+	}
+
+	// Split into parent directory and name prefix
+	// "./src/com" → parent="./src", prefix="com"
+	// "./src/"    → parent="./src", prefix=""
+	// "my"        → parent=".", prefix="my"
+	parent := filepath.Dir(input)
+	prefix := filepath.Base(input)
+
+	// If input ends with separator or is ".", we're listing inside it
+	if strings.HasSuffix(input, string(filepath.Separator)) || strings.HasSuffix(input, "/") || input == "." {
+		parent = input
+		prefix = ""
+	}
+
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return input
+	}
+
+	// Collect matching directories
+	var matches []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			matches = append(matches, name)
+		}
+	}
+
+	if len(matches) == 0 {
+		return input
+	}
+
+	if len(matches) == 1 {
+		// Single match — complete with trailing separator
+		return filepath.Join(parent, matches[0]) + string(filepath.Separator)
+	}
+
+	// Multiple matches — complete common prefix
+	common := matches[0]
+	for _, m := range matches[1:] {
+		common = commonPrefix(common, m)
+	}
+	if common != "" && len(common) > len(prefix) {
+		return filepath.Join(parent, common)
+	}
+
+	return input
+}
+
+// commonPrefix returns the longest common prefix of two strings (case-insensitive comparison).
+func commonPrefix(a, b string) string {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	i := 0
+	for i < minLen && strings.ToLower(string(a[i])) == strings.ToLower(string(b[i])) {
+		i++
+	}
+	return a[:i]
+}
+
+// checkDirBlocking returns the list of non-pgmi files blocking init, or nil if safe.
+func checkDirBlocking(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // doesn't exist yet — fine
+	}
+
+	var blocking []string
+	for _, entry := range entries {
+		if !pgmiManagedInitFiles[entry.Name()] {
+			blocking = append(blocking, entry.Name())
+		}
+	}
+	return blocking
 }
 
 func (w InitWizard) updateTemplate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -136,8 +286,8 @@ func (w InitWizard) updateTemplate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		w.result.Template = w.templates[w.templateIdx].Name
 		w.step = initStepSetupChoice
 	case key.Matches(msg, w.keys.Back):
-		w.result.Cancelled = true
-		return w, tea.Quit
+		w.step = initStepDirectory
+		return w, w.dirInput.Focus()
 	}
 	return w, nil
 }
@@ -148,18 +298,9 @@ func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		w.setupConfig = !w.setupConfig
 	case key.Matches(msg, w.keys.Select):
 		w.result.SetupConfig = w.setupConfig
-		w.result.TargetDir = w.targetDir
-		w.step = initStepComplete
 		return w, tea.Quit
 	case key.Matches(msg, w.keys.Back):
 		w.step = initStepTemplate
-	}
-	return w, nil
-}
-
-func (w InitWizard) updateComplete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, w.keys.Select) {
-		return w, tea.Quit
 	}
 	return w, nil
 }
@@ -172,13 +313,40 @@ func (w InitWizard) View() string {
 	b.WriteString("\n")
 
 	switch w.step {
+	case initStepDirectory:
+		b.WriteString(w.viewDirectory())
 	case initStepTemplate:
 		b.WriteString(w.viewTemplate())
 	case initStepSetupChoice:
 		b.WriteString(w.viewSetupChoice())
-	case initStepComplete:
-		b.WriteString(w.viewComplete())
 	}
+
+	return b.String()
+}
+
+func (w InitWizard) viewDirectory() string {
+	var b strings.Builder
+
+	b.WriteString(w.styles.Subtitle.Render("Where do you want to create the project?"))
+	b.WriteString("\n\n")
+
+	b.WriteString(w.styles.Label.Render("Directory:"))
+	b.WriteString("\n")
+	b.WriteString(w.styles.FocusedBox.Render(w.dirInput.View()))
+	b.WriteString("\n")
+
+	if w.dirError != "" {
+		b.WriteString("\n")
+		b.WriteString(w.styles.Error.Render("Directory is not empty: " + w.dirError))
+		b.WriteString("\n")
+		b.WriteString(w.styles.Description.Render("Choose a different location or remove existing files."))
+		b.WriteString("\n")
+		b.WriteString(w.styles.Description.Render("pgmi.yaml and .env are allowed."))
+	} else {
+		b.WriteString(w.styles.Description.Render("\nPress enter for current directory, or type a path."))
+	}
+
+	b.WriteString(w.styles.Help.Render("\n\nenter confirm • esc cancel"))
 
 	return b.String()
 }
@@ -186,7 +354,8 @@ func (w InitWizard) View() string {
 func (w InitWizard) viewTemplate() string {
 	var b strings.Builder
 
-	b.WriteString(w.styles.Subtitle.Render("Select a template"))
+	absPath, _ := filepath.Abs(w.result.TargetDir)
+	b.WriteString(w.styles.Subtitle.Render(fmt.Sprintf("Select a template  →  %s", absPath)))
 	b.WriteString("\n\n")
 
 	for i, t := range w.templates {
@@ -207,7 +376,7 @@ func (w InitWizard) viewTemplate() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • q quit"))
+	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • esc back"))
 
 	return b.String()
 }
@@ -250,31 +419,13 @@ func (w InitWizard) viewSetupChoice() string {
 	return b.String()
 }
 
-func (w InitWizard) viewComplete() string {
-	var b strings.Builder
-
-	b.WriteString(w.styles.Success.Render("✓ Ready to create project"))
-	b.WriteString("\n\n")
-
-	absPath, _ := filepath.Abs(w.targetDir)
-	b.WriteString(fmt.Sprintf("Directory: %s\n", absPath))
-	b.WriteString(fmt.Sprintf("Template:  %s\n", w.result.Template))
-
-	if w.result.SetupConfig {
-		b.WriteString("\nAfter creation, you'll configure the database connection.\n")
-	}
-
-	b.WriteString(w.styles.Help.Render("\nenter create project • esc cancel"))
-
-	return b.String()
-}
-
 // Result returns the wizard result.
 func (w InitWizard) Result() InitResult {
 	return w.result
 }
 
 // RunInitWizard executes the init wizard.
+// targetDir is used as pre-filled value (empty string shows placeholder ".").
 func RunInitWizard(targetDir string) (InitResult, error) {
 	templates := DefaultTemplates()
 	if len(templates) == 0 {
@@ -309,47 +460,4 @@ func RunInitWizard(targetDir string) (InitResult, error) {
 	}
 
 	return result, nil
-}
-
-// ShowInitComplete displays the completion message after project creation.
-func ShowInitComplete(targetDir string, template string, files []string) {
-	absPath, _ := filepath.Abs(targetDir)
-
-	fmt.Println()
-	fmt.Println("✓ Project created successfully!")
-	fmt.Println()
-	fmt.Printf("%s/\n", absPath)
-
-	for _, f := range files {
-		rel, _ := filepath.Rel(targetDir, f)
-		fmt.Printf("├── %s\n", rel)
-	}
-
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Printf("  1. cd %s\n", targetDir)
-	fmt.Println("  2. Edit your SQL files")
-	fmt.Println("  3. Run: pgmi deploy")
-	fmt.Println()
-}
-
-// DirectoryExists checks if a directory exists and is not empty.
-func DirectoryExists(path string) (bool, bool, error) {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, err
-	}
-	if !info.IsDir() {
-		return false, false, fmt.Errorf("path exists but is not a directory")
-	}
-
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return true, false, err
-	}
-
-	return true, len(entries) > 0, nil
 }

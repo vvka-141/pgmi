@@ -106,7 +106,7 @@ func (w ConfigWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, nil
 
 	case tea.KeyMsg:
-		if key.Matches(msg, w.keys.Quit) {
+		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
 			return w, tea.Quit
 		}

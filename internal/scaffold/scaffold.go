@@ -137,9 +137,16 @@ func ListTemplates() ([]string, error) {
 	return templates, nil
 }
 
-// isDirectoryEmpty checks if a directory is empty or doesn't exist.
-// Returns (true, nil) if directory doesn't exist or is empty.
-// Returns (false, nil) if directory exists and contains files/subdirectories.
+// pgmiManagedFiles are files that pgmi itself creates/manages,
+// and should not block project initialization.
+var pgmiManagedFiles = map[string]bool{
+	"pgmi.yaml": true,
+	".env":      true,
+}
+
+// isDirectoryEmpty checks if a directory is empty or contains only pgmi-managed files.
+// Returns (true, nil) if directory doesn't exist, is empty, or only contains pgmi-managed files.
+// Returns (false, nil) if directory exists and contains non-pgmi files.
 // Returns (false, error) if there's an error checking the directory.
 func isDirectoryEmpty(path string) (bool, error) {
 	// Check if path exists
@@ -163,8 +170,13 @@ func isDirectoryEmpty(path string) (bool, error) {
 		return false, fmt.Errorf("failed to read directory: %w", err)
 	}
 
-	// Empty if no entries
-	return len(entries) == 0, nil
+	for _, entry := range entries {
+		if !pgmiManagedFiles[entry.Name()] {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // buildFileTree creates a visual tree representation of the directory structure.

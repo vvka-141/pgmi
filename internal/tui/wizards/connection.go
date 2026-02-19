@@ -224,8 +224,8 @@ func (w ConnectionWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, nil
 
 	case tea.KeyMsg:
-		// Global quit
-		if key.Matches(msg, w.keys.Quit) {
+		// ctrl+c always quits
+		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
 			return w, tea.Quit
 		}
@@ -257,6 +257,17 @@ func (w ConnectionWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			w.spinner, cmd = w.spinner.Update(msg)
 			return w, cmd
+		}
+
+	default:
+		// Forward non-key messages (focus, blink cursor) to active text input
+		switch w.step {
+		case stepInputHost, stepInputAzure, stepInputAWS, stepInputGoogle, stepInputConnString:
+			if w.focusIndex >= 0 && w.focusIndex < len(w.inputs) {
+				var cmd tea.Cmd
+				w.inputs[w.focusIndex], cmd = w.inputs[w.focusIndex].Update(msg)
+				return w, cmd
+			}
 		}
 	}
 
