@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/vvka-141/pgmi/internal/tui/components"
 )
 
 // TemplateInfo holds template metadata for display.
@@ -46,8 +48,9 @@ type InitWizard struct {
 	step initStep
 
 	// Directory input
-	dirInput textinput.Model
-	dirError string
+	dirInput    textinput.Model
+	dirError    string
+	dirComplete *components.PathCompleter
 
 	// Template selection
 	templates   []TemplateInfo
@@ -89,13 +92,14 @@ func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 	di.Focus() // Must focus here — Init() has value receiver, state changes there are lost
 
 	return InitWizard{
-		step:      initStepDirectory,
-		dirInput:  di,
-		templates: templates,
-		width:     80,
-		height:    24,
-		styles:    defaultWizardStyles(),
-		keys:      defaultWizardKeys(),
+		step:        initStepDirectory,
+		dirInput:    di,
+		dirComplete: components.NewPathCompleter(true),
+		templates:   templates,
+		width:       80,
+		height:      24,
+		styles:      defaultWizardStyles(),
+		keys:        defaultWizardKeys(),
 	}
 }
 
@@ -166,7 +170,7 @@ func (w InitWizard) updateDirectory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return w, nil
 
 	case msg.String() == "tab":
-		completed := completeDirectoryPath(w.dirInput.Value())
+		completed := w.dirComplete.Next(w.dirInput.Value())
 		if completed != w.dirInput.Value() {
 			w.dirInput.SetValue(completed)
 			w.dirInput.CursorEnd()
@@ -179,81 +183,12 @@ func (w InitWizard) updateDirectory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return w, tea.Quit
 
 	default:
+		w.dirComplete.Reset()
 		w.dirError = ""
 		var cmd tea.Cmd
 		w.dirInput, cmd = w.dirInput.Update(msg)
 		return w, cmd
 	}
-}
-
-// completeDirectoryPath performs tab-completion on a partial directory path.
-func completeDirectoryPath(input string) string {
-	if input == "" {
-		input = "."
-	}
-
-	// Split into parent directory and name prefix
-	// "./src/com" → parent="./src", prefix="com"
-	// "./src/"    → parent="./src", prefix=""
-	// "my"        → parent=".", prefix="my"
-	parent := filepath.Dir(input)
-	prefix := filepath.Base(input)
-
-	// If input ends with separator or is ".", we're listing inside it
-	if strings.HasSuffix(input, string(filepath.Separator)) || strings.HasSuffix(input, "/") || input == "." {
-		parent = input
-		prefix = ""
-	}
-
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return input
-	}
-
-	// Collect matching directories
-	var matches []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
-			matches = append(matches, name)
-		}
-	}
-
-	if len(matches) == 0 {
-		return input
-	}
-
-	if len(matches) == 1 {
-		// Single match — complete with trailing separator
-		return filepath.Join(parent, matches[0]) + string(filepath.Separator)
-	}
-
-	// Multiple matches — complete common prefix
-	common := matches[0]
-	for _, m := range matches[1:] {
-		common = commonPrefix(common, m)
-	}
-	if common != "" && len(common) > len(prefix) {
-		return filepath.Join(parent, common)
-	}
-
-	return input
-}
-
-// commonPrefix returns the longest common prefix of two strings (case-insensitive comparison).
-func commonPrefix(a, b string) string {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	i := 0
-	for i < minLen && strings.ToLower(string(a[i])) == strings.ToLower(string(b[i])) {
-		i++
-	}
-	return a[:i]
 }
 
 // checkDirBlocking returns the list of non-pgmi files blocking init, or nil if safe.

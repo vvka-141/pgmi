@@ -240,5 +240,6 @@ func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig) error 
 	}
 
 	fmt.Fprintf(os.Stderr, "✓ Connection saved to %s\n", configPath)
+	offerSavePgpass(connConfig)
 	return nil
 }

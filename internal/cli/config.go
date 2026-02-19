@@ -94,5 +94,6 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("\n✓ Configuration saved to %s\n", configPath)
+	offerSavePgpass(&connResult.Config)
 	return nil
 }

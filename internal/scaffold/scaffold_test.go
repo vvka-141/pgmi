@@ -231,6 +231,39 @@ func TestCreateProject_AcceptsNonexistentDirectory(t *testing.T) {
 	}
 }
 
+func TestCreateProject_PreservesExistingPgmiYaml(t *testing.T) {
+	targetDir := filepath.Join(t.TempDir(), "withconfig")
+	if err := os.Mkdir(targetDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	originalContent := "connection:\n  host: myserver\n  port: 5433\n"
+	configPath := filepath.Join(targetDir, "pgmi.yaml")
+	if err := os.WriteFile(configPath, []byte(originalContent), 0644); err != nil {
+		t.Fatalf("Failed to create pgmi.yaml: %v", err)
+	}
+
+	scaffolder := NewScaffolder(false)
+	if err := scaffolder.CreateProject("testproject", "basic", targetDir); err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// pgmi.yaml should still have the original content
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Failed to read pgmi.yaml: %v", err)
+	}
+	if string(data) != originalContent {
+		t.Errorf("pgmi.yaml was overwritten.\n  got:  %q\n  want: %q", string(data), originalContent)
+	}
+
+	// Other template files should still be created
+	deployFile := filepath.Join(targetDir, "deploy.sql")
+	if _, err := os.Stat(deployFile); os.IsNotExist(err) {
+		t.Error("Expected deploy.sql to be created")
+	}
+}
+
 // TestBuildFileTree tests the file tree generation for display
 func TestBuildFileTree(t *testing.T) {
 	// Create a test directory structure

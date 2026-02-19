@@ -98,7 +98,14 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 		// Process template variables
 		processedContent := s.processTemplate(string(content), projectName)
 
-		// Write file to target
+		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
+		if pgmiManagedFiles[filepath.Base(targetFilePath)] {
+			if _, err := os.Stat(targetFilePath); err == nil {
+				s.logVerbose("Skipping existing: %s", relPath)
+				return nil
+			}
+		}
+
 		s.logVerbose("Creating file: %s", relPath)
 		if err := os.WriteFile(targetFilePath, []byte(processedContent), 0644); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", targetFilePath, err)

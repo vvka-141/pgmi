@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -283,6 +284,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		applyWizardConfig(wizardConfig)
 	}
 
+	// Prompt for password if needed and interactive
+	if err := promptPasswordIfNeeded(); err != nil {
+		return err
+	}
+
 	config, err := buildDeploymentConfig(cmd, sourcePath, verbose)
 	if err != nil {
 		return err
@@ -398,6 +404,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
 			} else {
 				fmt.Fprintf(os.Stderr, "✓ Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
+				offerSavePgpass(&connResult.Config)
 			}
 		}
 	}
@@ -456,6 +463,11 @@ func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
 		deployFlags.sslMode = cfg.SSLMode
 	}
 
+	// Pass password via env var for this process only
+	if cfg.Password != "" && os.Getenv("PGPASSWORD") == "" {
+		os.Setenv("PGPASSWORD", cfg.Password)
+	}
+
 	// Cloud provider settings
 	switch cfg.AuthMethod {
 	case pgmi.AuthMethodAzureEntraID:
@@ -477,4 +489,33 @@ func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
 			deployFlags.googleInstance = cfg.GoogleInstance
 		}
 	}
+}
+
+// promptPasswordIfNeeded prompts for a password when standard auth is used,
+// no password source is available, and the terminal is interactive.
+func promptPasswordIfNeeded() error {
+	if os.Getenv("PGPASSWORD") != "" {
+		return nil
+	}
+	if deployFlags.connection != "" || os.Getenv("DATABASE_URL") != "" || os.Getenv("PGMI_CONNECTION_STRING") != "" {
+		return nil
+	}
+	if deployFlags.azure || deployFlags.aws || deployFlags.google {
+		return nil
+	}
+	if !tui.IsInteractive() || deployFlags.force {
+		return nil
+	}
+
+	fmt.Fprint(os.Stderr, "Password: ")
+	password, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+
+	if len(password) > 0 {
+		os.Setenv("PGPASSWORD", string(password))
+	}
+	return nil
 }
