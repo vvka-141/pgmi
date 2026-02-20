@@ -83,6 +83,57 @@ func TestIsDirectoryEmpty(t *testing.T) {
 			expectedEmpty: false,
 			expectedError: false,
 		},
+		{
+			name: "directory with only pgmi.yaml",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "pgmionly")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("connection:\n  host: localhost"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: true,
+			expectedError: false,
+		},
+		{
+			name: "directory with pgmi.yaml and .env",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "managed")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("{}"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("KEY=val"), 0644); err != nil {
+					t.Fatalf("Failed to create .env: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: true,
+			expectedError: false,
+		},
+		{
+			name: "directory with pgmi.yaml and other files",
+			setup: func(t *testing.T) string {
+				dir := filepath.Join(t.TempDir(), "mixed")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatalf("Failed to create test directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("{}"), 0644); err != nil {
+					t.Fatalf("Failed to create pgmi.yaml: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("data"), 0644); err != nil {
+					t.Fatalf("Failed to create other file: %v", err)
+				}
+				return dir
+			},
+			expectedEmpty: false,
+			expectedError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +225,39 @@ func TestCreateProject_AcceptsNonexistentDirectory(t *testing.T) {
 		t.Error("Expected directory to be created")
 	}
 
+	deployFile := filepath.Join(targetDir, "deploy.sql")
+	if _, err := os.Stat(deployFile); os.IsNotExist(err) {
+		t.Error("Expected deploy.sql to be created")
+	}
+}
+
+func TestCreateProject_PreservesExistingPgmiYaml(t *testing.T) {
+	targetDir := filepath.Join(t.TempDir(), "withconfig")
+	if err := os.Mkdir(targetDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	originalContent := "connection:\n  host: myserver\n  port: 5433\n"
+	configPath := filepath.Join(targetDir, "pgmi.yaml")
+	if err := os.WriteFile(configPath, []byte(originalContent), 0644); err != nil {
+		t.Fatalf("Failed to create pgmi.yaml: %v", err)
+	}
+
+	scaffolder := NewScaffolder(false)
+	if err := scaffolder.CreateProject("testproject", "basic", targetDir); err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// pgmi.yaml should still have the original content
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Failed to read pgmi.yaml: %v", err)
+	}
+	if string(data) != originalContent {
+		t.Errorf("pgmi.yaml was overwritten.\n  got:  %q\n  want: %q", string(data), originalContent)
+	}
+
+	// Other template files should still be created
 	deployFile := filepath.Join(targetDir, "deploy.sql")
 	if _, err := os.Stat(deployFile); os.IsNotExist(err) {
 		t.Error("Expected deploy.sql to be created")

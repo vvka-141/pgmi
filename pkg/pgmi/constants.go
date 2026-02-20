@@ -3,6 +3,7 @@ package pgmi
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -36,11 +37,6 @@ const (
 
 	// DefaultRetryMaxAttempts is the default maximum number of retry attempts.
 	DefaultRetryMaxAttempts = 3
-
-	// MaxErrorPreviewLength is the maximum number of characters shown
-	// in error messages when previewing failed SQL batches.
-	// This prevents overwhelming the console with large SQL statement errors.
-	MaxErrorPreviewLength = 200
 
 	// DefaultManagementDB is the default database to connect to for management operations.
 	DefaultManagementDB = "postgres"
@@ -78,4 +74,29 @@ func ValidateDunderDirectories(path string) error {
 		}
 	}
 	return nil
+}
+
+// SQLExtensions lists recognized SQL file extensions.
+// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
+var SQLExtensions = map[string]bool{
+	".sql":     true,
+	".ddl":     true,
+	".dml":     true,
+	".dql":     true,
+	".dcl":     true,
+	".psql":    true,
+	".pgsql":   true,
+	".plpgsql": true,
+}
+
+// IsSQLExtension returns true if the extension indicates a SQL file.
+// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
+func IsSQLExtension(ext string) bool {
+	return SQLExtensions[strings.ToLower(ext)]
+}
+
+// IsTemplateDatabase returns true if the name is a PostgreSQL template database.
+func IsTemplateDatabase(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "template0" || lower == "template1"
 }

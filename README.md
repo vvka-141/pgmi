@@ -6,7 +6,7 @@
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
 pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
-Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
+Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls the deployment.
 
 ![pgmi deployment flow](pgmi-deploy.png)
 
@@ -43,13 +43,20 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-The Quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
+The quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
+
+pgmi loads **all** project files — not just SQL. Your `deploy.sql` can read JSON configuration, XML reference data, and CSV seeds from the same session views, processing them with PostgreSQL's built-in JSON, XML, and string functions. See [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for data ingestion patterns.
 
 ## Install
 
-**Go (all platforms):**
+**macOS / Linux:**
 ```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
 **Homebrew (macOS/Linux):**
@@ -60,10 +67,13 @@ brew install vvka-141/pgmi/pgmi
 **Debian/Ubuntu:**
 ```bash
 curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-sudo apt update && sudo apt install pgmi
+sudo apt install pgmi
 ```
 
-**Windows:** Download from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) or use `go install` above.
+**Go (all platforms):**
+```bash
+go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+```
 
 ## Get started
 
@@ -86,6 +96,8 @@ pgmi is a good fit when you need:
 - **Conditional deployment logic** — different behavior per environment, feature flags, custom phases
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
 - **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, leverage `pg_advisory_lock`
+- **Data files alongside schema** — load JSON config, XML reference data, CSV seeds in the same transaction as migrations
+- **Multi-cloud PostgreSQL targets** — same `deploy.sql` works on Azure, AWS, GCP with native auth (Entra ID, IAM)
 
 pgmi handles simple linear migrations out of the box — the basic template does exactly this. Its additional power is there when you need it.
 
@@ -98,6 +110,8 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Getting Started](docs/QUICKSTART.md) | Your first deployment in 10 minutes |
 | [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
 | [Coming from Flyway/Liquibase](docs/COMING-FROM.md) | Migration guides |
+| [deploy.sql Guide](docs/DEPLOY-GUIDE.md) | Authoring patterns: data ingestion, environment branching, multi-phase |
+| [Connections](docs/CONNECTIONS.md) | Connection architecture: cloud auth, SSL, poolers, IaC |
 | [CLI Reference](docs/CLI.md) | All commands, flags, exit codes |
 | [Configuration](docs/CONFIGURATION.md) | pgmi.yaml reference |
 | [Session API](docs/session-api.md) | Temp tables and helper functions |
@@ -105,6 +119,7 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
+| [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
 
 ## Templates

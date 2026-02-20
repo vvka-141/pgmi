@@ -1,6 +1,7 @@
 package preprocessor
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -41,7 +42,7 @@ func TestCommentStripper_Strip_LineComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -91,7 +92,7 @@ func TestCommentStripper_Strip_BlockComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -126,7 +127,7 @@ func TestCommentStripper_Strip_NestedBlockComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -176,7 +177,7 @@ func TestCommentStripper_Strip_SingleQuoteStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -228,15 +229,25 @@ func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
 			expected: "CREATE FUNCTION f() AS $$ SELECT '--'; $$ LANGUAGE sql;",
 		},
 		{
-			name:     "Numeric tag",
+			name:     "Numeric tag is not a valid dollar-quote",
+			input:    "SELECT $1 + $2;",
+			expected: "SELECT $1 + $2;",
+		},
+		{
+			name:     "Digit-initial tag not treated as dollar-quote",
 			input:    "SELECT $1$content$1$;",
 			expected: "SELECT $1$content$1$;",
+		},
+		{
+			name:     "Digit-initial tag with comment inside is stripped",
+			input:    "SELECT $1$--comment$1$;",
+			expected: "SELECT $1$",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -286,54 +297,9 @@ func TestCommentStripper_Strip_MixedScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestCommentStripper_Strip_LineMapping(t *testing.T) {
-	stripper := NewCommentStripper()
-
-	tests := []struct {
-		name          string
-		input         string
-		expectedLines int
-	}{
-		{
-			name:          "Single line",
-			input:         "SELECT 1;",
-			expectedLines: 1,
-		},
-		{
-			name:          "Multiple lines preserved",
-			input:         "SELECT 1;\nSELECT 2;\nSELECT 3;",
-			expectedLines: 3,
-		},
-		{
-			name:          "Comments removed but lines preserved",
-			input:         "-- comment\nSELECT 1;\n-- comment\nSELECT 2;",
-			expectedLines: 4,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, lineMap := stripper.Strip(tt.input)
-
-			// Count newlines in result
-			resultLines := 1
-			for _, c := range result {
-				if c == '\n' {
-					resultLines++
-				}
-			}
-
-			// Line map should have entries for each line
-			if len(lineMap) == 0 && tt.expectedLines > 0 {
-				t.Errorf("LineMap is empty, expected entries")
 			}
 		})
 	}
@@ -386,7 +352,7 @@ func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -420,10 +386,7 @@ func BenchmarkCommentStripper_Strip_LargeInput(b *testing.B) {
 	stripper := NewCommentStripper()
 
 	// Generate a large SQL input
-	var input string
-	for i := 0; i < 1000; i++ {
-		input += "SELECT * FROM users WHERE id = 1; -- comment\n"
-	}
+	input := strings.Repeat("SELECT * FROM users WHERE id = 1; -- comment\n", 1000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

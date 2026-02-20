@@ -98,7 +98,14 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 		// Process template variables
 		processedContent := s.processTemplate(string(content), projectName)
 
-		// Write file to target
+		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
+		if ManagedFiles[filepath.Base(targetFilePath)] {
+			if _, err := os.Stat(targetFilePath); err == nil {
+				s.logVerbose("Skipping existing: %s", relPath)
+				return nil
+			}
+		}
+
 		s.logVerbose("Creating file: %s", relPath)
 		if err := os.WriteFile(targetFilePath, []byte(processedContent), 0644); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", targetFilePath, err)
@@ -137,9 +144,30 @@ func ListTemplates() ([]string, error) {
 	return templates, nil
 }
 
-// isDirectoryEmpty checks if a directory is empty or doesn't exist.
-// Returns (true, nil) if directory doesn't exist or is empty.
-// Returns (false, nil) if directory exists and contains files/subdirectories.
+// IsValidTemplate checks if the given name matches an available template.
+func IsValidTemplate(name string) bool {
+	templates, err := ListTemplates()
+	if err != nil {
+		return false
+	}
+	for _, t := range templates {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ManagedFiles are files that pgmi itself creates/manages,
+// and should not block project initialization.
+var ManagedFiles = map[string]bool{
+	"pgmi.yaml": true,
+	".env":      true,
+}
+
+// isDirectoryEmpty checks if a directory is empty or contains only pgmi-managed files.
+// Returns (true, nil) if directory doesn't exist, is empty, or only contains pgmi-managed files.
+// Returns (false, nil) if directory exists and contains non-pgmi files.
 // Returns (false, error) if there's an error checking the directory.
 func isDirectoryEmpty(path string) (bool, error) {
 	// Check if path exists
@@ -163,8 +191,13 @@ func isDirectoryEmpty(path string) (bool, error) {
 		return false, fmt.Errorf("failed to read directory: %w", err)
 	}
 
-	// Empty if no entries
-	return len(entries) == 0, nil
+	for _, entry := range entries {
+		if !ManagedFiles[entry.Name()] {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // buildFileTree creates a visual tree representation of the directory structure.
@@ -181,59 +214,53 @@ func BuildFileTree(rootPath string) (string, error) {
 	sb.WriteString(absPath + "/\n")
 
 	// Walk the directory tree
-	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	dirCache := make(map[string][]fs.DirEntry)
+	err = filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root directory itself
 		if path == rootPath {
 			return nil
 		}
 
-		// Calculate relative path and depth
 		relPath, err := filepath.Rel(rootPath, path)
 		if err != nil {
 			return err
 		}
 
 		depth := strings.Count(relPath, string(os.PathSeparator))
+		indent := strings.Repeat("│   ", depth)
 
-		// Build indentation
-		indent := ""
-		for i := 0; i < depth; i++ {
-			indent += "│   "
-		}
-
-		// Determine if this is the last item in its directory
 		parentDir := filepath.Dir(path)
-		entries, err := os.ReadDir(parentDir)
-		if err != nil {
-			return err
+		entries, ok := dirCache[parentDir]
+		if !ok {
+			entries, err = os.ReadDir(parentDir)
+			if err != nil {
+				return err
+			}
+			dirCache[parentDir] = entries
 		}
 
 		isLast := false
 		baseName := filepath.Base(path)
-		for i, entry := range entries {
-			if entry.Name() == baseName && i == len(entries)-1 {
+		for i, e := range entries {
+			if e.Name() == baseName && i == len(entries)-1 {
 				isLast = true
 				break
 			}
 		}
 
-		// Choose branch character
 		branch := "├── "
 		if isLast {
 			branch = "└── "
-			// Update parent indent for proper tree structure
 			if depth > 0 {
 				indent = indent[:len(indent)-4] + "    "
 			}
 		}
 
-		// Format name (add / for directories)
-		name := info.Name()
-		if info.IsDir() {
+		name := entry.Name()
+		if entry.IsDir() {
 			name += "/"
 		}
 

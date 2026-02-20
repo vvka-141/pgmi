@@ -18,11 +18,3 @@ type BackoffStrategy interface {
 	MaxAttempts() int
 }
 
-// TimeProvider abstracts time operations for testability.
-type TimeProvider interface {
-	// Sleep pauses execution for the given duration
-	Sleep(d time.Duration)
-
-	// Now returns the current time
-	Now() time.Time
-}

@@ -371,6 +371,133 @@ func TestLoadParametersIntoSession_MultipleInvalidKeys(t *testing.T) {
 	}
 }
 
+func TestExtractTestDirectory_WindowsBackslashes(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{".\\__test__\\test.sql", "./__test__/"},
+		{".\\foo\\__test__\\test.sql", "./foo/__test__/"},
+		{".\\foo\\__tests__\\bar\\test.sql", "./foo/__tests__/bar/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := extractTestDirectory(tt.path)
+			if result != tt.expected {
+				t.Errorf("extractTestDirectory(%q) = %q, want %q", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCountTestDirectoryDepth_WindowsBackslashes(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected int
+	}{
+		{".\\__test__\\", 0},
+		{".\\__test__\\auth\\", 1},
+		{".\\__test__\\auth\\oauth\\", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := countTestDirectoryDepth(tt.path)
+			if result != tt.expected {
+				t.Errorf("countTestDirectoryDepth(%q) = %d, want %d", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCountTestDirectoryDepth_DoubleS(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected int
+	}{
+		{"./__tests__/", 0},
+		{"./__tests__/auth/", 1},
+		{"./__tests__/auth/oauth/", 2},
+		{"./src/__tests__/unit/", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := countTestDirectoryDepth(tt.path)
+			if result != tt.expected {
+				t.Errorf("countTestDirectoryDepth(%q) = %d, want %d", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsFixtureFile_EdgeCases(t *testing.T) {
+	tests := []struct {
+		filename string
+		expected bool
+	}{
+		{"_teardown.sql", false},
+		{"_setup.SQL", true},
+		{"_setup", false},
+		{"_setup.pgsql", false},
+		{"_SETUP.PSQL", true},
+		{"setup.sql", false},
+		{"_setup.sql.bak", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			result := isFixtureFile(tt.filename)
+			if result != tt.expected {
+				t.Errorf("isFixtureFile(%q) = %v, want %v", tt.filename, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFindParentTestDirectory_OrphanChild(t *testing.T) {
+	dirSet := map[string]bool{
+		"./__test__/":             true,
+		"./__test__/a/b/c/":      true,
+		// Missing intermediate "./__test__/a/" and "./__test__/a/b/"
+	}
+
+	// "./__test__/a/b/c/" parent is "./__test__/a/b/" which is not in the set
+	parent := findParentTestDirectory("./__test__/a/b/c/", dirSet)
+	if parent != nil {
+		t.Errorf("expected nil parent for orphan child, got %q", *parent)
+	}
+
+	// "./__test__/" has no parent at all
+	parent = findParentTestDirectory("./__test__/", dirSet)
+	if parent != nil {
+		t.Errorf("expected nil parent for root test dir, got %q", *parent)
+	}
+}
+
+func TestLoadFilesIntoSession_NonSQLTestFilesIdentified(t *testing.T) {
+	files := []pgmi.FileMetadata{
+		{Path: "./__test__/test_a.sql", Extension: ".sql", Content: "SELECT 1;"},
+		{Path: "./__test__/README.md", Extension: ".md", Content: "# tests"},
+		{Path: "./__test__/data.json", Extension: ".json", Content: "{}"},
+		{Path: "./__test__/_setup.sql", Extension: ".sql", Content: "-- setup"},
+	}
+
+	var testPaths, sqlTestPaths int
+	for _, f := range files {
+		if pgmi.IsTestPath(f.Path) {
+			testPaths++
+			if pgmi.IsSQLExtension(f.Extension) {
+				sqlTestPaths++
+			}
+		}
+	}
+
+	if testPaths != 4 {
+		t.Errorf("expected 4 test paths, got %d", testPaths)
+	}
+	if sqlTestPaths != 2 {
+		t.Errorf("expected 2 SQL test files, got %d", sqlTestPaths)
+	}
+}
+
 func TestValidateParameterKey_AllValidVariants(t *testing.T) {
 	validKeys := []string{
 		"key1",

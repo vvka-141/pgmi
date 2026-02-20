@@ -2,16 +2,12 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
-	"github.com/vvka-141/pgmi/internal/sourcemap"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -82,7 +78,7 @@ func NewDeploymentService(
 }
 
 func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
-	mgmtConfig := *connConfig
+	mgmtConfig := connConfig.DeepCopy()
 	mgmtConfig.Database = dbName
 
 	connector, err := s.connectorFactory(&mgmtConfig)
@@ -92,11 +88,15 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 
 	pool, err := connector.Connect(ctx)
 	if err != nil {
+		closeConnector(connector)
 		return nil, nil, fmt.Errorf("failed to connect to management database: %w", err)
 	}
 
 	dbConn := db.NewPoolAdapter(pool)
-	cleanup := func() { pool.Close() }
+	cleanup := func() {
+		pool.Close()
+		closeConnector(connector)
+	}
 	return dbConn, cleanup, nil
 }
 
@@ -123,7 +123,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 
 	// Prepare deployment session (scan files, connect to database, load session tables)
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
-	targetConfig := *connConfig
+	targetConfig := connConfig.DeepCopy()
 	targetConfig.Database = config.DatabaseName
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
@@ -131,12 +131,11 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	}
 	defer session.Close()
 
-	// Execute deploy.sql (macro expansion queries pgmi_test_plan() from SQL)
 	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
-		return fmt.Errorf("deploy.sql execution failed: %w", err)
+		return err
 	}
 
-	s.logger.Info("✓ Deployment completed successfully")
+	s.logger.Info("Deployment completed successfully")
 	return nil
 }
 
@@ -151,7 +150,7 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	s.logger.Verbose("Source path: %s", config.SourcePath)
 
 	// Parse connection string
-	connConfig, err := s.parseConnectionString(config.ConnectionString)
+	connConfig, err := db.ParseConnectionString(config.ConnectionString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse connection string: %w", err)
 	}
@@ -198,77 +197,55 @@ func (s *DeploymentService) executeDeploySQL(
 	// Execute preprocessed deploy.sql as a single script
 	_, err = conn.Exec(ctx, result.ExpandedSQL)
 	if err != nil {
-		// Try to attribute the error to the original source using the source map
-		attributedErr := s.attributeError(err, result.SourceMap)
-		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, attributedErr))
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
 
-	s.logger.Info("✓ Execution plan built successfully")
+	s.logger.Info("deploy.sql executed successfully")
 	return nil
 }
 
-// attributeError attempts to resolve error line numbers back to original sources.
-// If the error contains line information and the source map has a mapping,
-// returns an enhanced error with the original source context.
-func (s *DeploymentService) attributeError(err error, sm *sourcemap.SourceMap) error {
-	if sm == nil || sm.Len() == 0 {
-		return err
+func validateOverwriteTarget(targetDB, managementDB string) error {
+	if strings.EqualFold(targetDB, managementDB) {
+		return fmt.Errorf(
+			"cannot overwrite database %q: it is the management database pgmi connects to for server-level operations. "+
+				"Deploy to a different target database: %w",
+			targetDB, pgmi.ErrInvalidConfig,
+		)
 	}
-
-	// Extract PostgreSQL error
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return err
+	if pgmi.IsTemplateDatabase(targetDB) {
+		return fmt.Errorf(
+			"cannot overwrite database %q: PostgreSQL template databases cannot be dropped: %w",
+			targetDB, pgmi.ErrInvalidConfig,
+		)
 	}
-
-	// PostgreSQL errors may have line info in the message or Position field
-	line := extractLineFromError(pgErr)
-	if line == 0 {
-		return err
-	}
-
-	// Try to resolve the line using source map
-	file, origLine, desc, found := sm.Resolve(line)
-	if !found {
-		return err
-	}
-
-	// Create enhanced error message
-	return fmt.Errorf("%w\n  → %s (line %d: %s)", err, file, origLine, desc)
+	return nil
 }
 
-// extractLineFromError extracts a line number from a PostgreSQL error.
-// Checks Position field and parses "LINE X:" from the message.
-func extractLineFromError(pgErr *pgconn.PgError) int {
-	// PostgreSQL doesn't have a Line field in pgconn.PgError for query errors,
-	// but the Position field indicates character offset. We can also check
-	// the message for "LINE X:" pattern which appears in syntax errors.
-
-	// Check if message contains "LINE X:" pattern
-	if idx := strings.Index(pgErr.Message, "LINE "); idx != -1 {
-		remaining := pgErr.Message[idx+5:]
-		if colonIdx := strings.Index(remaining, ":"); colonIdx != -1 {
-			if line, err := strconv.Atoi(remaining[:colonIdx]); err == nil {
-				return line
-			}
-		}
+// connectManagement resolves the management DB name (defaulting to "postgres") and connects.
+func (s *DeploymentService) connectManagement(ctx context.Context, connConfig *pgmi.ConnectionConfig, maintenanceDB string) (pgmi.DBConnection, func(), error) {
+	mgmtDB := maintenanceDB
+	if mgmtDB == "" {
+		mgmtDB = pgmi.DefaultManagementDB
 	}
+	s.logger.Verbose("Connecting to management database '%s'", mgmtDB)
+	return s.mgmtConnector(ctx, connConfig, mgmtDB)
+}
 
-	// For context errors, check Where field
-	if pgErr.Where != "" {
-		if idx := strings.Index(pgErr.Where, "line "); idx != -1 {
-			remaining := pgErr.Where[idx+5:]
-			endIdx := strings.IndexAny(remaining, " ,)")
-			if endIdx == -1 {
-				endIdx = len(remaining)
-			}
-			if line, err := strconv.Atoi(remaining[:endIdx]); err == nil {
-				return line
-			}
-		}
+// createIfMissing checks whether the database exists and creates it if not.
+// Returns true if the database already existed.
+func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBConnection, dbName string) (existed bool, err error) {
+	exists, err := s.dbManager.Exists(ctx, dbConn, dbName)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if database exists: %w", err)
 	}
-
-	return 0
+	if !exists {
+		s.logger.Info("Database '%s' does not exist. Creating...", dbName)
+		if err := s.dbManager.Create(ctx, dbConn, dbName); err != nil {
+			return false, fmt.Errorf("failed to create database: %w", err)
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 // handleOverwrite handles the database drop and recreate workflow.
@@ -278,95 +255,69 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		managementDB = pgmi.DefaultManagementDB
 	}
 
-	s.logger.Verbose("Connecting to management database '%s'", managementDB)
+	if err := validateOverwriteTarget(config.DatabaseName, managementDB); err != nil {
+		return err
+	}
 
-	dbConn, cleanup, err := s.mgmtConnector(ctx, connConfig, managementDB)
+	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, managementDB)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	// Check if target database exists
-	exists, err := s.dbManager.Exists(ctx, dbConn, config.DatabaseName)
+	existed, err := s.createIfMissing(ctx, dbConn, config.DatabaseName)
 	if err != nil {
-		return fmt.Errorf("failed to check if database exists: %w", err)
+		return err
 	}
-
-	if !exists {
-		s.logger.Info("Database '%s' does not exist. Creating...", config.DatabaseName)
-		if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName); err != nil {
-			return fmt.Errorf("failed to create database: %w", err)
-		}
+	if !existed {
 		return nil
 	}
 
-	// Request approval for overwrite
 	s.logger.Verbose("Database '%s' exists. Requesting approval for overwrite.", config.DatabaseName)
 	approved, err := s.approver.RequestApproval(ctx, config.DatabaseName)
 	if err != nil {
 		return fmt.Errorf("approval request failed: %w", err)
 	}
-
 	if !approved {
 		return pgmi.ErrApprovalDenied
 	}
 
-	// Terminate all connections to target database
 	s.logger.Verbose("Terminating all connections to database '%s'", config.DatabaseName)
 	if err := s.dbManager.TerminateConnections(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to terminate connections: %w", err)
 	}
 
-	// Drop database
 	s.logger.Verbose("Dropping database '%s'", config.DatabaseName)
 	if err := s.dbManager.Drop(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to drop database: %w", err)
 	}
 
-	// Create database
 	s.logger.Verbose("Creating database '%s'", config.DatabaseName)
 	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to create database: %w", err)
 	}
 
-	s.logger.Info("✓ Database '%s' overwritten successfully", config.DatabaseName)
+	s.logger.Info("Database '%s' overwritten successfully", config.DatabaseName)
 	return nil
 }
 
 // ensureDatabaseExists ensures the target database exists, creating it if necessary.
 func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
-	managementDB := config.MaintenanceDatabase
-	if managementDB == "" {
-		managementDB = pgmi.DefaultManagementDB
-	}
-
-	s.logger.Verbose("Connecting to management database '%s' to check if target database exists", managementDB)
-
-	dbConn, cleanup, err := s.mgmtConnector(ctx, connConfig, managementDB)
+	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, config.MaintenanceDatabase)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	exists, err := s.dbManager.Exists(ctx, dbConn, config.DatabaseName)
+	existed, err := s.createIfMissing(ctx, dbConn, config.DatabaseName)
 	if err != nil {
-		return fmt.Errorf("failed to check if database exists: %w", err)
+		return err
 	}
-
-	if !exists {
-		s.logger.Info("Database '%s' does not exist. Creating...", config.DatabaseName)
-		if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName); err != nil {
-			return fmt.Errorf("failed to create database: %w", err)
-		}
-		s.logger.Verbose("✓ Database '%s' created successfully", config.DatabaseName)
-	} else {
+	if existed {
 		s.logger.Verbose("Database '%s' already exists", config.DatabaseName)
+	} else {
+		s.logger.Verbose("Database '%s' created successfully", config.DatabaseName)
 	}
 
 	return nil
-}
-
-// parseConnectionString parses a connection string using the db package parser.
-func (s *DeploymentService) parseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
-	return db.ParseConnectionString(connStr)
 }

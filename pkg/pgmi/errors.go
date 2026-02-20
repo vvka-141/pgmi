@@ -30,9 +30,6 @@ var (
 	// ErrUnsupportedAuthMethod indicates the requested authentication method is not supported.
 	ErrUnsupportedAuthMethod = errors.New("unsupported authentication method")
 
-	// ErrNotImplemented indicates a feature is not yet implemented.
-	ErrNotImplemented = errors.New("not implemented")
-
 	// ErrConnectionFailed indicates database connection failed.
 	ErrConnectionFailed = errors.New("connection failed")
 )

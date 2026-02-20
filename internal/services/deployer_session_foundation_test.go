@@ -78,7 +78,7 @@ func TestSessionPreparation_Foundation(t *testing.T) {
 	// 1. Create schema.sql objects (pgmi_source, pgmi_parameter, helper functions)
 	// 2. Load files into pgmi_source
 	// 3. Load parameters into pgmi_parameter
-	// 4. Create unittest.sql objects (moves test files, materializes plan)
+	// 4. Apply API contract (creates views, materializes plan)
 	t.Log("Creating pg_temp schema and helper functions...")
 	if err := params.CreateSchema(ctx, conn); err != nil {
 		t.Fatalf("Failed to create schema: %v", err)
@@ -102,11 +102,6 @@ func TestSessionPreparation_Foundation(t *testing.T) {
 	t.Log("Applying API contract...")
 	if _, err := contract.Apply(ctx, conn, ""); err != nil {
 		t.Fatalf("Failed to apply contract: %v", err)
-	}
-
-	t.Log("Creating unittest framework...")
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
 
 	// Session preparation complete. Now validate with SQL test suite.
@@ -170,9 +165,6 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
 
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 
 	// Verify empty state
 	var fileCount, testCount int
@@ -242,9 +234,6 @@ func TestSessionPreparation_OnlyMigrations(t *testing.T) {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
 
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 
 	// Verify: migrations in pgmi_source, no tests
 	var migrationCount, testCount int

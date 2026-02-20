@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	_ "embed"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -9,29 +8,9 @@ import (
 	"strings"
 )
 
-// SchemaXSD is the embedded XSD schema for PGMI metadata validation.
-// This serves as both documentation and a contract for the metadata format.
-//
-//go:embed schema.xsd
-var SchemaXSD string
-
-// ErrNoMetadata indicates that the file contains no PGMI metadata block.
-// This is not a fatal error - files without metadata use fallback identity.
 var ErrNoMetadata = errors.New("no PGMI metadata found")
 
-// ErrMultipleMetadata indicates that multiple <pgmi-meta> blocks were found.
-// Only one metadata block is allowed per file.
-var ErrMultipleMetadata = errors.New("multiple PGMI metadata blocks found")
-
-// ErrMetadataTooLarge indicates the metadata block exceeds size limits.
-var ErrMetadataTooLarge = errors.New("metadata block exceeds maximum size")
-
 const (
-	// MetaElementTag is the root element name for metadata blocks.
-	MetaElementTag = "pgmi-meta"
-
-	// MaxMetadataSize is the maximum allowed size for a metadata block (10KB).
-	// This prevents DoS attacks via extremely large metadata blocks.
 	MaxMetadataSize = 10 * 1024
 )
 
@@ -64,7 +43,7 @@ var oldMetaElementRegex = regexp.MustCompile(`<\s*pgmi:meta[\s>]`)
 //
 // Error cases:
 //   - No block comment or no <pgmi-meta> → ErrNoMetadata
-//   - Multiple <pgmi-meta> blocks → ErrMultipleMetadata
+//   - Multiple <pgmi-meta> blocks → MetadataError
 //   - Invalid XML syntax → wrapped xml.SyntaxError
 func Extract(content string, filePath string) (*Metadata, error) {
 	// Find all block comments

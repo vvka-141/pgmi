@@ -97,6 +97,69 @@ func TestConsoleLogger_Error(t *testing.T) {
 	}
 }
 
+func TestConsoleLogger_InfoWithoutArgs(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	logger := NewConsoleLogger(false)
+	logger.Info("100% complete")
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	expected := "100% complete\n"
+	if output != expected {
+		t.Errorf("Info without args: expected %q, got %q", expected, output)
+	}
+}
+
+func TestConsoleLogger_VerboseWithoutArgs(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	logger := NewConsoleLogger(true)
+	logger.Verbose("scanning 50% done")
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	expected := "[VERBOSE] scanning 50% done\n"
+	if output != expected {
+		t.Errorf("Verbose without args: expected %q, got %q", expected, output)
+	}
+}
+
+func TestConsoleLogger_ErrorWithoutArgs(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	logger := NewConsoleLogger(false)
+	logger.Error("failed at 99%")
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	expected := "[ERROR] failed at 99%\n"
+	if output != expected {
+		t.Errorf("Error without args: expected %q, got %q", expected, output)
+	}
+}
+
 func TestConsoleLogger_ConcurrentSafety(t *testing.T) {
 	// Capture stderr
 	old := os.Stderr

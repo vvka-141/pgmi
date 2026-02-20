@@ -39,7 +39,9 @@ func (f *memoryFile) RelativePath() string { return f.relPath }
 func (f *memoryFile) Info() FileInfo       { return f.info }
 
 func (f *memoryFile) ReadContent() ([]byte, error) {
-	return f.content, nil
+	cp := make([]byte, len(f.content))
+	copy(cp, f.content)
+	return cp, nil
 }
 
 // memoryDirectory implements Directory interface for in-memory filesystem
@@ -60,22 +62,8 @@ func (d *memoryDirectory) Walk(fn func(File, error) error) error {
 	})
 
 	for _, entry := range entries {
-		// Recover from panics in callback to prevent crashing the entire walk
-		var callbackErr error
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Convert panic to error
-					callbackErr = fmt.Errorf("walk callback panicked at %s: %v", entry.absPath, r)
-				}
-			}()
-
-			callbackErr = fn(entry, nil)
-		}()
-
-		// If callback returned an error (or panicked), stop walking
-		if callbackErr != nil {
-			return callbackErr
+		if err := fn(entry, nil); err != nil {
+			return err
 		}
 	}
 
@@ -290,44 +278,6 @@ func (mfs *MemoryFileSystem) ReadFile(filePath string) ([]byte, error) {
 	}
 
 	return file.content, nil
-}
-
-// ReadDir implements FileSystemProvider.ReadDir
-func (mfs *MemoryFileSystem) ReadDir(dirPath string) ([]FileInfo, error) {
-	// Normalize to forward slashes (virtual filesystem convention)
-	dirPath = filepath.ToSlash(dirPath)
-
-	// Calculate absolute path within virtual filesystem
-	var absPath string
-	if dirPath == "." || dirPath == "" {
-		absPath = mfs.root
-	} else if strings.HasPrefix(dirPath, "/") || path.IsAbs(dirPath) {
-		absPath = dirPath
-	} else {
-		absPath = path.Join(mfs.root, dirPath)
-	}
-	absPath = path.Clean(absPath)
-
-	// Get all direct children of this directory
-	var result []FileInfo
-	for filePath, file := range mfs.files {
-		// Skip the directory itself
-		if filePath == absPath {
-			continue
-		}
-
-		// Check if this file is a direct child
-		if path.Dir(filePath) == absPath {
-			result = append(result, file.info)
-		}
-	}
-
-	// Sort by name for deterministic order
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name() < result[j].Name()
-	})
-
-	return result, nil
 }
 
 // Stat implements FileSystemProvider.Stat

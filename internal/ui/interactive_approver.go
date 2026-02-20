@@ -54,30 +54,25 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 		}
 	}()
 
-	var approved bool
-	var resultErr error
-
 	select {
 	case <-ctx.Done():
-		approved, resultErr = false, ctx.Err()
-	case err := <-errChan:
-		approved, resultErr = false, fmt.Errorf("failed to read input: %w", err)
-	case input := <-inputChan:
-		if input == dbName {
-			fmt.Fprintln(a.output, "✓ Confirmed. Proceeding with database overwrite...")
-			approved, resultErr = true, nil
-		} else {
-			fmt.Fprintf(a.output, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
-			approved, resultErr = false, nil
+		if closer, ok := a.input.(io.Closer); ok && a.input != os.Stdin {
+			closer.Close()
+			wg.Wait()
 		}
+		return false, ctx.Err()
+	case err := <-errChan:
+		wg.Wait()
+		return false, fmt.Errorf("failed to read input: %w", err)
+	case input := <-inputChan:
+		wg.Wait()
+		if input == dbName {
+			fmt.Fprintln(a.output, "Confirmed. Proceeding with database overwrite...")
+			return true, nil
+		}
+		fmt.Fprintf(a.output, "Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
+		return false, nil
 	}
-
-	if closer, ok := a.input.(io.Closer); ok {
-		closer.Close()
-	}
-	wg.Wait()
-
-	return approved, resultErr
 }
 
 // Verify InteractiveApprover implements the Approver interface at compile time

@@ -53,26 +53,6 @@ func TestStandardConnector_RetryDefaults(t *testing.T) {
 	// These are tested in the retry package unit tests
 }
 
-// Test that demonstrates retry behavior is integrated (conceptual)
-// Full integration testing requires a real PostgreSQL instance with controlled failures
-func TestStandardConnector_RetryIntegration_Concept(t *testing.T) {
-	t.Skip("Skipping conceptual test - requires integration test environment")
-
-	// This test would:
-	// 1. Set up a test PostgreSQL instance
-	// 2. Configure it to reject connections initially
-	// 3. Start accepting after N attempts
-	// 4. Verify connector succeeds after retries
-	//
-	// Example flow:
-	// - Attempt 1: Connection refused (transient)
-	// - Wait 100ms (exponential backoff)
-	// - Attempt 2: Connection refused (transient)
-	// - Wait 200ms (exponential backoff)
-	// - Attempt 3: Connection accepted
-	// - Success
-}
-
 // Test error classification integration
 func TestErrorClassification_Integration(t *testing.T) {
 	classifier := retry.NewPostgreSQLErrorClassifier()

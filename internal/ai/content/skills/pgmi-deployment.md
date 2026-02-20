@@ -24,7 +24,7 @@ This design provides:
 - ✅ **Transactional safety** - All work can be wrapped in one transaction
 - ✅ **Isolation** - Temporary tables exist only for this deployment
 - ✅ **Simplicity** - No external state management
-- ✅ **Auditability** - Clear session boundaries for logging
+- ✅ **Inspectability** - All state queryable during the session; clear boundaries for logging
 
 **Contrast with other tools:**
 - ❌ Multi-session tools: State stored in files, harder to reason about
@@ -53,11 +53,11 @@ pgmi:
 
 pgmi creates temporary tables and helper functions in `pg_temp` schema:
 
-**Temporary Tables:**
+**Internal Tables** (underscore prefix):
 ```sql
--- pg_temp.pgmi_source
+-- pg_temp._pgmi_source
 -- Contains all discovered files EXCEPT deploy.sql and test files
-CREATE TEMP TABLE pgmi_source (
+CREATE TEMP TABLE _pgmi_source (
     path TEXT NOT NULL,              -- File path (e.g., ./migrations/001.sql)
     directory TEXT NOT NULL,          -- Parent directory with trailing / (e.g., ./migrations/)
     name TEXT NOT NULL,              -- Filename extracted from path
@@ -66,39 +66,32 @@ CREATE TEMP TABLE pgmi_source (
     pgmi_checksum TEXT NOT NULL,     -- Normalized checksum (content identity)
     is_sql_file BOOLEAN NOT NULL,   -- True if extension is a recognized SQL type
     -- Additional metadata fields
-) ;
+);
 
--- pg_temp.pgmi_parameter
+-- pg_temp._pgmi_parameter
 -- Contains CLI-supplied parameters
-CREATE TEMP TABLE pgmi_parameter (
+CREATE TEMP TABLE _pgmi_parameter (
     key TEXT NOT NULL,
     value TEXT NOT NULL
 );
 
--- pg_temp.pgmi_plan
--- Execution plan populated by deploy.sql
-CREATE TEMP TABLE pgmi_plan (
-    ordinal INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- Execution order (auto-assigned)
-    command_sql TEXT NOT NULL                               -- SQL command to execute
-);
-
--- pg_temp.pgmi_test_source
+-- pg_temp._pgmi_test_source
 -- Test files isolated from deployment
-CREATE TEMP TABLE pgmi_test_source (
+CREATE TEMP TABLE _pgmi_test_source (
     path TEXT NOT NULL,
     content TEXT NOT NULL,
-    -- Same structure as pgmi_source
+    -- Same structure as _pgmi_source
 );
+```
+
+**Public Views** (stable API for deploy.sql):
+```sql
+-- pg_temp.pgmi_source_view, pgmi_parameter_view, pgmi_test_source_view
+-- pg_temp.pgmi_plan_view - Execution order with metadata JOIN
 ```
 
 **Helper Functions:**
 ```sql
--- Parameter declaration (optional - for defaults, validation, documentation)
-pg_temp.pgmi_declare_param(p_key TEXT, p_type TEXT, p_default_value TEXT, p_required BOOLEAN, p_description TEXT) RETURNS VOID
-
--- Parameter access
-pg_temp.pgmi_get_param(key TEXT, default_value TEXT) RETURNS TEXT
-
 -- Test plan (returns execution order for tests)
 pg_temp.pgmi_test_plan(p_pattern TEXT DEFAULT NULL) RETURNS TABLE(ordinal INT, step_type TEXT, script_path TEXT, directory TEXT, depth INT)
 
@@ -106,10 +99,23 @@ pg_temp.pgmi_test_plan(p_pattern TEXT DEFAULT NULL) RETURNS TABLE(ordinal INT, s
 pg_temp.pgmi_has_tests(p_directory TEXT, p_pattern TEXT DEFAULT NULL) RETURNS BOOLEAN
 ```
 
+**Parameter Access:**
+Parameters passed via `--param key=value` are automatically available as session configuration variables using the `pgmi.` namespace prefix. Access them using PostgreSQL's native `current_setting()` function:
+```sql
+-- Access parameter with fallback to default (returns NULL if not set when true)
+SELECT COALESCE(current_setting('pgmi.env', true), 'development');
+
+-- Access required parameter (fails if not set)
+SELECT current_setting('pgmi.database_admin_password');
+```
+
+Templates can define their own helper functions for parameter access if desired (e.g., `deployment_setting()` in the advanced template).
+
 **Preprocessor Macro:**
 ```sql
--- pgmi_test() is a preprocessor macro expanded by Go (not a SQL function)
--- Use: CALL pgmi_test(); or CALL pgmi_test('./pattern/**');
+-- CALL pgmi_test() is a preprocessor macro expanded by Go (not a SQL function)
+-- Syntax: CALL pgmi_test(); or CALL pgmi_test('./pattern/**');
+-- Generates inline SQL with savepoint isolation via pgmi_test_generate()
 ```
 
 ---
@@ -121,24 +127,24 @@ pg_temp.pgmi_has_tests(p_directory TEXT, p_pattern TEXT DEFAULT NULL) RETURNS BO
 pgmi recursively scans the provided path for SQL files:
 
 **Discovery Rules:**
-1. **Include:** All SQL files in provided directory (recursive). Recognized extensions: `.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql`. The `is_sql_file` column in `pgmi_source` indicates whether a file matches these extensions.
-2. **Exclude:** `deploy.sql` (executed separately by pgmi, never loaded into `pgmi_source`)
-3. **Exclude:** Files in `__test__/` and `__tests__/` directories (loaded directly into `pgmi_test_source`, never into `pgmi_source`)
+1. **Include:** All SQL files in provided directory (recursive). Recognized extensions: `.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql`. The `is_sql_file` column in `pgmi_source_view` indicates whether a file matches these extensions.
+2. **Exclude:** `deploy.sql` (executed separately by pgmi, never loaded into internal tables)
+3. **Exclude:** Files in `__test__/` and `__tests__/` directories (loaded directly into `_pgmi_test_source`, never into `_pgmi_source`)
 4. **Order:** Files discovered in filesystem order (no guarantee)
 
 **File Categorization:**
 ```
 ./myapp/
-├── deploy.sql                    → Executed separately by pgmi (NOT in pgmi_source)
-├── init.sql                      → pg_temp.pgmi_source
+├── deploy.sql                    → Executed separately by pgmi (NOT in _pgmi_source)
+├── init.sql                      → pg_temp._pgmi_source (access via pgmi_source_view)
 ├── migrations/
-│   ├── 001_schema.sql           → pg_temp.pgmi_source
-│   └── 002_data.sql             → pg_temp.pgmi_source
+│   ├── 001_schema.sql           → pg_temp._pgmi_source (access via pgmi_source_view)
+│   └── 002_data.sql             → pg_temp._pgmi_source (access via pgmi_source_view)
 ├── utils/
-│   └── helpers.sql              → pg_temp.pgmi_source
+│   └── helpers.sql              → pg_temp._pgmi_source (access via pgmi_source_view)
 └── __test__/
-    ├── test_schema.sql          → pg_temp.pgmi_test_source (ISOLATED)
-    └── test_data.sql            → pg_temp.pgmi_test_source (ISOLATED)
+    ├── test_schema.sql          → pg_temp._pgmi_test_source (ISOLATED)
+    └── test_data.sql            → pg_temp._pgmi_test_source (ISOLATED)
 ```
 
 **Why Isolate Tests?**
@@ -146,9 +152,9 @@ pgmi recursively scans the provided path for SQL files:
 Test files often manipulate schema and data for testing purposes. If executed during deployment by mistake, they can cause **unrecoverable data corruption**.
 
 **Isolation Strategy:**
-- Physical separation: Different temp tables
-- Cannot accidentally execute via `pgmi_plan_view` (only includes `pgmi_source`, not `pgmi_test_source`)
-- Only accessible via `pgmi_test()` macro or `pgmi test` command
+- Physical separation: Different internal tables (`_pgmi_source` vs `_pgmi_test_source`)
+- Cannot accidentally execute via `pgmi_plan_view` (only joins `_pgmi_source`, not `_pgmi_test_source`)
+- Only accessible via `CALL pgmi_test()` preprocessor macro in deploy.sql
 - Automatic: Developer cannot bypass
 
 **Step 4: Calculate Checksums**
@@ -239,7 +245,7 @@ BEGIN
 END $$;
 
 -- Run tests (preprocessor macro)
-pgmi_test();
+CALL pgmi_test();
 
 COMMIT;
 ```
@@ -292,57 +298,42 @@ When deployment finishes (success or failure):
 
 ## Parameter System
 
-### Auto-Initialized Session Variables
+### Session Configuration Variables
 
-pgmi parameters are automatically available as PostgreSQL session variables without manual initialization.
+pgmi parameters are automatically available as PostgreSQL session configuration variables without manual initialization.
 
-**1. Automatic Initialization (Infrastructure)**
-- CLI parameters (`--param key=value`) automatically become session variables
+**Automatic Initialization:**
+- CLI parameters (`--param key=value`) automatically become session configuration variables
 - No manual initialization needed - parameters are immediately accessible
 - Session variables use `pgmi.` namespace prefix
-- Accessible via `current_setting('pgmi.key')` or `pgmi_get_param('key', 'default')`
+- Accessible via `current_setting('pgmi.key', true)` with COALESCE for defaults
 
-**2. Parameter Declaration (Optional)**
-- Use `pgmi_declare_param()` to document parameter contracts, set defaults, and add type validation
-- Supports types: text, int, bigint, numeric, boolean, uuid, timestamp, timestamptz, name
-- Required parameters fail-fast with clear error messages
-- Merged table (`pg_temp.pgmi_parameter`) stores values and metadata for AI introspection
+**Parameter Access Pattern:**
+Use PostgreSQL's native `current_setting()` function:
+```sql
+-- Optional parameter with default
+COALESCE(current_setting('pgmi.env', true), 'development')
+
+-- Required parameter (fails if not set)
+current_setting('pgmi.database_admin_password')
+```
+
+**Template-Specific Helpers:**
+Templates can define their own helper functions for parameter access with defaults, validation, and type coercion. For example, the advanced template provides `deployment_setting()`.
 
 **Example:**
 ```sql
--- deploy.sql - Declare parameters with defaults and validation
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'env',
-    p_type => 'text',
-    p_default_value => 'development',
-    p_description => 'Deployment environment'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'max_connections',
-    p_type => 'int',
-    p_default_value => '100',
-    p_description => 'Maximum database connections'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'database_admin_password',
-    p_type => 'text',
-    p_required => true,
-    p_description => 'Admin password (REQUIRED)'
-);
-
--- Parameters are immediately accessible
+-- deploy.sql - Access parameters directly
 DO $$
+DECLARE
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
-    IF current_setting('pgmi.env') = 'production' THEN
+    IF v_env = 'production' THEN
         RAISE NOTICE 'Production deployment detected';
     END IF;
 
-    -- Convenience wrapper with fallback
-    IF pg_temp.pgmi_get_param('env', 'development') = 'production' THEN
-        -- Production-specific validation
-    END IF;
+    -- Required parameter - fails fast if missing
+    PERFORM current_setting('pgmi.database_admin_password');
 END $$;
 ```
 
@@ -351,16 +342,15 @@ END $$;
 # Basic deployment with parameters
 pgmi deploy . --database mydb --param env=production --param max_connections=200
 
-# Required parameter missing (fails with clear error)
+# Required parameter missing (fails when accessed in deploy.sql)
 pgmi deploy . --database mydb
-# ERROR: Required parameter "database_admin_password" not provided.
-# Use: pgmi deploy . --param database_admin_password=<value>
+# ERROR: unrecognized configuration parameter "pgmi.database_admin_password"
 ```
 
 **Security Note:**
 - Session variables visible via `SHOW ALL` and `pg_settings`
-- ❌ Do NOT pass secrets (passwords, API keys, tokens)
-- ✅ Use connection strings for sensitive credentials
+- Do NOT pass secrets (passwords, API keys, tokens) as parameters
+- Use connection strings for sensitive credentials
 - Session variables exist only for deployment session
 
 ---
@@ -372,7 +362,7 @@ pgmi deploy . --database mydb
 **The Contract:**
 1. deploy.sql queries files from `pg_temp.pgmi_plan_view`
 2. deploy.sql executes files directly with `EXECUTE v_file.content`
-3. No magic: What you execute is what runs
+3. Transparent: file content passes through unmodified (except `CALL pgmi_test()` macro expansion)
 
 **Core Pattern:**
 
@@ -403,7 +393,7 @@ COMMIT;
 **Advantages:**
 - ✅ **Transparent:** User controls exactly what executes
 - ✅ **Deterministic:** Same inputs → same execution order → same result
-- ✅ **Flexible:** User controls everything (transaction boundaries, order, conditionals)
+- ✅ **Flexible:** User controls deployment logic (transaction boundaries, filtering, conditionals)
 - ✅ **Simple:** No queue abstraction, just SQL executing SQL
 - ✅ **PostgreSQL-native:** Uses standard PL/pgSQL patterns
 
@@ -450,7 +440,7 @@ Physical isolation in separate temp table (`pg_temp.pgmi_test_source`)
 - Test files invisible to deployment logic
 
 **During Testing:**
-- `pgmi_test()` macro reads from `pgmi_test_source` via `pgmi_test_plan()` function
+- `CALL pgmi_test()` macro reads from `_pgmi_test_source` via `pgmi_test_plan()` function
 - Can filter by regex pattern
 - Executes in transaction with automatic rollback
 
@@ -474,7 +464,7 @@ BEGIN
 END $$;
 
 -- Run tests (preprocessor macro handles savepoints automatically)
-pgmi_test();
+CALL pgmi_test();
 
 COMMIT;
 ```
@@ -598,9 +588,9 @@ BEGIN
 END $$;
 COMMIT;
 
--- Phase 4: Tests (rolled back via pgmi_test() macro)
+-- Phase 4: Tests (rolled back via CALL pgmi_test() macro)
 BEGIN;
-pgmi_test();
+CALL pgmi_test();
 COMMIT;
 ```
 
@@ -710,7 +700,7 @@ COMMIT;
 ```
 
 **Non-Determinism Sources:**
-- ❌ `SELECT path FROM pg_temp.pgmi_source` without ORDER BY (filesystem order)
+- ❌ `SELECT path FROM pg_temp.pgmi_source_view` without ORDER BY (filesystem order)
 - ❌ Hash-based iteration in PL/pgSQL
 - ✅ Always use `ORDER BY execution_order` or explicit `ORDER BY path` for deterministic results
 
@@ -820,8 +810,8 @@ type DeploymentConfig struct {
 **2. "File not found"**
 **Cause:** Query returns no rows for path
 **Solution:**
-- Check path matches discovered files (use `SELECT path FROM pg_temp.pgmi_source`)
-- Ensure file not in `__test__/` (test files are in `pgmi_test_source`, not `pgmi_source`)
+- Check path matches discovered files (use `SELECT path FROM pg_temp.pgmi_source_view`)
+- Ensure file not in `__test__/` (test files are in `pgmi_test_source_view`, not `pgmi_source_view`)
 
 **3. "Required parameter not provided"**
 **Cause:** A parameter declared with `p_required => true` was not supplied via `--param`
@@ -845,28 +835,41 @@ This sets `client_min_messages = 'debug'` on the session, surfacing all diagnost
 
 ### Session Objects
 
+pgmi uses a two-tier API: internal tables (`_pgmi_*` prefix) and public views (`*_view` suffix).
+
 | Object | Type | Purpose |
 |--------|------|---------|
-| `pg_temp.pgmi_source` | TABLE | All files except `deploy.sql` and tests |
+| `pg_temp._pgmi_source` | TABLE | All files except `deploy.sql` and tests |
+| `pg_temp.pgmi_source_view` | VIEW | Public access to source files |
 | `pg_temp.pgmi_plan_view` | VIEW | Files ordered by metadata for execution |
-| `pg_temp.pgmi_test_source` | TABLE | Files from `__test__/` directories |
-| `pg_temp.pgmi_parameter` | TABLE | CLI parameters from `--param` |
-| `pg_temp.pgmi_source_metadata` | TABLE | Parsed `<pgmi-meta>` blocks |
+| `pg_temp._pgmi_test_source` | TABLE | Files from `__test__/` directories |
+| `pg_temp.pgmi_test_source_view` | VIEW | Public access to test files |
+| `pg_temp._pgmi_parameter` | TABLE | CLI parameters from `--param` |
+| `pg_temp.pgmi_parameter_view` | VIEW | Public access to parameters |
+| `pg_temp._pgmi_source_metadata` | TABLE | Parsed `<pgmi-meta>` blocks |
 
 ### Helper Functions
 
 | Function | Purpose |
 |----------|---------|
-| `pgmi_declare_param(key, type, default, required, desc)` | Declare parameter with validation |
-| `pgmi_get_param(key, default)` | Access parameter value |
 | `pgmi_test_plan(pattern)` | Returns test execution plan (TABLE function) |
 | `pgmi_has_tests(directory, pattern)` | Check if tests exist |
+
+### Parameter Access
+
+Parameters are accessed via PostgreSQL's native `current_setting()`:
+
+| Pattern | Purpose |
+|---------|---------|
+| `current_setting('pgmi.key')` | Access required parameter (fails if not set) |
+| `COALESCE(current_setting('pgmi.key', true), 'default')` | Access optional parameter with default |
 
 ### Preprocessor Macro
 
 | Macro | Purpose |
 |-------|---------|
-| `pgmi_test()` or `pgmi_test('./pattern/**')` | Run tests with automatic savepoints (expanded by Go) |
+| `CALL pgmi_test()` or `CALL pgmi_test('./pattern/**')` | Run tests with automatic savepoints (expanded by Go) |
+| `CALL pgmi_test('pattern', 'callback')` | Run tests with custom callback function |
 
 ### Checksum Types
 

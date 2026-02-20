@@ -13,10 +13,9 @@ import (
 // AzureServicePrincipalProvider acquires tokens using Service Principal credentials.
 // This is the primary authentication method for CI/CD pipelines.
 type AzureServicePrincipalProvider struct {
-	tenantID     string
-	clientID     string
-	clientSecret string
-	credential   *azidentity.ClientSecretCredential
+	tenantID   string
+	clientID   string
+	credential *azidentity.ClientSecretCredential
 }
 
 // NewAzureServicePrincipalProvider creates a token provider for Service Principal auth.
@@ -32,10 +31,9 @@ func NewAzureServicePrincipalProvider(tenantID, clientID, clientSecret string) (
 	}
 
 	return &AzureServicePrincipalProvider{
-		tenantID:     tenantID,
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		credential:   cred,
+		tenantID:   tenantID,
+		clientID:   clientID,
+		credential: cred,
 	}, nil
 }
 

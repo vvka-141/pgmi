@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -78,9 +79,6 @@ func prepareSessionTables(t *testing.T, ctx context.Context, conn *pgxpool.Conn)
 	if err := l.LoadParametersIntoSession(ctx, conn, map[string]string{}); err != nil {
 		t.Fatalf("Failed to load params: %v", err)
 	}
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 }
 
 func newServiceWithReadContent(content string) *DeploymentService {
@@ -156,8 +154,8 @@ func TestExecuteDeploySQL_SyntaxError_Internal(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error for invalid SQL")
 	}
-	if !strings.Contains(err.Error(), "deploy.sql execution failed") {
-		t.Errorf("Expected deploy.sql error wrapper, got: %v", err)
+	if !errors.Is(err, pgmi.ErrExecutionFailed) {
+		t.Errorf("Expected ErrExecutionFailed sentinel, got: %v", err)
 	}
 }
 

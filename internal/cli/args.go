@@ -23,23 +23,6 @@ Example:
 	return nil
 }
 
-// RequireTargetPath validates that exactly one target_path argument is provided.
-// Returns a helpful error message with usage and examples if missing or too many.
-func RequireTargetPath(cmd *cobra.Command, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf(`missing required argument: <target_path>
-
-Usage: %s <target_path>
-
-Example:
-  %s ./myproject`, cmd.UseLine(), cmd.CommandPath())
-	}
-	if len(args) > 1 {
-		return fmt.Errorf("accepts 1 arg(s), received %d", len(args))
-	}
-	return nil
-}
-
 // RequireTemplateName validates that exactly one template_name argument is provided.
 // Returns a helpful error message with usage and examples if missing or too many.
 func RequireTemplateName(cmd *cobra.Command, args []string) error {

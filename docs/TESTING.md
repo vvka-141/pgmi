@@ -554,6 +554,131 @@ The `CALL pgmi_test()` macro:
 
 ---
 
+## Custom test callbacks
+
+The default test callback emits NOTICE messages (`[pgmi] Test: ...`). You can replace it with a custom PL/pgSQL function to produce structured output, log results to a table, or integrate with external reporting.
+
+```sql
+CALL pgmi_test('.*/orders/.*', 'my_test_callback');
+```
+
+Your callback function must match this signature:
+
+```sql
+CREATE OR REPLACE FUNCTION pg_temp.my_test_callback(
+    p_event TEXT,
+    p_path TEXT,
+    p_directory TEXT,
+    p_depth INT
+) RETURNS VOID AS $$
+BEGIN
+    CASE p_event
+        WHEN 'fixture_start' THEN
+            RAISE NOTICE '[FIXTURE] %', p_path;
+        WHEN 'test_start' THEN
+            RAISE NOTICE '[TEST] %', p_path;
+        WHEN 'teardown' THEN
+            RAISE NOTICE '[TEARDOWN] %', p_directory;
+        ELSE
+            RAISE NOTICE '[UNKNOWN] % %', p_event, p_path;
+    END CASE;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+**Events dispatched:**
+
+| Event | p_path | p_directory | When |
+|-------|--------|-------------|------|
+| `fixture_start` | Path to `_setup.sql` | Fixture directory | Before executing a fixture |
+| `test_start` | Path to test file | Test directory | Before executing a test |
+| `teardown` | NULL | Directory being torn down | After rolling back a directory's savepoint |
+
+**Example: logging results to a table**
+
+```sql
+CREATE TEMP TABLE test_log (
+    ordinal SERIAL,
+    event TEXT,
+    path TEXT,
+    logged_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+
+CREATE OR REPLACE FUNCTION pg_temp.logging_callback(
+    p_event TEXT, p_path TEXT, p_directory TEXT, p_depth INT
+) RETURNS VOID AS $$
+BEGIN
+    INSERT INTO pg_temp.test_log (event, path) VALUES (p_event, p_path);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Use the logging callback
+CALL pgmi_test(NULL, 'logging_callback');
+
+-- Query results after tests run
+SELECT * FROM pg_temp.test_log ORDER BY ordinal;
+```
+
+---
+
+## Teardown
+
+pgmi uses **implicit teardown via savepoint rollback** — there are no explicit teardown scripts. When a directory's tests finish, pgmi rolls back to the savepoint created before the directory's fixture, undoing all changes from both the fixture and the tests.
+
+```
+SAVEPOINT sp_orders_setup;          ← fixture boundary
+... orders/_setup.sql ...           ← fixture creates data
+    SAVEPOINT sp_test_1;
+    ... test_order_total.sql ...    ← test modifies data
+    ROLLBACK TO sp_test_1;          ← test changes undone
+ROLLBACK TO sp_orders_setup;        ← fixture + everything undone
+```
+
+This means:
+- No `_teardown.sql` convention — rollback handles cleanup
+- No manual `DELETE FROM` or `DROP TABLE` in test files
+- Sequences, temp objects, and side effects are all reverted
+
+**When implicit teardown isn't enough:** If your tests create objects outside the transaction (e.g., `CREATE INDEX CONCURRENTLY`), those cannot be rolled back. Avoid non-transactional operations in tests.
+
+---
+
+## Comparison with alternatives
+
+| Approach | Isolation | Speed | Requires Docker | Real PostgreSQL |
+|----------|-----------|-------|-----------------|-----------------|
+| **pgmi (savepoints)** | Per-test rollback | Fast (no I/O) | No | Yes |
+| **Testcontainers** | Fresh database per test | Slow (container startup) | Yes | Yes |
+| **pgTAP** | None (manual cleanup) | Fast | No | Yes |
+| **ORM rollback** | Transaction per test | Fast | No | ORM subset only |
+| **Neon branching** | Copy-on-write branch | Fast (API call) | No | Yes (managed) |
+
+**pgmi's advantage:** Tests run against the actual deployment (real schema, real data, real transactions) with zero infrastructure. No Docker, no API calls, no separate test database.
+
+**pgmi's limitation:** No structured output (JUnit XML, TAP). If you need CI dashboards with test result parsing, you'll need a custom [callback](#custom-test-callbacks).
+
+---
+
+## Compliance and gated deployment
+
+The [gated deployment pattern](#the-gated-deployment-pattern) provides auditable evidence that tests passed before changes were committed:
+
+1. Migrations run inside `BEGIN`
+2. `CALL pgmi_test()` executes all tests
+3. If any test fails → `RAISE EXCEPTION` → transaction aborts → database unchanged
+4. If all tests pass → `COMMIT` → changes persist
+
+**For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Tests passing is a precondition for the commit — there is no way to commit with failing tests.
+
+```sql
+-- After deployment, query the audit trail
+SELECT file_path, executed_at, executed_by, deployment_script_content_checksum
+FROM internal.deployment_script_execution_log
+ORDER BY executed_at;
+```
+
+---
+
 ## Troubleshooting
 
 ### "relation does not exist"

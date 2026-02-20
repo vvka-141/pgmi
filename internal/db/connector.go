@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -26,6 +27,15 @@ const (
 	DefaultMaxConnIdleTime = 30 * time.Minute
 )
 
+func configurePool(poolConfig *pgxpool.Config) {
+	poolConfig.MaxConns = DefaultMaxConns
+	poolConfig.MinConns = DefaultMinConns
+	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
+	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
+		fmt.Fprintln(os.Stderr, notice.Message)
+	}
+}
+
 // StandardConnector implements the Connector interface for standard
 // username/password authentication with automatic retry on transient failures.
 type StandardConnector struct {
@@ -43,7 +53,7 @@ func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
 		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	return &StandardConnector{
 		config:        config,
@@ -54,27 +64,16 @@ func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
 // Connect establishes a connection pool using standard authentication with automatic retry.
 func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
 	var pool *pgxpool.Pool
+	connStr := BuildConnectionString(c.config)
 
 	// Use retry executor to handle transient connection failures
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
-		connStr := BuildConnectionString(c.config)
-
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse connection config: %w", err)
 		}
 
-		// Set explicit pool limits for deployment operations to prevent resource exhaustion
-		// during long-running root.sql orchestration
-		poolConfig.MaxConns = DefaultMaxConns
-		poolConfig.MinConns = DefaultMinConns
-		poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
-
-		// Configure notice handler to stream PostgreSQL RAISE NOTICE/INFO/WARNING to stdout
-		// This is critical for the PostgreSQL-first experience - users should see database output directly
-		poolConfig.ConnConfig.OnNotice = func(pc *pgconn.PgConn, notice *pgconn.Notice) {
-			fmt.Println(notice.Message)
-		}
+		configurePool(poolConfig)
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
@@ -115,6 +114,7 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 }
 
 // wrapConnectionError wraps raw pgx connection errors with actionable guidance.
+// All returned errors wrap pgmi.ErrConnectionFailed so callers can use errors.Is().
 func wrapConnectionError(err error, host string, port int, database string) error {
 	errStr := strings.ToLower(err.Error())
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -128,7 +128,8 @@ Possible causes:
   - Wrong host or port
   - Firewall blocking the connection
 
-Original error: %w`, addr, host, port, err)
+Original error: %w
+%w`, addr, host, port, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "no host"):
 		return fmt.Errorf(`cannot resolve host "%s"
@@ -138,7 +139,8 @@ Possible causes:
   - DNS is not configured or reachable
   - Network connection issue
 
-Original error: %w`, host, err)
+Original error: %w
+%w`, host, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "password authentication failed"):
 		return fmt.Errorf(`password authentication failed for database "%s"
@@ -148,7 +150,8 @@ Possible causes:
   - Wrong username
   - User does not have access to the database
 
-Original error: %w`, database, err)
+Original error: %w
+%w`, database, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "does not exist"):
 		return fmt.Errorf(`database "%s" does not exist
@@ -158,7 +161,8 @@ To create it:
 
 Or use --overwrite to let pgmi create it.
 
-Original error: %w`, database, database, err)
+Original error: %w
+%w`, database, database, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out"):
 		return fmt.Errorf(`connection timed out to %s
@@ -169,7 +173,8 @@ Possible causes:
   - Firewall silently dropping packets
   - Wrong host/port (server not listening)
 
-Original error: %w`, addr, err)
+Original error: %w
+%w`, addr, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "ssl") || strings.Contains(errStr, "tls"):
 		return fmt.Errorf(`SSL/TLS connection error
@@ -179,7 +184,8 @@ Possible causes:
   - Certificate verification failed (try --sslmode=require)
   - Client certificates missing (check --sslcert, --sslkey)
 
-Original error: %w`, err)
+Original error: %w
+%w`, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "too many connections"):
 		return fmt.Errorf(`too many connections to database "%s"
@@ -191,16 +197,16 @@ Possible causes:
 
 Try: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';
 
-Original error: %w`, database, database, err)
+Original error: %w
+%w`, database, database, err, pgmi.ErrConnectionFailed)
 
 	default:
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to connect to database: %w\n%w", err, pgmi.ErrConnectionFailed)
 	}
 }
 
-// newAWSConnector creates an AWSIAMConnector with the appropriate token provider.
+// newAWSConnector creates a token-based connector with the AWS IAM token provider.
 func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
-	// Build endpoint from host:port
 	endpoint := fmt.Sprintf("%s:%d", config.Host, config.Port)
 
 	tokenProvider, err := NewAWSIAMTokenProvider(endpoint, config.AWSRegion, config.Username)
@@ -208,7 +214,7 @@ func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return nil, fmt.Errorf("failed to create AWS IAM token provider: %w", err)
 	}
 
-	return NewAWSIAMConnector(config, tokenProvider), nil
+	return NewTokenBasedConnector(config, tokenProvider, "AWS IAM"), nil
 }
 
 // newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
@@ -223,7 +229,7 @@ func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
 }
 
-// newAzureConnector creates an AzureEntraIDConnector with the appropriate token provider.
+// newAzureConnector creates a token-based connector with the Azure Entra ID token provider.
 // If explicit credentials (tenant, client, secret) are provided, uses Service Principal auth.
 // Otherwise, falls back to DefaultAzureCredential chain.
 func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
@@ -246,5 +252,5 @@ func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		}
 	}
 
-	return NewAzureEntraIDConnector(config, tokenProvider), nil
+	return NewTokenBasedConnector(config, tokenProvider, "Azure"), nil
 }

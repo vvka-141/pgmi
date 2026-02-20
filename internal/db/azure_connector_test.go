@@ -26,7 +26,7 @@ func (m *MockTokenProvider) String() string {
 	return "MockTokenProvider"
 }
 
-func TestAzureEntraIDConnector_Creation(t *testing.T) {
+func TestTokenBasedConnector_Creation(t *testing.T) {
 	config := &pgmi.ConnectionConfig{
 		Host:       "testserver.postgres.database.azure.com",
 		Port:       5432,
@@ -40,7 +40,7 @@ func TestAzureEntraIDConnector_Creation(t *testing.T) {
 		ExpiresOn: time.Now().Add(1 * time.Hour),
 	}
 
-	connector := NewAzureEntraIDConnector(config, mockProvider)
+	connector := NewTokenBasedConnector(config, mockProvider, "Azure")
 
 	if connector == nil {
 		t.Fatal("expected non-nil connector")
@@ -124,10 +124,9 @@ func TestNewConnector_AzureEntraID(t *testing.T) {
 		t.Fatal("expected non-nil connector")
 	}
 
-	// Verify it's an AzureEntraIDConnector
-	_, ok := connector.(*AzureEntraIDConnector)
+	_, ok := connector.(*TokenBasedConnector)
 	if !ok {
-		t.Error("expected AzureEntraIDConnector type")
+		t.Error("expected TokenBasedConnector type")
 	}
 }
 
@@ -148,21 +147,19 @@ func TestApplyAzureAuth(t *testing.T) {
 			wantAuthMethod: pgmi.AuthMethodStandard,
 		},
 		{
-			name:  "env vars only",
+			name:  "env vars without --azure stays Standard",
 			flags: &AzureFlags{},
 			env: &EnvVars{
 				AZURE_TENANT_ID:     "env-tenant",
 				AZURE_CLIENT_ID:     "env-client",
 				AZURE_CLIENT_SECRET: "env-secret",
 			},
-			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
-			wantTenantID:     "env-tenant",
-			wantClientID:     "env-client",
-			wantClientSecret: "env-secret",
+			wantAuthMethod: pgmi.AuthMethodStandard,
 		},
 		{
-			name: "flags override env vars",
+			name: "--azure with flags override env vars",
 			flags: &AzureFlags{
+				Enabled:  true,
 				TenantID: "flag-tenant",
 				ClientID: "flag-client",
 			},
@@ -174,11 +171,12 @@ func TestApplyAzureAuth(t *testing.T) {
 			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
 			wantTenantID:     "flag-tenant",
 			wantClientID:     "flag-client",
-			wantClientSecret: "env-secret", // Secret only from env
+			wantClientSecret: "env-secret",
 		},
 		{
-			name: "partial flags - tenant only",
+			name: "--azure with partial flags",
 			flags: &AzureFlags{
+				Enabled:  true,
 				TenantID: "flag-tenant",
 			},
 			env: &EnvVars{
@@ -238,7 +236,7 @@ func TestApplyAzureAuth(t *testing.T) {
 				AuthMethod: pgmi.AuthMethodStandard,
 			}
 
-			applyAzureAuth(config, tt.flags, tt.env)
+			applyAzureAuth(config, tt.flags, tt.env, nil)
 
 			if config.AuthMethod != tt.wantAuthMethod {
 				t.Errorf("AuthMethod = %v, want %v", config.AuthMethod, tt.wantAuthMethod)

@@ -36,37 +36,26 @@ func (d *embedDirectory) Path() string { return d.absPath }
 
 func (d *embedDirectory) Walk(fn func(File, error) error) error {
 	return fs.WalkDir(d.embedFS, d.absPath, func(filePath string, entry fs.DirEntry, err error) error {
-		// Recover from panics in callback to prevent crashing the entire walk
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("walk callback panicked at %s: %v", filePath, r)
-			}
-		}()
-
 		if err != nil {
 			return fn(nil, err)
 		}
 
-		// Get file info
 		info, err := entry.Info()
 		if err != nil {
 			return fn(nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err))
 		}
 
-		// Calculate relative path from root
 		relPath, err := filepath.Rel(d.root, filePath)
 		if err != nil {
 			return fn(nil, fmt.Errorf("failed to calculate relative path: %w", err))
 		}
-
-		// Normalize to forward slashes for consistency
 		relPath = strings.ReplaceAll(relPath, "\\", "/")
 
 		file := &embedFile{
 			embedFS: d.embedFS,
 			absPath: filePath,
 			relPath: relPath,
-			info:    info, // fs.DirEntry.Info() returns fs.FileInfo
+			info:    info,
 		}
 
 		return fn(file, nil)
@@ -149,39 +138,6 @@ func (efs *EmbedFileSystem) ReadFile(filePath string) ([]byte, error) {
 	}
 
 	return content, nil
-}
-
-// ReadDir implements FileSystemProvider.ReadDir
-func (efs *EmbedFileSystem) ReadDir(dirPath string) ([]FileInfo, error) {
-	// Normalize path to forward slashes
-	dirPath = strings.ReplaceAll(dirPath, "\\", "/")
-
-	// Calculate absolute path within embed.FS
-	var absPath string
-	if dirPath == "." || dirPath == "" {
-		absPath = efs.root
-	} else if strings.HasPrefix(dirPath, "/") || path.IsAbs(dirPath) {
-		absPath = dirPath
-	} else {
-		absPath = path.Join(efs.root, dirPath)
-	}
-	absPath = path.Clean(absPath)
-
-	entries, err := efs.embedFS.ReadDir(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
-	}
-
-	result := make([]FileInfo, 0, len(entries))
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get file info for %s: %w", entry.Name(), err)
-		}
-		result = append(result, info)
-	}
-
-	return result, nil
 }
 
 // Stat implements FileSystemProvider.Stat

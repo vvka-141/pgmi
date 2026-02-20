@@ -112,24 +112,29 @@ migrations/
 internal/
   services/
     deployer.go
-    deployer_test.go      # Unit tests for deployer
-  db/
-    connector.go
-    connector_test.go     # Unit tests for connector
-    queries/
-      prepare_session.sql
-testutil/
-  helpers.go              # Shared test utilities
-  fixtures.go             # Test fixtures
-integration/
-  deploy_test.go          # Integration tests
-  init_test.go
+    deployer_test.go                    # Unit tests
+    deployer_integration_test.go        # Integration tests (same package)
+    session_integration_test.go
+  files/
+    loader/
+      loader.go
+      loader_test.go                    # Unit tests
+      loader_integration_test.go        # Integration tests
+  scaffold/
+    scaffold.go
+    scaffold_test.go                    # Unit tests
+    testhelpers/
+      deployer.go                       # Test helpers for deployer
 ```
+
+**Naming Convention**:
+- `*_test.go` - Unit tests (no database required)
+- `*_integration_test.go` - Integration tests (require PostgreSQL)
 
 **Review Checklist**:
 - [ ] Test files colocated with implementation (`*_test.go`)?
-- [ ] Shared utilities in `testutil/` package?
-- [ ] Integration tests in `integration/` package?
+- [ ] Integration tests use `*_integration_test.go` suffix?
+- [ ] Test helpers in `testhelpers/` subdirectory when needed?
 - [ ] No test code in `internal/` imported by non-test code?
 
 ---
@@ -181,10 +186,11 @@ BEGIN;
 ROLLBACK; -- Cleanup automatic
 ```
 
-**pgmi Test Command**: Executes tests in transaction with automatic rollback.
-```bash
-pgmi test ./myapp -d test_db
-# All tests run in single transaction, rolled back after execution
+**CALL pgmi_test() Macro**: Executes tests within savepoints with automatic rollback.
+```sql
+-- In deploy.sql
+CALL pgmi_test();
+-- All tests run within savepoints, test data rolled back after execution
 ```
 
 ### Test Data Management
@@ -376,9 +382,11 @@ func TestDeployer(t *testing.T) {
 
 ### Test Helpers
 
+Test helpers in pgmi are colocated in `internal/testing/` or as `*_test.go` files within packages.
+
 ```go
-// testutil/helpers.go
-package testutil
+// internal/testing/helpers.go (pattern example)
+package testing
 
 import (
     "context"
@@ -424,8 +432,8 @@ func CreateTestDatabase(t *testing.T, name string) string {
 **Usage**:
 ```go
 func TestDeploy(t *testing.T) {
-    connStr := testutil.CreateTestDatabase(t, "test_deploy")
-    conn := testutil.MustConnect(t, connStr)
+    connStr := createTestDatabase(t, "test_deploy")
+    conn := mustConnect(t, connStr)
     defer conn.Close(context.Background())
 
     // Test logic
@@ -480,17 +488,15 @@ func TestDeployerWithFailingConnection(t *testing.T) {
 
 ### PostgreSQL Integration Tests
 
-**Pattern**: Test against real PostgreSQL instance.
+**Pattern**: Test against real PostgreSQL instance. Integration tests use `*_integration_test.go` suffix and are colocated with unit tests.
 
 ```go
-// integration/deploy_test.go
-package integration
+// internal/services/deployer_integration_test.go
+package services
 
 import (
     "context"
     "testing"
-    "github.com/yourorg/pgmi/internal/services"
-    "github.com/yourorg/pgmi/testutil"
 )
 
 func TestDeployBasicTemplate(t *testing.T) {
@@ -498,15 +504,13 @@ func TestDeployBasicTemplate(t *testing.T) {
         t.Skip("skipping integration test")
     }
 
-    // Create test database
-    connStr := testutil.CreateTestDatabase(t, "test_deploy_basic")
-    conn := testutil.MustConnect(t, connStr)
-    defer conn.Close(context.Background())
+    // Use testcontainer or PGMI_TEST_CONN environment variable
+    connStr := getTestConnectionString(t)
 
-    // Deploy
-    deployer := services.NewStandardDeployer(/* ... */)
+    // Deploy using the actual deployer
+    deployer := NewStandardDeployer(/* ... */)
     err := deployer.Deploy(context.Background(), &DeployConfig{
-        Path:         "../internal/scaffold/templates/basic",
+        Path:         "../../internal/scaffold/templates/basic",
         DatabaseName: "test_deploy_basic",
     })
 
@@ -514,10 +518,13 @@ func TestDeployBasicTemplate(t *testing.T) {
         t.Fatalf("deployment failed: %v", err)
     }
 
-    // Verify deployment
+    // Verify deployment with direct query
+    conn := mustConnect(t, connStr)
+    defer conn.Close(context.Background())
+
     var tableExists bool
     err = conn.QueryRow(context.Background(),
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'migration_script')",
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users')",
     ).Scan(&tableExists)
 
     if err != nil {
@@ -525,7 +532,7 @@ func TestDeployBasicTemplate(t *testing.T) {
     }
 
     if !tableExists {
-        t.Error("migration_script table not created")
+        t.Error("users table not created")
     }
 }
 ```
@@ -648,9 +655,9 @@ go tool cover -html=coverage.out
 - [ ] Critical path coverage >80%?
 
 ### Test Organization
-- [ ] Tests colocated with implementation?
-- [ ] Shared utilities in `testutil/`?
-- [ ] Integration tests in `integration/`?
+- [ ] Tests colocated with implementation (`*_test.go`)?
+- [ ] Integration tests use `*_integration_test.go` suffix?
+- [ ] Shared test infrastructure in `internal/testing/`?
 - [ ] Test naming clear and descriptive?
 
 ---

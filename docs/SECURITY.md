@@ -2,6 +2,19 @@
 
 pgmi handles sensitive parameters (passwords, API keys, tokens) as part of database deployments. This guide covers pgmi's security model, known threat vectors, and recommended practices for CI/CD pipelines.
 
+## Required Permissions
+
+| Operation | Minimum Privilege |
+|-----------|------------------|
+| `pgmi deploy` (new database) | `CREATEDB` on the PostgreSQL cluster |
+| `pgmi deploy` (existing database) | `CREATE` on `pg_temp` schema (granted by default to all roles) |
+| DDL in migrations | Depends on your SQL — typically schema owner or `CREATE` on target schema |
+| Advanced template role setup | Superuser (initial setup only) |
+
+pgmi itself only needs to: connect, create temp tables (automatic for any role), set session variables, and execute your deploy.sql. The actual permissions depend on what your SQL does.
+
+---
+
 ## How Parameters Flow
 
 ```

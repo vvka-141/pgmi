@@ -311,7 +311,7 @@ UPDATE users SET last_seen = now();
 
 - **Problem**: Lines 45-52 use FOR loop to insert files:
   \```sql
-  FOR v_file IN SELECT * FROM pg_temp.pgmi_source LOOP
+  FOR v_file IN SELECT * FROM pg_temp.pgmi_source_view LOOP
       INSERT INTO pg_temp.pgmi_plan VALUES (v_file.content);
   END LOOP;
   \```
@@ -325,7 +325,7 @@ UPDATE users SET last_seen = now();
 - **Fix**: Use single INSERT...SELECT:
   \```sql
   INSERT INTO pg_temp.pgmi_plan (command_sql)
-  SELECT content FROM pg_temp.pgmi_source ORDER BY path;
+  SELECT content FROM pg_temp.pgmi_source_view ORDER BY path;
   \```
 
 - **Rationale**: "Set Operations Over Loops" (pgmi-postgres-review:184-201).
@@ -344,7 +344,7 @@ UPDATE users SET last_seen = now();
 ```sql
 -- Pure SQL: Declarative, optimizable, inline-able
 SELECT path, content
-FROM pg_temp.pgmi_source
+FROM pg_temp.pgmi_source_view
 WHERE directory = './migrations/' AND is_sql_file
 ORDER BY path;
 ```
@@ -480,7 +480,7 @@ $$;
 -- Good: Readable, maintainable
 WITH pending_migrations AS (
     SELECT s.path, s.content, s.checksum
-    FROM pg_temp.pgmi_source s
+    FROM pg_temp.pgmi_source_view s
     LEFT JOIN internal.deployment_script_execution_log e
         ON s.path = e.script_id AND s.checksum = e.checksum
     WHERE e.script_id IS NULL
@@ -511,7 +511,7 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    FOR v_file IN SELECT * FROM pg_temp.pgmi_source LOOP
+    FOR v_file IN SELECT * FROM pg_temp.pgmi_source_view LOOP
         INSERT INTO pg_temp.pgmi_plan (sequence_number, command_sql)
         VALUES (DEFAULT, v_file.content);
     END LOOP;
@@ -520,14 +520,14 @@ END $$;
 -- ✅ GOOD: Single set operation
 INSERT INTO pg_temp.pgmi_plan (sequence_number, command_sql)
 SELECT ROW_NUMBER() OVER (ORDER BY path), content
-FROM pg_temp.pgmi_source;
+FROM pg_temp.pgmi_source_view;
 ```
 
 ### ✅ LATERAL Joins for Correlated Subqueries
 ```sql
 -- Efficient correlated subquery with LATERAL
 SELECT s.path, latest.execution_order
-FROM pg_temp.pgmi_source s
+FROM pg_temp.pgmi_source_view s
 LEFT JOIN LATERAL (
     SELECT execution_order
     FROM internal.deployment_script_execution_log e

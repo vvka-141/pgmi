@@ -8,28 +8,31 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vvka-141/pgmi/internal/sourcemap"
 	"github.com/vvka-141/pgmi/internal/testgen"
 )
 
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
-	ExpandedSQL string              // SQL with macros expanded
-	SourceMap   *sourcemap.SourceMap // Mapping for error attribution
-	MacroCount  int                 // Number of macros expanded
+	ExpandedSQL string // SQL with macros expanded
+	MacroCount  int    // Number of macros expanded
 }
+
+// testGenerateFunc is the signature for calling pgmi_test_generate.
+type testGenerateFunc func(ctx context.Context, conn *pgxpool.Conn, pattern string, callback string) (string, error)
 
 // Pipeline preprocesses SQL by expanding macros.
 type Pipeline struct {
-	commentStripper CommentStripper
-	macroDetector   MacroDetector
+	commentStripper  CommentStripper
+	macroDetector    MacroDetector
+	testGenerateFn   testGenerateFunc
 }
 
 // NewPipeline creates a new preprocessing pipeline.
 func NewPipeline() *Pipeline {
 	return &Pipeline{
-		commentStripper: NewCommentStripper(),
-		macroDetector:   NewMacroDetector(),
+		commentStripper:  NewCommentStripper(),
+		macroDetector:    NewMacroDetector(),
+		testGenerateFn:   callTestGenerate,
 	}
 }
 
@@ -39,12 +42,11 @@ func NewPipeline() *Pipeline {
 func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) (*PreprocessResult, error) {
 	result := &PreprocessResult{
 		ExpandedSQL: sql,
-		SourceMap:   sourcemap.New(),
 		MacroCount:  0,
 	}
 
 	// Strip comments to find macros
-	strippedSQL, _ := p.commentStripper.Strip(sql)
+	strippedSQL := p.commentStripper.Strip(sql)
 
 	// Detect macros in stripped SQL
 	macros := p.macroDetector.Detect(strippedSQL)
@@ -71,7 +73,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		}
 
 		// Call pg_temp.pgmi_test_generate() to get the test execution SQL
-		generatedSQL, err := callTestGenerate(ctx, conn, macro.Pattern, macro.Callback)
+		generatedSQL, err := p.testGenerateFn(ctx, conn, macro.Pattern, macro.Callback)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +83,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		macroText := strippedSQL[macro.StartPos:macro.EndPos]
 		idx := strings.LastIndex(expandedSQL, macroText)
 		if idx == -1 {
-			continue
+			return nil, fmt.Errorf("failed to locate macro %q in SQL for expansion", macroText)
 		}
 
 		// Replace the macro with generated SQL
@@ -116,7 +118,7 @@ func callTestGenerate(ctx context.Context, conn *pgxpool.Conn, pattern string, c
 
 // nullIfEmpty returns nil if s is empty, otherwise returns s.
 // Used for SQL NULL parameters.
-func nullIfEmpty(s string) interface{} {
+func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}

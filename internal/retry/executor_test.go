@@ -9,26 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// mockTimeProvider simulates time without actual delays (for fast testing)
-type mockTimeProvider struct {
-	currentTime time.Time
-}
-
-func newMockTimeProvider() *mockTimeProvider {
-	return &mockTimeProvider{
-		currentTime: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-}
-
-func (m *mockTimeProvider) Sleep(d time.Duration) {
-	// Simulate time passing without actual delay
-	m.currentTime = m.currentTime.Add(d)
-}
-
-func (m *mockTimeProvider) Now() time.Time {
-	return m.currentTime
-}
-
 // mockOperation tracks invocation count and simulates transient failures
 type mockOperation struct {
 	invocations   int
@@ -57,9 +37,9 @@ func (m *mockOperation) execute(ctx context.Context) error {
 func TestExecutor_Execute_SuccessOnFirstAttempt(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 	strategy := NewExponentialBackoff(3, WithJitter(0))
-	timeProvider := newMockTimeProvider()
 
-	executor := NewExecutor(classifier, strategy, timeProvider)
+
+	executor := NewExecutor(classifier, strategy)
 
 	op := &mockOperation{failUntil: 1} // Succeed immediately
 
@@ -80,7 +60,7 @@ func TestExecutor_Execute_SuccessAfterRetries(t *testing.T) {
 		WithJitter(0),
 	)
 
-	executor := NewExecutor(classifier, strategy, nil) // Use real time for this test
+	executor := NewExecutor(classifier, strategy) // Use real time for this test
 
 	// Fail first 3 attempts, succeed on 4th
 	op := &mockOperation{failUntil: 4}
@@ -99,7 +79,7 @@ func TestExecutor_Execute_FatalErrorNoRetry(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 	strategy := NewExponentialBackoff(5)
 
-	executor := NewExecutor(classifier, strategy, nil)
+	executor := NewExecutor(classifier, strategy)
 
 	fatalErr := &pgconn.PgError{Code: "42601", Message: "syntax error"}
 	op := &mockOperation{failUntil: 2, transientErr: fatalErr} // Always fail with fatal error
@@ -127,7 +107,7 @@ func TestExecutor_Execute_ExhaustedRetries(t *testing.T) {
 		WithJitter(0),
 	)
 
-	executor := NewExecutor(classifier, strategy, nil)
+	executor := NewExecutor(classifier, strategy)
 
 	// Never succeed (always return transient error)
 	transientErr := &pgconn.PgError{Code: "08006", Message: "connection failure"}
@@ -152,9 +132,9 @@ func TestExecutor_Execute_ContextCancellation(t *testing.T) {
 	strategy := NewExponentialBackoff(10,
 		WithInitialDelay(1*time.Second), // Long delay
 	)
-	timeProvider := newMockTimeProvider()
 
-	executor := NewExecutor(classifier, strategy, timeProvider)
+
+	executor := NewExecutor(classifier, strategy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -188,7 +168,7 @@ func TestExecutor_Execute_TransientThenFatal(t *testing.T) {
 		WithJitter(0),
 	)
 
-	executor := NewExecutor(classifier, strategy, nil)
+	executor := NewExecutor(classifier, strategy)
 
 	// Transient error for first 2 attempts, then fatal error
 	transientErr := &pgconn.PgError{Code: "08006", Message: "connection failure"}
@@ -232,7 +212,7 @@ func TestExecutor_Execute_OnRetryCallback(t *testing.T) {
 		retryDelays = append(retryDelays, delay)
 	}
 
-	executor := NewExecutor(classifier, strategy, nil).WithOnRetry(onRetry)
+	executor := NewExecutor(classifier, strategy).WithOnRetry(onRetry)
 
 	// Fail 3 times, succeed on 4th
 	op := &mockOperation{failUntil: 4}
@@ -274,9 +254,9 @@ func TestExecutor_Execute_OnRetryCallback(t *testing.T) {
 func TestExecutor_Execute_NoRetriesStrategy(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 	strategy := NewExponentialBackoff(0) // MaxAttempts = 0 (no retries)
-	timeProvider := newMockTimeProvider()
 
-	executor := NewExecutor(classifier, strategy, timeProvider)
+
+	executor := NewExecutor(classifier, strategy)
 
 	transientErr := &pgconn.PgError{Code: "08006", Message: "connection failure"}
 	op := &mockOperation{failUntil: 999, transientErr: transientErr}
@@ -300,7 +280,7 @@ func TestExecutor_Execute_GenericTransientError(t *testing.T) {
 		WithJitter(0),
 	)
 
-	executor := NewExecutor(classifier, strategy, nil)
+	executor := NewExecutor(classifier, strategy)
 
 	// Generic network error (should be classified as transient)
 	networkErr := errors.New("connection refused")
@@ -321,31 +301,5 @@ func TestExecutor_Execute_GenericTransientError(t *testing.T) {
 	}
 	if invocations != 3 {
 		t.Errorf("Expected 3 invocations, got %d", invocations)
-	}
-}
-
-func TestExecutor_DefaultTimeProvider(t *testing.T) {
-	classifier := NewPostgreSQLErrorClassifier()
-	strategy := NewExponentialBackoff(1,
-		WithInitialDelay(1*time.Millisecond), // Very short for fast test
-		WithJitter(0),                        // Disable jitter for deterministic timing
-	)
-
-	// Don't provide time provider (should use default system time)
-	executor := NewExecutor(classifier, strategy, nil)
-
-	op := &mockOperation{failUntil: 2} // Fail once, then succeed
-
-	start := time.Now()
-	err := executor.Execute(context.Background(), op.execute)
-	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Errorf("Expected success, got error: %v", err)
-	}
-
-	// Should have actually waited (using real time)
-	if elapsed < 1*time.Millisecond {
-		t.Errorf("Expected at least 1ms elapsed (real wait), got %v", elapsed)
 	}
 }

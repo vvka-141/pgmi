@@ -199,16 +199,18 @@ END $$;
 
 ### Available Session Objects
 
+pgmi uses a two-tier API: internal tables (`_pgmi_*` prefix) and public views (`*_view` suffix).
+
 | Object | Type | Purpose |
 |--------|------|---------|
 | `pgmi_plan_view` | VIEW | Files ordered by metadata for execution |
-| `pgmi_source` | TABLE | All loaded files with path, content, metadata |
-| `pgmi_test_source` | TABLE | Test files from `__test__/` directories |
-| `pgmi_parameter` | TABLE | CLI parameters |
-| `pgmi_declare_param()` | FUNCTION | Declare typed parameter with validation |
-| `pgmi_get_param()` | FUNCTION | Get parameter value with default |
+| `pgmi_source_view` | VIEW | All loaded files with path, content, metadata |
+| `pgmi_test_source_view` | VIEW | Test files from `__test__/` directories |
+| `pgmi_parameter_view` | VIEW | CLI parameters |
 | `pgmi_test_plan()` | FUNCTION | Get test execution plan |
-| `pgmi_test()` | MACRO | Preprocessor macro for running tests |
+| `pgmi_test_generate()` | FUNCTION | Generate test SQL with savepoints |
+| `CALL pgmi_test()` | MACRO | Preprocessor macro for running tests |
+| `current_setting('pgmi.key', true)` | BUILT-IN | Access parameter (with COALESCE for default) |
 
 ---
 
@@ -244,7 +246,7 @@ END $$;
 DO $$
 DECLARE
     v_file RECORD;
-    v_env TEXT := pg_temp.pgmi_get_param('env', 'development');
+    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
     -- Always run migrations
     FOR v_file IN (
@@ -299,56 +301,34 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 
 ---
 
-### `pgmi_get_param(key TEXT, default_value TEXT DEFAULT NULL)`
+### Parameter Access
 
-**Purpose:** Access parameter with optional fallback
+**Purpose:** Access CLI parameters with optional fallback using PostgreSQL's native `current_setting()`
+
+Parameters passed via `--param key=value` are automatically available as session configuration variables with the `pgmi.` prefix.
 
 ```sql
--- Get with default
-v_env := pg_temp.pgmi_get_param('env', 'development');
+-- Get with default (second parameter `true` returns NULL if not set)
+v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- Conditional logic
-IF pg_temp.pgmi_get_param('enable_feature', 'false') = 'true' THEN
+IF COALESCE(current_setting('pgmi.enable_feature', true), 'false') = 'true' THEN
     -- Feature-specific code
 END IF;
 
 -- Environment-specific configuration
-v_timeout := CASE pg_temp.pgmi_get_param('env', 'dev')
+v_timeout := CASE COALESCE(current_setting('pgmi.env', true), 'dev')
     WHEN 'production' THEN '60s'
     WHEN 'staging' THEN '30s'
     ELSE '10s'
 END;
+
+-- Required parameter (fails fast if not provided)
+v_password := current_setting('pgmi.admin_password');
 ```
 
----
-
-### `pgmi_declare_param(...)`
-
-**Purpose:** Declare typed parameter with validation and defaults
-
-```sql
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'env',
-    p_type => 'text',
-    p_default_value => 'development',
-    p_required => false,
-    p_description => 'Deployment environment'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'max_connections',
-    p_type => 'int',
-    p_default_value => '100'
-);
-
-SELECT pg_temp.pgmi_declare_param(
-    p_key => 'admin_password',
-    p_type => 'text',
-    p_required => true  -- Fails if not provided
-);
-```
-
-**Supported types:** `text`, `int`, `integer`, `bigint`, `numeric`, `boolean`, `bool`, `uuid`, `timestamp`, `timestamptz`, `name`
+**Template-Specific Helpers:**
+Templates can define their own helper functions for parameter access with validation and type coercion. For example, the advanced template provides a `deployment_setting()` helper.
 
 ---
 
@@ -389,13 +369,7 @@ INSERT INTO test_results (test_name, status) VALUES ('test_foo', 'PASS');
 
 #### ✅ GOOD: PostgreSQL exceptions
 ```sql
--- Using CASE with error() function (if available)
-SELECT CASE
-    WHEN public.execute_migration_script(...) = -1 THEN true
-    ELSE (SELECT error('Re-execution should return -1 (skipped)'))
-END;
-
--- Direct assertion in PL/pgSQL
+-- Inline assertion with DO block
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM migration_script WHERE path = 'test.sql') THEN
@@ -444,11 +418,12 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- Inline test (runs immediately, not transactional)
-SELECT CASE
-    WHEN utils.slugify('Hello World!') = 'hello-world-'
-    THEN true
-    ELSE (SELECT error('Slugify test failed'))
-END;
+DO $$
+BEGIN
+    IF utils.slugify('Hello World!') != 'hello-world-' THEN
+        RAISE EXCEPTION 'Slugify test failed';
+    END IF;
+END $$;
 
 -- More inline tests
 DO $$
@@ -520,9 +495,9 @@ END $$;
 
 **Isolation:**
 - Tests in `__test__/` are automatically isolated by pgmi
-- NOT executed during `pgmi deploy` (only via `pgmi test`)
-- Run in transaction with automatic rollback
-- Reason: Prevents accidental data corruption during deployment
+- Executed via `pgmi_test()` macro in deploy.sql
+- Run within savepoints with automatic rollback
+- Reason: Test data never persists, migrations commit normally
 
 ---
 
@@ -837,7 +812,7 @@ COMMIT;
 
 -- Phase 3: Tests (with automatic rollback via macro)
 BEGIN;
-pgmi_test();
+CALL pgmi_test();
 COMMIT;
 ```
 
@@ -888,7 +863,7 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_source WHERE is_sql_file ORDER BY path) LOOP
+    FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_source_view WHERE is_sql_file ORDER BY path) LOOP
         BEGIN
             EXECUTE v_file.content;
         EXCEPTION WHEN others THEN
@@ -1682,16 +1657,18 @@ END $$;
 
 ### Session API Summary
 
+pgmi uses a two-tier API: internal tables (`_pgmi_*` prefix) and public views (`*_view` suffix).
+
 | Object | Type | Purpose |
 |--------|------|---------|
 | `pgmi_plan_view` | VIEW | Files ordered by metadata for direct EXECUTE |
-| `pgmi_source` | TABLE | All loaded files with path, content, metadata |
-| `pgmi_test_source` | TABLE | Test files from `__test__/` directories |
-| `pgmi_parameter` | TABLE | CLI parameters |
-| `pgmi_declare_param()` | FUNCTION | Declare typed parameter with validation |
-| `pgmi_get_param(key, default)` | FUNCTION | Get parameter value with fallback |
+| `pgmi_source_view` | VIEW | All loaded files with path, content, metadata |
+| `pgmi_test_source_view` | VIEW | Test files from `__test__/` directories |
+| `pgmi_parameter_view` | VIEW | CLI parameters |
 | `pgmi_test_plan(pattern)` | FUNCTION | Get test execution plan |
-| `pgmi_test()` | MACRO | Preprocessor macro for running tests |
+| `pgmi_test_generate(pattern, callback)` | FUNCTION | Generate test SQL with savepoints |
+| `CALL pgmi_test()` | MACRO | Preprocessor macro for running tests |
+| `current_setting('pgmi.key', true)` | BUILT-IN | Access parameter (use with COALESCE for default) |
 
 ### Format Placeholders
 

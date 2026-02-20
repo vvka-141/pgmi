@@ -12,38 +12,19 @@
     <xs:sequence>
       <!-- Optional elements in order -->
       <xs:element name="description" type="xs:string" minOccurs="0"/>
-      <xs:element name="membership" type="MembershipType" minOccurs="0"/>
-      <xs:element name="dependency" type="DependencyType" minOccurs="0"/>
+      <xs:element name="sortKeys" type="SortKeysType" minOccurs="0"/>
     </xs:sequence>
 
     <!-- Required attributes -->
     <xs:attribute name="id" type="uuid" use="required"/>
     <xs:attribute name="idempotent" type="xs:boolean" use="required"/>
-    <xs:attribute name="sortKey" type="xs:string" use="required"/>
   </xs:complexType>
 
-  <!-- MembershipType: Container for group references -->
-  <xs:complexType name="MembershipType">
+  <!-- SortKeysType: Container for execution order keys -->
+  <xs:complexType name="SortKeysType">
     <xs:sequence>
-      <xs:element name="group" type="GroupRefType" maxOccurs="unbounded"/>
+      <xs:element name="key" type="xs:string" maxOccurs="unbounded"/>
     </xs:sequence>
-  </xs:complexType>
-
-  <!-- GroupRefType: Single group reference with UUID -->
-  <xs:complexType name="GroupRefType">
-    <xs:attribute name="id" type="uuid" use="required"/>
-  </xs:complexType>
-
-  <!-- DependencyType: Container for dependency references -->
-  <xs:complexType name="DependencyType">
-    <xs:sequence>
-      <xs:element name="dependsOn" type="DependsOnRefType" maxOccurs="unbounded"/>
-    </xs:sequence>
-  </xs:complexType>
-
-  <!-- DependsOnRefType: Single dependency reference with UUID -->
-  <xs:complexType name="DependsOnRefType">
-    <xs:attribute name="id" type="uuid" use="required"/>
   </xs:complexType>
 
   <!-- UUID simple type with regex pattern validation -->

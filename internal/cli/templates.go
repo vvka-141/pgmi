@@ -28,6 +28,8 @@ var templatesDescribeCmd = &cobra.Command{
 	Use:               "describe <template_name>",
 	Short:             "Show detailed information about a template",
 	Long:              `Show detailed information about a specific template including structure and features.`,
+	Example: `  pgmi templates describe basic
+  pgmi templates describe advanced`,
 	Args:              RequireTemplateName,
 	ValidArgsFunction: completeTemplateNames,
 	RunE:              runTemplatesDescribe,
@@ -77,21 +79,8 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 func runTemplatesDescribe(cmd *cobra.Command, args []string) error {
 	templateName := args[0]
 
-	// Validate template exists
-	templates, err := scaffold.ListTemplates()
-	if err != nil {
-		return fmt.Errorf("failed to list templates: %w", err)
-	}
-
-	validTemplate := false
-	for _, t := range templates {
-		if t == templateName {
-			validTemplate = true
-			break
-		}
-	}
-
-	if !validTemplate {
+	if !scaffold.IsValidTemplate(templateName) {
+		templates, _ := scaffold.ListTemplates()
 		return fmt.Errorf("template '%s' not found. Available templates: %v\n\nUse 'pgmi templates list' to see all templates", templateName, templates)
 	}
 

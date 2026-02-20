@@ -43,39 +43,6 @@ func TestRequireProjectPath(t *testing.T) {
 	})
 }
 
-func TestRequireTargetPath(t *testing.T) {
-	cmd := &cobra.Command{
-		Use: "init <target_path>",
-	}
-
-	t.Run("returns error when no args", func(t *testing.T) {
-		err := RequireTargetPath(cmd, []string{})
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "missing required argument: <target_path>") {
-			t.Errorf("expected error to contain 'missing required argument: <target_path>', got: %s", err.Error())
-		}
-	})
-
-	t.Run("returns nil when arg provided", func(t *testing.T) {
-		err := RequireTargetPath(cmd, []string{"./myproject"})
-		if err != nil {
-			t.Errorf("expected nil, got: %v", err)
-		}
-	})
-
-	t.Run("returns error when too many args", func(t *testing.T) {
-		err := RequireTargetPath(cmd, []string{"a", "b"})
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "accepts 1 arg") {
-			t.Errorf("expected error to contain 'accepts 1 arg', got: %s", err.Error())
-		}
-	})
-}
-
 func TestRequireTemplateName(t *testing.T) {
 	cmd := &cobra.Command{
 		Use: "describe <template_name>",

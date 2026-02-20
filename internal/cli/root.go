@@ -35,12 +35,9 @@ Exit Codes:
 
 // Execute runs the root command
 func Execute() error {
-	// Handle --version flag before Cobra parsing for universal CLI compatibility
-	for _, arg := range os.Args {
-		if arg == "--version" {
-			printVersionInfo()
-			return nil
-		}
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		printVersionInfo()
+		return nil
 	}
 	return rootCmd.Execute()
 }

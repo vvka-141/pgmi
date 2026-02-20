@@ -21,6 +21,25 @@ func NewLoader() *Loader {
 	return &Loader{}
 }
 
+// execBatch sends a prepared batch and checks each result.
+// labels must be parallel to the batch entries (one per queued statement).
+func execBatch(ctx context.Context, conn *pgxpool.Conn, batch *pgx.Batch, labels []string, itemErr, closeErr string) error {
+	results := conn.SendBatch(ctx, batch)
+
+	for _, label := range labels {
+		if _, err := results.Exec(); err != nil {
+			results.Close()
+			return fmt.Errorf("%s %s: %w", itemErr, label, err)
+		}
+	}
+
+	if err := results.Close(); err != nil {
+		return fmt.Errorf("%s: %w", closeErr, err)
+	}
+
+	return nil
+}
+
 // LoadFilesIntoSession loads file metadata into session-scoped tables.
 // Non-test files go into pg_temp.pgmi_source, test files go into pg_temp.pgmi_test_source.
 // Also loads script metadata (from <pgmi:meta> XML blocks) into pg_temp.pgmi_source_metadata.
@@ -35,7 +54,6 @@ func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, f
 		}
 	}
 
-	// Insert non-test files into pgmi_source
 	if err := l.insertFiles(ctx, conn, sourceFiles); err != nil {
 		return fmt.Errorf("failed to insert source files: %w", err)
 	}
@@ -45,12 +63,10 @@ func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, f
 		return fmt.Errorf("failed to insert test directories: %w", err)
 	}
 
-	// Insert test files into pgmi_test_source
 	if err := l.insertTestFiles(ctx, conn, testFiles); err != nil {
 		return fmt.Errorf("failed to insert test files: %w", err)
 	}
 
-	// Insert script metadata (only for non-test files with metadata)
 	if err := l.insertMetadata(ctx, conn, sourceFiles); err != nil {
 		return fmt.Errorf("failed to insert metadata: %w", err)
 	}
@@ -59,7 +75,6 @@ func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, f
 }
 
 // insertTestFiles inserts test file content into pg_temp.pgmi_test_source.
-// Uses batch insert for performance. Includes directory, filename, and is_fixture detection.
 // Only SQL files are inserted (non-SQL files like README.md are skipped).
 func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	if len(files) == 0 {
@@ -68,10 +83,9 @@ func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files 
 
 	insertSQL := `INSERT INTO pg_temp._pgmi_test_source (path, directory, filename, content, is_fixture) VALUES ($1, $2, $3, $4, $5)`
 
-	// Filter to SQL files only
 	var sqlFiles []pgmi.FileMetadata
 	for _, file := range files {
-		if isSQLExtension(file.Extension) {
+		if pgmi.IsSQLExtension(file.Extension) {
 			sqlFiles = append(sqlFiles, file)
 		}
 	}
@@ -81,37 +95,18 @@ func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files 
 	}
 
 	batch := &pgx.Batch{}
-	for _, file := range sqlFiles {
+	labels := make([]string, len(sqlFiles))
+	for i, file := range sqlFiles {
 		filename := filepath.Base(file.Path)
 		directory := extractTestDirectory(file.Path)
 		isFixture := isFixtureFile(filename)
 		batch.Queue(insertSQL, file.Path, directory, filename, file.Content, isFixture)
+		labels[i] = file.Path
 	}
 
-	results := conn.SendBatch(ctx, batch)
-
-	for i := range sqlFiles {
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to insert test file %s: %w", sqlFiles[i].Path, err)
-		}
-	}
-
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete test file batch insert: %w", err)
-	}
-
-	return nil
-}
-
-// isSQLExtension checks if the file extension indicates a SQL file.
-func isSQLExtension(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql":
-		return true
-	default:
-		return false
-	}
+	return execBatch(ctx, conn, batch, labels,
+		"failed to insert test file",
+		"failed to complete test file batch insert")
 }
 
 // insertTestDirectories extracts unique test directories from file paths and inserts them.
@@ -121,7 +116,6 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 		return nil
 	}
 
-	// Extract unique test directories
 	dirSet := make(map[string]bool)
 	for _, file := range files {
 		dir := extractTestDirectory(file.Path)
@@ -134,14 +128,12 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 		return nil
 	}
 
-	// Convert to sorted slice for deterministic order
 	dirs := make([]string, 0, len(dirSet))
 	for dir := range dirSet {
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
 
-	// Compute parent relationships and depth
 	type dirInfo struct {
 		path       string
 		parentPath *string
@@ -159,8 +151,7 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 		})
 	}
 
-	// Insert in order (parents before children due to FK constraint)
-	// Sort by depth to ensure parents are inserted first
+	// Sort by depth to ensure parents are inserted first (FK constraint)
 	sort.Slice(dirInfos, func(i, j int) bool {
 		return dirInfos[i].depth < dirInfos[j].depth
 	})
@@ -168,39 +159,27 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 	insertSQL := `INSERT INTO pg_temp._pgmi_test_directory (path, parent_path, depth) VALUES ($1, $2, $3)`
 
 	batch := &pgx.Batch{}
-	for _, info := range dirInfos {
+	labels := make([]string, len(dirInfos))
+	for i, info := range dirInfos {
 		batch.Queue(insertSQL, info.path, info.parentPath, info.depth)
+		labels[i] = info.path
 	}
 
-	results := conn.SendBatch(ctx, batch)
-
-	for i := range dirInfos {
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to insert test directory %s: %w", dirInfos[i].path, err)
-		}
-	}
-
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete test directory batch insert: %w", err)
-	}
-
-	return nil
+	return execBatch(ctx, conn, batch, labels,
+		"failed to insert test directory",
+		"failed to complete test directory batch insert")
 }
 
 // extractTestDirectory extracts the full directory path from a test file path.
 // Returns the directory path ending with /, e.g., "./__test__/auth/" from "./__test__/auth/test.sql"
 // Only processes paths that contain __test__ or __tests__.
 func extractTestDirectory(path string) string {
-	// Normalize path separators
 	path = strings.ReplaceAll(path, "\\", "/")
 
-	// Verify this is a test path
 	if !strings.Contains(path, "/__test__/") && !strings.Contains(path, "/__tests__/") {
 		return ""
 	}
 
-	// Get the directory by removing the filename
 	lastSlash := strings.LastIndex(path, "/")
 	if lastSlash == -1 {
 		return ""
@@ -211,7 +190,6 @@ func extractTestDirectory(path string) string {
 // findParentTestDirectory finds the parent directory in the test hierarchy.
 // Returns nil if no parent exists in the directory set.
 func findParentTestDirectory(dir string, dirSet map[string]bool) *string {
-	// Remove trailing slash and find the parent path
 	trimmed := strings.TrimSuffix(dir, "/")
 	parts := strings.Split(trimmed, "/")
 
@@ -219,7 +197,6 @@ func findParentTestDirectory(dir string, dirSet map[string]bool) *string {
 		return nil
 	}
 
-	// The parent is simply the directory one level up
 	parentPath := strings.Join(parts[:len(parts)-1], "/") + "/"
 	if dirSet[parentPath] {
 		return &parentPath
@@ -229,25 +206,22 @@ func findParentTestDirectory(dir string, dirSet map[string]bool) *string {
 
 // countTestDirectoryDepth counts how deep the directory is within the test hierarchy.
 // The root __test__/ directory has depth 0, subdirectories increment from there.
+var testDirPattern = regexp.MustCompile(`/__tests?__/`)
+
 func countTestDirectoryDepth(path string) int {
-	// Normalize and verify it's a test path
 	path = strings.ReplaceAll(path, "\\", "/")
 
-	// Find the __test__/ or __tests__/ segment
-	testPattern := regexp.MustCompile(`/__tests?__/`)
-	loc := testPattern.FindStringIndex(path)
+	loc := testDirPattern.FindStringIndex(path)
 	if loc == nil {
 		return 0
 	}
 
-	// Count slashes after the __test__/ segment (excluding trailing slash)
 	afterTest := path[loc[1]:]
 	afterTest = strings.TrimSuffix(afterTest, "/")
 	if afterTest == "" {
-		return 0 // Root test directory
+		return 0
 	}
 
-	// Count path segments after __test__/
 	return strings.Count(afterTest, "/") + 1
 }
 
@@ -259,41 +233,23 @@ func isFixtureFile(filename string) bool {
 }
 
 // insertFiles inserts file metadata into the pg_temp.pgmi_source table using the pgmi_register_file function.
-// This provides 10-100x performance improvement over individual INSERTs for large file sets.
 func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	if len(files) == 0 {
-		return nil // Nothing to insert
+		return nil
 	}
 
 	insertSQL := `SELECT pg_temp.pgmi_register_file($1, $2, $3, $4)`
 
-	// Use batch insert for performance
 	batch := &pgx.Batch{}
-	for _, file := range files {
-		batch.Queue(insertSQL,
-			file.Path,
-			file.Content,
-			file.ChecksumRaw, // raw checksum
-			file.Checksum,    // normalized checksum (pgmi_checksum)
-		)
+	labels := make([]string, len(files))
+	for i, file := range files {
+		batch.Queue(insertSQL, file.Path, file.Content, file.ChecksumRaw, file.Checksum)
+		labels[i] = file.Path
 	}
 
-	// Send batch and process results
-	results := conn.SendBatch(ctx, batch)
-
-	// Check each result for errors
-	for i := range files {
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to insert file %s: %w", files[i].Path, err)
-		}
-	}
-
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete file batch insert: %w", err)
-	}
-
-	return nil
+	return execBatch(ctx, conn, batch, labels,
+		"failed to insert file",
+		"failed to complete file batch insert")
 }
 
 // LoadParametersIntoSession loads parameters into the pg_temp.pgmi_parameter table
@@ -323,36 +279,21 @@ func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Co
 // Keys are normalized to lowercase for case-insensitive lookups.
 func (l *Loader) insertParams(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
 	if len(params) == 0 {
-		return nil // Nothing to insert
+		return nil
 	}
 
 	insertSQL := `INSERT INTO pg_temp._pgmi_parameter (key, value) VALUES (LOWER($1), $2)`
 
-	// Use batch insert for performance (even though params are typically small)
 	batch := &pgx.Batch{}
-	paramKeys := make([]string, 0, len(params))
-
+	labels := make([]string, 0, len(params))
 	for key, value := range params {
 		batch.Queue(insertSQL, key, value)
-		paramKeys = append(paramKeys, key)
+		labels = append(labels, key)
 	}
 
-	// Send batch and process results
-	results := conn.SendBatch(ctx, batch)
-
-	// Check each result for errors
-	for i := range paramKeys {
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to insert parameter %s: %w", paramKeys[i], err)
-		}
-	}
-
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete parameter batch insert: %w", err)
-	}
-
-	return nil
+	return execBatch(ctx, conn, batch, labels,
+		"failed to insert parameter",
+		"failed to complete parameter batch insert")
 }
 
 // setSessionVariables sets PostgreSQL session variables for all CLI parameters.
@@ -366,66 +307,33 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 	}
 
 	batch := &pgx.Batch{}
-	paramKeys := make([]string, 0, len(params))
-
+	labels := make([]string, 0, len(params))
 	for key, value := range params {
-		// Normalize key to lowercase (consistent with insertParams)
 		sessionVar := fmt.Sprintf("pgmi.%s", strings.ToLower(key))
-
-		// Queue set_config() call
-		// set_config(setting_name, new_value, is_local)
-		// is_local=false makes the setting session-scoped (resets on connection close)
 		batch.Queue("SELECT set_config($1, $2, false)", sessionVar, value)
-		paramKeys = append(paramKeys, key)
+		labels = append(labels, key)
 	}
 
-	// Send batch and process results
-	results := conn.SendBatch(ctx, batch)
-
-	// Check each result for errors
-	for i := range paramKeys {
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to set session variable for parameter %s: %w", paramKeys[i], err)
-		}
-	}
-
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete session variable batch set: %w", err)
-	}
-
-	return nil
+	return execBatch(ctx, conn, batch, labels,
+		"failed to set session variable for parameter",
+		"failed to complete session variable batch set")
 }
 
 // insertMetadata inserts script metadata into the pg_temp.pgmi_source_metadata table.
 // Only processes files that have metadata (FileMetadata.Metadata != nil).
-// Uses batch insert for performance.
 func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
-	// Count files with metadata
-	metadataCount := 0
-	for _, file := range files {
-		if file.Metadata != nil {
-			metadataCount++
-		}
-	}
-
-	if metadataCount == 0 {
-		return nil // No metadata to insert
-	}
-
 	insertSQL := `
 		INSERT INTO pg_temp._pgmi_source_metadata
 		(path, id, idempotent, sort_keys, description)
 		VALUES ($1, $2, $3, $4, $5)
 	`
 
-	// Build batch for files with metadata
 	batch := &pgx.Batch{}
+	var labels []string
 	for _, file := range files {
 		if file.Metadata == nil {
-			continue // Skip files without metadata
+			continue
 		}
-
 		batch.Queue(insertSQL,
 			file.Path,
 			file.Metadata.ID,
@@ -433,27 +341,16 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 			file.Metadata.SortKeys,
 			file.Metadata.Description,
 		)
+		labels = append(labels, file.Path)
 	}
 
-	// Send batch and process results
-	results := conn.SendBatch(ctx, batch)
-
-	// Check each result for errors
-	for _, file := range files {
-		if file.Metadata == nil {
-			continue
-		}
-		if _, err := results.Exec(); err != nil {
-			results.Close()
-			return fmt.Errorf("failed to insert metadata for file %s: %w", file.Path, err)
-		}
+	if len(labels) == 0 {
+		return nil
 	}
 
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("failed to complete metadata batch insert: %w", err)
-	}
-
-	return nil
+	return execBatch(ctx, conn, batch, labels,
+		"failed to insert metadata for file",
+		"failed to complete metadata batch insert")
 }
 
 var keyPattern = regexp.MustCompile(`^[a-zA-Z0-9_]{1,63}$`)

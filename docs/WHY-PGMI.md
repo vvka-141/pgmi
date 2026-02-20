@@ -90,6 +90,21 @@ pgmi is a good fit when:
 - The deployment plan is queryable data, not opaque framework state
 - Clear success/failure signals via PostgreSQL exceptions
 
+**You deploy data files alongside schema.**
+- JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
+- Checksum-based change detection means unchanged data files are skipped automatically
+- See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
+
+**You target multiple cloud PostgreSQL providers.**
+- Same `deploy.sql` works on Azure Database for PostgreSQL, Amazon RDS, Google Cloud SQL, Citus, TimescaleDB, Neon, Supabase
+- Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM) — no credential translation layer
+- See [CONNECTIONS.md](CONNECTIONS.md) for the full connection architecture
+
+**You want fast iteration with disposable databases.**
+- `pgmi deploy . --overwrite --force` drops and recreates the database, then deploys from scratch
+- Tests run inside the deployment transaction and roll back automatically
+- Zero manual cleanup between iterations
+
 ## When pgmi is overkill
 
 pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic** for learning and simple projects, **advanced** for production with metadata-driven deployment. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for details.
@@ -117,6 +132,12 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |
 | Transaction control | Explicit (you decide) | Implicit (framework decides) |
+| Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
+| Cloud auth | Native (Azure, AWS, GCP IAM) | Varies by tool |
+| File loading | In-memory, suited for schema + reference data | Varies |
+| Connection poolers | Direct connection required | Usually transparent |
+
+For a deeper exploration of pgmi's costs, see [TRADEOFFS.md](TRADEOFFS.md).
 
 ## Design principles
 
@@ -131,21 +152,23 @@ pgmi doesn't implement migration logic in Go. It loads your files into PostgreSQ
 ### Infrastructure, not orchestration
 
 pgmi provides:
-- File loading into temp tables
-- Parameter injection
-- Plan execution
+- File discovery and loading into temp tables
+- Parameter injection as session variables
+- Optional metadata parsing (`<pgmi-meta>`) for execution ordering
+- Preprocessor macro expansion (`CALL pgmi_test()`)
+- deploy.sql execution
 
 pgmi does NOT decide:
 - Transaction boundaries (you write `BEGIN`/`COMMIT`)
-- Execution order (you query and sort `pg_temp.pgmi_source_view`)
+- Which files run (you query and filter `pgmi_plan_view` or `pgmi_source_view`)
 - Retry logic (you use `EXCEPTION` blocks)
 - Idempotency (you write `IF NOT EXISTS`, `ON CONFLICT`)
 
 ### Your SQL remains portable
 
-pgmi adds no annotations to your SQL files. A migration file used with pgmi is valid PostgreSQL SQL—you can run it directly with `psql` if needed.
+Your migration files are valid PostgreSQL SQL—you can run them directly with `psql`. The optional `<pgmi-meta>` blocks live inside standard SQL comments (`/* ... */`), so they don't break compatibility. pgmi parses them before SQL reaches PostgreSQL to configure file ordering and idempotency tracking — they're metadata about your files, not executable syntax.
 
-The only pgmi-specific code is `deploy.sql`, which uses temp table functions. If you later switch tools, your migration files work unchanged.
+The pgmi-specific parts are `deploy.sql` (which queries session temp tables) and any `<pgmi-meta>` blocks you choose to add. If you later switch tools, your migration files work unchanged — strip the comment blocks and they're plain SQL.
 
 ## Comparison with other tools
 

@@ -5,9 +5,7 @@
 // This package implements the PGMI metadata system, which allows SQL scripts to declare:
 //   - Unique identity (UUID, path-independent)
 //   - Idempotency flag (safe to rerun vs one-time only)
-//   - Execution order control (sortKey)
-//   - Explicit dependencies (ensure correct execution sequence)
-//   - Group membership (logical collections for filtering/dependencies)
+//   - Execution order control (sortKeys)
 //
 // # Metadata Format
 //
@@ -16,20 +14,15 @@
 //	/*
 //	<pgmi-meta
 //	    id="550e8400-e29b-41d4-a716-446655440000"
-//	    idempotent="true"
-//	    sortKey="2025-11-13/001">
+//	    idempotent="true">
 //
 //	  <description>
 //	    Create users table and seed admin account
 //	  </description>
 //
-//	  <membership>
-//	    <group id="a78c2401-4835-4b91-b5fa-9358b9b0c8"/>
-//	  </membership>
-//
-//	  <dependency>
-//	    <dependsOn id="15f6ae80-2a91-479c-9ed8-56c8cc686f85"/>
-//	  </dependency>
+//	  <sortKeys>
+//	    <key>10-setup/0010</key>
+//	  </sortKeys>
 //
 //	</pgmi-meta>
 //	*/
@@ -39,10 +32,8 @@
 // The XSD schema (schema.xsd) defines strict validation:
 //   - id: Required UUID (regex validated)
 //   - idempotent: Required boolean (true/false)
-//   - sortKey: Required non-empty string
 //   - description: Optional free-form text
-//   - membership: Optional, must have ≥1 group if present
-//   - dependency: Optional, must have ≥1 dependsOn if present
+//   - sortKeys: Optional, contains one or more <key> elements
 //
 // # Fallback Identity
 //

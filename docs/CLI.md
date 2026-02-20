@@ -500,6 +500,8 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `AWS_REGION` | `deploy` | AWS region for RDS IAM auth |
 | `AWS_DEFAULT_REGION` | `deploy` | Fallback AWS region |
 
+pgmi uses the [`jackc/pgx`](https://github.com/jackc/pgx) driver (Go-native, no libpq dependency). All standard `PG*` environment variables are supported.
+
 ### Precedence
 
 ```

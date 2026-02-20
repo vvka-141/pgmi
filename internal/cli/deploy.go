@@ -5,17 +5,22 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
+	"github.com/vvka-141/pgmi/internal/tui"
+	"github.com/vvka-141/pgmi/internal/tui/wizards"
 	"github.com/vvka-141/pgmi/internal/ui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -70,20 +75,12 @@ Examples:
 }
 
 type deployFlagValues struct {
-	connection, host, username, database, sslMode string
-	port                                          int
-	azure                                         bool
-	azureTenantID, azureClientID                  string
-	aws                                           bool
-	awsRegion                                     string
-	google                                        bool
-	googleInstance                                string
-	sslCert, sslKey, sslRootCert                  string
-	overwrite, force                              bool
-	params                                        []string
-	paramsFiles                                   []string
-	timeout                                       time.Duration
-	compat                                        string
+	connectionFlags
+	overwrite, force bool
+	params           []string
+	paramsFiles      []string
+	timeout          time.Duration
+	compat           string
 }
 
 var deployFlags deployFlagValues
@@ -167,11 +164,11 @@ func init() {
 			"Use with --overwrite for CI/CD pipelines")
 
 	// Parameter flags
-	deployCmd.Flags().StringSliceVar(&deployFlags.params, "param", nil,
+	deployCmd.Flags().StringArrayVar(&deployFlags.params, "param", nil,
 		"Parameters as key=value pairs (can be specified multiple times)\n"+
 			"Available as session variables: current_setting('pgmi.key') during deployment\n"+
 			"Example: --param env=prod --param region=us-west")
-	deployCmd.Flags().StringSliceVar(&deployFlags.paramsFiles, "params-file", nil,
+	deployCmd.Flags().StringArrayVar(&deployFlags.paramsFiles, "params-file", nil,
 		"Load parameters from .env files (can be specified multiple times)\n"+
 			"Later files override earlier ones, CLI --param overrides all")
 
@@ -189,32 +186,8 @@ func init() {
 }
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
-func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.DeploymentConfig, error) {
-	projectCfg, err := loadProjectConfig(sourcePath)
-	if err != nil {
-		return pgmi.DeploymentConfig{}, err
-	}
-
-	connFlags := connectionFlags{
-		connection:     deployFlags.connection,
-		host:           deployFlags.host,
-		port:           deployFlags.port,
-		username:       deployFlags.username,
-		database:       deployFlags.database,
-		sslMode:        deployFlags.sslMode,
-		azure:          deployFlags.azure,
-		azureTenantID:  deployFlags.azureTenantID,
-		azureClientID:  deployFlags.azureClientID,
-		aws:            deployFlags.aws,
-		awsRegion:      deployFlags.awsRegion,
-		google:         deployFlags.google,
-		googleInstance: deployFlags.googleInstance,
-		sslCert:        deployFlags.sslCert,
-		sslKey:         deployFlags.sslKey,
-		sslRootCert:    deployFlags.sslRootCert,
-	}
-
-	resolved, err := resolveConnectionFromFlags(connFlags, projectCfg, verbose)
+func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
+	resolved, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
@@ -263,7 +236,26 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
 
-	config, err := buildDeploymentConfig(cmd, sourcePath, verbose)
+	projectCfg, err := loadProjectConfig(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	// Check if we need to run the connection wizard
+	if needsConnectionWizard(projectCfg) && tui.IsInteractive() && !deployFlags.force {
+		wizardConfig, err := runDeployWizard(sourcePath)
+		if err != nil {
+			return err
+		}
+		if wizardConfig == nil {
+			// User cancelled
+			return nil
+		}
+		// Merge wizard results into flags for buildDeploymentConfig
+		applyWizardConfig(wizardConfig)
+	}
+
+	config, err := buildDeploymentConfig(cmd, sourcePath, projectCfg, verbose)
 	if err != nil {
 		return err
 	}
@@ -317,9 +309,112 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	if err := deployer.Deploy(ctx, config); err != nil {
-		return fmt.Errorf("deployment failed: %w", err)
+	return deployer.Deploy(ctx, config)
+}
+
+// needsConnectionWizard checks if we have enough connection info to proceed.
+// Returns true if NO connection info is available from any source.
+func needsConnectionWizard(projectCfg *config.ProjectConfig) bool {
+	if deployFlags.connection != "" || deployFlags.host != "" || deployFlags.database != "" {
+		return false
 	}
 
-	return nil
+	if hasEnvConnectionSource() {
+		return false
+	}
+
+	if projectCfg != nil {
+		if projectCfg.Connection.Host != "" || projectCfg.Connection.Database != "" {
+			return false
+		}
+	}
+
+	return true
 }
+
+// runDeployWizard runs the interactive connection wizard for deploy.
+// Returns the config to use, or nil if user cancelled.
+func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "No database connection configured.")
+	fmt.Fprintln(os.Stderr, "")
+
+	// Run connection wizard
+	connResult, err := wizards.RunConnectionWizard()
+	if err != nil {
+		return nil, fmt.Errorf("connection wizard failed: %w", err)
+	}
+	if connResult.Cancelled {
+		fmt.Fprintln(os.Stderr, "Cancelled.")
+		return nil, nil
+	}
+
+	// Ask if user wants to save config
+	saveChoice := connResult.Tested // If tested successfully, default to asking about save
+
+	if saveChoice && tui.IsInteractive() {
+		fmt.Fprintln(os.Stderr, "")
+		if tui.PromptContinue("Save this connection to pgmi.yaml for future use?") {
+			if err := saveConnectionToConfig(sourcePath, &connResult.Config, connResult.ManagementDatabase); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
+				offerSavePgpass(&connResult.Config)
+			}
+		}
+	}
+
+	return &connResult.Config, nil
+}
+
+
+// applyWizardConfig applies wizard results to deploy flags.
+func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
+	if cfg == nil {
+		return
+	}
+
+	// Only set if not already set by CLI flags
+	if deployFlags.host == "" {
+		deployFlags.host = cfg.Host
+	}
+	if deployFlags.port == 0 && cfg.Port != 0 {
+		deployFlags.port = cfg.Port
+	}
+	if deployFlags.username == "" {
+		deployFlags.username = cfg.Username
+	}
+	if deployFlags.database == "" {
+		deployFlags.database = cfg.Database
+	}
+	if deployFlags.sslMode == "" {
+		deployFlags.sslMode = cfg.SSLMode
+	}
+
+	if cfg.Password != "" {
+		deployFlags.password = cfg.Password
+	}
+
+	// Cloud provider settings
+	switch cfg.AuthMethod {
+	case pgmi.AuthMethodAzureEntraID:
+		deployFlags.azure = true
+		if deployFlags.azureTenantID == "" {
+			deployFlags.azureTenantID = cfg.AzureTenantID
+		}
+		if deployFlags.azureClientID == "" {
+			deployFlags.azureClientID = cfg.AzureClientID
+		}
+	case pgmi.AuthMethodAWSIAM:
+		deployFlags.aws = true
+		if deployFlags.awsRegion == "" {
+			deployFlags.awsRegion = cfg.AWSRegion
+		}
+	case pgmi.AuthMethodGoogleIAM:
+		deployFlags.google = true
+		if deployFlags.googleInstance == "" {
+			deployFlags.googleInstance = cfg.GoogleInstance
+		}
+	}
+}
+

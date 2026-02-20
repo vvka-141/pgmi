@@ -183,6 +183,18 @@ type ConnectionConfig struct {
 	SSLPassword string
 }
 
+// DeepCopy returns a deep copy of the ConnectionConfig.
+func (c *ConnectionConfig) DeepCopy() ConnectionConfig {
+	cp := *c
+	if c.AdditionalParams != nil {
+		cp.AdditionalParams = make(map[string]string, len(c.AdditionalParams))
+		for k, v := range c.AdditionalParams {
+			cp.AdditionalParams[k] = v
+		}
+	}
+	return cp
+}
+
 // AuthMethod represents the type of authentication to use.
 type AuthMethod int
 
@@ -207,11 +219,6 @@ func (a AuthMethod) String() string {
 	default:
 		return fmt.Sprintf("Unknown(%d)", a)
 	}
-}
-
-// IsValid returns true if the AuthMethod is a valid, defined value.
-func (a AuthMethod) IsValid() bool {
-	return a >= AuthMethodStandard && a <= AuthMethodAzureEntraID
 }
 
 // FileMetadata represents a file loaded into pgmi_files table.

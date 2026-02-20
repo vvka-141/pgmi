@@ -210,16 +210,15 @@ func TestValidationResult_ErrorString(t *testing.T) {
 	}
 }
 
-// TestValidationResult_HasErrors tests error detection
-func TestValidationResult_HasErrors(t *testing.T) {
+func TestValidationResult_AddError_MarksInvalid(t *testing.T) {
 	result := ValidationResult{Valid: true, Errors: []string{}}
 
-	if result.HasErrors() {
-		t.Error("Expected no errors initially")
+	if !result.Valid {
+		t.Error("Expected valid initially")
 	}
 
 	result.AddError("Test error")
-	if !result.HasErrors() {
-		t.Error("Expected errors after adding error")
+	if result.Valid {
+		t.Error("Expected invalid after adding error")
 	}
 }

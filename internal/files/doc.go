@@ -17,9 +17,9 @@
 //	fileScanner := scanner.NewScanner(checksum.New())
 //	result, err := fileScanner.ScanDirectory("./migrations")
 //
-//	// Load files into database
+//	// Load files into database session
 //	fileLoader := loader.NewLoader()
-//	err = fileLoader.LoadFilesIntoSession(ctx, pool, result.Files)
+//	err = fileLoader.LoadFilesIntoSession(ctx, conn, result.Files)
 //
 // # Organization
 //

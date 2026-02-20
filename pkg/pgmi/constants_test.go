@@ -51,3 +51,60 @@ func TestValidateDunderDirectories(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTemplateDatabase(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"template0", true},
+		{"template1", true},
+		{"Template0", true},
+		{"TEMPLATE1", true},
+		{"postgres", false},
+		{"mydb", false},
+		{"template2", false},
+		{"template", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pgmi.IsTemplateDatabase(tt.name); got != tt.want {
+				t.Errorf("IsTemplateDatabase(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsSQLExtension(t *testing.T) {
+	tests := []struct {
+		ext  string
+		want bool
+	}{
+		{".sql", true},
+		{".SQL", true},
+		{".ddl", true},
+		{".dml", true},
+		{".dql", true},
+		{".dcl", true},
+		{".psql", true},
+		{".pgsql", true},
+		{".plpgsql", true},
+		{".PLPGSQL", true},
+		{".go", false},
+		{".py", false},
+		{".txt", false},
+		{".md", false},
+		{"", false},
+		{".sqlx", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ext, func(t *testing.T) {
+			if got := pgmi.IsSQLExtension(tt.ext); got != tt.want {
+				t.Errorf("IsSQLExtension(%q) = %v, want %v", tt.ext, got, tt.want)
+			}
+		})
+	}
+}

@@ -356,3 +356,85 @@ func TestResolveTargetDatabase_ErrorMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectionStringFromEnv(t *testing.T) {
+	// Save and restore
+	origPGMI := os.Getenv("PGMI_CONNECTION_STRING")
+	origDBURL := os.Getenv("DATABASE_URL")
+	defer func() {
+		setOrUnset("PGMI_CONNECTION_STRING", origPGMI)
+		setOrUnset("DATABASE_URL", origDBURL)
+	}()
+
+	tests := []struct {
+		name     string
+		pgmiEnv  string
+		dbURLEnv string
+		want     string
+	}{
+		{"PGMI_CONNECTION_STRING takes precedence", "pgmi://host", "db://host", "pgmi://host"},
+		{"falls back to DATABASE_URL", "", "db://host", "db://host"},
+		{"empty when neither set", "", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnset("PGMI_CONNECTION_STRING", tt.pgmiEnv)
+			setOrUnset("DATABASE_URL", tt.dbURLEnv)
+
+			if got := connectionStringFromEnv(); got != tt.want {
+				t.Errorf("connectionStringFromEnv() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasEnvConnectionSource(t *testing.T) {
+	origPGMI := os.Getenv("PGMI_CONNECTION_STRING")
+	origDBURL := os.Getenv("DATABASE_URL")
+	origPGHOST := os.Getenv("PGHOST")
+	origPGDB := os.Getenv("PGDATABASE")
+	defer func() {
+		setOrUnset("PGMI_CONNECTION_STRING", origPGMI)
+		setOrUnset("DATABASE_URL", origDBURL)
+		setOrUnset("PGHOST", origPGHOST)
+		setOrUnset("PGDATABASE", origPGDB)
+	}()
+
+	tests := []struct {
+		name     string
+		pgmiEnv  string
+		dbURLEnv string
+		pgHost   string
+		pgDB     string
+		want     bool
+	}{
+		{"PGMI_CONNECTION_STRING set", "pgmi://host", "", "", "", true},
+		{"DATABASE_URL set", "", "db://host", "", "", true},
+		{"PGHOST + PGDATABASE set", "", "", "localhost", "mydb", true},
+		{"PGHOST alone not enough", "", "", "localhost", "", false},
+		{"PGDATABASE alone not enough", "", "", "", "mydb", false},
+		{"nothing set", "", "", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnset("PGMI_CONNECTION_STRING", tt.pgmiEnv)
+			setOrUnset("DATABASE_URL", tt.dbURLEnv)
+			setOrUnset("PGHOST", tt.pgHost)
+			setOrUnset("PGDATABASE", tt.pgDB)
+
+			if got := hasEnvConnectionSource(); got != tt.want {
+				t.Errorf("hasEnvConnectionSource() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func setOrUnset(key, value string) {
+	if value != "" {
+		os.Setenv(key, value)
+	} else {
+		os.Unsetenv(key)
+	}
+}

@@ -8,7 +8,7 @@
 //
 //	classifier := retry.NewPostgreSQLErrorClassifier()
 //	strategy := retry.NewExponentialBackoff(3)
-//	executor := retry.NewExecutor(classifier, strategy, nil)
+//	executor := retry.NewExecutor(classifier, strategy)
 //
 //	err := executor.Execute(ctx, func(ctx context.Context) error {
 //	    return connectToDatabase(ctx)
@@ -27,6 +27,6 @@
 //
 // # Thread Safety
 //
-// Executor instances are NOT safe for concurrent use due to the mutable onRetry callback.
-// Create separate Executor instances for concurrent operations.
+// Executor instances are safe for concurrent use. Use WithOnRetry() to create
+// independent configurations per goroutine.
 package retry

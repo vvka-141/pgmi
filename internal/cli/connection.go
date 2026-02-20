@@ -9,6 +9,24 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+// connectionStringFromEnv returns the first non-empty connection string from
+// PGMI_CONNECTION_STRING or DATABASE_URL environment variables.
+func connectionStringFromEnv() string {
+	if s := os.Getenv("PGMI_CONNECTION_STRING"); s != "" {
+		return s
+	}
+	return os.Getenv("DATABASE_URL")
+}
+
+// hasEnvConnectionSource returns true if environment variables provide enough
+// connection info to skip the interactive wizard.
+func hasEnvConnectionSource() bool {
+	if connectionStringFromEnv() != "" {
+		return true
+	}
+	return os.Getenv("PGHOST") != "" && os.Getenv("PGDATABASE") != ""
+}
+
 // resolveConnection consolidates connection resolution logic for both deploy and test commands.
 // It handles connection string flags, granular flags, Azure/AWS/Google flags, and environment variables.
 //
@@ -28,10 +46,7 @@ func resolveConnection(
 ) (*pgmi.ConnectionConfig, string, error) {
 	connString := connStringFlag
 	if connString == "" {
-		connString = os.Getenv("PGMI_CONNECTION_STRING")
-	}
-	if connString == "" {
-		connString = os.Getenv("DATABASE_URL")
+		connString = connectionStringFromEnv()
 	}
 
 	envVars := db.LoadFromEnvironment()

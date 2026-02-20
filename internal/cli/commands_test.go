@@ -82,10 +82,10 @@ func TestDeployCmd_ForceWithoutOverwrite(t *testing.T) {
 	}
 }
 
-func TestInitCmd_ArgsValidation(t *testing.T) {
+func TestInitCmd_ArgsValidation_NoArgs(t *testing.T) {
 	err := initCmd.Args(initCmd, []string{})
-	if err == nil {
-		t.Fatal("Expected error for missing args")
+	if err != nil {
+		t.Errorf("Expected no error for zero args (defaults to .), got: %v", err)
 	}
 }
 

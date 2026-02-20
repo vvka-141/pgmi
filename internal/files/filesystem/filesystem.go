@@ -43,11 +43,6 @@ type FileSystemProvider interface {
 	// ReadFile reads a specific file at the given path
 	ReadFile(path string) ([]byte, error)
 
-	// ReadDir reads the directory entries at the given path.
-	// This is a convenience method that returns a flat list of entries
-	// without requiring Walk() for simple directory listing.
-	ReadDir(path string) ([]FileInfo, error)
-
 	// Stat returns file information for the given path
 	Stat(path string) (FileInfo, error)
 }

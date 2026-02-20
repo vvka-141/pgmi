@@ -30,28 +30,25 @@ type osDirectory struct {
 func (d *osDirectory) Path() string { return d.absPath }
 
 func (d *osDirectory) Walk(fn func(File, error) error) error {
-	return filepath.Walk(d.absPath, func(path string, info os.FileInfo, err error) error {
-		// Recover from panics in callback to prevent crashing the entire walk
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("walk callback panicked at %s: %v", path, r)
-			}
-		}()
-
-		if err != nil {
-			return fn(nil, err)
+	return filepath.WalkDir(d.absPath, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fn(nil, walkErr)
 		}
 
-		// Get relative path
 		relPath, relErr := filepath.Rel(d.absPath, path)
 		if relErr != nil {
 			return fn(nil, fmt.Errorf("failed to get relative path: %w", relErr))
 		}
 
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return fn(nil, fmt.Errorf("failed to get file info: %w", infoErr))
+		}
+
 		file := &osFile{
 			absPath: path,
 			relPath: relPath,
-			info:    info, // os.FileInfo implements fs.FileInfo
+			info:    info,
 		}
 
 		return fn(file, nil)
@@ -66,18 +63,6 @@ func NewOSFileSystem() *OSFileSystem {
 	return &OSFileSystem{}
 }
 
-// OSFileSystemProvider is a deprecated alias for OSFileSystem.
-// Use OSFileSystem instead.
-//
-// Deprecated: Use OSFileSystem instead.
-type OSFileSystemProvider = OSFileSystem
-
-// NewOSFileSystemProvider creates a new OS filesystem provider.
-//
-// Deprecated: Use NewOSFileSystem instead.
-func NewOSFileSystemProvider() *OSFileSystem {
-	return NewOSFileSystem()
-}
 
 func (p *OSFileSystem) Open(path string) (Directory, error) {
 	// Verify path exists and is a directory
@@ -100,24 +85,6 @@ func (p *OSFileSystem) Open(path string) (Directory, error) {
 
 func (p *OSFileSystem) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
-}
-
-func (p *OSFileSystem) ReadDir(path string) ([]FileInfo, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	result := make([]FileInfo, 0, len(entries))
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get file info for %s: %w", entry.Name(), err)
-		}
-		result = append(result, info)
-	}
-
-	return result, nil
 }
 
 func (p *OSFileSystem) Stat(path string) (FileInfo, error) {

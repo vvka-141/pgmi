@@ -29,6 +29,7 @@ func TestPrecedence_FlagOverridesEnv(t *testing.T) {
 		flagConfig,
 		nil, // Azure flags
 		nil, // AWS flags
+		nil, // Google flags
 		nil, // Cert flags
 		envVars,
 		nil,
@@ -64,6 +65,7 @@ func TestPrecedence_CertFlagOverridesEnv(t *testing.T) {
 		nil,
 		nil, // Azure flags
 		nil, // AWS flags
+		nil, // Google flags
 		certFlags,
 		envVars,
 		nil,
@@ -92,6 +94,7 @@ func TestPrecedence_EnvFallback(t *testing.T) {
 		&db.GranularConnFlags{Port: config.Port},
 		nil, // Azure flags
 		nil, // AWS flags
+		nil, // Google flags
 		nil, // Cert flags
 		envVars,
 		nil,

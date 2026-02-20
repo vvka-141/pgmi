@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
@@ -21,6 +24,7 @@ type connectionFlags struct {
 	host           string
 	port           int
 	username       string
+	password       string // not a CLI flag; set programmatically (e.g., from wizard)
 	database       string
 	sslMode        string
 	azure          bool
@@ -39,7 +43,6 @@ type connectionFlags struct {
 type resolvedConnection struct {
 	ConnConfig    *pgmi.ConnectionConfig
 	MaintenanceDB string
-	ConnStr       string
 }
 
 // resolveConnectionFromFlags resolves connection configuration from flags and project config.
@@ -83,10 +86,13 @@ func resolveConnectionFromFlags(
 		return nil, err
 	}
 
+	if flags.password != "" && connConfig.Password == "" {
+		connConfig.Password = flags.password
+	}
+
 	return &resolvedConnection{
 		ConnConfig:    connConfig,
 		MaintenanceDB: maintenanceDB,
-		ConnStr:       db.BuildConnectionString(connConfig),
 	}, nil
 }
 
@@ -188,6 +194,54 @@ func logConnectionVerbose(connConfig *pgmi.ConnectionConfig, maintenanceDB strin
 	}
 	fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
 }
+
+// saveConnectionToConfig saves connection config to pgmi.yaml, merging with any existing config.
+func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
+	configPath := filepath.Join(sourcePath, "pgmi.yaml")
+
+	cfg, err := config.Load(sourcePath)
+	if err != nil {
+		cfg = &config.ProjectConfig{}
+	}
+
+	cfg.Connection = config.ConnectionConfig{
+		Host:               connConfig.Host,
+		Port:               connConfig.Port,
+		Username:           connConfig.Username,
+		Database:           connConfig.Database,
+		ManagementDatabase: managementDB,
+		SSLMode:            connConfig.SSLMode,
+		SSLCert:            connConfig.SSLCert,
+		SSLKey:             connConfig.SSLKey,
+		SSLRootCert:        connConfig.SSLRootCert,
+		AuthMethod:         authMethodToString(connConfig.AuthMethod),
+		AzureTenantID:      connConfig.AzureTenantID,
+		AzureClientID:      connConfig.AzureClientID,
+		AWSRegion:          connConfig.AWSRegion,
+		GoogleInstance:     connConfig.GoogleInstance,
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+func authMethodToString(m pgmi.AuthMethod) string {
+	switch m {
+	case pgmi.AuthMethodAzureEntraID:
+		return "azure"
+	case pgmi.AuthMethodAWSIAM:
+		return "aws"
+	case pgmi.AuthMethodGoogleIAM:
+		return "google"
+	default:
+		return ""
+	}
+}
+
 
 // loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.
 // Later files override earlier ones. Returns merged parameters map.

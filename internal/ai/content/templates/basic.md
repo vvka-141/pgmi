@@ -108,12 +108,12 @@ CREATE INDEX IF NOT EXISTS ...
 ### Parameter Usage
 
 ```sql
--- Access CLI parameters
-v_email := pg_temp.pgmi_get_param('admin_email', 'admin@example.com');
+-- Access CLI parameters (use COALESCE for defaults)
+v_email := COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com');
 
 -- Use in migrations
 INSERT INTO users (email, name)
-VALUES (pg_temp.pgmi_get_param('admin_email', 'admin@example.com'), 'Admin')
+VALUES (COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com'), 'Admin')
 ON CONFLICT (email) DO NOTHING;
 ```
 

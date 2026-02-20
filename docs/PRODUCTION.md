@@ -2,6 +2,22 @@
 
 This guide covers considerations for running pgmi in production environments: performance, rollback strategies, monitoring, and operational patterns.
 
+## Connection requirements
+
+pgmi requires a **direct PostgreSQL connection** or a connection pooler in **session mode**.
+
+pgmi uses session-scoped temporary tables (`pg_temp`) that exist only for the lifetime of a single database connection. Connection poolers in transaction or statement mode reassign connections between operations, destroying the temporary tables mid-deployment.
+
+| Pooler Mode | Compatible | Why |
+|-------------|-----------|-----|
+| Session | Yes | Connection stays with one backend for the entire session |
+| Transaction | **No** | Backend may change between transactions — `pg_temp` state lost |
+| Statement | **No** | Backend may change between statements — `pg_temp` state lost |
+
+This applies to PgBouncer, Pgpool-II, AWS RDS Proxy, Azure PgBouncer, and any other connection pooler. Direct connections are always safe. If you use a pooler, either configure session mode for pgmi deployments or bypass the pooler with a direct connection string.
+
+---
+
 ## Deployment strategies
 
 ### Single-transaction deployment
@@ -379,6 +395,35 @@ BEGIN
 END $$;
 ```
 
+## Audit and compliance
+
+### Advanced template: built-in tracking
+
+The advanced template maintains a persistent execution log in `internal.deployment_script_execution_log`:
+
+| Column | Description |
+|--------|-------------|
+| `deployment_script_object_id` | UUID from `<pgmi-meta>` (or auto-generated from path) |
+| `file_path` | File path at execution time |
+| `idempotent` | Whether script was re-runnable |
+| `deployment_script_content_checksum` | Content hash at execution time |
+| `sort_key` | Execution ordering key |
+| `xact_id` | PostgreSQL transaction ID (correlates with WAL) |
+| `executed_at` | Timestamp |
+| `executed_by` | Database role that ran the script |
+
+Non-idempotent scripts are skipped on subsequent deployments. The companion view `internal.vw_deployment_script` provides last execution and execution count per script.
+
+### Basic template: stateless
+
+The basic template does not persist execution history. Every deployment re-executes all files (using `CREATE OR REPLACE` / `IF NOT EXISTS` for safety). Implement your own tracking in deploy.sql if needed — see the [Audit logging](#audit-logging) section below.
+
+### Session transparency
+
+During deployment, all state is queryable — files (`pgmi_source_view`), parameters (`pgmi_parameter_view`), execution plan (`pgmi_plan_view`), test plan (`pgmi_test_plan()`). This enables runtime inspection and debugging, though session state does not persist after the connection ends.
+
+---
+
 ## Performance considerations
 
 ### Timeout configuration
@@ -410,13 +455,10 @@ RESET statement_timeout;
 
 ### Connection pooling
 
-pgmi uses a single connection for the entire deployment. If you use connection pooling (PgBouncer, etc.):
-
-- Use **session mode** for deployments (transaction mode doesn't support temp tables)
-- Consider a direct connection for deployments, bypassing the pooler
+See [Connection Requirements](#connection-requirements) above. Use a direct connection or session-mode pooler for deployments:
 
 ```bash
-# Direct connection for deployment
+# Direct connection for deployment (bypasses pooler)
 pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 
 # Application traffic goes through pooler

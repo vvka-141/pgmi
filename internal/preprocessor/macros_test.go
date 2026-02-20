@@ -1,6 +1,7 @@
 package preprocessor
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -493,13 +494,14 @@ END $$;`
 func BenchmarkMacroDetector_Detect_LargeInput(b *testing.B) {
 	detector := NewMacroDetector()
 
-	var input string
+	var sb strings.Builder
 	for i := 0; i < 100; i++ {
-		input += "SELECT * FROM users WHERE id = 1;\n"
+		sb.WriteString("SELECT * FROM users WHERE id = 1;\n")
 		if i%20 == 0 {
-			input += "CALL pgmi_test('./pattern/**');\n"
+			sb.WriteString("CALL pgmi_test('./pattern/**');\n")
 		}
 	}
+	input := sb.String()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

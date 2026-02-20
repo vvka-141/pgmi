@@ -9,34 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// PostgreSQL error codes for transient conditions
+// PostgreSQL error codes for transient conditions.
 // See: https://www.postgresql.org/docs/current/errcodes-appendix.html
+//
+// Classes 08 (Connection Exception), 53 (Insufficient Resources), and
+// 57 (Operator Intervention) are matched by prefix in isTransientPgError.
+// Only codes from other classes need individual constants.
 const (
-	// Class 08 - Connection Exception
-	pgCodeConnectionException                        = "08000"
-	pgCodeConnectionDoesNotExist                     = "08003"
-	pgCodeConnectionFailure                          = "08006"
-	pgCodeSQLClientUnableToEstablishConnection       = "08001"
-	pgCodeSQLServerRejectedEstablishmentOfConnection = "08004"
-
 	// Class 40 - Transaction Rollback
 	pgCodeSerializationFailure = "40001"
 	pgCodeDeadlockDetected     = "40P01"
 
-	// Class 53 - Insufficient Resources
-	pgCodeInsufficientResources         = "53000"
-	pgCodeDiskFull                      = "53100"
-	pgCodeOutOfMemory                   = "53200"
-	pgCodeTooManyConnections            = "53300"
-	pgCodeConfigurationLimitExceeded    = "53400"
-
 	// Class 55 - Object Not In Prerequisite State
 	pgCodeLockNotAvailable = "55P03"
-
-	// Class 57 - Operator Intervention
-	pgCodeAdminShutdown    = "57P01"
-	pgCodeCrashShutdown    = "57P02"
-	pgCodeCannotConnectNow = "57P03"
 )
 
 // PostgreSQLErrorClassifier implements ErrorClassifier for PostgreSQL-specific errors.
@@ -92,37 +77,11 @@ func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bo
 		return true
 	}
 
-	// Check for specific transient error codes
+	// Individual codes from classes not covered by prefix
 	switch code {
-	// Class 08 - Connection Exception
-	case pgCodeConnectionException,
-		pgCodeConnectionDoesNotExist,
-		pgCodeConnectionFailure,
-		pgCodeSQLClientUnableToEstablishConnection,
-		pgCodeSQLServerRejectedEstablishmentOfConnection:
+	case pgCodeSerializationFailure, pgCodeDeadlockDetected: // Class 40
 		return true
-
-	// Class 40 - Transaction Rollback
-	case pgCodeSerializationFailure,
-		pgCodeDeadlockDetected:
-		return true
-
-	// Class 53 - Insufficient Resources
-	case pgCodeInsufficientResources,
-		pgCodeDiskFull,
-		pgCodeOutOfMemory,
-		pgCodeTooManyConnections,
-		pgCodeConfigurationLimitExceeded:
-		return true
-
-	// Class 55 - Object Not In Prerequisite State
-	case pgCodeLockNotAvailable:
-		return true
-
-	// Class 57 - Operator Intervention
-	case pgCodeAdminShutdown,
-		pgCodeCrashShutdown,
-		pgCodeCannotConnectNow:
+	case pgCodeLockNotAvailable: // Class 55
 		return true
 	}
 
@@ -131,40 +90,22 @@ func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bo
 
 // isNetworkError checks for network-level errors.
 func (c *PostgreSQLErrorClassifier) isNetworkError(err error) bool {
-	// DNS errors
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		// Temporary DNS failures are retryable
-		return dnsErr.Temporary() || dnsErr.Timeout()
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
 	}
 
-	// Network operation errors
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
-		// Temporary network errors are retryable
-		if opErr.Temporary() || opErr.Timeout() {
+		if opErr.Timeout() {
 			return true
 		}
 
-		// Check underlying error
 		if opErr.Err != nil {
-			// Connection refused (server not ready)
-			if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
-				return true
-			}
-
-			// Connection reset by peer
-			if errors.Is(opErr.Err, syscall.ECONNRESET) {
-				return true
-			}
-
-			// Network unreachable
-			if errors.Is(opErr.Err, syscall.ENETUNREACH) {
-				return true
-			}
-
-			// Host unreachable
-			if errors.Is(opErr.Err, syscall.EHOSTUNREACH) {
+			if errors.Is(opErr.Err, syscall.ECONNREFUSED) ||
+				errors.Is(opErr.Err, syscall.ECONNRESET) ||
+				errors.Is(opErr.Err, syscall.ENETUNREACH) ||
+				errors.Is(opErr.Err, syscall.EHOSTUNREACH) {
 				return true
 			}
 		}
@@ -183,7 +124,6 @@ func (c *PostgreSQLErrorClassifier) isConnectionError(err error) bool {
 		"connection reset",
 		"connection timeout",
 		"connection failure",
-		"no such host",
 		"network is unreachable",
 		"i/o timeout",
 		"broken pipe",
@@ -191,7 +131,6 @@ func (c *PostgreSQLErrorClassifier) isConnectionError(err error) bool {
 		"server closed the connection",
 		"unexpected eof",
 		"connection pool exhausted",
-		"context deadline exceeded", // May be transient if external timeout
 	}
 
 	for _, pattern := range transientPatterns {

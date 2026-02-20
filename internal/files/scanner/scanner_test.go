@@ -218,7 +218,7 @@ func TestScanDirectory_SQLExtensions(t *testing.T) {
 
 	sqlCount := 0
 	for _, f := range result.Files {
-		if isSQLExtension(f.Extension) {
+		if pgmi.IsSQLExtension(f.Extension) {
 			sqlCount++
 		}
 	}
@@ -242,6 +242,20 @@ func TestValidateDeploySQL_Missing(t *testing.T) {
 
 	if err := s.ValidateDeploySQL("/project"); err == nil {
 		t.Error("Expected error for missing deploy.sql")
+	}
+}
+
+func TestValidateDeploySQL_IsDirectory(t *testing.T) {
+	s, fs := newTestScanner()
+	// Add a file inside a "deploy.sql" directory to make that path exist as a directory
+	fs.AddFile("deploy.sql/inner.sql", "SELECT 1;")
+
+	err := s.ValidateDeploySQL("/project")
+	if err == nil {
+		t.Error("Expected error when deploy.sql is a directory")
+	}
+	if err != nil && !strings.Contains(err.Error(), "directory") {
+		t.Errorf("Error should mention 'directory', got: %v", err)
 	}
 }
 
