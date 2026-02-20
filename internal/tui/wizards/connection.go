@@ -64,6 +64,23 @@ func WithTester(t ConnectionTester) WizardOption {
 	}
 }
 
+// Provider IDs.
+const (
+	providerLocal  = "local"
+	providerAzure  = "azure"
+	providerAWS    = "aws"
+	providerGoogle = "google"
+	providerCustom = "custom"
+)
+
+// Auth method IDs.
+const (
+	authPassword   = "password"
+	authEntra      = "entra"
+	authIAM        = "iam"
+	authConnString = "connstring"
+)
+
 // ConnectionResult holds the result of the connection wizard.
 type ConnectionResult struct {
 	Cancelled          bool
@@ -91,46 +108,46 @@ type AuthOption struct {
 // Available providers.
 var providers = []Provider{
 	{
-		ID:          "local",
+		ID:          providerLocal,
 		Name:        "Local / On-Premises",
 		Description: "PostgreSQL on localhost or your own servers",
 		AuthMethods: []AuthOption{
-			{ID: "password", Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
+			{ID: authPassword, Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
 		},
 	},
 	{
-		ID:          "azure",
+		ID:          providerAzure,
 		Name:        "Azure Database for PostgreSQL",
 		Description: "Microsoft Azure managed PostgreSQL",
 		AuthMethods: []AuthOption{
-			{ID: "entra", Name: "Azure Entra ID (Recommended)", Description: "Uses az login, managed identity, or environment variables", AuthMethod: pgmi.AuthMethodAzureEntraID},
-			{ID: "password", Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
+			{ID: authEntra, Name: "Azure Entra ID (Recommended)", Description: "Uses az login, managed identity, or environment variables", AuthMethod: pgmi.AuthMethodAzureEntraID},
+			{ID: authPassword, Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
 		},
 	},
 	{
-		ID:          "aws",
+		ID:          providerAWS,
 		Name:        "AWS RDS PostgreSQL",
 		Description: "Amazon Web Services managed PostgreSQL",
 		AuthMethods: []AuthOption{
-			{ID: "iam", Name: "IAM Database Authentication", Description: "Uses AWS credentials for authentication", AuthMethod: pgmi.AuthMethodAWSIAM},
-			{ID: "password", Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
+			{ID: authIAM, Name: "IAM Database Authentication", Description: "Uses AWS credentials for authentication", AuthMethod: pgmi.AuthMethodAWSIAM},
+			{ID: authPassword, Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
 		},
 	},
 	{
-		ID:          "google",
+		ID:          providerGoogle,
 		Name:        "Google Cloud SQL",
 		Description: "Google Cloud managed PostgreSQL",
 		AuthMethods: []AuthOption{
-			{ID: "iam", Name: "Cloud SQL IAM", Description: "Uses Google Cloud credentials", AuthMethod: pgmi.AuthMethodGoogleIAM},
-			{ID: "password", Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
+			{ID: authIAM, Name: "Cloud SQL IAM", Description: "Uses Google Cloud credentials", AuthMethod: pgmi.AuthMethodGoogleIAM},
+			{ID: authPassword, Name: "Username and Password", Description: "Standard PostgreSQL authentication", AuthMethod: pgmi.AuthMethodStandard},
 		},
 	},
 	{
-		ID:          "custom",
+		ID:          providerCustom,
 		Name:        "Other / Connection String",
 		Description: "Enter a full PostgreSQL connection string",
 		AuthMethods: []AuthOption{
-			{ID: "connstring", Name: "Connection String", Description: "postgresql://user:pass@host:port/database", AuthMethod: pgmi.AuthMethodStandard},
+			{ID: authConnString, Name: "Connection String", Description: "postgresql://user:pass@host:port/database", AuthMethod: pgmi.AuthMethodStandard},
 		},
 	},
 }
@@ -374,22 +391,22 @@ func (w ConnectionWizard) updateAuthSelection(msg tea.KeyMsg) (tea.Model, tea.Cm
 
 func (w *ConnectionWizard) getInputStep() wizardStep {
 	switch w.provider.ID {
-	case "azure":
-		if w.authMethod.ID == "entra" {
+	case providerAzure:
+		if w.authMethod.ID == authEntra {
 			return stepInputAzure
 		}
 		return stepInputHost
-	case "aws":
-		if w.authMethod.ID == "iam" {
+	case providerAWS:
+		if w.authMethod.ID == authIAM {
 			return stepInputAWS
 		}
 		return stepInputHost
-	case "google":
-		if w.authMethod.ID == "iam" {
+	case providerGoogle:
+		if w.authMethod.ID == authIAM {
 			return stepInputGoogle
 		}
 		return stepInputHost
-	case "custom":
+	case providerCustom:
 		return stepInputConnString
 	default:
 		return stepInputHost
@@ -423,7 +440,7 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	host := textinput.New()
 	host.CharLimit = 256
 	host.Width = 40
-	if w.provider != nil && w.provider.ID == "local" {
+	if w.provider != nil && w.provider.ID == providerLocal {
 		host.SetValue("localhost")
 	} else {
 		host.Placeholder = "hostname"
@@ -982,8 +999,8 @@ func (w ConnectionWizard) Result() ConnectionResult {
 }
 
 // Run executes the connection wizard and returns the result.
-func RunConnectionWizard() (ConnectionResult, error) {
-	wizard := NewConnectionWizard()
+func RunConnectionWizard(opts ...WizardOption) (ConnectionResult, error) {
+	wizard := NewConnectionWizard(opts...)
 	p := tea.NewProgram(wizard, tea.WithAltScreen())
 
 	model, err := p.Run()

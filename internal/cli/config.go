@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -53,9 +54,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	existingCfg, err := config.Load(targetDir)
 	if err == nil && existingCfg != nil {
-		fmt.Println("Found existing pgmi.yaml")
+		fmt.Fprintln(os.Stderr, "Found existing pgmi.yaml")
 		if !tui.PromptContinue("Overwrite connection settings?") {
-			fmt.Println("Cancelled.")
+			fmt.Fprintln(os.Stderr, "Cancelled.")
 			return nil
 		}
 	}
@@ -65,7 +66,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connection wizard failed: %w", err)
 	}
 	if connResult.Cancelled {
-		fmt.Println("Cancelled.")
+		fmt.Fprintln(os.Stderr, "Cancelled.")
 		return nil
 	}
 
@@ -73,7 +74,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Printf("\nConnection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
+	fmt.Fprintf(os.Stderr, "\nConnection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
 	offerSavePgpass(&connResult.Config)
 	return nil
 }

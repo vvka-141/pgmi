@@ -120,7 +120,7 @@ func (c *PathCompleter) formatMatch(parent, name string) string {
 
 // splitPath splits an input into parent directory and name prefix.
 //
-//	"./src/com" → ("./src", "com")
+//	"./src/com" → ("src", "com")
 //	"./src/"    → ("./src", "")
 //	"my"        → (".", "my")
 //	""          → (".", "")

@@ -104,6 +104,8 @@ func TestSplitPath(t *testing.T) {
 		{"", ".", ""},
 		{".", ".", ""},
 		{"my", ".", "my"},
+		{"./src/com", "src", "com"},
+		{"./src/", "./src", ""},
 	}
 
 	for _, tt := range tests {
