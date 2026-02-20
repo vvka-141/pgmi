@@ -61,9 +61,11 @@ This distinction is fundamental to all design decisions:
 
 ### 2. SQL-Centric Control
 
-**Users control EVERYTHING through SQL**
+**Deployment logic lives in SQL, infrastructure lives in Go**
 
-- **Execution order**: deploy.sql decides what runs when via `pgmi_plan_view ORDER BY execution_order`
+Go handles: file discovery, `<pgmi-meta>` parsing, `CALL pgmi_test()` preprocessing, session setup.
+SQL handles:
+- **Execution order**: deploy.sql queries and filters `pgmi_plan_view`
 - **Transaction boundaries**: BEGIN/COMMIT in deploy.sql, not CLI flags
 - **Error handling**: EXCEPTION blocks in SQL, not retry logic in Go
 - **Idempotency**: User's responsibility via CREATE OR REPLACE, IF NOT EXISTS, etc.
@@ -73,7 +75,7 @@ This distinction is fundamental to all design decisions:
 
 **Example**:
 ```sql
--- deploy.sql controls everything with direct execution
+-- deploy.sql controls deployment logic with direct execution
 BEGIN;
 
 DO $$
@@ -356,7 +358,7 @@ pgmi_test('.*/pre-deployment/.*');
 - ✅ **Session-Scoped**: Use pg_temp tables, clean session separation
 
 - ❌ **Go Code Orchestration**: Business logic in Go for deployment flow
-- ✅ **SQL Orchestration**: User controls everything via deploy.sql
+- ✅ **SQL Orchestration**: User controls deployment logic via deploy.sql
 
 - ❌ **Abstracting PostgreSQL**: Hiding native behavior behind framework
 - ✅ **Native PostgreSQL**: Expose PostgreSQL's full power to user

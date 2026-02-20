@@ -6,7 +6,7 @@
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
 pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
-Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls everything.
+Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls the deployment.
 
 ![pgmi deployment flow](pgmi-deploy.png)
 

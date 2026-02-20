@@ -39,7 +39,7 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**The key insight:** deploy.sql is the deployment script. It queries `pgmi_plan_view` and uses `EXECUTE` to run files directly. You control everything.
+**The key insight:** deploy.sql is the deployment script. It queries `pgmi_plan_view` and uses `EXECUTE` to run files directly. You control the deployment logic — transactions, ordering, conditionals, error handling.
 
 **Connection requirement:** Because everything depends on `pg_temp` tables surviving for the entire session, pgmi requires a direct connection or a pooler in session mode. Transaction-mode poolers (PgBouncer, RDS Proxy, etc.) will silently break deployments by reassigning the backend connection. See [Production Guide — Connection Requirements](PRODUCTION.md#connection-requirements).
 
@@ -780,11 +780,11 @@ pgmi is not a migration framework. It's an **execution fabric**.
 
 | Traditional Migration Tool | pgmi |
 |---------------------------|------|
-| Decides execution order | Your SQL decides execution order |
+| Decides execution order | Your SQL queries and filters the plan |
 | Controls transactions | Your SQL controls transactions |
 | Provides retry logic | Your SQL provides retry logic (EXCEPTION blocks) |
 | Has migration history table | You implement tracking however you want |
-| Black box | Transparent—everything is queryable |
+| Black box | Transparent — session state is queryable |
 
 **pgmi's job is to:**
 1. Connect to PostgreSQL
@@ -797,7 +797,7 @@ pgmi is not a migration framework. It's an **execution fabric**.
 3. Control transaction boundaries and error handling
 4. Decide which files run in what order
 
-**The result:** Complete control. No magic. PostgreSQL is the deployment engine—pgmi just provides infrastructure.
+**The result:** Full control over deployment logic. pgmi handles infrastructure (file loading, metadata parsing, preprocessing); your SQL handles everything else. PostgreSQL is the deployment engine.
 
 ---
 

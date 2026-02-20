@@ -131,13 +131,15 @@ pgmi doesn't implement migration logic in Go. It loads your files into PostgreSQ
 ### Infrastructure, not orchestration
 
 pgmi provides:
-- File loading into temp tables
-- Parameter injection
-- Plan execution
+- File discovery and loading into temp tables
+- Parameter injection as session variables
+- Optional metadata parsing (`<pgmi-meta>`) for execution ordering
+- Preprocessor macro expansion (`CALL pgmi_test()`)
+- deploy.sql execution
 
 pgmi does NOT decide:
 - Transaction boundaries (you write `BEGIN`/`COMMIT`)
-- Execution order (you query and sort `pg_temp.pgmi_source_view`)
+- Which files run (you query and filter `pgmi_plan_view` or `pgmi_source_view`)
 - Retry logic (you use `EXCEPTION` blocks)
 - Idempotency (you write `IF NOT EXISTS`, `ON CONFLICT`)
 
@@ -145,7 +147,7 @@ pgmi does NOT decide:
 
 Your migration files are valid PostgreSQL SQL—you can run them directly with `psql`. The optional `<pgmi-meta>` blocks live inside standard SQL comments (`/* ... */`), so they don't break compatibility. pgmi parses them before SQL reaches PostgreSQL to configure file ordering and idempotency tracking — they're metadata about your files, not executable syntax.
 
-The only pgmi-specific code is `deploy.sql`, which queries session temp tables. If you later switch tools, your migration files work unchanged.
+The pgmi-specific parts are `deploy.sql` (which queries session temp tables) and any `<pgmi-meta>` blocks you choose to add. If you later switch tools, your migration files work unchanged — strip the comment blocks and they're plain SQL.
 
 ## Comparison with other tools
 

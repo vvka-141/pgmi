@@ -362,7 +362,7 @@ pgmi deploy . --database mydb
 **The Contract:**
 1. deploy.sql queries files from `pg_temp.pgmi_plan_view`
 2. deploy.sql executes files directly with `EXECUTE v_file.content`
-3. No magic: What you execute is what runs
+3. Transparent: file content passes through unmodified (except `CALL pgmi_test()` macro expansion)
 
 **Core Pattern:**
 
@@ -393,7 +393,7 @@ COMMIT;
 **Advantages:**
 - ✅ **Transparent:** User controls exactly what executes
 - ✅ **Deterministic:** Same inputs → same execution order → same result
-- ✅ **Flexible:** User controls everything (transaction boundaries, order, conditionals)
+- ✅ **Flexible:** User controls deployment logic (transaction boundaries, filtering, conditionals)
 - ✅ **Simple:** No queue abstraction, just SQL executing SQL
 - ✅ **PostgreSQL-native:** Uses standard PL/pgSQL patterns
 
