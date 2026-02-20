@@ -52,7 +52,7 @@ func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
 		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	return &StandardConnector{
 		config:        config,

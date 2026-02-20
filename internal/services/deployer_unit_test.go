@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -519,52 +518,4 @@ func TestValidateOverwriteTarget(t *testing.T) {
 	}
 }
 
-// --- Error attribution tests ---
-
-func TestExtractLineFromError_LineInMessage(t *testing.T) {
-	tests := []struct {
-		name     string
-		message  string
-		expected int
-	}{
-		{"syntax error with line", "syntax error at or near \"foo\" at LINE 42:", 42},
-		{"LINE at start", "LINE 1: SELECT * FROM nonexistent;", 1},
-		{"LINE in middle", "ERROR: syntax error at LINE 15: unexpected token", 15},
-		{"no LINE marker", "ERROR: something went wrong", 0},
-		{"LINE without colon", "LINE 5 is problematic", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pgErr := &pgconn.PgError{Message: tt.message}
-			result := extractLineFromError(pgErr)
-			if result != tt.expected {
-				t.Errorf("extractLineFromError(%q) = %d, expected %d", tt.message, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestExtractLineFromError_LineInWhere(t *testing.T) {
-	tests := []struct {
-		name     string
-		where    string
-		expected int
-	}{
-		{"PL/pgSQL line", "PL/pgSQL function my_func() line 5 at RAISE", 5},
-		{"line with comma", "line 10, column 5", 10},
-		{"line with paren", "line 3) RAISE EXCEPTION", 3},
-		{"no line marker", "at RAISE EXCEPTION", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pgErr := &pgconn.PgError{Where: tt.where}
-			result := extractLineFromError(pgErr)
-			if result != tt.expected {
-				t.Errorf("extractLineFromError(where=%q) = %d, expected %d", tt.where, result, tt.expected)
-			}
-		})
-	}
-}
 

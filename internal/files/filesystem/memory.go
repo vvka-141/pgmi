@@ -39,7 +39,9 @@ func (f *memoryFile) RelativePath() string { return f.relPath }
 func (f *memoryFile) Info() FileInfo       { return f.info }
 
 func (f *memoryFile) ReadContent() ([]byte, error) {
-	return f.content, nil
+	cp := make([]byte, len(f.content))
+	copy(cp, f.content)
+	return cp, nil
 }
 
 // memoryDirectory implements Directory interface for in-memory filesystem

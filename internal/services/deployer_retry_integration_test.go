@@ -20,7 +20,7 @@ func TestRetryExecutor_SimulatedTransientFailure(t *testing.T) {
 		retry.WithJitter(0),
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	// Simulate an operation that fails twice with transient errors, then succeeds
 	var attempts int32
@@ -70,7 +70,7 @@ func TestRetryExecutor_FatalErrorNoRetry(t *testing.T) {
 		retry.WithInitialDelay(1*time.Millisecond),
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	// Simulate an operation that fails with a fatal error
 	var attempts int32
@@ -108,7 +108,7 @@ func TestRetryExecutor_ExhaustedRetries(t *testing.T) {
 		t.Logf("Retry attempt %d after error: %v (delay: %v)", attempt, err, delay)
 	}
 
-	executor := retry.NewExecutor(classifier, strategy, nil).WithOnRetry(onRetry)
+	executor := retry.NewExecutor(classifier, strategy).WithOnRetry(onRetry)
 
 	// Simulate an operation that always fails with transient error
 	var attempts int32
@@ -146,7 +146,7 @@ func TestRetryExecutor_ContextCancellation(t *testing.T) {
 		retry.WithInitialDelay(50*time.Millisecond), // Longer delay to ensure cancellation happens
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -192,7 +192,7 @@ func TestRetryExecutor_MixedErrors(t *testing.T) {
 		retry.WithJitter(0),
 	)
 
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	// Simulate: transient → transient → fatal
 	var attempts int32
@@ -241,7 +241,7 @@ func TestRetryExecutor_SuccessOnFirstAttempt(t *testing.T) {
 		retryCount++
 	}
 
-	executor := retry.NewExecutor(classifier, strategy, nil).WithOnRetry(onRetry)
+	executor := retry.NewExecutor(classifier, strategy).WithOnRetry(onRetry)
 
 	var attempts int32
 	operation := func(ctx context.Context) error {

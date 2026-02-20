@@ -15,18 +15,16 @@ import (
 // ensuring each goroutine can have its own configuration without shared state.
 // The original Executor remains unchanged.
 type Executor struct {
-	classifier   pgmi.ErrorClassifier
-	strategy     pgmi.BackoffStrategy
-	timeProvider pgmi.TimeProvider
-	onRetry      func(attempt int, err error, delay time.Duration)
+	classifier pgmi.ErrorClassifier
+	strategy   pgmi.BackoffStrategy
+	onRetry    func(attempt int, err error, delay time.Duration)
 }
 
 // NewExecutor creates a new retry executor with the given configuration.
-// Panics if classifier or strategy is nil. TimeProvider can be nil (defaults to system time).
+// Panics if classifier or strategy is nil.
 func NewExecutor(
 	classifier pgmi.ErrorClassifier,
 	strategy pgmi.BackoffStrategy,
-	timeProvider pgmi.TimeProvider,
 ) *Executor {
 	if classifier == nil {
 		panic("classifier cannot be nil")
@@ -34,13 +32,9 @@ func NewExecutor(
 	if strategy == nil {
 		panic("strategy cannot be nil")
 	}
-	if timeProvider == nil {
-		timeProvider = &systemTimeProvider{}
-	}
 	return &Executor{
-		classifier:   classifier,
-		strategy:     strategy,
-		timeProvider: timeProvider,
+		classifier: classifier,
+		strategy:   strategy,
 	}
 }
 
@@ -51,7 +45,7 @@ func NewExecutor(
 //
 // Example:
 //
-//	executor := retry.NewExecutor(classifier, strategy, nil)
+//	executor := retry.NewExecutor(classifier, strategy)
 //	executor1 := executor.WithOnRetry(callback1) // New instance
 //	executor2 := executor.WithOnRetry(callback2) // Another new instance
 //	// executor1 and executor2 are independent
@@ -118,15 +112,4 @@ func (e *Executor) Execute(ctx context.Context, operation func(ctx context.Conte
 
 	// Exhausted all retry attempts
 	return lastErr
-}
-
-// systemTimeProvider is the default TimeProvider that uses actual system time.
-type systemTimeProvider struct{}
-
-func (s *systemTimeProvider) Sleep(d time.Duration) {
-	time.Sleep(d)
-}
-
-func (s *systemTimeProvider) Now() time.Time {
-	return time.Now()
 }

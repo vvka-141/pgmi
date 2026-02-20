@@ -2,16 +2,12 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
-	"github.com/vvka-141/pgmi/internal/sourcemap"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -201,77 +197,11 @@ func (s *DeploymentService) executeDeploySQL(
 	// Execute preprocessed deploy.sql as a single script
 	_, err = conn.Exec(ctx, result.ExpandedSQL)
 	if err != nil {
-		// Try to attribute the error to the original source using the source map
-		attributedErr := s.attributeError(err, result.SourceMap)
-		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, attributedErr)
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
 
 	s.logger.Info("✓ deploy.sql executed successfully")
 	return nil
-}
-
-// attributeError attempts to resolve error line numbers back to original sources.
-// If the error contains line information and the source map has a mapping,
-// returns an enhanced error with the original source context.
-func (s *DeploymentService) attributeError(err error, sm *sourcemap.SourceMap) error {
-	if sm == nil || sm.Len() == 0 {
-		return err
-	}
-
-	// Extract PostgreSQL error
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return err
-	}
-
-	// PostgreSQL errors may have line info in the message or Position field
-	line := extractLineFromError(pgErr)
-	if line == 0 {
-		return err
-	}
-
-	// Try to resolve the line using source map
-	file, origLine, desc, found := sm.Resolve(line)
-	if !found {
-		return err
-	}
-
-	// Create enhanced error message
-	return fmt.Errorf("%w\n  → %s (line %d: %s)", err, file, origLine, desc)
-}
-
-// extractLineFromError extracts a line number from a PostgreSQL error.
-// Checks Position field and parses "LINE X:" from the message.
-func extractLineFromError(pgErr *pgconn.PgError) int {
-	// PostgreSQL doesn't have a Line field in pgconn.PgError for query errors,
-	// but the Position field indicates character offset. We can also check
-	// the message for "LINE X:" pattern which appears in syntax errors.
-
-	// Check if message contains "LINE X:" pattern
-	if idx := strings.Index(pgErr.Message, "LINE "); idx != -1 {
-		remaining := pgErr.Message[idx+5:]
-		if colonIdx := strings.Index(remaining, ":"); colonIdx != -1 {
-			if line, err := strconv.Atoi(remaining[:colonIdx]); err == nil {
-				return line
-			}
-		}
-	}
-
-	// For context errors, check Where field
-	if pgErr.Where != "" {
-		if idx := strings.Index(pgErr.Where, "line "); idx != -1 {
-			remaining := pgErr.Where[idx+5:]
-			endIdx := strings.IndexAny(remaining, " ,)")
-			if endIdx == -1 {
-				endIdx = len(remaining)
-			}
-			if line, err := strconv.Atoi(remaining[:endIdx]); err == nil {
-				return line
-			}
-		}
-	}
-
-	return 0
 }
 
 func validateOverwriteTarget(targetDB, managementDB string) error {

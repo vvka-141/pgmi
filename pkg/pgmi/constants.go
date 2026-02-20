@@ -38,11 +38,6 @@ const (
 	// DefaultRetryMaxAttempts is the default maximum number of retry attempts.
 	DefaultRetryMaxAttempts = 3
 
-	// MaxErrorPreviewLength is the maximum number of characters shown
-	// in error messages when previewing failed SQL batches.
-	// This prevents overwhelming the console with large SQL statement errors.
-	MaxErrorPreviewLength = 200
-
 	// DefaultManagementDB is the default database to connect to for management operations.
 	DefaultManagementDB = "postgres"
 )

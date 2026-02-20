@@ -6,26 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// NamespaceFileIdentity is the fixed UUID namespace for generating deterministic
-// file identities from file paths. This namespace is derived from the string
-// "pgmi.com/file-identity/v1" using UUID v5 with the URL namespace.
-//
-// Value: 6ba7b810-9dad-11d1-80b4-00c04fd430c8 (standard UUID v5 namespace for URLs)
-//        hashed with "pgmi.com/file-identity/v1"
-//
-// This constant ensures that:
-//   - File paths always generate the same UUID across deployments
-//   - The namespace is unique to PGMI (no collisions with other systems)
-//   - Users can independently verify deterministic ID generation
-var NamespaceFileIdentity = uuid.MustParse("e8c72c3e-7b4a-5f9d-b8e1-4c6d8a2e5f7c")
-
-// init generates the namespace UUID from the canonical string on package load.
-// This is computed once at startup for efficiency.
-func init() {
-	// Generate namespace from URL namespace + canonical string
-	// uuid.NameSpaceURL is the standard UUID v5 namespace for URL identifiers
-	NamespaceFileIdentity = uuid.NewSHA1(uuid.NameSpaceURL, []byte("pgmi.com/file-identity/v1"))
-}
+var NamespaceFileIdentity = uuid.NewSHA1(uuid.NameSpaceURL, []byte("pgmi.com/file-identity/v1"))
 
 // GenerateFallbackID creates a deterministic UUID v5 from a normalized file path.
 // This is used for files without explicit <pgmi:meta> blocks to ensure stable

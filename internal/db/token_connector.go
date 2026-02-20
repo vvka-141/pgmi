@@ -28,7 +28,7 @@ func NewTokenBasedConnector(config *pgmi.ConnectionConfig, tokenProvider TokenPr
 		retry.WithInitialDelay(pgmi.DefaultRetryInitialDelay),
 		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
 	)
-	executor := retry.NewExecutor(classifier, strategy, nil)
+	executor := retry.NewExecutor(classifier, strategy)
 
 	return &TokenBasedConnector{
 		config:        config,

@@ -44,10 +44,6 @@ func (s *Session) Conn() *pgxpool.Conn {
 	return s.conn
 }
 
-func (s *Session) ScanResult() FileScanResult {
-	return s.scanResult
-}
-
 // Close releases all session resources. Idempotent.
 func (s *Session) Close() error {
 	if s.conn != nil {

@@ -58,11 +58,6 @@ func (v *ValidationResult) AddError(format string, args ...interface{}) {
 	v.Errors = append(v.Errors, fmt.Sprintf(format, args...))
 }
 
-// HasErrors returns true if the validation result contains errors.
-func (v *ValidationResult) HasErrors() bool {
-	return len(v.Errors) > 0
-}
-
 // ErrorString returns all validation errors joined with semicolons.
 // Returns empty string if no errors.
 func (v *ValidationResult) ErrorString() string {

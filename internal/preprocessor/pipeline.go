@@ -8,15 +8,13 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vvka-141/pgmi/internal/sourcemap"
 	"github.com/vvka-141/pgmi/internal/testgen"
 )
 
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
-	ExpandedSQL string              // SQL with macros expanded
-	SourceMap   *sourcemap.SourceMap // Mapping for error attribution
-	MacroCount  int                 // Number of macros expanded
+	ExpandedSQL string // SQL with macros expanded
+	MacroCount  int    // Number of macros expanded
 }
 
 // Pipeline preprocesses SQL by expanding macros.
@@ -39,7 +37,6 @@ func NewPipeline() *Pipeline {
 func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) (*PreprocessResult, error) {
 	result := &PreprocessResult{
 		ExpandedSQL: sql,
-		SourceMap:   sourcemap.New(),
 		MacroCount:  0,
 	}
 

@@ -72,7 +72,7 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 		}
 	}
 
-	if closer, ok := a.input.(io.Closer); ok {
+	if closer, ok := a.input.(io.Closer); ok && a.input != os.Stdin {
 		closer.Close()
 	}
 	wg.Wait()

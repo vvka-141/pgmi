@@ -221,11 +221,6 @@ func (a AuthMethod) String() string {
 	}
 }
 
-// IsValid returns true if the AuthMethod is a valid, defined value.
-func (a AuthMethod) IsValid() bool {
-	return a >= AuthMethodStandard && a <= AuthMethodAzureEntraID
-}
-
 // FileMetadata represents a file loaded into pgmi_files table.
 // All file paths use Unix-style forward slashes for cross-platform consistency.
 type FileMetadata struct {
