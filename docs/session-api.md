@@ -41,6 +41,8 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 
 **The key insight:** deploy.sql is the deployment script. It queries `pgmi_plan_view` and uses `EXECUTE` to run files directly. You control everything.
 
+**Connection requirement:** Because everything depends on `pg_temp` tables surviving for the entire session, pgmi requires a direct connection or a pooler in session mode. Transaction-mode poolers (PgBouncer, RDS Proxy, etc.) will silently break deployments by reassigning the backend connection. See [Production Guide — Connection Requirements](PRODUCTION.md#connection-requirements).
+
 ---
 
 ## Two-Tier API Design

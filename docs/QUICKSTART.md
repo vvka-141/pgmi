@@ -60,6 +60,8 @@ brew install vvka-141/pgmi/pgmi
 curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
 sudo apt update && sudo apt install pgmi
 ```
+
+The script configures the [Cloudsmith APT repository](https://cloudsmith.io/~vvka-141/repos/pgmi/packages/) and GPG key. The pgmi binary is then installed via standard `apt install` with package signature verification.
 </details>
 
 <details>

@@ -36,7 +36,7 @@ This distinction is fundamental to all design decisions:
 - Manage locking strategy (PostgreSQL's native behavior prevails)
 - Make any "how to deploy" decisions
 
-**Tagline**: A PostgreSQL-native execution fabric for humans and autonomous agents—deterministic, auditable, and transactionally safe.
+**Tagline**: A PostgreSQL-native execution fabric for humans and autonomous agents—deterministic, inspectable, and transactionally safe. The advanced template adds persistent audit logging via `internal.deployment_script_execution_log`.
 
 ## Architectural Foundations
 
