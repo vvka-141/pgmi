@@ -35,12 +35,11 @@ var pgmiManagedInitFiles = map[string]bool{
 
 // InitResult holds the result of the init wizard.
 type InitResult struct {
-	Cancelled    bool
-	TargetDir    string
-	Template     string
-	SetupConfig  bool
-	ConfigResult ConfigResult
-	ConnResult   ConnectionResult
+	Cancelled   bool
+	TargetDir   string
+	Template    string
+	SetupConfig bool
+	ConnResult  ConnectionResult
 }
 
 // InitWizard guides users through project initialization.
