@@ -24,6 +24,7 @@ type connectionFlags struct {
 	host           string
 	port           int
 	username       string
+	password       string // not a CLI flag; set programmatically (e.g., from wizard)
 	database       string
 	sslMode        string
 	azure          bool
@@ -83,6 +84,10 @@ func resolveConnectionFromFlags(
 	connConfig, maintenanceDB, err := resolveConnection(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, projectCfg, verbose)
 	if err != nil {
 		return nil, err
+	}
+
+	if flags.password != "" && connConfig.Password == "" {
+		connConfig.Password = flags.password
 	}
 
 	return &resolvedConnection{

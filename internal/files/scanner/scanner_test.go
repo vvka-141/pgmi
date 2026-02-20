@@ -245,6 +245,20 @@ func TestValidateDeploySQL_Missing(t *testing.T) {
 	}
 }
 
+func TestValidateDeploySQL_IsDirectory(t *testing.T) {
+	s, fs := newTestScanner()
+	// Add a file inside a "deploy.sql" directory to make that path exist as a directory
+	fs.AddFile("deploy.sql/inner.sql", "SELECT 1;")
+
+	err := s.ValidateDeploySQL("/project")
+	if err == nil {
+		t.Error("Expected error when deploy.sql is a directory")
+	}
+	if err != nil && !strings.Contains(err.Error(), "directory") {
+		t.Errorf("Error should mention 'directory', got: %v", err)
+	}
+}
+
 func TestReadDeploySQL(t *testing.T) {
 	s, fs := newTestScanner()
 	fs.AddFile("deploy.sql", "SELECT 1;")

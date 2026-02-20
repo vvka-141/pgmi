@@ -13,14 +13,13 @@ type SessionPreparer interface {
 
 // Session holds database resources for a deployment. Not safe for concurrent use.
 type Session struct {
-	pool       *pgxpool.Pool
-	conn       *pgxpool.Conn
-	scanResult FileScanResult
-	onClose    func()
+	pool    *pgxpool.Pool
+	conn    *pgxpool.Conn
+	onClose func()
 }
 
 // NewSession creates a new Session. Panics if pool or conn is nil.
-func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, scanResult FileScanResult, onClose func()) *Session {
+func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, onClose func()) *Session {
 	if pool == nil {
 		panic("pool cannot be nil")
 	}
@@ -29,10 +28,9 @@ func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, scanResult FileScanResul
 	}
 
 	return &Session{
-		pool:       pool,
-		conn:       conn,
-		scanResult: scanResult,
-		onClose:    onClose,
+		pool:    pool,
+		conn:    conn,
+		onClose: onClose,
 	}
 }
 

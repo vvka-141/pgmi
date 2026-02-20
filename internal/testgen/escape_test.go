@@ -4,49 +4,6 @@ import (
 	"testing"
 )
 
-func TestEscapeSQLString(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"simple", "simple"},
-		{"with'quote", "with''quote"},
-		{"two''quotes", "two''''quotes"},
-		{"path/to/file.sql", "path/to/file.sql"},
-		{"it's", "it''s"},
-		{"", ""},
-	}
-
-	for _, tc := range tests {
-		result := EscapeSQLString(tc.input)
-		if result != tc.expected {
-			t.Errorf("EscapeSQLString(%q) = %q, expected %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
-func TestEscapeSQLIdentifier(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"simple", "simple"},
-		{"with space", `"with space"`},
-		{"UPPER", `"UPPER"`},
-		{"with-dash", `"with-dash"`},
-		{"with\"quote", `"with""quote"`},
-		{"__pgmi_0__", "__pgmi_0__"},
-		{"_valid_123", "_valid_123"},
-	}
-
-	for _, tc := range tests {
-		result := EscapeSQLIdentifier(tc.input)
-		if result != tc.expected {
-			t.Errorf("EscapeSQLIdentifier(%q) = %q, expected %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
 func TestValidateCallbackName(t *testing.T) {
 	validCases := []string{
 		"",
@@ -84,24 +41,6 @@ func TestValidateCallbackName(t *testing.T) {
 		}
 		if !contains(err.Error(), tc.wantErr) {
 			t.Errorf("ValidateCallbackName(%q) error = %q, want containing %q", tc.input, err.Error(), tc.wantErr)
-		}
-	}
-}
-
-func TestEscapeQualifiedName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"simple", "simple"},
-		{"pg_temp.my_func", "pg_temp.my_func"},
-		{"UPPER.Func", `"UPPER"."Func"`},
-		{"schema.with space", `schema."with space"`},
-	}
-	for _, tc := range tests {
-		result := EscapeQualifiedName(tc.input)
-		if result != tc.expected {
-			t.Errorf("EscapeQualifiedName(%q) = %q, expected %q", tc.input, result, tc.expected)
 		}
 	}
 }

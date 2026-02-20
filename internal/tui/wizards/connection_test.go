@@ -777,3 +777,232 @@ func TestInitWizard_ConnectionCancelledViaEsc(t *testing.T) {
 		t.Error("ConnResult should be cancelled")
 	}
 }
+
+// --- AWS IAM flow ---
+
+func selectAWSIAMProvider(t *testing.T, w ConnectionWizard) tea.Model {
+	t.Helper()
+	// Provider list: Local(0), Azure(1), AWS(2)
+	m, _ := update(t, w, keyMsg("down"))  // → Azure
+	m, _ = update(t, m, keyMsg("down"))   // → AWS
+	m, _ = update(t, m, keyMsg("enter"))  // Select AWS → auth selection
+	wiz := asWizard(t, m)
+	if wiz.step != stepSelectAuth {
+		t.Fatalf("expected stepSelectAuth, got %d", wiz.step)
+	}
+	// First auth option is IAM
+	m, _ = update(t, m, keyMsg("enter")) // Select IAM → AWS form
+	return m
+}
+
+func TestConnectionWizard_AWSIAMFlow(t *testing.T) {
+	mock := &mockTester{info: "AWS RDS ready"}
+	w := NewConnectionWizard(WithTester(mock))
+
+	m := selectAWSIAMProvider(t, w)
+	wiz := asWizard(t, m)
+	if wiz.step != stepInputAWS {
+		t.Fatalf("expected stepInputAWS, got %d", wiz.step)
+	}
+	if len(wiz.inputs) != 5 {
+		t.Fatalf("AWS form should have 5 inputs, got %d", len(wiz.inputs))
+	}
+
+	// Fill: host, port(enter=default), database, username, region
+	m = typeString(t, m, "mydb.xxx.us-east-1.rds.amazonaws.com")
+	m, _ = update(t, m, keyMsg("enter")) // host → port
+	m, _ = update(t, m, keyMsg("enter")) // port (default 5432) → database
+	m = typeString(t, m, "mydb")
+	m, _ = update(t, m, keyMsg("enter")) // database → username
+	m = typeString(t, m, "iam_user")
+	m, _ = update(t, m, keyMsg("enter")) // username → region
+	m = typeString(t, m, "us-east-1")
+
+	var cmd tea.Cmd
+	m, cmd = update(t, m, keyMsg("enter")) // region → submit
+	wiz = asWizard(t, m)
+	if wiz.step != stepTestConnection {
+		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
+	}
+
+	// Resolve test
+	msgs := drainCmds(cmd)
+	result, ok := findTestResult(msgs)
+	if !ok {
+		t.Fatal("expected testResultMsg")
+	}
+	m, _ = update(t, m, result)
+	m, _ = update(t, m, keyMsg("enter")) // accept → done
+	wiz = asWizard(t, m)
+	if wiz.step != stepDone {
+		t.Errorf("step = %d, want stepDone", wiz.step)
+	}
+	if mock.gotCfg.AuthMethod != pgmi.AuthMethodAWSIAM {
+		t.Errorf("auth = %v, want AWSIAM", mock.gotCfg.AuthMethod)
+	}
+	if mock.gotCfg.AWSRegion != "us-east-1" {
+		t.Errorf("AWSRegion = %q, want %q", mock.gotCfg.AWSRegion, "us-east-1")
+	}
+}
+
+func TestConnectionWizard_AWSIAMFlow_ValidationMissingHost(t *testing.T) {
+	w := NewConnectionWizard()
+	m := selectAWSIAMProvider(t, w)
+
+	// Skip all fields without filling host
+	for i := 0; i < 4; i++ {
+		m, _ = update(t, m, keyMsg("enter"))
+	}
+	m, _ = update(t, m, keyMsg("enter")) // submit
+	wiz := asWizard(t, m)
+	if wiz.validationErr == "" {
+		t.Error("expected validation error for empty host")
+	}
+}
+
+// --- Google Cloud SQL IAM flow ---
+
+func selectGoogleIAMProvider(t *testing.T, w ConnectionWizard) tea.Model {
+	t.Helper()
+	// Provider list: Local(0), Azure(1), AWS(2), Google(3)
+	m, _ := update(t, w, keyMsg("down"))  // → Azure
+	m, _ = update(t, m, keyMsg("down"))   // → AWS
+	m, _ = update(t, m, keyMsg("down"))   // → Google
+	m, _ = update(t, m, keyMsg("enter"))  // Select Google → auth selection
+	wiz := asWizard(t, m)
+	if wiz.step != stepSelectAuth {
+		t.Fatalf("expected stepSelectAuth, got %d", wiz.step)
+	}
+	// First auth option is Cloud SQL IAM
+	m, _ = update(t, m, keyMsg("enter"))
+	return m
+}
+
+func TestConnectionWizard_GoogleIAMFlow(t *testing.T) {
+	mock := &mockTester{info: "Cloud SQL ready"}
+	w := NewConnectionWizard(WithTester(mock))
+
+	m := selectGoogleIAMProvider(t, w)
+	wiz := asWizard(t, m)
+	if wiz.step != stepInputGoogle {
+		t.Fatalf("expected stepInputGoogle, got %d", wiz.step)
+	}
+	if len(wiz.inputs) != 3 {
+		t.Fatalf("Google form should have 3 inputs, got %d", len(wiz.inputs))
+	}
+
+	// Fill: instance, database, username
+	m = typeString(t, m, "proj:region:inst")
+	m, _ = update(t, m, keyMsg("enter")) // instance → database
+	m = typeString(t, m, "mydb")
+	m, _ = update(t, m, keyMsg("enter")) // database → username
+	m = typeString(t, m, "iam_user@proj.iam")
+
+	var cmd tea.Cmd
+	m, cmd = update(t, m, keyMsg("enter")) // username → submit
+	wiz = asWizard(t, m)
+	if wiz.step != stepTestConnection {
+		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
+	}
+
+	msgs := drainCmds(cmd)
+	result, ok := findTestResult(msgs)
+	if !ok {
+		t.Fatal("expected testResultMsg")
+	}
+	m, _ = update(t, m, result)
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz = asWizard(t, m)
+	if wiz.step != stepDone {
+		t.Errorf("step = %d, want stepDone", wiz.step)
+	}
+	if mock.gotCfg.AuthMethod != pgmi.AuthMethodGoogleIAM {
+		t.Errorf("auth = %v, want GoogleIAM", mock.gotCfg.AuthMethod)
+	}
+	if mock.gotCfg.GoogleInstance != "proj:region:inst" {
+		t.Errorf("instance = %q, want %q", mock.gotCfg.GoogleInstance, "proj:region:inst")
+	}
+}
+
+func TestConnectionWizard_GoogleIAMFlow_ValidationMissingInstance(t *testing.T) {
+	w := NewConnectionWizard()
+	m := selectGoogleIAMProvider(t, w)
+
+	// Skip instance, type database, skip username → submit
+	m, _ = update(t, m, keyMsg("enter")) // instance (empty) → database
+	m = typeString(t, m, "mydb")
+	m, _ = update(t, m, keyMsg("enter")) // database → username
+	m, _ = update(t, m, keyMsg("enter")) // username → submit
+	wiz := asWizard(t, m)
+	if wiz.validationErr == "" {
+		t.Error("expected validation error for empty instance")
+	}
+}
+
+// --- Connection String flow ---
+
+func selectConnStringProvider(t *testing.T, w ConnectionWizard) tea.Model {
+	t.Helper()
+	// Provider list: Local(0), Azure(1), AWS(2), Google(3), Custom(4)
+	m, _ := update(t, w, keyMsg("down"))  // → Azure
+	m, _ = update(t, m, keyMsg("down"))   // → AWS
+	m, _ = update(t, m, keyMsg("down"))   // → Google
+	m, _ = update(t, m, keyMsg("down"))   // → Custom
+	m, _ = update(t, m, keyMsg("enter"))  // Select Custom → only 1 auth → skip to form
+	return m
+}
+
+func TestConnectionWizard_ConnStringFlow(t *testing.T) {
+	mock := &mockTester{info: "Connected"}
+	w := NewConnectionWizard(WithTester(mock))
+
+	m := selectConnStringProvider(t, w)
+	wiz := asWizard(t, m)
+	if wiz.step != stepInputConnString {
+		t.Fatalf("expected stepInputConnString, got %d", wiz.step)
+	}
+	if len(wiz.inputs) != 1 {
+		t.Fatalf("ConnString form should have 1 input, got %d", len(wiz.inputs))
+	}
+
+	m = typeString(t, m, "postgresql://user:pass@localhost:5432/mydb")
+	var cmd tea.Cmd
+	m, cmd = update(t, m, keyMsg("enter")) // submit
+	wiz = asWizard(t, m)
+	if wiz.step != stepTestConnection {
+		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
+	}
+
+	msgs := drainCmds(cmd)
+	result, ok := findTestResult(msgs)
+	if !ok {
+		t.Fatal("expected testResultMsg")
+	}
+	m, _ = update(t, m, result)
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz = asWizard(t, m)
+	if wiz.step != stepDone {
+		t.Errorf("step = %d, want stepDone", wiz.step)
+	}
+}
+
+func TestConnectionWizard_ConnStringFlow_ValidationMissing(t *testing.T) {
+	w := NewConnectionWizard()
+	m := selectConnStringProvider(t, w)
+
+	// Submit empty connection string
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz := asWizard(t, m)
+	if wiz.validationErr == "" {
+		t.Error("expected validation error for empty connection string")
+	}
+}
+
+func TestConnectionWizard_CtrlC_Cancels(t *testing.T) {
+	w := NewConnectionWizard()
+	_, cmd := update(t, w, tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	if !isQuitCmd(cmd) {
+		t.Error("ctrl+c should produce tea.Quit")
+	}
+}

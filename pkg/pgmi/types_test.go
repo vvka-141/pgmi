@@ -167,6 +167,27 @@ func TestConnectionConfig_DeepCopy(t *testing.T) {
 	})
 }
 
+func TestAuthMethod_String(t *testing.T) {
+	tests := []struct {
+		method pgmi.AuthMethod
+		want   string
+	}{
+		{pgmi.AuthMethodStandard, "Standard"},
+		{pgmi.AuthMethodAWSIAM, "AWS IAM"},
+		{pgmi.AuthMethodGoogleIAM, "Google IAM"},
+		{pgmi.AuthMethodAzureEntraID, "Azure Entra ID"},
+		{pgmi.AuthMethod(99), "Unknown(99)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := tt.method.String(); got != tt.want {
+				t.Errorf("AuthMethod(%d).String() = %q, want %q", tt.method, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTestConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name      string

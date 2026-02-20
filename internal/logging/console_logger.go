@@ -30,19 +30,31 @@ func (l *ConsoleLogger) Verbose(format string, args ...interface{}) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
+	} else {
+		fmt.Fprint(os.Stderr, "[VERBOSE] "+format+"\n")
+	}
 }
 
 // Info logs informational messages about normal operations.
 func (l *ConsoleLogger) Info(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	} else {
+		fmt.Fprint(os.Stderr, format+"\n")
+	}
 }
 
 // Error logs error messages.
 func (l *ConsoleLogger) Error(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
+	} else {
+		fmt.Fprint(os.Stderr, "[ERROR] "+format+"\n")
+	}
 }

@@ -116,7 +116,7 @@ func (sm *SessionManager) PrepareSession(
 	}
 
 	// Create Session object to encapsulate resources
-	session := pgmi.NewSession(pool, conn, scanResult, connectorCleanup)
+	session := pgmi.NewSession(pool, conn, connectorCleanup)
 	success = true
 	return session, nil
 }

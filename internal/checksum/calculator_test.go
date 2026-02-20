@@ -220,6 +220,17 @@ func TestSHA256Calculator_Normalization_ComplexScenario(t *testing.T) {
 	}
 }
 
+func TestSHA256Calculator_Normalization_DollarQuotePreserved(t *testing.T) {
+	calc := New()
+
+	withComment := calc.CalculateNormalized([]byte("SELECT $$ -- inside $$ FROM t;"))
+	withoutComment := calc.CalculateNormalized([]byte("SELECT $$  $$ FROM t;"))
+
+	if withComment == withoutComment {
+		t.Error("Dollar-quoted content with comment-like text should produce different hash than without")
+	}
+}
+
 func TestSHA256Calculator_RawVsNormalized_ShouldDiffer(t *testing.T) {
 	calc := New()
 
@@ -315,6 +326,41 @@ func TestSHA256Calculator_removeComments(t *testing.T) {
 			name:     "Comment with asterisk inside",
 			input:    "SELECT /* comment with * asterisk */ * FROM users;",
 			expected: "SELECT   * FROM users;",
+		},
+		{
+			name:     "Comment-like text inside dollar-quoted string preserved",
+			input:    "SELECT $$ -- not a comment $$ FROM users;",
+			expected: "SELECT $$ -- not a comment $$ FROM users;",
+		},
+		{
+			name:     "Block comment inside dollar-quoted string preserved",
+			input:    "SELECT $$/* not a comment */$$ FROM users;",
+			expected: "SELECT $$/* not a comment */$$ FROM users;",
+		},
+		{
+			name:     "Comment-like text inside tagged dollar-quote preserved",
+			input:    "SELECT $fn$-- still not a comment$fn$ FROM users;",
+			expected: "SELECT $fn$-- still not a comment$fn$ FROM users;",
+		},
+		{
+			name:     "Comment-like text inside single-quoted string preserved",
+			input:    "SELECT '-- not a comment' FROM users;",
+			expected: "SELECT '-- not a comment' FROM users;",
+		},
+		{
+			name:     "Escaped single quote preserved",
+			input:    "SELECT 'it''s -- ok' FROM users;",
+			expected: "SELECT 'it''s -- ok' FROM users;",
+		},
+		{
+			name:     "Nested block comments",
+			input:    "SELECT /* outer /* inner */ still comment */ * FROM users;",
+			expected: "SELECT   * FROM users;",
+		},
+		{
+			name:     "Real function body with dollar-quote",
+			input:    "CREATE FUNCTION f() RETURNS void AS $$ BEGIN -- do stuff\nEND; $$ LANGUAGE plpgsql; -- done",
+			expected: "CREATE FUNCTION f() RETURNS void AS $$ BEGIN -- do stuff\nEND; $$ LANGUAGE plpgsql;  ",
 		},
 	}
 

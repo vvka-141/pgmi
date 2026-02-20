@@ -141,10 +141,10 @@ func TestPostgreSQLErrorClassifier_IsTransient_NetworkErrors(t *testing.T) {
 			isTransient: true,
 		},
 		{
-			name: "dns_temporary_error",
+			name: "dns_not_found_error",
 			err: &net.DNSError{
-				Err:         "temporary failure",
-				IsTemporary: true,
+				Err:        "no such host",
+				IsNotFound: true,
 			},
 			isTransient: true,
 		},
@@ -231,13 +231,12 @@ func TestPostgreSQLErrorClassifier_IsTransient_ConnectionStringErrors(t *testing
 			err:         errors.New("connection pool exhausted"),
 			isTransient: true,
 		},
+		// Non-transient errors
 		{
 			name:        "context_deadline_exceeded",
 			err:         errors.New("context deadline exceeded"),
-			isTransient: true,
+			isTransient: false,
 		},
-
-		// Non-transient errors
 		{
 			name:        "generic_error",
 			err:         errors.New("some other error"),

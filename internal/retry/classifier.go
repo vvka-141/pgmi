@@ -90,40 +90,22 @@ func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bo
 
 // isNetworkError checks for network-level errors.
 func (c *PostgreSQLErrorClassifier) isNetworkError(err error) bool {
-	// DNS errors
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		// Temporary DNS failures are retryable
-		return dnsErr.Temporary() || dnsErr.Timeout()
+		return dnsErr.IsTimeout || dnsErr.IsNotFound
 	}
 
-	// Network operation errors
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
-		// Temporary network errors are retryable
-		if opErr.Temporary() || opErr.Timeout() {
+		if opErr.Timeout() {
 			return true
 		}
 
-		// Check underlying error
 		if opErr.Err != nil {
-			// Connection refused (server not ready)
-			if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
-				return true
-			}
-
-			// Connection reset by peer
-			if errors.Is(opErr.Err, syscall.ECONNRESET) {
-				return true
-			}
-
-			// Network unreachable
-			if errors.Is(opErr.Err, syscall.ENETUNREACH) {
-				return true
-			}
-
-			// Host unreachable
-			if errors.Is(opErr.Err, syscall.EHOSTUNREACH) {
+			if errors.Is(opErr.Err, syscall.ECONNREFUSED) ||
+				errors.Is(opErr.Err, syscall.ECONNRESET) ||
+				errors.Is(opErr.Err, syscall.ENETUNREACH) ||
+				errors.Is(opErr.Err, syscall.EHOSTUNREACH) {
 				return true
 			}
 		}
@@ -150,7 +132,6 @@ func (c *PostgreSQLErrorClassifier) isConnectionError(err error) bool {
 		"server closed the connection",
 		"unexpected eof",
 		"connection pool exhausted",
-		"context deadline exceeded", // May be transient if external timeout
 	}
 
 	for _, pattern := range transientPatterns {

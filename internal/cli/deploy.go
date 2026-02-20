@@ -397,9 +397,8 @@ func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
 		deployFlags.sslMode = cfg.SSLMode
 	}
 
-	// Pass password via env var for this process only
-	if cfg.Password != "" && os.Getenv("PGPASSWORD") == "" {
-		os.Setenv("PGPASSWORD", cfg.Password)
+	if cfg.Password != "" {
+		deployFlags.password = cfg.Password
 	}
 
 	// Cloud provider settings
