@@ -28,6 +28,8 @@ var templatesDescribeCmd = &cobra.Command{
 	Use:               "describe <template_name>",
 	Short:             "Show detailed information about a template",
 	Long:              `Show detailed information about a specific template including structure and features.`,
+	Example: `  pgmi templates describe basic
+  pgmi templates describe advanced`,
 	Args:              RequireTemplateName,
 	ValidArgsFunction: completeTemplateNames,
 	RunE:              runTemplatesDescribe,

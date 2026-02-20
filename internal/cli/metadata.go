@@ -177,7 +177,7 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(filesWithoutMetadata) == 0 {
-		fmt.Fprintln(os.Stderr, "✓ All SQL files already have metadata")
+		fmt.Fprintln(os.Stderr, "All SQL files already have metadata.")
 		return nil
 	}
 
@@ -232,16 +232,15 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to write file %s: %w", filePath, err)
 			}
 
-			fmt.Fprintf(os.Stderr, "    ✓ Written to file\n")
+			fmt.Fprintf(os.Stderr, "    Written to file\n")
 		}
 		fmt.Fprintln(os.Stderr)
 	}
 
 	if previewOnly {
-		fmt.Fprintln(os.Stderr, "ℹ Preview mode: No files were modified")
-		fmt.Fprintln(os.Stderr, "  Use --write flag to apply changes")
+		fmt.Fprintln(os.Stderr, "Preview mode: no files were modified. Use --write to apply changes.")
 	} else {
-		fmt.Fprintf(os.Stderr, "✓ Generated metadata for %d file(s)\n", len(filesWithoutMetadata))
+		fmt.Fprintf(os.Stderr, "Generated metadata for %d file(s).\n", len(filesWithoutMetadata))
 	}
 
 	return nil
@@ -327,7 +326,7 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr)
 
 		if len(duplicates) > 0 {
-			fmt.Fprintln(os.Stderr, "✗ Duplicate IDs detected:")
+			fmt.Fprintln(os.Stderr, "Error: Duplicate IDs detected:")
 			for _, dup := range duplicates {
 				fmt.Fprintln(os.Stderr, dup)
 			}
@@ -335,7 +334,7 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		}
 
 		if validationPassed {
-			fmt.Fprintln(os.Stderr, "✓ Metadata validation passed")
+			fmt.Fprintln(os.Stderr, "Metadata validation passed.")
 		}
 	}
 
@@ -428,7 +427,7 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr)
 		}
 
-		fmt.Fprintln(os.Stderr, "ℹ Actual execution order is determined by sort keys during deployment")
+		fmt.Fprintln(os.Stderr, "Note: Actual execution order is determined by sort keys during deployment.")
 	}
 
 	return nil

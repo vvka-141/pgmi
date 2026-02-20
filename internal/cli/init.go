@@ -123,9 +123,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	tree, err := scaffold.BuildFileTree(targetPath)
 	if err != nil {
 		// Non-fatal - just skip tree display
-		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
+		fmt.Fprintf(os.Stderr, "\nProject initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
 	} else {
-		fmt.Fprintf(os.Stderr, "\n✓ Project initialized successfully using template '%s'\n\n", selectedTemplate)
+		fmt.Fprintf(os.Stderr, "\nProject initialized successfully using template '%s'\n\n", selectedTemplate)
 		fmt.Fprintln(os.Stderr, "Created structure:")
 		fmt.Fprint(os.Stderr, tree)
 	}
@@ -136,7 +136,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "✓ Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
+			fmt.Fprintf(os.Stderr, "Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
 			offerSavePgpass(&connResult.Config)
 		}
 	}

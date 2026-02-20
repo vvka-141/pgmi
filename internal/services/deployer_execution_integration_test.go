@@ -50,9 +50,6 @@ func TestExecuteDeploySQL_DirectExecution(t *testing.T) {
 	if _, err := contract.Apply(ctx, conn, ""); err != nil {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 
 	deploySQL := `
 DO $$
@@ -147,9 +144,6 @@ func TestExecuteDeploySQL_MultipleStatements(t *testing.T) {
 	if _, err := contract.Apply(ctx, conn, ""); err != nil {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 
 	deploySQL := `
 		CREATE TABLE multi_t1(id int);
@@ -208,9 +202,6 @@ func TestExecuteDeploySQL_ContextCancellation(t *testing.T) {
 	}
 	if _, err := contract.Apply(ctx, conn, ""); err != nil {
 		t.Fatalf("Failed to apply contract: %v", err)
-	}
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
 	}
 
 	cancel()

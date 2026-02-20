@@ -364,7 +364,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 			if err := saveConnectionToConfig(sourcePath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "✓ Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
+				fmt.Fprintf(os.Stderr, "Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
 				offerSavePgpass(&connResult.Config)
 			}
 		}

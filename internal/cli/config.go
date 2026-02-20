@@ -73,7 +73,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Printf("\n✓ Connection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
+	fmt.Printf("\nConnection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
 	offerSavePgpass(&connResult.Config)
 	return nil
 }

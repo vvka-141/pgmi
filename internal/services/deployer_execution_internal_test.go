@@ -79,9 +79,6 @@ func prepareSessionTables(t *testing.T, ctx context.Context, conn *pgxpool.Conn)
 	if err := l.LoadParametersIntoSession(ctx, conn, map[string]string{}); err != nil {
 		t.Fatalf("Failed to load params: %v", err)
 	}
-	if err := params.CreateUnittestSchema(ctx, conn); err != nil {
-		t.Fatalf("Failed to create unittest schema: %v", err)
-	}
 }
 
 func newServiceWithReadContent(content string) *DeploymentService {

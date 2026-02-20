@@ -15,7 +15,7 @@ BEGIN
     RAISE NOTICE '========================================';
 END $$;
 
--- TEST 1: File Separation (pgmi_source should have NO test files after unittest.sql runs)
+-- TEST 1: File Separation (pgmi_source_view should have NO test files)
 DO $$
 DECLARE
     v_test_files_in_source INT;

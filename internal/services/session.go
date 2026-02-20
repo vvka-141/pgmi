@@ -185,21 +185,21 @@ func (sm *SessionManager) prepareSessionTables(
 	if err := params.CreateSchema(ctx, conn); err != nil {
 		return fmt.Errorf("failed to create internal tables: %w", err)
 	}
-	sm.logger.Info("✓ Created internal tables in pg_temp schema")
+	sm.logger.Info("Created internal tables in pg_temp schema")
 
 	// Load files into pg_temp._pgmi_source table
 	sm.logger.Verbose("Loading files into pg_temp._pgmi_source table...")
 	if err := sm.fileLoader.LoadFilesIntoSession(ctx, conn, scanResult.Files); err != nil {
 		return fmt.Errorf("failed to load files: %w", err)
 	}
-	sm.logger.Info("✓ Loaded %d files into pg_temp._pgmi_source", len(scanResult.Files))
+	sm.logger.Info("Loaded %d files into pg_temp._pgmi_source", len(scanResult.Files))
 
 	// Load parameters into pg_temp._pgmi_parameter table
 	sm.logger.Verbose("Loading parameters into pg_temp._pgmi_parameter table...")
 	if err := sm.fileLoader.LoadParametersIntoSession(ctx, conn, parameters); err != nil {
 		return fmt.Errorf("failed to load parameters: %w", err)
 	}
-	sm.logger.Info("✓ Loaded %d parameters into pg_temp._pgmi_parameter", len(parameters))
+	sm.logger.Info("Loaded %d parameters into pg_temp._pgmi_parameter", len(parameters))
 
 	// Apply API contract (creates views and pgmi_test_generate)
 	sm.logger.Verbose("Applying API contract...")
@@ -207,7 +207,7 @@ func (sm *SessionManager) prepareSessionTables(
 	if err != nil {
 		return fmt.Errorf("failed to apply API contract: %w", err)
 	}
-	sm.logger.Info("✓ Applied API contract v%s", appliedVersion)
+	sm.logger.Info("Applied API contract v%s", appliedVersion)
 
 	return nil
 }

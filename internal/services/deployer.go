@@ -135,7 +135,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 		return err
 	}
 
-	s.logger.Info("✓ Deployment completed successfully")
+	s.logger.Info("Deployment completed successfully")
 	return nil
 }
 
@@ -200,7 +200,7 @@ func (s *DeploymentService) executeDeploySQL(
 		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
 
-	s.logger.Info("✓ deploy.sql executed successfully")
+	s.logger.Info("deploy.sql executed successfully")
 	return nil
 }
 
@@ -297,7 +297,7 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		return fmt.Errorf("failed to create database: %w", err)
 	}
 
-	s.logger.Info("✓ Database '%s' overwritten successfully", config.DatabaseName)
+	s.logger.Info("Database '%s' overwritten successfully", config.DatabaseName)
 	return nil
 }
 
@@ -316,7 +316,7 @@ func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig
 	if existed {
 		s.logger.Verbose("Database '%s' already exists", config.DatabaseName)
 	} else {
-		s.logger.Verbose("✓ Database '%s' created successfully", config.DatabaseName)
+		s.logger.Verbose("Database '%s' created successfully", config.DatabaseName)
 	}
 
 	return nil

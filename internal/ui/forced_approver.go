@@ -46,7 +46,7 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 		}
 	}
 
-	fmt.Fprintf(a.output, "\r✓ Proceeding with database overwrite...                              \n")
+	fmt.Fprintf(a.output, "\rProceeding with database overwrite...                              \n")
 	return true, nil
 }
 

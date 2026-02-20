@@ -64,10 +64,10 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 		approved, resultErr = false, fmt.Errorf("failed to read input: %w", err)
 	case input := <-inputChan:
 		if input == dbName {
-			fmt.Fprintln(a.output, "✓ Confirmed. Proceeding with database overwrite...")
+			fmt.Fprintln(a.output, "Confirmed. Proceeding with database overwrite...")
 			approved, resultErr = true, nil
 		} else {
-			fmt.Fprintf(a.output, "✗ Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
+			fmt.Fprintf(a.output, "Input '%s' does not match database name '%s'. Operation cancelled.\n", input, dbName)
 			approved, resultErr = false, nil
 		}
 	}
