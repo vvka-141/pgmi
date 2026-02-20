@@ -66,7 +66,7 @@ func TestNewSession_PanicsOnNilPool(t *testing.T) {
 	}()
 
 	// This should panic
-	pgmi.NewSession(nil, &pgxpool.Conn{}, pgmi.FileScanResult{})
+	pgmi.NewSession(nil, &pgxpool.Conn{}, pgmi.FileScanResult{}, nil)
 }
 
 // TestNewSession_PanicsOnNilConn verifies that NewSession panics on nil connection
@@ -78,6 +78,6 @@ func TestNewSession_PanicsOnNilConn(t *testing.T) {
 	}()
 
 	// This should panic
-	pgmi.NewSession(&pgxpool.Pool{}, nil, pgmi.FileScanResult{})
+	pgmi.NewSession(&pgxpool.Pool{}, nil, pgmi.FileScanResult{}, nil)
 }
 

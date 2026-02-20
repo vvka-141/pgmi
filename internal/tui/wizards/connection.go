@@ -826,32 +826,42 @@ func (w ConnectionWizard) viewAuthSelection() string {
 	return b.String()
 }
 
-func (w ConnectionWizard) viewHostForm() string {
+type formConfig struct {
+	subtitle    string
+	labels      []string
+	hints       map[int]string
+	description []string
+}
+
+func (w ConnectionWizard) viewForm(fc formConfig) string {
 	var b strings.Builder
 
-	b.WriteString(w.styles.Subtitle.Render("Connection Details"))
+	b.WriteString(w.styles.Subtitle.Render(fc.subtitle))
 	b.WriteString("\n\n")
 
-	labels := []string{"Host:", "Port:", "Database:", "Management DB:", "Username:", "Password:"}
-	hints := map[int]string{
-		2: "target database — created automatically if it doesn't exist",
-		3: "existing database pgmi connects to for server-level operations",
-	}
 	for i, input := range w.inputs {
 		style := w.styles.Box
 		if i == w.focusIndex {
 			style = w.styles.FocusedBox
 		}
-		b.WriteString(w.styles.Label.Render(labels[i]))
+		b.WriteString(w.styles.Label.Render(fc.labels[i]))
 		b.WriteString("\n")
 		b.WriteString(style.Render(input.View()))
-		if hint, ok := hints[i]; ok {
+		if hint, ok := fc.hints[i]; ok {
 			b.WriteString("\n")
 			b.WriteString(w.styles.Description.Render(hint))
 		}
 		b.WriteString("\n\n")
 	}
 
+	for _, desc := range fc.description {
+		b.WriteString(w.styles.Description.Render(desc))
+		b.WriteString("\n")
+	}
+	if len(fc.description) > 0 {
+		b.WriteString("\n")
+	}
+
 	if w.validationErr != "" {
 		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
 		b.WriteString("\n\n")
@@ -860,101 +870,44 @@ func (w ConnectionWizard) viewHostForm() string {
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
 
 	return b.String()
+}
+
+func (w ConnectionWizard) viewHostForm() string {
+	return w.viewForm(formConfig{
+		subtitle: "Connection Details",
+		labels:   []string{"Host:", "Port:", "Database:", "Management DB:", "Username:", "Password:"},
+		hints: map[int]string{
+			2: "target database — created automatically if it doesn't exist",
+			3: "existing database pgmi connects to for server-level operations",
+		},
+	})
 }
 
 func (w ConnectionWizard) viewAzureForm() string {
-	var b strings.Builder
-
-	b.WriteString(w.styles.Subtitle.Render("Azure PostgreSQL - Entra ID"))
-	b.WriteString("\n\n")
-
-	labels := []string{"Server:", "Database:", "Username:"}
-	for i, input := range w.inputs {
-		style := w.styles.Box
-		if i == w.focusIndex {
-			style = w.styles.FocusedBox
-		}
-		b.WriteString(w.styles.Label.Render(labels[i]))
-		b.WriteString("\n")
-		b.WriteString(style.Render(input.View()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Description.Render("Authentication uses Azure CLI (az login) or environment variables."))
-	b.WriteString("\n\n")
-
-	if w.validationErr != "" {
-		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
-
-	return b.String()
+	return w.viewForm(formConfig{
+		subtitle:    "Azure PostgreSQL - Entra ID",
+		labels:      []string{"Server:", "Database:", "Username:"},
+		description: []string{"Authentication uses Azure CLI (az login) or environment variables."},
+	})
 }
 
 func (w ConnectionWizard) viewAWSForm() string {
-	var b strings.Builder
-
-	b.WriteString(w.styles.Subtitle.Render("AWS RDS - IAM Authentication"))
-	b.WriteString("\n\n")
-
-	labels := []string{"Host:", "Port:", "Database:", "Username:", "Region:"}
-	for i, input := range w.inputs {
-		style := w.styles.Box
-		if i == w.focusIndex {
-			style = w.styles.FocusedBox
-		}
-		b.WriteString(w.styles.Label.Render(labels[i]))
-		b.WriteString("\n")
-		b.WriteString(style.Render(input.View()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Description.Render("Authentication uses AWS credentials (env vars, config file, or IAM role)."))
-	b.WriteString("\n\n")
-
-	if w.validationErr != "" {
-		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
-
-	return b.String()
+	return w.viewForm(formConfig{
+		subtitle:    "AWS RDS - IAM Authentication",
+		labels:      []string{"Host:", "Port:", "Database:", "Username:", "Region:"},
+		description: []string{"Authentication uses AWS credentials (env vars, config file, or IAM role)."},
+	})
 }
 
 func (w ConnectionWizard) viewGoogleForm() string {
-	var b strings.Builder
-
-	b.WriteString(w.styles.Subtitle.Render("Google Cloud SQL - IAM"))
-	b.WriteString("\n\n")
-
-	labels := []string{"Instance:", "Database:", "Username:"}
-	for i, input := range w.inputs {
-		style := w.styles.Box
-		if i == w.focusIndex {
-			style = w.styles.FocusedBox
-		}
-		b.WriteString(w.styles.Label.Render(labels[i]))
-		b.WriteString("\n")
-		b.WriteString(style.Render(input.View()))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Description.Render("Instance format: project:region:instance"))
-	b.WriteString("\n")
-	b.WriteString(w.styles.Description.Render("Authentication uses gcloud or service account."))
-	b.WriteString("\n\n")
-
-	if w.validationErr != "" {
-		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
-
-	return b.String()
+	return w.viewForm(formConfig{
+		subtitle: "Google Cloud SQL - IAM",
+		labels:   []string{"Instance:", "Database:", "Username:"},
+		description: []string{
+			"Instance format: project:region:instance",
+			"Authentication uses gcloud or service account.",
+		},
+	})
 }
 
 func (w ConnectionWizard) viewConnStringForm() string {

@@ -82,14 +82,8 @@ func NewDeploymentService(
 }
 
 func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
-	mgmtConfig := *connConfig
+	mgmtConfig := connConfig.DeepCopy()
 	mgmtConfig.Database = dbName
-	if connConfig.AdditionalParams != nil {
-		mgmtConfig.AdditionalParams = make(map[string]string, len(connConfig.AdditionalParams))
-		for k, v := range connConfig.AdditionalParams {
-			mgmtConfig.AdditionalParams[k] = v
-		}
-	}
 
 	connector, err := s.connectorFactory(&mgmtConfig)
 	if err != nil {
@@ -133,14 +127,8 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 
 	// Prepare deployment session (scan files, connect to database, load session tables)
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
-	targetConfig := *connConfig
+	targetConfig := connConfig.DeepCopy()
 	targetConfig.Database = config.DatabaseName
-	if connConfig.AdditionalParams != nil {
-		targetConfig.AdditionalParams = make(map[string]string, len(connConfig.AdditionalParams))
-		for k, v := range connConfig.AdditionalParams {
-			targetConfig.AdditionalParams[k] = v
-		}
-	}
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager

@@ -106,21 +106,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Validate template
-	templates, err := scaffold.ListTemplates()
-	if err != nil {
-		return fmt.Errorf("failed to list templates: %w", err)
-	}
-
-	validTemplate := false
-	for _, t := range templates {
-		if t == selectedTemplate {
-			validTemplate = true
-			break
-		}
-	}
-
-	if !validTemplate {
+	if !scaffold.IsValidTemplate(selectedTemplate) {
+		templates, _ := scaffold.ListTemplates()
 		return fmt.Errorf("invalid template '%s'. Available templates: %v\n\nUse 'pgmi templates list' for detailed descriptions", selectedTemplate, templates)
 	}
 

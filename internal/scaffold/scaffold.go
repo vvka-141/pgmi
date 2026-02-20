@@ -144,6 +144,20 @@ func ListTemplates() ([]string, error) {
 	return templates, nil
 }
 
+// IsValidTemplate checks if the given name matches an available template.
+func IsValidTemplate(name string) bool {
+	templates, err := ListTemplates()
+	if err != nil {
+		return false
+	}
+	for _, t := range templates {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ManagedFiles are files that pgmi itself creates/manages,
 // and should not block project initialization.
 var ManagedFiles = map[string]bool{

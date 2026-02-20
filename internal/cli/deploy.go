@@ -75,20 +75,12 @@ Examples:
 }
 
 type deployFlagValues struct {
-	connection, host, username, database, sslMode string
-	port                                          int
-	azure                                         bool
-	azureTenantID, azureClientID                  string
-	aws                                           bool
-	awsRegion                                     string
-	google                                        bool
-	googleInstance                                string
-	sslCert, sslKey, sslRootCert                  string
-	overwrite, force                              bool
-	params                                        []string
-	paramsFiles                                   []string
-	timeout                                       time.Duration
-	compat                                        string
+	connectionFlags
+	overwrite, force bool
+	params           []string
+	paramsFiles      []string
+	timeout          time.Duration
+	compat           string
 }
 
 var deployFlags deployFlagValues
@@ -195,26 +187,7 @@ func init() {
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
 func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
-	connFlags := connectionFlags{
-		connection:     deployFlags.connection,
-		host:           deployFlags.host,
-		port:           deployFlags.port,
-		username:       deployFlags.username,
-		database:       deployFlags.database,
-		sslMode:        deployFlags.sslMode,
-		azure:          deployFlags.azure,
-		azureTenantID:  deployFlags.azureTenantID,
-		azureClientID:  deployFlags.azureClientID,
-		aws:            deployFlags.aws,
-		awsRegion:      deployFlags.awsRegion,
-		google:         deployFlags.google,
-		googleInstance: deployFlags.googleInstance,
-		sslCert:        deployFlags.sslCert,
-		sslKey:         deployFlags.sslKey,
-		sslRootCert:    deployFlags.sslRootCert,
-	}
-
-	resolved, err := resolveConnectionFromFlags(connFlags, projectCfg, verbose)
+	resolved, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
