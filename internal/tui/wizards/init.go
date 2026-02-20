@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/tui/components"
 )
 
@@ -27,11 +28,6 @@ func DefaultTemplates() []TemplateInfo {
 	}
 }
 
-// pgmiManagedInitFiles are files that pgmi creates/manages and don't block init.
-var pgmiManagedInitFiles = map[string]bool{
-	"pgmi.yaml": true,
-	".env":      true,
-}
 
 // InitResult holds the result of the init wizard.
 type InitResult struct {
@@ -212,7 +208,7 @@ func checkDirBlocking(dir string) []string {
 
 	var blocking []string
 	for _, entry := range entries {
-		if !pgmiManagedInitFiles[entry.Name()] {
+		if !scaffold.ManagedFiles[entry.Name()] {
 			blocking = append(blocking, entry.Name())
 		}
 	}

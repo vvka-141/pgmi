@@ -166,11 +166,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// pgmiManagedFiles are files that pgmi creates/manages and should not block init.
-var pgmiManagedFiles = map[string]bool{
-	"pgmi.yaml": true,
-	".env":      true,
-}
 
 // isInitBlocked checks if the target directory has non-pgmi files that would block init.
 // Returns (true, reason) if blocked, (false, "") if safe to proceed.
@@ -183,7 +178,7 @@ func isInitBlocked(targetPath string) (bool, string) {
 
 	var blocking []string
 	for _, entry := range entries {
-		if !pgmiManagedFiles[entry.Name()] {
+		if !scaffold.ManagedFiles[entry.Name()] {
 			blocking = append(blocking, entry.Name())
 		}
 	}

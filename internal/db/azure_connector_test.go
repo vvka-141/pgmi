@@ -147,21 +147,19 @@ func TestApplyAzureAuth(t *testing.T) {
 			wantAuthMethod: pgmi.AuthMethodStandard,
 		},
 		{
-			name:  "env vars only",
+			name:  "env vars without --azure stays Standard",
 			flags: &AzureFlags{},
 			env: &EnvVars{
 				AZURE_TENANT_ID:     "env-tenant",
 				AZURE_CLIENT_ID:     "env-client",
 				AZURE_CLIENT_SECRET: "env-secret",
 			},
-			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
-			wantTenantID:     "env-tenant",
-			wantClientID:     "env-client",
-			wantClientSecret: "env-secret",
+			wantAuthMethod: pgmi.AuthMethodStandard,
 		},
 		{
-			name: "flags override env vars",
+			name: "--azure with flags override env vars",
 			flags: &AzureFlags{
+				Enabled:  true,
 				TenantID: "flag-tenant",
 				ClientID: "flag-client",
 			},
@@ -173,11 +171,12 @@ func TestApplyAzureAuth(t *testing.T) {
 			wantAuthMethod:   pgmi.AuthMethodAzureEntraID,
 			wantTenantID:     "flag-tenant",
 			wantClientID:     "flag-client",
-			wantClientSecret: "env-secret", // Secret only from env
+			wantClientSecret: "env-secret",
 		},
 		{
-			name: "partial flags - tenant only",
+			name: "--azure with partial flags",
 			flags: &AzureFlags{
+				Enabled:  true,
 				TenantID: "flag-tenant",
 			},
 			env: &EnvVars{

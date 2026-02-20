@@ -265,8 +265,7 @@ func applyAzureAuth(config *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVa
 	// Client secret only comes from env var (no flag for security)
 	clientSecret := env.AZURE_CLIENT_SECRET
 
-	// If any Azure credentials are present, switch to Azure auth
-	if flags.Enabled || tenantID != "" || clientID != "" {
+	if flags.Enabled {
 		config.AuthMethod = pgmi.AuthMethodAzureEntraID
 		config.AzureTenantID = tenantID
 		config.AzureClientID = clientID

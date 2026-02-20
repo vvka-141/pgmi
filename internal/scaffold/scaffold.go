@@ -99,7 +99,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 		processedContent := s.processTemplate(string(content), projectName)
 
 		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
-		if pgmiManagedFiles[filepath.Base(targetFilePath)] {
+		if ManagedFiles[filepath.Base(targetFilePath)] {
 			if _, err := os.Stat(targetFilePath); err == nil {
 				s.logVerbose("Skipping existing: %s", relPath)
 				return nil
@@ -144,9 +144,9 @@ func ListTemplates() ([]string, error) {
 	return templates, nil
 }
 
-// pgmiManagedFiles are files that pgmi itself creates/manages,
+// ManagedFiles are files that pgmi itself creates/manages,
 // and should not block project initialization.
-var pgmiManagedFiles = map[string]bool{
+var ManagedFiles = map[string]bool{
 	"pgmi.yaml": true,
 	".env":      true,
 }
@@ -178,7 +178,7 @@ func isDirectoryEmpty(path string) (bool, error) {
 	}
 
 	for _, entry := range entries {
-		if !pgmiManagedFiles[entry.Name()] {
+		if !ManagedFiles[entry.Name()] {
 			return false, nil
 		}
 	}
