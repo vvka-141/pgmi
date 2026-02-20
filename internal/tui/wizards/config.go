@@ -411,7 +411,7 @@ func (w ConfigWizard) viewReview() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(w.styles.Help.Render("enter save to pgmi.yaml • esc go back"))
+	b.WriteString(w.styles.Help.Render("enter confirm • esc go back"))
 
 	return b.String()
 }

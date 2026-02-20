@@ -63,11 +63,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	selectedTemplate := initTemplate
 	setupConnection := false
+	var connResult wizards.ConnectionResult
 	var targetPath string
 
 	if tui.IsInteractive() && !templateFlagChanged {
-		// Interactive mode: wizard handles directory selection and validation.
-		// Pre-fill with the CLI arg if provided, otherwise wizard starts empty (defaults to ".").
 		prefill := ""
 		if explicitPath {
 			prefill = args[0]
@@ -85,6 +84,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		targetPath = result.TargetDir
 		selectedTemplate = result.Template
 		setupConnection = result.SetupConfig
+		connResult = result.ConnResult
 	} else {
 		// Non-interactive mode: require explicit path or default to "."
 		targetPath = "."
@@ -146,10 +146,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Fprint(os.Stderr, tree)
 	}
 
-	// If user wants to setup connection, run wizard now
-	if setupConnection {
+	// If user configured connection in the wizard, save it
+	if setupConnection && !connResult.Cancelled {
 		fmt.Fprintln(os.Stderr, "")
-		if err := runInitConnectionSetup(targetPath); err != nil {
+		if err := saveInitConfig(targetPath, &connResult.Config); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
 		}
 	}
@@ -194,20 +194,6 @@ func isInitBlocked(targetPath string) (bool, string) {
 
 	absPath, _ := filepath.Abs(targetPath)
 	return true, fmt.Sprintf("directory '%s' is not empty\n\nBlocking files/directories: %v\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n  - Choose a different location: pgmi init ./new-project\n  - Remove existing files manually\n  - pgmi.yaml and .env are allowed", absPath, blocking)
-}
-
-// runInitConnectionSetup runs the connection wizard after project init.
-func runInitConnectionSetup(targetPath string) error {
-	connResult, err := wizards.RunConnectionWizard()
-	if err != nil {
-		return err
-	}
-	if connResult.Cancelled {
-		return nil
-	}
-
-	// Save to pgmi.yaml
-	return saveInitConfig(targetPath, &connResult.Config)
 }
 
 // saveInitConfig saves connection config to the newly created pgmi.yaml.

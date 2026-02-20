@@ -17,6 +17,53 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+// ConnectionTester tests database connectivity.
+type ConnectionTester interface {
+	TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) (info string, err error)
+}
+
+type pgxTester struct{}
+
+func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) (string, error) {
+	if cfg.AuthMethod != pgmi.AuthMethodStandard {
+		return fmt.Sprintf("Configuration ready for %s authentication", cfg.AuthMethod.String()), nil
+	}
+
+	var connStr string
+	if cs, ok := cfg.AdditionalParams["connection_string"]; ok && cs != "" {
+		connStr = cs
+	} else {
+		connStr = fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
+			cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database, cfg.SSLMode)
+	}
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close(ctx)
+
+	var version string
+	if err := conn.QueryRow(ctx, "SELECT version()").Scan(&version); err != nil {
+		return "", err
+	}
+
+	if idx := strings.Index(version, ","); idx > 0 {
+		version = version[:idx]
+	}
+	return version, nil
+}
+
+// WizardOption configures a ConnectionWizard.
+type WizardOption func(*ConnectionWizard)
+
+// WithTester injects a ConnectionTester (for testing/mocking).
+func WithTester(t ConnectionTester) WizardOption {
+	return func(w *ConnectionWizard) {
+		w.tester = t
+	}
+}
+
 // ConnectionResult holds the result of the connection wizard.
 type ConnectionResult struct {
 	Cancelled bool
@@ -112,9 +159,6 @@ type ConnectionWizard struct {
 	testErr  error
 	testInfo string
 
-	// Save option
-	saveIdx int
-
 	// Result
 	result ConnectionResult
 
@@ -127,6 +171,9 @@ type ConnectionWizard struct {
 
 	// Key bindings
 	keys wizardKeys
+
+	// Connection tester (injectable for testing)
+	tester ConnectionTester
 }
 
 type wizardStep int
@@ -140,7 +187,6 @@ const (
 	stepInputGoogle
 	stepInputConnString
 	stepTestConnection
-	stepSaveOption
 	stepDone
 )
 
@@ -195,19 +241,24 @@ func defaultWizardKeys() wizardKeys {
 }
 
 // NewConnectionWizard creates a new connection wizard.
-func NewConnectionWizard() ConnectionWizard {
+func NewConnectionWizard(opts ...WizardOption) ConnectionWizard {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 
-	return ConnectionWizard{
+	w := ConnectionWizard{
 		step:    stepSelectProvider,
 		spinner: s,
 		width:   80,
 		height:  24,
 		styles:  defaultWizardStyles(),
 		keys:    defaultWizardKeys(),
+		tester:  pgxTester{},
 	}
+	for _, opt := range opts {
+		opt(&w)
+	}
+	return w
 }
 
 // Init implements tea.Model.
@@ -240,8 +291,6 @@ func (w ConnectionWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return w.updateInputForm(msg)
 		case stepTestConnection:
 			return w.updateTestConnection(msg)
-		case stepSaveOption:
-			return w.updateSaveOption(msg)
 		}
 
 	case testResultMsg:
@@ -370,9 +419,13 @@ func (w *ConnectionWizard) initInputs() tea.Cmd {
 
 func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	host := textinput.New()
-	host.Placeholder = "localhost"
 	host.CharLimit = 256
 	host.Width = 40
+	if w.provider != nil && w.provider.ID == "local" {
+		host.SetValue("localhost")
+	} else {
+		host.Placeholder = "hostname"
+	}
 
 	port := textinput.New()
 	port.SetValue("5432")
@@ -385,7 +438,7 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	database.Width = 40
 
 	username := textinput.New()
-	username.Placeholder = "postgres"
+	username.SetValue("postgres")
 	username.CharLimit = 64
 	username.Width = 40
 
@@ -478,21 +531,25 @@ func (w *ConnectionWizard) createConnStringInputs() []textinput.Model {
 func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Tab), msg.String() == "down":
-		// Move to next field or submit
 		if w.focusIndex < len(w.inputs)-1 {
 			w.inputs[w.focusIndex].Blur()
 			w.focusIndex++
 			return w, w.inputs[w.focusIndex].Focus()
 		}
 	case msg.String() == "shift+tab", msg.String() == "up":
-		// Move to previous field
 		if w.focusIndex > 0 {
 			w.inputs[w.focusIndex].Blur()
 			w.focusIndex--
 			return w, w.inputs[w.focusIndex].Focus()
 		}
 	case key.Matches(msg, w.keys.Select):
-		// Submit form
+		// Enter on non-last field advances to next field
+		if w.focusIndex < len(w.inputs)-1 {
+			w.inputs[w.focusIndex].Blur()
+			w.focusIndex++
+			return w, w.inputs[w.focusIndex].Focus()
+		}
+		// Enter on last field submits the form
 		if err := w.validateInputs(); err == nil {
 			w.buildConfig()
 			w.step = stepTestConnection
@@ -508,7 +565,6 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return w, nil
 	default:
-		// Update the focused input
 		var cmd tea.Cmd
 		w.inputs[w.focusIndex], cmd = w.inputs[w.focusIndex].Update(msg)
 		return w, cmd
@@ -627,53 +683,16 @@ type testResultMsg struct {
 }
 
 func (w *ConnectionWizard) testConnection() tea.Cmd {
+	cfg := w.result.Config
+	tester := w.tester
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-
-		cfg := w.result.Config
-
-		// Build connection string for testing
-		var connStr string
-		if cs, ok := cfg.AdditionalParams["connection_string"]; ok && cs != "" {
-			connStr = cs
-		} else {
-			connStr = fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
-				cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database, cfg.SSLMode)
-		}
-
-		// For cloud providers with IAM auth, we can't easily test without the full auth flow
-		// Just do a basic connectivity test
-		if cfg.AuthMethod != pgmi.AuthMethodStandard {
-			return testResultMsg{
-				success: true,
-				info:    fmt.Sprintf("Configuration ready for %s authentication", cfg.AuthMethod.String()),
-			}
-		}
-
-		conn, err := pgx.Connect(ctx, connStr)
+		info, err := tester.TestConnection(ctx, cfg)
 		if err != nil {
 			return testResultMsg{success: false, err: err}
 		}
-		defer conn.Close(ctx)
-
-		// Get server version
-		var version string
-		err = conn.QueryRow(ctx, "SELECT version()").Scan(&version)
-		if err != nil {
-			return testResultMsg{success: false, err: err}
-		}
-
-		// Extract short version info
-		shortVersion := version
-		if idx := strings.Index(version, ","); idx > 0 {
-			shortVersion = version[:idx]
-		}
-
-		return testResultMsg{
-			success: true,
-			info:    shortVersion,
-		}
+		return testResultMsg{success: true, info: info}
 	}
 }
 
@@ -685,13 +704,13 @@ func (w ConnectionWizard) updateTestConnection(msg tea.KeyMsg) (tea.Model, tea.C
 	switch {
 	case key.Matches(msg, w.keys.Select):
 		if w.testOK {
-			w.step = stepSaveOption
-			w.saveIdx = 0
-		} else {
-			// Go back to edit
-			w.step = w.getInputStep()
-			return w, w.initInputs()
+			w.result.Tested = true
+			w.step = stepDone
+			return w, tea.Quit
 		}
+		// Test failed — go back to edit
+		w.step = w.getInputStep()
+		return w, w.initInputs()
 	case key.Matches(msg, w.keys.Back):
 		w.step = w.getInputStep()
 		return w, w.initInputs()
@@ -699,25 +718,6 @@ func (w ConnectionWizard) updateTestConnection(msg tea.KeyMsg) (tea.Model, tea.C
 	return w, nil
 }
 
-func (w ConnectionWizard) updateSaveOption(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, w.keys.Up):
-		if w.saveIdx > 0 {
-			w.saveIdx--
-		}
-	case key.Matches(msg, w.keys.Down):
-		if w.saveIdx < 2 {
-			w.saveIdx++
-		}
-	case key.Matches(msg, w.keys.Select):
-		w.result.Tested = true
-		w.step = stepDone
-		return w, tea.Quit
-	case key.Matches(msg, w.keys.Back):
-		w.step = stepTestConnection
-	}
-	return w, nil
-}
 
 // View implements tea.Model.
 func (w ConnectionWizard) View() string {
@@ -744,8 +744,6 @@ func (w ConnectionWizard) View() string {
 		b.WriteString(w.viewConnStringForm())
 	case stepTestConnection:
 		b.WriteString(w.viewTestConnection())
-	case stepSaveOption:
-		b.WriteString(w.viewSaveOption())
 	}
 
 	return b.String()
@@ -972,52 +970,9 @@ func (w ConnectionWizard) viewTestConnection() string {
 	return b.String()
 }
 
-func (w ConnectionWizard) viewSaveOption() string {
-	var b strings.Builder
-
-	b.WriteString(w.styles.Subtitle.Render("Save Configuration"))
-	b.WriteString("\n\n")
-
-	options := []struct {
-		name string
-		desc string
-	}{
-		{"Save to pgmi.yaml (recommended)", "Creates a configuration file in your project"},
-		{"Use for this session only", "Don't save - will need to enter again next time"},
-		{"Show connection details", "Display the configuration without saving"},
-	}
-
-	for i, opt := range options {
-		cursor := "  "
-		style := w.styles.Unselected
-		symbol := "○"
-
-		if i == w.saveIdx {
-			cursor = ""
-			style = w.styles.Selected
-			symbol = "●"
-		}
-
-		b.WriteString(cursor)
-		b.WriteString(style.Render(symbol + " " + opt.name))
-		b.WriteString("\n")
-		b.WriteString(w.styles.Description.Render(opt.desc))
-		b.WriteString("\n")
-	}
-
-	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • esc back"))
-
-	return b.String()
-}
-
 // Result returns the wizard result.
 func (w ConnectionWizard) Result() ConnectionResult {
 	return w.result
-}
-
-// SaveChoice returns the save choice index (0=save, 1=session only, 2=show).
-func (w ConnectionWizard) SaveChoice() int {
-	return w.saveIdx
 }
 
 // Run executes the connection wizard and returns the result.

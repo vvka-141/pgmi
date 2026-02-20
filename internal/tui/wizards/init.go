@@ -59,6 +59,10 @@ type InitWizard struct {
 	// Config setup choice
 	setupConfig bool
 
+	// Embedded connection wizard (active when user chose to configure connection)
+	connWizard *ConnectionWizard
+	connActive bool
+
 	// Result
 	result InitResult
 
@@ -110,6 +114,17 @@ func (w InitWizard) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if w.connActive && w.connWizard != nil {
+		m, cmd := w.connWizard.Update(msg)
+		cw := m.(ConnectionWizard)
+		w.connWizard = &cw
+		if cw.result.Cancelled || cw.step == stepDone {
+			w.result.ConnResult = cw.Result()
+			return w, tea.Quit
+		}
+		return w, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		w.width = msg.Width
@@ -117,7 +132,6 @@ func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, nil
 
 	case tea.KeyMsg:
-		// ctrl+c always quits
 		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
 			return w, tea.Quit
@@ -133,7 +147,6 @@ func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	default:
-		// Forward non-key messages (e.g. focus, blink) to the active text input
 		if w.step == initStepDirectory {
 			var cmd tea.Cmd
 			w.dirInput, cmd = w.dirInput.Update(msg)
@@ -233,6 +246,12 @@ func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		w.setupConfig = !w.setupConfig
 	case key.Matches(msg, w.keys.Select):
 		w.result.SetupConfig = w.setupConfig
+		if w.setupConfig {
+			cw := NewConnectionWizard()
+			w.connWizard = &cw
+			w.connActive = true
+			return w, cw.Init()
+		}
 		return w, tea.Quit
 	case key.Matches(msg, w.keys.Back):
 		w.step = initStepTemplate
@@ -242,6 +261,10 @@ func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (w InitWizard) View() string {
+	if w.connActive && w.connWizard != nil {
+		return w.connWizard.View()
+	}
+
 	var b strings.Builder
 
 	b.WriteString(w.styles.Title.Render("pgmi init - Project Setup"))
@@ -375,24 +398,5 @@ func RunInitWizard(targetDir string) (InitResult, error) {
 		return InitResult{Cancelled: true}, err
 	}
 
-	result := model.(InitWizard).Result()
-
-	// If user wants to setup config, run connection wizard after project creation
-	if result.SetupConfig && !result.Cancelled {
-		connResult, err := RunConnectionWizard()
-		if err != nil {
-			return result, err
-		}
-		result.ConnResult = connResult
-
-		if !connResult.Cancelled {
-			cfgResult, err := RunConfigWizard(connResult.Config)
-			if err != nil {
-				return result, err
-			}
-			result.ConfigResult = cfgResult
-		}
-	}
-
-	return result, nil
+	return model.(InitWizard).Result(), nil
 }

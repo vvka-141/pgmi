@@ -2,11 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/tui"
@@ -15,22 +13,24 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config [path]",
-	Short: "Interactively create or edit pgmi.yaml configuration",
-	Long: `Launches an interactive wizard to create or edit pgmi.yaml configuration.
+	Short: "Interactively configure database connection",
+	Long: `Launches an interactive wizard to configure the database connection in pgmi.yaml.
 
 The wizard guides you through:
-  1. Database connection setup (host, port, authentication)
-  2. Parameter configuration (key-value pairs for deploy.sql)
-  3. Timeout settings
+  1. Selecting your PostgreSQL provider (local, Azure, AWS, Google)
+  2. Entering connection details (host, port, credentials)
+  3. Testing the connection
+
+Parameters and timeout can be edited directly in pgmi.yaml.
 
 This command requires an interactive terminal. For non-interactive use,
 create pgmi.yaml manually or use environment variables.
 
 Examples:
-  # Create config in current directory
+  # Configure connection in current directory
   pgmi config
 
-  # Create config in a specific project directory
+  # Configure connection in a specific project directory
   pgmi config ./my-project`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runConfig,
@@ -46,23 +46,20 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		targetDir = args[0]
 	}
 
-	// Require interactive terminal
 	if !tui.IsInteractive() {
 		return fmt.Errorf("config command requires an interactive terminal\n" +
 			"For non-interactive use, create pgmi.yaml manually or use environment variables")
 	}
 
-	// Check if config already exists
 	existingCfg, err := config.Load(targetDir)
 	if err == nil && existingCfg != nil {
 		fmt.Println("Found existing pgmi.yaml")
-		if !tui.PromptContinue("Overwrite existing configuration?") {
+		if !tui.PromptContinue("Overwrite connection settings?") {
 			fmt.Println("Cancelled.")
 			return nil
 		}
 	}
 
-	// Run connection wizard
 	connResult, err := wizards.RunConnectionWizard()
 	if err != nil {
 		return fmt.Errorf("connection wizard failed: %w", err)
@@ -72,28 +69,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Run config wizard with the connection
-	cfgResult, err := wizards.RunConfigWizard(connResult.Config)
-	if err != nil {
-		return fmt.Errorf("config wizard failed: %w", err)
-	}
-	if cfgResult.Cancelled {
-		fmt.Println("Cancelled.")
-		return nil
+	if err := saveConnectionToConfig(targetDir, &connResult.Config); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	// Save the config
-	configPath := filepath.Join(targetDir, "pgmi.yaml")
-	data, err := yaml.Marshal(cfgResult.Config)
-	if err != nil {
-		return fmt.Errorf("failed to serialize config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
-	}
-
-	fmt.Printf("\n✓ Configuration saved to %s\n", configPath)
+	fmt.Printf("\n✓ Connection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
 	offerSavePgpass(&connResult.Config)
 	return nil
 }
