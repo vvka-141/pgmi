@@ -164,11 +164,11 @@ func init() {
 			"Use with --overwrite for CI/CD pipelines")
 
 	// Parameter flags
-	deployCmd.Flags().StringSliceVar(&deployFlags.params, "param", nil,
+	deployCmd.Flags().StringArrayVar(&deployFlags.params, "param", nil,
 		"Parameters as key=value pairs (can be specified multiple times)\n"+
 			"Available as session variables: current_setting('pgmi.key') during deployment\n"+
 			"Example: --param env=prod --param region=us-west")
-	deployCmd.Flags().StringSliceVar(&deployFlags.paramsFiles, "params-file", nil,
+	deployCmd.Flags().StringArrayVar(&deployFlags.paramsFiles, "params-file", nil,
 		"Load parameters from .env files (can be specified multiple times)\n"+
 			"Later files override earlier ones, CLI --param overrides all")
 

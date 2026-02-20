@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +49,7 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 		}
 
 		if time.Until(expiresOn) < 5*time.Minute {
-			fmt.Printf("Warning: %s token expires in %v\n", c.providerName, time.Until(expiresOn).Round(time.Second))
+			fmt.Fprintf(os.Stderr, "Warning: %s token expires in %v\n", c.providerName, time.Until(expiresOn).Round(time.Second))
 		}
 
 		configWithToken := *c.config

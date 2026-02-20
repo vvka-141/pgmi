@@ -250,7 +250,7 @@ Example:
 -- Validates regex syntax before use in test filtering (fail-fast on bad patterns)
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_validate_pattern(p_pattern TEXT)
 RETURNS TEXT
-LANGUAGE plpgsql IMMUTABLE
+LANGUAGE plpgsql STABLE
 AS $$
 BEGIN
     IF p_pattern IS NULL THEN

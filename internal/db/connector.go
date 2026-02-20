@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MinConns = DefaultMinConns
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		fmt.Println(notice.Message)
+		fmt.Fprintln(os.Stderr, notice.Message)
 	}
 }
 
