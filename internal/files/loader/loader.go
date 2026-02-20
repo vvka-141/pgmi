@@ -206,11 +206,12 @@ func findParentTestDirectory(dir string, dirSet map[string]bool) *string {
 
 // countTestDirectoryDepth counts how deep the directory is within the test hierarchy.
 // The root __test__/ directory has depth 0, subdirectories increment from there.
+var testDirPattern = regexp.MustCompile(`/__tests?__/`)
+
 func countTestDirectoryDepth(path string) int {
 	path = strings.ReplaceAll(path, "\\", "/")
 
-	testPattern := regexp.MustCompile(`/__tests?__/`)
-	loc := testPattern.FindStringIndex(path)
+	loc := testDirPattern.FindStringIndex(path)
 	if loc == nil {
 		return 0
 	}

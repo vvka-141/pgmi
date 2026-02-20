@@ -81,7 +81,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		macroText := strippedSQL[macro.StartPos:macro.EndPos]
 		idx := strings.LastIndex(expandedSQL, macroText)
 		if idx == -1 {
-			continue
+			return nil, fmt.Errorf("failed to locate macro %q in SQL for expansion", macroText)
 		}
 
 		// Replace the macro with generated SQL

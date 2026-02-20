@@ -64,10 +64,11 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 	newEntry := fmt.Sprintf("%s:%s:%s:%s:%s", host, port, db, user, password)
 	matchPrefix := fmt.Sprintf("%s:%s:%s:%s:", host, port, db, user)
 
-	// Read existing file
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {
 		lines = strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read existing .pgpass: %w", err)
 	}
 
 	// Replace existing entry or append

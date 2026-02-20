@@ -65,18 +65,3 @@ func TestStandardConnector_MaxDelayConstraint(t *testing.T) {
 	t.Log("StandardConnector is configured with max delay of 1 minute")
 }
 
-// TestDeploymentTimeout_Integration demonstrates the timeout flow from CLI to connector.
-func TestDeploymentTimeout_Integration(t *testing.T) {
-	// This test demonstrates the timeout flow:
-	//
-	// 1. CLI sets --timeout flag (default: 3 minutes)
-	// 2. CLI creates context with timeout: context.WithTimeout(ctx, deployTimeout)
-	// 3. Context is passed to deployer.Deploy(ctx, config)
-	// 4. Deployer passes context to connector.Connect(ctx)
-	// 5. Connector's retry executor respects context cancellation
-	//
-	// The retry logic uses time.NewTimer with select on ctx.Done() to respect
-	// the deadline, ensuring that retries stop when the global timeout is reached.
-
-	t.Skip("Conceptual test - demonstrates timeout flow")
-}

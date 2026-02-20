@@ -30,31 +30,36 @@ type osDirectory struct {
 func (d *osDirectory) Path() string { return d.absPath }
 
 func (d *osDirectory) Walk(fn func(File, error) error) error {
-	return filepath.Walk(d.absPath, func(path string, info os.FileInfo, err error) error {
-		// Recover from panics in callback to prevent crashing the entire walk
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("walk callback panicked at %s: %v", path, r)
+	return filepath.Walk(d.absPath, func(path string, info os.FileInfo, walkErr error) error {
+		var callbackErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					callbackErr = fmt.Errorf("walk callback panicked at %s: %v", path, r)
+				}
+			}()
+
+			if walkErr != nil {
+				callbackErr = fn(nil, walkErr)
+				return
 			}
+
+			relPath, relErr := filepath.Rel(d.absPath, path)
+			if relErr != nil {
+				callbackErr = fn(nil, fmt.Errorf("failed to get relative path: %w", relErr))
+				return
+			}
+
+			file := &osFile{
+				absPath: path,
+				relPath: relPath,
+				info:    info,
+			}
+
+			callbackErr = fn(file, nil)
 		}()
 
-		if err != nil {
-			return fn(nil, err)
-		}
-
-		// Get relative path
-		relPath, relErr := filepath.Rel(d.absPath, path)
-		if relErr != nil {
-			return fn(nil, fmt.Errorf("failed to get relative path: %w", relErr))
-		}
-
-		file := &osFile{
-			absPath: path,
-			relPath: relPath,
-			info:    info, // os.FileInfo implements fs.FileInfo
-		}
-
-		return fn(file, nil)
+		return callbackErr
 	})
 }
 

@@ -329,7 +329,7 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		return err
 	}
 
-	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, config.MaintenanceDatabase)
+	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, managementDB)
 	if err != nil {
 		return err
 	}

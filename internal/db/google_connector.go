@@ -6,7 +6,6 @@ import (
 	"net"
 
 	"cloud.google.com/go/cloudsqlconn"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -59,13 +58,7 @@ func (c *GoogleCloudSQLConnector) Connect(ctx context.Context) (*pgxpool.Pool, e
 		return dialer.Dial(ctx, c.instance)
 	}
 
-	poolConfig.MaxConns = DefaultMaxConns
-	poolConfig.MinConns = DefaultMinConns
-	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
-
-	poolConfig.ConnConfig.OnNotice = func(pc *pgconn.PgConn, notice *pgconn.Notice) {
-		fmt.Println(notice.Message)
-	}
+	configurePool(poolConfig)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

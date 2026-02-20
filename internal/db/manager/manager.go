@@ -18,9 +18,7 @@ const (
 )
 
 // Manager implements database lifecycle operations using the DBConnection abstraction.
-//
-// Thread-Safety: NOT safe for concurrent use. Create separate instances for
-// concurrent operations.
+// Stateless and safe for concurrent use; thread safety depends on the injected DBConnection.
 type Manager struct{}
 
 // New creates a new DatabaseManager instance.

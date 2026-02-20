@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/retry"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -62,22 +61,16 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 			return fmt.Errorf("failed to parse connection config: %w", err)
 		}
 
-		poolConfig.MaxConns = DefaultMaxConns
-		poolConfig.MinConns = DefaultMinConns
-		poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
-
-		poolConfig.ConnConfig.OnNotice = func(pc *pgconn.PgConn, notice *pgconn.Notice) {
-			fmt.Println(notice.Message)
-		}
+		configurePool(poolConfig)
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
-			return fmt.Errorf("failed to connect to database: %w", err)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		if err := pool.Ping(ctx); err != nil {
 			pool.Close()
-			return fmt.Errorf("failed to ping database: %w", err)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		return nil

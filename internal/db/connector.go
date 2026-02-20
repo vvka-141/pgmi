@@ -26,6 +26,15 @@ const (
 	DefaultMaxConnIdleTime = 30 * time.Minute
 )
 
+func configurePool(poolConfig *pgxpool.Config) {
+	poolConfig.MaxConns = DefaultMaxConns
+	poolConfig.MinConns = DefaultMinConns
+	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
+	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
+		fmt.Println(notice.Message)
+	}
+}
+
 // StandardConnector implements the Connector interface for standard
 // username/password authentication with automatic retry on transient failures.
 type StandardConnector struct {
@@ -64,17 +73,7 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 			return fmt.Errorf("failed to parse connection config: %w", err)
 		}
 
-		// Set explicit pool limits for deployment operations to prevent resource exhaustion
-		// during long-running root.sql orchestration
-		poolConfig.MaxConns = DefaultMaxConns
-		poolConfig.MinConns = DefaultMinConns
-		poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
-
-		// Configure notice handler to stream PostgreSQL RAISE NOTICE/INFO/WARNING to stdout
-		// This is critical for the PostgreSQL-first experience - users should see database output directly
-		poolConfig.ConnConfig.OnNotice = func(pc *pgconn.PgConn, notice *pgconn.Notice) {
-			fmt.Println(notice.Message)
-		}
+		configurePool(poolConfig)
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
