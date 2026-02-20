@@ -148,14 +148,20 @@ func longestCommonPrefix(strs []string) string {
 		return strs[0]
 	}
 
-	first := strs[0]
+	lowered := make([]string, len(strs))
+	for i, s := range strs {
+		lowered[i] = strings.ToLower(s)
+	}
+
+	first := lowered[0]
+	rest := lowered[1:]
 	for i := 0; i < len(first); i++ {
-		ch := strings.ToLower(string(first[i]))
-		for _, s := range strs[1:] {
-			if i >= len(s) || strings.ToLower(string(s[i])) != ch {
-				return first[:i]
+		ch := first[i]
+		for _, s := range rest {
+			if i >= len(s) || s[i] != ch {
+				return strs[0][:i]
 			}
 		}
 	}
-	return first
+	return strs[0]
 }

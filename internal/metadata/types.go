@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/xml"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -65,12 +66,5 @@ func (v *ValidationResult) HasErrors() bool {
 // ErrorString returns all validation errors joined with semicolons.
 // Returns empty string if no errors.
 func (v *ValidationResult) ErrorString() string {
-	if len(v.Errors) == 0 {
-		return ""
-	}
-	result := v.Errors[0]
-	for i := 1; i < len(v.Errors); i++ {
-		result += "; " + v.Errors[i]
-	}
-	return result
+	return strings.Join(v.Errors, "; ")
 }

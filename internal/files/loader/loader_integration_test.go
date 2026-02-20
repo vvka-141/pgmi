@@ -197,10 +197,7 @@ func TestLoadParametersIntoSession_KeyTooLong(t *testing.T) {
 	}
 
 	l := loader.NewLoader()
-	longKey := ""
-	for i := 0; i < 64; i++ {
-		longKey += "a"
-	}
+	longKey := strings.Repeat("a", 64)
 	p := map[string]string{longKey: "value"}
 
 	err = l.LoadParametersIntoSession(ctx, conn, p)

@@ -10,7 +10,9 @@ func PromptContinue(message string) bool {
 	fmt.Printf("%s [Y/n]: ", message)
 
 	var response string
-	fmt.Scanln(&response)
+	if _, err := fmt.Scanln(&response); err != nil {
+		return true
+	}
 
 	return response == "" || response == "y" || response == "Y"
 }

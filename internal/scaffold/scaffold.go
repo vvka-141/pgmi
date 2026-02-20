@@ -214,6 +214,7 @@ func BuildFileTree(rootPath string) (string, error) {
 	sb.WriteString(absPath + "/\n")
 
 	// Walk the directory tree
+	dirCache := make(map[string][]fs.DirEntry)
 	err = filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -229,16 +230,16 @@ func BuildFileTree(rootPath string) (string, error) {
 		}
 
 		depth := strings.Count(relPath, string(os.PathSeparator))
-
-		indent := ""
-		for i := 0; i < depth; i++ {
-			indent += "│   "
-		}
+		indent := strings.Repeat("│   ", depth)
 
 		parentDir := filepath.Dir(path)
-		entries, err := os.ReadDir(parentDir)
-		if err != nil {
-			return err
+		entries, ok := dirCache[parentDir]
+		if !ok {
+			entries, err = os.ReadDir(parentDir)
+			if err != nil {
+				return err
+			}
+			dirCache[parentDir] = entries
 		}
 
 		isLast := false

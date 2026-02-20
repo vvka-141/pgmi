@@ -1,6 +1,7 @@
 package preprocessor
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -375,10 +376,7 @@ func BenchmarkCommentStripper_Strip_LargeInput(b *testing.B) {
 	stripper := NewCommentStripper()
 
 	// Generate a large SQL input
-	var input string
-	for i := 0; i < 1000; i++ {
-		input += "SELECT * FROM users WHERE id = 1; -- comment\n"
-	}
+	input := strings.Repeat("SELECT * FROM users WHERE id = 1; -- comment\n", 1000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

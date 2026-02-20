@@ -683,8 +683,7 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 	m, _ = update(t, m, keyMsg("enter"))   // database
 	m, _ = update(t, m, keyMsg("enter"))   // management db
 	m, _ = update(t, m, keyMsg("enter"))   // username
-	var cmd tea.Cmd
-	m, cmd = update(t, m, keyMsg("enter")) // password → submit
+	m, _ = update(t, m, keyMsg("enter")) // password → submit
 	iw = asInitWizard(t, m)
 	if iw.connWizard.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", iw.connWizard.step)
@@ -698,6 +697,7 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 	}
 
 	// Step 7: press Enter to confirm — should quit the entire combined wizard
+	var cmd tea.Cmd
 	m, cmd = update(t, m, keyMsg("enter"))
 	iw = asInitWizard(t, m)
 
