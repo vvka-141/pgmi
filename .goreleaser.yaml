@@ -77,7 +77,17 @@ release:
   header: |
     ## Quick Install
 
-    **macOS / Linux (Homebrew):**
+    **macOS / Linux:**
+    ```
+    curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+    ```
+
+    **Windows (PowerShell):**
+    ```
+    irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
+    ```
+
+    **Homebrew (macOS/Linux):**
     ```
     brew install vvka-141/pgmi/pgmi
     ```
@@ -88,7 +98,7 @@ release:
     sudo apt install pgmi
     ```
 
-    **Windows:** Download from the table below, or install with Go:
+    **Go (all platforms):**
     ```
     go install github.com/vvka-141/pgmi/cmd/pgmi@latest
     ```
@@ -100,19 +110,6 @@ release:
     | Linux | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_linux_amd64.tar.gz) | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_linux_arm64.tar.gz) |
     | macOS | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_amd64.tar.gz) | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_arm64.tar.gz) |
     | Windows | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_amd64.zip) | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_arm64.zip) |
-
-    **Install manually after download:**
-
-    Linux / macOS:
-    ```
-    tar xzf pgmi_*.tar.gz && sudo mv pgmi /usr/local/bin/
-    ```
-
-    Windows (PowerShell as Admin):
-    ```
-    Expand-Archive pgmi_*.zip -DestinationPath C:\Tools
-    # Add C:\Tools to your PATH if not already present
-    ```
 
   footer: |
     ---

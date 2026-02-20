@@ -47,9 +47,14 @@ The Quick example above shows the core pattern: query files, execute with `EXECU
 
 ## Install
 
-**Go (all platforms):**
+**macOS / Linux:**
 ```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
 **Homebrew (macOS/Linux):**
@@ -60,10 +65,13 @@ brew install vvka-141/pgmi/pgmi
 **Debian/Ubuntu:**
 ```bash
 curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-sudo apt update && sudo apt install pgmi
+sudo apt install pgmi
 ```
 
-**Windows:** Download from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) or use `go install` above.
+**Go (all platforms):**
+```bash
+go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+```
 
 ## Get started
 

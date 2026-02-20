@@ -1,15 +1,15 @@
 #!/bin/bash
 set -e
 
-# pgmi installer script
+# pgmi installer for Linux and macOS
 # Usage: curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
 # Or with specific version: PGMI_VERSION=v1.0.0 curl -sSL ... | bash
+# Windows: use scripts/install.ps1 instead (irm .../install.ps1 | iex)
 
 REPO="vvka-141/pgmi"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 VERSION="${PGMI_VERSION:-latest}"
 
-# Detect OS and architecture
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     ARCH=$(uname -m)
@@ -27,11 +27,9 @@ detect_platform() {
     case "$OS" in
         linux)  OS="linux" ;;
         darwin) OS="darwin" ;;
-        mingw*|msys*|cygwin*)
-            OS="windows"
-            ;;
         *)
             echo "Error: Unsupported operating system: $OS"
+            echo "Windows users: use scripts/install.ps1 instead"
             exit 1
             ;;
     esac
@@ -39,7 +37,6 @@ detect_platform() {
     echo "Detected platform: ${OS}/${ARCH}"
 }
 
-# Get latest version from GitHub API
 get_latest_version() {
     if [ "$VERSION" = "latest" ]; then
         VERSION=$(curl -sS "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
@@ -51,17 +48,8 @@ get_latest_version() {
     echo "Installing pgmi ${VERSION}"
 }
 
-# Download and install
 install_pgmi() {
-    local EXT="tar.gz"
-    local BINARY="pgmi"
-
-    if [ "$OS" = "windows" ]; then
-        EXT="zip"
-        BINARY="pgmi.exe"
-    fi
-
-    local FILENAME="pgmi_${VERSION#v}_${OS}_${ARCH}.${EXT}"
+    local FILENAME="pgmi_${VERSION#v}_${OS}_${ARCH}.tar.gz"
     local URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 
     echo "Downloading ${URL}..."
@@ -76,26 +64,20 @@ install_pgmi() {
 
     echo "Extracting..."
     cd "$TMP_DIR"
-
-    if [ "$EXT" = "zip" ]; then
-        unzip -q "$FILENAME"
-    else
-        tar -xzf "$FILENAME"
-    fi
+    tar -xzf "$FILENAME"
 
     echo "Installing to ${INSTALL_DIR}..."
 
     if [ -w "$INSTALL_DIR" ]; then
-        mv "$BINARY" "${INSTALL_DIR}/"
+        mv pgmi "${INSTALL_DIR}/"
     else
         echo "Note: Requires sudo to install to ${INSTALL_DIR}"
-        sudo mv "$BINARY" "${INSTALL_DIR}/"
+        sudo mv pgmi "${INSTALL_DIR}/"
     fi
 
-    chmod +x "${INSTALL_DIR}/${BINARY}"
+    chmod +x "${INSTALL_DIR}/pgmi"
 }
 
-# Verify installation
 verify_install() {
     if command -v pgmi &> /dev/null; then
         echo ""
@@ -108,7 +90,6 @@ verify_install() {
     fi
 }
 
-# Main
 main() {
     echo "pgmi installer"
     echo "=============="
