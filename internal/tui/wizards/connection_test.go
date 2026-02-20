@@ -3,7 +3,9 @@ package wizards
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -63,6 +65,8 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 	}
@@ -1004,5 +1008,259 @@ func TestConnectionWizard_CtrlC_Cancels(t *testing.T) {
 
 	if !isQuitCmd(cmd) {
 		t.Error("ctrl+c should produce tea.Quit")
+	}
+}
+
+// --- View tests ---
+
+func TestConnectionWizard_View_ProviderStep(t *testing.T) {
+	w := NewConnectionWizard()
+	view := w.View()
+
+	if !strings.Contains(view, "Connection Setup") {
+		t.Error("View at provider step should contain 'Connection Setup'")
+	}
+	for _, p := range providers {
+		if !strings.Contains(view, p.Name) {
+			t.Errorf("View at provider step should contain provider name %q", p.Name)
+		}
+	}
+}
+
+func TestConnectionWizard_View_InputFormStep(t *testing.T) {
+	w := NewConnectionWizard()
+	m, _ := update(t, w, keyMsg("enter")) // select local → host form
+
+	view := m.View()
+	for _, label := range []string{"Host:", "Port:", "Database:"} {
+		if !strings.Contains(view, label) {
+			t.Errorf("View at input form should contain %q", label)
+		}
+	}
+}
+
+func TestConnectionWizard_View_TestConnectionStep(t *testing.T) {
+	w := NewConnectionWizard()
+	m, _ := selectLocalAndFillDB(t, w)
+
+	// Simulate success
+	m, _ = update(t, m, testResultMsg{success: true, info: "PostgreSQL 16.1"})
+	view := m.View()
+	if !strings.Contains(view, "Connected successfully") {
+		t.Error("View after success should contain 'Connected successfully'")
+	}
+
+	// Simulate failure path
+	w2 := NewConnectionWizard()
+	m2, _ := selectLocalAndFillDB(t, w2)
+	m2, _ = update(t, m2, testResultMsg{success: false, err: fmt.Errorf("refused")})
+	view2 := m2.View()
+	if !strings.Contains(view2, "Connection failed") {
+		t.Error("View after failure should contain 'Connection failed'")
+	}
+}
+
+func TestConnectionWizard_TabNavigation(t *testing.T) {
+	w := NewConnectionWizard()
+	m, _ := update(t, w, keyMsg("enter")) // local → host form
+	wiz := asWizard(t, m)
+	if wiz.focusIndex != 0 {
+		t.Fatalf("initial focus = %d, want 0", wiz.focusIndex)
+	}
+
+	// Tab → focus 1
+	m, _ = update(t, m, keyMsg("tab"))
+	wiz = asWizard(t, m)
+	if wiz.focusIndex != 1 {
+		t.Errorf("after tab, focusIndex = %d, want 1", wiz.focusIndex)
+	}
+
+	// Shift+tab → focus 0
+	m, _ = update(t, m, keyMsg("shift+tab"))
+	wiz = asWizard(t, m)
+	if wiz.focusIndex != 0 {
+		t.Errorf("after shift+tab, focusIndex = %d, want 0", wiz.focusIndex)
+	}
+}
+
+func TestConnectionWizard_TabAtBoundary(t *testing.T) {
+	w := NewConnectionWizard()
+	m, _ := update(t, w, keyMsg("enter")) // local → host form (6 inputs)
+
+	// Shift+tab at first field stays at 0
+	m, _ = update(t, m, keyMsg("shift+tab"))
+	wiz := asWizard(t, m)
+	if wiz.focusIndex != 0 {
+		t.Errorf("shift+tab at first field: focusIndex = %d, want 0", wiz.focusIndex)
+	}
+
+	// Tab to last field
+	for i := 0; i < 5; i++ {
+		m, _ = update(t, m, keyMsg("tab"))
+	}
+	wiz = asWizard(t, m)
+	if wiz.focusIndex != 5 {
+		t.Fatalf("after 5 tabs, focusIndex = %d, want 5", wiz.focusIndex)
+	}
+
+	// Tab at last field stays put
+	m, _ = update(t, m, keyMsg("tab"))
+	wiz = asWizard(t, m)
+	if wiz.focusIndex != 5 {
+		t.Errorf("tab at last field: focusIndex = %d, want 5", wiz.focusIndex)
+	}
+}
+
+func TestConnectionWizard_BackFromAuthToProvider(t *testing.T) {
+	w := NewConnectionWizard()
+	// Navigate to Azure (has multiple auth methods)
+	m, _ := update(t, w, keyMsg("down"))
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz := asWizard(t, m)
+	if wiz.step != stepSelectAuth {
+		t.Fatalf("expected stepSelectAuth, got %d", wiz.step)
+	}
+
+	// Esc at auth → back to provider
+	m, _ = update(t, m, keyMsg("esc"))
+	wiz = asWizard(t, m)
+	if wiz.step != stepSelectProvider {
+		t.Errorf("after esc at auth, step = %d, want stepSelectProvider", wiz.step)
+	}
+}
+
+func TestConnectionWizard_ProviderBounds(t *testing.T) {
+	w := NewConnectionWizard()
+
+	// Up at 0 stays 0
+	m, _ := update(t, w, keyMsg("up"))
+	wiz := asWizard(t, m)
+	if wiz.providerIdx != 0 {
+		t.Errorf("up at 0: providerIdx = %d, want 0", wiz.providerIdx)
+	}
+
+	// Navigate to max
+	maxIdx := len(providers) - 1
+	for i := 0; i < maxIdx+5; i++ {
+		m, _ = update(t, m, keyMsg("down"))
+	}
+	wiz = asWizard(t, m)
+	if wiz.providerIdx != maxIdx {
+		t.Errorf("down past max: providerIdx = %d, want %d", wiz.providerIdx, maxIdx)
+	}
+}
+
+func TestConnectionWizard_InvalidPortDefaultsTo5432(t *testing.T) {
+	mock := &mockTester{info: "PostgreSQL 16.1"}
+	w := NewConnectionWizard(WithTester(mock))
+
+	// Select local → host form
+	m, _ := update(t, w, keyMsg("enter"))
+
+	// Clear host default, type host
+	m, _ = update(t, m, keyMsg("enter")) // host → port
+
+	// Clear port default and type invalid
+	wiz := asWizard(t, m)
+	wiz.inputs[1].SetValue("abc")
+	m = wiz
+
+	m, _ = update(t, m, keyMsg("enter"))           // port → database
+	m = typeString(t, m, "testdb")
+	m, _ = update(t, m, keyMsg("enter"))            // database → mgmt db
+	m, _ = update(t, m, keyMsg("enter"))            // mgmt db → username
+	m, _ = update(t, m, keyMsg("enter"))            // username → password
+	m, _ = update(t, m, keyMsg("enter"))            // password → submit
+
+	wiz = asWizard(t, m)
+	if wiz.result.Config.Port != 5432 {
+		t.Errorf("invalid port should default to 5432, got %d", wiz.result.Config.Port)
+	}
+}
+
+func TestConnectionWizard_AzureValidation_MissingDatabase(t *testing.T) {
+	w := NewConnectionWizard()
+
+	// Navigate to Azure → Entra ID
+	m, _ := update(t, w, keyMsg("down"))
+	m, _ = update(t, m, keyMsg("enter"))  // Azure → auth
+	m, _ = update(t, m, keyMsg("enter"))  // Entra ID → Azure form
+
+	// Type server name
+	m = typeString(t, m, "myserver.postgres.database.azure.com")
+	m, _ = update(t, m, keyMsg("enter"))  // server → database
+	// Skip database (empty)
+	m, _ = update(t, m, keyMsg("enter"))  // database → username
+	m, _ = update(t, m, keyMsg("enter"))  // username → submit
+	wiz := asWizard(t, m)
+	if wiz.validationErr == "" {
+		t.Error("expected validation error for empty Azure database")
+	}
+	if !strings.Contains(wiz.validationErr, "database") {
+		t.Errorf("validation error should mention database, got: %q", wiz.validationErr)
+	}
+}
+
+// --- InitWizard View tests ---
+
+func TestInitWizard_View_DirectoryStep(t *testing.T) {
+	templates := DefaultTemplates()
+	dir := filepath.Join(t.TempDir(), "newproject")
+	w := NewInitWizard(dir, templates)
+
+	view := w.View()
+	if !strings.Contains(view, "pgmi init") {
+		t.Error("View at directory step should contain 'pgmi init'")
+	}
+	if !strings.Contains(view, "Directory:") {
+		t.Error("View at directory step should contain 'Directory:'")
+	}
+}
+
+func TestInitWizard_View_TemplateStep(t *testing.T) {
+	templates := DefaultTemplates()
+	dir := filepath.Join(t.TempDir(), "newproject")
+	w := NewInitWizard(dir, templates)
+
+	// Confirm directory → template step
+	m, _ := update(t, w, keyMsg("enter"))
+	view := m.View()
+	if !strings.Contains(view, "basic") {
+		t.Error("View at template step should contain 'basic'")
+	}
+	if !strings.Contains(view, "advanced") {
+		t.Error("View at template step should contain 'advanced'")
+	}
+}
+
+func TestInitWizard_CheckDirBlocking(t *testing.T) {
+	// Empty dir → no blocking
+	emptyDir := filepath.Join(t.TempDir(), "empty")
+	os.MkdirAll(emptyDir, 0o755)
+	if blocking := checkDirBlocking(emptyDir); len(blocking) != 0 {
+		t.Errorf("empty dir should not block, got %v", blocking)
+	}
+
+	// pgmi.yaml and .env → allowed
+	managedDir := filepath.Join(t.TempDir(), "managed")
+	os.MkdirAll(managedDir, 0o755)
+	os.WriteFile(filepath.Join(managedDir, "pgmi.yaml"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(managedDir, ".env"), []byte(""), 0o644)
+	if blocking := checkDirBlocking(managedDir); len(blocking) != 0 {
+		t.Errorf("pgmi-managed files should not block, got %v", blocking)
+	}
+
+	// Other files → blocked
+	blockedDir := filepath.Join(t.TempDir(), "blocked")
+	os.MkdirAll(blockedDir, 0o755)
+	os.WriteFile(filepath.Join(blockedDir, "main.go"), []byte("package main"), 0o644)
+	blocking := checkDirBlocking(blockedDir)
+	if len(blocking) == 0 {
+		t.Error("non-pgmi files should block")
+	}
+
+	// Non-existent dir → no blocking
+	if blocking := checkDirBlocking(filepath.Join(t.TempDir(), "nonexistent")); len(blocking) != 0 {
+		t.Errorf("non-existent dir should not block, got %v", blocking)
 	}
 }
