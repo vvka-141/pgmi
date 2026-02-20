@@ -78,16 +78,6 @@ func (c *PathCompleter) Reset() {
 	c.lastInput = ""
 }
 
-// Matches returns the current match list (useful for showing hints).
-func (c *PathCompleter) Matches() []string {
-	return c.matches
-}
-
-// CycleIndex returns the current cycle position.
-func (c *PathCompleter) CycleIndex() int {
-	return c.cycleIndex
-}
-
 func (c *PathCompleter) findMatches(parent, prefix string) []string {
 	if parent == "" {
 		parent = "."

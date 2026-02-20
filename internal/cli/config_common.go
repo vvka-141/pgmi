@@ -42,7 +42,6 @@ type connectionFlags struct {
 type resolvedConnection struct {
 	ConnConfig    *pgmi.ConnectionConfig
 	MaintenanceDB string
-	ConnStr       string
 }
 
 // resolveConnectionFromFlags resolves connection configuration from flags and project config.
@@ -89,7 +88,6 @@ func resolveConnectionFromFlags(
 	return &resolvedConnection{
 		ConnConfig:    connConfig,
 		MaintenanceDB: maintenanceDB,
-		ConnStr:       db.BuildConnectionString(connConfig),
 	}, nil
 }
 

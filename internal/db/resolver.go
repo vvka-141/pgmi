@@ -414,11 +414,17 @@ func resolveFromGranularParams(
 
 	// Port: flag > PGPORT > pgmi.yaml > default
 	if flags.Port != 0 {
+		if err := validatePort(flags.Port); err != nil {
+			return nil, "", fmt.Errorf("invalid --port flag: %w", err)
+		}
 		cfg.Port = flags.Port
 	} else if envVars.PGPORT != "" {
 		port, err := strconv.Atoi(envVars.PGPORT)
 		if err != nil {
 			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer", envVars.PGPORT)
+		}
+		if err := validatePort(port); err != nil {
+			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': %w", envVars.PGPORT, err)
 		}
 		cfg.Port = port
 	} else if pc.Port != 0 {
@@ -473,4 +479,11 @@ func resolveFromGranularParams(
 	}
 
 	return cfg, maintenanceDB, nil
+}
+
+func validatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port %d: must be between 1 and 65535", port)
+	}
+	return nil
 }

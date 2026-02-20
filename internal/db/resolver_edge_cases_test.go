@@ -263,14 +263,12 @@ func TestResolveConnectionParams_PGPORTEdgeCases(t *testing.T) {
 		{
 			name:        "invalid - negative",
 			pgPort:      "-1",
-			expectError: false, // strconv.Atoi accepts negative, but PostgreSQL won't
-			wantPort:    -1,
+			expectError: true,
 		},
 		{
 			name:        "invalid - too large",
 			pgPort:      "999999",
-			expectError: false, // strconv.Atoi accepts, but PostgreSQL won't
-			wantPort:    999999,
+			expectError: true,
 		},
 		{
 			name:        "invalid - with spaces",

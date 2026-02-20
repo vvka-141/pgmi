@@ -83,6 +83,7 @@ func TestMTLS_CertFlags_EndToEnd(t *testing.T) {
 		nil,
 		nil, // Azure flags
 		nil, // AWS flags
+		nil, // Google flags
 		certFlags,
 		&db.EnvVars{},
 		nil,

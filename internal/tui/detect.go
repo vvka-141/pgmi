@@ -33,6 +33,9 @@ func DetectMode() Mode {
 	if os.Getenv("CI") != "" {
 		return ModeNonInteractive
 	}
+	if os.Getenv("NO_COLOR") != "" {
+		return ModeNonInteractive
+	}
 
 	// Check if stdin is a terminal
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -50,14 +53,4 @@ func DetectMode() Mode {
 // IsInteractive is a convenience function that returns true if running in interactive mode.
 func IsInteractive() bool {
 	return DetectMode() == ModeInteractive
-}
-
-// TerminalSize returns the current terminal dimensions.
-// Returns default values (80x24) if detection fails.
-func TerminalSize() (width, height int) {
-	w, h, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		return 80, 24
-	}
-	return w, h
 }

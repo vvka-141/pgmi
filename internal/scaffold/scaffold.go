@@ -200,17 +200,15 @@ func BuildFileTree(rootPath string) (string, error) {
 	sb.WriteString(absPath + "/\n")
 
 	// Walk the directory tree
-	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root directory itself
 		if path == rootPath {
 			return nil
 		}
 
-		// Calculate relative path and depth
 		relPath, err := filepath.Rel(rootPath, path)
 		if err != nil {
 			return err
@@ -218,13 +216,11 @@ func BuildFileTree(rootPath string) (string, error) {
 
 		depth := strings.Count(relPath, string(os.PathSeparator))
 
-		// Build indentation
 		indent := ""
 		for i := 0; i < depth; i++ {
 			indent += "│   "
 		}
 
-		// Determine if this is the last item in its directory
 		parentDir := filepath.Dir(path)
 		entries, err := os.ReadDir(parentDir)
 		if err != nil {
@@ -233,26 +229,23 @@ func BuildFileTree(rootPath string) (string, error) {
 
 		isLast := false
 		baseName := filepath.Base(path)
-		for i, entry := range entries {
-			if entry.Name() == baseName && i == len(entries)-1 {
+		for i, e := range entries {
+			if e.Name() == baseName && i == len(entries)-1 {
 				isLast = true
 				break
 			}
 		}
 
-		// Choose branch character
 		branch := "├── "
 		if isLast {
 			branch = "└── "
-			// Update parent indent for proper tree structure
 			if depth > 0 {
 				indent = indent[:len(indent)-4] + "    "
 			}
 		}
 
-		// Format name (add / for directories)
-		name := info.Name()
-		if info.IsDir() {
+		name := entry.Name()
+		if entry.IsDir() {
 			name += "/"
 		}
 

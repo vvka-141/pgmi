@@ -60,6 +60,9 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid port: %w", err)
 		}
+		if err := validatePort(port); err != nil {
+			return nil, err
+		}
 		config.Port = port
 	}
 
@@ -144,6 +147,9 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 		case "port":
 			port, err := strconv.Atoi(value)
 			if err != nil {
+				return nil, fmt.Errorf("invalid port in ADO.NET string: %w", err)
+			}
+			if err := validatePort(port); err != nil {
 				return nil, fmt.Errorf("invalid port in ADO.NET string: %w", err)
 			}
 			config.Port = port

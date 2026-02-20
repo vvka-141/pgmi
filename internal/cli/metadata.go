@@ -336,13 +336,11 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 
 		if validationPassed {
 			fmt.Fprintln(os.Stderr, "✓ Metadata validation passed")
-		} else {
-			return fmt.Errorf("metadata validation failed")
 		}
 	}
 
 	if !validationPassed {
-		return fmt.Errorf("validation failed with errors")
+		return fmt.Errorf("metadata validation failed")
 	}
 
 	return nil

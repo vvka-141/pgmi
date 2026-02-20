@@ -30,7 +30,7 @@ type osDirectory struct {
 func (d *osDirectory) Path() string { return d.absPath }
 
 func (d *osDirectory) Walk(fn func(File, error) error) error {
-	return filepath.Walk(d.absPath, func(path string, info os.FileInfo, walkErr error) error {
+	return filepath.WalkDir(d.absPath, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fn(nil, walkErr)
 		}
@@ -38,6 +38,11 @@ func (d *osDirectory) Walk(fn func(File, error) error) error {
 		relPath, relErr := filepath.Rel(d.absPath, path)
 		if relErr != nil {
 			return fn(nil, fmt.Errorf("failed to get relative path: %w", relErr))
+		}
+
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return fn(nil, fmt.Errorf("failed to get file info: %w", infoErr))
 		}
 
 		file := &osFile{

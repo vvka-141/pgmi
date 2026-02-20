@@ -1010,7 +1010,11 @@ func (w ConnectionWizard) viewTestConnection() string {
 		} else {
 			b.WriteString(w.styles.Error.Render("✗ Connection failed"))
 			b.WriteString("\n")
-			b.WriteString(w.styles.Description.Render(w.testErr.Error()))
+			errMsg := "unknown error"
+			if w.testErr != nil {
+				errMsg = w.testErr.Error()
+			}
+			b.WriteString(w.styles.Description.Render(errMsg))
 			b.WriteString("\n\n")
 			b.WriteString(w.styles.Help.Render("enter try again • esc go back"))
 		}
