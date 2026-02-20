@@ -92,7 +92,7 @@ func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bo
 func (c *PostgreSQLErrorClassifier) isNetworkError(err error) bool {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return dnsErr.IsTimeout || dnsErr.IsNotFound
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
 	}
 
 	var opErr *net.OpError
@@ -124,7 +124,6 @@ func (c *PostgreSQLErrorClassifier) isConnectionError(err error) bool {
 		"connection reset",
 		"connection timeout",
 		"connection failure",
-		"no such host",
 		"network is unreachable",
 		"i/o timeout",
 		"broken pipe",

@@ -141,10 +141,18 @@ func TestPostgreSQLErrorClassifier_IsTransient_NetworkErrors(t *testing.T) {
 			isTransient: true,
 		},
 		{
-			name: "dns_not_found_error",
+			name: "dns_not_found_is_not_transient",
 			err: &net.DNSError{
 				Err:        "no such host",
 				IsNotFound: true,
+			},
+			isTransient: false,
+		},
+		{
+			name: "dns_temporary_error",
+			err: &net.DNSError{
+				Err:         "server misbehaving",
+				IsTemporary: true,
 			},
 			isTransient: true,
 		},
@@ -192,9 +200,9 @@ func TestPostgreSQLErrorClassifier_IsTransient_ConnectionStringErrors(t *testing
 			isTransient: true,
 		},
 		{
-			name:        "no_such_host",
+			name:        "no_such_host_not_transient",
 			err:         errors.New("no such host"),
-			isTransient: true,
+			isTransient: false,
 		},
 		{
 			name:        "network_unreachable_message",
