@@ -315,20 +315,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 // needsConnectionWizard checks if we have enough connection info to proceed.
 // Returns true if NO connection info is available from any source.
 func needsConnectionWizard(projectCfg *config.ProjectConfig) bool {
-	// Check CLI flags
 	if deployFlags.connection != "" || deployFlags.host != "" || deployFlags.database != "" {
 		return false
 	}
 
-	// Check environment variables
-	if os.Getenv("DATABASE_URL") != "" || os.Getenv("PGMI_CONNECTION_STRING") != "" {
-		return false
-	}
-	if os.Getenv("PGHOST") != "" && os.Getenv("PGDATABASE") != "" {
+	if hasEnvConnectionSource() {
 		return false
 	}
 
-	// Check pgmi.yaml
 	if projectCfg != nil {
 		if projectCfg.Connection.Host != "" || projectCfg.Connection.Database != "" {
 			return false

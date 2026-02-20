@@ -113,6 +113,7 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 }
 
 // wrapConnectionError wraps raw pgx connection errors with actionable guidance.
+// All returned errors wrap pgmi.ErrConnectionFailed so callers can use errors.Is().
 func wrapConnectionError(err error, host string, port int, database string) error {
 	errStr := strings.ToLower(err.Error())
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -126,7 +127,8 @@ Possible causes:
   - Wrong host or port
   - Firewall blocking the connection
 
-Original error: %w`, addr, host, port, err)
+Original error: %w
+%w`, addr, host, port, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "no host"):
 		return fmt.Errorf(`cannot resolve host "%s"
@@ -136,7 +138,8 @@ Possible causes:
   - DNS is not configured or reachable
   - Network connection issue
 
-Original error: %w`, host, err)
+Original error: %w
+%w`, host, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "password authentication failed"):
 		return fmt.Errorf(`password authentication failed for database "%s"
@@ -146,7 +149,8 @@ Possible causes:
   - Wrong username
   - User does not have access to the database
 
-Original error: %w`, database, err)
+Original error: %w
+%w`, database, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "does not exist"):
 		return fmt.Errorf(`database "%s" does not exist
@@ -156,7 +160,8 @@ To create it:
 
 Or use --overwrite to let pgmi create it.
 
-Original error: %w`, database, database, err)
+Original error: %w
+%w`, database, database, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out"):
 		return fmt.Errorf(`connection timed out to %s
@@ -167,7 +172,8 @@ Possible causes:
   - Firewall silently dropping packets
   - Wrong host/port (server not listening)
 
-Original error: %w`, addr, err)
+Original error: %w
+%w`, addr, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "ssl") || strings.Contains(errStr, "tls"):
 		return fmt.Errorf(`SSL/TLS connection error
@@ -177,7 +183,8 @@ Possible causes:
   - Certificate verification failed (try --sslmode=require)
   - Client certificates missing (check --sslcert, --sslkey)
 
-Original error: %w`, err)
+Original error: %w
+%w`, err, pgmi.ErrConnectionFailed)
 
 	case strings.Contains(errStr, "too many connections"):
 		return fmt.Errorf(`too many connections to database "%s"
@@ -189,10 +196,11 @@ Possible causes:
 
 Try: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';
 
-Original error: %w`, database, database, err)
+Original error: %w
+%w`, database, database, err, pgmi.ErrConnectionFailed)
 
 	default:
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to connect to database: %w\n%w", err, pgmi.ErrConnectionFailed)
 	}
 }
 

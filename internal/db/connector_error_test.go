@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestWrapConnectionError(t *testing.T) {
@@ -133,6 +135,11 @@ func TestWrapConnectionError(t *testing.T) {
 			// Verify original error is wrapped (unwrappable)
 			if !errors.Is(wrapped, originalErr) {
 				t.Error("wrapped error does not unwrap to original error")
+			}
+
+			// Verify ErrConnectionFailed sentinel is chained
+			if !errors.Is(wrapped, pgmi.ErrConnectionFailed) {
+				t.Error("wrapped error does not chain pgmi.ErrConnectionFailed")
 			}
 		})
 	}

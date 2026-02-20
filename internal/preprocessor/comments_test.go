@@ -229,9 +229,19 @@ func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
 			expected: "CREATE FUNCTION f() AS $$ SELECT '--'; $$ LANGUAGE sql;",
 		},
 		{
-			name:     "Numeric tag",
+			name:     "Numeric tag is not a valid dollar-quote",
+			input:    "SELECT $1 + $2;",
+			expected: "SELECT $1 + $2;",
+		},
+		{
+			name:     "Digit-initial tag not treated as dollar-quote",
 			input:    "SELECT $1$content$1$;",
 			expected: "SELECT $1$content$1$;",
+		},
+		{
+			name:     "Digit-initial tag with comment inside is stripped",
+			input:    "SELECT $1$--comment$1$;",
+			expected: "SELECT $1$",
 		},
 	}
 

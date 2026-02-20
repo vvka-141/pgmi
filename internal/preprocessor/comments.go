@@ -158,12 +158,9 @@ func (c *commentStripper) extractDollarTag(runes []rune, i int) string {
 			return string(runes[i : j+1])
 		}
 		if j == i+1 {
-			if !unicode.IsLetter(r) && r != '_' && r != '$' {
-				if unicode.IsDigit(r) {
-					// Continue, might be $1$
-				} else {
-					return ""
-				}
+			// Tag identifier must start with letter or underscore (PostgreSQL spec)
+			if !unicode.IsLetter(r) && r != '_' {
+				return ""
 			}
 		} else {
 			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {

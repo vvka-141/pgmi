@@ -17,17 +17,22 @@ type PreprocessResult struct {
 	MacroCount  int    // Number of macros expanded
 }
 
+// testGenerateFunc is the signature for calling pgmi_test_generate.
+type testGenerateFunc func(ctx context.Context, conn *pgxpool.Conn, pattern string, callback string) (string, error)
+
 // Pipeline preprocesses SQL by expanding macros.
 type Pipeline struct {
-	commentStripper CommentStripper
-	macroDetector   MacroDetector
+	commentStripper  CommentStripper
+	macroDetector    MacroDetector
+	testGenerateFn   testGenerateFunc
 }
 
 // NewPipeline creates a new preprocessing pipeline.
 func NewPipeline() *Pipeline {
 	return &Pipeline{
-		commentStripper: NewCommentStripper(),
-		macroDetector:   NewMacroDetector(),
+		commentStripper:  NewCommentStripper(),
+		macroDetector:    NewMacroDetector(),
+		testGenerateFn:   callTestGenerate,
 	}
 }
 
@@ -68,7 +73,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		}
 
 		// Call pg_temp.pgmi_test_generate() to get the test execution SQL
-		generatedSQL, err := callTestGenerate(ctx, conn, macro.Pattern, macro.Callback)
+		generatedSQL, err := p.testGenerateFn(ctx, conn, macro.Pattern, macro.Callback)
 		if err != nil {
 			return nil, err
 		}
