@@ -337,11 +337,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	if err := deployer.Deploy(ctx, config); err != nil {
-		return fmt.Errorf("deployment failed: %w", err)
-	}
-
-	return nil
+	return deployer.Deploy(ctx, config)
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.

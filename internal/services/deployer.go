@@ -131,9 +131,8 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	}
 	defer session.Close()
 
-	// Execute deploy.sql (macro expansion queries pgmi_test_plan() from SQL)
 	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
-		return fmt.Errorf("deploy.sql execution failed: %w", err)
+		return err
 	}
 
 	s.logger.Info("✓ Deployment completed successfully")
@@ -200,7 +199,7 @@ func (s *DeploymentService) executeDeploySQL(
 	if err != nil {
 		// Try to attribute the error to the original source using the source map
 		attributedErr := s.attributeError(err, result.SourceMap)
-		return fmt.Errorf("deploy.sql execution failed: %w", errors.Join(pgmi.ErrExecutionFailed, attributedErr))
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, attributedErr)
 	}
 
 	s.logger.Info("✓ Execution plan built successfully")
