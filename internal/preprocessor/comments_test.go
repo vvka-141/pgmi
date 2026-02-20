@@ -41,7 +41,7 @@ func TestCommentStripper_Strip_LineComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -91,7 +91,7 @@ func TestCommentStripper_Strip_BlockComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -126,7 +126,7 @@ func TestCommentStripper_Strip_NestedBlockComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -176,7 +176,7 @@ func TestCommentStripper_Strip_SingleQuoteStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -236,7 +236,7 @@ func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}
@@ -286,54 +286,9 @@ func TestCommentStripper_Strip_MixedScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestCommentStripper_Strip_LineMapping(t *testing.T) {
-	stripper := NewCommentStripper()
-
-	tests := []struct {
-		name          string
-		input         string
-		expectedLines int
-	}{
-		{
-			name:          "Single line",
-			input:         "SELECT 1;",
-			expectedLines: 1,
-		},
-		{
-			name:          "Multiple lines preserved",
-			input:         "SELECT 1;\nSELECT 2;\nSELECT 3;",
-			expectedLines: 3,
-		},
-		{
-			name:          "Comments removed but lines preserved",
-			input:         "-- comment\nSELECT 1;\n-- comment\nSELECT 2;",
-			expectedLines: 4,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, lineMap := stripper.Strip(tt.input)
-
-			// Count newlines in result
-			resultLines := 1
-			for _, c := range result {
-				if c == '\n' {
-					resultLines++
-				}
-			}
-
-			// Line map should have entries for each line
-			if len(lineMap) == 0 && tt.expectedLines > 0 {
-				t.Errorf("LineMap is empty, expected entries")
 			}
 		})
 	}
@@ -386,7 +341,7 @@ func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _ := stripper.Strip(tt.input)
+			result := stripper.Strip(tt.input)
 			if result != tt.expected {
 				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
 			}

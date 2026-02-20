@@ -231,6 +231,38 @@ func TestConnectionWizard_EnterAdvancesFields(t *testing.T) {
 	}
 }
 
+func TestConnectionWizard_ValidationErrorShown(t *testing.T) {
+	w := NewConnectionWizard()
+
+	// Select local provider → host form
+	m, _ := update(t, w, keyMsg("enter"))
+
+	// Advance through all fields WITHOUT typing a database name
+	for i := 0; i < 5; i++ {
+		m, _ = update(t, m, keyMsg("enter"))
+	}
+	// Now on password (last field), press Enter → validation should fail
+	m, _ = update(t, m, keyMsg("enter"))
+	w = asWizard(t, m)
+
+	if w.step == stepTestConnection {
+		t.Fatal("should NOT advance to test connection with empty database")
+	}
+	if w.validationErr == "" {
+		t.Fatal("validationErr should be set when database is empty")
+	}
+	if w.validationErr != "database name is required" {
+		t.Errorf("validationErr = %q, want %q", w.validationErr, "database name is required")
+	}
+
+	// Typing clears the error
+	m, _ = update(t, m, keyMsg("x"))
+	w = asWizard(t, m)
+	if w.validationErr != "" {
+		t.Errorf("validationErr should be cleared after typing, got %q", w.validationErr)
+	}
+}
+
 func TestConnectionWizard_TestSuccessThenQuit(t *testing.T) {
 	w := NewConnectionWizard()
 

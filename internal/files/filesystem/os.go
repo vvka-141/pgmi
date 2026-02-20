@@ -95,24 +95,6 @@ func (p *OSFileSystem) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func (p *OSFileSystem) ReadDir(path string) ([]FileInfo, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	result := make([]FileInfo, 0, len(entries))
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get file info for %s: %w", entry.Name(), err)
-		}
-		result = append(result, info)
-	}
-
-	return result, nil
-}
-
 func (p *OSFileSystem) Stat(path string) (FileInfo, error) {
 	// os.Stat returns os.FileInfo which implements fs.FileInfo
 	return os.Stat(path)

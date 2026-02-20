@@ -81,30 +81,3 @@ func TestNewSession_PanicsOnNilConn(t *testing.T) {
 	pgmi.NewSession(&pgxpool.Pool{}, nil, pgmi.FileScanResult{})
 }
 
-// TestSessionManager_PrepareSession_ErrorPaths tests error handling in session preparation
-// This is a unit test focusing on error propagation
-func TestSessionManager_PrepareSession_ErrorHandling(t *testing.T) {
-	// These tests verify that errors are properly wrapped and returned
-	// Actual integration tests with real database will test full functionality
-
-	t.Run("missing source path returns error", func(t *testing.T) {
-		// This would normally be caught by file scanner
-		// Just verifying error propagation structure
-		t.Skip("Requires integration test setup with mock components")
-	})
-
-	t.Run("invalid connection config returns error", func(t *testing.T) {
-		// This would normally be caught during connection
-		// Just verifying error propagation structure
-		t.Skip("Requires integration test setup with mock components")
-	})
-}
-
-// Note: Most session cleanup tests require integration test setup with actual
-// PostgreSQL database. The critical tests are:
-// 1. Session cleanup on error during file loading
-// 2. Session cleanup on error during connection acquire
-// 3. Context cancellation during session preparation
-//
-// These are better tested as integration tests in deployer_integration_test.go
-// where we have access to real database connections.

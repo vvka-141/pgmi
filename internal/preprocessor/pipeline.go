@@ -44,7 +44,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 	}
 
 	// Strip comments to find macros
-	strippedSQL, _ := p.commentStripper.Strip(sql)
+	strippedSQL := p.commentStripper.Strip(sql)
 
 	// Detect macros in stripped SQL
 	macros := p.macroDetector.Detect(strippedSQL)
@@ -116,7 +116,7 @@ func callTestGenerate(ctx context.Context, conn *pgxpool.Conn, pattern string, c
 
 // nullIfEmpty returns nil if s is empty, otherwise returns s.
 // Used for SQL NULL parameters.
-func nullIfEmpty(s string) interface{} {
+func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}

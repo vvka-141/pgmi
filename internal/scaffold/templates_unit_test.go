@@ -255,8 +255,6 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 	}
 }
 
-// TestTemplatePlaceholderExtraction validates placeholder extraction from embedded templates
-
 // TestBasicTemplateTestFilePaths verifies that root-level __test__/ files
 // are scanned with correct paths that will match the SQL is_test_file regex
 func TestBasicTemplateTestFilePaths(t *testing.T) {

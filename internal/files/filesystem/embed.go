@@ -151,39 +151,6 @@ func (efs *EmbedFileSystem) ReadFile(filePath string) ([]byte, error) {
 	return content, nil
 }
 
-// ReadDir implements FileSystemProvider.ReadDir
-func (efs *EmbedFileSystem) ReadDir(dirPath string) ([]FileInfo, error) {
-	// Normalize path to forward slashes
-	dirPath = strings.ReplaceAll(dirPath, "\\", "/")
-
-	// Calculate absolute path within embed.FS
-	var absPath string
-	if dirPath == "." || dirPath == "" {
-		absPath = efs.root
-	} else if strings.HasPrefix(dirPath, "/") || path.IsAbs(dirPath) {
-		absPath = dirPath
-	} else {
-		absPath = path.Join(efs.root, dirPath)
-	}
-	absPath = path.Clean(absPath)
-
-	entries, err := efs.embedFS.ReadDir(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
-	}
-
-	result := make([]FileInfo, 0, len(entries))
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get file info for %s: %w", entry.Name(), err)
-		}
-		result = append(result, info)
-	}
-
-	return result, nil
-}
-
 // Stat implements FileSystemProvider.Stat
 func (efs *EmbedFileSystem) Stat(statPath string) (FileInfo, error) {
 	// Normalize path to forward slashes

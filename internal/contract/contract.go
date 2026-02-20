@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"sort"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,10 +18,6 @@ const (
 	V1     Version = "1"
 	Latest Version = V1
 )
-
-var supportedVersions = map[Version]string{
-	V1: "api-v1.sql",
-}
 
 // Load returns the SQL content for the specified API version.
 // If version is empty, the latest version is used.
@@ -60,12 +55,7 @@ func Apply(ctx context.Context, conn *pgxpool.Conn, version string) (Version, er
 
 // SupportedVersions returns a sorted list of all supported API versions.
 func SupportedVersions() []Version {
-	versions := make([]Version, 0, len(supportedVersions))
-	for v := range supportedVersions {
-		versions = append(versions, v)
-	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
-	return versions
+	return []Version{V1}
 }
 
 // LatestVersion returns the current latest API version.

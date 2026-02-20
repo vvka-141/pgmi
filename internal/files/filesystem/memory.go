@@ -292,44 +292,6 @@ func (mfs *MemoryFileSystem) ReadFile(filePath string) ([]byte, error) {
 	return file.content, nil
 }
 
-// ReadDir implements FileSystemProvider.ReadDir
-func (mfs *MemoryFileSystem) ReadDir(dirPath string) ([]FileInfo, error) {
-	// Normalize to forward slashes (virtual filesystem convention)
-	dirPath = filepath.ToSlash(dirPath)
-
-	// Calculate absolute path within virtual filesystem
-	var absPath string
-	if dirPath == "." || dirPath == "" {
-		absPath = mfs.root
-	} else if strings.HasPrefix(dirPath, "/") || path.IsAbs(dirPath) {
-		absPath = dirPath
-	} else {
-		absPath = path.Join(mfs.root, dirPath)
-	}
-	absPath = path.Clean(absPath)
-
-	// Get all direct children of this directory
-	var result []FileInfo
-	for filePath, file := range mfs.files {
-		// Skip the directory itself
-		if filePath == absPath {
-			continue
-		}
-
-		// Check if this file is a direct child
-		if path.Dir(filePath) == absPath {
-			result = append(result, file.info)
-		}
-	}
-
-	// Sort by name for deterministic order
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name() < result[j].Name()
-	})
-
-	return result, nil
-}
-
 // Stat implements FileSystemProvider.Stat
 func (mfs *MemoryFileSystem) Stat(statPath string) (FileInfo, error) {
 	// Normalize to forward slashes (virtual filesystem convention)

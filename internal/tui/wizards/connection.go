@@ -149,8 +149,9 @@ type ConnectionWizard struct {
 	authMethod *AuthOption
 
 	// Form inputs
-	inputs     []textinput.Model
-	focusIndex int
+	inputs        []textinput.Model
+	focusIndex    int
+	validationErr string
 
 	// Connection testing
 	spinner  spinner.Model
@@ -556,13 +557,16 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return w, w.inputs[w.focusIndex].Focus()
 		}
 		// Enter on last field submits the form
-		if err := w.validateInputs(); err == nil {
-			w.buildConfig()
-			w.step = stepTestConnection
-			w.testing = true
-			w.testDone = false
-			return w, tea.Batch(w.spinner.Tick, w.testConnection())
+		if err := w.validateInputs(); err != nil {
+			w.validationErr = err.Error()
+			return w, nil
 		}
+		w.validationErr = ""
+		w.buildConfig()
+		w.step = stepTestConnection
+		w.testing = true
+		w.testDone = false
+		return w, tea.Batch(w.spinner.Tick, w.testConnection())
 	case key.Matches(msg, w.keys.Back):
 		if w.provider != nil && len(w.provider.AuthMethods) > 1 {
 			w.step = stepSelectAuth
@@ -571,6 +575,7 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return w, nil
 	default:
+		w.validationErr = ""
 		var cmd tea.Cmd
 		w.inputs[w.focusIndex], cmd = w.inputs[w.focusIndex].Update(msg)
 		return w, cmd
@@ -847,6 +852,11 @@ func (w ConnectionWizard) viewHostForm() string {
 		b.WriteString("\n\n")
 	}
 
+	if w.validationErr != "" {
+		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
 
 	return b.String()
@@ -872,6 +882,12 @@ func (w ConnectionWizard) viewAzureForm() string {
 
 	b.WriteString(w.styles.Description.Render("Authentication uses Azure CLI (az login) or environment variables."))
 	b.WriteString("\n\n")
+
+	if w.validationErr != "" {
+		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
 
 	return b.String()
@@ -897,6 +913,12 @@ func (w ConnectionWizard) viewAWSForm() string {
 
 	b.WriteString(w.styles.Description.Render("Authentication uses AWS credentials (env vars, config file, or IAM role)."))
 	b.WriteString("\n\n")
+
+	if w.validationErr != "" {
+		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
 
 	return b.String()
@@ -924,6 +946,12 @@ func (w ConnectionWizard) viewGoogleForm() string {
 	b.WriteString("\n")
 	b.WriteString(w.styles.Description.Render("Authentication uses gcloud or service account."))
 	b.WriteString("\n\n")
+
+	if w.validationErr != "" {
+		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
 
 	return b.String()
@@ -942,6 +970,12 @@ func (w ConnectionWizard) viewConnStringForm() string {
 
 	b.WriteString(w.styles.Description.Render("Format: postgresql://user:password@host:port/database"))
 	b.WriteString("\n\n")
+
+	if w.validationErr != "" {
+		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(w.styles.Help.Render("enter submit • esc back"))
 
 	return b.String()

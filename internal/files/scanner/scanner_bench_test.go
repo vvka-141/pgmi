@@ -32,8 +32,3 @@ func BenchmarkScanDirectory(b *testing.B) {
 		}
 	}
 }
-
-// NOTE: In-memory filesystem benchmarking removed as NewMemoryFileSystemProvider
-// is not exported. Real filesystem benchmarking via BenchmarkScanDirectory is sufficient.
-
-// BenchmarkExtractPlaceholders benchmarks placeholder extraction
