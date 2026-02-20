@@ -131,7 +131,7 @@ func splitPath(input string) (parent, prefix string) {
 	}
 
 	if strings.HasSuffix(input, string(filepath.Separator)) || strings.HasSuffix(input, "/") {
-		return strings.TrimRight(input, string(filepath.Separator)+"/"), ""
+		return strings.TrimRight(input, `/\`), ""
 	}
 
 	parent = filepath.Dir(input)
