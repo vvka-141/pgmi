@@ -24,7 +24,7 @@ This design provides:
 - ✅ **Transactional safety** - All work can be wrapped in one transaction
 - ✅ **Isolation** - Temporary tables exist only for this deployment
 - ✅ **Simplicity** - No external state management
-- ✅ **Auditability** - Clear session boundaries for logging
+- ✅ **Inspectability** - All state queryable during the session; clear boundaries for logging
 
 **Contrast with other tools:**
 - ❌ Multi-session tools: State stored in files, harder to reason about

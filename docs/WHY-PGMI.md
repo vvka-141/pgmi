@@ -143,11 +143,9 @@ pgmi does NOT decide:
 
 ### Your SQL remains portable
 
-pgmi adds no annotations to your SQL files. A migration file used with pgmi is valid PostgreSQL SQL—you can run it directly with `psql` if needed.
+Your migration files are valid PostgreSQL SQL—you can run them directly with `psql`. The optional `<pgmi-meta>` blocks live inside standard SQL comments (`/* ... */`), so they don't break compatibility. pgmi parses them before SQL reaches PostgreSQL to configure file ordering and idempotency tracking — they're metadata about your files, not executable syntax.
 
-The optional `<pgmi-meta>` blocks are file-level configuration metadata (like ID3 tags for music files) — they configure how pgmi presents files to your SQL (ordering, idempotency tracking). They're parsed by Go before SQL reaches PostgreSQL and stripped from content. They don't affect SQL execution.
-
-The only pgmi-specific code is `deploy.sql`, which uses temp table functions. If you later switch tools, your migration files work unchanged.
+The only pgmi-specific code is `deploy.sql`, which queries session temp tables. If you later switch tools, your migration files work unchanged.
 
 ## Comparison with other tools
 

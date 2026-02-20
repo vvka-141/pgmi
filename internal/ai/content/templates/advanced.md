@@ -33,7 +33,7 @@ User → Gateway → PostgreSQL Transaction
 - **Transactional guarantees**: Every state change is atomic, consistent, isolated, durable
 - **Single source of truth**: No state synchronization between services
 - **Testable**: If transactions pass tests, the system is fundamentally healthy
-- **Auditable**: PostgreSQL's transactional log captures everything
+- **Auditable**: Every script execution is logged to `internal.deployment_script_execution_log` with UUID, checksum, timestamp, and executing role
 - **Simpler debugging**: State is always in the database, never "in flight"
 
 ## Transaction-Centric Design

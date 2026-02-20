@@ -36,7 +36,7 @@ This distinction is fundamental to all design decisions:
 - Manage locking strategy (PostgreSQL's native behavior prevails)
 - Make any "how to deploy" decisions
 
-**Tagline**: A PostgreSQL-native execution fabric for humans and autonomous agents—deterministic, inspectable, and transactionally safe. The advanced template adds persistent audit logging via `internal.deployment_script_execution_log`.
+**Tagline**: A PostgreSQL-native execution fabric for humans and autonomous agents—deterministic, inspectable, and transactionally safe.
 
 ## Architectural Foundations
 
@@ -57,7 +57,7 @@ This distinction is fundamental to all design decisions:
 3. Executes deploy.sql, which queries files and executes them directly
 ```
 
-**Key Principle**: Session scope ensures clean separation—no persistent metadata pollution, session ends and everything disappears.
+**Key Principle**: Session scope ensures clean separation—no persistent metadata pollution, session ends and everything disappears. All session state (files, parameters, plan, test plan) is queryable during deployment, making the process fully inspectable. For persistent audit trails, the advanced template provides `internal.deployment_script_execution_log`; the basic template is stateless by design.
 
 ### 2. SQL-Centric Control
 
