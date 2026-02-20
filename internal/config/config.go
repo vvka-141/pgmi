@@ -13,15 +13,20 @@ import (
 var ErrConfigNotFound = errors.New("config file not found")
 
 type ConnectionConfig struct {
-	Host                string `yaml:"host"`
-	Port                int    `yaml:"port"`
-	Username            string `yaml:"username"`
-	Database            string `yaml:"database"`
-	ManagementDatabase  string `yaml:"management_database,omitempty"`
-	SSLMode             string `yaml:"sslmode"`
-	SSLCert             string `yaml:"sslcert"`
-	SSLKey              string `yaml:"sslkey"`
-	SSLRootCert         string `yaml:"sslrootcert"`
+	Host               string `yaml:"host"`
+	Port               int    `yaml:"port"`
+	Username           string `yaml:"username"`
+	Database           string `yaml:"database"`
+	ManagementDatabase string `yaml:"management_database,omitempty"`
+	SSLMode            string `yaml:"sslmode"`
+	SSLCert            string `yaml:"sslcert,omitempty"`
+	SSLKey             string `yaml:"sslkey,omitempty"`
+	SSLRootCert        string `yaml:"sslrootcert,omitempty"`
+	AuthMethod         string `yaml:"auth_method,omitempty"`
+	AzureTenantID      string `yaml:"azure_tenant_id,omitempty"`
+	AzureClientID      string `yaml:"azure_client_id,omitempty"`
+	AWSRegion          string `yaml:"aws_region,omitempty"`
+	GoogleInstance     string `yaml:"google_instance,omitempty"`
 }
 
 type ProjectConfig struct {

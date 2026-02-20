@@ -236,7 +236,7 @@ func TestApplyAzureAuth(t *testing.T) {
 				AuthMethod: pgmi.AuthMethodStandard,
 			}
 
-			applyAzureAuth(config, tt.flags, tt.env)
+			applyAzureAuth(config, tt.flags, tt.env, nil)
 
 			if config.AuthMethod != tt.wantAuthMethod {
 				t.Errorf("AuthMethod = %v, want %v", config.AuthMethod, tt.wantAuthMethod)

@@ -724,6 +724,213 @@ func TestResolveConnectionParams_CertFlagsNoConflictWithConnection(t *testing.T)
 	}
 }
 
+func TestApplyAWSAuth(t *testing.T) {
+	tests := []struct {
+		name           string
+		flags          *AWSFlags
+		env            *EnvVars
+		pc             *config.ProjectConfig
+		wantAuthMethod pgmi.AuthMethod
+		wantRegion     string
+	}{
+		{
+			name:           "no AWS config",
+			flags:          &AWSFlags{},
+			env:            &EnvVars{},
+			wantAuthMethod: pgmi.AuthMethodStandard,
+		},
+		{
+			name:           "--aws with flag region",
+			flags:          &AWSFlags{Enabled: true, Region: "us-east-1"},
+			env:            &EnvVars{},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "us-east-1",
+		},
+		{
+			name:           "--aws with env region",
+			flags:          &AWSFlags{Enabled: true},
+			env:            &EnvVars{AWS_REGION: "eu-west-1"},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "eu-west-1",
+		},
+		{
+			name:           "--aws flag overrides env region",
+			flags:          &AWSFlags{Enabled: true, Region: "us-east-1"},
+			env:            &EnvVars{AWS_REGION: "eu-west-1"},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "us-east-1",
+		},
+		{
+			name:           "AWS_DEFAULT_REGION fallback",
+			flags:          &AWSFlags{Enabled: true},
+			env:            &EnvVars{AWS_DEFAULT_REGION: "ap-south-1"},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "ap-south-1",
+		},
+		{
+			name:  "pgmi.yaml activates AWS",
+			flags: &AWSFlags{},
+			env:   &EnvVars{},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod: "aws",
+				AWSRegion:  "yaml-region",
+			}},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "yaml-region",
+		},
+		{
+			name:  "env overrides pgmi.yaml region",
+			flags: &AWSFlags{},
+			env:   &EnvVars{AWS_REGION: "env-region"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod: "aws",
+				AWSRegion:  "yaml-region",
+			}},
+			wantAuthMethod: pgmi.AuthMethodAWSIAM,
+			wantRegion:     "env-region",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			applyAWSAuth(cfg, tt.flags, tt.env, tt.pc)
+
+			if cfg.AuthMethod != tt.wantAuthMethod {
+				t.Errorf("AuthMethod = %v, want %v", cfg.AuthMethod, tt.wantAuthMethod)
+			}
+			if cfg.AWSRegion != tt.wantRegion {
+				t.Errorf("AWSRegion = %v, want %v", cfg.AWSRegion, tt.wantRegion)
+			}
+		})
+	}
+}
+
+func TestApplyGoogleAuth(t *testing.T) {
+	tests := []struct {
+		name           string
+		flags          *GoogleFlags
+		pc             *config.ProjectConfig
+		wantAuthMethod pgmi.AuthMethod
+		wantInstance   string
+	}{
+		{
+			name:           "no Google config",
+			flags:          &GoogleFlags{},
+			wantAuthMethod: pgmi.AuthMethodStandard,
+		},
+		{
+			name:           "--google with flag instance",
+			flags:          &GoogleFlags{Enabled: true, Instance: "proj:region:inst"},
+			wantAuthMethod: pgmi.AuthMethodGoogleIAM,
+			wantInstance:   "proj:region:inst",
+		},
+		{
+			name:  "pgmi.yaml activates Google",
+			flags: &GoogleFlags{},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod:     "google",
+				GoogleInstance: "yaml:region:inst",
+			}},
+			wantAuthMethod: pgmi.AuthMethodGoogleIAM,
+			wantInstance:   "yaml:region:inst",
+		},
+		{
+			name:  "flag overrides pgmi.yaml instance",
+			flags: &GoogleFlags{Enabled: true, Instance: "flag:region:inst"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod:     "google",
+				GoogleInstance: "yaml:region:inst",
+			}},
+			wantAuthMethod: pgmi.AuthMethodGoogleIAM,
+			wantInstance:   "flag:region:inst",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			applyGoogleAuth(cfg, tt.flags, tt.pc)
+
+			if cfg.AuthMethod != tt.wantAuthMethod {
+				t.Errorf("AuthMethod = %v, want %v", cfg.AuthMethod, tt.wantAuthMethod)
+			}
+			if cfg.GoogleInstance != tt.wantInstance {
+				t.Errorf("GoogleInstance = %v, want %v", cfg.GoogleInstance, tt.wantInstance)
+			}
+		})
+	}
+}
+
+func TestApplyAzureAuth_YamlFallback(t *testing.T) {
+	tests := []struct {
+		name             string
+		flags            *AzureFlags
+		env              *EnvVars
+		pc               *config.ProjectConfig
+		wantAuthMethod   pgmi.AuthMethod
+		wantTenantID     string
+		wantClientID     string
+	}{
+		{
+			name:  "pgmi.yaml activates Azure",
+			flags: &AzureFlags{},
+			env:   &EnvVars{},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod:    "azure",
+				AzureTenantID: "yaml-tenant",
+				AzureClientID: "yaml-client",
+			}},
+			wantAuthMethod: pgmi.AuthMethodAzureEntraID,
+			wantTenantID:   "yaml-tenant",
+			wantClientID:   "yaml-client",
+		},
+		{
+			name:  "env overrides pgmi.yaml tenant",
+			flags: &AzureFlags{},
+			env:   &EnvVars{AZURE_TENANT_ID: "env-tenant"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod:    "azure",
+				AzureTenantID: "yaml-tenant",
+				AzureClientID: "yaml-client",
+			}},
+			wantAuthMethod: pgmi.AuthMethodAzureEntraID,
+			wantTenantID:   "env-tenant",
+			wantClientID:   "yaml-client",
+		},
+		{
+			name:  "flag overrides both env and yaml",
+			flags: &AzureFlags{Enabled: true, TenantID: "flag-tenant"},
+			env:   &EnvVars{AZURE_TENANT_ID: "env-tenant"},
+			pc: &config.ProjectConfig{Connection: config.ConnectionConfig{
+				AuthMethod:    "azure",
+				AzureTenantID: "yaml-tenant",
+				AzureClientID: "yaml-client",
+			}},
+			wantAuthMethod: pgmi.AuthMethodAzureEntraID,
+			wantTenantID:   "flag-tenant",
+			wantClientID:   "yaml-client",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			applyAzureAuth(cfg, tt.flags, tt.env, tt.pc)
+
+			if cfg.AuthMethod != tt.wantAuthMethod {
+				t.Errorf("AuthMethod = %v, want %v", cfg.AuthMethod, tt.wantAuthMethod)
+			}
+			if cfg.AzureTenantID != tt.wantTenantID {
+				t.Errorf("AzureTenantID = %v, want %v", cfg.AzureTenantID, tt.wantTenantID)
+			}
+			if cfg.AzureClientID != tt.wantClientID {
+				t.Errorf("AzureClientID = %v, want %v", cfg.AzureClientID, tt.wantClientID)
+			}
+		})
+	}
+}
+
 func TestResolveConnectionParams_CertFlagsPrecedence(t *testing.T) {
 	certFlags := &CertFlags{
 		SSLCert: "flag.crt",

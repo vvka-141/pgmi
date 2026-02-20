@@ -232,14 +232,10 @@ func ResolveConnectionParams(
 		return nil, "", err
 	}
 
-	// Apply Azure Entra ID authentication if configured
-	applyAzureAuth(config, azureFlags, envVars)
-
-	// Apply AWS IAM authentication if configured
-	applyAWSAuth(config, awsFlags, envVars)
-
-	// Apply Google Cloud SQL IAM authentication if configured
-	applyGoogleAuth(config, googleFlags)
+	// Apply cloud authentication (flag > env var > pgmi.yaml)
+	applyAzureAuth(config, azureFlags, envVars, projectConfig)
+	applyAWSAuth(config, awsFlags, envVars, projectConfig)
+	applyGoogleAuth(config, googleFlags, projectConfig)
 
 	// Apply TLS client certificate parameters
 	applyCertParams(config, certFlags, envVars, projectConfig)
@@ -249,34 +245,57 @@ func ResolveConnectionParams(
 
 // applyAzureAuth sets Azure Entra ID authentication on the config if credentials are available.
 // CLI flags take precedence over environment variables.
-func applyAzureAuth(config *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVars) {
-	// Determine tenant ID: flag > env var
+func applyAzureAuth(cfg *pgmi.ConnectionConfig, flags *AzureFlags, env *EnvVars, pc *config.ProjectConfig) {
+	var yamlTenantID, yamlClientID, yamlAuthMethod string
+	if pc != nil {
+		yamlTenantID = pc.Connection.AzureTenantID
+		yamlClientID = pc.Connection.AzureClientID
+		yamlAuthMethod = pc.Connection.AuthMethod
+	}
+
+	enabled := flags.Enabled || yamlAuthMethod == "azure"
+
+	// Determine tenant ID: flag > env var > pgmi.yaml
 	tenantID := flags.TenantID
 	if tenantID == "" {
 		tenantID = env.AZURE_TENANT_ID
 	}
+	if tenantID == "" {
+		tenantID = yamlTenantID
+	}
 
-	// Determine client ID: flag > env var
+	// Determine client ID: flag > env var > pgmi.yaml
 	clientID := flags.ClientID
 	if clientID == "" {
 		clientID = env.AZURE_CLIENT_ID
 	}
+	if clientID == "" {
+		clientID = yamlClientID
+	}
 
-	// Client secret only comes from env var (no flag for security)
+	// Client secret only comes from env var (no flag/yaml for security)
 	clientSecret := env.AZURE_CLIENT_SECRET
 
-	if flags.Enabled {
-		config.AuthMethod = pgmi.AuthMethodAzureEntraID
-		config.AzureTenantID = tenantID
-		config.AzureClientID = clientID
-		config.AzureClientSecret = clientSecret
+	if enabled {
+		cfg.AuthMethod = pgmi.AuthMethodAzureEntraID
+		cfg.AzureTenantID = tenantID
+		cfg.AzureClientID = clientID
+		cfg.AzureClientSecret = clientSecret
 	}
 }
 
 // applyAWSAuth sets AWS IAM authentication on the config if enabled.
 // CLI flags take precedence over environment variables.
-func applyAWSAuth(config *pgmi.ConnectionConfig, flags *AWSFlags, env *EnvVars) {
-	// Determine region: flag > AWS_REGION > AWS_DEFAULT_REGION
+func applyAWSAuth(cfg *pgmi.ConnectionConfig, flags *AWSFlags, env *EnvVars, pc *config.ProjectConfig) {
+	var yamlRegion, yamlAuthMethod string
+	if pc != nil {
+		yamlRegion = pc.Connection.AWSRegion
+		yamlAuthMethod = pc.Connection.AuthMethod
+	}
+
+	enabled := flags.Enabled || yamlAuthMethod == "aws"
+
+	// Determine region: flag > AWS_REGION > AWS_DEFAULT_REGION > pgmi.yaml
 	region := flags.Region
 	if region == "" {
 		region = env.AWS_REGION
@@ -284,19 +303,33 @@ func applyAWSAuth(config *pgmi.ConnectionConfig, flags *AWSFlags, env *EnvVars) 
 	if region == "" {
 		region = env.AWS_DEFAULT_REGION
 	}
+	if region == "" {
+		region = yamlRegion
+	}
 
-	// If AWS auth is enabled (via flag), switch to AWS IAM auth
-	if flags.Enabled {
-		config.AuthMethod = pgmi.AuthMethodAWSIAM
-		config.AWSRegion = region
+	if enabled {
+		cfg.AuthMethod = pgmi.AuthMethodAWSIAM
+		cfg.AWSRegion = region
 	}
 }
 
-// applyGoogleAuth sets Google Cloud SQL IAM authentication on the config if enabled.
-func applyGoogleAuth(config *pgmi.ConnectionConfig, flags *GoogleFlags) {
-	if flags.Enabled {
-		config.AuthMethod = pgmi.AuthMethodGoogleIAM
-		config.GoogleInstance = flags.Instance
+func applyGoogleAuth(cfg *pgmi.ConnectionConfig, flags *GoogleFlags, pc *config.ProjectConfig) {
+	var yamlInstance, yamlAuthMethod string
+	if pc != nil {
+		yamlInstance = pc.Connection.GoogleInstance
+		yamlAuthMethod = pc.Connection.AuthMethod
+	}
+
+	enabled := flags.Enabled || yamlAuthMethod == "google"
+
+	instance := flags.Instance
+	if instance == "" {
+		instance = yamlInstance
+	}
+
+	if enabled {
+		cfg.AuthMethod = pgmi.AuthMethodGoogleIAM
+		cfg.GoogleInstance = instance
 	}
 }
 

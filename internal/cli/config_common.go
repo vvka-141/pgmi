@@ -206,6 +206,14 @@ func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig
 		Database:           connConfig.Database,
 		ManagementDatabase: managementDB,
 		SSLMode:            connConfig.SSLMode,
+		SSLCert:            connConfig.SSLCert,
+		SSLKey:             connConfig.SSLKey,
+		SSLRootCert:        connConfig.SSLRootCert,
+		AuthMethod:         authMethodToString(connConfig.AuthMethod),
+		AzureTenantID:      connConfig.AzureTenantID,
+		AzureClientID:      connConfig.AzureClientID,
+		AWSRegion:          connConfig.AWSRegion,
+		GoogleInstance:     connConfig.GoogleInstance,
 	}
 
 	data, err := yaml.Marshal(cfg)
@@ -215,6 +223,20 @@ func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig
 
 	return os.WriteFile(configPath, data, 0644)
 }
+
+func authMethodToString(m pgmi.AuthMethod) string {
+	switch m {
+	case pgmi.AuthMethodAzureEntraID:
+		return "azure"
+	case pgmi.AuthMethodAWSIAM:
+		return "aws"
+	case pgmi.AuthMethodGoogleIAM:
+		return "google"
+	default:
+		return ""
+	}
+}
+
 
 // loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.
 // Later files override earlier ones. Returns merged parameters map.
