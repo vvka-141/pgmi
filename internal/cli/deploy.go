@@ -194,12 +194,7 @@ func init() {
 }
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
-func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, verbose bool) (pgmi.DeploymentConfig, error) {
-	projectCfg, err := loadProjectConfig(sourcePath)
-	if err != nil {
-		return pgmi.DeploymentConfig{}, err
-	}
-
+func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
 	connFlags := connectionFlags{
 		connection:     deployFlags.connection,
 		host:           deployFlags.host,
@@ -268,8 +263,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
 
+	projectCfg, err := loadProjectConfig(sourcePath)
+	if err != nil {
+		return err
+	}
+
 	// Check if we need to run the connection wizard
-	if needsConnectionWizard(sourcePath) && tui.IsInteractive() && !deployFlags.force {
+	if needsConnectionWizard(projectCfg) && tui.IsInteractive() && !deployFlags.force {
 		wizardConfig, err := runDeployWizard(sourcePath)
 		if err != nil {
 			return err
@@ -282,7 +282,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		applyWizardConfig(wizardConfig)
 	}
 
-	config, err := buildDeploymentConfig(cmd, sourcePath, verbose)
+	config, err := buildDeploymentConfig(cmd, sourcePath, projectCfg, verbose)
 	if err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 // needsConnectionWizard checks if we have enough connection info to proceed.
 // Returns true if NO connection info is available from any source.
-func needsConnectionWizard(sourcePath string) bool {
+func needsConnectionWizard(projectCfg *config.ProjectConfig) bool {
 	// Check CLI flags
 	if deployFlags.connection != "" || deployFlags.host != "" || deployFlags.database != "" {
 		return false
@@ -356,9 +356,8 @@ func needsConnectionWizard(sourcePath string) bool {
 	}
 
 	// Check pgmi.yaml
-	cfg, err := config.Load(sourcePath)
-	if err == nil && cfg != nil {
-		if cfg.Connection.Host != "" || cfg.Connection.Database != "" {
+	if projectCfg != nil {
+		if projectCfg.Connection.Host != "" || projectCfg.Connection.Database != "" {
 			return false
 		}
 	}

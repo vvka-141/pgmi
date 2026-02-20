@@ -55,10 +55,3 @@ func TestSchemaStatementByStatement(t *testing.T) {
 	}
 	t.Log("All statements executed successfully")
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

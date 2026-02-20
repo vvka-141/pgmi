@@ -19,7 +19,10 @@ func pgpassPath() string {
 	if runtime.GOOS == "windows" {
 		return filepath.Join(os.Getenv("APPDATA"), "postgresql", "pgpass.conf")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
 	return filepath.Join(home, ".pgpass")
 }
 
@@ -49,16 +52,19 @@ func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
 // writePgpassEntry adds or updates a .pgpass entry for the given connection.
 func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 	path := pgpassPath()
+	if path == "" {
+		return fmt.Errorf("cannot determine home directory")
+	}
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 
-	host := cfg.Host
+	host := escapePgpass(cfg.Host)
 	port := fmt.Sprintf("%d", cfg.Port)
-	db := cfg.Database
-	user := cfg.Username
+	db := escapePgpass(cfg.Database)
+	user := escapePgpass(cfg.Username)
 	password := escapePgpass(cfg.Password)
 
 	newEntry := fmt.Sprintf("%s:%s:%s:%s:%s", host, port, db, user, password)

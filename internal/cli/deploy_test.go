@@ -249,7 +249,7 @@ func TestBuildDeploymentConfig(t *testing.T) {
 			tt.setupFlags()
 
 			// Build deployment config
-			config, err := buildDeploymentConfig(deployCmd, tt.sourcePath, tt.verbose)
+			config, err := buildDeploymentConfig(deployCmd, tt.sourcePath, nil, tt.verbose)
 
 			// Check error expectations
 			if (err != nil) != tt.wantErr {
@@ -304,7 +304,7 @@ func TestBuildDeploymentConfig_AzureAuth(t *testing.T) {
 	deployFlags.azure = true
 	deployFlags.timeout = 3 * time.Minute
 
-	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -343,7 +343,7 @@ api_key=file_secret
 	deployFlags.timeout = 3 * time.Minute
 
 	// Build config
-	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 			resetDeployFlags()
 			tt.setupFlags()
 
-			_, err := buildDeploymentConfig(deployCmd, tempDir, false)
+			_, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
 
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -462,7 +462,7 @@ func TestBuildDeploymentConfig_Validate(t *testing.T) {
 	deployFlags.paramsFiles = nil
 	deployFlags.timeout = 3 * time.Minute
 
-	config, err := buildDeploymentConfig(deployCmd, tempDir, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}

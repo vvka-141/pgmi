@@ -63,11 +63,10 @@ func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
 // Connect establishes a connection pool using standard authentication with automatic retry.
 func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
 	var pool *pgxpool.Pool
+	connStr := BuildConnectionString(c.config)
 
 	// Use retry executor to handle transient connection failures
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
-		connStr := BuildConnectionString(c.config)
-
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse connection config: %w", err)

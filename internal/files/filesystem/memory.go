@@ -60,22 +60,8 @@ func (d *memoryDirectory) Walk(fn func(File, error) error) error {
 	})
 
 	for _, entry := range entries {
-		// Recover from panics in callback to prevent crashing the entire walk
-		var callbackErr error
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Convert panic to error
-					callbackErr = fmt.Errorf("walk callback panicked at %s: %v", entry.absPath, r)
-				}
-			}()
-
-			callbackErr = fn(entry, nil)
-		}()
-
-		// If callback returned an error (or panicked), stop walking
-		if callbackErr != nil {
-			return callbackErr
+		if err := fn(entry, nil); err != nil {
+			return err
 		}
 	}
 

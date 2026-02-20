@@ -36,37 +36,26 @@ func (d *embedDirectory) Path() string { return d.absPath }
 
 func (d *embedDirectory) Walk(fn func(File, error) error) error {
 	return fs.WalkDir(d.embedFS, d.absPath, func(filePath string, entry fs.DirEntry, err error) error {
-		// Recover from panics in callback to prevent crashing the entire walk
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("walk callback panicked at %s: %v", filePath, r)
-			}
-		}()
-
 		if err != nil {
 			return fn(nil, err)
 		}
 
-		// Get file info
 		info, err := entry.Info()
 		if err != nil {
 			return fn(nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err))
 		}
 
-		// Calculate relative path from root
 		relPath, err := filepath.Rel(d.root, filePath)
 		if err != nil {
 			return fn(nil, fmt.Errorf("failed to calculate relative path: %w", err))
 		}
-
-		// Normalize to forward slashes for consistency
 		relPath = strings.ReplaceAll(relPath, "\\", "/")
 
 		file := &embedFile{
 			embedFS: d.embedFS,
 			absPath: filePath,
 			relPath: relPath,
-			info:    info, // fs.DirEntry.Info() returns fs.FileInfo
+			info:    info,
 		}
 
 		return fn(file, nil)

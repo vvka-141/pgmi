@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -81,22 +82,8 @@ func TestAPIContainsExpectedObjects(t *testing.T) {
 	}
 
 	for _, pattern := range expectedPatterns {
-		if !containsString(sql, pattern) {
+		if !strings.Contains(sql, pattern) {
 			t.Errorf("API SQL missing expected pattern: %s", pattern)
 		}
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 &&
-		(len(s) >= len(substr) && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

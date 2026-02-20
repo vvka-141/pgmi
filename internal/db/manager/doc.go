@@ -26,6 +26,6 @@
 //
 // # Thread Safety
 //
-// Manager is NOT safe for concurrent use. Create separate instances
-// for concurrent operations.
+// Manager is stateless and safe for concurrent use.
+// Thread safety of individual operations depends on the injected DBConnection.
 package manager
