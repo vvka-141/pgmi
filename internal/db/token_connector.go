@@ -11,50 +11,47 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// AzureEntraIDConnector implements the Connector interface for Azure Entra ID authentication.
-// It acquires an OAuth token from Azure AD and uses it as the PostgreSQL password.
-type AzureEntraIDConnector struct {
+// TokenBasedConnector implements the Connector interface for cloud providers
+// that authenticate via short-lived tokens (AWS IAM, Azure Entra ID).
+// The token is acquired from a TokenProvider and used as the PostgreSQL password.
+type TokenBasedConnector struct {
 	config        *pgmi.ConnectionConfig
 	tokenProvider TokenProvider
 	retryExecutor *retry.Executor
+	providerName  string
 }
 
-// NewAzureEntraIDConnector creates a connector for Azure Entra ID authentication.
-// The tokenProvider is used to acquire OAuth tokens for PostgreSQL access.
-func NewAzureEntraIDConnector(config *pgmi.ConnectionConfig, tokenProvider TokenProvider) *AzureEntraIDConnector {
+// NewTokenBasedConnector creates a connector that uses a TokenProvider for authentication.
+// providerName is used in error/warning messages (e.g., "AWS IAM", "Azure").
+func NewTokenBasedConnector(config *pgmi.ConnectionConfig, tokenProvider TokenProvider, providerName string) *TokenBasedConnector {
 	classifier := retry.NewPostgreSQLErrorClassifier()
 	strategy := retry.NewExponentialBackoff(pgmi.DefaultRetryMaxAttempts,
 		retry.WithInitialDelay(pgmi.DefaultRetryInitialDelay),
 		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
 	)
-
 	executor := retry.NewExecutor(classifier, strategy, nil)
 
-	return &AzureEntraIDConnector{
+	return &TokenBasedConnector{
 		config:        config,
 		tokenProvider: tokenProvider,
 		retryExecutor: executor,
+		providerName:  providerName,
 	}
 }
 
-// Connect establishes a connection pool using Azure Entra ID authentication.
-// The OAuth token is acquired and used as the password for the PostgreSQL connection.
-func (c *AzureEntraIDConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
+func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
 	var pool *pgxpool.Pool
 
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
-		// Acquire fresh token for each connection attempt
 		token, expiresOn, err := c.tokenProvider.GetToken(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to acquire Azure token: %w", err)
+			return fmt.Errorf("failed to acquire %s token: %w", c.providerName, err)
 		}
 
-		// Log token acquisition (without the token itself)
 		if time.Until(expiresOn) < 5*time.Minute {
-			fmt.Printf("Warning: Azure token expires in %v\n", time.Until(expiresOn).Round(time.Second))
+			fmt.Printf("Warning: %s token expires in %v\n", c.providerName, time.Until(expiresOn).Round(time.Second))
 		}
 
-		// Create a copy of config with the token as password
 		configWithToken := *c.config
 		configWithToken.Password = token
 

@@ -26,7 +26,7 @@ func (m *MockTokenProvider) String() string {
 	return "MockTokenProvider"
 }
 
-func TestAzureEntraIDConnector_Creation(t *testing.T) {
+func TestTokenBasedConnector_Creation(t *testing.T) {
 	config := &pgmi.ConnectionConfig{
 		Host:       "testserver.postgres.database.azure.com",
 		Port:       5432,
@@ -40,7 +40,7 @@ func TestAzureEntraIDConnector_Creation(t *testing.T) {
 		ExpiresOn: time.Now().Add(1 * time.Hour),
 	}
 
-	connector := NewAzureEntraIDConnector(config, mockProvider)
+	connector := NewTokenBasedConnector(config, mockProvider, "Azure")
 
 	if connector == nil {
 		t.Fatal("expected non-nil connector")
@@ -124,10 +124,9 @@ func TestNewConnector_AzureEntraID(t *testing.T) {
 		t.Fatal("expected non-nil connector")
 	}
 
-	// Verify it's an AzureEntraIDConnector
-	_, ok := connector.(*AzureEntraIDConnector)
+	_, ok := connector.(*TokenBasedConnector)
 	if !ok {
-		t.Error("expected AzureEntraIDConnector type")
+		t.Error("expected TokenBasedConnector type")
 	}
 }
 

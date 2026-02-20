@@ -66,18 +66,6 @@ func NewOSFileSystem() *OSFileSystem {
 	return &OSFileSystem{}
 }
 
-// OSFileSystemProvider is a deprecated alias for OSFileSystem.
-// Use OSFileSystem instead.
-//
-// Deprecated: Use OSFileSystem instead.
-type OSFileSystemProvider = OSFileSystem
-
-// NewOSFileSystemProvider creates a new OS filesystem provider.
-//
-// Deprecated: Use NewOSFileSystem instead.
-func NewOSFileSystemProvider() *OSFileSystem {
-	return NewOSFileSystem()
-}
 
 func (p *OSFileSystem) Open(path string) (Directory, error) {
 	// Verify path exists and is a directory

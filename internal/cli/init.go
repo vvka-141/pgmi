@@ -6,13 +6,10 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
-	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/internal/tui/wizards"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var initCmd = &cobra.Command{
@@ -149,8 +146,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// If user configured connection in the wizard, save it
 	if setupConnection && !connResult.Cancelled {
 		fmt.Fprintln(os.Stderr, "")
-		if err := saveInitConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
+		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "✓ Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
+			offerSavePgpass(&connResult.Config)
 		}
 	}
 
@@ -196,37 +196,3 @@ func isInitBlocked(targetPath string) (bool, string) {
 	return true, fmt.Sprintf("directory '%s' is not empty\n\nBlocking files/directories: %v\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n  - Choose a different location: pgmi init ./new-project\n  - Remove existing files manually\n  - pgmi.yaml and .env are allowed", absPath, blocking)
 }
 
-// saveInitConfig saves connection config to the newly created pgmi.yaml.
-func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
-	configPath := filepath.Join(targetPath, "pgmi.yaml")
-
-	// Load existing config (created by scaffold)
-	cfg, err := config.Load(targetPath)
-	if err != nil {
-		cfg = &config.ProjectConfig{}
-	}
-
-	// Update connection
-	cfg.Connection = config.ConnectionConfig{
-		Host:               connConfig.Host,
-		Port:               connConfig.Port,
-		Username:           connConfig.Username,
-		Database:           connConfig.Database,
-		ManagementDatabase: managementDB,
-		SSLMode:            connConfig.SSLMode,
-	}
-
-	// Marshal and write
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "✓ Connection saved to %s\n", configPath)
-	offerSavePgpass(connConfig)
-	return nil
-}

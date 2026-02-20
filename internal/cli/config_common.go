@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
@@ -187,6 +190,32 @@ func logConnectionVerbose(connConfig *pgmi.ConnectionConfig, maintenanceDB strin
 		fmt.Fprintf(os.Stderr, "  SSL Root Cert: %s\n", connConfig.SSLRootCert)
 	}
 	fmt.Fprintf(os.Stderr, "  Auth Method: %s\n", connConfig.AuthMethod)
+}
+
+// saveConnectionToConfig saves connection config to pgmi.yaml, merging with any existing config.
+func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
+	configPath := filepath.Join(sourcePath, "pgmi.yaml")
+
+	cfg, err := config.Load(sourcePath)
+	if err != nil {
+		cfg = &config.ProjectConfig{}
+	}
+
+	cfg.Connection = config.ConnectionConfig{
+		Host:               connConfig.Host,
+		Port:               connConfig.Port,
+		Username:           connConfig.Username,
+		Database:           connConfig.Database,
+		ManagementDatabase: managementDB,
+		SSLMode:            connConfig.SSLMode,
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
 }
 
 // loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.

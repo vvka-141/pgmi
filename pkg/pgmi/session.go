@@ -38,14 +38,18 @@ type Session struct {
 	pool       *pgxpool.Pool
 	conn       *pgxpool.Conn
 	scanResult FileScanResult
+	onClose    func()
 }
 
 // NewSession creates a new Session instance.
 // This is intended to be called by SessionManager, not by external code.
 //
+// The optional onClose callback is invoked after pool/connection cleanup,
+// used to release connector-level resources (e.g., Cloud SQL dialer).
+//
 // Panics if pool or conn is nil (programmer error - SessionManager
 // should never create a Session with nil resources).
-func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, scanResult FileScanResult) *Session {
+func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, scanResult FileScanResult, onClose ...func()) *Session {
 	if pool == nil {
 		panic("pool cannot be nil")
 	}
@@ -53,10 +57,16 @@ func NewSession(pool *pgxpool.Pool, conn *pgxpool.Conn, scanResult FileScanResul
 		panic("conn cannot be nil")
 	}
 
+	var cleanup func()
+	if len(onClose) > 0 {
+		cleanup = onClose[0]
+	}
+
 	return &Session{
 		pool:       pool,
 		conn:       conn,
 		scanResult: scanResult,
+		onClose:    cleanup,
 	}
 }
 
@@ -88,16 +98,19 @@ func (s *Session) ScanResult() FileScanResult {
 //
 // After calling Close(), the Session should not be used.
 func (s *Session) Close() error {
-	// Release connection first (if not nil)
 	if s.conn != nil {
 		s.conn.Release()
 		s.conn = nil
 	}
 
-	// Close pool second (if not nil)
 	if s.pool != nil {
 		s.pool.Close()
 		s.pool = nil
+	}
+
+	if s.onClose != nil {
+		s.onClose()
+		s.onClose = nil
 	}
 
 	return nil

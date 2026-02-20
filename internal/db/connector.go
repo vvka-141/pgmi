@@ -198,9 +198,8 @@ Original error: %w`, database, database, err)
 	}
 }
 
-// newAWSConnector creates an AWSIAMConnector with the appropriate token provider.
+// newAWSConnector creates a token-based connector with the AWS IAM token provider.
 func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
-	// Build endpoint from host:port
 	endpoint := fmt.Sprintf("%s:%d", config.Host, config.Port)
 
 	tokenProvider, err := NewAWSIAMTokenProvider(endpoint, config.AWSRegion, config.Username)
@@ -208,7 +207,7 @@ func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return nil, fmt.Errorf("failed to create AWS IAM token provider: %w", err)
 	}
 
-	return NewAWSIAMConnector(config, tokenProvider), nil
+	return NewTokenBasedConnector(config, tokenProvider, "AWS IAM"), nil
 }
 
 // newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
@@ -223,7 +222,7 @@ func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
 }
 
-// newAzureConnector creates an AzureEntraIDConnector with the appropriate token provider.
+// newAzureConnector creates a token-based connector with the Azure Entra ID token provider.
 // If explicit credentials (tenant, client, secret) are provided, uses Service Principal auth.
 // Otherwise, falls back to DefaultAzureCredential chain.
 func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
@@ -246,5 +245,5 @@ func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		}
 	}
 
-	return NewAzureEntraIDConnector(config, tokenProvider), nil
+	return NewTokenBasedConnector(config, tokenProvider, "Azure"), nil
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/contract"
@@ -80,7 +81,7 @@ func (sm *SessionManager) PrepareSession(
 	}
 
 	// Connect to target database
-	pool, err := sm.connectToDatabase(ctx, connConfig)
+	pool, connectorCleanup, err := sm.connectToDatabase(ctx, connConfig)
 	if err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
 	}
@@ -90,6 +91,7 @@ func (sm *SessionManager) PrepareSession(
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		pool.Close()
+		connectorCleanup()
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 
@@ -98,6 +100,7 @@ func (sm *SessionManager) PrepareSession(
 		if !success {
 			conn.Release()
 			pool.Close()
+			connectorCleanup()
 		}
 	}()
 
@@ -113,7 +116,7 @@ func (sm *SessionManager) PrepareSession(
 	}
 
 	// Create Session object to encapsulate resources
-	session := pgmi.NewSession(pool, conn, scanResult)
+	session := pgmi.NewSession(pool, conn, scanResult, connectorCleanup)
 	success = true
 	return session, nil
 }
@@ -139,23 +142,33 @@ func (sm *SessionManager) scanAndValidateFiles(sourcePath string) (pgmi.FileScan
 }
 
 // connectToDatabase establishes a connection to the target database.
+// Returns a cleanup function that releases connector-level resources (e.g., Cloud SQL dialer).
+// The cleanup function must be called after the pool is closed.
 func (sm *SessionManager) connectToDatabase(
 	ctx context.Context,
 	connConfig *pgmi.ConnectionConfig,
-) (*pgxpool.Pool, error) {
+) (*pgxpool.Pool, func(), error) {
 	sm.logger.Verbose("Connecting to database '%s'", connConfig.Database)
 
 	connector, err := sm.connectorFactory(connConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create connector: %w", err)
+		return nil, func() {}, fmt.Errorf("failed to create connector: %w", err)
 	}
 
 	pool, err := connector.Connect(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database %q: %w", connConfig.Database, err)
+		closeConnector(connector)
+		return nil, func() {}, fmt.Errorf("failed to connect to database %q: %w", connConfig.Database, err)
 	}
 
-	return pool, nil
+	return pool, func() { closeConnector(connector) }, nil
+}
+
+// closeConnector closes connectors that implement io.Closer (e.g., GoogleCloudSQLConnector).
+func closeConnector(c pgmi.Connector) {
+	if closer, ok := c.(io.Closer); ok {
+		closer.Close()
+	}
 }
 
 // prepareSessionTables prepares the deployment session by creating utility functions

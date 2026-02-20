@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/config"
@@ -402,34 +401,6 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 	return &connResult.Config, nil
 }
 
-// saveConnectionToConfig saves connection config to pgmi.yaml.
-func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
-	configPath := filepath.Join(sourcePath, "pgmi.yaml")
-
-	// Load existing config or create new
-	cfg, err := config.Load(sourcePath)
-	if err != nil {
-		cfg = &config.ProjectConfig{}
-	}
-
-	// Update connection
-	cfg.Connection = config.ConnectionConfig{
-		Host:               connConfig.Host,
-		Port:               connConfig.Port,
-		Username:           connConfig.Username,
-		Database:           connConfig.Database,
-		ManagementDatabase: managementDB,
-		SSLMode:            connConfig.SSLMode,
-	}
-
-	// Marshal and write
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(configPath, data, 0644)
-}
 
 // applyWizardConfig applies wizard results to deploy flags.
 func applyWizardConfig(cfg *pgmi.ConnectionConfig) {

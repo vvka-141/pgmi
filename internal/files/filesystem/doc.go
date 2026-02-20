@@ -11,6 +11,6 @@
 //   - FileInfo: File metadata similar to os.FileInfo
 //
 // Implementations:
-//   - OSFileSystemProvider: Production implementation using OS filesystem
+//   - OSFileSystem: Production implementation using OS filesystem
 //   - MemoryFileSystem: In-memory implementation for testing
 package filesystem
