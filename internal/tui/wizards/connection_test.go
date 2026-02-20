@@ -113,8 +113,8 @@ func TestConnectionWizard_SelectLocalProvider(t *testing.T) {
 	if w.step != stepInputHost {
 		t.Errorf("after selecting local provider, step = %d, want stepInputHost (%d)", w.step, stepInputHost)
 	}
-	if len(w.inputs) != 5 {
-		t.Errorf("host form should have 5 inputs, got %d", len(w.inputs))
+	if len(w.inputs) != 6 {
+		t.Errorf("host form should have 6 inputs, got %d", len(w.inputs))
 	}
 }
 
@@ -132,12 +132,41 @@ func TestConnectionWizard_HostFormDefaults(t *testing.T) {
 	if w.inputs[1].Value() != "5432" {
 		t.Errorf("port default = %q, want %q", w.inputs[1].Value(), "5432")
 	}
-	if w.inputs[2].Value() != "postgres" {
-		t.Errorf("database default = %q, want %q", w.inputs[2].Value(), "postgres")
+	if w.inputs[2].Value() != "" {
+		t.Errorf("database should be empty (placeholder only), got %q", w.inputs[2].Value())
 	}
 	if w.inputs[3].Value() != "postgres" {
 		t.Errorf("username default = %q, want %q", w.inputs[3].Value(), "postgres")
 	}
+}
+
+func typeString(t *testing.T, m tea.Model, s string) tea.Model {
+	t.Helper()
+	for _, r := range s {
+		m, _ = update(t, m, keyMsg(string(r)))
+	}
+	return m
+}
+
+func selectLocalAndFillDB(t *testing.T, w ConnectionWizard) (tea.Model, tea.Cmd) {
+	t.Helper()
+	// Select local provider → host form
+	m, _ := update(t, w, keyMsg("enter"))
+	// Enter on Host → Port
+	m, _ = update(t, m, keyMsg("enter"))
+	// Enter on Port → Database (focus index 2)
+	m, _ = update(t, m, keyMsg("enter"))
+	// Type database name
+	m = typeString(t, m, "testdb")
+	// Enter on Database → Management DB
+	m, _ = update(t, m, keyMsg("enter"))
+	// Enter on Management DB (default "postgres") → Username
+	m, _ = update(t, m, keyMsg("enter"))
+	// Enter on Username → Password
+	m, _ = update(t, m, keyMsg("enter"))
+	// Enter on Password → submit
+	m, cmd := update(t, m, keyMsg("enter"))
+	return m, cmd
 }
 
 func TestConnectionWizard_EnterAdvancesFields(t *testing.T) {
@@ -167,18 +196,28 @@ func TestConnectionWizard_EnterAdvancesFields(t *testing.T) {
 		t.Errorf("after Enter on port, focusIndex = %d, want 2", w.focusIndex)
 	}
 
-	// Enter on Database → Username
+	// Type database name (required, no default)
+	m = typeString(t, m, "testdb")
+
+	// Enter on Database → Management DB
 	m, _ = update(t, m, keyMsg("enter"))
 	w = asWizard(t, m)
 	if w.focusIndex != 3 {
 		t.Errorf("after Enter on database, focusIndex = %d, want 3", w.focusIndex)
 	}
 
-	// Enter on Username → Password
+	// Enter on Management DB → Username
 	m, _ = update(t, m, keyMsg("enter"))
 	w = asWizard(t, m)
 	if w.focusIndex != 4 {
-		t.Errorf("after Enter on username, focusIndex = %d, want 4", w.focusIndex)
+		t.Errorf("after Enter on mgmt db, focusIndex = %d, want 4", w.focusIndex)
+	}
+
+	// Enter on Username → Password
+	m, _ = update(t, m, keyMsg("enter"))
+	w = asWizard(t, m)
+	if w.focusIndex != 5 {
+		t.Errorf("after Enter on username, focusIndex = %d, want 5", w.focusIndex)
 	}
 
 	// Enter on Password (last field) → should submit form
@@ -195,13 +234,7 @@ func TestConnectionWizard_EnterAdvancesFields(t *testing.T) {
 func TestConnectionWizard_TestSuccessThenQuit(t *testing.T) {
 	w := NewConnectionWizard()
 
-	// Select local provider → host form
-	m, _ := update(t, w, keyMsg("enter"))
-
-	// Advance through all fields to submit
-	for i := 0; i < 5; i++ {
-		m, _ = update(t, m, keyMsg("enter"))
-	}
+	m, _ := selectLocalAndFillDB(t, w)
 	w = asWizard(t, m)
 	if w.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", w.step)
@@ -235,11 +268,7 @@ func TestConnectionWizard_TestSuccessThenQuit(t *testing.T) {
 func TestConnectionWizard_TestFailureGoesBackToEdit(t *testing.T) {
 	w := NewConnectionWizard()
 
-	// Select local provider → submit form with defaults
-	m, _ := update(t, w, keyMsg("enter"))
-	for i := 0; i < 5; i++ {
-		m, _ = update(t, m, keyMsg("enter"))
-	}
+	m, _ := selectLocalAndFillDB(t, w)
 
 	// Simulate failed test
 	m, _ = update(t, m, testResultMsg{success: false, err: fmt.Errorf("connection refused")})
@@ -294,11 +323,7 @@ func TestConnectionWizard_NavigateProviders(t *testing.T) {
 func TestConnectionWizard_BuildConfigDefaults(t *testing.T) {
 	w := NewConnectionWizard()
 
-	// Select local provider → submit form with all defaults
-	m, _ := update(t, w, keyMsg("enter"))
-	for i := 0; i < 5; i++ {
-		m, _ = update(t, m, keyMsg("enter"))
-	}
+	m, _ := selectLocalAndFillDB(t, w)
 	w = asWizard(t, m)
 
 	cfg := w.result.Config
@@ -308,8 +333,8 @@ func TestConnectionWizard_BuildConfigDefaults(t *testing.T) {
 	if cfg.Port != 5432 {
 		t.Errorf("config.Port = %d, want 5432", cfg.Port)
 	}
-	if cfg.Database != "postgres" {
-		t.Errorf("config.Database = %q, want %q", cfg.Database, "postgres")
+	if cfg.Database != "testdb" {
+		t.Errorf("config.Database = %q, want %q", cfg.Database, "testdb")
 	}
 	if cfg.Username != "postgres" {
 		t.Errorf("config.Username = %q, want %q", cfg.Username, "postgres")
@@ -319,20 +344,11 @@ func TestConnectionWizard_BuildConfigDefaults(t *testing.T) {
 func TestConnectionWizard_FullHappyPath(t *testing.T) {
 	w := NewConnectionWizard()
 
-	// Step 1: Select local provider
-	m, _ := update(t, w, keyMsg("enter"))
-	w = asWizard(t, m)
-	if w.step != stepInputHost {
-		t.Fatalf("step 1: expected stepInputHost, got %d", w.step)
-	}
-
-	// Step 2: Accept defaults, advance through all 5 fields
-	for i := 0; i < 5; i++ {
-		m, _ = update(t, m, keyMsg("enter"))
-	}
+	// Step 1+2: Select local provider, fill database, submit
+	m, _ := selectLocalAndFillDB(t, w)
 	w = asWizard(t, m)
 	if w.step != stepTestConnection {
-		t.Fatalf("step 2: expected stepTestConnection, got %d", w.step)
+		t.Fatalf("expected stepTestConnection, got %d", w.step)
 	}
 
 	// Step 3: Connection test succeeds
@@ -374,12 +390,7 @@ func TestConnectionWizard_MockTesterCalledOnSubmit(t *testing.T) {
 	mock := &mockTester{info: "PostgreSQL 16.1"}
 	w := NewConnectionWizard(WithTester(mock))
 
-	m, _ := update(t, w, keyMsg("enter"))
-
-	var cmd tea.Cmd
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd := selectLocalAndFillDB(t, w)
 	wiz := asWizard(t, m)
 	if wiz.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
@@ -402,17 +413,16 @@ func TestConnectionWizard_MockTesterCalledOnSubmit(t *testing.T) {
 	if mock.gotCfg.Host != "localhost" {
 		t.Errorf("mock got host = %q, want localhost", mock.gotCfg.Host)
 	}
+	if mock.gotCfg.Database != "postgres" {
+		t.Errorf("mock got database = %q, want postgres (tests against management DB)", mock.gotCfg.Database)
+	}
 }
 
 func TestConnectionWizard_MockTesterFailureFlow(t *testing.T) {
 	mock := &mockTester{err: fmt.Errorf("connection refused")}
 	w := NewConnectionWizard(WithTester(mock))
 
-	m, _ := update(t, w, keyMsg("enter"))
-	var cmd tea.Cmd
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd := selectLocalAndFillDB(t, w)
 
 	msgs := drainCmds(cmd)
 	result, ok := findTestResult(msgs)
@@ -443,11 +453,7 @@ func TestConnectionWizard_EndToEndWithMockTester(t *testing.T) {
 	mock := &mockTester{info: "PostgreSQL 16.1"}
 	w := NewConnectionWizard(WithTester(mock))
 
-	m, _ := update(t, w, keyMsg("enter"))
-	var cmd tea.Cmd
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd := selectLocalAndFillDB(t, w)
 
 	msgs := drainCmds(cmd)
 	result, _ := findTestResult(msgs)
@@ -476,14 +482,14 @@ func TestConnectionWizard_EndToEndWithMockTester(t *testing.T) {
 	if r.Config.Port != 5432 {
 		t.Errorf("port = %d, want 5432", r.Config.Port)
 	}
-	if r.Config.Database != "postgres" {
-		t.Errorf("database = %q, want postgres", r.Config.Database)
+	if r.Config.Database != "testdb" {
+		t.Errorf("database = %q, want testdb", r.Config.Database)
 	}
 	if mock.gotCfg.Host != "localhost" {
 		t.Errorf("mock got host = %q, want localhost", mock.gotCfg.Host)
 	}
 	if mock.gotCfg.Database != "postgres" {
-		t.Errorf("mock got database = %q, want postgres", mock.gotCfg.Database)
+		t.Errorf("mock got database = %q, want postgres (tests against management DB)", mock.gotCfg.Database)
 	}
 }
 
@@ -507,14 +513,12 @@ func TestConnectionWizard_AzureEntraIDFlow(t *testing.T) {
 		t.Fatalf("Azure form should have 3 inputs, got %d", len(wiz.inputs))
 	}
 
-	for _, r := range "myserver.postgres.database.azure.com" {
-		m, _ = update(t, m, keyMsg(string(r)))
-	}
-
+	m = typeString(t, m, "myserver.postgres.database.azure.com")
+	m, _ = update(t, m, keyMsg("enter")) // server → database
+	m = typeString(t, m, "testdb")
+	m, _ = update(t, m, keyMsg("enter")) // database → username
 	var cmd tea.Cmd
-	for i := 0; i < 3; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd = update(t, m, keyMsg("enter")) // username → submit
 	wiz = asWizard(t, m)
 	if wiz.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
@@ -544,11 +548,7 @@ func TestConnectionWizard_RetryAfterFailure(t *testing.T) {
 	failMock := &mockTester{err: fmt.Errorf("timeout")}
 	w := NewConnectionWizard(WithTester(failMock))
 
-	m, _ := update(t, w, keyMsg("enter"))
-	var cmd tea.Cmd
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd := selectLocalAndFillDB(t, w)
 
 	msgs := drainCmds(cmd)
 	result, _ := findTestResult(msgs)
@@ -565,12 +565,16 @@ func TestConnectionWizard_RetryAfterFailure(t *testing.T) {
 	}
 
 	// Now inject a success tester — simulate fixing the issue
-	// Re-submit the form (advance through all fields again)
+	// Re-submit the form (inputs are recreated fresh, must type database again)
 	wiz.tester = &mockTester{info: "PostgreSQL 16.1"}
 	m = wiz
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, _ = update(t, m, keyMsg("enter"))   // host
+	m, _ = update(t, m, keyMsg("enter"))   // port
+	m = typeString(t, m, "testdb")          // type database name
+	m, _ = update(t, m, keyMsg("enter"))   // database
+	m, _ = update(t, m, keyMsg("enter"))   // management db
+	m, _ = update(t, m, keyMsg("enter"))   // username
+	m, cmd = update(t, m, keyMsg("enter")) // password → submit
 	wiz = asWizard(t, m)
 	if wiz.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
@@ -640,11 +644,15 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 		t.Fatalf("expected connection wizard at stepInputHost, got %d", iw.connWizard.step)
 	}
 
-	// Step 5: advance through all 5 host fields and submit
+	// Step 5: advance through host fields, type database name, submit
+	m, _ = update(t, m, keyMsg("enter"))   // host
+	m, _ = update(t, m, keyMsg("enter"))   // port
+	m = typeString(t, m, "testdb")          // type database name
+	m, _ = update(t, m, keyMsg("enter"))   // database
+	m, _ = update(t, m, keyMsg("enter"))   // management db
+	m, _ = update(t, m, keyMsg("enter"))   // username
 	var cmd tea.Cmd
-	for i := 0; i < 5; i++ {
-		m, cmd = update(t, m, keyMsg("enter"))
-	}
+	m, cmd = update(t, m, keyMsg("enter")) // password → submit
 	iw = asInitWizard(t, m)
 	if iw.connWizard.step != stepTestConnection {
 		t.Fatalf("expected stepTestConnection, got %d", iw.connWizard.step)

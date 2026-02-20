@@ -69,7 +69,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := saveConnectionToConfig(targetDir, &connResult.Config); err != nil {
+	if err := saveConnectionToConfig(targetDir, &connResult.Config, connResult.ManagementDatabase); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 

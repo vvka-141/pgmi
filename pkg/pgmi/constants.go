@@ -99,3 +99,9 @@ var SQLExtensions = map[string]bool{
 func IsSQLExtension(ext string) bool {
 	return SQLExtensions[strings.ToLower(ext)]
 }
+
+// IsTemplateDatabase returns true if the name is a PostgreSQL template database.
+func IsTemplateDatabase(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "template0" || lower == "template1"
+}

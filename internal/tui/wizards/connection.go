@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -33,8 +34,7 @@ func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) 
 	if cs, ok := cfg.AdditionalParams["connection_string"]; ok && cs != "" {
 		connStr = cs
 	} else {
-		connStr = fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
-			cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database, cfg.SSLMode)
+		connStr = db.BuildConnectionString(&cfg)
 	}
 
 	conn, err := pgx.Connect(ctx, connStr)
@@ -66,9 +66,10 @@ func WithTester(t ConnectionTester) WizardOption {
 
 // ConnectionResult holds the result of the connection wizard.
 type ConnectionResult struct {
-	Cancelled bool
-	Config    pgmi.ConnectionConfig
-	Tested    bool
+	Cancelled          bool
+	Config             pgmi.ConnectionConfig
+	Tested             bool
+	ManagementDatabase string
 }
 
 // Provider represents a database hosting provider.
@@ -433,9 +434,14 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	port.Width = 10
 
 	database := textinput.New()
-	database.SetValue("postgres")
+	database.Placeholder = "mydb"
 	database.CharLimit = 64
 	database.Width = 40
+
+	mgmtDB := textinput.New()
+	mgmtDB.SetValue(pgmi.DefaultManagementDB)
+	mgmtDB.CharLimit = 64
+	mgmtDB.Width = 40
 
 	username := textinput.New()
 	username.SetValue("postgres")
@@ -449,7 +455,7 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	password.CharLimit = 256
 	password.Width = 40
 
-	return []textinput.Model{host, port, database, username, password}
+	return []textinput.Model{host, port, database, mgmtDB, username, password}
 }
 
 func (w *ConnectionWizard) createAzureInputs() []textinput.Model {
@@ -459,7 +465,7 @@ func (w *ConnectionWizard) createAzureInputs() []textinput.Model {
 	server.Width = 50
 
 	database := textinput.New()
-	database.SetValue("postgres")
+	database.Placeholder = "mydb"
 	database.CharLimit = 64
 	database.Width = 40
 
@@ -483,7 +489,7 @@ func (w *ConnectionWizard) createAWSInputs() []textinput.Model {
 	port.Width = 10
 
 	database := textinput.New()
-	database.SetValue("postgres")
+	database.Placeholder = "mydb"
 	database.CharLimit = 64
 	database.Width = 40
 
@@ -507,7 +513,7 @@ func (w *ConnectionWizard) createGoogleInputs() []textinput.Model {
 	instance.Width = 50
 
 	database := textinput.New()
-	database.SetValue("postgres")
+	database.Placeholder = "mydb"
 	database.CharLimit = 64
 	database.Width = 40
 
@@ -580,16 +586,25 @@ func (w *ConnectionWizard) validateInputs() error {
 			return fmt.Errorf("database name is required")
 		}
 	case stepInputAzure:
-		if w.inputs[0].Value() == "" { // server
+		if w.inputs[0].Value() == "" {
 			return fmt.Errorf("server name is required")
 		}
+		if w.inputs[1].Value() == "" {
+			return fmt.Errorf("database name is required")
+		}
 	case stepInputAWS:
-		if w.inputs[0].Value() == "" { // host
+		if w.inputs[0].Value() == "" {
 			return fmt.Errorf("host is required")
 		}
+		if w.inputs[2].Value() == "" {
+			return fmt.Errorf("database name is required")
+		}
 	case stepInputGoogle:
-		if w.inputs[0].Value() == "" { // instance
+		if w.inputs[0].Value() == "" {
 			return fmt.Errorf("instance connection name is required")
+		}
+		if w.inputs[1].Value() == "" {
+			return fmt.Errorf("database name is required")
 		}
 	case stepInputConnString:
 		if w.inputs[0].Value() == "" {
@@ -617,23 +632,22 @@ func (w *ConnectionWizard) buildConfig() {
 			cfg.Port = 5432
 		}
 		cfg.Database = w.inputs[2].Value()
-		if cfg.Database == "" {
-			cfg.Database = "postgres"
+		w.result.ManagementDatabase = w.inputs[3].Value()
+		if w.result.ManagementDatabase == "" {
+			w.result.ManagementDatabase = pgmi.DefaultManagementDB
 		}
-		cfg.Username = w.inputs[3].Value()
+		cfg.Username = w.inputs[4].Value()
 		if cfg.Username == "" {
 			cfg.Username = "postgres"
 		}
-		cfg.Password = w.inputs[4].Value()
+		cfg.Password = w.inputs[5].Value()
 		cfg.SSLMode = "prefer"
 
 	case stepInputAzure:
 		cfg.Host = w.inputs[0].Value()
 		cfg.Port = 5432
 		cfg.Database = w.inputs[1].Value()
-		if cfg.Database == "" {
-			cfg.Database = "postgres"
-		}
+		w.result.ManagementDatabase = pgmi.DefaultManagementDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.SSLMode = "require"
 		cfg.AuthMethod = pgmi.AuthMethodAzureEntraID
@@ -646,9 +660,7 @@ func (w *ConnectionWizard) buildConfig() {
 			cfg.Port = 5432
 		}
 		cfg.Database = w.inputs[2].Value()
-		if cfg.Database == "" {
-			cfg.Database = "postgres"
-		}
+		w.result.ManagementDatabase = pgmi.DefaultManagementDB
 		cfg.Username = w.inputs[3].Value()
 		cfg.AWSRegion = w.inputs[4].Value()
 		cfg.SSLMode = "require"
@@ -657,9 +669,7 @@ func (w *ConnectionWizard) buildConfig() {
 	case stepInputGoogle:
 		cfg.GoogleInstance = w.inputs[0].Value()
 		cfg.Database = w.inputs[1].Value()
-		if cfg.Database == "" {
-			cfg.Database = "postgres"
-		}
+		w.result.ManagementDatabase = pgmi.DefaultManagementDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.AuthMethod = pgmi.AuthMethodGoogleIAM
 
@@ -684,11 +694,15 @@ type testResultMsg struct {
 
 func (w *ConnectionWizard) testConnection() tea.Cmd {
 	cfg := w.result.Config
+	// Test against the management database to verify server connectivity.
+	// The target database may not exist yet — pgmi creates it during deployment.
+	testCfg := cfg
+	testCfg.Database = w.result.ManagementDatabase
 	tester := w.tester
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		info, err := tester.TestConnection(ctx, cfg)
+		info, err := tester.TestConnection(ctx, testCfg)
 		if err != nil {
 			return testResultMsg{success: false, err: err}
 		}
@@ -813,9 +827,10 @@ func (w ConnectionWizard) viewHostForm() string {
 	b.WriteString(w.styles.Subtitle.Render("Connection Details"))
 	b.WriteString("\n\n")
 
-	labels := []string{"Host:", "Port:", "Database:", "Username:", "Password:"}
+	labels := []string{"Host:", "Port:", "Database:", "Management DB:", "Username:", "Password:"}
 	hints := map[int]string{
-		2: "pgmi connects here first; target database is set with -d flag at deploy time",
+		2: "target database — created automatically if it doesn't exist",
+		3: "existing database pgmi connects to for server-level operations",
 	}
 	for i, input := range w.inputs {
 		style := w.styles.Box

@@ -13,14 +13,15 @@ import (
 var ErrConfigNotFound = errors.New("config file not found")
 
 type ConnectionConfig struct {
-	Host        string `yaml:"host"`
-	Port        int    `yaml:"port"`
-	Username    string `yaml:"username"`
-	Database    string `yaml:"database"`
-	SSLMode     string `yaml:"sslmode"`
-	SSLCert     string `yaml:"sslcert"`
-	SSLKey      string `yaml:"sslkey"`
-	SSLRootCert string `yaml:"sslrootcert"`
+	Host                string `yaml:"host"`
+	Port                int    `yaml:"port"`
+	Username            string `yaml:"username"`
+	Database            string `yaml:"database"`
+	ManagementDatabase  string `yaml:"management_database,omitempty"`
+	SSLMode             string `yaml:"sslmode"`
+	SSLCert             string `yaml:"sslcert"`
+	SSLKey              string `yaml:"sslkey"`
+	SSLRootCert         string `yaml:"sslrootcert"`
 }
 
 type ProjectConfig struct {

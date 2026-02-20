@@ -149,7 +149,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// If user configured connection in the wizard, save it
 	if setupConnection && !connResult.Cancelled {
 		fmt.Fprintln(os.Stderr, "")
-		if err := saveInitConfig(targetPath, &connResult.Config); err != nil {
+		if err := saveInitConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
 		}
 	}
@@ -197,7 +197,7 @@ func isInitBlocked(targetPath string) (bool, string) {
 }
 
 // saveInitConfig saves connection config to the newly created pgmi.yaml.
-func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig) error {
+func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
 	configPath := filepath.Join(targetPath, "pgmi.yaml")
 
 	// Load existing config (created by scaffold)
@@ -208,11 +208,12 @@ func saveInitConfig(targetPath string, connConfig *pgmi.ConnectionConfig) error 
 
 	// Update connection
 	cfg.Connection = config.ConnectionConfig{
-		Host:     connConfig.Host,
-		Port:     connConfig.Port,
-		Username: connConfig.Username,
-		Database: connConfig.Database,
-		SSLMode:  connConfig.SSLMode,
+		Host:               connConfig.Host,
+		Port:               connConfig.Port,
+		Username:           connConfig.Username,
+		Database:           connConfig.Database,
+		ManagementDatabase: managementDB,
+		SSLMode:            connConfig.SSLMode,
 	}
 
 	// Marshal and write

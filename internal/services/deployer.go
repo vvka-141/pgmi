@@ -270,11 +270,32 @@ func extractLineFromError(pgErr *pgconn.PgError) int {
 	return 0
 }
 
+func validateOverwriteTarget(targetDB, managementDB string) error {
+	if strings.EqualFold(targetDB, managementDB) {
+		return fmt.Errorf(
+			"cannot overwrite database %q: it is the management database pgmi connects to for server-level operations. "+
+				"Deploy to a different target database: %w",
+			targetDB, pgmi.ErrInvalidConfig,
+		)
+	}
+	if pgmi.IsTemplateDatabase(targetDB) {
+		return fmt.Errorf(
+			"cannot overwrite database %q: PostgreSQL template databases cannot be dropped: %w",
+			targetDB, pgmi.ErrInvalidConfig,
+		)
+	}
+	return nil
+}
+
 // handleOverwrite handles the database drop and recreate workflow.
 func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
 	managementDB := config.MaintenanceDatabase
 	if managementDB == "" {
 		managementDB = pgmi.DefaultManagementDB
+	}
+
+	if err := validateOverwriteTarget(config.DatabaseName, managementDB); err != nil {
+		return err
 	}
 
 	s.logger.Verbose("Connecting to management database '%s'", managementDB)

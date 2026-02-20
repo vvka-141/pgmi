@@ -467,9 +467,11 @@ func resolveFromGranularParams(
 		cfg.SSLMode = "prefer"
 	}
 
-	// For granular parameters, maintenance database is always "postgres"
-	// This is the standard database used for CREATE DATABASE operations
-	maintenanceDB := pgmi.DefaultManagementDB // "postgres"
+	// Management database: pgmi.yaml > default ("postgres")
+	maintenanceDB := pc.ManagementDatabase
+	if maintenanceDB == "" {
+		maintenanceDB = pgmi.DefaultManagementDB
+	}
 
 	return cfg, maintenanceDB, nil
 }

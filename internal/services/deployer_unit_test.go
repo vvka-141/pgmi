@@ -410,6 +410,115 @@ func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
 	}
 }
 
+// --- Overwrite target validation tests ---
+
+func TestDeploy_OverwriteBlocksManagementDB(t *testing.T) {
+	svc := newTestService(nil, &mockApprover{approved: true}, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+	cfg.DatabaseName = "postgres" // same as DefaultManagementDB
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error when overwriting management database")
+	}
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("Expected ErrInvalidConfig, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "management database") {
+		t.Errorf("Error should mention management database, got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteBlocksTemplateDatabases(t *testing.T) {
+	for _, tmplDB := range []string{"template0", "template1"} {
+		t.Run(tmplDB, func(t *testing.T) {
+			svc := newTestService(nil, &mockApprover{approved: true}, nil, successfulMgmtConn())
+
+			cfg := validConfig()
+			cfg.Overwrite = true
+			cfg.Force = true
+			cfg.DatabaseName = tmplDB
+
+			err := svc.Deploy(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("Expected error when overwriting template database")
+			}
+			if !errors.Is(err, pgmi.ErrInvalidConfig) {
+				t.Errorf("Expected ErrInvalidConfig, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "template") {
+				t.Errorf("Error should mention template, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeploy_OverwriteBlocksCustomManagementDB(t *testing.T) {
+	svc := newTestService(nil, &mockApprover{approved: true}, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+	cfg.DatabaseName = "maint_db"
+	cfg.MaintenanceDatabase = "maint_db" // target == custom maintenance DB
+
+	err := svc.Deploy(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Expected error when target equals maintenance database")
+	}
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("Expected ErrInvalidConfig, got: %v", err)
+	}
+}
+
+func TestDeploy_OverwriteAllowsDifferentDB(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: false}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+	cfg.DatabaseName = "myapp" // different from management DB
+
+	err := svc.Deploy(context.Background(), cfg)
+	// Should pass validation and proceed (mock stop from session prep)
+	if err == nil || err.Error() != "mock stop" {
+		t.Fatalf("Expected 'mock stop' (passed validation), got: %v", err)
+	}
+}
+
+func TestValidateOverwriteTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		mgmtDB   string
+		wantErr   bool
+		errSubstr string
+	}{
+		{"different DB is fine", "myapp", "postgres", false, ""},
+		{"same as management DB", "postgres", "postgres", true, "management"},
+		{"case-insensitive management", "POSTGRES", "postgres", true, "management"},
+		{"template0", "template0", "postgres", true, "template"},
+		{"template1", "template1", "postgres", true, "template"},
+		{"TEMPLATE0 case-insensitive", "TEMPLATE0", "postgres", true, "template"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOverwriteTarget(tt.target, tt.mgmtDB)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateOverwriteTarget(%q, %q) error = %v, wantErr %v", tt.target, tt.mgmtDB, err, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Errorf("expected error containing %q, got: %v", tt.errSubstr, err)
+			}
+		})
+	}
+}
+
 // --- Error attribution tests ---
 
 func TestExtractLineFromError_LineInMessage(t *testing.T) {

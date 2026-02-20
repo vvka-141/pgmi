@@ -390,7 +390,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 	if saveChoice && tui.IsInteractive() {
 		fmt.Fprintln(os.Stderr, "")
 		if tui.PromptContinue("Save this connection to pgmi.yaml for future use?") {
-			if err := saveConnectionToConfig(sourcePath, &connResult.Config); err != nil {
+			if err := saveConnectionToConfig(sourcePath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
 			} else {
 				fmt.Fprintf(os.Stderr, "✓ Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
@@ -403,7 +403,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 }
 
 // saveConnectionToConfig saves connection config to pgmi.yaml.
-func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig) error {
+func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig, managementDB string) error {
 	configPath := filepath.Join(sourcePath, "pgmi.yaml")
 
 	// Load existing config or create new
@@ -414,11 +414,12 @@ func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig
 
 	// Update connection
 	cfg.Connection = config.ConnectionConfig{
-		Host:     connConfig.Host,
-		Port:     connConfig.Port,
-		Username: connConfig.Username,
-		Database: connConfig.Database,
-		SSLMode:  connConfig.SSLMode,
+		Host:               connConfig.Host,
+		Port:               connConfig.Port,
+		Username:           connConfig.Username,
+		Database:           connConfig.Database,
+		ManagementDatabase: managementDB,
+		SSLMode:            connConfig.SSLMode,
 	}
 
 	// Marshal and write
