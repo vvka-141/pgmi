@@ -17,8 +17,9 @@ test-azure:            ## Run Azure Entra ID tests (requires Azure credentials)
 
 test-all: test test-connection  ## Run unit + connection tests
 
-lint:                  ## Run linter
+lint:                  ## Run linter (cross-platform: catches issues that only manifest on Linux)
 	golangci-lint run
+	GOOS=linux golangci-lint run
 
 build:                 ## Build pgmi binary
 	go build -o pgmi ./cmd/pgmi
