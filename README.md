@@ -43,7 +43,9 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-The Quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
+The quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
+
+pgmi loads **all** project files — not just SQL. Your `deploy.sql` can read JSON configuration, XML reference data, and CSV seeds from the same session views, processing them with PostgreSQL's built-in JSON, XML, and string functions. See [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for data ingestion patterns.
 
 ## Install
 
@@ -94,6 +96,8 @@ pgmi is a good fit when you need:
 - **Conditional deployment logic** — different behavior per environment, feature flags, custom phases
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
 - **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, leverage `pg_advisory_lock`
+- **Data files alongside schema** — load JSON config, XML reference data, CSV seeds in the same transaction as migrations
+- **Multi-cloud PostgreSQL targets** — same `deploy.sql` works on Azure, AWS, GCP with native auth (Entra ID, IAM)
 
 pgmi handles simple linear migrations out of the box — the basic template does exactly this. Its additional power is there when you need it.
 
@@ -106,6 +110,8 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Getting Started](docs/QUICKSTART.md) | Your first deployment in 10 minutes |
 | [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
 | [Coming from Flyway/Liquibase](docs/COMING-FROM.md) | Migration guides |
+| [deploy.sql Guide](docs/DEPLOY-GUIDE.md) | Authoring patterns: data ingestion, environment branching, multi-phase |
+| [Connections](docs/CONNECTIONS.md) | Connection architecture: cloud auth, SSL, poolers, IaC |
 | [CLI Reference](docs/CLI.md) | All commands, flags, exit codes |
 | [Configuration](docs/CONFIGURATION.md) | pgmi.yaml reference |
 | [Session API](docs/session-api.md) | Temp tables and helper functions |
@@ -113,6 +119,7 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
+| [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
 
 ## Templates

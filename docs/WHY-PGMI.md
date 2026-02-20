@@ -90,6 +90,21 @@ pgmi is a good fit when:
 - The deployment plan is queryable data, not opaque framework state
 - Clear success/failure signals via PostgreSQL exceptions
 
+**You deploy data files alongside schema.**
+- JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
+- Checksum-based change detection means unchanged data files are skipped automatically
+- See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
+
+**You target multiple cloud PostgreSQL providers.**
+- Same `deploy.sql` works on Azure Database for PostgreSQL, Amazon RDS, Google Cloud SQL, Citus, TimescaleDB, Neon, Supabase
+- Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM) — no credential translation layer
+- See [CONNECTIONS.md](CONNECTIONS.md) for the full connection architecture
+
+**You want fast iteration with disposable databases.**
+- `pgmi deploy . --overwrite --force` drops and recreates the database, then deploys from scratch
+- Tests run inside the deployment transaction and roll back automatically
+- Zero manual cleanup between iterations
+
 ## When pgmi is overkill
 
 pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic** for learning and simple projects, **advanced** for production with metadata-driven deployment. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for details.
@@ -117,6 +132,12 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |
 | Transaction control | Explicit (you decide) | Implicit (framework decides) |
+| Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
+| Cloud auth | Native (Azure, AWS, GCP IAM) | Varies by tool |
+| File loading | In-memory, suited for schema + reference data | Varies |
+| Connection poolers | Direct connection required | Usually transparent |
+
+For a deeper exploration of pgmi's costs, see [TRADEOFFS.md](TRADEOFFS.md).
 
 ## Design principles
 
