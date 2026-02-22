@@ -118,9 +118,11 @@ myapp/
 ├── deploy.sql              ← Your deployment logic (the brain)
 ├── pgmi.yaml               ← Connection defaults (the config)
 ├── migrations/             ← Your SQL files go here
-│   └── 001_hello_world.sql
+│   ├── 001_users.sql
+│   └── 002_user_crud.sql
 ├── __test__/               ← Your test files (or __tests__/)
-│   └── test_hello_world.sql
+│   ├── _setup.sql          ← Test fixture (seed data)
+│   └── test_user_crud.sql
 └── README.md
 ```
 
@@ -134,15 +136,20 @@ Open `pgmi.yaml`. It looks like this:
 
 ```yaml
 connection:
-  database: myapp
+  database: mydb
+  host: localhost
+  port: 5432
+  sslmode: prefer
 
 params:
   env: development
+
+timeout: 3m
 ```
 
-This tells pgmi: "when I deploy, create/connect to a database called `myapp`". That's it. No JSON, no XML — just this small YAML file for connection defaults.
+This tells pgmi: "when I deploy, connect to `localhost:5432` and use a database called `mydb`". No JSON, no XML — just this small YAML file for connection defaults.
 
-**Update it for your local PostgreSQL:**
+**Update the database name and add your username:**
 
 ```yaml
 connection:
@@ -153,6 +160,8 @@ connection:
 
 params:
   env: development
+
+timeout: 3m
 ```
 
 > **Where does the password go?** Not in `pgmi.yaml` — that file is meant to be committed to Git. Set the password as an environment variable instead:
@@ -187,11 +196,11 @@ pgmi loads your project files into session-scoped views, then runs `deploy.sql`:
 - **`pg_temp.pgmi_source_view`** — raw access to all files (for introspection)
 - **`pg_temp.pgmi_plan_view`** — files sorted by execution order (for deployment)
 
-Your job in `deploy.sql` is to query files from `pg_temp.pgmi_plan_view` and execute them with `EXECUTE`. The templates do exactly this.
+The basic template queries `pg_temp.pgmi_source_view` (raw file access); the advanced template uses `pg_temp.pgmi_plan_view` (metadata-driven ordering).
 
-### migrations/001_hello_world.sql — your first SQL file
+### migrations/ — your SQL files
 
-This is a regular SQL file. Nothing special about it — no annotations required, no magic comments. It creates a `hello_world()` function that demonstrates pgmi's parameter system.
+These are regular SQL files. Nothing special about them — no annotations required, no magic comments. The basic template creates a `"user"` table (`001_users.sql`) and CRUD functions (`002_user_crud.sql`).
 
 ---
 
@@ -210,15 +219,22 @@ What this does:
 
 **Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
 
-You should see output ending with:
+You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-✓ Migrations complete
-✓ All tests passed (no side effects)
-✓ Deployment complete!
+NOTICE: Admin user ready: admin@example.com (id=1)
+NOTICE: [pgmi] Test suite started
+NOTICE: [pgmi] Fixture: ./__test__/_setup.sql
+NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
+NOTICE: [pgmi] Test suite completed (...)
+
+  ___   ___  _  _ ___
+ |   \ / _ \| \| | __|
+ | |) | (_) | .` | _|
+ |___/ \___/|_|\_|___|
 ```
 
-Your database `myapp` now exists with the `hello_world()` function and the built-in test has already verified it works.
+Your database `myapp` now exists with a `"user"` table, CRUD functions, and the built-in tests have already verified they work.
 
 ---
 
@@ -231,49 +247,44 @@ Your database `myapp` now exists with the `hello_world()` function and the built
 3. Open the Query Tool (Tools → Query Tool) and run:
 
 ```sql
-SELECT hello_world();
+SELECT * FROM get_user('admin@example.com');
 ```
 
-You should see: `Hello, World!`
+You should see the admin user record with `email = 'admin@example.com'` and `name = 'Administrator'`.
 
 ### Using the terminal
 
 ```bash
-psql -h localhost -U postgres -d myapp -c "SELECT hello_world();"
+psql -h localhost -U postgres -d myapp -c "SELECT * FROM get_user('admin@example.com');"
 ```
 
 ```
-  hello_world
----------------
- Hello, World!
+ id |        email        |     name      |          created_at
+----+---------------------+---------------+-------------------------------
+  1 | admin@example.com   | Administrator | 2026-...
 ```
 
-Try it with a custom parameter:
+Try it with a custom admin email parameter:
 
 ```bash
-pgmi deploy . --overwrite --force --param name=Alice
-psql -h localhost -U postgres -d myapp -c "SELECT hello_world();"
-```
-
-```
-   hello_world
------------------
- Hello, Alice!
+pgmi deploy . --overwrite --force --param admin_email=you@example.com
+psql -h localhost -U postgres -d myapp -c "SELECT * FROM get_user('you@example.com');"
 ```
 
 You just deployed a PostgreSQL project with pgmi.
 
 ---
 
-## Step 6: Add a second migration
+## Step 6: Add a new migration
 
-Create a new file `migrations/002_users.sql`:
+Create a new file `migrations/003_orders.sql`:
 
 ```sql
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS "order" (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT
+    user_id INT NOT NULL REFERENCES "user"(id),
+    total NUMERIC(10,2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
@@ -289,7 +300,7 @@ Check the database (pgAdmin: refresh, or terminal):
 psql -h localhost -U postgres -d myapp -c "\dt"
 ```
 
-You should see your new `users` table. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
+You should see both the `user` and `order` tables. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
 
 ---
 
@@ -318,7 +329,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** for learning, 
 | **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
 | **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
 | **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
-| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-schema: `api`, `internal`, `utils`, `core`, `membership` |
+| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, utils, api), `membership/`, `tools/` |
 | **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |
 | **MCP integration** | None | Full MCP server for AI assistants |
 

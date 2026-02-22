@@ -59,20 +59,22 @@ See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#error-context-with-exception-blocks) for t
 
 `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. This is a PostgreSQL constraint, not a pgmi limitation — the same issue affects Flyway, Liquibase, Prisma, Goose, and Drizzle.
 
-pgmi's workaround: structure deploy.sql to run concurrent indexes in a separate non-transactional phase:
+pgmi's workaround: structure deploy.sql so that concurrent indexes are top-level statements outside any transaction block. After `COMMIT`, pgmi's temp tables still exist (session-scoped), and each subsequent top-level statement runs in autocommit mode:
 
 ```sql
--- Phase 1: transactional
+-- Phase 1: transactional migrations
 BEGIN;
--- ... migrations ...
+-- ... migrations (excluding concurrent index files) ...
 COMMIT;
 
--- Phase 2: non-transactional concurrent indexes
-DO $$ BEGIN
-    EXECUTE (SELECT content FROM pg_temp.pgmi_source_view
-             WHERE path = './migrations/003_user_email_concurrent.sql');
-END $$;
+-- Phase 2: concurrent indexes as top-level statements (autocommit mode)
+-- These CANNOT be inside a DO block — DO creates an implicit transaction context.
+-- Write them explicitly; pgmi's temp tables are still available for queries.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_date ON orders(created_at);
 ```
+
+Note: because top-level SQL has no procedural constructs, you cannot dynamically iterate `pgmi_source_view` for concurrent indexes. Write them explicitly in deploy.sql, or use a separate pgmi deployment phase.
 
 See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#create-index-concurrently-workaround) for the complete pattern.
 
@@ -110,13 +112,16 @@ Documentation is `README.md`, these docs, `pgmi ai skills`, and the embedded AI 
 
 ## File loading has practical limits
 
-pgmi loads all project files into Go memory, then batch-inserts them into PostgreSQL session tables. This means:
+pgmi loads all project files into Go memory, then batch-inserts them into PostgreSQL session-scoped temporary tables. This means:
 
-- A 100 MB project uses ~100 MB Go memory + ~100 MB PostgreSQL session memory
+- A 100 MB project uses ~100 MB Go memory + wire transfer time + PostgreSQL storage for temp tables
+- PostgreSQL temp tables use local buffers (`temp_buffers`, default 8 MB) and automatically spill to disk when data exceeds the buffer — there is no inherent RAM limitation on temp table size
 - Files are loaded as text and assumed to be UTF-8
 - Binary files are loaded but not useful (pgmi won't corrupt them, but PL/pgSQL can't process binary data meaningfully)
 
 **Practical thresholds:**
+
+The bottleneck for large projects is INSERT throughput (parameterized row-by-row inserts) and wire transfer time, not memory:
 
 | Scale | Works well |
 |-------|-----------|

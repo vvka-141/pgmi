@@ -69,9 +69,10 @@ pgmi deploy . --azure \
 6. Azure PowerShell (`Connect-AzAccount`)
 
 **Token characteristics:**
-- User tokens: 4-hour expiry
-- Service principal tokens: 24-hour expiry
+- User tokens (interactive/CLI): up to 1-hour expiry
+- Managed identity tokens: up to 24-hour expiry
 - OAuth scope: `https://ossrdbms-aad.database.windows.net/.default`
+- pgmi acquires a fresh token at connection time via the Azure SDK credential chain; token lifetime only matters for long-running connections, not typical deployments
 
 ---
 

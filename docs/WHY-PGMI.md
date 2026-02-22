@@ -92,7 +92,7 @@ pgmi is a good fit when:
 
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
-- Checksum-based change detection means unchanged data files are skipped automatically
+- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the advanced template does this automatically)
 - See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
@@ -134,7 +134,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Transaction control | Explicit (you decide) | Implicit (framework decides) |
 | Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
 | Cloud auth | Native (Azure, AWS, GCP IAM) | Varies by tool |
-| File loading | In-memory, suited for schema + reference data | Varies |
+| File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
 
 For a deeper exploration of pgmi's costs, see [TRADEOFFS.md](TRADEOFFS.md).

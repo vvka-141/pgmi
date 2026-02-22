@@ -127,9 +127,6 @@ pgmi.yaml intentionally **excludes**:
 | `sslpassword` | Key passphrase is a secret | `PGSSLPASSWORD` env var |
 | `overwrite` | Operational safety flag | `--overwrite` CLI flag |
 | `force` | Operational safety flag | `--force` CLI flag |
-| `azure` | Runtime auth flag, not a project default | `--azure` CLI flag, `AZURE_*` env vars |
-| `aws` | Runtime auth flag, not a project default | `--aws` CLI flag, `AWS_*` env vars |
-| `google` | Runtime auth flag, not a project default | `--google` CLI flag, `GOOGLE_APPLICATION_CREDENTIALS` |
 
 pgmi.yaml is safe to commit to version control. Secrets belong in environment variables, `.pgpass`, or your CI/CD secret store.
 
@@ -139,23 +136,28 @@ pgmi.yaml is safe to commit to version control. Secrets belong in environment va
 
 ```yaml
 connection:
-  database: myapp
+  database: mydb
+  host: localhost
+  port: 5432
+  sslmode: prefer
 
 params:
   env: development
+
+timeout: 3m
 ```
 
 ### Advanced Template (`pgmi init myapp --template advanced`)
 
 ```yaml
 connection:
+  database: mydb
   host: localhost
   port: 5432
-  database: myapp
   sslmode: prefer
 
 params:
-  env: development
+  env: dev
 
 timeout: 5m
 ```

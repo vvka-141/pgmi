@@ -10,7 +10,7 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 |---------|--------|-----------|------|
 | Migration files | `V1__name.sql` | Changelog + changesets | Any `.sql` file |
 | Execution order | Filename prefix (V1, V2...) | Changelog order | Your `deploy.sql` decides |
-| Transaction control | `--single-transaction` flag | Per-changeset or global | `BEGIN`/`COMMIT` in deploy.sql |
+| Transaction control | `flyway.group=true` (batch) | Per-changeset or global | `BEGIN`/`COMMIT` in deploy.sql |
 | Tracking state | `flyway_schema_history` table | `databasechangelog` table | Your choice (or none) |
 | Rollback | Undo scripts (`U1__name.sql`) | Rollback commands in changeset | PostgreSQL transactions |
 | Conditionals | Callbacks, limited | Preconditions, contexts | Full PL/pgSQL in deploy.sql |

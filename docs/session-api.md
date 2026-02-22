@@ -97,7 +97,7 @@ This view provides direct access to all discovered files. For most use cases, pr
 | `pgmi_checksum` | text | SHA-256 of normalized content |
 | `path_parts` | text[] | Path split by `/` |
 | `is_sql_file` | boolean | True for recognized SQL extensions |
-| `is_test_file` | boolean | True if path contains `__test__/` |
+| `is_test_file` | boolean | Always `false` in this view — files matching `__test__/` are routed to `pgmi_test_source_view` instead |
 | `parent_folder_name` | text | Immediate parent directory name |
 
 ```sql
@@ -120,8 +120,8 @@ This view joins `_pgmi_source` with `_pgmi_source_metadata` and provides a clean
 | `checksum` | text | Normalized checksum |
 | `generic_id` | uuid | Auto-generated UUID from path |
 | `id` | uuid | Explicit ID from [`<pgmi-meta>`](METADATA.md) (NULL if none) |
-| `idempotent` | boolean | Whether file can be re-executed |
-| `description` | text | From `<pgmi-meta>` |
+| `idempotent` | boolean | Whether file can be re-executed (defaults to `true` for files without metadata) |
+| `description` | text | From `<pgmi-meta>` (defaults to `''` for files without metadata, never NULL) |
 | `sort_key` | text | Execution ordering key |
 | `execution_order` | bigint | Sequential execution number |
 
@@ -447,9 +447,8 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 **Test execution emits notices:**
 - `NOTICE: [pgmi] Fixture: ./path/to/_setup.sql`
 - `NOTICE: [pgmi] Test: ./path/to/test_example.sql`
-- `NOTICE: [pgmi] Teardown: ./path/to/__test__/`
 
-With `--verbose`, DEBUG messages show savepoint operations (`ROLLBACK TO SAVEPOINT`, `RELEASE SAVEPOINT`).
+With `--verbose`, DEBUG messages show rollback and teardown events (`[pgmi] Rollback: ...`, `[pgmi] Teardown: ...`).
 
 #### pgmi_test_generate(pattern, callback) Function
 
@@ -484,7 +483,7 @@ This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, 
 ```sql
 -- Create a permanent copy of the test plan
 SELECT pg_temp.pgmi_persist_test_plan('public', NULL);
--- Creates: public.pgmi_test_plan_snapshot
+-- Creates: public.pgmi_test_plan
 ```
 
 | Parameter | Type | Description |
@@ -574,7 +573,10 @@ END $$;
 
 ### Conditional Deployment
 
+`CALL pgmi_test()` is a preprocessor macro that expands to top-level SQL (including `SAVEPOINT` commands), so it **must** appear at the top level of deploy.sql — never inside a `DO` block. Structure your deploy.sql with the DO block for migrations and `CALL pgmi_test()` as a separate top-level statement:
+
 ```sql
+-- Phase 1: Migrations and seeds (inside DO block)
 DO $$
 DECLARE
     v_file RECORD;
@@ -599,12 +601,12 @@ BEGIN
             EXECUTE v_file.content;
         END LOOP;
     END IF;
-
-    -- Optionally run tests
-    IF COALESCE(current_setting('pgmi.include_tests', true), 'true')::boolean THEN
-        CALL pgmi_test();
-    END IF;
 END $$;
+
+-- Phase 2: Tests (top-level — expands to SAVEPOINT commands)
+CALL pgmi_test();
+
+COMMIT;
 ```
 
 ### Dynamic File Selection
@@ -685,7 +687,7 @@ These tables are the underlying storage for the session API. Users should use th
 | `pgmi_checksum` | text | SHA-256 of normalized content (for idempotency) |
 | `path_parts` | text[] | Path split by `/` |
 | `is_sql_file` | boolean | True for SQL file extensions |
-| `is_test_file` | boolean | True if path contains `__test__/` |
+| `is_test_file` | boolean | Always `false` — a CHECK constraint routes test files to `_pgmi_test_source` instead |
 | `parent_folder_name` | text | Immediate parent directory name |
 
 ### pg_temp._pgmi_parameter

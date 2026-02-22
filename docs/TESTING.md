@@ -452,7 +452,7 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 | Worry about test execution order | Not needed — each test starts from fixture state |
 | Manage test database separately | Not needed — tests run against your real deployment, then vanish |
 | Build a test runner or assertion framework | Not needed — `RAISE EXCEPTION` is the assertion |
-| Reset sequences, truncate tables, drop temp objects | Not needed — outer `ROLLBACK` erases everything |
+| Truncate tables, drop temp objects, clean up test state | Not needed — outer `ROLLBACK` erases everything (note: sequence advances from `nextval()` are not rolled back — this is standard PostgreSQL behavior) |
 
 ---
 
@@ -562,37 +562,50 @@ The default test callback emits NOTICE messages (`[pgmi] Test: ...`). You can re
 CALL pgmi_test('.*/orders/.*', 'my_test_callback');
 ```
 
-Your callback function must match this signature:
+Your callback function must accept a single `pg_temp.pgmi_test_event` composite type parameter and return void:
 
 ```sql
-CREATE OR REPLACE FUNCTION pg_temp.my_test_callback(
-    p_event TEXT,
-    p_path TEXT,
-    p_directory TEXT,
-    p_depth INT
-) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION pg_temp.my_test_callback(e pg_temp.pgmi_test_event)
+RETURNS void AS $$
 BEGIN
-    CASE p_event
+    CASE e.event
         WHEN 'fixture_start' THEN
-            RAISE NOTICE '[FIXTURE] %', p_path;
+            RAISE NOTICE '[FIXTURE] %', e.path;
         WHEN 'test_start' THEN
-            RAISE NOTICE '[TEST] %', p_path;
-        WHEN 'teardown' THEN
-            RAISE NOTICE '[TEARDOWN] %', p_directory;
+            RAISE NOTICE '[TEST] %', e.path;
+        WHEN 'teardown_start' THEN
+            RAISE NOTICE '[TEARDOWN] %', e.directory;
         ELSE
-            RAISE NOTICE '[UNKNOWN] % %', p_event, p_path;
+            RAISE NOTICE '[%] % %', e.event, COALESCE(e.path, e.directory);
     END CASE;
 END;
 $$ LANGUAGE plpgsql;
 ```
 
+**The `pgmi_test_event` composite type:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | TEXT | Event name (see table below) |
+| `path` | TEXT | Script path (NULL for suite/teardown events) |
+| `directory` | TEXT | Test directory containing the script |
+| `depth` | INT | Nesting level (0 = root `__test__/`) |
+| `ordinal` | INT | Execution order (1-based, monotonically increasing) |
+| `context` | JSONB | Extensible payload for custom data |
+
 **Events dispatched:**
 
-| Event | p_path | p_directory | When |
-|-------|--------|-------------|------|
+| Event | path | directory | When |
+|-------|------|-----------|------|
+| `suite_start` | NULL | `''` | Before the test suite begins |
 | `fixture_start` | Path to `_setup.sql` | Fixture directory | Before executing a fixture |
+| `fixture_end` | Path to `_setup.sql` | Fixture directory | After executing a fixture |
 | `test_start` | Path to test file | Test directory | Before executing a test |
-| `teardown` | NULL | Directory being torn down | After rolling back a directory's savepoint |
+| `test_end` | Path to test file | Test directory | After executing a test |
+| `rollback` | Path or NULL | Directory | After rolling back a test savepoint |
+| `teardown_start` | NULL | Directory being torn down | Before rolling back a directory's savepoint |
+| `teardown_end` | NULL | Directory being torn down | After rolling back a directory's savepoint |
+| `suite_end` | NULL | `''` | After the test suite completes (ordinal = total steps) |
 
 **Example: logging results to a table**
 
@@ -604,16 +617,15 @@ CREATE TEMP TABLE test_log (
     logged_at TIMESTAMPTZ DEFAULT clock_timestamp()
 );
 
-CREATE OR REPLACE FUNCTION pg_temp.logging_callback(
-    p_event TEXT, p_path TEXT, p_directory TEXT, p_depth INT
-) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION pg_temp.logging_callback(e pg_temp.pgmi_test_event)
+RETURNS void AS $$
 BEGIN
-    INSERT INTO pg_temp.test_log (event, path) VALUES (p_event, p_path);
+    INSERT INTO pg_temp.test_log (event, path) VALUES (e.event, e.path);
 END;
 $$ LANGUAGE plpgsql;
 
 -- Use the logging callback
-CALL pgmi_test(NULL, 'logging_callback');
+CALL pgmi_test(NULL, 'pg_temp.logging_callback');
 
 -- Query results after tests run
 SELECT * FROM pg_temp.test_log ORDER BY ordinal;
@@ -637,7 +649,7 @@ ROLLBACK TO sp_orders_setup;        ← fixture + everything undone
 This means:
 - No `_teardown.sql` convention — rollback handles cleanup
 - No manual `DELETE FROM` or `DROP TABLE` in test files
-- Sequences, temp objects, and side effects are all reverted
+- DML changes, temp objects, and DDL are all reverted (note: `nextval()` advances are permanent — sequences are non-transactional in PostgreSQL, so tests may see gaps in sequence values, which is harmless)
 
 **When implicit teardown isn't enough:** If your tests create objects outside the transaction (e.g., `CREATE INDEX CONCURRENTLY`), those cannot be rolled back. Avoid non-transactional operations in tests.
 

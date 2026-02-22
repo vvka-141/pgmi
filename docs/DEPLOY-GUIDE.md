@@ -386,29 +386,21 @@ END $$;
 COMMIT;
 
 -- Phase 2: Concurrent indexes (non-transactional, must be idempotent)
-DO $$
-DECLARE v_file RECORD;
-BEGIN
-    FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_source_view
-        WHERE directory = './migrations/' AND is_sql_file
-            AND path LIKE '%_concurrent.sql'
-        ORDER BY path
-    ) LOOP
-        RAISE NOTICE 'Creating concurrent index: %', v_file.path;
-        EXECUTE v_file.content;
-    END LOOP;
-END $$;
+-- These MUST be top-level statements — DO blocks create an implicit transaction
+-- context, which causes CREATE INDEX CONCURRENTLY to fail.
+-- pgmi's temp tables survive COMMIT (session-scoped), so they're still queryable.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_date ON orders(created_at);
 ```
 
-Name your concurrent index files with a `_concurrent.sql` suffix (or any convention you prefer) and always use `IF NOT EXISTS`:
+Because top-level SQL has no procedural constructs (no loops, no variables), concurrent index statements must be written explicitly — you cannot dynamically iterate `pgmi_source_view` for them. Always use `IF NOT EXISTS`:
 
 ```sql
 -- migrations/003_user_email_concurrent.sql
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
 ```
 
-This is not a pgmi limitation — `CREATE INDEX CONCURRENTLY` behaves the same way in Flyway, Liquibase, and every other tool that uses transactions. See [TRADEOFFS.md](TRADEOFFS.md#create-index-concurrently) for more context.
+This is a PostgreSQL constraint, not a pgmi limitation — `CREATE INDEX CONCURRENTLY` behaves the same way in Flyway, Liquibase, and every other tool that uses transactions. See [TRADEOFFS.md](TRADEOFFS.md#create-index-concurrently) for more context.
 
 ---
 

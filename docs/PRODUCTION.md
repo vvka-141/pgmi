@@ -94,9 +94,9 @@ COMMIT;
 ### Per-file commits (when you really need them)
 
 True per-file commits are complex in pgmi's model because:
-1. pgmi's temp tables (`pg_temp.*`) disappear after COMMIT
-2. You can't use COMMIT inside PL/pgSQL DO blocks
-3. Each top-level SQL statement auto-commits when not in a transaction
+1. You can't use COMMIT inside PL/pgSQL DO blocks (only inside procedures via `CREATE PROCEDURE` + `CALL`)
+2. Each top-level SQL statement auto-commits when not in a transaction
+3. Top-level SQL has no procedural constructs (no loops, no variables) — so you can't iterate `pgmi_source_view` outside a DO block
 
 **Recommended approach:** Use idempotent migrations with single-transaction deployment. If deployment fails, fix the issue and redeploy — pgmi will re-run idempotent scripts safely.
 
