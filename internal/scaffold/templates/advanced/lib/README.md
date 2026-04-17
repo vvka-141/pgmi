@@ -50,25 +50,26 @@ Base tables and patterns for domain modeling.
 
 | File | Purpose |
 |------|---------|
-| `foundation.sql` | Entity hierarchy (`entity`, `managed_entity`) |
+| `foundation.sql` | `core.entity_id` domain (opt-in marker) |
+| `entity-standards.sql` | DDL event trigger that injects `created_at`/`deleted_at` on tables declaring `object_id core.entity_id` |
 | `attached-properties.sql` | Key-value property attachment system |
 
-**Entity Hierarchy:**
-```
-core.entity                 # Base: object_id, created_at
-    └── core.managed_entity # Adds: deleted_at (soft-delete)
-```
-
-**Usage Pattern:**
+**Opt-In Entity Standards:**
 ```sql
--- Your domain table inherits from managed_entity
+-- Declare object_id as core.entity_id; the trigger handles the rest.
+-- Works identically for plain and partitioned tables.
 CREATE TABLE core.customer (
+    object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL
-) INHERITS (core.managed_entity);
+);
 
--- Automatically has: object_id, created_at, deleted_at
+-- Injected automatically by core_entity_table_standards:
+--   created_at timestamptz NOT NULL DEFAULT now()
+--   deleted_at timestamptz NULL
 ```
+
+Index strategy is left to you — the trigger does not create any indexes. Add whatever partial or covering indexes fit your access pattern.
 
 ### `common/` - Cross-Cutting Primitives
 

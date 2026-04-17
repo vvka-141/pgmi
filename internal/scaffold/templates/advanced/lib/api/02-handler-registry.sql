@@ -14,10 +14,15 @@
 DO $$ BEGIN RAISE NOTICE '→ Installing handler registry'; END $$;
 
 -- ============================================================================
--- Handler Registry Table (inherits identity from core.entity)
+-- Handler Registry Table
 -- ============================================================================
+-- object_id core.entity_id opts this table into the DDL-trigger entity
+-- standards: created_at and deleted_at columns are injected automatically by
+-- core_entity_table_standards.
 
 CREATE TABLE IF NOT EXISTS api.handler (
+    object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
+
     handler_type api.handler_type NOT NULL,
     handler_func regprocedure NOT NULL UNIQUE,
     handler_function_name text NOT NULL,
@@ -48,22 +53,12 @@ CREATE TABLE IF NOT EXISTS api.handler (
     output_json_schema   api.json_schema,
     input_xml_schema     api.xml_schema,
     output_xml_schema    api.xml_schema
-) INHERITS (core.entity);
+);
 
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'api.handler'::regclass AND contype = 'p'
-    ) THEN
-        ALTER TABLE api.handler ADD PRIMARY KEY (object_id);
-    END IF;
-END $$;
 
 CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 
@@ -72,7 +67,7 @@ CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 -- ============================================================================
 
 COMMENT ON TABLE api.handler IS
-    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as immutable snapshot. Inherits identity from core.entity.';
+    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as an immutable snapshot. object_id core.entity_id opts the table into entity lifecycle standards (created_at, deleted_at injected by the DDL trigger).';
 
 COMMENT ON COLUMN api.handler.handler_type IS
     'Protocol type: rest, rpc, mcp_tool, mcp_resource, mcp_prompt, queue';
