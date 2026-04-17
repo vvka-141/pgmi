@@ -173,8 +173,23 @@ END $$;
 SELECT api.create_or_replace_rpc_handler(
     jsonb_build_object(
         'id', 'e2000001-0001-4000-8000-000000000001',
-        'methodName', 'math.sum',          -- JSON-RPC method name
-        'description', 'Calculate sum of two numbers'
+        'methodName', 'math.sum',
+        'description', 'Calculate sum of two numbers',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'required', jsonb_build_array('a', 'b'),
+            'properties', jsonb_build_object(
+                'a', jsonb_build_object('type', 'number', 'description', 'First addend'),
+                'b', jsonb_build_object('type', 'number', 'description', 'Second addend')
+            )
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'result', jsonb_build_object('type', 'number', 'description', 'Sum of a and b')
+            )
+        ),
+        'responseHeaders', jsonb_build_object('x-include-schema', 'true')
     ),
     $body$
 DECLARE
@@ -270,14 +285,23 @@ END $$;
 SELECT api.create_or_replace_mcp_handler(
     jsonb_build_object(
         'id', 'e3000001-0001-4000-8000-000000000001',
-        'type', 'tool',                     -- MCP type: tool, resource, or prompt
+        'type', 'tool',
         'name', 'database_info',
         'description', 'Get database version and connection info',
-        'inputSchema', jsonb_build_object(   -- JSON Schema for tool inputs
+        'inputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(),
             'required', jsonb_build_array()
-        )
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'database', jsonb_build_object('type', 'string', 'description', 'Current database name'),
+                'version',  jsonb_build_object('type', 'string', 'description', 'PostgreSQL server version string'),
+                'user',     jsonb_build_object('type', 'string', 'description', 'Connected role name')
+            )
+        ),
+        'tags', jsonb_build_array('system', 'introspection')
     ),
     $body$
 BEGIN

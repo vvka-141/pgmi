@@ -27,11 +27,18 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     input_schema jsonb,
     uri_template text,
     mime_type text DEFAULT 'application/json',
-    arguments jsonb
+    arguments jsonb,
+    tags text[] NOT NULL DEFAULT '{}'
 );
+
+ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
 CREATE INDEX IF NOT EXISTS ix_mcp_route_name ON api.mcp_route(mcp_name);
+CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
+
+COMMENT ON COLUMN api.mcp_route.tags IS
+    'Freeform tags for filtering tools via api.mcp_list_tools(p_tags). GIN-indexed for efficient && (overlap) queries.';
 
 -- ============================================================================
 -- Grant Permissions

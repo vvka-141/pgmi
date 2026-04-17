@@ -121,6 +121,7 @@ BEGIN
     );
 
     SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.produces, h.requires_auth,
+           h.output_json_schema,
            r.route_name, r.auto_log
     INTO v_route
     FROM api.rest_route r
@@ -166,13 +167,28 @@ BEGIN
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Merge headers: gateway sets technical headers (content-length, timing), preserves handler custom headers
+        IF v_route.output_json_schema IS NOT NULL
+           AND v_route.response_headers->>'x-include-schema' = 'true' THEN
+            BEGIN
+                v_response := (
+                    (v_response).status_code,
+                    (v_response).headers,
+                    convert_to(
+                        (api.content_json((v_response).content)
+                            || jsonb_build_object('$schema', v_route.output_json_schema::jsonb))::text,
+                        'UTF8'
+                    )
+                )::api.http_response;
+            EXCEPTION WHEN OTHERS THEN
+                NULL;
+            END;
+        END IF;
+
         v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore) || extensions.hstore(ARRAY[
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
             'x-route-id', v_route.object_id::text
         ]);
-        -- Only set default content-type if handler didn't provide one
         IF NOT v_response.headers ? 'content-type' THEN
             v_response.headers := v_response.headers || 'content-type=>application/json; charset=utf-8'::extensions.hstore;
         END IF;
@@ -299,7 +315,9 @@ BEGIN
         v_json_id := NULL;
     END;
 
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.method_name, r.auto_log
+    SELECT h.handler_exec_sql, h.object_id, h.requires_auth,
+           h.response_headers, h.output_json_schema,
+           r.method_name, r.auto_log
     INTO v_handler
     FROM api.handler h
     JOIN api.rpc_route r ON r.handler_object_id = h.object_id
@@ -327,7 +345,23 @@ BEGIN
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Merge headers: gateway sets technical headers, preserves handler custom headers
+        IF v_handler.output_json_schema IS NOT NULL
+           AND v_handler.response_headers->>'x-include-schema' = 'true' THEN
+            BEGIN
+                v_response := (
+                    (v_response).status_code,
+                    (v_response).headers,
+                    convert_to(
+                        (api.content_json((v_response).content)
+                            || jsonb_build_object('$schema', v_handler.output_json_schema::jsonb))::text,
+                        'UTF8'
+                    )
+                )::api.http_response;
+            EXCEPTION WHEN OTHERS THEN
+                NULL;
+            END;
+        END IF;
+
         v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore) || extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
@@ -593,24 +627,34 @@ $$;
 -- MCP Discovery Functions
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION api.mcp_list_tools()
+DROP FUNCTION IF EXISTS api.mcp_list_tools();
+
+CREATE OR REPLACE FUNCTION api.mcp_list_tools(p_tags text[] DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
     SELECT jsonb_build_object('tools', COALESCE(jsonb_agg(
-        jsonb_build_object(
-            'name', r.mcp_name,
-            'title', COALESCE(h.title, h.description),
-            'description', h.description,
-            'inputSchema', r.input_schema
+        jsonb_strip_nulls(
+            jsonb_build_object(
+                'name', r.mcp_name,
+                'title', COALESCE(h.title, h.description),
+                'description', h.description,
+                'inputSchema', r.input_schema,
+                'outputSchema', h.output_json_schema::jsonb,
+                'tags', CASE WHEN r.tags = '{}' THEN NULL ELSE to_jsonb(r.tags) END
+            )
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
-    WHERE r.mcp_type = 'tool';
+    WHERE r.mcp_type = 'tool'
+      AND (p_tags IS NULL OR r.tags && p_tags);
 $$;
+
+COMMENT ON FUNCTION api.mcp_list_tools(text[]) IS
+    'MCP tool discovery. Returns {"tools":[...]} with name, title, description, inputSchema, outputSchema, and tags. Pass p_tags to filter by tag overlap (uses GIN index).';
 
 CREATE OR REPLACE FUNCTION api.mcp_list_resources()
 RETURNS jsonb

@@ -42,8 +42,18 @@ CREATE TABLE IF NOT EXISTS api.handler (
     owner_name name NOT NULL,
 
     title text,
-    description text
+    description text,
+
+    input_json_schema    api.json_schema,
+    output_json_schema   api.json_schema,
+    input_xml_schema     api.xml_schema,
+    output_xml_schema    api.xml_schema
 ) INHERITS (core.entity);
+
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
 
 DO $$
 BEGIN
@@ -123,6 +133,18 @@ COMMENT ON COLUMN api.handler.owner_name IS
 
 COMMENT ON COLUMN api.handler.description IS
     'Human-readable description (typically from pg_description or handler metadata).';
+
+COMMENT ON COLUMN api.handler.input_json_schema IS
+    'JSON Schema describing request parameters. Returned by api.mcp_list_tools() as inputSchema and by discovery endpoints for all protocols.';
+
+COMMENT ON COLUMN api.handler.output_json_schema IS
+    'JSON Schema describing response structure. Returned by api.mcp_list_tools() as outputSchema. For REST/RPC handlers, the gateway merges it into responses when response_headers contains x-include-schema=true.';
+
+COMMENT ON COLUMN api.handler.input_xml_schema IS
+    'XML Schema (XSD) describing request parameters for XML-based handlers.';
+
+COMMENT ON COLUMN api.handler.output_xml_schema IS
+    'XML Schema (XSD) describing response structure for XML-based handlers.';
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.handler - central handler registry with pg_proc snapshot';
