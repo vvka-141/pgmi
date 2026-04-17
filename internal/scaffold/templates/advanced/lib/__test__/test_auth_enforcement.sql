@@ -166,6 +166,24 @@ END;
     RAISE NOTICE '  ✓ REST: Protected handler returns 200 with x-user-id, session variable set';
 
     -- ========================================================================
+    -- Test: unprefixed user-id header is NOT accepted as auth
+    -- (standardized on x-user-id; no alias fallback)
+    -- ========================================================================
+
+    v_response := api.rest_invoke(
+        'GET',
+        '/test-protected-rest',
+        'user-id=>userZZZ'::extensions.hstore,
+        NULL::bytea
+    );
+
+    IF (v_response).status_code != 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: user-id alias must NOT satisfy auth gate, expected 401 got %', (v_response).status_code;
+    END IF;
+
+    RAISE NOTICE '  ✓ REST: user-id header alone is rejected (alias removed)';
+
+    -- ========================================================================
     -- Test: REST public handler accepts unauthenticated requests
     -- ========================================================================
 

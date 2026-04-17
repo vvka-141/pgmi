@@ -11,7 +11,8 @@
 </pgmi-meta>
 */
 
-CREATE OR REPLACE VIEW membership.vw_user_claims AS
+CREATE OR REPLACE VIEW membership.vw_user_claims
+WITH (security_invoker = true) AS
 SELECT
     u.object_id AS user_id,
     u.email,

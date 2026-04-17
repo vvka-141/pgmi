@@ -523,6 +523,15 @@ DECLARE
 BEGIN
     v_schema := COALESCE((request).arguments->>'schema', 'public');
 
+    IF v_schema LIKE 'pg\_%' ESCAPE '\'
+       OR v_schema = 'information_schema'
+       OR v_schema = 'internal' THEN
+        RETURN api.mcp_tool_error(
+            format('Schema "%s" is not accessible via this tool', v_schema),
+            (request).request_id
+        );
+    END IF;
+
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'table_name', t.tablename,
         'table_type', CASE WHEN v.viewname IS NOT NULL THEN 'view' ELSE 'table' END,
@@ -551,9 +560,31 @@ END;
 DO $$
 DECLARE
     v_response api.mcp_response;
+    v_env jsonb;
 BEGIN
     v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, 'demo-4');
     RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, NULL, 'demo-4b');
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject pg_catalog schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(pg_catalog) rejected';
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, NULL, 'demo-4c');
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject information_schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(information_schema) rejected';
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, NULL, 'demo-4d');
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject internal schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(internal) rejected';
 END $$;
 
 -- ============================================================================

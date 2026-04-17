@@ -70,18 +70,29 @@ LANGUAGE plpgsql IMMUTABLE STRICT AS $$
 DECLARE
     v_result text := replace(p_encoded, '+', ' ');
     v_pos int;
+    v_start int := 1;
     v_hex text;
 BEGIN
     LOOP
-        v_pos := position('%' IN v_result);
-        EXIT WHEN v_pos = 0 OR v_pos > length(v_result) - 2;
+        v_pos := position('%' IN substring(v_result FROM v_start));
+        EXIT WHEN v_pos = 0;
+        v_pos := v_pos + v_start - 1;
+
+        IF v_pos > length(v_result) - 2 THEN
+            EXIT;
+        END IF;
 
         v_hex := substring(v_result FROM v_pos + 1 FOR 2);
-        EXIT WHEN v_hex !~ '^[0-9A-Fa-f]{2}$';
+
+        IF v_hex !~ '^[0-9A-Fa-f]{2}$' THEN
+            v_start := v_pos + 1;
+            CONTINUE;
+        END IF;
 
         v_result := substring(v_result FROM 1 FOR v_pos - 1)
                  || chr(('x' || v_hex)::bit(8)::int)
                  || substring(v_result FROM v_pos + 3);
+        v_start := v_pos + 1;
     END LOOP;
 
     RETURN v_result;
@@ -151,6 +162,21 @@ BEGIN
     v_decoded := api.url_decode('100%25+complete');
     IF v_decoded != '100% complete' THEN
         RAISE EXCEPTION 'url_decode mixed failed: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('%GG%20hello');
+    IF v_decoded != '%GG hello' THEN
+        RAISE EXCEPTION 'url_decode must skip invalid %% and decode later valid sequences: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('trailing%');
+    IF v_decoded != 'trailing%' THEN
+        RAISE EXCEPTION 'url_decode trailing %% should stay literal: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('trailing%1');
+    IF v_decoded != 'trailing%1' THEN
+        RAISE EXCEPTION 'url_decode trailing %%X should stay literal: got %', v_decoded;
     END IF;
 
     -- Test regexp_quote
@@ -377,7 +403,11 @@ CREATE OR REPLACE FUNCTION api.mcp_tool_error(
     request_id text
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT api.mcp_error(-32603, message, request_id);
+    SELECT api.mcp_tool_result(
+        jsonb_build_array(jsonb_build_object('type', 'text', 'text', message)),
+        request_id,
+        true
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
@@ -467,11 +497,21 @@ BEGIN
         RAISE EXCEPTION 'mcp_tool_result: missing content in result';
     END IF;
 
-    -- Test mcp_tool_error
+    -- Test mcp_tool_error: MCP spec requires tool execution failures to use
+    -- result.isError=true with content array, NOT the JSON-RPC error envelope.
     v_response := api.mcp_tool_error('Tool failed', 'req-4');
     v_envelope := (v_response).envelope;
-    IF v_envelope->'error' IS NULL THEN
-        RAISE EXCEPTION 'mcp_tool_error: missing error object';
+    IF v_envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'mcp_tool_error: must NOT use JSON-RPC error channel for tool failures';
+    END IF;
+    IF (v_envelope->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'mcp_tool_error: result.isError must be true';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'content') AS c
+        WHERE c->>'type' = 'text' AND c->>'text' = 'Tool failed'
+    ) THEN
+        RAISE EXCEPTION 'mcp_tool_error: result.content must contain the error message';
     END IF;
 
     -- Test mcp_text helper

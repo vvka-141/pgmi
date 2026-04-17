@@ -111,4 +111,23 @@ BEGIN
     EXECUTE format('GRANT SELECT ON membership."user" TO %I', v_customer_role);
 END $$;
 
+DO $$
+DECLARE
+    v_view text;
+    v_options text[];
+BEGIN
+    FOR v_view IN
+        SELECT table_name FROM information_schema.views
+        WHERE table_schema = 'membership' AND table_name LIKE 'vw\_%' ESCAPE '\'
+    LOOP
+        SELECT reloptions INTO v_options
+        FROM pg_class
+        WHERE relnamespace = 'membership'::regnamespace AND relname = v_view;
+
+        IF v_options IS NULL OR NOT ('security_invoker=true' = ANY(v_options)) THEN
+            RAISE EXCEPTION 'membership view % must be created WITH (security_invoker = true) so RLS applies to customer role', v_view;
+        END IF;
+    END LOOP;
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '  ✓ membership RLS policies installed'; END $$;

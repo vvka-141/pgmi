@@ -48,3 +48,17 @@ BEGIN
 
     RAISE DEBUG '✓ User upsert tests passed';
 END $$;
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+BEGIN
+    IF has_function_privilege(
+        v_customer_role,
+        'membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN)',
+        'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: customer role must NOT have EXECUTE on upsert_user (identity overwrite risk)';
+    END IF;
+    RAISE DEBUG '  ✓ customer role denied EXECUTE on upsert_user';
+END $$;

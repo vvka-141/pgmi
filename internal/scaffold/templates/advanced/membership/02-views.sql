@@ -11,22 +11,26 @@
 </pgmi-meta>
 */
 
-CREATE OR REPLACE VIEW membership.vw_active_users AS
+CREATE OR REPLACE VIEW membership.vw_active_users
+WITH (security_invoker = true) AS
 SELECT object_id, email, display_name, email_verified, created_at, updated_at
 FROM membership."user"
 WHERE is_active = true;
 
-CREATE OR REPLACE VIEW membership.vw_active_organizations AS
+CREATE OR REPLACE VIEW membership.vw_active_organizations
+WITH (security_invoker = true) AS
 SELECT object_id, name, slug, owner_user_id, is_personal, created_at, updated_at
 FROM membership.organization
 WHERE is_active = true;
 
-CREATE OR REPLACE VIEW membership.vw_user_owned_organizations AS
+CREATE OR REPLACE VIEW membership.vw_user_owned_organizations
+WITH (security_invoker = true) AS
 SELECT o.object_id, o.name, o.slug, o.owner_user_id, o.is_personal, o.created_at
 FROM membership.organization o
 WHERE o.is_active = true;
 
-CREATE OR REPLACE VIEW membership.vw_user_memberships AS
+CREATE OR REPLACE VIEW membership.vw_user_memberships
+WITH (security_invoker = true) AS
 SELECT
     om.object_id,
     om.organization_id,
@@ -42,11 +46,13 @@ FROM membership.organization_member om
 JOIN membership.organization o ON o.object_id = om.organization_id
 WHERE o.is_active = true;
 
-CREATE OR REPLACE VIEW membership.vw_active_memberships AS
+CREATE OR REPLACE VIEW membership.vw_active_memberships
+WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
 WHERE status = 'active';
 
-CREATE OR REPLACE VIEW membership.vw_pending_invitations AS
+CREATE OR REPLACE VIEW membership.vw_pending_invitations
+WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
 WHERE status = 'pending';
 

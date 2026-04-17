@@ -24,7 +24,7 @@ DECLARE
     v_user_id text;
     v_max_len constant int := 4096;
 BEGIN
-    v_user_id := COALESCE(p_headers->'x-user-id', p_headers->'user-id');
+    v_user_id := p_headers->'x-user-id';
 
     IF v_user_id IS NOT NULL AND length(v_user_id) <= v_max_len THEN
         PERFORM set_config('auth.user_id', v_user_id, true);
@@ -57,7 +57,7 @@ DECLARE
     v_provider text;
     v_subject_id text;
 BEGIN
-    v_subject := COALESCE(p_headers->'x-user-id', p_headers->'user-id');
+    v_subject := p_headers->'x-user-id';
     IF v_subject IS NULL OR length(v_subject) > 4096 THEN
         RETURN;
     END IF;
