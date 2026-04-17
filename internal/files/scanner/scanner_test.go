@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -240,8 +241,15 @@ func TestValidateDeploySQL(t *testing.T) {
 func TestValidateDeploySQL_Missing(t *testing.T) {
 	s, _ := newTestScanner()
 
-	if err := s.ValidateDeploySQL("/project"); err == nil {
-		t.Error("Expected error for missing deploy.sql")
+	err := s.ValidateDeploySQL("/project")
+	if err == nil {
+		t.Fatal("Expected error for missing deploy.sql")
+	}
+	if !errors.Is(err, pgmi.ErrDeploySQLNotFound) {
+		t.Errorf("Expected errors.Is(err, ErrDeploySQLNotFound), got: %v", err)
+	}
+	if code := pgmi.ExitCodeForError(err); code != pgmi.ExitDeploySQLMissing {
+		t.Errorf("Expected exit code %d (ExitDeploySQLMissing), got %d", pgmi.ExitDeploySQLMissing, code)
 	}
 }
 

@@ -151,6 +151,19 @@ func TestAPISQL_ViewsAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestAPISQL_CallbackNameValidated(t *testing.T) {
+	sql, _, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !strings.Contains(sql, "Invalid callback name") {
+		t.Error("pgmi_test_generate must validate callback identifier (SQL injection guard)")
+	}
+	if !strings.Contains(sql, "[a-zA-Z_][a-zA-Z0-9_]*([.][a-zA-Z_][a-zA-Z0-9_]*)?") {
+		t.Error("pgmi_test_generate must use strict identifier regex for callback validation")
+	}
+}
+
 func TestAPIContainsExpectedObjects(t *testing.T) {
 	sql, _, err := Load("")
 	if err != nil {

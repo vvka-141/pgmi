@@ -8,8 +8,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "pgmi",
-	Short: "PostgreSQL-native execution fabric",
+	Use:           "pgmi",
+	Short:         "PostgreSQL-native execution fabric",
+	SilenceErrors: true,
 	Long: asciiLogo + `
 
 pgmi loads project files and parameters into session-scoped temporary tables,

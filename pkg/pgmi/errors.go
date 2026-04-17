@@ -2,7 +2,10 @@ package pgmi
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Sentinel errors for common failure scenarios.
@@ -78,4 +81,32 @@ func ExitCodeForError(err error) int {
 	}
 
 	return ExitGeneralError
+}
+
+// FormatError renders an error for CLI output. For plain errors it returns the
+// message. If the chain contains a *pgconn.PgError, it appends the DETAIL,
+// HINT, and WHERE context fields that PostgreSQL attached to the error but
+// that err.Error() omits, matching the diagnostic fields psql surfaces.
+func FormatError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(err.Error())
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Detail != "" {
+			fmt.Fprintf(&b, "\nDETAIL: %s", pgErr.Detail)
+		}
+		if pgErr.Hint != "" {
+			fmt.Fprintf(&b, "\nHINT: %s", pgErr.Hint)
+		}
+		if pgErr.Where != "" {
+			fmt.Fprintf(&b, "\nWHERE: %s", pgErr.Where)
+		}
+	}
+
+	return b.String()
 }

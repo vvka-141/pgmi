@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/testgen"
@@ -45,10 +44,8 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		MacroCount:  0,
 	}
 
-	// Strip comments to find macros
 	strippedSQL := p.commentStripper.Strip(sql)
 
-	// Detect macros in stripped SQL
 	macros := p.macroDetector.Detect(strippedSQL)
 	if len(macros) == 0 {
 		return result, nil
@@ -56,8 +53,11 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 
 	result.MacroCount = len(macros)
 
-	// Process macros in reverse order to maintain correct positions
-	// (since each replacement may change the length of the string)
+	strippedToOrig, err := buildStrippedToOriginalMap(sql, strippedSQL)
+	if err != nil {
+		return nil, err
+	}
+
 	sortedMacros := make([]MacroCall, len(macros))
 	copy(sortedMacros, macros)
 	sort.Slice(sortedMacros, func(i, j int) bool {
@@ -67,31 +67,42 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 	expandedSQL := sql
 
 	for _, macro := range sortedMacros {
-		// Validate callback name format
 		if err := testgen.ValidateCallbackName(macro.Callback); err != nil {
 			return nil, err
 		}
 
-		// Call pg_temp.pgmi_test_generate() to get the test execution SQL
 		generatedSQL, err := p.testGenerateFn(ctx, conn, macro.Pattern, macro.Callback)
 		if err != nil {
 			return nil, err
 		}
 
-		// Extract macro text from stripped SQL and find it in expandedSQL
-		// Since we process in reverse order, use LastIndex to find the rightmost occurrence
-		macroText := strippedSQL[macro.StartPos:macro.EndPos]
-		idx := strings.LastIndex(expandedSQL, macroText)
-		if idx == -1 {
-			return nil, fmt.Errorf("failed to locate macro %q in SQL for expansion", macroText)
-		}
-
-		// Replace the macro with generated SQL
-		expandedSQL = expandedSQL[:idx] + generatedSQL + expandedSQL[idx+len(macroText):]
+		origStart := strippedToOrig[macro.StartPos]
+		origEnd := strippedToOrig[macro.EndPos]
+		expandedSQL = expandedSQL[:origStart] + generatedSQL + expandedSQL[origEnd:]
 	}
 
 	result.ExpandedSQL = expandedSQL
 	return result, nil
+}
+
+// buildStrippedToOriginalMap returns a slice where index i is the byte offset
+// in strippedSQL and the value is the corresponding byte offset in orig.
+// Safe because Strip only drops bytes — never reorders or inserts.
+func buildStrippedToOriginalMap(orig, stripped string) ([]int, error) {
+	m := make([]int, len(stripped)+1)
+	origIdx := 0
+	for strIdx := 0; strIdx < len(stripped); strIdx++ {
+		for origIdx < len(orig) && orig[origIdx] != stripped[strIdx] {
+			origIdx++
+		}
+		if origIdx >= len(orig) {
+			return nil, fmt.Errorf("internal: stripped byte %d (%q) not locatable in original SQL", strIdx, stripped[strIdx])
+		}
+		m[strIdx] = origIdx
+		origIdx++
+	}
+	m[len(stripped)] = origIdx
+	return m, nil
 }
 
 // callTestGenerate calls pg_temp.pgmi_test_generate() to get test execution SQL.

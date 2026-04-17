@@ -143,6 +143,15 @@ DECLARE
 BEGIN
     v_callback := COALESCE(p_callback, 'pg_temp.pgmi_test_callback');
 
+    -- Guard against SQL injection via callback name. Only accept an unquoted
+    -- PostgreSQL identifier, optionally schema-qualified. The value is
+    -- interpolated into generated SQL and cannot be safely %I-quoted because
+    -- schema.function syntax is a compound identifier.
+    IF v_callback !~ '^[a-zA-Z_][a-zA-Z0-9_]*([.][a-zA-Z_][a-zA-Z0-9_]*)?$' THEN
+        RAISE EXCEPTION 'Invalid callback name: %. Expected [schema.]function identifier.', v_callback
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
     -- Suite start
     v_sql := v_sql || format(
         'SELECT %s(ROW(''suite_start'', NULL, '''', 0, 0, NULL)::pg_temp.pgmi_test_event);',

@@ -119,6 +119,27 @@ func TestPipeline_Process_MultipleMacros(t *testing.T) {
 	}
 }
 
+func TestPipeline_Process_MacroFollowedByCommentWithSameText(t *testing.T) {
+	p := newTestPipeline(mockTestGenerate(map[string]string{
+		"": "/* expanded */",
+	}))
+	ctx := context.Background()
+
+	sql := "CALL pgmi_test();\n-- run CALL pgmi_test(); again"
+	result, err := p.Process(ctx, nil, sql)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.MacroCount != 1 {
+		t.Errorf("MacroCount = %d, want 1 (comment text should not be expanded)", result.MacroCount)
+	}
+	expected := "/* expanded */\n-- run CALL pgmi_test(); again"
+	if result.ExpandedSQL != expected {
+		t.Errorf("ExpandedSQL = %q\nwant %q", result.ExpandedSQL, expected)
+	}
+}
+
 func TestPipeline_Process_MacroInComment(t *testing.T) {
 	p := newTestPipeline(mockTestGenerate(nil))
 	ctx := context.Background()

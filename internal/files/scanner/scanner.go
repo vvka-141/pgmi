@@ -197,7 +197,7 @@ func (s *Scanner) ValidateDeploySQL(sourcePath string) error {
 	deploySQLPath := filepath.Join(sourcePath, "deploy.sql")
 	info, err := s.fsProvider.Stat(deploySQLPath)
 	if err != nil {
-		return fmt.Errorf("deploy.sql not found in source directory: %s (error: %w)", sourcePath, err)
+		return fmt.Errorf("%w at %s: %v", pgmi.ErrDeploySQLNotFound, sourcePath, err)
 	}
 
 	if info.IsDir() {

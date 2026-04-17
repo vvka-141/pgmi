@@ -23,6 +23,7 @@ func main() {
 	}
 
 	if err := cli.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", pgmi.FormatError(err))
 		os.Exit(pgmi.ExitCodeForError(err))
 	}
 }
