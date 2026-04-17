@@ -78,7 +78,12 @@ $$;
 --   - resources: Data access (resources/list, resources/read)
 --   - prompts: Message templates (prompts/list, prompts/get)
 --
--- Note: listChanged notifications are not currently supported.
+-- Known gap: listChanged notifications are NOT declared because pgmi does not
+-- yet emit notifications/{tools,resources,prompts}/list_changed when the MCP
+-- registry mutates. Long-lived clients will see a stale list until reconnect.
+-- Integration path: LISTEN/NOTIFY on a channel fired by registration
+-- functions, fanned out by the MCP transport gateway. Declaring listChanged
+-- capability MUST remain in lockstep with that notification plumbing.
 --
 -- Returns:
 --   {"tools": {}, "resources": {}, "prompts": {}}
@@ -95,6 +100,9 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         'prompts', jsonb_build_object()
     );
 $$;
+
+COMMENT ON FUNCTION api.mcp_server_capabilities() IS
+    'MCP capabilities advertised during initialize. Empty objects declare support without listChanged — pgmi does not yet emit list_changed notifications; see function body for integration notes.';
 
 -- ============================================================================
 -- MCP Initialize Handler

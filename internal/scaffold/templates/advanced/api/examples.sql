@@ -304,16 +304,22 @@ SELECT api.create_or_replace_mcp_handler(
         'tags', jsonb_build_array('system', 'introspection')
     ),
     $body$
+DECLARE
+    v_structured jsonb;
 BEGIN
-    -- Build a tool result containing text content blocks
+    v_structured := jsonb_build_object(
+        'database', current_database(),
+        'version',  version(),
+        'user',     current_user
+    );
+    -- Emit both a text content block (human/model fallback) AND structuredContent
+    -- per MCP 2025-06-18+: when outputSchema is declared, structuredContent
+    -- SHOULD conform to it and content remains a text rendering for the model.
     RETURN api.mcp_tool_result(
-        jsonb_build_array(api.mcp_text(format(
-            'Database: %s, Version: %s, User: %s',
-            current_database(),
-            version(),
-            current_user
-        ))),
-        (request).request_id
+        jsonb_build_array(api.mcp_text(v_structured::text)),
+        (request).request_id,
+        false,
+        v_structured
     );
 END;
     $body$

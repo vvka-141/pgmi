@@ -215,7 +215,23 @@ BEGIN
             END;
         END IF;
 
-        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore) || extensions.hstore(ARRAY[
+        -- Merge registered response_headers (except the x-include-schema
+        -- directive, which controls $schema injection above and MUST NOT
+        -- appear on the wire). Keys are lowercased for case-insensitive
+        -- semantics expected by HTTP clients.
+        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore);
+        IF v_route.response_headers IS NOT NULL AND v_route.response_headers <> '{}'::jsonb THEN
+            v_response.headers := v_response.headers || COALESCE((
+                SELECT extensions.hstore(
+                    array_agg(lower(key)),
+                    array_agg(value)
+                )
+                FROM jsonb_each_text(v_route.response_headers)
+                WHERE lower(key) <> 'x-include-schema'
+            ), ''::extensions.hstore);
+        END IF;
+
+        v_response.headers := v_response.headers || extensions.hstore(ARRAY[
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
             'x-route-id', v_route.object_id::text
@@ -407,12 +423,28 @@ BEGIN
             END;
         END IF;
 
-        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore) || extensions.hstore(ARRAY[
-            'content-type', 'application/json; charset=utf-8',
+        -- Merge registered response_headers (except x-include-schema directive).
+        -- Keys lowercased for HTTP case-insensitive semantics.
+        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore);
+        IF v_handler.response_headers IS NOT NULL AND v_handler.response_headers <> '{}'::jsonb THEN
+            v_response.headers := v_response.headers || COALESCE((
+                SELECT extensions.hstore(
+                    array_agg(lower(key)),
+                    array_agg(value)
+                )
+                FROM jsonb_each_text(v_handler.response_headers)
+                WHERE lower(key) <> 'x-include-schema'
+            ), ''::extensions.hstore);
+        END IF;
+
+        v_response.headers := v_response.headers || extensions.hstore(ARRAY[
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
             'x-rpc-method', v_handler.method_name
         ]);
+        IF NOT v_response.headers ? 'content-type' THEN
+            v_response.headers := v_response.headers || 'content-type=>application/json; charset=utf-8'::extensions.hstore;
+        END IF;
 
         IF v_handler.auto_log THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
@@ -682,8 +714,29 @@ $$;
 -- ============================================================================
 -- MCP Discovery Functions
 -- ============================================================================
+-- NO PAGINATION YET: these functions return the entire list in a single call.
+-- MCP clients MUST NOT rely on cursor behaviour. Pagination (RFC-style
+-- nextCursor) is planned post-v1 — keyset on mcp_name. Until then, servers
+-- with >~500 tools will send large payloads.
+--
+-- NO listChanged NOTIFICATIONS: api.mcp_server_capabilities declares no
+-- listChanged capability because we do not yet emit notifications/tools/
+-- list_changed (or resources/, prompts/). Clients see a static tool list for
+-- the duration of a connection. Integration path: LISTEN/NOTIFY on a channel
+-- triggered by api.create_or_replace_mcp_handler, fanned out by the MCP
+-- transport gateway.
+--
+-- TAGS placement: pgmi surfaces tags inside the spec-defined `_meta` object
+-- (an extension slot reserved by MCP for server-specific data). Top-level
+-- `tags` would be a spec violation under strict clients.
+--
+-- AUTH FILTERING: tools that require authentication are hidden from
+-- mcp_list_tools when auth.user_id is not set in the session. MCP spec
+-- allows either (a) hide-then-reject or (b) expose-and-return-isError;
+-- pgmi uses (a) because hidden tools are the idiomatic MCP UX.
 
 DROP FUNCTION IF EXISTS api.mcp_list_tools();
+DROP FUNCTION IF EXISTS api.mcp_list_tools(text[]);
 
 CREATE OR REPLACE FUNCTION api.mcp_list_tools(p_tags text[] DEFAULT NULL)
 RETURNS jsonb
@@ -691,26 +744,39 @@ LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
+    WITH norm AS (
+        -- NULL or empty array both mean "no tag filter"
+        SELECT CASE WHEN p_tags IS NULL OR cardinality(p_tags) = 0
+                    THEN NULL::text[]
+                    ELSE p_tags
+               END AS tag_filter
+    )
     SELECT jsonb_build_object('tools', COALESCE(jsonb_agg(
         jsonb_strip_nulls(
             jsonb_build_object(
                 'name', r.mcp_name,
-                'title', COALESCE(h.title, h.description),
+                'title', h.title,
                 'description', h.description,
                 'inputSchema', r.input_schema,
                 'outputSchema', h.output_json_schema::jsonb,
-                'tags', CASE WHEN r.tags = '{}' THEN NULL ELSE to_jsonb(r.tags) END
+                '_meta', CASE WHEN r.tags = '{}' THEN NULL
+                              ELSE jsonb_build_object('tags', to_jsonb(r.tags)) END
             )
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
+    CROSS JOIN norm
     WHERE r.mcp_type = 'tool'
-      AND (p_tags IS NULL OR r.tags && p_tags);
+      AND (norm.tag_filter IS NULL OR r.tags && norm.tag_filter)
+      -- Hide auth-required tools from callers with no identity. Callers with
+      -- auth.user_id set see every tool (including the ones that require auth).
+      AND (NOT h.requires_auth
+           OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
 $$;
 
 COMMENT ON FUNCTION api.mcp_list_tools(text[]) IS
-    'MCP tool discovery. Returns {"tools":[...]} with name, title, description, inputSchema, outputSchema, and tags. Pass p_tags to filter by tag overlap (uses GIN index).';
+    'MCP tool discovery. Returns {"tools":[...]} with name, title, description, inputSchema, outputSchema, and _meta.tags (pgmi extension). Hides tools requiring auth when the session has no auth.user_id. Pass p_tags to filter by tag overlap (NULL or empty = no filter).';
 
 CREATE OR REPLACE FUNCTION api.mcp_list_resources()
 RETURNS jsonb
@@ -718,19 +784,29 @@ LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
+    -- A resource with no RFC 6570 {placeholder} is a static URI per MCP spec;
+    -- emit as `uri`. Otherwise emit as `uriTemplate` (RFC 6570 Level 1 subset).
     SELECT jsonb_build_object('resources', COALESCE(jsonb_agg(
-        jsonb_build_object(
-            'name', r.mcp_name,
-            'title', COALESCE(h.title, h.description),
-            'description', h.description,
-            'uriTemplate', r.uri_template,
-            'mimeType', r.mime_type
+        jsonb_strip_nulls(
+            jsonb_build_object(
+                'name', r.mcp_name,
+                'title', h.title,
+                'description', h.description,
+                'uri', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN NULL ELSE r.uri_template END,
+                'uriTemplate', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN r.uri_template ELSE NULL END,
+                'mimeType', r.mime_type
+            )
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
-    WHERE r.mcp_type = 'resource';
+    WHERE r.mcp_type = 'resource'
+      AND (NOT h.requires_auth
+           OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
 $$;
+
+COMMENT ON FUNCTION api.mcp_list_resources() IS
+    'MCP resource discovery. Emits uri (static) or uriTemplate (RFC 6570 placeholders detected) based on uri_template shape. Hides auth-required resources from unauthenticated sessions.';
 
 CREATE OR REPLACE FUNCTION api.mcp_list_prompts()
 RETURNS jsonb
@@ -739,17 +815,24 @@ SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
     SELECT jsonb_build_object('prompts', COALESCE(jsonb_agg(
-        jsonb_build_object(
-            'name', r.mcp_name,
-            'title', COALESCE(h.title, h.description),
-            'description', h.description,
-            'arguments', r.arguments
+        jsonb_strip_nulls(
+            jsonb_build_object(
+                'name', r.mcp_name,
+                'title', h.title,
+                'description', h.description,
+                'arguments', r.arguments
+            )
         )
     ), '[]'::jsonb))
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
-    WHERE r.mcp_type = 'prompt';
+    WHERE r.mcp_type = 'prompt'
+      AND (NOT h.requires_auth
+           OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
 $$;
+
+COMMENT ON FUNCTION api.mcp_list_prompts() IS
+    'MCP prompt discovery. Strips NULL fields for spec compliance (clients reject "title": null). Hides auth-required prompts from unauthenticated sessions.';
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.set_auth_context() - authentication header extraction';

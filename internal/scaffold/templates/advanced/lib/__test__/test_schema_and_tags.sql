@@ -193,30 +193,233 @@ END;
         RAISE EXCEPTION 'mcp_list_tools did not expose outputSchema for schema_tool_alpha: %', v_list;
     END IF;
 
+    -- Tags MUST be under _meta.tags (MCP extension slot), NOT at top level
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
+        WHERE t->>'name' = 'schema_tool_alpha' AND t ? 'tags'
+    ) THEN
+        RAISE EXCEPTION 'mcp_list_tools must NOT put tags at top-level tool object (spec violation): %', v_list;
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
         WHERE t->>'name' = 'schema_tool_alpha'
-          AND t->'tags' @> '["alpha"]'::jsonb
+          AND t->'_meta'->'tags' @> '["alpha"]'::jsonb
     ) THEN
-        RAISE EXCEPTION 'mcp_list_tools did not expose tags: %', v_list;
+        RAISE EXCEPTION 'mcp_list_tools missing _meta.tags for schema_tool_alpha: %', v_list;
     END IF;
 
-    RAISE NOTICE '  + mcp_list_tools includes outputSchema and tags by default';
+    RAISE NOTICE '  + mcp_list_tools includes outputSchema and _meta.tags';
 
+    -- Tag filter: specific tag returns one tool
     v_list := api.mcp_list_tools(ARRAY['alpha']);
-
     IF jsonb_array_length(v_list->'tools') <> 1
        OR (v_list->'tools'->0->>'name') <> 'schema_tool_alpha' THEN
         RAISE EXCEPTION 'mcp_list_tools(ARRAY[''alpha'']) did not filter correctly: %', v_list;
     END IF;
 
+    -- Tag filter: shared tag returns both
     v_list := api.mcp_list_tools(ARRAY['schema-test']);
-
     IF jsonb_array_length(v_list->'tools') < 2 THEN
         RAISE EXCEPTION 'mcp_list_tools(ARRAY[''schema-test'']) should match both tools: %', v_list;
     END IF;
 
-    RAISE NOTICE '  + mcp_list_tools(p_tags) filters by tag overlap';
+    -- Tag filter: empty array MUST be treated as "no filter" (returns all tools)
+    DECLARE
+        v_all_count int;
+        v_empty_count int;
+    BEGIN
+        v_list := api.mcp_list_tools();
+        v_all_count := jsonb_array_length(v_list->'tools');
+        v_list := api.mcp_list_tools(ARRAY[]::text[]);
+        v_empty_count := jsonb_array_length(v_list->'tools');
+        IF v_empty_count <> v_all_count THEN
+            RAISE EXCEPTION 'mcp_list_tools(empty array) must behave identically to mcp_list_tools() — got % vs %',
+                v_empty_count, v_all_count;
+        END IF;
+    END;
+
+    RAISE NOTICE '  + mcp_list_tools(p_tags) filters by tag overlap; empty array = no filter';
 
     RAISE NOTICE '✓ Schema and tags tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: auth-required tools are hidden from mcp_list_tools when auth.user_id
+-- is unset; static resources emit `uri`, templated ones emit `uriTemplate`
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_auth_tool_id uuid := 'e3000010-0001-4000-8000-000000000001';
+    v_static_res_id uuid := 'e3000010-0002-4000-8000-000000000001';
+    v_template_res_id uuid := 'e3000010-0003-4000-8000-000000000001';
+    v_list jsonb;
+BEGIN
+    RAISE NOTICE '-> Testing tools/list auth filter + resources/list uri vs uriTemplate';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', v_auth_tool_id,
+            'type', 'tool',
+            'name', 'auth_only_probe',
+            'description', 'Requires auth — should be hidden when unauthenticated',
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
+            'requiresAuth', true
+        ),
+        $body$
+BEGIN
+    RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id);
+END;
+        $body$
+    );
+
+    -- Ensure no session auth is carried over from earlier tests
+    PERFORM set_config('auth.user_id', '', true);
+
+    v_list := api.mcp_list_tools();
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
+        WHERE t->>'name' = 'auth_only_probe'
+    ) THEN
+        RAISE EXCEPTION 'auth_only_probe must be hidden when auth.user_id is unset: %', v_list;
+    END IF;
+
+    PERFORM set_config('auth.user_id', 'test|alice', true);
+
+    v_list := api.mcp_list_tools();
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
+        WHERE t->>'name' = 'auth_only_probe'
+    ) THEN
+        RAISE EXCEPTION 'auth_only_probe must appear when auth.user_id is set: %', v_list;
+    END IF;
+
+    PERFORM set_config('auth.user_id', '', true);
+
+    RAISE NOTICE '  + mcp_list_tools hides auth-required tools when unauthenticated';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', v_static_res_id,
+            'type', 'resource',
+            'name', 'static_catalog',
+            'description', 'Static resource (no placeholders)',
+            'uriTemplate', 'postgres:///catalog',
+            'mimeType', 'application/json',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object(
+            'uri', (request).uri,
+            'mimeType', 'application/json',
+            'text', '{}'
+        )),
+        (request).request_id
+    );
+END;
+        $body$
+    );
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', v_template_res_id,
+            'type', 'resource',
+            'name', 'templated_doc',
+            'description', 'Templated resource (has {placeholder})',
+            'uriTemplate', 'postgres:///docs/{doc_id}',
+            'mimeType', 'application/json',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object(
+            'uri', (request).uri,
+            'mimeType', 'application/json',
+            'text', '{}'
+        )),
+        (request).request_id
+    );
+END;
+        $body$
+    );
+
+    v_list := api.mcp_list_resources();
+
+    -- Static: MUST emit `uri`, MUST NOT emit `uriTemplate`
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'resources') r
+        WHERE r->>'name' = 'static_catalog'
+          AND r->>'uri' = 'postgres:///catalog'
+          AND NOT (r ? 'uriTemplate')
+    ) THEN
+        RAISE EXCEPTION 'Static resource must emit `uri` (not `uriTemplate`): %', v_list;
+    END IF;
+
+    -- Templated: MUST emit `uriTemplate`, MUST NOT emit `uri`
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'resources') r
+        WHERE r->>'name' = 'templated_doc'
+          AND r->>'uriTemplate' = 'postgres:///docs/{doc_id}'
+          AND NOT (r ? 'uri')
+    ) THEN
+        RAISE EXCEPTION 'Templated resource must emit `uriTemplate` (not `uri`): %', v_list;
+    END IF;
+
+    RAISE NOTICE '  + mcp_list_resources distinguishes static uri from uriTemplate';
+
+    RAISE NOTICE '✓ MCP list auth/uri tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: registered response_headers propagate to REST responses
+-- (except the x-include-schema directive, which stays internal).
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_handler_id uuid := 'e3000011-0001-4000-8000-000000000001';
+    v_response api.http_response;
+BEGIN
+    RAISE NOTICE '-> Testing REST registered response_headers propagation';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', v_handler_id,
+            'uri', '^/headers-probe(\?.*)?$',
+            'httpMethod', '^GET$',
+            'name', 'headers_probe',
+            'requiresAuth', false,
+            'responseHeaders', jsonb_build_object(
+                'X-Content-Type-Options', 'nosniff',
+                'X-Frame-Options', 'DENY',
+                'x-include-schema', 'false'
+            )
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, jsonb_build_object('ok', true));
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke('GET', '/headers-probe', ''::extensions.hstore, NULL::bytea);
+
+    IF (v_response).headers->'x-content-type-options' <> 'nosniff' THEN
+        RAISE EXCEPTION 'X-Content-Type-Options not propagated (got %): %',
+            (v_response).headers->'x-content-type-options', (v_response).headers;
+    END IF;
+    IF (v_response).headers->'x-frame-options' <> 'DENY' THEN
+        RAISE EXCEPTION 'X-Frame-Options not propagated: %', (v_response).headers;
+    END IF;
+    -- x-include-schema is a directive — MUST NOT leak to the wire
+    IF (v_response).headers ? 'x-include-schema' THEN
+        RAISE EXCEPTION 'x-include-schema directive must not appear on the wire: %', (v_response).headers;
+    END IF;
+
+    RAISE NOTICE '  + registered response_headers propagate (case-insensitive) and x-include-schema is stripped';
+
+    RAISE NOTICE '✓ response_headers propagation tests passed';
 END $$;
