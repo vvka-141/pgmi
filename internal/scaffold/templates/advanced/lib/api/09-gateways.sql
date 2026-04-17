@@ -16,6 +16,18 @@ DO $$ BEGIN RAISE NOTICE '→ Installing protocol gateways'; END $$;
 -- ============================================================================
 -- Authentication Context
 -- ============================================================================
+-- TRUST BOUNDARY (security critical):
+--
+-- api.set_auth_context trusts x-user-id / x-user-email / x-tenant-id headers
+-- WITHOUT cryptographic verification. It is the deployment's responsibility to
+-- ensure only trusted traffic reaches api.rest_invoke / api.rpc_invoke — these
+-- headers MUST be stripped from client requests and re-issued by a trusted
+-- gateway that has authenticated the user (e.g., a reverse proxy validating
+-- a JWT and emitting x-user-id, or PostgREST with role-based auth).
+--
+-- To help detect misuse, x-user-id must be in 'provider|subject' form. Raw
+-- subject strings (no pipe) are rejected so that casual attempts to forge
+-- x-user-id: alice fail closed.
 
 CREATE OR REPLACE FUNCTION api.set_auth_context(p_headers extensions.hstore)
 RETURNS void
@@ -26,7 +38,10 @@ DECLARE
 BEGIN
     v_user_id := p_headers->'x-user-id';
 
-    IF v_user_id IS NOT NULL AND length(v_user_id) <= v_max_len THEN
+    IF v_user_id IS NOT NULL
+       AND length(v_user_id) <= v_max_len
+       AND position('|' IN v_user_id) > 0
+       AND position('|' IN v_user_id) < length(v_user_id) THEN
         PERFORM set_config('auth.user_id', v_user_id, true);
         PERFORM set_config('auth.idp_subject', v_user_id, true);
     END IF;
@@ -44,6 +59,9 @@ BEGIN
     END IF;
 END;
 $$;
+
+COMMENT ON FUNCTION api.set_auth_context(extensions.hstore) IS
+    'Gateway-only trust boundary: maps x-user-id (format provider|subject_id), x-user-email, x-tenant-id, authorization headers into session GUCs. Callers MUST be a trusted gateway that has already verified the identity — these headers carry no integrity check.';
 
 CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
 RETURNS void
@@ -167,20 +185,33 @@ BEGIN
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
+        -- REST $schema injection: only when opt-in via x-include-schema=true AND
+        -- the body parses as a JSON object. For array/scalar bodies, wrap in
+        -- {"data": body, "$schema": schema} so the schema describes a nested
+        -- value rather than corrupting the root shape. Non-JSON or malformed
+        -- bodies are passed through unchanged (RAISE DEBUG, not silent swallow).
         IF v_route.output_json_schema IS NOT NULL
            AND v_route.response_headers->>'x-include-schema' = 'true' THEN
+            DECLARE
+                v_body jsonb;
+                v_merged jsonb;
             BEGIN
+                v_body := api.content_json((v_response).content);
+                IF jsonb_typeof(v_body) = 'object' THEN
+                    v_merged := v_body || jsonb_build_object('$schema', v_route.output_json_schema::jsonb);
+                ELSE
+                    v_merged := jsonb_build_object(
+                        'data', v_body,
+                        '$schema', v_route.output_json_schema::jsonb
+                    );
+                END IF;
                 v_response := (
                     (v_response).status_code,
                     (v_response).headers,
-                    convert_to(
-                        (api.content_json((v_response).content)
-                            || jsonb_build_object('$schema', v_route.output_json_schema::jsonb))::text,
-                        'UTF8'
-                    )
+                    convert_to(v_merged::text, 'UTF8')
                 )::api.http_response;
             EXCEPTION WHEN OTHERS THEN
-                NULL;
+                RAISE DEBUG 'rest_invoke: $schema injection skipped (non-JSON body): %', SQLERRM;
             END;
         END IF;
 
@@ -345,20 +376,34 @@ BEGIN
 
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
+        -- RPC $schema injection: merge into result member only (never at top
+        -- level of the JSON-RPC envelope). JSON-RPC 2.0 responses MUST NOT have
+        -- extra top-level keys. Injecting into result is spec-compliant because
+        -- result is "Any" type. Skip for error responses (result absent) or
+        -- when result is not a JSON object.
         IF v_handler.output_json_schema IS NOT NULL
            AND v_handler.response_headers->>'x-include-schema' = 'true' THEN
+            DECLARE
+                v_body jsonb;
+                v_merged jsonb;
             BEGIN
-                v_response := (
-                    (v_response).status_code,
-                    (v_response).headers,
-                    convert_to(
-                        (api.content_json((v_response).content)
-                            || jsonb_build_object('$schema', v_handler.output_json_schema::jsonb))::text,
-                        'UTF8'
-                    )
-                )::api.http_response;
+                v_body := api.content_json((v_response).content);
+                IF jsonb_typeof(v_body) = 'object'
+                   AND jsonb_typeof(v_body->'result') = 'object' THEN
+                    v_merged := jsonb_set(
+                        v_body,
+                        '{result,$schema}',
+                        v_handler.output_json_schema::jsonb,
+                        true
+                    );
+                    v_response := (
+                        (v_response).status_code,
+                        (v_response).headers,
+                        convert_to(v_merged::text, 'UTF8')
+                    )::api.http_response;
+                END IF;
             EXCEPTION WHEN OTHERS THEN
-                NULL;
+                RAISE DEBUG 'rpc_invoke: $schema injection skipped (malformed envelope): %', SQLERRM;
             END;
         END IF;
 
@@ -401,12 +446,17 @@ $$;
 -- ============================================================================
 -- MCP Tool Invocation
 -- ============================================================================
+-- Exception handling follows MCP spec: tool execution failures return
+-- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
+-- JSON-RPC -32601 is reserved for "tool not found" (true protocol error).
+
+DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
 CREATE OR REPLACE FUNCTION api.mcp_call_tool(
     p_name text,
     p_arguments jsonb,
     p_context jsonb DEFAULT NULL,
-    p_request_id text DEFAULT NULL
+    p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -460,15 +510,17 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         RAISE DEBUG 'mcp_call_tool: Handler exception: %', SQLERRM;
 
-        -- Log full error to exchange table for debugging (always log errors)
-        v_response := api.mcp_error(-32603, SQLERRM, p_request_id);
+        -- C1 fix: MCP spec requires tool *execution* failures to use
+        -- result.isError=true (via mcp_tool_error), NOT a JSON-RPC error
+        -- envelope (which is reserved for protocol-level errors).
+        v_response := api.mcp_tool_error(SQLERRM, p_request_id);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
             VALUES (v_handler.object_id, 'tool', v_handler.mcp_name, v_request, v_response);
         END IF;
 
-        -- Return sanitized error to client (hide internal details)
-        RETURN api.mcp_error(-32603, 'Internal error', p_request_id);
+        -- Return sanitized isError result to client (MCP spec-compliant)
+        RETURN api.mcp_tool_error('Tool execution failed', p_request_id);
     END;
 END;
 $$;
@@ -477,10 +529,12 @@ $$;
 -- MCP Resource Read
 -- ============================================================================
 
+DROP FUNCTION IF EXISTS api.mcp_read_resource(text, jsonb, text);
+
 CREATE OR REPLACE FUNCTION api.mcp_read_resource(
     p_uri text,
     p_context jsonb DEFAULT NULL,
-    p_request_id text DEFAULT NULL
+    p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -552,11 +606,13 @@ $$;
 -- MCP Prompt Expansion
 -- ============================================================================
 
+DROP FUNCTION IF EXISTS api.mcp_get_prompt(text, jsonb, jsonb, text);
+
 CREATE OR REPLACE FUNCTION api.mcp_get_prompt(
     p_name text,
     p_arguments jsonb,
     p_context jsonb DEFAULT NULL,
-    p_request_id text DEFAULT NULL
+    p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
 LANGUAGE plpgsql
 SECURITY DEFINER

@@ -55,10 +55,30 @@ CREATE TABLE IF NOT EXISTS api.handler (
     output_xml_schema    api.xml_schema
 );
 
+-- Evolution path: keep columns when DROP DOMAIN CASCADE removed them during
+-- api.json_schema rebuild (see lib/api/01-types.sql).
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
+
+-- Fail fast if the entity-standards DDL trigger did not inject created_at /
+-- deleted_at. Prevents opaque downstream errors on INSERT.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'api.handler'::regclass
+          AND attname = 'created_at' AND NOT attisdropped
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'api.handler'::regclass
+          AND attname = 'deleted_at' AND NOT attisdropped
+    ) THEN
+        RAISE EXCEPTION 'api.handler missing created_at/deleted_at — core_entity_table_standards event trigger did not fire'
+            USING HINT = 'Verify lib/core/entity-standards.sql ran successfully and deployment connection has superuser.';
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 

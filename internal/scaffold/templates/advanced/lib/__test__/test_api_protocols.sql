@@ -373,7 +373,7 @@ END;
     -- Test: MCP Tool Invocation (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
-    v_response := api.mcp_call_tool('test_tool', '{}'::jsonb, NULL, 'req-1');
+    v_response := api.mcp_call_tool('test_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->>'jsonrpc' != '2.0' THEN
@@ -398,7 +398,7 @@ END;
     -- Test: MCP Tool Not Found (JSON-RPC 2.0 Error Format)
     -- ========================================================================
 
-    v_response := api.mcp_call_tool('nonexistent_tool_xyz', '{}'::jsonb, NULL, 'req-2');
+    v_response := api.mcp_call_tool('nonexistent_tool_xyz', '{}'::jsonb, NULL, '"req-2"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->>'jsonrpc' != '2.0' THEN
@@ -419,7 +419,7 @@ END;
     -- Test: MCP Resource Read (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
-    v_response := api.mcp_read_resource('test:///123', NULL, 'req-3');
+    v_response := api.mcp_read_resource('test:///123', NULL, '"req-3"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->>'jsonrpc' != '2.0' THEN
@@ -444,7 +444,7 @@ END;
         'test_prompt',
         '{"input": "test value"}'::jsonb,
         NULL,
-        'req-4'
+        '"req-4"'::jsonb
     );
     v_envelope := (v_response).envelope;
 
@@ -556,7 +556,7 @@ END;
             'type', 'tool',
             'name', 'test_registry_tool',
             'description', 'Registry test MCP tool',
-            'inputSchema', '{}'::jsonb,
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'requiresAuth', false
         ),
         $body$

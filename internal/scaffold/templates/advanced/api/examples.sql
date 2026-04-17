@@ -278,7 +278,7 @@ END $$;
 -- Demonstrates an MCP tool handler. MCP tools differ from REST/RPC:
 -- - Discovered via api.mcp_list_tools() (clients enumerate capabilities)
 -- - Called via api.mcp_call_tool(name, arguments, context, request_id)
--- - Request is api.mcp_request (arguments jsonb, uri text, context jsonb, request_id text)
+-- - Request is api.mcp_request (arguments jsonb, uri text, context jsonb, request_id jsonb)
 -- - Response is api.mcp_response (JSON-RPC 2.0 envelope)
 -- - Use api.mcp_tool_result() and api.mcp_text() to build responses
 
@@ -325,7 +325,7 @@ DECLARE
     v_response api.mcp_response;
 BEGIN
     -- api.mcp_call_tool(name, arguments, context, request_id)
-    v_response := api.mcp_call_tool('database_info', '{}'::jsonb, NULL, 'demo-1');
+    v_response := api.mcp_call_tool('database_info', '{}'::jsonb, NULL, '"demo-1"'::jsonb);
     RAISE DEBUG '  → MCP tool database_info  envelope=%', (v_response).envelope;
 END $$;
 
@@ -385,7 +385,7 @@ DECLARE
     v_response api.mcp_response;
 BEGIN
     -- api.mcp_read_resource(uri, context, request_id)
-    v_response := api.mcp_read_resource('postgres:///api/handler', NULL, 'demo-2');
+    v_response := api.mcp_read_resource('postgres:///api/handler', NULL, '"demo-2"'::jsonb);
     RAISE DEBUG '  → MCP resource postgres:///api/handler  envelope=%', (v_response).envelope;
 END $$;
 
@@ -445,7 +445,7 @@ BEGIN
     v_response := api.mcp_get_prompt(
         'sql_assistant',
         '{"task": "find all critical path activities", "tables": "project_design.activity"}'::jsonb,
-        NULL, 'demo-3'
+        NULL, '"demo-3"'::jsonb
     );
     RAISE DEBUG '  → MCP prompt sql_assistant  envelope=%', (v_response).envelope;
 END $$;
@@ -586,24 +586,24 @@ DECLARE
     v_response api.mcp_response;
     v_env jsonb;
 BEGIN
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, 'demo-4');
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, '"demo-4"'::jsonb);
     RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, NULL, 'demo-4b');
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, NULL, '"demo-4b"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject pg_catalog schema';
     END IF;
     RAISE DEBUG '  ✓ list_tables(pg_catalog) rejected';
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, NULL, 'demo-4c');
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, NULL, '"demo-4c"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject information_schema';
     END IF;
     RAISE DEBUG '  ✓ list_tables(information_schema) rejected';
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, NULL, 'demo-4d');
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, NULL, '"demo-4d"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject internal schema';
@@ -696,7 +696,7 @@ BEGIN
         'describe_table',
         '{"table":"handler","schema":"api"}'::jsonb,
         '{"user_id":"test|123"}'::jsonb,
-        'demo-5'
+        '"demo-5"'::jsonb
     );
     RAISE DEBUG '  -> MCP tool describe_table  envelope=%', (v_response).envelope;
 END $$;

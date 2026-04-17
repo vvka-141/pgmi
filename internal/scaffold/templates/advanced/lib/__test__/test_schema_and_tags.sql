@@ -122,11 +122,17 @@ END;
     );
     v_response_body := api.content_json((v_http_response).content);
 
-    IF NOT v_response_body ? '$schema' THEN
-        RAISE EXCEPTION 'RPC response missing $schema key (x-include-schema=true): %', v_response_body;
+    -- JSON-RPC 2.0 spec: the response envelope MUST NOT carry extra top-level
+    -- keys. The $schema injection goes into result (where result is "Any" per
+    -- spec, so extra keys inside result are allowed).
+    IF v_response_body ? '$schema' THEN
+        RAISE EXCEPTION 'RPC response $schema must not be at envelope top level (JSON-RPC 2.0 violation): %', v_response_body;
+    END IF;
+    IF NOT (v_response_body->'result') ? '$schema' THEN
+        RAISE EXCEPTION 'RPC response.result missing $schema key (x-include-schema=true): %', v_response_body;
     END IF;
 
-    RAISE NOTICE '  + RPC response body contains $schema merged from output_json_schema';
+    RAISE NOTICE '  + RPC response.result contains $schema merged from output_json_schema';
 
     -- ========================================================================
     -- MCP: outputSchema appears in mcp_list_tools; tags filter works

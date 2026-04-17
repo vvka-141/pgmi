@@ -36,6 +36,38 @@ COMMENT ON FUNCTION membership.api_key_prefix IS
     'Prefix segment of API keys. Reads the pgmi.api_key_prefix GUC or defaults to "pgmi". Format: {prefix}_{key_id}_{secret}.';
 
 -- ============================================================================
+-- Constant-time String Comparison
+-- ============================================================================
+-- Eliminates the timing side-channel in hash comparisons. Plain `=` on text
+-- short-circuits on the first differing byte, leaking the length of the match
+-- prefix. This helper XORs every byte and accumulates differences so execution
+-- time is independent of where inputs diverge.
+
+CREATE OR REPLACE FUNCTION membership.eq_constant_time(a text, b text)
+RETURNS boolean
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+DECLARE
+    v_a bytea := convert_to(a, 'UTF8');
+    v_b bytea := convert_to(b, 'UTF8');
+    v_la int := octet_length(v_a);
+    v_lb int := octet_length(v_b);
+    v_len int := GREATEST(v_la, v_lb);
+    v_diff int := v_la # v_lb;
+    i int;
+BEGIN
+    FOR i IN 0 .. v_len - 1 LOOP
+        v_diff := v_diff
+            | (CASE WHEN i < v_la THEN get_byte(v_a, i) ELSE 0 END
+               # CASE WHEN i < v_lb THEN get_byte(v_b, i) ELSE 0 END);
+    END LOOP;
+    RETURN v_diff = 0;
+END;
+$$;
+
+COMMENT ON FUNCTION membership.eq_constant_time(text, text) IS
+    'Constant-time equality compare for hex/text secrets. Runtime is independent of where inputs diverge, eliminating the timing side-channel present in plain `=`.';
+
+-- ============================================================================
 -- API Key Status Enum
 -- ============================================================================
 
@@ -71,6 +103,20 @@ CREATE TABLE IF NOT EXISTS membership.api_key (
     CONSTRAINT ck_api_key_key_id_not_empty CHECK (length(key_id) >= 6),
     CONSTRAINT ck_api_key_key_hash_not_empty CHECK (length(key_hash) = 64)
 );
+
+-- Fail fast if the entity-standards DDL trigger did not inject created_at /
+-- deleted_at (partial indexes below reference deleted_at).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'membership.api_key'::regclass
+          AND attname = 'deleted_at' AND NOT attisdropped
+    ) THEN
+        RAISE EXCEPTION 'membership.api_key missing deleted_at — core_entity_table_standards event trigger did not fire'
+            USING HINT = 'Verify lib/core/entity-standards.sql ran successfully and deployment connection has superuser.';
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_api_key_org
     ON membership.api_key(organization_id)
@@ -311,7 +357,7 @@ BEGIN
     END IF;
 
     v_computed_hash := encode(extensions.digest(p_raw_key, 'sha256'), 'hex');
-    IF v_computed_hash != v_key.key_hash THEN
+    IF NOT membership.eq_constant_time(v_computed_hash, v_key.key_hash) THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, v_key_id, 'invalid secret'::text;
         RETURN;
     END IF;

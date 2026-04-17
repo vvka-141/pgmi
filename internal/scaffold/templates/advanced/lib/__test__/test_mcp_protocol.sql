@@ -15,7 +15,7 @@ BEGIN
     -- Test: Initialize with valid protocol version
     -- ========================================================================
 
-    v_response := api.mcp_initialize('{"protocolVersion":"2024-11-05"}'::jsonb, 'init-1');
+    v_response := api.mcp_initialize('{"protocolVersion":"2024-11-05"}'::jsonb, '"init-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->>'jsonrpc' != '2.0' THEN
@@ -44,7 +44,7 @@ BEGIN
     -- Test: Initialize with missing protocol version
     -- ========================================================================
 
-    v_response := api.mcp_initialize('{}'::jsonb, 'init-2');
+    v_response := api.mcp_initialize('{}'::jsonb, '"init-2"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->'error' IS NULL THEN
@@ -61,7 +61,7 @@ BEGIN
     -- Test: Initialize with unsupported protocol version
     -- ========================================================================
 
-    v_response := api.mcp_initialize('{"protocolVersion":"1999-01-01"}'::jsonb, 'init-3');
+    v_response := api.mcp_initialize('{"protocolVersion":"1999-01-01"}'::jsonb, '"init-3"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->'error' IS NULL THEN
@@ -84,7 +84,7 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Testing MCP Ping';
 
-    v_response := api.mcp_ping('ping-1');
+    v_response := api.mcp_ping('"ping-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
     IF v_envelope->>'jsonrpc' != '2.0' THEN

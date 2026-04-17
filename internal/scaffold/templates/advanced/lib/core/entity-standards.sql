@@ -120,8 +120,17 @@ $$;
 DO $su$
 DECLARE
     v_owner_role text := pg_temp.deployment_setting('database_owner_role');
+    v_is_super   boolean;
+    v_installed  boolean;
 BEGIN
     EXECUTE 'RESET ROLE';
+
+    SELECT rolsuper INTO v_is_super FROM pg_roles WHERE rolname = current_user;
+    IF NOT COALESCE(v_is_super, false) THEN
+        EXECUTE format('SET ROLE %I', v_owner_role);
+        RAISE EXCEPTION 'pgmi advanced template requires a superuser deployment connection; current role % is not superuser', current_user
+            USING HINT = 'Connect as a superuser (or a role with CREATEROLE + SUPERUSER) to install the core_entity_table_standards event trigger, or disable entity-standards by removing lib/core/entity-standards.sql from the deployment.';
+    END IF;
 
     EXECUTE 'DROP EVENT TRIGGER IF EXISTS core_entity_table_standards';
     EXECUTE format(
@@ -130,6 +139,14 @@ BEGIN
         'WHEN TAG IN (''CREATE TABLE'', ''ALTER TABLE'') '
         'EXECUTE FUNCTION core.entity_table_ddl_hook()'
     );
+
+    SELECT EXISTS (
+        SELECT 1 FROM pg_event_trigger WHERE evtname = 'core_entity_table_standards'
+    ) INTO v_installed;
+    IF NOT v_installed THEN
+        EXECUTE format('SET ROLE %I', v_owner_role);
+        RAISE EXCEPTION 'core_entity_table_standards event trigger was not installed despite no error; refusing to continue';
+    END IF;
 
     EXECUTE format('SET ROLE %I', v_owner_role);
 EXCEPTION WHEN OTHERS THEN
