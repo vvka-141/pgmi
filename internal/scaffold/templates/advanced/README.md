@@ -112,7 +112,7 @@ myproject/
 │   ├── api/                  # HTTP framework (types, routing, gateways)
 │   ├── core/                 # Managed object infrastructure
 │   ├── internal/             # Deployment tracking, text attributes
-│   ├── utils/                # Type casting, text utilities
+│   ├── common/               # Cross-cutting primitives (casting, encoding, text)
 │   └── __test__/             # Framework tests
 ├── api/                      # YOUR API HANDLERS
 │   └── examples.sql          # Starting point - modify/replace this
@@ -358,7 +358,7 @@ database_customer_role (LOGIN)
 
 | Schema | Purpose | Access |
 |--------|---------|--------|
-| `utils` | Type casting, text utilities | All roles |
+| `common` | Cross-cutting primitives (casting, encoding, text) | All roles |
 | `api` | HTTP types, routing, handlers | API role (EXECUTE only) |
 | `core` | Business domain (your tables) | Admin role |
 | `internal` | Deployment tracking, infrastructure | Owner only |
@@ -373,8 +373,8 @@ myproject/
 ├── api/
 │   ├── examples.sql          # Framework examples
 │   └── my_handlers.sql       # YOUR handlers
-├── utils/                    # YOUR utilities (create if needed)
-│   └── my_utils.sql
+├── common/                   # YOUR cross-cutting helpers (create if needed)
+│   └── my_helpers.sql
 └── core/                     # YOUR domain (create if needed)
     └── my_tables.sql
 ```
@@ -405,5 +405,5 @@ pgmi deploy . -d mydb \
 Check your `<sortKeys>` - lower values execute first.
 
 ### Extending framework code
-Create files in root directories (api/, utils/, core/) not in lib/.
+Create files in root directories (api/, common/, core/) not in lib/.
 Use sortKeys `005/xxx` or higher to execute after framework.

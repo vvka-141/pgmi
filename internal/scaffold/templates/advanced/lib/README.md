@@ -2,7 +2,7 @@
 
 This directory contains the framework code that powers the advanced template. It provides HTTP routing, entity management, deployment tracking, and utility functions.
 
-**Most users should NOT modify these files.** Instead, extend functionality in root-level directories (`api/`, `core/`, `utils/`).
+**Most users should NOT modify these files.** Instead, extend functionality in root-level directories (`api/`, `core/`, `common/`).
 
 ## Directory Structure
 
@@ -10,7 +10,7 @@ This directory contains the framework code that powers the advanced template. It
 lib/
 ├── api/                    # HTTP framework (REST, RPC, MCP)
 ├── core/                   # Entity hierarchy and domain patterns
-├── utils/                  # Type casting and text utilities
+├── common/                 # Cross-cutting primitives (casting, encoding, text)
 └── __test__/               # Framework tests
 ```
 
@@ -70,19 +70,20 @@ CREATE TABLE core.customer (
 -- Automatically has: object_id, created_at, deleted_at
 ```
 
-### `utils/` - Utility Functions
+### `common/` - Cross-Cutting Primitives
 
-Pure utility functions with no side effects.
+Pure utility functions and domain types shared across every schema.
 
 | File | Purpose |
 |------|---------|
-| `cast_utils.sql` | Safe type casting (`try_cast_uuid`, `try_cast_int`, etc.) |
-| `text_utils.sql` | Text manipulation (`slugify`, `trim_whitespace`, etc.) |
+| `cast.sql` | Safe type casting with `?|` operator and `common.try_cast(text, default)` overloads |
+| `encoding.sql` | Bytea encoding domain types (`common.utf8`, `common.latin1`, `common.win1252`) and converters |
+| `text.sql` | Text manipulation (regex helpers, semantic fingerprint) |
 
 **Key Functions:**
-- `utils.try_cast_uuid(text)` - Returns NULL on invalid input (no exception)
-- `utils.try_cast_int(text)` - Safe integer conversion
-- `utils.try_cast_timestamp(text)` - Safe timestamp conversion
+- `common.try_cast(text, null::uuid)` - Returns NULL (or default) on invalid input, no exception
+- `common.try_cast(text, null::int)` / `null::bigint` / `null::numeric` / `null::interval` / `null::timestamp` - Other typed overloads
+- `common.utf8`, `common.latin1`, `common.win1252` - Bytea domains that validate encoding at cast time
 
 ### `__test__/` - Framework Tests
 
@@ -102,7 +103,7 @@ Tests for the framework itself (not your application).
 
 1. **Add handlers**: Create files in `api/` (root level)
 2. **Add domain tables**: Create files in `core/` (root level, create if needed)
-3. **Add utilities**: Create files in `utils/` (root level, create if needed)
+3. **Add cross-cutting helpers**: Create files in `common/` (root level, create if needed)
 
 **Execution Order:**
 - Framework files use sortKeys `001`-`004`

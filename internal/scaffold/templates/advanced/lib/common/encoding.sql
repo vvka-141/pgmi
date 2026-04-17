@@ -41,19 +41,19 @@ END $$;
 -- These types wrap decoded text, preserving encoding provenance.
 -- As composite types we own, we can create casts from/to them.
 
-DROP TYPE IF EXISTS utils.utf8 CASCADE;
-CREATE TYPE utils.utf8 AS (v text);
-COMMENT ON TYPE utils.utf8 IS
+DROP TYPE IF EXISTS common.utf8 CASCADE;
+CREATE TYPE common.utf8 AS (v text);
+COMMENT ON TYPE common.utf8 IS
     'UTF-8 decoded text wrapper. Enables cast chaining: my_bytea::utf8::jsonb';
 
-DROP TYPE IF EXISTS utils.latin1 CASCADE;
-CREATE TYPE utils.latin1 AS (v text);
-COMMENT ON TYPE utils.latin1 IS
+DROP TYPE IF EXISTS common.latin1 CASCADE;
+CREATE TYPE common.latin1 AS (v text);
+COMMENT ON TYPE common.latin1 IS
     'Latin-1 (ISO-8859-1) decoded text wrapper. Enables cast chaining: my_bytea::latin1::text';
 
-DROP TYPE IF EXISTS utils.win1252 CASCADE;
-CREATE TYPE utils.win1252 AS (v text);
-COMMENT ON TYPE utils.win1252 IS
+DROP TYPE IF EXISTS common.win1252 CASCADE;
+CREATE TYPE common.win1252 AS (v text);
+COMMENT ON TYPE common.win1252 IS
     'Windows-1252 decoded text wrapper. Enables cast chaining: my_bytea::win1252::text';
 
 -- ============================================================================
@@ -61,74 +61,74 @@ COMMENT ON TYPE utils.win1252 IS
 -- ============================================================================
 -- First step in the chain: decode bytea to wrapped text.
 
-CREATE OR REPLACE FUNCTION utils.bytea_to_utf8(input bytea)
-RETURNS utils.utf8
+CREATE OR REPLACE FUNCTION common.bytea_to_utf8(input bytea)
+RETURNS common.utf8
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
-    SELECT ROW(convert_from($1, 'UTF8'))::utils.utf8;
+    SELECT ROW(convert_from($1, 'UTF8'))::common.utf8;
 $$;
 
-CREATE CAST (bytea AS utils.utf8)
-    WITH FUNCTION utils.bytea_to_utf8(bytea);
+CREATE CAST (bytea AS common.utf8)
+    WITH FUNCTION common.bytea_to_utf8(bytea);
 
 
-CREATE OR REPLACE FUNCTION utils.bytea_to_latin1(input bytea)
-RETURNS utils.latin1
+CREATE OR REPLACE FUNCTION common.bytea_to_latin1(input bytea)
+RETURNS common.latin1
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
-    SELECT ROW(convert_from($1, 'LATIN1'))::utils.latin1;
+    SELECT ROW(convert_from($1, 'LATIN1'))::common.latin1;
 $$;
 
-CREATE CAST (bytea AS utils.latin1)
-    WITH FUNCTION utils.bytea_to_latin1(bytea);
+CREATE CAST (bytea AS common.latin1)
+    WITH FUNCTION common.bytea_to_latin1(bytea);
 
 
-CREATE OR REPLACE FUNCTION utils.bytea_to_win1252(input bytea)
-RETURNS utils.win1252
+CREATE OR REPLACE FUNCTION common.bytea_to_win1252(input bytea)
+RETURNS common.win1252
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
-    SELECT ROW(convert_from($1, 'WIN1252'))::utils.win1252;
+    SELECT ROW(convert_from($1, 'WIN1252'))::common.win1252;
 $$;
 
-CREATE CAST (bytea AS utils.win1252)
-    WITH FUNCTION utils.bytea_to_win1252(bytea);
+CREATE CAST (bytea AS common.win1252)
+    WITH FUNCTION common.bytea_to_win1252(bytea);
 
 -- ============================================================================
 -- Encoding Type → text Casts
 -- ============================================================================
 -- Extract the decoded text from the wrapper.
 
-CREATE OR REPLACE FUNCTION utils.utf8_to_text(input utils.utf8)
+CREATE OR REPLACE FUNCTION common.utf8_to_text(input common.utf8)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT ($1).v;
 $$;
 
-CREATE CAST (utils.utf8 AS text)
-    WITH FUNCTION utils.utf8_to_text(utils.utf8);
+CREATE CAST (common.utf8 AS text)
+    WITH FUNCTION common.utf8_to_text(common.utf8);
 
 
-CREATE OR REPLACE FUNCTION utils.latin1_to_text(input utils.latin1)
+CREATE OR REPLACE FUNCTION common.latin1_to_text(input common.latin1)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT ($1).v;
 $$;
 
-CREATE CAST (utils.latin1 AS text)
-    WITH FUNCTION utils.latin1_to_text(utils.latin1);
+CREATE CAST (common.latin1 AS text)
+    WITH FUNCTION common.latin1_to_text(common.latin1);
 
 
-CREATE OR REPLACE FUNCTION utils.win1252_to_text(input utils.win1252)
+CREATE OR REPLACE FUNCTION common.win1252_to_text(input common.win1252)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT ($1).v;
 $$;
 
-CREATE CAST (utils.win1252 AS text)
-    WITH FUNCTION utils.win1252_to_text(utils.win1252);
+CREATE CAST (common.win1252 AS text)
+    WITH FUNCTION common.win1252_to_text(common.win1252);
 
 -- ============================================================================
 -- utf8 → JSON/JSONB/XML Casts
@@ -136,101 +136,101 @@ CREATE CAST (utils.win1252 AS text)
 -- Direct conversion from utf8 wrapper to structured types.
 -- These enable: my_bytea::utf8::jsonb without intermediate ::text
 
-CREATE OR REPLACE FUNCTION utils.utf8_to_jsonb(input utils.utf8)
+CREATE OR REPLACE FUNCTION common.utf8_to_jsonb(input common.utf8)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT ($1).v::jsonb;
 $$;
 
-CREATE CAST (utils.utf8 AS jsonb)
-    WITH FUNCTION utils.utf8_to_jsonb(utils.utf8);
+CREATE CAST (common.utf8 AS jsonb)
+    WITH FUNCTION common.utf8_to_jsonb(common.utf8);
 
 
-CREATE OR REPLACE FUNCTION utils.utf8_to_json(input utils.utf8)
+CREATE OR REPLACE FUNCTION common.utf8_to_json(input common.utf8)
 RETURNS json
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT ($1).v::json;
 $$;
 
-CREATE CAST (utils.utf8 AS json)
-    WITH FUNCTION utils.utf8_to_json(utils.utf8);
+CREATE CAST (common.utf8 AS json)
+    WITH FUNCTION common.utf8_to_json(common.utf8);
 
 
-CREATE OR REPLACE FUNCTION utils.utf8_to_xml(input utils.utf8)
+CREATE OR REPLACE FUNCTION common.utf8_to_xml(input common.utf8)
 RETURNS xml
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT xmlparse(DOCUMENT ($1).v);
 $$;
 
-CREATE CAST (utils.utf8 AS xml)
-    WITH FUNCTION utils.utf8_to_xml(utils.utf8);
+CREATE CAST (common.utf8 AS xml)
+    WITH FUNCTION common.utf8_to_xml(common.utf8);
 
 -- ============================================================================
 -- Convenience Functions (for those who prefer function syntax)
 -- ============================================================================
 -- Alternative to cast syntax: to_jsonb(my_bytea), utf8(my_bytea)::jsonb
 
-CREATE OR REPLACE FUNCTION utils.utf8(input bytea)
+CREATE OR REPLACE FUNCTION common.utf8(input bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT convert_from($1, 'UTF8');
 $$;
 
-COMMENT ON FUNCTION utils.utf8(bytea) IS
+COMMENT ON FUNCTION common.utf8(bytea) IS
     'Decode bytea as UTF-8 text. Alternative to cast: utf8(x)::jsonb';
 
-CREATE OR REPLACE FUNCTION utils.latin1(input bytea)
+CREATE OR REPLACE FUNCTION common.latin1(input bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT convert_from($1, 'LATIN1');
 $$;
 
-COMMENT ON FUNCTION utils.latin1(bytea) IS
+COMMENT ON FUNCTION common.latin1(bytea) IS
     'Decode bytea as Latin-1 text. Alternative to cast syntax.';
 
-CREATE OR REPLACE FUNCTION utils.win1252(input bytea)
+CREATE OR REPLACE FUNCTION common.win1252(input bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT convert_from($1, 'WIN1252');
 $$;
 
-COMMENT ON FUNCTION utils.win1252(bytea) IS
+COMMENT ON FUNCTION common.win1252(bytea) IS
     'Decode bytea as Windows-1252 text. Alternative to cast syntax.';
 
-CREATE OR REPLACE FUNCTION utils.to_jsonb(input bytea)
+CREATE OR REPLACE FUNCTION common.to_jsonb(input bytea)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT convert_from($1, 'UTF8')::jsonb;
 $$;
 
-COMMENT ON FUNCTION utils.to_jsonb(bytea) IS
+COMMENT ON FUNCTION common.to_jsonb(bytea) IS
     'Decode bytea as UTF-8 and parse as JSONB. One-step shortcut.';
 
-CREATE OR REPLACE FUNCTION utils.to_json(input bytea)
+CREATE OR REPLACE FUNCTION common.to_json(input bytea)
 RETURNS json
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT convert_from($1, 'UTF8')::json;
 $$;
 
-COMMENT ON FUNCTION utils.to_json(bytea) IS
+COMMENT ON FUNCTION common.to_json(bytea) IS
     'Decode bytea as UTF-8 and parse as JSON. One-step shortcut.';
 
-CREATE OR REPLACE FUNCTION utils.to_xml(input bytea)
+CREATE OR REPLACE FUNCTION common.to_xml(input bytea)
 RETURNS xml
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT xmlparse(DOCUMENT convert_from($1, 'UTF8'));
 $$;
 
-COMMENT ON FUNCTION utils.to_xml(bytea) IS
+COMMENT ON FUNCTION common.to_xml(bytea) IS
     'Decode bytea as UTF-8 and parse as XML document. One-step shortcut.';
 
 -- ============================================================================
@@ -250,14 +250,14 @@ BEGIN
     RAISE NOTICE '→ Testing encoding types and casts';
 
     -- Test 1: bytea::utf8::text chain
-    v_result_text := v_bytea_json::utils.utf8::text;
+    v_result_text := v_bytea_json::common.utf8::text;
     IF v_result_text != '{"key": "value", "num": 42}' THEN
         RAISE EXCEPTION 'bytea::utf8::text failed: got %', v_result_text;
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::text chain works';
 
     -- Test 2: bytea::utf8::jsonb chain
-    v_result_jsonb := v_bytea_json::utils.utf8::jsonb;
+    v_result_jsonb := v_bytea_json::common.utf8::jsonb;
     IF v_result_jsonb->>'key' != 'value' THEN
         RAISE EXCEPTION 'bytea::utf8::jsonb failed: key extraction incorrect';
     END IF;
@@ -267,42 +267,42 @@ BEGIN
     RAISE NOTICE '  ✓ bytea::utf8::jsonb chain works';
 
     -- Test 3: bytea::utf8::json chain
-    v_result_json := v_bytea_json::utils.utf8::json;
+    v_result_json := v_bytea_json::common.utf8::json;
     IF v_result_json->>'key' != 'value' THEN
         RAISE EXCEPTION 'bytea::utf8::json failed: key extraction incorrect';
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::json chain works';
 
     -- Test 4: bytea::utf8::xml chain
-    v_result_xml := v_bytea_xml::utils.utf8::xml;
+    v_result_xml := v_bytea_xml::common.utf8::xml;
     IF (xpath('/root/item/text()', v_result_xml))[1]::text != 'test' THEN
         RAISE EXCEPTION 'bytea::utf8::xml failed: xpath extraction incorrect';
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::xml chain works';
 
     -- Test 5: bytea::latin1::text chain
-    v_result_text := v_bytea_latin1::utils.latin1::text;
+    v_result_text := v_bytea_latin1::common.latin1::text;
     IF v_result_text != 'Héllo Wörld' THEN
         RAISE EXCEPTION 'bytea::latin1::text failed: got %', v_result_text;
     END IF;
     RAISE NOTICE '  ✓ bytea::latin1::text chain works';
 
     -- Test 6: Convenience function utf8()::jsonb
-    v_result_jsonb := utils.utf8(v_bytea_json)::jsonb;
+    v_result_jsonb := common.utf8(v_bytea_json)::jsonb;
     IF v_result_jsonb->>'key' != 'value' THEN
         RAISE EXCEPTION 'utf8()::jsonb failed';
     END IF;
     RAISE NOTICE '  ✓ utf8() function with cast chain works';
 
     -- Test 7: One-step to_jsonb()
-    v_result_jsonb := utils.to_jsonb(v_bytea_json);
+    v_result_jsonb := common.to_jsonb(v_bytea_json);
     IF v_result_jsonb->>'key' != 'value' THEN
         RAISE EXCEPTION 'to_jsonb() failed';
     END IF;
     RAISE NOTICE '  ✓ to_jsonb() one-step function works';
 
     -- Test 8: NULL handling
-    IF (NULL::bytea)::utils.utf8 IS NOT NULL THEN
+    IF (NULL::bytea)::common.utf8 IS NOT NULL THEN
         RAISE EXCEPTION 'NULL::bytea::utf8 should be NULL';
     END IF;
     RAISE NOTICE '  ✓ NULL handling correct';
@@ -320,33 +320,33 @@ DECLARE
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
     -- Grant usage on types
-    EXECUTE format('GRANT USAGE ON TYPE utils.utf8 TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT USAGE ON TYPE utils.latin1 TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT USAGE ON TYPE utils.win1252 TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT USAGE ON TYPE common.utf8 TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT USAGE ON TYPE common.latin1 TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT USAGE ON TYPE common.win1252 TO %I, %I', v_admin_role, v_api_role);
 
     -- Grant execute on all functions
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.bytea_to_utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.bytea_to_latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.bytea_to_win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.utf8_to_text(utils.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.latin1_to_text(utils.latin1) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.win1252_to_text(utils.win1252) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.utf8_to_jsonb(utils.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.utf8_to_json(utils.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.utf8_to_xml(utils.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.to_jsonb(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.to_json(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION utils.to_xml(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_text(common.utf8) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1_to_text(common.latin1) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252_to_text(common.win1252) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_jsonb(common.utf8) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_json(common.utf8) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_xml(common.utf8) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_jsonb(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_json(bytea) TO %I, %I', v_admin_role, v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_xml(bytea) TO %I, %I', v_admin_role, v_api_role);
 END $$;
 
 DO $$
 BEGIN
-    RAISE NOTICE '  ✓ utils.utf8 type - UTF-8 encoding wrapper';
-    RAISE NOTICE '  ✓ utils.latin1 type - Latin-1 encoding wrapper';
-    RAISE NOTICE '  ✓ utils.win1252 type - Windows-1252 encoding wrapper';
+    RAISE NOTICE '  ✓ common.utf8 type - UTF-8 encoding wrapper';
+    RAISE NOTICE '  ✓ common.latin1 type - Latin-1 encoding wrapper';
+    RAISE NOTICE '  ✓ common.win1252 type - Windows-1252 encoding wrapper';
     RAISE NOTICE '  ✓ bytea::utf8 cast - decode as UTF-8';
     RAISE NOTICE '  ✓ bytea::latin1 cast - decode as Latin-1';
     RAISE NOTICE '  ✓ bytea::win1252 cast - decode as Windows-1252';

@@ -176,10 +176,10 @@ BEGIN
     EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
 
     -- Configure search_path for each role
-    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_owner_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_admin_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = api, core, extensions, utils, pg_temp', v_api_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = api, membership, core, extensions, utils, pg_temp', v_customer_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, common, pg_temp', v_owner_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, common, pg_temp', v_admin_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, core, extensions, common, pg_temp', v_api_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, membership, core, extensions, common, pg_temp', v_customer_role);
 
     -- Transfer database ownership
     EXECUTE format('ALTER DATABASE %I OWNER TO %I', current_database(), v_owner_role);
@@ -219,28 +219,28 @@ BEGIN
     CREATE SCHEMA IF NOT EXISTS internal;
     CREATE SCHEMA IF NOT EXISTS core;
     CREATE SCHEMA IF NOT EXISTS api;
-    CREATE SCHEMA IF NOT EXISTS utils;
+    CREATE SCHEMA IF NOT EXISTS common;
     CREATE SCHEMA IF NOT EXISTS membership;
 
     COMMENT ON SCHEMA internal IS 'Deployment infrastructure and system tables. Not for application use.';
     COMMENT ON SCHEMA core IS 'Core domain entities and business logic. The heart of your application.';
     COMMENT ON SCHEMA api IS 'Public API layer. Functions and views exposed to applications and external clients.';
-    COMMENT ON SCHEMA utils IS 'Shared utility functions available to all roles.';
+    COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
     COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
     REVOKE ALL ON SCHEMA public FROM PUBLIC;
-    REVOKE ALL ON SCHEMA utils, api, core, internal, membership FROM PUBLIC;
+    REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
 
-    EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA common TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA api TO %I, %I', v_api_role, v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA core TO %I', v_api_role);
     EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
 
     EXECUTE format(
-        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, utils, pg_temp',
+        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, common, pg_temp',
         current_database()
     );
-    SET search_path TO core, api, membership, internal, extensions, utils, pg_temp;
+    SET search_path TO core, api, membership, internal, extensions, common, pg_temp;
 
     RAISE NOTICE '[pgmi] Schemas configured';
 END $schemas$;

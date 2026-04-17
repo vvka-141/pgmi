@@ -320,9 +320,9 @@ Description: Production-ready template with metadata-driven deployment
 Best For: Production databases, complex deployments
 
 Features:
-  - Metadata-driven execution (topological sort)
+  - Metadata-driven execution (sort key ordering)
   - UUID-based script tracking
-  - Four-schema architecture (utils/api/core/internal)
+  - Four-schema architecture (common/api/core/internal)
   - Three-tier role hierarchy (owner/admin/api)
   - Built-in HTTP framework
 ```

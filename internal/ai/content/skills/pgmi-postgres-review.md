@@ -43,7 +43,7 @@ PostgreSQL allows custom operators for domain-specific syntax:
 CREATE OPERATOR ?| (
     LEFTARG = text,
     RIGHTARG = uuid,
-    PROCEDURE = utils.try_cast
+    PROCEDURE = common.try_cast
 );
 
 -- Later usage is VALID if operator defined first
@@ -121,7 +121,7 @@ User-defined functions are the norm, not the exception:
 
 ```sql
 -- Example: Safe type casting with defaults
-CREATE FUNCTION utils.try_cast(input text, default_value uuid)
+CREATE FUNCTION common.try_cast(input text, default_value uuid)
 RETURNS uuid AS $$
     SELECT CASE
         WHEN $1 ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -131,7 +131,7 @@ RETURNS uuid AS $$
 $$ LANGUAGE SQL IMMUTABLE;
 
 -- Usage is valid if function defined first
-SELECT utils.try_cast('invalid-uuid', extensions.uuid_nil());
+SELECT common.try_cast('invalid-uuid', extensions.uuid_nil());
 ```
 
 **Verification Steps**:
@@ -144,7 +144,7 @@ SELECT utils.try_cast('invalid-uuid', extensions.uuid_nil());
 pgmi uses **metadata sortKeys** in `<pgmi-meta>` blocks to control file execution order:
 
 ```xml
-<!-- cast_utils.sql -->
+<!-- cast.sql -->
 <pgmi-meta>
   <sortKeys>
     <key>001/000</key>  <!-- Executes FIRST -->
@@ -169,7 +169,7 @@ pgmi uses **metadata sortKeys** in `<pgmi-meta>` blocks to control file executio
 
 **Example Verification**:
 ```
-cast_utils.sql:    sortKey 001/000 (defines ?| operator)
+cast.sql:    sortKey 001/000 (defines ?| operator)
 foundation.sql:    sortKey 004/000 (uses ?| operator)
 001 < 004 → ✓ Correct order, no issue
 ```

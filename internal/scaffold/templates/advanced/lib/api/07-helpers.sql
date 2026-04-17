@@ -20,13 +20,13 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API helper functions'; END $$;
 CREATE OR REPLACE FUNCTION api.content_json(content bytea)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT content::utils.utf8::jsonb;
+    SELECT content::common.utf8::jsonb;
 $$;
 
 CREATE OR REPLACE FUNCTION api.content_text(content bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT content::utils.utf8::text;
+    SELECT content::common.utf8::text;
 $$;
 
 CREATE OR REPLACE FUNCTION api.header(headers extensions.hstore, name text)

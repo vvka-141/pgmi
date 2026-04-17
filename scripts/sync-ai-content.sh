@@ -38,7 +38,7 @@ for skill in "${SKILLS[@]}"; do
     if [ -f "$src" ]; then
         cp "$src" "$tgt"
         echo "  Synced: $skill"
-        ((synced++))
+        synced=$((synced + 1))
     else
         echo "  Skipped: $skill (not found)"
     fi

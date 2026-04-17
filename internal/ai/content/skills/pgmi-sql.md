@@ -409,8 +409,8 @@ END $$;
 For functions with **no side effects** and **no data queries**:
 
 ```sql
--- utils/text_utils.sql
-CREATE OR REPLACE FUNCTION utils.slugify(input_text TEXT)
+-- common/text.sql
+CREATE OR REPLACE FUNCTION common.slugify(input_text TEXT)
 RETURNS TEXT AS $$
 BEGIN
     RETURN lower(regexp_replace(input_text, '[^a-zA-Z0-9]+', '-', 'g'));
@@ -420,7 +420,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 -- Inline test (runs immediately, not transactional)
 DO $$
 BEGIN
-    IF utils.slugify('Hello World!') != 'hello-world-' THEN
+    IF common.slugify('Hello World!') != 'hello-world-' THEN
         RAISE EXCEPTION 'Slugify test failed';
     END IF;
 END $$;
@@ -428,11 +428,11 @@ END $$;
 -- More inline tests
 DO $$
 BEGIN
-    IF utils.slugify('') != '' THEN
+    IF common.slugify('') != '' THEN
         RAISE EXCEPTION 'Empty string should return empty';
     END IF;
 
-    IF utils.slugify('NoSpaces') != 'nospaces' THEN
+    IF common.slugify('NoSpaces') != 'nospaces' THEN
         RAISE EXCEPTION 'No spaces should be preserved';
     END IF;
 
