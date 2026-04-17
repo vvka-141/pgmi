@@ -243,3 +243,59 @@ BEGIN
 
     RAISE DEBUG '✓ API key expiry tests passed';
 END $$;
+
+-- ============================================================================
+-- Test: validate_api_key rejects keys belonging to inactive user/org
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_alice_id uuid := current_setting('test.alice_id')::uuid;
+    v_org_id uuid;
+    v_created record;
+    v_validation record;
+BEGIN
+    RAISE DEBUG '→ Testing API key inactive-principal rejection';
+
+    SELECT object_id INTO STRICT v_org_id
+    FROM membership.organization
+    WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    -- Inactive organization → key rejected with 'organization is inactive'
+    SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'inactive-org-key');
+
+    UPDATE membership.organization SET is_active = false WHERE object_id = v_org_id;
+
+    SELECT * INTO v_validation FROM membership.validate_api_key(v_created.out_api_key);
+    IF v_validation.is_valid THEN
+        RAISE EXCEPTION 'Key for inactive organization should not validate';
+    END IF;
+    IF v_validation.reason != 'organization is inactive' THEN
+        RAISE EXCEPTION 'Expected "organization is inactive", got: %', v_validation.reason;
+    END IF;
+
+    UPDATE membership.organization SET is_active = true WHERE object_id = v_org_id;
+    PERFORM membership.revoke_api_key(v_created.out_key_id);
+
+    RAISE DEBUG '  ✓ inactive organization → key rejected';
+
+    -- Inactive user → key rejected with 'user is inactive'
+    SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'inactive-user-key');
+
+    UPDATE membership."user" SET is_active = false WHERE object_id = v_alice_id;
+
+    SELECT * INTO v_validation FROM membership.validate_api_key(v_created.out_api_key);
+    IF v_validation.is_valid THEN
+        RAISE EXCEPTION 'Key for inactive user should not validate';
+    END IF;
+    IF v_validation.reason != 'user is inactive' THEN
+        RAISE EXCEPTION 'Expected "user is inactive", got: %', v_validation.reason;
+    END IF;
+
+    UPDATE membership."user" SET is_active = true WHERE object_id = v_alice_id;
+    PERFORM membership.revoke_api_key(v_created.out_key_id);
+
+    RAISE DEBUG '  ✓ inactive user → key rejected';
+
+    RAISE DEBUG '✓ API key inactive-principal tests passed';
+END $$;

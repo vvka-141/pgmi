@@ -523,10 +523,14 @@ BEGIN
     EXECUTE format('GRANT SELECT ON api.vw_route_stats TO %I', v_admin_role);
     EXECUTE format('GRANT SELECT ON api.vw_route_summary TO %I', v_admin_role);
 
-    -- Exchange views
-    EXECUTE format('GRANT SELECT ON api.vw_rest_exchange_info TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_rpc_exchange_info TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_mcp_exchange_info TO %I', v_api_role);
+    -- Exchange views project from rest/rpc/mcp_exchange (which include
+    -- truncated SQLERRM). Default-grant to admin only; aggregate
+    -- vw_exchange_stats/summary may be shared with api since they don't
+    -- expose individual error messages. Idempotent against earlier deploys
+    -- that granted detail views to api.
+    EXECUTE format('REVOKE SELECT ON api.vw_rest_exchange_info FROM %I', v_api_role);
+    EXECUTE format('REVOKE SELECT ON api.vw_rpc_exchange_info FROM %I', v_api_role);
+    EXECUTE format('REVOKE SELECT ON api.vw_mcp_exchange_info FROM %I', v_api_role);
     EXECUTE format('GRANT SELECT ON api.vw_exchange_stats TO %I', v_api_role);
     EXECUTE format('GRANT SELECT ON api.vw_exchange_summary TO %I', v_api_role);
     EXECUTE format('GRANT SELECT ON api.vw_rest_exchange_info TO %I', v_admin_role);

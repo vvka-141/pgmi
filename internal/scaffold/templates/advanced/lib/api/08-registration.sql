@@ -14,6 +14,63 @@
 DO $$ BEGIN RAISE NOTICE '→ Installing handler registration functions'; END $$;
 
 -- ============================================================================
+-- Shared: Handler Name Validation
+-- ============================================================================
+-- Reject handler names that would: (a) collide on PostgreSQL's 63-byte
+-- identifier truncation when prefixed (rest_/rpc_/mcp_tool_), or (b) embed
+-- characters that escape the format('%I') quoting we rely on. ASCII-only;
+-- internationalisation is intentionally out of scope.
+
+CREATE OR REPLACE FUNCTION internal.validate_handler_name(p_name text)
+RETURNS void
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+BEGIN
+    IF p_name IS NULL OR length(p_name) = 0 THEN
+        RAISE EXCEPTION 'handler name must be non-empty';
+    END IF;
+    IF p_name !~ '^[a-zA-Z][a-zA-Z0-9_.\-]{0,48}$' THEN
+        RAISE EXCEPTION 'invalid handler name %; must match ^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$ (1-49 chars, ASCII alnum/underscore/dot/hyphen, leading letter)',
+            p_name
+            USING HINT = 'PostgreSQL identifier limit is 63 bytes; pgmi caps at 49 to leave room for prefixes (rest_/rpc_/mcp_tool_) without silent truncation that would cause function-name collisions.';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.validate_handler_name(text) IS
+    'Rejects handler names that risk PostgreSQL identifier truncation (>49 chars) or break format(%I) quoting. ASCII-only.';
+
+-- ============================================================================
+-- Shared: Random Dollar-Quote Boundary
+-- ============================================================================
+-- Avoid predictable boundaries (UUID-derived) so a malicious handler body
+-- cannot pre-compute a sentinel that breaks out of the dollar-quoted block
+-- during EXECUTE. Loops if the random nonce happens to appear in the body
+-- (vanishingly unlikely with 64-bit entropy).
+
+CREATE OR REPLACE FUNCTION internal.random_dollar_quote_boundary(p_body text)
+RETURNS text
+LANGUAGE plpgsql VOLATILE STRICT PARALLEL SAFE AS $$
+DECLARE
+    v_boundary text;
+    v_attempts int := 0;
+BEGIN
+    LOOP
+        v_boundary := 'hb_' || encode(extensions.gen_random_bytes(8), 'hex');
+        IF position('$' || v_boundary || '$' IN p_body) = 0 THEN
+            RETURN v_boundary;
+        END IF;
+        v_attempts := v_attempts + 1;
+        IF v_attempts > 8 THEN
+            RAISE EXCEPTION 'could not generate non-colliding dollar-quote boundary after % attempts', v_attempts;
+        END IF;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.random_dollar_quote_boundary(text) IS
+    'Returns a fresh dollar-quote tag (hb_<16 hex>) guaranteed not to appear inside p_body. Eliminates predictable-boundary injection paths in CREATE FUNCTION assembly.';
+
+-- ============================================================================
 -- Shared: Capture pg_proc Snapshot
 -- ============================================================================
 
@@ -126,8 +183,13 @@ BEGIN
     END;
     v_response_headers := COALESCE(p_metadata->'responseHeaders', '{}'::jsonb);
 
-    v_function_name := COALESCE(v_name, 'rest_handler_' || replace(v_id::text, '-', '_'));
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    IF v_name IS NOT NULL THEN
+        PERFORM internal.validate_handler_name(v_name);
+        v_function_name := v_name;
+    ELSE
+        v_function_name := 'rest_handler_' || replace(v_id::text, '-', '_');
+    END IF;
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.rest_request)
@@ -287,8 +349,9 @@ BEGIN
     END;
     v_response_headers := COALESCE(p_metadata->'responseHeaders', '{}'::jsonb);
 
+    PERFORM internal.validate_handler_name(v_method_name);
     v_function_name := 'rpc_' || replace(replace(v_method_name, '.', '_'), '-', '_');
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.rpc_request)
@@ -438,8 +501,9 @@ BEGIN
 
     v_handler_type := ('mcp_' || v_type)::api.handler_type;
 
+    PERFORM internal.validate_handler_name(v_name);
     v_function_name := 'mcp_' || v_type || '_' || replace(replace(v_name, '.', '_'), '-', '_');
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.mcp_request)

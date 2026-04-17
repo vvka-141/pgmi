@@ -115,6 +115,7 @@ DECLARE
     v_response api.http_response;
     v_route record;
     v_version text;
+    v_path text;
     v_start_time timestamptz;
     v_execution_ms numeric;
 BEGIN
@@ -138,13 +139,18 @@ BEGIN
         ''
     );
 
+    -- Match against the path only; query string is parsed separately by the
+    -- handler via api.query_params(). Routes can use plain regex like
+    -- '^/users/\d+$' without hand-anchoring '(\?.*)?$'.
+    v_path := api.url_path(p_url);
+
     SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.produces, h.requires_auth,
            h.output_json_schema,
            r.route_name, r.auto_log
     INTO v_route
     FROM api.rest_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
-    WHERE p_url ~ r.address_regexp
+    WHERE v_path ~ r.address_regexp
       AND p_method ~ r.method_regexp
       AND v_version ~ r.version_regexp
     ORDER BY r.sequence_number DESC
@@ -251,12 +257,17 @@ BEGIN
         RAISE DEBUG 'rest_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log full error to exchange table for debugging (always log errors)
-        v_response := api.problem_response(500, 'Internal Server Error', SQLERRM);
+        -- Log SQLSTATE + truncated SQLERRM. Full SQLERRM may include
+        -- attacker-supplied input or PII (handlers commonly raise with
+        -- "Invalid email: <user_input>"); truncating limits the blast radius
+        -- if exchange-table grants ever loosen.
+        v_response := api.problem_response(500, 'Internal Server Error',
+            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200));
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text
+            'x-execution-time-ms', v_execution_ms::text,
+            'x-error-sqlstate', SQLSTATE
         ]);
         IF v_route.object_id IS NOT NULL THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
@@ -457,12 +468,14 @@ BEGIN
         RAISE DEBUG 'rpc_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log full error to exchange table for debugging (always log errors)
-        v_response := api.jsonrpc_error(-32603, SQLERRM, v_json_id);
+        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
+        v_response := api.jsonrpc_error(-32603,
+            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), v_json_id);
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text
+            'x-execution-time-ms', v_execution_ms::text,
+            'x-error-sqlstate', SQLSTATE
         ]);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
@@ -545,7 +558,11 @@ BEGIN
         -- C1 fix: MCP spec requires tool *execution* failures to use
         -- result.isError=true (via mcp_tool_error), NOT a JSON-RPC error
         -- envelope (which is reserved for protocol-level errors).
-        v_response := api.mcp_tool_error(SQLERRM, p_request_id);
+        -- C3 fix: persist SQLSTATE + truncated SQLERRM (limits exposure if
+        -- exchange-table grants are loosened).
+        v_response := api.mcp_tool_error(
+            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200),
+            p_request_id);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
             VALUES (v_handler.object_id, 'tool', v_handler.mcp_name, v_request, v_response);
@@ -621,8 +638,9 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         RAISE DEBUG 'mcp_read_resource: Handler exception: %', SQLERRM;
 
-        -- Log full error to exchange table for debugging (always log errors)
-        v_response := api.mcp_error(-32603, SQLERRM, p_request_id);
+        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
+        v_response := api.mcp_error(-32603,
+            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
             VALUES (v_handler.object_id, 'resource', v_handler.mcp_name, v_request, v_response);
@@ -698,8 +716,9 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         RAISE DEBUG 'mcp_get_prompt: Handler exception: %', SQLERRM;
 
-        -- Log full error to exchange table for debugging (always log errors)
-        v_response := api.mcp_error(-32603, SQLERRM, p_request_id);
+        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
+        v_response := api.mcp_error(-32603,
+            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
             VALUES (v_handler.object_id, 'prompt', v_handler.mcp_name, v_request, v_response);

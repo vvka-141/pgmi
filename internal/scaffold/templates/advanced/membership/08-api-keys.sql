@@ -380,6 +380,27 @@ BEGIN
         RETURN;
     END IF;
 
+    -- Reject when the owning user or organization has been deactivated.
+    -- Without this check, deactivated principals retain valid credentials
+    -- until each key is individually revoked — a privilege-escalation path.
+    IF NOT EXISTS (
+        SELECT 1 FROM membership."user" u
+        WHERE u.object_id = v_key.user_id AND u.is_active
+    ) THEN
+        RETURN QUERY SELECT false, v_key.user_id, v_key.organization_id, v_key_id,
+            'user is inactive'::text;
+        RETURN;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM membership.organization o
+        WHERE o.object_id = v_key.organization_id AND o.is_active
+    ) THEN
+        RETURN QUERY SELECT false, v_key.user_id, v_key.organization_id, v_key_id,
+            'organization is inactive'::text;
+        RETURN;
+    END IF;
+
     UPDATE membership.api_key c_key
     SET last_used_at = now()
     WHERE c_key.key_id = v_key_id;
@@ -507,8 +528,14 @@ DECLARE
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
     v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
+    -- Read-only privileges across the board. Mutations MUST flow through the
+    -- SECURITY DEFINER lifecycle functions (create/disable/enable/revoke) so
+    -- the membership and quota checks cannot be bypassed by direct DML — even
+    -- by the admin role. Idempotent against earlier deploys that granted
+    -- INSERT/UPDATE/DELETE to admin.
     EXECUTE format('GRANT SELECT ON membership.api_key TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON membership.api_key TO %I', v_admin_role);
+    EXECUTE format('GRANT SELECT ON membership.api_key TO %I', v_admin_role);
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON membership.api_key FROM %I', v_admin_role);
     EXECUTE format('GRANT SELECT ON membership.api_key TO %I', v_customer_role);
 
     EXECUTE format('GRANT EXECUTE ON FUNCTION membership.api_key_prefix() TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
