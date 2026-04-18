@@ -10,6 +10,10 @@ import (
 	"github.com/vvka-141/pgmi/internal/testgen"
 )
 
+// (buildStrippedToOriginalMap was removed together with Strip's usage for
+// macro detection. RedactForMacros returns a length-preserved mask so macro
+// offsets are directly usable against the original SQL.)
+
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
 	ExpandedSQL string // SQL with macros expanded
@@ -44,19 +48,18 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		MacroCount:  0,
 	}
 
-	strippedSQL := p.commentStripper.Strip(sql)
+	// Mask out comment and string-literal bytes with spaces, preserving
+	// byte positions. The macro detector can safely regex over the result
+	// without matching inside 'CALL pgmi_test();' literals or $$ quoted $$
+	// bodies. Positions it returns are directly usable against `sql`.
+	redactedSQL := p.commentStripper.RedactForMacros(sql)
 
-	macros := p.macroDetector.Detect(strippedSQL)
+	macros := p.macroDetector.Detect(sql, redactedSQL)
 	if len(macros) == 0 {
 		return result, nil
 	}
 
 	result.MacroCount = len(macros)
-
-	strippedToOrig, err := buildStrippedToOriginalMap(sql, strippedSQL)
-	if err != nil {
-		return nil, err
-	}
 
 	sortedMacros := make([]MacroCall, len(macros))
 	copy(sortedMacros, macros)
@@ -76,33 +79,11 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 			return nil, err
 		}
 
-		origStart := strippedToOrig[macro.StartPos]
-		origEnd := strippedToOrig[macro.EndPos]
-		expandedSQL = expandedSQL[:origStart] + generatedSQL + expandedSQL[origEnd:]
+		expandedSQL = expandedSQL[:macro.StartPos] + generatedSQL + expandedSQL[macro.EndPos:]
 	}
 
 	result.ExpandedSQL = expandedSQL
 	return result, nil
-}
-
-// buildStrippedToOriginalMap returns a slice where index i is the byte offset
-// in strippedSQL and the value is the corresponding byte offset in orig.
-// Safe because Strip only drops bytes — never reorders or inserts.
-func buildStrippedToOriginalMap(orig, stripped string) ([]int, error) {
-	m := make([]int, len(stripped)+1)
-	origIdx := 0
-	for strIdx := 0; strIdx < len(stripped); strIdx++ {
-		for origIdx < len(orig) && orig[origIdx] != stripped[strIdx] {
-			origIdx++
-		}
-		if origIdx >= len(orig) {
-			return nil, fmt.Errorf("internal: stripped byte %d (%q) not locatable in original SQL", strIdx, stripped[strIdx])
-		}
-		m[strIdx] = origIdx
-		origIdx++
-	}
-	m[len(stripped)] = origIdx
-	return m, nil
 }
 
 // callTestGenerate calls pg_temp.pgmi_test_generate() to get test execution SQL.

@@ -227,9 +227,21 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 			// Prepend metadata block
 			newContent := metaBlock + string(content)
 
-			// Write back to file
-			if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-				return fmt.Errorf("failed to write file %s: %w", filePath, err)
+			// Atomic write: write to a sibling .tmp then os.Rename. A crash
+			// between Write and Rename leaves the original intact; a crash
+			// during Rename is handled atomically by the OS. Preserves the
+			// source file's mode so we don't silently widen permissions.
+			origInfo, err := os.Stat(absPath)
+			if err != nil {
+				return fmt.Errorf("failed to stat file %s: %w", filePath, err)
+			}
+			tmpPath := absPath + ".pgmi-tmp"
+			if err := os.WriteFile(tmpPath, []byte(newContent), origInfo.Mode().Perm()); err != nil {
+				return fmt.Errorf("failed to write %s: %w", filePath, err)
+			}
+			if err := os.Rename(tmpPath, absPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("failed to finalise write of %s: %w", filePath, err)
 			}
 
 			fmt.Fprintf(os.Stdout, "    Written to file\n")

@@ -104,6 +104,28 @@ func (sm *SessionManager) PrepareSession(
 		}
 	}()
 
+	// Serialise concurrent `pgmi deploy` against the same target database.
+	// pg_try_advisory_lock returns false immediately if another session
+	// already holds the lock — we surface that as a distinct sentinel so
+	// the caller gets a clear message and a dedicated exit code (15)
+	// instead of a cryptic mid-deploy SQL error. The lock is session-
+	// scoped; releasing the pg_temp session on disconnect releases it.
+	//
+	// The key is derived from the DB name via hashtextextended so two
+	// deployments against DIFFERENT databases on the same cluster do not
+	// block each other.
+	var lockAcquired bool
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT pg_try_advisory_lock(hashtextextended('pgmi.deploy.' || current_database(), 0))`,
+	).Scan(&lockAcquired); err != nil {
+		return nil, fmt.Errorf("failed to check deployment advisory lock: %w", err)
+	}
+	if !lockAcquired {
+		return nil, fmt.Errorf("%w: another pgmi deployment is already running against %q",
+			pgmi.ErrConcurrentDeploy, connConfig.Database)
+	}
+
 	if verbose {
 		if _, err := conn.Exec(ctx, "SET client_min_messages = 'debug'"); err != nil {
 			return nil, fmt.Errorf("failed to set client_min_messages: %w", err)

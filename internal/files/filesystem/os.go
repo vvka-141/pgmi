@@ -2,10 +2,28 @@ package filesystem
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 )
+
+// DefaultMaxFileSize is the default per-file size cap for scanned SQL files.
+// Anything over this is almost certainly a mistake (a binary asset landed in
+// the source tree, a runaway artifact, a ZIP bomb). Override with the
+// PGMI_MAX_FILE_SIZE environment variable (bytes; must be a positive integer).
+const DefaultMaxFileSize int64 = 10 * 1024 * 1024 // 10 MiB
+
+// maxFileSize returns the effective per-file size cap, honoring PGMI_MAX_FILE_SIZE.
+func maxFileSize() int64 {
+	if raw := os.Getenv("PGMI_MAX_FILE_SIZE"); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxFileSize
+}
 
 // osFile implements File interface for OS filesystem
 type osFile struct {
@@ -18,8 +36,42 @@ func (f *osFile) Path() string         { return f.absPath }
 func (f *osFile) RelativePath() string { return f.relPath }
 func (f *osFile) Info() FileInfo       { return f.info }
 
+// ReadContent reads the file with two hardening steps beyond os.ReadFile:
+//   - Reject symlinks via os.Lstat before opening, so a malicious symlink
+//     named *.sql that points at /etc/shadow is not followed.
+//   - Cap read size at PGMI_MAX_FILE_SIZE (default 10 MiB) via io.LimitReader,
+//     so a multi-GB binary that landed in the project tree cannot OOM the
+//     deploy or ship an unbounded INSERT to PostgreSQL.
 func (f *osFile) ReadContent() ([]byte, error) {
-	return os.ReadFile(f.absPath)
+	linkInfo, err := os.Lstat(f.absPath)
+	if err != nil {
+		return nil, fmt.Errorf("lstat %s: %w", f.relPath, err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing to read symlink %s (symlinks are rejected by the scanner to avoid path-escape)", f.relPath)
+	}
+
+	cap := maxFileSize()
+	if linkInfo.Size() > cap {
+		return nil, fmt.Errorf("file %s is %d bytes, exceeds %d-byte cap (override via PGMI_MAX_FILE_SIZE)", f.relPath, linkInfo.Size(), cap)
+	}
+
+	file, err := os.Open(f.absPath)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", f.relPath, err)
+	}
+	defer file.Close()
+
+	// +1 so ReadAll reads one extra byte if the file grew between Lstat and Open;
+	// we then detect that and return an explicit error instead of silently truncating.
+	data, err := io.ReadAll(io.LimitReader(file, cap+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", f.relPath, err)
+	}
+	if int64(len(data)) > cap {
+		return nil, fmt.Errorf("file %s grew past the %d-byte cap during read (override via PGMI_MAX_FILE_SIZE)", f.relPath, cap)
+	}
+	return data, nil
 }
 
 // osDirectory implements Directory interface for OS filesystem

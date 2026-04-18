@@ -66,30 +66,43 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 	var pool *pgxpool.Pool
 	connStr := BuildConnectionString(c.config)
 
-	// Use retry executor to handle transient connection failures
+	// Use retry executor to handle transient connection failures.
+	// Every error path in the closure MUST null out `pool` so a prior
+	// attempt's half-constructed pool is not returned alongside an error
+	// and is not leaked across retry iterations.
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
+			pool = nil
 			return fmt.Errorf("failed to parse connection config: %w", err)
 		}
 
 		configurePool(poolConfig)
 
-		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		newPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
+			pool = nil
 			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		// Test the connection
-		if err := pool.Ping(ctx); err != nil {
-			pool.Close()
+		if err := newPool.Ping(ctx); err != nil {
+			newPool.Close()
+			pool = nil
 			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
+		pool = newPool
 		return nil
 	})
 
 	if err != nil {
+		// Defensive: if retries exhausted after a success-then-fail sequence,
+		// make sure we don't hand back a stale pool.
+		if pool != nil {
+			pool.Close()
+			pool = nil
+		}
 		return nil, err
 	}
 

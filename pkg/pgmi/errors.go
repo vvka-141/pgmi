@@ -36,6 +36,10 @@ var (
 
 	// ErrConnectionFailed indicates database connection failed.
 	ErrConnectionFailed = errors.New("connection failed")
+
+	// ErrConcurrentDeploy indicates another pgmi deployment is already in
+	// progress against the target database (Go-side advisory lock contention).
+	ErrConcurrentDeploy = errors.New("concurrent deployment in progress")
 )
 
 // ExitCodeForError returns the appropriate exit code for an error.
@@ -54,6 +58,8 @@ func ExitCodeForError(err error) int {
 
 	// Check for sentinel errors
 	switch {
+	case errors.Is(err, ErrConcurrentDeploy):
+		return ExitConcurrentDeploy
 	case errors.Is(err, ErrInvalidConfig):
 		return ExitConfigError
 	case errors.Is(err, ErrDeploySQLNotFound):

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -303,12 +304,17 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	interrupted := false
+	// atomic.Bool because the signal goroutine and the caller observe this
+	// field across a happens-before edge that is NOT provided by `Deploy`
+	// returning (deploy has no synchronisation contract with sigChan). Plain
+	// bool would trip `go test -race` on any integration path that exercises
+	// SIGINT.
+	var interrupted atomic.Bool
 	go func() {
 		select {
 		case <-sigChan:
 			fmt.Fprintln(os.Stderr, "pgmi: interrupted, cancelling deployment...")
-			interrupted = true
+			interrupted.Store(true)
 			cancel()
 		case <-ctx.Done():
 			// Context cancelled (deployment completed or timeout), exit goroutine cleanly
@@ -320,7 +326,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
 	// maps to 130 (ExitInterrupted). Deployer may return nil or an unrelated wrap;
 	// either way, a user Ctrl-C must not exit 0.
-	if interrupted {
+	if interrupted.Load() {
 		if err == nil {
 			return context.Canceled
 		}

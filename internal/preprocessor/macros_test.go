@@ -5,6 +5,83 @@ import (
 	"testing"
 )
 
+// TestMacroDetector_IgnoresLiteralsAndComments guards against the
+// string-literal bypass reported by the code review: tokens that look like
+// CALL pgmi_test() but live inside single-quoted strings, dollar-quoted
+// bodies, or comments MUST NOT be macro-expanded.
+func TestMacroDetector_IgnoresLiteralsAndComments(t *testing.T) {
+	stripper := NewCommentStripper()
+	detector := NewMacroDetector()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "inside single-quoted literal (EXECUTE)",
+			input: `EXECUTE 'CALL pgmi_test();';`,
+		},
+		{
+			name:  "inside RAISE NOTICE format string",
+			input: `DO $$ BEGIN RAISE NOTICE 'about to CALL pgmi_test() for logging'; END $$;`,
+		},
+		{
+			name:  "inside unnamed dollar-quote",
+			input: `DO $$ BEGIN /* not a real call */ PERFORM 'nothing'; -- literal: CALL pgmi_test();` + "\n" + ` END $$;`,
+		},
+		{
+			name:  "inside named dollar-quote",
+			input: `CREATE FUNCTION f() RETURNS void AS $body$ SELECT 'CALL pgmi_test() as a string' $body$ LANGUAGE sql;`,
+		},
+		{
+			name:  "inside line comment",
+			input: `-- TODO: add CALL pgmi_test('./api/**'); here` + "\n" + `SELECT 1;`,
+		},
+		{
+			name:  "inside block comment",
+			input: `/* reminder: CALL pgmi_test(); */ SELECT 1;`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mask := stripper.RedactForMacros(tt.input)
+			macros := detector.Detect(tt.input, mask)
+			if len(macros) != 0 {
+				t.Errorf("expected no macros in %q; detector returned %d: %+v",
+					tt.name, len(macros), macros)
+			}
+		})
+	}
+}
+
+// TestMacroDetector_DetectsTopLevelDespiteAdjacentLiterals ensures that the
+// new redaction behaviour does not break real macro calls that appear
+// adjacent to string literals or comments.
+func TestMacroDetector_DetectsTopLevelDespiteAdjacentLiterals(t *testing.T) {
+	stripper := NewCommentStripper()
+	detector := NewMacroDetector()
+
+	input := `
+-- run the tests below (literal in this comment should not match: CALL pgmi_test();)
+DO $$ BEGIN RAISE NOTICE 'starting tests'; END $$;
+CALL pgmi_test('./api/**');
+CALL pgmi_test();
+DO $$ BEGIN RAISE NOTICE 'done'; END $$;
+`
+	mask := stripper.RedactForMacros(input)
+	macros := detector.Detect(input, mask)
+	if len(macros) != 2 {
+		t.Fatalf("expected exactly 2 top-level macros, got %d: %+v", len(macros), macros)
+	}
+	if macros[0].Pattern != "./api/**" {
+		t.Errorf("first macro pattern = %q, want ./api/**", macros[0].Pattern)
+	}
+	if macros[1].Pattern != "" {
+		t.Errorf("second macro pattern = %q, want empty", macros[1].Pattern)
+	}
+}
+
 func TestMacroDetector_Detect_BasicCalls(t *testing.T) {
 	detector := NewMacroDetector()
 
@@ -36,7 +113,7 @@ func TestMacroDetector_Detect_BasicCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
 			}
@@ -87,7 +164,7 @@ func TestMacroDetector_Detect_SchemaQualified(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
 			}
@@ -140,7 +217,7 @@ func TestMacroDetector_Detect_WhitespaceVariations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1 for input %q", len(macros), tt.input)
 			}
@@ -193,7 +270,7 @@ func TestMacroDetector_Detect_InContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
 			}
@@ -242,7 +319,7 @@ func TestMacroDetector_Detect_MultipleMacros(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != len(tt.expected) {
 				t.Fatalf("Detect() returned %d macros, expected %d", len(macros), len(tt.expected))
 			}
@@ -259,7 +336,7 @@ func TestMacroDetector_Detect_Positions(t *testing.T) {
 	detector := NewMacroDetector()
 
 	input := "CALL pgmi_test()"
-	macros := detector.Detect(input)
+	macros := detector.Detect(input, "")
 
 	if len(macros) != 1 {
 		t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
@@ -283,7 +360,7 @@ func TestMacroDetector_Detect_PositionsWithPattern(t *testing.T) {
 	detector := NewMacroDetector()
 
 	input := "CALL pgmi_test('./users/**');"
-	macros := detector.Detect(input)
+	macros := detector.Detect(input, "")
 
 	if len(macros) != 1 {
 		t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
@@ -340,7 +417,7 @@ func TestMacroDetector_Detect_NoMacros(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 0 {
 				t.Errorf("Detect() returned %d macros, expected 0 for input %q", len(macros), tt.input)
 			}
@@ -385,7 +462,7 @@ func TestMacroDetector_Detect_PatternVariations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
 			}
@@ -439,7 +516,7 @@ CALL pg_temp.pgmi_test('./api/**');`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != tt.expectedCount {
 				t.Fatalf("Detect() returned %d macros, expected %d", len(macros), tt.expectedCount)
 			}
@@ -456,7 +533,7 @@ func TestMacroDetector_Detect_OrderPreserved(t *testing.T) {
 	detector := NewMacroDetector()
 
 	input := "CALL pgmi_test('./a/**'); CALL pgmi_test('./b/**'); CALL pgmi_test('./c/**');"
-	macros := detector.Detect(input)
+	macros := detector.Detect(input, "")
 
 	if len(macros) != 3 {
 		t.Fatalf("Detect() returned %d macros, expected 3", len(macros))
@@ -487,7 +564,7 @@ END $$;`
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		detector.Detect(input)
+		detector.Detect(input, "")
 	}
 }
 
@@ -505,7 +582,7 @@ func BenchmarkMacroDetector_Detect_LargeInput(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		detector.Detect(input)
+		detector.Detect(input, "")
 	}
 }
 
@@ -572,7 +649,7 @@ func TestMacroDetector_Detect_WithCallback(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			macros := detector.Detect(tt.input)
+			macros := detector.Detect(tt.input, "")
 			if len(macros) != 1 {
 				t.Fatalf("Detect() returned %d macros, expected 1", len(macros))
 			}

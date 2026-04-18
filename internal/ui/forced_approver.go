@@ -37,12 +37,27 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 
 	countdownSeconds := int(pgmi.DefaultForceApprovalCountdown.Seconds())
 	for i := countdownSeconds; i > 0; i-- {
+		fmt.Fprintf(a.output, "\rDropping in: %d seconds... (Press Ctrl+C to cancel)", i)
+		// ctx-aware wait: a plain a.sleepFn would swallow Ctrl-C for up
+		// to one second per iteration. a.sleepFn is kept for test
+		// injection — if a test overrides it we honour that path; in
+		// production sleepFn is time.Sleep which we bypass in favour of
+		// the select below.
+		if a.sleepFn != nil {
+			// Test path: call the injected sleep; ctx check still happens
+			// on the next iteration.
+			a.sleepFn(1 * time.Second)
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			default:
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
-		default:
-			fmt.Fprintf(a.output, "\rDropping in: %d seconds... (Press Ctrl+C to cancel)", i)
-			a.sleepFn(1 * time.Second)
+		case <-time.After(time.Second):
 		}
 	}
 
