@@ -196,7 +196,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS hstore SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS plv8;
+-- No plv8: unblocks managed cloud PostgreSQL (RDS, Azure Flexible Server,
+-- Google Cloud SQL). Handlers ship as plpgsql / sql; add plv8 yourself via
+-- a sortKeys-005+ file if you need JavaScript handlers AND your provider
+-- supports the extension.
 
 
 -- ============================================================================
@@ -425,17 +428,18 @@ END $$;
 -- ============================================================================
 -- EXECUTE DEPLOYMENT
 -- ============================================================================
-DO $$ BEGIN RAISE NOTICE '[pgmi] Acquiring deployment lock...'; END $$;
-SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
-
+-- Transaction-scoped advisory lock: auto-released on COMMIT or ROLLBACK so
+-- a mid-deploy failure never leaves the lock held until session disconnect.
+-- Session-scoped pg_advisory_lock was error-prone: if deploy() raised and
+-- the client session stayed open for another operation, the lock lingered.
 BEGIN;
+    SELECT pg_advisory_xact_lock(hashtext('pgmi_deploy_' || current_database()));
+    DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
     SELECT pg_temp.deploy();
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;
 COMMIT;
-
-SELECT pg_advisory_unlock(hashtext('pgmi_deploy_' || current_database()));
 DO $$ 
 BEGIN 
     RAISE NOTICE '[pgmi] Deployment lock released'; 

@@ -141,7 +141,7 @@ COMMENT ON COLUMN api.handler.security IS
     'Execution context: definer (runs as function owner) or invoker (runs as calling user).';
 
 COMMENT ON COLUMN api.handler.language_name IS
-    'Implementation language: sql, plpgsql, plv8, etc.';
+    'Implementation language: sql or plpgsql (any other language extension the deployment has installed also works).';
 
 COMMENT ON COLUMN api.handler.owner_name IS
     'Role that owns the handler function.';

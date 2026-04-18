@@ -37,7 +37,7 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --        - httpMethod:   POSIX regex matched against the HTTP method (default: any)
 --        - name:         Becomes the PostgreSQL function name (api.<name>)
 --        - description:  Human-readable — shown in pgAdmin and introspection views
---        - language:     Handler language: plpgsql (default), sql, plv8
+--        - language:     Handler language: plpgsql (default) or sql
 --        - requiresAuth: If true, gateway rejects requests without x-user-id header
 --        - autoLog:      If true, request/response logged to api.rest_exchange
 --

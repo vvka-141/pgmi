@@ -28,7 +28,16 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     uri_template text,
     mime_type text DEFAULT 'application/json',
     arguments jsonb,
-    tags text[] NOT NULL DEFAULT '{}'
+    tags text[] NOT NULL DEFAULT '{}',
+
+    -- api.uri_template_to_regex implements RFC 6570 Level 1 simple-string
+    -- expansion only. Level 2+ operators (+ reserved, ? query, / path,
+    -- . label, ; param, & form, # fragment) would silently mis-route.
+    -- Reject them at registration instead of producing broken URIs.
+    CONSTRAINT ck_uri_template_level1_only CHECK (
+        uri_template IS NULL
+        OR uri_template !~ '\{[+?#./;&]'
+    )
 );
 
 ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';

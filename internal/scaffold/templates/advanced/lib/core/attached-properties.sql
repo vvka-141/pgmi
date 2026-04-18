@@ -47,11 +47,26 @@ COMMENT ON TABLE core.attached_text IS
 
 CREATE OR REPLACE FUNCTION core.cleanup_orphan_attached_properties()
 RETURNS integer
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = pg_catalog, core
+AS $$
 DECLARE
     v_count integer;
     v_sql   text;
+    v_entity_id_type oid;
 BEGIN
+    -- Resolve the marker type via pg_type by name — search-path-independent.
+    -- If core.entity_id was dropped (e.g., domain rebuild is underway) the
+    -- caller gets 0, not a cryptic "type does not exist" from ::regtype.
+    SELECT t.oid INTO v_entity_id_type
+    FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'core' AND t.typname = 'entity_id';
+
+    IF v_entity_id_type IS NULL THEN
+        RETURN 0;
+    END IF;
+
     SELECT string_agg(
         format('SELECT object_id FROM %I.%I', n.nspname, c.relname),
         ' UNION ALL '
@@ -61,7 +76,7 @@ BEGIN
     JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE a.attname = 'object_id'
-      AND a.atttypid = 'core.entity_id'::regtype
+      AND a.atttypid = v_entity_id_type
       AND a.attnum > 0
       AND NOT a.attisdropped
       AND c.relkind IN ('r', 'p')
@@ -71,6 +86,10 @@ BEGIN
         RETURN 0;
     END IF;
 
+    -- UNION ALL of every entity table is O(tables × rows). Fine for small-to-
+    -- medium deployments (dozens of entity tables, millions of rows total).
+    -- For very large footprints, run per-table cleanup manually with each
+    -- DELETE scoped to a single entity table so the planner uses its indexes.
     EXECUTE format(
         'WITH all_entities AS (%s),
          deleted AS (

@@ -66,37 +66,34 @@ END $$;
 
 CREATE OR REPLACE FUNCTION api.url_decode(p_encoded text)
 RETURNS text
-LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    v_result text := replace(p_encoded, '+', ' ');
-    v_pos int;
-    v_start int := 1;
-    v_hex text;
-BEGIN
-    LOOP
-        v_pos := position('%' IN substring(v_result FROM v_start));
-        EXIT WHEN v_pos = 0;
-        v_pos := v_pos + v_start - 1;
-
-        IF v_pos > length(v_result) - 2 THEN
-            EXIT;
-        END IF;
-
-        v_hex := substring(v_result FROM v_pos + 1 FOR 2);
-
-        IF v_hex !~ '^[0-9A-Fa-f]{2}$' THEN
-            v_start := v_pos + 1;
-            CONTINUE;
-        END IF;
-
-        v_result := substring(v_result FROM 1 FOR v_pos - 1)
-                 || chr(('x' || v_hex)::bit(8)::int)
-                 || substring(v_result FROM v_pos + 3);
-        v_start := v_pos + 1;
-    END LOOP;
-
-    RETURN v_result;
-END;
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    -- Tokenise in a single pass, decode each valid %HH into a bytea, concat
+    -- and interpret as UTF-8. Avoids the O(n²) string-rebuild loop the prior
+    -- plpgsql implementation used, which amplified DoS surface on long
+    -- percent-encoded URLs. Invalid %XX and trailing partial sequences are
+    -- preserved as literals — same semantics, verified by the inline tests.
+    WITH parts AS (
+        SELECT m[1] AS piece, ord
+        FROM regexp_matches(
+            replace(p_encoded, '+', ' '),
+            '(%[0-9A-Fa-f]{2}|[^%]+|%)',
+            'g'
+        ) WITH ORDINALITY AS t(m, ord)
+    )
+    SELECT convert_from(
+        COALESCE(
+            string_agg(
+                CASE
+                    WHEN piece ~ '^%[0-9A-Fa-f]{2}$'
+                    THEN decode(substring(piece FROM 2), 'hex')
+                    ELSE convert_to(piece, 'UTF8')
+                END,
+                ''::bytea ORDER BY ord
+            ),
+            ''::bytea
+        ),
+        'UTF8'
+    ) FROM parts;
 $$;
 
 CREATE OR REPLACE FUNCTION api.regexp_quote(p_text text)
