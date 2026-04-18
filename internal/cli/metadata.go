@@ -181,7 +181,7 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Found %d file(s) without metadata:\n\n", len(filesWithoutMetadata))
+	fmt.Fprintf(os.Stdout, "Found %d file(s) without metadata:\n\n", len(filesWithoutMetadata))
 
 	// Generate metadata for each file
 	for _, filePath := range filesWithoutMetadata {
@@ -209,9 +209,9 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 
 `, fallbackID, scaffoldIdempotent, filepath.Base(filePath), filepath.Base(filePath))
 
-		fmt.Fprintf(os.Stderr, "  %s\n", filePath)
-		fmt.Fprintf(os.Stderr, "    ID: %s (fallback)\n", fallbackID)
-		fmt.Fprintf(os.Stderr, "    Idempotent: %v\n", scaffoldIdempotent)
+		fmt.Fprintf(os.Stdout, "  %s\n", filePath)
+		fmt.Fprintf(os.Stdout, "    ID: %s (fallback)\n", fallbackID)
+		fmt.Fprintf(os.Stdout, "    Idempotent: %v\n", scaffoldIdempotent)
 
 		if !previewOnly {
 			// Read existing file content
@@ -232,9 +232,9 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to write file %s: %w", filePath, err)
 			}
 
-			fmt.Fprintf(os.Stderr, "    Written to file\n")
+			fmt.Fprintf(os.Stdout, "    Written to file\n")
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stdout)
 	}
 
 	if previewOnly {
@@ -319,11 +319,11 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(jsonBytes))
 	} else {
 		// Human-readable output
-		fmt.Fprintf(os.Stderr, "\nValidation Summary:\n")
-		fmt.Fprintf(os.Stderr, "  Total files: %d\n", len(scanResult.Files))
-		fmt.Fprintf(os.Stderr, "  Files with metadata: %d\n", filesWithMetadata)
-		fmt.Fprintf(os.Stderr, "  Files without metadata: %d\n", filesWithoutMetadata)
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stdout, "\nValidation Summary:\n")
+		fmt.Fprintf(os.Stdout, "  Total files: %d\n", len(scanResult.Files))
+		fmt.Fprintf(os.Stdout, "  Files with metadata: %d\n", filesWithMetadata)
+		fmt.Fprintf(os.Stdout, "  Files without metadata: %d\n", filesWithoutMetadata)
+		fmt.Fprintln(os.Stdout)
 
 		if len(duplicates) > 0 {
 			fmt.Fprintln(os.Stderr, "Error: Duplicate IDs detected:")
@@ -414,17 +414,17 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(jsonBytes))
 	} else {
 		// Human-readable output
-		fmt.Fprintf(os.Stderr, "\nMetadata Summary (%d files):\n\n", len(plan))
+		fmt.Fprintf(os.Stdout, "\nMetadata Summary (%d files):\n\n", len(plan))
 
 		for i, entry := range plan {
-			fmt.Fprintf(os.Stderr, "%d. %s\n", i+1, entry.Path)
-			fmt.Fprintf(os.Stderr, "   ID: %s\n", entry.ID)
+			fmt.Fprintf(os.Stdout, "%d. %s\n", i+1, entry.Path)
+			fmt.Fprintf(os.Stdout, "   ID: %s\n", entry.ID)
 			if entry.Description != "" {
-				fmt.Fprintf(os.Stderr, "   Description: %s\n", entry.Description)
+				fmt.Fprintf(os.Stdout, "   Description: %s\n", entry.Description)
 			}
-			fmt.Fprintf(os.Stderr, "   Idempotent: %v\n", entry.Idempotent)
-			fmt.Fprintf(os.Stderr, "   Sort Keys: %v\n", entry.SortKeys)
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stdout, "   Idempotent: %v\n", entry.Idempotent)
+			fmt.Fprintf(os.Stdout, "   Sort Keys: %v\n", entry.SortKeys)
+			fmt.Fprintln(os.Stdout)
 		}
 
 		fmt.Fprintln(os.Stderr, "Note: Actual execution order is determined by sort keys during deployment.")

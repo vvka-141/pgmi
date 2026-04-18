@@ -25,6 +25,19 @@ var versionCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
+	v, _, _ := resolveVersionInfo()
+	rootCmd.Version = v
+	rootCmd.SetVersionTemplate(versionTemplate())
+}
+
+// versionTemplate produces the same one-line-first output for both
+// `pgmi --version` (cobra-handled) and `pgmi version`.
+func versionTemplate() string {
+	v, c, d := resolveVersionInfo()
+	return fmt.Sprintf(
+		"pgmi %s (compat %s)\nCommit: %s, Built: %s, Platform: %s/%s\n",
+		v, contract.LatestVersion(), c, d, runtime.GOOS, runtime.GOARCH,
+	)
 }
 
 func resolveVersionInfo() (v, c, d string) {
@@ -62,14 +75,12 @@ func resolveVersionInfo() (v, c, d string) {
 	return
 }
 
+// printVersionInfo writes machine-greppable version output to stdout.
+// First line is the version (psql --version convention so `pgmi version | head -1`
+// returns just `pgmi 0.9.1 (compat v1)`); subsequent lines carry build metadata.
 func printVersionInfo() {
 	v, c, d := resolveVersionInfo()
-
-	fmt.Println(asciiLogo)
-	fmt.Println()
 	fmt.Printf("pgmi %s (compat %s)\n", v, contract.LatestVersion())
 	fmt.Printf("Commit: %s, Built: %s, Platform: %s/%s\n", c, d, runtime.GOOS, runtime.GOARCH)
-	fmt.Println("PostgreSQL deployment tool")
-	fmt.Println()
 	fmt.Println("Repository: https://github.com/vvka-141/pgmi")
 }

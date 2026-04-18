@@ -22,24 +22,40 @@ No proprietary DSL. No migration framework. Just SQL in control.
 Philosophy: Minimal interference, maximum empowerment.
 
 Exit Codes:
-  0  - Success
-  1  - General error (deployment or test failed)
-  2  - CLI usage error (invalid arguments or flags)
-  3  - Panic or unexpected system error
-  10 - Invalid configuration or parameters
-  11 - Database connection failed
-  12 - User denied overwrite approval
-  13 - SQL execution failed
-  14 - deploy.sql not found`,
+  0   - Success
+  1   - General error (deployment or test failed)
+  2   - CLI usage error (invalid arguments or flags)
+  3   - Panic or unexpected system error
+  10  - Invalid configuration or parameters
+  11  - Database connection failed
+  12  - User denied overwrite approval
+  13  - SQL execution failed
+  14  - deploy.sql not found
+  130 - Interrupted (SIGINT / Ctrl-C)
+
+Environment Variables:
+  Connection (PostgreSQL libpq standard):
+    PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSSLMODE
+    PGAPPNAME          application_name for pg_stat_activity (default: "pgmi")
+    PGCONNECT_TIMEOUT  connection timeout in seconds
+    PGSSLCERT, PGSSLKEY, PGSSLROOTCERT, PGSSLPASSWORD
+    PGPASSFILE         path to .pgpass (default: ~/.pgpass or %APPDATA%\postgresql\pgpass.conf)
+    DATABASE_URL       full connection string (Heroku/Rails convention)
+
+  Cloud authentication:
+    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET  (Azure Entra ID)
+    AWS_REGION, AWS_DEFAULT_REGION                         (AWS RDS IAM)
+
+  pgmi behavior:
+    PGMI_CONNECTION_STRING  explicit connection string (overrides PG* vars)
+    PGMI_NON_INTERACTIVE    set to "1" to disable TUI wizards
+    CI                      any non-empty value disables TUI wizards
+    NO_COLOR                any non-empty value disables ANSI colors (wizard still runs)`,
 	SilenceUsage: true,
 }
 
 // Execute runs the root command
 func Execute() error {
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		printVersionInfo()
-		return nil
-	}
 	return rootCmd.Execute()
 }
 

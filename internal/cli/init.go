@@ -119,36 +119,34 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create project: %w", err)
 	}
 
-	// Display file tree
+	// Display file tree (data the user asked for → stdout)
 	tree, err := scaffold.BuildFileTree(targetPath)
 	if err != nil {
-		// Non-fatal - just skip tree display
-		fmt.Fprintf(os.Stderr, "\nProject initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
+		fmt.Fprintf(os.Stdout, "\nProject initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
 	} else {
-		fmt.Fprintf(os.Stderr, "\nProject initialized successfully using template '%s'\n\n", selectedTemplate)
-		fmt.Fprintln(os.Stderr, "Created structure:")
-		fmt.Fprint(os.Stderr, tree)
+		fmt.Fprintf(os.Stdout, "\nProject initialized successfully using template '%s'\n\n", selectedTemplate)
+		fmt.Fprintln(os.Stdout, "Created structure:")
+		fmt.Fprint(os.Stdout, tree)
 	}
 
-	// If user configured connection in the wizard, save it
+	// Connection-save side-effect status: warning to stderr, success to stdout.
 	if setupConnection && !connResult.Cancelled {
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stdout, "")
 		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
+			fmt.Fprintf(os.Stdout, "Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
 			offerSavePgpass(&connResult.Config)
 		}
 	}
 
-	// Next steps
-	fmt.Fprintln(os.Stderr, "\nNext steps:")
+	fmt.Fprintln(os.Stdout, "\nNext steps:")
 	if targetPath != "." {
-		fmt.Fprintf(os.Stderr, "  cd %s\n", targetPath)
+		fmt.Fprintf(os.Stdout, "  cd %s\n", targetPath)
 	}
-	fmt.Fprintln(os.Stderr, "  pgmi deploy . --database mydb")
-	fmt.Fprintln(os.Stderr, "  # Or with parameters:")
-	fmt.Fprintln(os.Stderr, "  pgmi deploy . --database mydb --param key=value")
+	fmt.Fprintln(os.Stdout, "  pgmi deploy . --database mydb")
+	fmt.Fprintln(os.Stdout, "  # Or with parameters:")
+	fmt.Fprintln(os.Stdout, "  pgmi deploy . --database mydb --param key=value")
 
 	return nil
 }

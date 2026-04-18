@@ -1,6 +1,7 @@
 package pgmi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +44,12 @@ var (
 func ExitCodeForError(err error) int {
 	if err == nil {
 		return ExitSuccess
+	}
+
+	// SIGINT / Ctrl-C produces context.Canceled when the deploy goroutine
+	// observes the cancelled context. Map to 130 per Unix convention (128 + SIGINT).
+	if errors.Is(err, context.Canceled) {
+		return ExitInterrupted
 	}
 
 	// Check for sentinel errors

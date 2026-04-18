@@ -125,12 +125,14 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
 	targetConfig := connConfig.DeepCopy()
 	targetConfig.Database = config.DatabaseName
+	s.logger.Info("Preparing session (scanning files, loading parameters)...")
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
 	defer session.Close()
 
+	s.logger.Info("Executing deploy.sql...")
 	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
 		return err
 	}

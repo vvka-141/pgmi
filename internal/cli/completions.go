@@ -1,12 +1,40 @@
 package cli
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 )
+
+var completionCmd = &cobra.Command{
+	Use:       "completion [bash|zsh|fish|powershell]",
+	Short:     "Generate shell completion script",
+	Long:      "Emit a shell completion script for the named shell. Source the output in your shell's rc file.\n\nExamples:\n  # bash\n  pgmi completion bash > /etc/bash_completion.d/pgmi\n\n  # zsh\n  pgmi completion zsh > \"${fpath[1]}/_pgmi\"\n\n  # fish\n  pgmi completion fish > ~/.config/fish/completions/pgmi.fish\n\n  # PowerShell\n  pgmi completion powershell | Out-String | Invoke-Expression",
+	Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+	ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		switch args[0] {
+		case "bash":
+			return rootCmd.GenBashCompletion(os.Stdout)
+		case "zsh":
+			return rootCmd.GenZshCompletion(os.Stdout)
+		case "fish":
+			return rootCmd.GenFishCompletion(os.Stdout, true)
+		case "powershell":
+			return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
+		default:
+			return fmt.Errorf("unsupported shell %q; valid: bash, zsh, fish, powershell", args[0])
+		}
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(completionCmd)
+}
 
 // sslModes contains valid PostgreSQL SSL modes for shell completion.
 var sslModes = []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}

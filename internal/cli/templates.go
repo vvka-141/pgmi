@@ -47,8 +47,8 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to list templates: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Available templates:")
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stdout, "Available templates:")
+	fmt.Fprintln(os.Stdout)
 
 	// Template descriptions
 	descriptions := getTemplateDescriptions()
@@ -62,17 +62,17 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "  %-12s %s\n", t, desc.Short)
+		fmt.Fprintf(os.Stdout, "  %-12s %s\n", t, desc.Short)
 		if desc.Long != "" {
-			fmt.Fprintf(os.Stderr, "               %s\n", desc.Long)
+			fmt.Fprintf(os.Stdout, "               %s\n", desc.Long)
 		}
 		if desc.BestFor != "" {
-			fmt.Fprintf(os.Stderr, "               Best for: %s\n", desc.BestFor)
+			fmt.Fprintf(os.Stdout, "               Best for: %s\n", desc.BestFor)
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stdout)
 	}
 
-	fmt.Fprintln(os.Stderr, "Use: pgmi init <project_name> --template <template_name>")
+	fmt.Fprintln(os.Stdout, "Use: pgmi init <project_name> --template <template_name>")
 	return nil
 }
 
@@ -92,31 +92,31 @@ func runTemplatesDescribe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print detailed description
-	fmt.Fprintf(os.Stderr, "Template: %s\n", templateName)
-	fmt.Fprintf(os.Stderr, "Description: %s\n", desc.Short)
+	fmt.Fprintf(os.Stdout, "Template: %s\n", templateName)
+	fmt.Fprintf(os.Stdout, "Description: %s\n", desc.Short)
 	if desc.Long != "" {
-		fmt.Fprintf(os.Stderr, "\n%s\n", desc.Long)
+		fmt.Fprintf(os.Stdout, "\n%s\n", desc.Long)
 	}
 
 	if len(desc.Structure) > 0 {
-		fmt.Fprintln(os.Stderr, "\nStructure:")
+		fmt.Fprintln(os.Stdout, "\nStructure:")
 		for _, item := range desc.Structure {
-			fmt.Fprintf(os.Stderr, "  %s\n", item)
+			fmt.Fprintf(os.Stdout, "  %s\n", item)
 		}
 	}
 
 	if len(desc.Features) > 0 {
-		fmt.Fprintln(os.Stderr, "\nFeatures:")
+		fmt.Fprintln(os.Stdout, "\nFeatures:")
 		for _, feature := range desc.Features {
-			fmt.Fprintf(os.Stderr, "  - %s\n", feature)
+			fmt.Fprintf(os.Stdout, "  - %s\n", feature)
 		}
 	}
 
 	if desc.BestFor != "" {
-		fmt.Fprintf(os.Stderr, "\nBest for: %s\n", desc.BestFor)
+		fmt.Fprintf(os.Stdout, "\nBest for: %s\n", desc.BestFor)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nUsage:\n  pgmi init myproject --template %s\n", templateName)
+	fmt.Fprintf(os.Stdout, "\nUsage:\n  pgmi init myproject --template %s\n", templateName)
 
 	return nil
 }

@@ -22,7 +22,10 @@ const (
 //   - stdin is not a terminal (piped input, CI/CD)
 //   - PGMI_NON_INTERACTIVE=1 is set
 //   - CI=true is set (common CI/CD convention)
-//   - NO_COLOR is set (accessibility/automation indicator)
+//
+// NO_COLOR is explicitly NOT a signal for non-interactivity — per
+// https://no-color.org it disables colors only. Callers that render with
+// colors should query ColorsDisabled() instead.
 //
 // Returns ModeInteractive otherwise.
 func DetectMode() Mode {
@@ -31,9 +34,6 @@ func DetectMode() Mode {
 		return ModeNonInteractive
 	}
 	if os.Getenv("CI") != "" {
-		return ModeNonInteractive
-	}
-	if os.Getenv("NO_COLOR") != "" {
 		return ModeNonInteractive
 	}
 
@@ -53,4 +53,11 @@ func DetectMode() Mode {
 // IsInteractive is a convenience function that returns true if running in interactive mode.
 func IsInteractive() bool {
 	return DetectMode() == ModeInteractive
+}
+
+// ColorsDisabled returns true when the user requested uncoloured output via
+// the NO_COLOR environment variable (https://no-color.org) — an accessibility
+// and scripting hint distinct from non-interactivity.
+func ColorsDisabled() bool {
+	return os.Getenv("NO_COLOR") != ""
 }

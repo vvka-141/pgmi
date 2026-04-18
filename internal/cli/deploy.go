@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -101,7 +102,10 @@ func init() {
 
 	// Granular connection flags (PostgreSQL standard)
 	// Precedence: flag > environment variable > default
-	deployCmd.Flags().StringVarP(&deployFlags.host, "host", "h", "",
+	// --host has no short form: cobra reserves -h for --help, which users
+	// expect universally (kubectl, gh, git, docker). --host is typed once
+	// per run, not per-invocation like in psql — the GNU help convention wins.
+	deployCmd.Flags().StringVar(&deployFlags.host, "host", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
 	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
@@ -299,17 +303,32 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
+	interrupted := false
 	go func() {
 		select {
 		case <-sigChan:
-			fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")
+			fmt.Fprintln(os.Stderr, "pgmi: interrupted, cancelling deployment...")
+			interrupted = true
 			cancel()
 		case <-ctx.Done():
 			// Context cancelled (deployment completed or timeout), exit goroutine cleanly
 		}
 	}()
 
-	return deployer.Deploy(ctx, config)
+	err = deployer.Deploy(ctx, config)
+
+	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
+	// maps to 130 (ExitInterrupted). Deployer may return nil or an unrelated wrap;
+	// either way, a user Ctrl-C must not exit 0.
+	if interrupted {
+		if err == nil {
+			return context.Canceled
+		}
+		if !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("%w: %v", context.Canceled, err)
+		}
+	}
+	return err
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.

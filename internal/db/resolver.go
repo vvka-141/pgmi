@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -86,13 +87,15 @@ func (g *GranularConnFlags) IsEmpty() bool {
 // EnvVars represents PostgreSQL standard environment variables.
 // See: https://www.postgresql.org/docs/current/libpq-envars.html
 type EnvVars struct {
-	PGHOST       string // PostgreSQL server host
-	PGPORT       string // PostgreSQL server port
-	PGUSER       string // PostgreSQL username
-	PGPASSWORD   string // PostgreSQL password (discouraged, use .pgpass instead)
-	PGDATABASE   string // Default database name
-	PGSSLMODE    string // SSL mode
-	DATABASE_URL string // Full connection string (Heroku/Rails convention)
+	PGHOST           string // PostgreSQL server host
+	PGPORT           string // PostgreSQL server port
+	PGUSER           string // PostgreSQL username
+	PGPASSWORD       string // PostgreSQL password (discouraged, use .pgpass instead)
+	PGDATABASE       string // Default database name
+	PGSSLMODE        string // SSL mode
+	PGAPPNAME        string // application_name reported in pg_stat_activity
+	PGCONNECT_TIMEOUT string // Connection timeout in seconds (libpq convention)
+	DATABASE_URL     string // Full connection string (Heroku/Rails convention)
 
 	// Azure Entra ID environment variables (Azure SDK standard names)
 	AZURE_TENANT_ID     string // Azure AD tenant/directory ID
@@ -120,6 +123,8 @@ func LoadFromEnvironment() *EnvVars {
 		PGPASSWORD:          os.Getenv("PGPASSWORD"),
 		PGDATABASE:          os.Getenv("PGDATABASE"),
 		PGSSLMODE:           os.Getenv("PGSSLMODE"),
+		PGAPPNAME:           os.Getenv("PGAPPNAME"),
+		PGCONNECT_TIMEOUT:   os.Getenv("PGCONNECT_TIMEOUT"),
 		DATABASE_URL:        os.Getenv("DATABASE_URL"),
 		AZURE_TENANT_ID:     os.Getenv("AZURE_TENANT_ID"),
 		AZURE_CLIENT_ID:     os.Getenv("AZURE_CLIENT_ID"),
@@ -503,6 +508,22 @@ func resolveFromGranularParams(
 	}
 	if cfg.SSLMode == "" {
 		cfg.SSLMode = "prefer"
+	}
+
+	// AppName: PGAPPNAME > "pgmi" default. Surfaces in pg_stat_activity.application_name
+	// so DBAs can attribute live sessions to pgmi deployments.
+	cfg.AppName = envVars.PGAPPNAME
+	if cfg.AppName == "" {
+		cfg.AppName = "pgmi"
+	}
+
+	// ConnectTimeout: PGCONNECT_TIMEOUT (seconds) — libpq convention.
+	if envVars.PGCONNECT_TIMEOUT != "" {
+		seconds, err := strconv.Atoi(envVars.PGCONNECT_TIMEOUT)
+		if err != nil || seconds < 0 {
+			return nil, "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds)", envVars.PGCONNECT_TIMEOUT)
+		}
+		cfg.ConnectTimeout = time.Duration(seconds) * time.Second
 	}
 
 	// Management database: pgmi.yaml > default ("postgres")

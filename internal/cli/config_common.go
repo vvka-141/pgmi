@@ -226,7 +226,10 @@ func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	// 0600: pgmi.yaml may accrue sensitive params via user edits; treat as
+	// private by default (same convention as .pgpass). Users who need a
+	// checked-in config can widen the mode themselves.
+	return os.WriteFile(configPath, data, 0600)
 }
 
 func authMethodToString(m pgmi.AuthMethod) string {
