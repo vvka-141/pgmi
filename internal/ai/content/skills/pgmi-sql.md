@@ -388,12 +388,12 @@ DO $$
 DECLARE
     v_count INT;
 BEGIN
-    SELECT COUNT(*) INTO v_count FROM api.http_route;
+    SELECT COUNT(*) INTO v_count FROM api.handler;
     IF v_count = 0 THEN
         RAISE EXCEPTION 'TEST FAILED: No routes registered';
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM api.http_route WHERE route_name = 'hello_world') THEN
+    IF NOT EXISTS (SELECT 1 FROM api.handler WHERE handler_function_name = 'hello_world') THEN
         RAISE EXCEPTION 'TEST FAILED: hello_world route not found';
     END IF;
 
@@ -522,22 +522,19 @@ END $$;
 ```sql
 -- ✅ GOOD: Pure SQL
 SELECT
-    route_name,
     handler_function_name,
-    CASE
-        WHEN auto_log THEN 'logged'
-        ELSE 'silent'
-    END AS logging_mode
-FROM api.http_route
-WHERE method_regexp ~ '^GET$'
-ORDER BY sequence_number;
+    handler_type,
+    CASE WHEN requires_auth THEN 'protected' ELSE 'public' END AS auth_mode
+FROM api.handler
+WHERE handler_type = 'rest'
+ORDER BY handler_function_name;
 
 -- ❌ AVOID: Unnecessary PL/pgSQL
 DO $$
 DECLARE
     v_route RECORD;
 BEGIN
-    FOR v_route IN SELECT * FROM api.http_route LOOP
+    FOR v_route IN SELECT * FROM api.handler LOOP
         -- Procedural logic where SQL would suffice
     END LOOP;
 END $$;

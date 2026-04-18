@@ -111,6 +111,10 @@ pgmi init myapp --template basic
 cd myapp
 ```
 
+> **Interactive setup**: if you run `pgmi init myapp` (without flags) on a TTY, an interactive wizard walks you through template choice and connection setup, saving a `pgmi.yaml` for later `pgmi deploy` runs. Add `--template <name>` to skip the template prompt, or set `PGMI_NON_INTERACTIVE=1` / `CI=1` to bypass wizards entirely.
+>
+> If you already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them.
+
 This creates a ready-to-deploy project:
 
 ```

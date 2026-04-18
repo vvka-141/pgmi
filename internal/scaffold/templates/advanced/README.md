@@ -14,6 +14,8 @@ PostgreSQL as your application server - HTTP routing, business logic, and data i
 
 **Prerequisites:** Familiarity with PostgreSQL functions, views, and transactions. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full decision guide.
 
+**Deployment connection must be a superuser.** `lib/core/entity-standards.sql` installs a DDL event trigger (`core_entity_table_standards`) — `CREATE EVENT TRIGGER` is a superuser-only operation. pgmi fails fast at install time with an actionable error if the connection lacks `rolsuper`. Managed PostgreSQL providers that do not expose superuser access (most AWS RDS tiers, some Azure Flexible Server configurations) cannot run this template as-is. If that applies to you: strip `lib/core/entity-standards.sql` from the deployment and add `created_at`/`deleted_at` columns explicitly on every entity table.
+
 ## Deployment Architecture
 
 **IMPORTANT**: The HTTP handlers in this template are designed to run **behind a web server or API gateway** (Go, Node.js, nginx, Envoy, AWS API Gateway, etc.). PostgreSQL is NOT directly exposed to the internet.

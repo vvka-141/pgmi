@@ -556,7 +556,7 @@ The advanced template organizes code into four schemas by concern:
 | **common** | Cross-cutting primitives (casting, encoding, text) | Database Owner | `try_cast()`, `slugify()`, `common.utf8` domain |
 | **internal** | Infrastructure, deployment & test tracking | Database Owner | `deployment_script_execution_log`, `unittest_script`, `generate_test_script()` |
 | **core** | Domain business logic | Database Owner | Your application tables, domain functions |
-| **api** | External interface (HTTP routes, public API) | Database Owner | `http_route`, request handlers, queues |
+| **api** | External interface (HTTP routes, public API) | Database Owner | `handler` registry, protocol-specific route tables (`rest_route`, `rpc_route`, `mcp_route`), request handlers |
 
 **Rationale:**
 - **Separation of concerns:** Clear boundaries between infrastructure, utilities, domain, and interface
@@ -606,67 +606,47 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO myapp_api;
 
 ### HTTP Framework
 
-The advanced template includes a built-in HTTP routing framework for PostgreSQL-backed APIs.
+The advanced template includes a built-in multi-protocol framework (REST, JSON-RPC, MCP) for PostgreSQL-backed APIs.
 
 **Core Components:**
 
-1. **Route Registry** (`api.http_route` table)
-   ```sql
-   CREATE TABLE api.http_route (
-       object_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-       route_name           TEXT NOT NULL UNIQUE,
-       handler_function_name TEXT NOT NULL,
-       address_regexp       TEXT NOT NULL, -- POSIX regex for URL
-       method_regexp        TEXT NOT NULL, -- POSIX regex for HTTP method
-       sequence_number      INT NOT NULL,
-       auto_log             BOOLEAN DEFAULT true,
-       volatility           TEXT DEFAULT 'VOLATILE',
-       language_name        TEXT DEFAULT 'plpgsql'
-   );
-   ```
+1. **Handler Registry** (`api.handler` table) — single table for all protocols, with
+   `handler_type` enum distinguishing `rest` / `rpc` / `mcp_tool` / `mcp_resource` / `mcp_prompt`.
+   Carries pg_proc snapshot columns (`returns_type`, `volatility`, `parallel`, `security`, etc.),
+   `input_json_schema` / `output_json_schema` (`api.json_schema` domain), `response_headers`
+   (jsonb), and `requires_auth`. Protocol-specific routing lives in sibling tables
+   (`api.rest_route`, `api.rpc_route`, `api.mcp_route`).
 
-2. **Handler Functions** (user-defined)
+2. **Handler Functions** — declared via registration helpers, not `INSERT`. Each helper
+   validates the handler name (`^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$`), generates a random
+   dollar-quote boundary, creates the function, captures pg_proc metadata, and links the
+   route:
    ```sql
-   CREATE FUNCTION api.handle_hello_world(p_request jsonb)
-   RETURNS jsonb AS $$
+   SELECT api.create_or_replace_rest_handler(
+       jsonb_build_object(
+           'id',         'e1000001-0001-4000-8000-000000000001'::uuid,
+           'uri',        '^/hello$',                  -- query string is stripped before match
+           'httpMethod', '^GET$',
+           'name',       'hello_world',
+           'requiresAuth', false
+       ),
+       $body$
    BEGIN
-       RETURN jsonb_build_object(
-           'status', 200,
-           'headers', jsonb_build_object('Content-Type', 'application/json'),
-           'body', jsonb_build_object('message', 'Hello, World!')
-       );
+       RETURN api.json_response(200, jsonb_build_object('message', 'Hello, World!'));
    END;
-   $$ LANGUAGE plpgsql SECURITY DEFINER;
-   ```
-
-3. **Request Queue** (optional, for async processing)
-   ```sql
-   CREATE TABLE api.http_request_queue (
-       request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-       route_name TEXT NOT NULL,
-       request_data jsonb NOT NULL,
-       created_at TIMESTAMPTZ DEFAULT now(),
-       processed_at TIMESTAMPTZ,
-       status TEXT DEFAULT 'pending'
+       $body$
    );
    ```
 
-**Example Route Definition:**
-```sql
-INSERT INTO api.http_route (
-    route_name,
-    handler_function_name,
-    address_regexp,
-    method_regexp,
-    sequence_number
-) VALUES (
-    'hello_world',
-    'api.handle_hello_world',
-    '^/hello/?$',          -- Matches /hello or /hello/
-    '^GET$',               -- Only GET requests
-    100
-);
-```
+3. **Exchange Tables** (`api.rest_exchange`, `api.rpc_exchange`, `api.mcp_exchange`) —
+   persistent request/response log, populated per invocation when `autoLog` is set.
+   Exception paths record `sqlstate=<code> detail=<truncated>` rather than raw `SQLERRM`
+   so attacker-supplied input does not leak through the log.
+
+**Example Route Resolution:**
+
+Routes are resolved inside `api.rest_invoke` / `api.rpc_invoke` / `api.mcp_call_tool`;
+you do not `INSERT` directly. The registration helpers own the mapping.
 
 **Request/Response Contract:**
 
@@ -962,7 +942,7 @@ FROM api.http_incoming_queue q
 
 #### Error Response Headers
 
-When errors occur, `api.http_invoke()` adds metadata to response headers:
+When errors occur, `api.rest_invoke()` adds metadata to response headers:
 
 ```sql
 v_response.headers := v_std_headers
@@ -1162,9 +1142,9 @@ func TestAdvancedTemplateDeployment(t *testing.T) {
 ```sql
 -- Immediate execution (not in __test__)
 SELECT CASE
-    WHEN common.try_cast_uuid('not-a-uuid') IS NULL
+    WHEN common.try_cast('not-a-uuid', NULL::uuid) IS NULL
     THEN true
-    ELSE (SELECT error('try_cast_uuid should return NULL for invalid input'))
+    ELSE (SELECT error('common.try_cast(text, null::uuid) should return NULL for invalid input'))
 END;
 ```
 

@@ -386,14 +386,15 @@ pgmi metadata plan ./myproject --json
 </pgmi-meta>
 */
 
-CREATE OR REPLACE FUNCTION utils.try_cast_uuid(input TEXT)
-RETURNS UUID AS $$
+CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value uuid)
+RETURNS uuid
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
 BEGIN
-    RETURN input::UUID;
+    RETURN input::uuid;
 EXCEPTION WHEN invalid_text_representation THEN
-    RETURN NULL;
+    RETURN default_value;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$;
 ```
 
 **Result**: Executes every deployment, always updates function definition.

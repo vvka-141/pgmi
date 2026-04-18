@@ -22,27 +22,37 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 
 | File | Purpose |
 |------|---------|
-| `01-types.sql` | Request/response types for each protocol |
-| `02-handler-registry.sql` | `api.http_route` table for handler metadata |
+| `01-types.sql` | Request/response types + `api.json_schema` / `api.xml_schema` domains |
+| `02-handler-registry.sql` | `api.handler` table for handler metadata (central registry) |
 | `03-rest-routes.sql` | REST handler creation and resolution |
 | `04-rpc-routes.sql` | JSON-RPC handler creation and resolution |
-| `05-mcp-routes.sql` | MCP tool/resource/prompt handlers |
-| `06-queue-infrastructure.sql` | Async request queue for background processing |
+| `05-mcp-routes.sql` | MCP tool/resource/prompt handlers (with `tags text[]`) |
+| `06-queue-infrastructure.sql` | Request/response exchange tables (`rest_exchange`, `rpc_exchange`, `mcp_exchange`) |
 | `07-helpers.sql` | Response builders, error handling, tracing |
-| `08-registration.sql` | Handler registration functions |
-| `09-gateways.sql` | Gateway functions (`rest_invoke`, `rpc_invoke`, `mcp_call_tool`) |
+| `08-registration.sql` | Handler registration + name validation + random dollar-quote |
+| `09-gateways.sql` | Gateway functions (`rest_invoke`, `rpc_invoke`, `mcp_call_tool`, `mcp_list_tools`, …) |
+| `10-mcp-protocol.sql` | MCP protocol layer (`mcp_initialize`, `mcp_ping`, `mcp_handle_request`) |
 
 **Key Types:**
-- `api.http_request` / `api.http_response` - HTTP request/response structures
-- `api.rest_request` / `api.rpc_request` / `api.mcp_request` - Protocol-specific requests
-- `api.handler_type` - Enum: `rest`, `rpc`, `mcp_tool`, `mcp_resource`, `mcp_prompt`
+- `api.rest_request` / `api.rpc_request` / `api.mcp_request` — protocol-specific request composites
+- `api.http_response` / `api.mcp_response` — unified HTTP response + MCP JSON-RPC envelope
+- `api.handler_type` — enum: `rest`, `rpc`, `mcp_tool`, `mcp_resource`, `mcp_prompt`
+- `api.json_schema` — JSON Schema domain validated by `api.is_valid_json_schema` (rejects empty `{}`, validates keyword shapes)
+- `api.xml_schema` — XSD document domain
 
 **Key Functions:**
-- `api.rest_invoke(method, url, headers, content)` - Execute REST request
-- `api.rpc_invoke(route_id, headers, content)` - Execute RPC request
-- `api.mcp_call_tool(name, args, context, request_id)` - Execute MCP tool
-- `api.create_or_replace_rest_handler(spec, body)` - Register REST handler
-- `api.json_response(status, body)` - Build JSON HTTP response
+- `api.rest_invoke(method, url, headers, content)` — execute REST request; strips query string before regex match
+- `api.rpc_invoke(route_id, headers, content)` — execute JSON-RPC request
+- `api.mcp_call_tool(name, args, context, request_id jsonb)` — execute MCP tool; exceptions return `result.isError=true`
+- `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` — tool discovery; hides `requires_auth` tools from unauthenticated sessions; tags live under `_meta.tags`
+- `api.mcp_handle_request(request, context)` — MCP JSON-RPC dispatcher; notifications receive no response (envelope NULL)
+- `api.create_or_replace_rest_handler(spec, body)` / `_rpc_handler` / `_mcp_handler` — register handler; validates name against `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$`
+- `api.json_response(status, body)` — build JSON HTTP response
+
+**Handler registration contract:**
+- Metadata JSONB may include `inputSchema` / `outputSchema` (validated by `api.json_schema` domain), `responseHeaders` (merged into wire headers; `x-include-schema` is a directive, not a header), `tags` (MCP only, surfaces as `_meta.tags`).
+- Setting `responseHeaders.x-include-schema = 'true'` merges `outputSchema` into REST responses (as `$schema` at body root) or RPC responses (inside `result.$schema`, preserving JSON-RPC 2.0 envelope).
+- Handler names are capped at 49 chars; longer names are rejected at registration to prevent PostgreSQL 63-byte identifier truncation collisions.
 
 ### `core/` - Entity Hierarchy
 
@@ -94,9 +104,12 @@ Tests for the framework itself (not your application).
 |------|-------|
 | `test_api_protocols.sql` | REST/RPC/MCP gateway functions |
 | `test_auth_enforcement.sql` | Authentication requirements |
+| `test_entity_standards.sql` | DDL-trigger entity standards (`created_at`/`deleted_at` injection) |
 | `test_error_handling.sql` | Error classification and HTTP status mapping |
-| `test_handler_lifecycle.sql` | Handler registration and resolution |
+| `test_handler_lifecycle.sql` | Handler registration, name validation, query-string routing |
+| `test_mcp_protocol.sql` | MCP `initialize` / `ping` / dispatcher + JSON-RPC 2.0 compliance |
 | `test_migrations_tracking.sql` | Deployment script tracking |
+| `test_schema_and_tags.sql` | `api.json_schema` domain, `$schema` injection, `_meta.tags`, auth hiding |
 
 ## Extension Points
 

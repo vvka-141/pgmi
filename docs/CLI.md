@@ -494,6 +494,12 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGSSLKEY` | `deploy` | Client SSL private key path |
 | `PGSSLROOTCERT` | `deploy` | Root CA certificate path |
 | `PGSSLPASSWORD` | `deploy` | Password for encrypted client key |
+| `PGAPPNAME` | `deploy` | `application_name` reported in `pg_stat_activity` (default: `pgmi`) |
+| `PGCONNECT_TIMEOUT` | `deploy` | Connection timeout in seconds (libpq convention) |
+| `PGPASSFILE` | `deploy` | Path to `.pgpass` (default: `~/.pgpass` or `%APPDATA%\postgresql\pgpass.conf`) |
+| `PGMI_NON_INTERACTIVE` | any | Set to `1` to disable TUI wizards |
+| `CI` | any | Any non-empty value disables TUI wizards |
+| `NO_COLOR` | any | Disables ANSI colors (wizards still run; accessibility signal per https://no-color.org) |
 | `AZURE_TENANT_ID` | `deploy` | Azure AD tenant ID |
 | `AZURE_CLIENT_ID` | `deploy` | Azure AD client ID |
 | `AZURE_CLIENT_SECRET` | `deploy` | Azure AD client secret |
@@ -523,6 +529,29 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 | `12` | User denied overwrite approval |
 | `13` | SQL execution failed |
 | `14` | `deploy.sql` not found |
+| `130` | Interrupted by SIGINT (Ctrl-C) — Unix convention 128+SIGINT |
+
+---
+
+## Shell Completion
+
+Generate a completion script for your shell:
+
+```bash
+# bash
+pgmi completion bash > /etc/bash_completion.d/pgmi
+
+# zsh
+pgmi completion zsh > "${fpath[1]}/_pgmi"
+
+# fish
+pgmi completion fish > ~/.config/fish/completions/pgmi.fish
+
+# PowerShell
+pgmi completion powershell | Out-String | Invoke-Expression
+```
+
+Completion covers commands, flags, template names (for `init --template`), SSL mode values, and AI skill/template names (for `ai skill` / `ai template`).
 
 ---
 

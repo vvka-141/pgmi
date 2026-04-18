@@ -85,31 +85,89 @@ pgmi implements MCP using JSON-RPC 2.0:
 
 | Function | Purpose |
 |----------|---------|
-| `api.mcp_handle_request(request, context)` | Unified dispatcher - routes all MCP methods |
-| `api.mcp_initialize(params, request_id)` | Handshake handler |
-| `api.mcp_ping(request_id)` | Keepalive response |
-| `api.mcp_call_tool(name, args, context, id)` | Invoke a tool |
-| `api.mcp_read_resource(uri, context, id)` | Read a resource |
-| `api.mcp_get_prompt(name, args, context, id)` | Expand a prompt |
-| `api.mcp_list_tools()` | Discovery: list all tools |
-| `api.mcp_list_resources()` | Discovery: list all resources |
-| `api.mcp_list_prompts()` | Discovery: list all prompts |
+| `api.mcp_handle_request(request, context)` | Unified dispatcher — returns `NULL` envelope for JSON-RPC notifications (no response sent) |
+| `api.mcp_initialize(params, request_id jsonb)` | Handshake handler |
+| `api.mcp_ping(request_id jsonb)` | Keepalive response |
+| `api.mcp_call_tool(name, args, context, id jsonb)` | Invoke a tool; handler exceptions → `result.isError=true` (not JSON-RPC error) |
+| `api.mcp_read_resource(uri, context, id jsonb)` | Read a resource |
+| `api.mcp_get_prompt(name, args, context, id jsonb)` | Expand a prompt |
+| `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` | Tool discovery; hides `requires_auth` tools when `auth.user_id` is unset; surfaces tags as `_meta.tags`; `p_tags` filter matches by overlap (NULL or empty array = no filter) |
+| `api.mcp_list_resources()` | Resource discovery; emits `uri` for static resources, `uriTemplate` for RFC 6570 templates; same auth-hide semantics |
+| `api.mcp_list_prompts()` | Prompt discovery; same auth-hide semantics |
+
+`request_id` is **jsonb** across the MCP API so JSON-RPC 2.0 id types (string, integer, null) round-trip verbatim. Passing a raw text literal (`'req-1'`) fails domain parsing — use `'"req-1"'::jsonb` or `'42'::jsonb`.
+
+No pagination: `mcp_list_*` return the full list in one call. Clients MUST NOT rely on cursor behaviour. Keyset pagination is planned post-v1.
+
+No `listChanged` notifications yet: pgmi does not emit `notifications/{tools,resources,prompts}/list_changed` when the registry mutates. `mcp_server_capabilities` stays silent on `listChanged` in lockstep. See `lib/api/09-gateways.sql` for the integration path (LISTEN/NOTIFY sketch).
 
 ### Method Routing
 
-The dispatcher (`api.mcp_handle_request`) routes requests by method:
+The dispatcher (`api.mcp_handle_request`) routes requests by method. Any method in the `notifications/*` family (or any request missing an `id` member) returns a NULL envelope — callers MUST NOT write anything to the wire for notifications per JSON-RPC 2.0.
 
 | Method | Handler |
 |--------|---------|
-| `initialize` | `api.mcp_initialize()` |
-| `notifications/initialized` | No-op (acknowledgment) |
-| `ping` | `api.mcp_ping()` |
+| `initialize` | `api.mcp_initialize(params, id)` |
+| `notifications/initialized` / any `notifications/*` | returns NULL envelope (no response) |
+| `ping` | `api.mcp_ping(id)` |
 | `tools/list` | `api.mcp_list_tools()` |
-| `tools/call` | `api.mcp_call_tool()` |
+| `tools/call` | `api.mcp_call_tool(name, args, context, id)` |
 | `resources/list` | `api.mcp_list_resources()` |
-| `resources/read` | `api.mcp_read_resource()` |
+| `resources/read` | `api.mcp_read_resource(uri, context, id)` |
 | `prompts/list` | `api.mcp_list_prompts()` |
-| `prompts/get` | `api.mcp_get_prompt()` |
+| `prompts/get` | `api.mcp_get_prompt(name, args, context, id)` |
+
+## Schema Contracts and Tags
+
+Handler registration metadata accepts the following optional fields:
+
+- **`inputSchema`** — JSON Schema (`api.json_schema` domain) describing arguments. Rejected if empty `{}` or malformed.
+- **`outputSchema`** — JSON Schema describing results. For MCP tools, surfaces in `tools/list` and enables spec-compliant `structuredContent` emission (see below). For REST/RPC, triggers `$schema` merge when `responseHeaders.x-include-schema='true'` — REST merges into body (wrapping arrays/scalars as `{data, $schema}`), RPC merges into `result.$schema` (never top-level, to keep JSON-RPC 2.0 compliant).
+- **`responseHeaders`** (jsonb) — arbitrary headers merged into the wire response (keys lowercased). The key `x-include-schema` is a directive, not a header; it controls `$schema` merge and is stripped before the response reaches the client.
+- **`tags`** (MCP only, `text[]`) — surfaces in `tools/list` under `_meta.tags` (MCP spec extension slot). `mcp_list_tools(p_tags)` filters by overlap; NULL or empty array = no filter.
+
+```sql
+-- Tool with outputSchema and tags, emitting structuredContent
+SELECT api.create_or_replace_mcp_handler(
+    jsonb_build_object(
+        'id',   'a0000001-0001-4000-8000-000000000001'::uuid,
+        'type', 'tool',
+        'name', 'weather_at',
+        'description', 'Get weather for a location',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object('location', jsonb_build_object('type', 'string')),
+            'required', jsonb_build_array('location')
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object('temp_c', jsonb_build_object('type', 'number'))
+        ),
+        'tags', jsonb_build_array('weather', 'read-only')
+    ),
+    $body$
+DECLARE v_structured jsonb;
+BEGIN
+    v_structured := jsonb_build_object('temp_c', 21.5);
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(api.mcp_text(v_structured::text)),
+        (request).request_id,
+        false,
+        v_structured
+    );
+END;
+    $body$
+);
+```
+
+`api.mcp_tool_result(content, request_id, is_error, structured_content)` — when
+a `structured_content` jsonb is passed, MCP clients that support outputSchema can
+validate the structured payload directly instead of re-parsing the text content.
+
+Handler names are validated against `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` at
+registration. Names over 49 chars are rejected to prevent PostgreSQL 63-byte
+identifier truncation collisions on the generated function
+(`mcp_tool_<name>`, `rpc_<name>`, etc.).
 
 ## Creating Handlers
 

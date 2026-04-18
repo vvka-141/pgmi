@@ -98,7 +98,7 @@ Composite types, enums, and domains are common in enterprise PostgreSQL:
 
 ```sql
 -- Example: HTTP request type
-CREATE TYPE api.http_request AS (
+CREATE TYPE api.rest_request AS (
     method TEXT,
     path TEXT,
     headers JSONB,
@@ -106,7 +106,7 @@ CREATE TYPE api.http_request AS (
 );
 
 -- Usage is valid if type defined first
-CREATE FUNCTION api.process_request(req api.http_request)
+CREATE FUNCTION api.process_request(req api.rest_request)
 RETURNS api.http_response AS $$ ... $$;
 ```
 
@@ -190,7 +190,7 @@ DECLARE
     v_response api.http_response;  -- Composite type
     v_sql text;
 BEGIN
-    v_sql := format('SELECT api.%I($1::api.http_request)', handler_name);
+    v_sql := format('SELECT api.%I($1::api.rest_request)', handler_name);
     EXECUTE v_sql INTO v_response USING v_request;
     -- ERROR: invalid input syntax for type integer: "(200, headers, content)"
 END;
@@ -202,7 +202,7 @@ DECLARE
     v_response api.http_response;  -- Composite type
     v_sql text;
 BEGIN
-    v_sql := format('SELECT * FROM api.%I($1::api.http_request)', handler_name);
+    v_sql := format('SELECT * FROM api.%I($1::api.rest_request)', handler_name);
     EXECUTE v_sql INTO v_response USING v_request;
     -- Success: properly destructures composite type
 END;
@@ -231,15 +231,15 @@ END;
 
 **❌ REJECT**:
 ```sql
-format('SELECT ($1::%I)', 'api.http_request')
--- Produces: SELECT ($1::"api.http_request")
--- Error: type "api.http_request" does not exist (quotes make it identifier)
+format('SELECT ($1::%I)', 'api.rest_request')
+-- Produces: SELECT ($1::"api.rest_request")
+-- Error: type "api.rest_request" does not exist (quotes make it identifier)
 ```
 
 **✅ REQUIRE**:
 ```sql
-format('SELECT ($1::api.http_request)')
--- Produces: SELECT ($1::api.http_request)
+format('SELECT ($1::api.rest_request)')
+-- Produces: SELECT ($1::api.rest_request)
 -- Success: type name used directly
 ```
 
