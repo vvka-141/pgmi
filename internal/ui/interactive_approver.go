@@ -12,6 +12,17 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+// InteractiveApprover is a one-shot, CLI-only approver. When the input is
+// os.Stdin (the only production path), a ctx cancellation returns
+// immediately and leaves the stdin-reading goroutine blocked on
+// ReadString — it is released when the OS closes stdin at process exit.
+// This is acceptable for a one-shot CLI but makes this approver UNSUITABLE
+// for library callers that create many approvers within a single process.
+//
+// The sync.WaitGroup coordinates the non-stdin (test-injected) path where
+// we can close the reader explicitly; it is deliberately not waited on
+// when input == os.Stdin because closing os.Stdin in a shared process is
+// a hostile act.
 type InteractiveApprover struct {
 	verbose bool
 	input   io.Reader
@@ -56,6 +67,9 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 
 	select {
 	case <-ctx.Done():
+		// Non-stdin (tests): unblock the reader goroutine and wait for it
+		// to exit so the caller can safely discard the approver.
+		// Stdin (production): leak the goroutine — see package doc.
 		if closer, ok := a.input.(io.Closer); ok && a.input != os.Stdin {
 			closer.Close()
 			wg.Wait()

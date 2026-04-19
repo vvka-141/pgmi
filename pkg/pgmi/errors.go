@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -100,6 +101,11 @@ func ExitCodeForError(err error) int {
 // message. If the chain contains a *pgconn.PgError, it appends the DETAIL,
 // HINT, and WHERE context fields that PostgreSQL attached to the error but
 // that err.Error() omits, matching the diagnostic fields psql surfaces.
+//
+// Password material embedded in connection strings is scrubbed before return:
+// any `password=<value>` query-style fragment or `user:<password>@` URI
+// fragment is replaced with a `[redacted]` marker. pgmi today does not leak
+// passwords into its own errors, but defence in depth is cheap.
 func FormatError(err error) string {
 	if err == nil {
 		return ""
@@ -121,5 +127,22 @@ func FormatError(err error) string {
 		}
 	}
 
-	return b.String()
+	return redactPasswords(b.String())
+}
+
+// passwordKVPattern matches libpq-style `password=<value>` and key=value
+// connection string fragments. Terminates at whitespace, ampersand, or end.
+var passwordKVPattern = regexp.MustCompile(`(?i)password=[^\s&'"]*`)
+
+// passwordURIPattern matches `user:password@host` inside URI connection strings.
+// The password group is everything between : and @, non-greedy.
+var passwordURIPattern = regexp.MustCompile(`(://[^:/@\s]+):[^@\s]*@`)
+
+// redactPasswords replaces password-looking substrings with `[redacted]`.
+// Handles both libpq keyword form (`password=secret`) and URI form
+// (`postgresql://user:secret@host/db`).
+func redactPasswords(s string) string {
+	s = passwordKVPattern.ReplaceAllString(s, "password=[redacted]")
+	s = passwordURIPattern.ReplaceAllString(s, "$1:[redacted]@")
+	return s
 }
