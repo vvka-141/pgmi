@@ -27,11 +27,27 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     input_schema jsonb,
     uri_template text,
     mime_type text DEFAULT 'application/json',
-    arguments jsonb
+    arguments jsonb,
+    tags text[] NOT NULL DEFAULT '{}',
+
+    -- api.uri_template_to_regex implements RFC 6570 Level 1 simple-string
+    -- expansion only. Level 2+ operators (+ reserved, ? query, / path,
+    -- . label, ; param, & form, # fragment) would silently mis-route.
+    -- Reject them at registration instead of producing broken URIs.
+    CONSTRAINT ck_uri_template_level1_only CHECK (
+        uri_template IS NULL
+        OR uri_template !~ '\{[+?#./;&]'
+    )
 );
+
+ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
 CREATE INDEX IF NOT EXISTS ix_mcp_route_name ON api.mcp_route(mcp_name);
+CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
+
+COMMENT ON COLUMN api.mcp_route.tags IS
+    'Freeform tags for filtering tools via api.mcp_list_tools(p_tags). GIN-indexed for efficient && (overlap) queries.';
 
 -- ============================================================================
 -- Grant Permissions

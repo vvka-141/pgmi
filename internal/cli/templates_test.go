@@ -47,13 +47,13 @@ func TestTemplateDescriptionContent(t *testing.T) {
 	}{
 		{
 			name:                "basic",
-			expectedShort:       "Simple structure for learning",
+			expectedShort:       "Linear migrations, minimal structure",
 			minFeatures:         3,
 			minStructureEntries: 2,
 		},
 		{
 			name:                "advanced",
-			expectedShort:       "Advanced patterns with savepoint protection",
+			expectedShort:       "Metadata-driven deployment, REST/RPC/MCP handler registry",
 			minFeatures:         3,
 			minStructureEntries: 2,
 		},

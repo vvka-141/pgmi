@@ -36,6 +36,13 @@ func NewGoogleCloudSQLConnector(config *pgmi.ConnectionConfig, instance string) 
 // After the pool is closed, the caller must call Close() on this connector
 // to release the Cloud SQL dialer.
 func (c *GoogleCloudSQLConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
+	// Guard against double Connect(). A second call without Close() would
+	// overwrite c.dialer, leaking the previous dialer's Cloud SQL auth
+	// resources (background token refresh goroutines, TLS caches).
+	if c.dialer != nil {
+		return nil, fmt.Errorf("GoogleCloudSQLConnector.Connect: connector already connected; call Close() before reconnecting")
+	}
+
 	dialer, err := cloudsqlconn.NewDialer(ctx, cloudsqlconn.WithIAMAuthN())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Cloud SQL dialer: %w", err)

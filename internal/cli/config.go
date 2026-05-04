@@ -14,25 +14,14 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config [path]",
-	Short: "Interactively configure database connection",
-	Long: `Launches an interactive wizard to configure the database connection in pgmi.yaml.
+	Short: "Run the connection wizard and save to pgmi.yaml",
+	Long: `Launch the connection wizard and write the result to pgmi.yaml.
 
-The wizard guides you through:
-  1. Selecting your PostgreSQL provider (local, Azure, AWS, Google)
-  2. Entering connection details (host, port, credentials)
-  3. Testing the connection
+  pgmi config              In the current directory
+  pgmi config ./project    In ./project
 
-Parameters and timeout can be edited directly in pgmi.yaml.
-
-This command requires an interactive terminal. For non-interactive use,
-create pgmi.yaml manually or use environment variables.
-
-Examples:
-  # Configure connection in current directory
-  pgmi config
-
-  # Configure connection in a specific project directory
-  pgmi config ./my-project`,
+The wizard handles local, Azure Entra ID, AWS IAM, and Google Cloud SQL
+auth. Requires an interactive terminal — for CI, write pgmi.yaml by hand.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runConfig,
 }
@@ -48,13 +37,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	if !tui.IsInteractive() {
-		return fmt.Errorf("config command requires an interactive terminal\n" +
-			"For non-interactive use, create pgmi.yaml manually or use environment variables")
+		return fmt.Errorf("config requires an interactive terminal\nfor CI, write pgmi.yaml by hand or use PG* environment variables")
 	}
 
 	existingCfg, err := config.Load(targetDir)
 	if err == nil && existingCfg != nil {
-		fmt.Fprintln(os.Stderr, "Found existing pgmi.yaml")
+		fmt.Fprintln(os.Stderr, "pgmi.yaml exists.")
 		if !tui.PromptContinue("Overwrite connection settings?") {
 			fmt.Fprintln(os.Stderr, "Cancelled.")
 			return nil
@@ -74,7 +62,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nConnection saved to %s\n", filepath.Join(targetDir, "pgmi.yaml"))
+	fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(targetDir, "pgmi.yaml"))
 	offerSavePgpass(&connResult.Config)
 	return nil
 }

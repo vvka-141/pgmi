@@ -1,12 +1,12 @@
 .PHONY: test test-short test-integration test-connection test-azure test-all lint build release-ready doctor build-clean sync-ai
 
-test:                  ## Run unit tests (no database required)
-	go test ./...
-
-test-short:            ## Run unit tests, skip slow tests
+test:                  ## Run unit tests only (no database, short mode)
 	go test -short ./...
 
-test-integration:      ## Run all tests including DB integration (uses testcontainers if PGMI_TEST_CONN not set)
+test-short:            ## Alias for `test` — kept for backward compat in CI scripts
+	go test -short ./...
+
+test-integration:      ## Run the full suite including DB integration (uses testcontainers if PGMI_TEST_CONN not set)
 	go test ./...
 
 test-connection:       ## Run connection/security scenario tests (requires Docker)

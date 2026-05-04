@@ -107,13 +107,13 @@ api.mcp_handle_request(p_request jsonb, p_context jsonb DEFAULT NULL) RETURNS ap
 
 | Method | Handler |
 |--------|---------|
-| `initialize` | `api.mcp_initialize()` |
-| `notifications/initialized` | No-op (returns empty success) |
-| `ping` | `api.mcp_ping()` |
+| `initialize` | `api.mcp_initialize(params, id)` |
+| `notifications/initialized` / any `notifications/*` | Returns NULL envelope — JSON-RPC notifications MUST NOT receive a response |
+| `ping` | `api.mcp_ping(id)` |
 | `tools/list` | `api.mcp_success(api.mcp_list_tools(), id)` |
-| `tools/call` | `api.mcp_call_tool()` |
+| `tools/call` | `api.mcp_call_tool(name, args, context, id)` |
 | `resources/list` | `api.mcp_success(api.mcp_list_resources(), id)` |
-| `resources/read` | `api.mcp_read_resource()` |
+| `resources/read` | `api.mcp_read_resource(uri, context, id)` |
 | `prompts/list` | `api.mcp_success(api.mcp_list_prompts(), id)` |
 | `prompts/get` | `api.mcp_get_prompt()` |
 | Unknown | Error -32601 (Method not found) |
@@ -312,10 +312,16 @@ api.mcp_get_prompt(
 ### Discovery Functions
 
 ```sql
-api.mcp_list_tools() RETURNS jsonb      -- {"tools": [...]}
-api.mcp_list_resources() RETURNS jsonb  -- {"resources": [...]}
-api.mcp_list_prompts() RETURNS jsonb    -- {"prompts": [...]}
+api.mcp_list_tools(p_tags text[] DEFAULT NULL) RETURNS jsonb  -- {"tools": [...]}
+api.mcp_list_resources() RETURNS jsonb                         -- {"resources": [...]}
+api.mcp_list_prompts() RETURNS jsonb                           -- {"prompts": [...]}
 ```
+
+- Tools/resources/prompts with `requires_auth=true` are hidden when `auth.user_id` is unset in the session.
+- `mcp_list_tools(p_tags)` filters by tag overlap; NULL or empty array = no filter.
+- Tags surface under `_meta.tags` on the tool object (MCP spec extension slot), not at top level.
+- `mcp_list_resources` emits `uri` for static resources and `uriTemplate` for RFC 6570 templated ones.
+- No pagination; no `listChanged` notifications (see gateway file for integration notes).
 
 ---
 

@@ -130,10 +130,9 @@ function Install-Pgmi {
         $pgmiExe = Join-Path $InstallDir "pgmi.exe"
         if (Test-Path $pgmiExe) {
             $v = & $pgmiExe --version 2>&1
-            Write-Host "=====================================================" -ForegroundColor Green
-            Write-Host "  pgmi installed successfully!" -ForegroundColor Green
+            Write-Host ""
             Write-Host "  $v" -ForegroundColor Green
-            Write-Host "=====================================================" -ForegroundColor Green
+            Write-Host ""
         } else {
             Write-Warn "Installation completed but pgmi.exe not found at $pgmiExe"
         }

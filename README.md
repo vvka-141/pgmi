@@ -95,7 +95,7 @@ pgmi is a good fit when you need:
 
 - **Conditional deployment logic** — different behavior per environment, feature flags, custom phases
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
-- **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, leverage `pg_advisory_lock`
+- **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, take advisory locks via `pg_advisory_lock`
 - **Data files alongside schema** — load JSON config, XML reference data, CSV seeds in the same transaction as migrations
 - **Multi-cloud PostgreSQL targets** — same `deploy.sql` works on Azure, AWS, GCP with native auth (Entra ID, IAM)
 

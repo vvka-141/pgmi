@@ -78,7 +78,12 @@ $$;
 --   - resources: Data access (resources/list, resources/read)
 --   - prompts: Message templates (prompts/list, prompts/get)
 --
--- Note: listChanged notifications are not currently supported.
+-- Known gap: listChanged notifications are NOT declared because pgmi does not
+-- yet emit notifications/{tools,resources,prompts}/list_changed when the MCP
+-- registry mutates. Long-lived clients will see a stale list until reconnect.
+-- Integration path: LISTEN/NOTIFY on a channel fired by registration
+-- functions, fanned out by the MCP transport gateway. Declaring listChanged
+-- capability MUST remain in lockstep with that notification plumbing.
 --
 -- Returns:
 --   {"tools": {}, "resources": {}, "prompts": {}}
@@ -95,6 +100,9 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         'prompts', jsonb_build_object()
     );
 $$;
+
+COMMENT ON FUNCTION api.mcp_server_capabilities() IS
+    'MCP capabilities advertised during initialize. Empty objects declare support without listChanged — pgmi does not yet emit list_changed notifications; see function body for integration notes.';
 
 -- ============================================================================
 -- MCP Initialize Handler
@@ -128,9 +136,11 @@ $$;
 --     "capabilities": {"tools": {}, "resources": {}, "prompts": {}}
 --   }}
 
+DROP FUNCTION IF EXISTS api.mcp_initialize(jsonb, text);
+
 CREATE OR REPLACE FUNCTION api.mcp_initialize(
     p_params jsonb,
-    p_request_id text
+    p_request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -180,7 +190,9 @@ $$;
 -- Example Response:
 --   {"jsonrpc": "2.0", "id": "2", "result": {}}
 
-CREATE OR REPLACE FUNCTION api.mcp_ping(p_request_id text)
+DROP FUNCTION IF EXISTS api.mcp_ping(text);
+
+CREATE OR REPLACE FUNCTION api.mcp_ping(p_request_id jsonb)
 RETURNS api.mcp_response
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success('{}'::jsonb, p_request_id);
@@ -241,6 +253,10 @@ $$;
 --     [request_json, context_json]
 --   )
 
+-- Dispatcher returns NULL (envelope=NULL) for JSON-RPC notifications. The
+-- caller MUST check envelope IS NULL before sending a response to the wire —
+-- notifications MUST NOT receive a response per JSON-RPC 2.0 spec.
+
 CREATE OR REPLACE FUNCTION api.mcp_handle_request(
     p_request jsonb,
     p_context jsonb DEFAULT NULL
@@ -253,27 +269,42 @@ DECLARE
     v_jsonrpc text;
     v_method text;
     v_params jsonb;
-    v_id text;
+    v_id jsonb;
+    v_is_notification boolean;
 BEGIN
     -- Validate request is not null
     IF p_request IS NULL THEN
         RETURN api.mcp_error(-32600, 'Invalid Request: null request', NULL);
     END IF;
 
-    -- Extract JSON-RPC envelope fields
+    -- Extract JSON-RPC envelope fields. v_id is jsonb to preserve type (string,
+    -- integer, null). A request without an id member is a notification.
     v_jsonrpc := p_request->>'jsonrpc';
     v_method := p_request->>'method';
-    v_id := p_request->>'id';
+    v_id := p_request->'id';
+    v_is_notification := NOT (p_request ? 'id');
     v_params := COALESCE(p_request->'params', '{}'::jsonb);
 
     -- Validate JSON-RPC 2.0 version
     IF v_jsonrpc IS NULL OR v_jsonrpc != '2.0' THEN
+        IF v_is_notification THEN
+            RETURN ROW(NULL::jsonb)::api.mcp_response;
+        END IF;
         RETURN api.mcp_error(-32600, 'Invalid Request: missing or invalid jsonrpc version', v_id);
     END IF;
 
     -- Validate method is present
     IF v_method IS NULL THEN
+        IF v_is_notification THEN
+            RETURN ROW(NULL::jsonb)::api.mcp_response;
+        END IF;
         RETURN api.mcp_error(-32600, 'Invalid Request: missing method', v_id);
+    END IF;
+
+    -- JSON-RPC 2.0: notifications (no id) MUST NOT receive a response.
+    -- Dispatch the method body for its side-effects but return NULL envelope.
+    IF v_is_notification OR v_method LIKE 'notifications/%' THEN
+        RETURN ROW(NULL::jsonb)::api.mcp_response;
     END IF;
 
     -- Set up authentication context from p_context parameter
@@ -291,10 +322,6 @@ BEGIN
     CASE v_method
         WHEN 'initialize' THEN
             RETURN api.mcp_initialize(v_params, v_id);
-
-        WHEN 'notifications/initialized' THEN
-            -- Client acknowledgment of successful init - no action needed
-            RETURN api.mcp_success('{}'::jsonb, v_id);
 
         WHEN 'ping' THEN
             RETURN api.mcp_ping(v_id);
@@ -350,7 +377,7 @@ DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    -- Test: Initialize handshake
+    -- Test: Initialize handshake (string id)
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb);
     v_envelope := (v_response).envelope;
     IF v_envelope->>'jsonrpc' != '2.0' THEN
@@ -360,7 +387,14 @@ BEGIN
         RAISE EXCEPTION 'mcp_handle_request initialize: missing serverInfo';
     END IF;
 
-    -- Test: Ping keepalive
+    -- Test: Integer id round-trips as integer (JSON-RPC 2.0 type preservation)
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":42,"method":"ping"}'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF jsonb_typeof(v_envelope->'id') != 'number' OR (v_envelope->>'id')::int != 42 THEN
+        RAISE EXCEPTION 'mcp_handle_request: integer id type not preserved, got %', v_envelope->'id';
+    END IF;
+
+    -- Test: Ping keepalive (string id)
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"2","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
     IF v_envelope->>'id' != '2' THEN
@@ -374,11 +408,25 @@ BEGIN
         RAISE EXCEPTION 'mcp_handle_request unknown method: wrong error code';
     END IF;
 
-    -- Test: Missing jsonrpc returns -32600
+    -- Test: Missing jsonrpc returns -32600 (request has id, so it's a request not a notification)
     v_response := api.mcp_handle_request('{"id":"4","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
     IF (v_envelope->'error'->>'code')::int != -32600 THEN
         RAISE EXCEPTION 'mcp_handle_request missing jsonrpc: wrong error code';
+    END IF;
+
+    -- Test: notifications/initialized MUST NOT receive a response
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","method":"notifications/initialized"}'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF v_envelope IS NOT NULL THEN
+        RAISE EXCEPTION 'mcp_handle_request notifications/initialized: MUST NOT return a response envelope, got %', v_envelope;
+    END IF;
+
+    -- Test: any notification (no id) MUST NOT receive a response
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","method":"tools/list"}'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF v_envelope IS NOT NULL THEN
+        RAISE EXCEPTION 'mcp_handle_request notification (no id) MUST NOT return response envelope, got %', v_envelope;
     END IF;
 END $$;
 
@@ -401,13 +449,13 @@ DECLARE
 BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_info() TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_capabilities() TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_initialize(jsonb, text) TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_ping(text) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_initialize(jsonb, jsonb) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_ping(jsonb) TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_handle_request(jsonb, jsonb) TO %I', v_api_role);
 
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_info() TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_server_capabilities() TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_initialize(jsonb, text) TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_ping(text) TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_initialize(jsonb, jsonb) TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_ping(jsonb) TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.mcp_handle_request(jsonb, jsonb) TO %I', v_admin_role);
 END $$;

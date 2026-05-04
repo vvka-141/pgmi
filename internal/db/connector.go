@@ -66,30 +66,43 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 	var pool *pgxpool.Pool
 	connStr := BuildConnectionString(c.config)
 
-	// Use retry executor to handle transient connection failures
+	// Use retry executor to handle transient connection failures.
+	// Every error path in the closure MUST null out `pool` so a prior
+	// attempt's half-constructed pool is not returned alongside an error
+	// and is not leaked across retry iterations.
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
+			pool = nil
 			return fmt.Errorf("failed to parse connection config: %w", err)
 		}
 
 		configurePool(poolConfig)
 
-		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		newPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
+			pool = nil
 			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
 		// Test the connection
-		if err := pool.Ping(ctx); err != nil {
-			pool.Close()
+		if err := newPool.Ping(ctx); err != nil {
+			newPool.Close()
+			pool = nil
 			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
+		pool = newPool
 		return nil
 	})
 
 	if err != nil {
+		// Defensive: if retries exhausted after a success-then-fail sequence,
+		// make sure we don't hand back a stale pool.
+		if pool != nil {
+			pool.Close()
+			pool = nil
+		}
 		return nil, err
 	}
 
@@ -113,95 +126,53 @@ func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	}
 }
 
+// connError keeps the user-visible message free of wrapped-error noise while
+// still surfacing the raw err and the ErrConnectionFailed sentinel through
+// errors.Is(). Without the custom Unwrap, we'd have to repeat err.Error() in
+// the visible message to keep it unwrappable.
+type connError struct {
+	msg string
+	err error
+}
+
+func (e *connError) Error() string  { return e.msg }
+func (e *connError) Unwrap() []error { return []error{e.err, pgmi.ErrConnectionFailed} }
+
+func newConnError(err error, format string, args ...any) error {
+	return &connError{msg: fmt.Sprintf(format, args...), err: err}
+}
+
 // wrapConnectionError wraps raw pgx connection errors with actionable guidance.
-// All returned errors wrap pgmi.ErrConnectionFailed so callers can use errors.Is().
+// All returned errors satisfy errors.Is(err, pgmi.ErrConnectionFailed) and
+// errors.Is(err, originalErr).
 func wrapConnectionError(err error, host string, port int, database string) error {
 	errStr := strings.ToLower(err.Error())
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	switch {
 	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "actively refused"):
-		return fmt.Errorf(`connection refused to %s
-
-Possible causes:
-  - PostgreSQL is not running (check: pg_isready -h %s -p %d)
-  - Wrong host or port
-  - Firewall blocking the connection
-
-Original error: %w
-%w`, addr, host, port, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "connection refused to %s\nis PostgreSQL running? check: pg_isready -h %s -p %d", addr, host, port)
 
 	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "no host"):
-		return fmt.Errorf(`cannot resolve host "%s"
-
-Possible causes:
-  - Hostname is misspelled
-  - DNS is not configured or reachable
-  - Network connection issue
-
-Original error: %w
-%w`, host, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "cannot resolve host %q\ncheck hostname spelling, DNS, and $PGHOST", host)
 
 	case strings.Contains(errStr, "password authentication failed"):
-		return fmt.Errorf(`password authentication failed for database "%s"
-
-Possible causes:
-  - Wrong password (check $PGPASSWORD or ~/.pgpass)
-  - Wrong username
-  - User does not have access to the database
-
-Original error: %w
-%w`, database, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "password authentication failed for database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", database)
 
 	case strings.Contains(errStr, "does not exist"):
-		return fmt.Errorf(`database "%s" does not exist
-
-To create it:
-  createdb %s
-
-Or use --overwrite to let pgmi create it.
-
-Original error: %w
-%w`, database, database, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "database %q does not exist\ncreate it with `createdb %s` or pass --overwrite to let pgmi create it", database, database)
 
 	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out"):
-		return fmt.Errorf(`connection timed out to %s
-
-Possible causes:
-  - Server is overloaded or unresponsive
-  - Network latency or packet loss
-  - Firewall silently dropping packets
-  - Wrong host/port (server not listening)
-
-Original error: %w
-%w`, addr, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "connection timed out to %s\ncheck network reachability and server load; raise --timeout if needed", addr)
 
 	case strings.Contains(errStr, "ssl") || strings.Contains(errStr, "tls"):
-		return fmt.Errorf(`SSL/TLS connection error
-
-Possible causes:
-  - Server requires SSL but --sslmode is wrong
-  - Certificate verification failed (try --sslmode=require)
-  - Client certificates missing (check --sslcert, --sslkey)
-
-Original error: %w
-%w`, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "SSL/TLS connection error: %v\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert", err)
 
 	case strings.Contains(errStr, "too many connections"):
-		return fmt.Errorf(`too many connections to database "%s"
-
-Possible causes:
-  - Connection pool exhausted on server
-  - max_connections limit reached in postgresql.conf
-  - Stale connections from previous deployments
-
-Try: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';
-
-Original error: %w
-%w`, database, database, err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "too many connections to database %q\nserver is at max_connections; close idle backends or wait", database)
 
 	default:
-		return fmt.Errorf("failed to connect to database: %w\n%w", err, pgmi.ErrConnectionFailed)
+		return newConnError(err, "failed to connect to database: %v", err)
 	}
 }
 

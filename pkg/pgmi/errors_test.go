@@ -1,10 +1,13 @@
 package pgmi_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -24,6 +27,11 @@ func TestExitCodeForError(t *testing.T) {
 		{"ErrExecutionFailed", pgmi.ErrExecutionFailed, pgmi.ExitExecutionFailed},
 		{"ErrConnectionFailed", pgmi.ErrConnectionFailed, pgmi.ExitConnectionError},
 		{"ErrUnsupportedAuthMethod", pgmi.ErrUnsupportedAuthMethod, pgmi.ExitConfigError},
+		{"ErrConcurrentDeploy", pgmi.ErrConcurrentDeploy, pgmi.ExitConcurrentDeploy},
+
+		// SIGINT / Ctrl-C
+		{"context.Canceled", context.Canceled, pgmi.ExitInterrupted},
+		{"wrapped context.Canceled", fmt.Errorf("aborted: %w", context.Canceled), pgmi.ExitInterrupted},
 
 		// wrapped sentinel errors
 		{"wrapped ErrInvalidConfig", fmt.Errorf("config problem: %w", pgmi.ErrInvalidConfig), pgmi.ExitConfigError},
@@ -31,6 +39,7 @@ func TestExitCodeForError(t *testing.T) {
 		{"wrapped ErrApprovalDenied", fmt.Errorf("user said no: %w", pgmi.ErrApprovalDenied), pgmi.ExitApprovalDenied},
 		{"wrapped ErrExecutionFailed", fmt.Errorf("sql broke: %w", pgmi.ErrExecutionFailed), pgmi.ExitExecutionFailed},
 		{"wrapped ErrConnectionFailed", fmt.Errorf("db down: %w", pgmi.ErrConnectionFailed), pgmi.ExitConnectionError},
+		{"wrapped ErrConcurrentDeploy", fmt.Errorf("hit lock: %w", pgmi.ErrConcurrentDeploy), pgmi.ExitConcurrentDeploy},
 		{"double wrapped ErrExecutionFailed", fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", pgmi.ErrExecutionFailed)), pgmi.ExitExecutionFailed},
 
 		// joined errors (errors.Join)
@@ -59,5 +68,72 @@ func TestExitCodeForError(t *testing.T) {
 				t.Errorf("ExitCodeForError(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatError_Nil(t *testing.T) {
+	if got := pgmi.FormatError(nil); got != "" {
+		t.Errorf("FormatError(nil) = %q, want empty string", got)
+	}
+}
+
+func TestFormatError_PlainError(t *testing.T) {
+	err := errors.New("something broke")
+	got := pgmi.FormatError(err)
+	if got != "something broke" {
+		t.Errorf("FormatError = %q, want %q", got, "something broke")
+	}
+}
+
+func TestFormatError_PgErrorWithAllFields(t *testing.T) {
+	pgErr := &pgconn.PgError{
+		Severity: "ERROR",
+		Code:     "23505",
+		Message:  "duplicate key value violates unique constraint \"users_email_key\"",
+		Detail:   "Key (email)=(alice@example.com) already exists.",
+		Hint:     "Use UPDATE instead of INSERT, or ON CONFLICT.",
+		Where:    "PL/pgSQL function insert_user(text) line 5 at SQL statement",
+	}
+
+	got := pgmi.FormatError(pgErr)
+
+	wantSubstrings := []string{
+		"duplicate key value",
+		"DETAIL: Key (email)=(alice@example.com) already exists.",
+		"HINT: Use UPDATE instead of INSERT, or ON CONFLICT.",
+		"WHERE: PL/pgSQL function insert_user(text) line 5 at SQL statement",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("FormatError missing %q\ngot: %s", want, got)
+		}
+	}
+}
+
+func TestFormatError_WrappedPgError(t *testing.T) {
+	pgErr := &pgconn.PgError{
+		Message: "relation \"missing_table\" does not exist",
+		Hint:    "Perhaps you meant existing_table.",
+	}
+	wrapped := fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, pgErr)
+
+	got := pgmi.FormatError(wrapped)
+
+	if !strings.Contains(got, "relation \"missing_table\" does not exist") {
+		t.Errorf("FormatError missing pg message, got: %s", got)
+	}
+	if !strings.Contains(got, "HINT: Perhaps you meant existing_table.") {
+		t.Errorf("FormatError missing HINT line, got: %s", got)
+	}
+}
+
+func TestFormatError_PgErrorEmptyFieldsOmitted(t *testing.T) {
+	pgErr := &pgconn.PgError{
+		Message: "column \"foo\" does not exist",
+	}
+	got := pgmi.FormatError(pgErr)
+
+	if strings.Contains(got, "DETAIL:") || strings.Contains(got, "HINT:") || strings.Contains(got, "WHERE:") {
+		t.Errorf("FormatError added empty diagnostic fields, got: %s", got)
 	}
 }

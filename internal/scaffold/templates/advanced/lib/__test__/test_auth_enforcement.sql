@@ -58,7 +58,7 @@ END;
             'type', 'tool',
             'name', 'test_protected_tool',
             'description', 'Protected MCP tool',
-            'inputSchema', '{}'::jsonb
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$
 BEGIN
@@ -113,7 +113,7 @@ END;
             'type', 'tool',
             'name', 'test_public_tool',
             'description', 'Public MCP tool',
-            'inputSchema', '{}'::jsonb,
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'requiresAuth', false
         ),
         $body$
@@ -150,7 +150,7 @@ END;
     v_response := api.rest_invoke(
         'GET',
         '/test-protected-rest',
-        'x-user-id=>user123'::extensions.hstore,
+        'x-user-id=>test|user123'::extensions.hstore,
         NULL::bytea
     );
 
@@ -159,11 +159,29 @@ END;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'user_id' != 'user123' THEN
-        RAISE EXCEPTION 'TEST FAILED: Session variable auth.user_id should be "user123", got "%"', v_content->>'user_id';
+    IF v_content->>'user_id' != 'test|user123' THEN
+        RAISE EXCEPTION 'TEST FAILED: Session variable auth.user_id should be "test|user123", got "%"', v_content->>'user_id';
     END IF;
 
     RAISE NOTICE '  ✓ REST: Protected handler returns 200 with x-user-id, session variable set';
+
+    -- ========================================================================
+    -- Test: unprefixed user-id header is NOT accepted as auth
+    -- (standardized on x-user-id; no alias fallback)
+    -- ========================================================================
+
+    v_response := api.rest_invoke(
+        'GET',
+        '/test-protected-rest',
+        'user-id=>userZZZ'::extensions.hstore,
+        NULL::bytea
+    );
+
+    IF (v_response).status_code != 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: user-id alias must NOT satisfy auth gate, expected 401 got %', (v_response).status_code;
+    END IF;
+
+    RAISE NOTICE '  ✓ REST: user-id header alone is rejected (alias removed)';
 
     -- ========================================================================
     -- Test: REST public handler accepts unauthenticated requests
@@ -205,7 +223,7 @@ END;
 
     v_response := api.rpc_invoke(
         v_route_id,
-        'x-user-id=>user456'::extensions.hstore,
+        'x-user-id=>test|user456'::extensions.hstore,
         convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "2"}', 'UTF8')
     );
 
@@ -214,8 +232,8 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Protected RPC with auth should succeed, got error: %', v_content->'error';
     END IF;
 
-    IF v_content->'result'->>'user_id' != 'user456' THEN
-        RAISE EXCEPTION 'TEST FAILED: RPC session variable auth.user_id should be "user456"';
+    IF v_content->'result'->>'user_id' != 'test|user456' THEN
+        RAISE EXCEPTION 'TEST FAILED: RPC session variable auth.user_id should be "test|user456"';
     END IF;
 
     RAISE NOTICE '  ✓ RPC: Protected handler succeeds with x-user-id, session variable set';
@@ -248,7 +266,7 @@ END;
     PERFORM set_config('auth.tenant_id', '', true);
     PERFORM set_config('auth.token', '', true);
 
-    v_mcp_response := api.mcp_call_tool('test_protected_tool', '{}'::jsonb, NULL, 'req-1');
+    v_mcp_response := api.mcp_call_tool('test_protected_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb);
 
     IF (v_mcp_response).envelope->'error' IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: Protected MCP without context should return JSON-RPC error';
@@ -268,7 +286,7 @@ END;
         'test_protected_tool',
         '{}'::jsonb,
         '{"user_id": "user789"}'::jsonb,
-        'req-2'
+        '"req-2"'::jsonb
     );
 
     IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
@@ -288,7 +306,7 @@ END;
     -- Test: MCP public tool accepts unauthenticated requests
     -- ========================================================================
 
-    v_mcp_response := api.mcp_call_tool('test_public_tool', '{}'::jsonb, NULL, 'req-3');
+    v_mcp_response := api.mcp_call_tool('test_public_tool', '{}'::jsonb, NULL, '"req-3"'::jsonb);
 
     IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: Public MCP tool should succeed without context, got error: %', (v_mcp_response).envelope->'error';

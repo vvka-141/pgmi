@@ -28,15 +28,6 @@ func TestTemplateDeployment(t *testing.T) {
 func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	ctx := context.Background()
 
-	// Advanced template requires plv8 extension - skip if not available
-	if templateName == "advanced" {
-		if !checkExtensionAvailable(t, connString, "plv8") {
-			t.Skip("Skipping advanced template test: plv8 extension not available")
-		}
-	}
-
-	// Create EmbedFileSystem from embedded templates
-	// This approach eliminates the need for filesystem I/O during testing
 	templateRoot := "templates/" + templateName
 	embedFS := scaffold.GetTemplatesFS()
 	efs := filesystem.NewEmbedFileSystem(embedFS, templateRoot)
@@ -94,26 +85,6 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	// Step 3: Verify deployment by querying the database
 	defer testhelpers.CleanupTestDB(t, connString, testDB)
 	verifyTemplateDeployment(t, connString, testDB, templateName)
-}
-
-// checkExtensionAvailable checks if a PostgreSQL extension is available for installation
-func checkExtensionAvailable(t *testing.T, connString, extName string) bool {
-	t.Helper()
-	ctx := context.Background()
-	pool := testhelpers.GetTestPool(t, connString, "postgres")
-	defer pool.Close()
-
-	var available bool
-	err := pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM pg_available_extensions WHERE name = $1
-		)
-	`, extName).Scan(&available)
-	if err != nil {
-		t.Logf("Warning: could not check extension availability: %v", err)
-		return false
-	}
-	return available
 }
 
 // verifyTemplateDeployment performs template-specific verification queries

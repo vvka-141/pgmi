@@ -17,7 +17,13 @@ type MacroCall struct {
 
 // MacroDetector detects pgmi macro calls in SQL.
 type MacroDetector interface {
-	Detect(sql string) []MacroCall
+	// Detect finds macro calls. The `sql` argument is the original text
+	// (used to extract Pattern/Callback substrings). The `mask` argument is
+	// a length-preserved redacted copy where comment/string bytes are
+	// replaced with spaces (see CommentStripper.RedactForMacros) — the
+	// regex runs over mask so it cannot match inside literals or comments.
+	// Byte offsets in the returned MacroCall are positions in `sql`.
+	Detect(sql string, mask string) []MacroCall
 }
 
 // macroDetector implements MacroDetector using regex.
@@ -43,11 +49,22 @@ func NewMacroDetector() MacroDetector {
 	return &macroDetector{pattern: pattern}
 }
 
-// Detect finds all pgmi macro calls in the given SQL string.
-// The input should be comment-stripped SQL.
-// Returns macros in order of appearance.
-func (d *macroDetector) Detect(sql string) []MacroCall {
-	matches := d.pattern.FindAllStringSubmatchIndex(sql, -1)
+// Detect finds all pgmi macro calls. See interface doc for the two-argument
+// contract. For legacy callers that have already masked their input, pass the
+// same string for both arguments.
+func (d *macroDetector) Detect(sql string, mask string) []MacroCall {
+	if mask == "" {
+		mask = sql
+	}
+	// Sanity: mask MUST align byte-for-byte with sql. RedactForMacros
+	// guarantees this; if a caller passes something shorter, positions from
+	// the match would index out of range on `sql`.
+	if len(mask) != len(sql) {
+		// Fall back to single-source behaviour when misaligned.
+		mask = sql
+	}
+
+	matches := d.pattern.FindAllStringSubmatchIndex(mask, -1)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -63,32 +80,28 @@ func (d *macroDetector) Detect(sql string) []MacroCall {
 		endPos := match[1]
 
 		// Adjust start position if we matched a word boundary character
-		// (the [^a-zA-Z0-9_] part of the pattern)
-		// We need to skip the boundary char but keep CALL prefix
-		if startPos < len(sql) {
-			matchedText := sql[startPos:endPos]
-			if len(matchedText) > 0 {
-				firstChar := rune(matchedText[0])
-				// Skip if it's not 'c' or 'C' (CALL)
-				if firstChar != 'c' && firstChar != 'C' {
-					startPos++
-				}
+		// (the [^a-zA-Z0-9_] part of the pattern). The boundary byte is the
+		// same in sql and mask (it is whitespace/punctuation outside of
+		// strings), so this works on either source.
+		if startPos < len(mask) {
+			firstChar := rune(mask[startPos])
+			if firstChar != 'c' && firstChar != 'C' {
+				startPos++
 			}
 		}
 
-		// Extract pattern if present
+		// Extract pattern/callback from the ORIGINAL sql — the mask has them
+		// replaced with spaces since they live inside single-quoted literals.
 		pattern := ""
 		if match[2] != -1 && match[3] != -1 {
 			pattern = sql[match[2]:match[3]]
 		}
 
-		// Extract callback if present
 		callback := ""
 		if match[4] != -1 && match[5] != -1 {
 			callback = sql[match[4]:match[5]]
 		}
 
-		// Calculate line and column
 		line, column := d.calculatePosition(sql, startPos)
 
 		macros = append(macros, MacroCall{

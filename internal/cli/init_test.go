@@ -50,8 +50,8 @@ func TestRunInit_InvalidTemplate(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error for invalid template")
 	}
-	if !strings.Contains(err.Error(), "invalid template") {
-		t.Errorf("Expected 'invalid template' error, got: %v", err)
+	if !strings.Contains(err.Error(), "unknown template") {
+		t.Errorf("Expected 'unknown template' error, got: %v", err)
 	}
 }
 

@@ -133,7 +133,8 @@ DO $$ BEGIN RAISE DEBUG 'membership: Applied seed data (superuser role)'; END $$
 -- Views
 -- ============================================================================
 
-CREATE OR REPLACE VIEW membership.vw_user_roles AS
+CREATE OR REPLACE VIEW membership.vw_user_roles
+WITH (security_invoker = true) AS
 SELECT
     ur.user_object_id,
     r.name AS role_name,
@@ -142,7 +143,8 @@ SELECT
 FROM membership.user_role ur
 JOIN membership.role r ON r.object_id = ur.role_object_id;
 
-CREATE OR REPLACE VIEW membership.vw_users AS
+CREATE OR REPLACE VIEW membership.vw_users
+WITH (security_invoker = true) AS
 SELECT
     u.object_id,
     u.email,
@@ -157,7 +159,8 @@ LEFT JOIN membership.user_role ur ON ur.user_object_id = u.object_id
 LEFT JOIN membership.role r ON r.object_id = ur.role_object_id
 GROUP BY u.object_id;
 
-CREATE OR REPLACE VIEW membership.vw_user_identities AS
+CREATE OR REPLACE VIEW membership.vw_user_identities
+WITH (security_invoker = true) AS
 SELECT
     ui.object_id,
     ui.user_object_id,
@@ -169,7 +172,8 @@ SELECT
 FROM membership.user_identity ui
 JOIN membership."user" u ON u.object_id = ui.user_object_id;
 
-CREATE OR REPLACE VIEW membership.vw_organization_members AS
+CREATE OR REPLACE VIEW membership.vw_organization_members
+WITH (security_invoker = true) AS
 SELECT
     om.object_id,
     om.organization_id,

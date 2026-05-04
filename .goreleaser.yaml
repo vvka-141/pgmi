@@ -131,7 +131,7 @@ brews:
       email: bot@pgmi.dev
     directory: Formula
     homepage: "https://github.com/vvka-141/pgmi"
-    description: "PostgreSQL-native execution fabric for humans and autonomous agents"
+    description: "PostgreSQL-native deployment driver"
     license: "MPL-2.0"
     install: |
       bin.install "pgmi"
@@ -144,7 +144,7 @@ nfpms:
     vendor: vvka-141
     homepage: "https://github.com/vvka-141/pgmi"
     maintainer: "Alexey Evlampiev <alexey.evlampiev@gmail.com>"
-    description: "PostgreSQL-native execution fabric for humans and autonomous agents"
+    description: "PostgreSQL-native deployment driver"
     license: "MPL-2.0"
     formats:
       - deb

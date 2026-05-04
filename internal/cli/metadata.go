@@ -16,100 +16,58 @@ import (
 
 var metadataCmd = &cobra.Command{
 	Use:   "metadata",
-	Short: "Metadata operations for SQL files",
-	Long: `Metadata commands for managing SQL file metadata.
+	Short: "Inspect and scaffold <pgmi-meta> blocks (no DB connection)",
+	Long: `Inspect and scaffold <pgmi-meta> blocks in your SQL files.
 
-Available commands:
-  scaffold  Generate metadata for SQL files without metadata
-  validate  Validate metadata in SQL files (no DB connection required)
-  plan      Show execution plan based on metadata (no DB connection required)
+  pgmi metadata scaffold ./project --write
+  pgmi metadata validate ./project
+  pgmi metadata plan ./project --json
 
-Examples:
-  # Generate metadata for all files without metadata
-  pgmi metadata scaffold ./myproject
-
-  # Validate metadata across all files
-  pgmi metadata validate ./myproject
-
-  # Show execution plan as JSON
-  pgmi metadata plan ./myproject --json`,
+All three subcommands operate purely on the filesystem — no database
+connection is opened.`,
 }
 
-// Scaffold command
 var metadataScaffoldCmd = &cobra.Command{
 	Use:   "scaffold <project_path>",
-	Short: "Generate metadata for SQL files without metadata",
-	Long: `Generate metadata blocks for SQL files that don't have metadata.
+	Short: "Add <pgmi-meta> blocks to files that lack one",
+	Long: `Add <pgmi-meta> blocks to SQL files that don't have one. Each new block
+gets a fallback UUID derived from the file path and the default settings.
 
-This command:
-1. Scans the project directory for SQL files
-2. Identifies files without <pgmi-meta> blocks
-3. Generates metadata with fallback UUIDs and default settings
-4. Optionally writes metadata to files (with --write flag)
+  pgmi metadata scaffold ./project              Preview only
+  pgmi metadata scaffold ./project --write      Apply to files
+  pgmi metadata scaffold ./project --idempotent=false --write
 
-By default, previews changes without modifying files.
-
-Examples:
-  # Preview metadata generation
-  pgmi metadata scaffold ./myproject
-
-  # Write metadata to files
-  pgmi metadata scaffold ./myproject --write
-
-  # Customize generated metadata
-  pgmi metadata scaffold ./myproject --idempotent=true --write`,
+Without --write, no files are modified.`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runMetadataScaffold,
 }
 
-// Validate command
 var metadataValidateCmd = &cobra.Command{
 	Use:   "validate <project_path>",
-	Short: "Validate metadata in SQL files",
-	Long: `Validate metadata blocks in SQL files without connecting to database.
+	Short: "Check <pgmi-meta> XML validity and uniqueness",
+	Long: `Check that every <pgmi-meta> block parses, conforms to the XSD schema,
+and that no two files share an id.
 
-This command checks:
-1. XML syntax and namespace correctness
-2. XSD schema compliance (required fields, UUID format, etc.)
-3. Duplicate IDs across files
+  pgmi metadata validate ./project
+  pgmi metadata validate ./project --json
 
-Examples:
-  # Validate all metadata
-  pgmi metadata validate ./myproject
-
-  # Validate with verbose output
-  pgmi metadata validate ./myproject --verbose
-
-  # Validate with JSON output
-  pgmi metadata validate ./myproject --json`,
+Exit non-zero on any failure.`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runMetadataValidate,
 }
 
-// Plan command
 var metadataPlanCmd = &cobra.Command{
 	Use:   "plan <project_path>",
-	Short: "Show execution plan based on metadata",
-	Long: `Display execution plan derived from metadata sort keys.
+	Short: "Show files in execution order from sortKeys",
+	Long: `Show every SQL file with its id, sortKeys, and idempotent flag, ordered
+the way pgmi_plan_view would order them at deploy time.
 
-This command:
-1. Scans SQL files and extracts metadata
-2. Shows files with their IDs and sort keys
-3. Displays metadata information for each file
+  pgmi metadata plan ./project
+  pgmi metadata plan ./project --json
 
-No database connection required - analysis is purely metadata-driven.
-
-Examples:
-  # Show execution plan (human-readable)
-  pgmi metadata plan ./myproject
-
-  # Show execution plan as JSON
-  pgmi metadata plan ./myproject --json
-
-  # Show plan with verbose details
-  pgmi metadata plan ./myproject --verbose`,
+Use this to verify ordering before running ` + "`pgmi deploy`" + `.`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runMetadataPlan,
@@ -181,7 +139,7 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Found %d file(s) without metadata:\n\n", len(filesWithoutMetadata))
+	fmt.Fprintf(os.Stdout, "Found %d file(s) without metadata:\n\n", len(filesWithoutMetadata))
 
 	// Generate metadata for each file
 	for _, filePath := range filesWithoutMetadata {
@@ -209,9 +167,9 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 
 `, fallbackID, scaffoldIdempotent, filepath.Base(filePath), filepath.Base(filePath))
 
-		fmt.Fprintf(os.Stderr, "  %s\n", filePath)
-		fmt.Fprintf(os.Stderr, "    ID: %s (fallback)\n", fallbackID)
-		fmt.Fprintf(os.Stderr, "    Idempotent: %v\n", scaffoldIdempotent)
+		fmt.Fprintf(os.Stdout, "  %s\n", filePath)
+		fmt.Fprintf(os.Stdout, "    ID: %s (fallback)\n", fallbackID)
+		fmt.Fprintf(os.Stdout, "    Idempotent: %v\n", scaffoldIdempotent)
 
 		if !previewOnly {
 			// Read existing file content
@@ -227,14 +185,26 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 			// Prepend metadata block
 			newContent := metaBlock + string(content)
 
-			// Write back to file
-			if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-				return fmt.Errorf("failed to write file %s: %w", filePath, err)
+			// Atomic write: write to a sibling .tmp then os.Rename. A crash
+			// between Write and Rename leaves the original intact; a crash
+			// during Rename is handled atomically by the OS. Preserves the
+			// source file's mode so we don't silently widen permissions.
+			origInfo, err := os.Stat(absPath)
+			if err != nil {
+				return fmt.Errorf("failed to stat file %s: %w", filePath, err)
+			}
+			tmpPath := absPath + ".pgmi-tmp"
+			if err := os.WriteFile(tmpPath, []byte(newContent), origInfo.Mode().Perm()); err != nil {
+				return fmt.Errorf("failed to write %s: %w", filePath, err)
+			}
+			if err := os.Rename(tmpPath, absPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("failed to finalise write of %s: %w", filePath, err)
 			}
 
-			fmt.Fprintf(os.Stderr, "    Written to file\n")
+			fmt.Fprintf(os.Stdout, "    Written to file\n")
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stdout)
 	}
 
 	if previewOnly {
@@ -319,11 +289,11 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(jsonBytes))
 	} else {
 		// Human-readable output
-		fmt.Fprintf(os.Stderr, "\nValidation Summary:\n")
-		fmt.Fprintf(os.Stderr, "  Total files: %d\n", len(scanResult.Files))
-		fmt.Fprintf(os.Stderr, "  Files with metadata: %d\n", filesWithMetadata)
-		fmt.Fprintf(os.Stderr, "  Files without metadata: %d\n", filesWithoutMetadata)
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stdout, "\nValidation Summary:\n")
+		fmt.Fprintf(os.Stdout, "  Total files: %d\n", len(scanResult.Files))
+		fmt.Fprintf(os.Stdout, "  Files with metadata: %d\n", filesWithMetadata)
+		fmt.Fprintf(os.Stdout, "  Files without metadata: %d\n", filesWithoutMetadata)
+		fmt.Fprintln(os.Stdout)
 
 		if len(duplicates) > 0 {
 			fmt.Fprintln(os.Stderr, "Error: Duplicate IDs detected:")
@@ -414,17 +384,17 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(jsonBytes))
 	} else {
 		// Human-readable output
-		fmt.Fprintf(os.Stderr, "\nMetadata Summary (%d files):\n\n", len(plan))
+		fmt.Fprintf(os.Stdout, "\nMetadata Summary (%d files):\n\n", len(plan))
 
 		for i, entry := range plan {
-			fmt.Fprintf(os.Stderr, "%d. %s\n", i+1, entry.Path)
-			fmt.Fprintf(os.Stderr, "   ID: %s\n", entry.ID)
+			fmt.Fprintf(os.Stdout, "%d. %s\n", i+1, entry.Path)
+			fmt.Fprintf(os.Stdout, "   ID: %s\n", entry.ID)
 			if entry.Description != "" {
-				fmt.Fprintf(os.Stderr, "   Description: %s\n", entry.Description)
+				fmt.Fprintf(os.Stdout, "   Description: %s\n", entry.Description)
 			}
-			fmt.Fprintf(os.Stderr, "   Idempotent: %v\n", entry.Idempotent)
-			fmt.Fprintf(os.Stderr, "   Sort Keys: %v\n", entry.SortKeys)
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stdout, "   Idempotent: %v\n", entry.Idempotent)
+			fmt.Fprintf(os.Stdout, "   Sort Keys: %v\n", entry.SortKeys)
+			fmt.Fprintln(os.Stdout)
 		}
 
 		fmt.Fprintln(os.Stderr, "Note: Actual execution order is determined by sort keys during deployment.")

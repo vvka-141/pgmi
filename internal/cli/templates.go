@@ -4,30 +4,30 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/spf13/cobra"
+	"github.com/vvka-141/pgmi/internal/scaffold"
 )
 
 var templatesCmd = &cobra.Command{
 	Use:   "templates",
-	Short: "Manage project templates",
-	Long: `List and describe available project templates.
+	Short: "List or describe project templates",
+	Long: `List or describe the project templates that ` + "`pgmi init`" + ` can scaffold.
 
-Templates provide different starting points for your pgmi projects,
-from simple learning structures to production-ready deployments.`,
+  pgmi templates list
+  pgmi templates describe basic`,
 }
 
 var templatesListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all available templates",
-	Long:  `List all available project templates with descriptions.`,
+	Short: "List available templates",
+	Long:  `Print the names and one-line descriptions of all bundled templates.`,
 	RunE:  runTemplatesList,
 }
 
 var templatesDescribeCmd = &cobra.Command{
-	Use:               "describe <template_name>",
-	Short:             "Show detailed information about a template",
-	Long:              `Show detailed information about a specific template including structure and features.`,
+	Use:   "describe <template_name>",
+	Short: "Show the structure and features of a template",
+	Long:  `Show the directory layout, features, and intended use of one template.`,
 	Example: `  pgmi templates describe basic
   pgmi templates describe advanced`,
 	Args:              RequireTemplateName,
@@ -47,32 +47,20 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to list templates: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Available templates:")
-	fmt.Fprintln(os.Stderr)
-
-	// Template descriptions
 	descriptions := getTemplateDescriptions()
 
 	for _, t := range templates {
 		desc, ok := descriptions[t]
 		if !ok {
-			desc = TemplateDescription{
-				Short: "No description available",
-				Long:  "",
-			}
+			desc = TemplateDescription{Short: "(no description)"}
 		}
-
-		fmt.Fprintf(os.Stderr, "  %-12s %s\n", t, desc.Short)
-		if desc.Long != "" {
-			fmt.Fprintf(os.Stderr, "               %s\n", desc.Long)
-		}
+		fmt.Fprintf(os.Stdout, "%-12s %s\n", t, desc.Short)
 		if desc.BestFor != "" {
-			fmt.Fprintf(os.Stderr, "               Best for: %s\n", desc.BestFor)
+			fmt.Fprintf(os.Stdout, "%-12s   for: %s\n", "", desc.BestFor)
 		}
-		fmt.Fprintln(os.Stderr)
 	}
 
-	fmt.Fprintln(os.Stderr, "Use: pgmi init <project_name> --template <template_name>")
+	fmt.Fprintln(os.Stderr, "\nScaffold one with: pgmi init <path> -t <template>")
 	return nil
 }
 
@@ -81,42 +69,39 @@ func runTemplatesDescribe(cmd *cobra.Command, args []string) error {
 
 	if !scaffold.IsValidTemplate(templateName) {
 		templates, _ := scaffold.ListTemplates()
-		return fmt.Errorf("template '%s' not found. Available templates: %v\n\nUse 'pgmi templates list' to see all templates", templateName, templates)
+		return fmt.Errorf("unknown template %q (available: %v)\nrun `pgmi templates list` for descriptions", templateName, templates)
 	}
 
-	// Get template description
 	descriptions := getTemplateDescriptions()
 	desc, ok := descriptions[templateName]
 	if !ok {
-		return fmt.Errorf("no description available for template '%s'", templateName)
+		return fmt.Errorf("no description registered for template %q", templateName)
 	}
 
-	// Print detailed description
-	fmt.Fprintf(os.Stderr, "Template: %s\n", templateName)
-	fmt.Fprintf(os.Stderr, "Description: %s\n", desc.Short)
+	fmt.Fprintf(os.Stdout, "%s — %s\n", templateName, desc.Short)
 	if desc.Long != "" {
-		fmt.Fprintf(os.Stderr, "\n%s\n", desc.Long)
+		fmt.Fprintf(os.Stdout, "\n%s\n", desc.Long)
 	}
 
 	if len(desc.Structure) > 0 {
-		fmt.Fprintln(os.Stderr, "\nStructure:")
+		fmt.Fprintln(os.Stdout, "\nStructure:")
 		for _, item := range desc.Structure {
-			fmt.Fprintf(os.Stderr, "  %s\n", item)
+			fmt.Fprintf(os.Stdout, "  %s\n", item)
 		}
 	}
 
 	if len(desc.Features) > 0 {
-		fmt.Fprintln(os.Stderr, "\nFeatures:")
+		fmt.Fprintln(os.Stdout, "\nFeatures:")
 		for _, feature := range desc.Features {
-			fmt.Fprintf(os.Stderr, "  - %s\n", feature)
+			fmt.Fprintf(os.Stdout, "  - %s\n", feature)
 		}
 	}
 
 	if desc.BestFor != "" {
-		fmt.Fprintf(os.Stderr, "\nBest for: %s\n", desc.BestFor)
+		fmt.Fprintf(os.Stdout, "\nFor: %s\n", desc.BestFor)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nUsage:\n  pgmi init myproject --template %s\n", templateName)
+	fmt.Fprintf(os.Stderr, "\nScaffold with: pgmi init <path> -t %s\n", templateName)
 
 	return nil
 }
@@ -134,35 +119,53 @@ type TemplateDescription struct {
 func getTemplateDescriptions() map[string]TemplateDescription {
 	return map[string]TemplateDescription{
 		"basic": {
-			Short:   "Simple structure for learning",
-			Long:    "A minimal template with just the essentials to get started with pgmi.",
+			Short: "Linear migrations, minimal structure",
+			Long:  "A small starter project: deploy.sql executes the files in migrations/ in lexicographic order. No metadata, no idempotency tracking, no advanced libraries.",
 			Structure: []string{
 				"├── deploy.sql",
-				"└── migrations/",
-				"    └── 001_example.sql",
+				"├── pgmi.yaml",
+				"├── README.md",
+				"├── migrations/",
+				"│   ├── 001_users.sql",
+				"│   └── 002_user_crud.sql",
+				"└── __test__/",
+				"    ├── _setup.sql",
+				"    └── test_user_crud.sql",
 			},
 			Features: []string{
-				"Single migrations directory",
-				"Basic deploy.sql orchestrator",
-				"Minimal setup for quick starts",
+				"Linear migration ordering by filename",
+				"deploy.sql runs every file in migrations/",
+				"Test scaffolding via __test__/ (CALL pgmi_test())",
 			},
-			BestFor: "Quick prototypes, learning pgmi basics",
+			BestFor: "Learning pgmi, small projects, prototypes",
 		},
 		"advanced": {
-			Short:   "Advanced patterns with savepoint protection",
-			Long:    "Template demonstrating advanced PostgreSQL patterns including savepoint management and complex orchestration.",
+			Short: "Metadata-driven deployment, REST/RPC/MCP handler registry",
+			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), JWT authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
 			Structure: []string{
 				"├── deploy.sql",
-				"└── migrations/",
-				"    └── 001_example.sql",
+				"├── pgmi.yaml",
+				"├── session.xml",
+				"├── README.md",
+				"├── ARCHITECTURE.md",
+				"├── lib/",
+				"│   ├── core/        (entity standards, foundation, attached properties)",
+				"│   ├── common/      (cast, text, encoding helpers)",
+				"│   └── api/         (REST/RPC/MCP routing, handler registry, queue)",
+				"├── membership/      (users, organizations, identities, API keys, RLS)",
+				"├── api/             (your handler implementations + examples.sql)",
+				"└── tools/",
 			},
 			Features: []string{
-				"Savepoint protection",
-				"Advanced error handling",
-				"Complex phase lifecycle",
-				"Transaction safety patterns",
+				"<pgmi-meta> sortKeys for multi-phase execution ordering",
+				"Idempotency via script-UUID tracking in core.script",
+				"Role hierarchy: owner → admin → api → customer",
+				"JWT + API-key authentication with multi-provider identity",
+				"REST/RPC/MCP routing with handler registry (api.handler)",
+				"Row-level security policies on membership tables",
+				"Deploys on RDS, Azure Flexible Server, Cloud SQL, Supabase, Neon",
 			},
-			BestFor: "Complex deployments requiring advanced transactional safety",
+			BestFor: "Production deployments, multi-tenant apps, AI-integrated apps",
 		},
 	}
 }

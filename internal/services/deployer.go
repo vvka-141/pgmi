@@ -125,17 +125,18 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// SessionManager handles: file scanning, database connection, utility functions, files, params
 	targetConfig := connConfig.DeepCopy()
 	targetConfig.Database = config.DatabaseName
+	s.logger.Info("Preparing session: scanning files, loading parameters")
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
 	defer session.Close()
 
+	s.logger.Info("Executing deploy.sql")
 	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
 		return err
 	}
 
-	s.logger.Info("Deployment completed successfully")
 	return nil
 }
 
@@ -146,7 +147,7 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	s.logger.Verbose("Starting deployment to database '%s'", config.DatabaseName)
+	s.logger.Verbose("Deploying to database %q", config.DatabaseName)
 	s.logger.Verbose("Source path: %s", config.SourcePath)
 
 	// Parse connection string
@@ -176,7 +177,7 @@ func (s *DeploymentService) executeDeploySQL(
 	conn *pgxpool.Conn,
 	sourcePath string,
 ) error {
-	s.logger.Verbose("Executing deploy.sql...")
+	s.logger.Verbose("Reading deploy.sql")
 
 	deploySQL, err := s.fileScanner.ReadDeploySQL(sourcePath)
 	if err != nil {
@@ -200,23 +201,15 @@ func (s *DeploymentService) executeDeploySQL(
 		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
 
-	s.logger.Info("deploy.sql executed successfully")
 	return nil
 }
 
 func validateOverwriteTarget(targetDB, managementDB string) error {
 	if strings.EqualFold(targetDB, managementDB) {
-		return fmt.Errorf(
-			"cannot overwrite database %q: it is the management database pgmi connects to for server-level operations. "+
-				"Deploy to a different target database: %w",
-			targetDB, pgmi.ErrInvalidConfig,
-		)
+		return fmt.Errorf("cannot overwrite management database %q\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d: %w", targetDB, pgmi.ErrInvalidConfig)
 	}
 	if pgmi.IsTemplateDatabase(targetDB) {
-		return fmt.Errorf(
-			"cannot overwrite database %q: PostgreSQL template databases cannot be dropped: %w",
-			targetDB, pgmi.ErrInvalidConfig,
-		)
+		return fmt.Errorf("cannot drop template database %q (template0/template1 are protected by PostgreSQL): %w", targetDB, pgmi.ErrInvalidConfig)
 	}
 	return nil
 }
@@ -227,7 +220,7 @@ func (s *DeploymentService) connectManagement(ctx context.Context, connConfig *p
 	if mgmtDB == "" {
 		mgmtDB = pgmi.DefaultManagementDB
 	}
-	s.logger.Verbose("Connecting to management database '%s'", mgmtDB)
+	s.logger.Verbose("Connecting to management database %q", mgmtDB)
 	return s.mgmtConnector(ctx, connConfig, mgmtDB)
 }
 
@@ -239,7 +232,7 @@ func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBC
 		return false, fmt.Errorf("failed to check if database exists: %w", err)
 	}
 	if !exists {
-		s.logger.Info("Database '%s' does not exist. Creating...", dbName)
+		s.logger.Info("Database %q does not exist; creating", dbName)
 		if err := s.dbManager.Create(ctx, dbConn, dbName); err != nil {
 			return false, fmt.Errorf("failed to create database: %w", err)
 		}
@@ -273,7 +266,7 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		return nil
 	}
 
-	s.logger.Verbose("Database '%s' exists. Requesting approval for overwrite.", config.DatabaseName)
+	s.logger.Verbose("Database %q exists; requesting approval", config.DatabaseName)
 	approved, err := s.approver.RequestApproval(ctx, config.DatabaseName)
 	if err != nil {
 		return fmt.Errorf("approval request failed: %w", err)
@@ -282,22 +275,22 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		return pgmi.ErrApprovalDenied
 	}
 
-	s.logger.Verbose("Terminating all connections to database '%s'", config.DatabaseName)
+	s.logger.Verbose("Terminating connections to %q", config.DatabaseName)
 	if err := s.dbManager.TerminateConnections(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to terminate connections: %w", err)
 	}
 
-	s.logger.Verbose("Dropping database '%s'", config.DatabaseName)
+	s.logger.Verbose("DROP DATABASE %q", config.DatabaseName)
 	if err := s.dbManager.Drop(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to drop database: %w", err)
 	}
 
-	s.logger.Verbose("Creating database '%s'", config.DatabaseName)
+	s.logger.Verbose("CREATE DATABASE %q", config.DatabaseName)
 	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName); err != nil {
 		return fmt.Errorf("failed to create database: %w", err)
 	}
 
-	s.logger.Info("Database '%s' overwritten successfully", config.DatabaseName)
+	s.logger.Info("Recreated database %q", config.DatabaseName)
 	return nil
 }
 
@@ -314,9 +307,9 @@ func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig
 		return err
 	}
 	if existed {
-		s.logger.Verbose("Database '%s' already exists", config.DatabaseName)
+		s.logger.Verbose("Database %q already exists", config.DatabaseName)
 	} else {
-		s.logger.Verbose("Database '%s' created successfully", config.DatabaseName)
+		s.logger.Verbose("Created database %q", config.DatabaseName)
 	}
 
 	return nil

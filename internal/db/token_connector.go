@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/retry"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -43,6 +44,7 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 	var pool *pgxpool.Pool
 
 	err := c.retryExecutor.Execute(ctx, func(ctx context.Context) error {
+		// Initial token — also doubles as a reachability check before pool construction.
 		token, expiresOn, err := c.tokenProvider.GetToken(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to acquire %s token: %w", c.providerName, err)
@@ -63,6 +65,32 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 		}
 
 		configurePool(poolConfig)
+
+		// Cloud auth tokens are short-lived (AWS RDS IAM: 15 min; Azure/GCP
+		// ~1h). Every time pgx dials a NEW backend (initial fill, growth,
+		// replacement after idle timeout), BeforeConnect acquires a fresh
+		// token so deployments longer than the token TTL keep working.
+		// The token baked into connStr above is only used as a fallback
+		// when BeforeConnect errors — in practice it's overwritten below.
+		tokenProvider := c.tokenProvider
+		providerName := c.providerName
+		poolConfig.BeforeConnect = func(ctx context.Context, cc *pgx.ConnConfig) error {
+			freshToken, _, tokenErr := tokenProvider.GetToken(ctx)
+			if tokenErr != nil {
+				return fmt.Errorf("failed to refresh %s token on dial: %w", providerName, tokenErr)
+			}
+			cc.Password = freshToken
+			return nil
+		}
+
+		// Cap connection lifetime to the remaining token validity so pgx
+		// recycles backends before their password silently expires. Belt
+		// and braces — BeforeConnect already covers the dial path, but a
+		// still-open connection whose token expired mid-session can see
+		// server-initiated auth churn on re-auth.
+		if ttl := time.Until(expiresOn); ttl > 0 && ttl < poolConfig.MaxConnLifetime {
+			poolConfig.MaxConnLifetime = ttl
+		}
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {

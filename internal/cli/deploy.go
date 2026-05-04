@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,48 +29,29 @@ import (
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy <project_path>",
-	Short: "Execute a database deployment",
-	Long: `Deploy executes a database deployment using the SQL files in the specified directory.
+	Short: "Run deploy.sql against a target database",
+	Long: `Run deploy.sql against a target database.
 
-The deploy command:
-1. Connects to PostgreSQL using the specified authentication method
-2. Optionally drops and recreates the target database (with --overwrite)
-3. Loads SQL files into pgmi_source temporary table
-4. Loads parameters into pgmi_parameter temporary table
-5. Executes the deploy.sql file to orchestrate the deployment
+pgmi connects, loads project files into pg_temp tables, loads CLI parameters,
+then executes deploy.sql. Transactions, ordering, and idempotency are decided
+by deploy.sql, not by pgmi.
 
-Arguments:
-  project_path    Path to directory containing deploy.sql and SQL files
-                  Must be a valid directory with deployment scripts
-
-Password Authentication:
-  For security, password is NOT accepted as a CLI flag. Use one of:
-    1. $PGPASSWORD environment variable
-    2. .pgpass file (PostgreSQL standard: chmod 600 ~/.pgpass)
-    3. Connection string: postgresql://user:pass@host/db
-  Never use passwords in shell commands (visible in history and process list)
-
-Examples:
-  # Basic deployment
   pgmi deploy ./migrations -d mydb
-
-  # Deploy with overwrite (recreate database)
   pgmi deploy ./migrations -d mydb --overwrite --force
-
-  # Deploy with parameters from file
   pgmi deploy ./migrations -d mydb --params-file prod.env
+  pgmi deploy ./migrations -d mydb --param env=prod --param version=1.2.3
 
-  # Deploy with multiple params files (later files override earlier ones)
-  pgmi deploy ./migrations -d mydb \
-    --params-file base.env \
-    --params-file prod.env
+Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
+string. Cloud auth: --azure, --aws, --google (no password needed).
 
-  # Deploy with layered configuration (CLI overrides all files)
-  pgmi deploy ./migrations -d mydb \
-    --params-file base.env \
-    --params-file prod.env \
-    --param environment=staging \
-    --param version=1.2.3`,
+Parameter precedence: --param > --params-file (later wins) > pgmi.yaml > env.
+
+Exit codes:
+  0   success
+  10  invalid configuration       13  SQL execution failed
+  11  connection failed           14  deploy.sql not found
+  12  user denied overwrite       15  concurrent deploy in progress
+  130 interrupted (SIGINT)`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runDeploy,
@@ -101,7 +84,10 @@ func init() {
 
 	// Granular connection flags (PostgreSQL standard)
 	// Precedence: flag > environment variable > default
-	deployCmd.Flags().StringVarP(&deployFlags.host, "host", "h", "",
+	// --host has no short form: cobra reserves -h for --help, which users
+	// expect universally (kubectl, gh, git, docker). --host is typed once
+	// per run, not per-invocation like in psql — the GNU help convention wins.
+	deployCmd.Flags().StringVar(&deployFlags.host, "host", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
 	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
@@ -299,17 +285,37 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
+	// atomic.Bool because the signal goroutine and the caller observe this
+	// field across a happens-before edge that is NOT provided by `Deploy`
+	// returning (deploy has no synchronisation contract with sigChan). Plain
+	// bool would trip `go test -race` on any integration path that exercises
+	// SIGINT.
+	var interrupted atomic.Bool
 	go func() {
 		select {
 		case <-sigChan:
-			fmt.Fprintln(os.Stderr, "\n[INTERRUPT] Received interrupt signal, cancelling deployment...")
+			fmt.Fprintln(os.Stderr, "pgmi: interrupted, cancelling deployment...")
+			interrupted.Store(true)
 			cancel()
 		case <-ctx.Done():
 			// Context cancelled (deployment completed or timeout), exit goroutine cleanly
 		}
 	}()
 
-	return deployer.Deploy(ctx, config)
+	err = deployer.Deploy(ctx, config)
+
+	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
+	// maps to 130 (ExitInterrupted). Deployer may return nil or an unrelated wrap;
+	// either way, a user Ctrl-C must not exit 0.
+	if interrupted.Load() {
+		if err == nil {
+			return context.Canceled
+		}
+		if !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("%w: %v", context.Canceled, err)
+		}
+	}
+	return err
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.

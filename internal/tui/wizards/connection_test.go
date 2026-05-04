@@ -1046,8 +1046,8 @@ func TestConnectionWizard_View_TestConnectionStep(t *testing.T) {
 	// Simulate success
 	m, _ = update(t, m, testResultMsg{success: true, info: "PostgreSQL 16.1"})
 	view := m.View()
-	if !strings.Contains(view, "Connected successfully") {
-		t.Error("View after success should contain 'Connected successfully'")
+	if !strings.Contains(view, "✓ Connected") {
+		t.Error("View after success should contain '✓ Connected'")
 	}
 
 	// Simulate failure path

@@ -23,8 +23,8 @@ type TemplateInfo struct {
 // DefaultTemplates returns the available template information.
 func DefaultTemplates() []TemplateInfo {
 	return []TemplateInfo{
-		{Name: "basic", Description: "Simple migrations with sequential execution"},
-		{Name: "advanced", Description: "Production-ready with metadata-driven deployment"},
+		{Name: "basic", Description: "Linear migrations, minimal structure"},
+		{Name: "advanced", Description: "Metadata-driven deployment, REST/RPC/MCP handler registry"},
 	}
 }
 
@@ -292,11 +292,9 @@ func (w InitWizard) viewDirectory() string {
 		b.WriteString("\n")
 		b.WriteString(w.styles.Error.Render("Directory is not empty: " + w.dirError))
 		b.WriteString("\n")
-		b.WriteString(w.styles.Description.Render("Choose a different location or remove existing files."))
-		b.WriteString("\n")
-		b.WriteString(w.styles.Description.Render("pgmi.yaml and .env are allowed."))
+		b.WriteString(w.styles.Description.Render("Pick another path or remove the files (pgmi.yaml and .env are tolerated)."))
 	} else {
-		b.WriteString(w.styles.Description.Render("\nPress enter for current directory, or type a path."))
+		b.WriteString(w.styles.Description.Render("\nEnter for current directory, or type a path."))
 	}
 
 	b.WriteString(w.styles.Help.Render("\n\nenter confirm • esc cancel"))
@@ -337,7 +335,7 @@ func (w InitWizard) viewTemplate() string {
 func (w InitWizard) viewSetupChoice() string {
 	var b strings.Builder
 
-	b.WriteString(w.styles.Subtitle.Render("Configure database connection now?"))
+	b.WriteString(w.styles.Subtitle.Render("Set up the connection now?"))
 	b.WriteString("\n\n")
 
 	options := []struct {
@@ -345,8 +343,8 @@ func (w InitWizard) viewSetupChoice() string {
 		name     string
 		desc     string
 	}{
-		{!w.setupConfig, "No, I'll configure later", "Creates project with placeholder pgmi.yaml"},
-		{w.setupConfig, "Yes, set up connection (recommended)", "Configure pgmi.yaml with your database settings"},
+		{!w.setupConfig, "No — configure later", "pgmi.yaml gets a placeholder"},
+		{w.setupConfig, "Yes — run the connection wizard", "writes connection settings to pgmi.yaml"},
 	}
 
 	for _, opt := range options {

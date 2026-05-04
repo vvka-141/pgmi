@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/testgen"
 )
+
+// (buildStrippedToOriginalMap was removed together with Strip's usage for
+// macro detection. RedactForMacros returns a length-preserved mask so macro
+// offsets are directly usable against the original SQL.)
 
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
@@ -45,19 +48,19 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 		MacroCount:  0,
 	}
 
-	// Strip comments to find macros
-	strippedSQL := p.commentStripper.Strip(sql)
+	// Mask out comment and string-literal bytes with spaces, preserving
+	// byte positions. The macro detector can safely regex over the result
+	// without matching inside 'CALL pgmi_test();' literals or $$ quoted $$
+	// bodies. Positions it returns are directly usable against `sql`.
+	redactedSQL := p.commentStripper.RedactForMacros(sql)
 
-	// Detect macros in stripped SQL
-	macros := p.macroDetector.Detect(strippedSQL)
+	macros := p.macroDetector.Detect(sql, redactedSQL)
 	if len(macros) == 0 {
 		return result, nil
 	}
 
 	result.MacroCount = len(macros)
 
-	// Process macros in reverse order to maintain correct positions
-	// (since each replacement may change the length of the string)
 	sortedMacros := make([]MacroCall, len(macros))
 	copy(sortedMacros, macros)
 	sort.Slice(sortedMacros, func(i, j int) bool {
@@ -67,27 +70,16 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 	expandedSQL := sql
 
 	for _, macro := range sortedMacros {
-		// Validate callback name format
 		if err := testgen.ValidateCallbackName(macro.Callback); err != nil {
 			return nil, err
 		}
 
-		// Call pg_temp.pgmi_test_generate() to get the test execution SQL
 		generatedSQL, err := p.testGenerateFn(ctx, conn, macro.Pattern, macro.Callback)
 		if err != nil {
 			return nil, err
 		}
 
-		// Extract macro text from stripped SQL and find it in expandedSQL
-		// Since we process in reverse order, use LastIndex to find the rightmost occurrence
-		macroText := strippedSQL[macro.StartPos:macro.EndPos]
-		idx := strings.LastIndex(expandedSQL, macroText)
-		if idx == -1 {
-			return nil, fmt.Errorf("failed to locate macro %q in SQL for expansion", macroText)
-		}
-
-		// Replace the macro with generated SQL
-		expandedSQL = expandedSQL[:idx] + generatedSQL + expandedSQL[idx+len(macroText):]
+		expandedSQL = expandedSQL[:macro.StartPos] + generatedSQL + expandedSQL[macro.EndPos:]
 	}
 
 	result.ExpandedSQL = expandedSQL

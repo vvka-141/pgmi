@@ -20,13 +20,13 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API helper functions'; END $$;
 CREATE OR REPLACE FUNCTION api.content_json(content bytea)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT content::utils.utf8::jsonb;
+    SELECT content::common.utf8::jsonb;
 $$;
 
 CREATE OR REPLACE FUNCTION api.content_text(content bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT content::utils.utf8::text;
+    SELECT content::common.utf8::text;
 $$;
 
 CREATE OR REPLACE FUNCTION api.header(headers extensions.hstore, name text)
@@ -66,26 +66,34 @@ END $$;
 
 CREATE OR REPLACE FUNCTION api.url_decode(p_encoded text)
 RETURNS text
-LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE
-    v_result text := replace(p_encoded, '+', ' ');
-    v_pos int;
-    v_hex text;
-BEGIN
-    LOOP
-        v_pos := position('%' IN v_result);
-        EXIT WHEN v_pos = 0 OR v_pos > length(v_result) - 2;
-
-        v_hex := substring(v_result FROM v_pos + 1 FOR 2);
-        EXIT WHEN v_hex !~ '^[0-9A-Fa-f]{2}$';
-
-        v_result := substring(v_result FROM 1 FOR v_pos - 1)
-                 || chr(('x' || v_hex)::bit(8)::int)
-                 || substring(v_result FROM v_pos + 3);
-    END LOOP;
-
-    RETURN v_result;
-END;
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    -- Tokenise in a single pass, decode each valid %HH into a bytea, concat
+    -- and interpret as UTF-8. Avoids the O(n²) string-rebuild loop the prior
+    -- plpgsql implementation used, which amplified DoS surface on long
+    -- percent-encoded URLs. Invalid %XX and trailing partial sequences are
+    -- preserved as literals — same semantics, verified by the inline tests.
+    WITH parts AS (
+        SELECT m[1] AS piece, ord
+        FROM regexp_matches(
+            replace(p_encoded, '+', ' '),
+            '(%[0-9A-Fa-f]{2}|[^%]+|%)',
+            'g'
+        ) WITH ORDINALITY AS t(m, ord)
+    )
+    SELECT convert_from(
+        COALESCE(
+            string_agg(
+                CASE
+                    WHEN piece ~ '^%[0-9A-Fa-f]{2}$'
+                    THEN decode(substring(piece FROM 2), 'hex')
+                    ELSE convert_to(piece, 'UTF8')
+                END,
+                ''::bytea ORDER BY ord
+            ),
+            ''::bytea
+        ),
+        'UTF8'
+    ) FROM parts;
 $$;
 
 CREATE OR REPLACE FUNCTION api.regexp_quote(p_text text)
@@ -151,6 +159,21 @@ BEGIN
     v_decoded := api.url_decode('100%25+complete');
     IF v_decoded != '100% complete' THEN
         RAISE EXCEPTION 'url_decode mixed failed: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('%GG%20hello');
+    IF v_decoded != '%GG hello' THEN
+        RAISE EXCEPTION 'url_decode must skip invalid %% and decode later valid sequences: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('trailing%');
+    IF v_decoded != 'trailing%' THEN
+        RAISE EXCEPTION 'url_decode trailing %% should stay literal: got %', v_decoded;
+    END IF;
+
+    v_decoded := api.url_decode('trailing%1');
+    IF v_decoded != 'trailing%1' THEN
+        RAISE EXCEPTION 'url_decode trailing %%X should stay literal: got %', v_decoded;
     END IF;
 
     -- Test regexp_quote
@@ -325,10 +348,21 @@ END $$;
 -- ============================================================================
 -- MCP Response Builders (JSON-RPC 2.0 Compliant)
 -- ============================================================================
+-- request_id is jsonb so JSON-RPC id types (string, integer, null) round-trip
+-- exactly. Drop any prior text-signature variants before recreating.
+
+DROP FUNCTION IF EXISTS api.mcp_success(jsonb, text);
+DROP FUNCTION IF EXISTS api.mcp_error(integer, text, text, jsonb);
+DROP FUNCTION IF EXISTS api.mcp_tool_result(jsonb, text, boolean);
+DROP FUNCTION IF EXISTS api.mcp_tool_error(text, text);
+DROP FUNCTION IF EXISTS api.mcp_resource_result(jsonb, text);
+DROP FUNCTION IF EXISTS api.mcp_resource_error(text, text);
+DROP FUNCTION IF EXISTS api.mcp_prompt_result(jsonb, text);
+DROP FUNCTION IF EXISTS api.mcp_prompt_error(text, text);
 
 CREATE OR REPLACE FUNCTION api.mcp_success(
     result jsonb,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT ROW(
@@ -343,7 +377,7 @@ $$;
 CREATE OR REPLACE FUNCTION api.mcp_error(
     code integer,
     message text,
-    request_id text,
+    request_id jsonb,
     data jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -362,27 +396,36 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     content jsonb,
-    request_id text,
-    is_error boolean DEFAULT false
+    request_id jsonb,
+    is_error boolean DEFAULT false,
+    structured_content jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('content', content, 'isError', is_error),
+        jsonb_strip_nulls(jsonb_build_object(
+            'content', content,
+            'isError', is_error,
+            'structuredContent', structured_content
+        )),
         request_id
     );
 $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_error(
     message text,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT api.mcp_error(-32603, message, request_id);
+    SELECT api.mcp_tool_result(
+        jsonb_build_array(jsonb_build_object('type', 'text', 'text', message)),
+        request_id,
+        true
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
@@ -393,7 +436,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_error(
     message text,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_error(-32603, message, request_id);
@@ -401,7 +444,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
     messages jsonb,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
@@ -412,7 +455,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION api.mcp_prompt_error(
     message text,
-    request_id text
+    request_id jsonb
 ) RETURNS api.mcp_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_error(-32603, message, request_id);
@@ -431,21 +474,28 @@ DECLARE
     v_envelope jsonb;
     v_text jsonb;
 BEGIN
-    -- Test mcp_success
-    v_response := api.mcp_success('{"value": 42}'::jsonb, 'req-1');
+    -- Test mcp_success (string id)
+    v_response := api.mcp_success('{"value": 42}'::jsonb, '"req-1"'::jsonb);
     v_envelope := (v_response).envelope;
     IF v_envelope->>'jsonrpc' != '2.0' THEN
         RAISE EXCEPTION 'mcp_success: missing jsonrpc 2.0';
     END IF;
-    IF v_envelope->>'id' != 'req-1' THEN
-        RAISE EXCEPTION 'mcp_success: wrong id';
+    IF v_envelope->>'id' != 'req-1' OR jsonb_typeof(v_envelope->'id') != 'string' THEN
+        RAISE EXCEPTION 'mcp_success: id type not preserved as string';
     END IF;
     IF v_envelope->'result' IS NULL THEN
         RAISE EXCEPTION 'mcp_success: missing result';
     END IF;
 
+    -- Test mcp_success with integer id — JSON-RPC 2.0 requires type preservation
+    v_response := api.mcp_success('{}'::jsonb, '42'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF jsonb_typeof(v_envelope->'id') != 'number' OR (v_envelope->>'id')::int != 42 THEN
+        RAISE EXCEPTION 'mcp_success: integer id must stay numeric, got %', v_envelope->'id';
+    END IF;
+
     -- Test mcp_error
-    v_response := api.mcp_error(-32603, 'Internal error', 'req-2');
+    v_response := api.mcp_error(-32603, 'Internal error', '"req-2"'::jsonb);
     v_envelope := (v_response).envelope;
     IF v_envelope->>'jsonrpc' != '2.0' THEN
         RAISE EXCEPTION 'mcp_error: missing jsonrpc 2.0';
@@ -458,7 +508,7 @@ BEGIN
     END IF;
 
     -- Test mcp_tool_result
-    v_response := api.mcp_tool_result('[{"type": "text", "text": "Hello"}]'::jsonb, 'req-3');
+    v_response := api.mcp_tool_result('[{"type": "text", "text": "Hello"}]'::jsonb, '"req-3"'::jsonb);
     v_envelope := (v_response).envelope;
     IF v_envelope->>'jsonrpc' != '2.0' THEN
         RAISE EXCEPTION 'mcp_tool_result: missing jsonrpc 2.0';
@@ -467,11 +517,34 @@ BEGIN
         RAISE EXCEPTION 'mcp_tool_result: missing content in result';
     END IF;
 
-    -- Test mcp_tool_error
-    v_response := api.mcp_tool_error('Tool failed', 'req-4');
+    -- Test mcp_tool_result with structured content (MCP 2025-06-18+ outputSchema pattern)
+    v_response := api.mcp_tool_result(
+        jsonb_build_array(jsonb_build_object('type', 'text', 'text', '{"answer":42}')),
+        '"req-3b"'::jsonb,
+        false,
+        '{"answer":42}'::jsonb
+    );
     v_envelope := (v_response).envelope;
-    IF v_envelope->'error' IS NULL THEN
-        RAISE EXCEPTION 'mcp_tool_error: missing error object';
+    IF v_envelope->'result'->'structuredContent' IS NULL
+       OR (v_envelope->'result'->'structuredContent'->>'answer')::int != 42 THEN
+        RAISE EXCEPTION 'mcp_tool_result: structuredContent not emitted when provided';
+    END IF;
+
+    -- Test mcp_tool_error: MCP spec requires tool execution failures to use
+    -- result.isError=true with content array, NOT the JSON-RPC error envelope.
+    v_response := api.mcp_tool_error('Tool failed', '"req-4"'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF v_envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'mcp_tool_error: must NOT use JSON-RPC error channel for tool failures';
+    END IF;
+    IF (v_envelope->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'mcp_tool_error: result.isError must be true';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'content') AS c
+        WHERE c->>'type' = 'text' AND c->>'text' = 'Tool failed'
+    ) THEN
+        RAISE EXCEPTION 'mcp_tool_error: result.content must contain the error message';
     END IF;
 
     -- Test mcp_text helper

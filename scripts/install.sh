@@ -81,11 +81,10 @@ install_pgmi() {
 verify_install() {
     if command -v pgmi &> /dev/null; then
         echo ""
-        echo "pgmi installed successfully!"
         pgmi --version
     else
         echo ""
-        echo "Installation complete. You may need to add ${INSTALL_DIR} to your PATH."
+        echo "Installed to ${INSTALL_DIR}. Add it to PATH if not already there:"
         echo "  export PATH=\"\$PATH:${INSTALL_DIR}\""
     fi
 }

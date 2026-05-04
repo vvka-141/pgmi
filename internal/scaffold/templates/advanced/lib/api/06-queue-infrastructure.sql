@@ -154,13 +154,23 @@ BEGIN
     EXECUTE format('GRANT USAGE ON SEQUENCE api.inbound_queue_seq TO %I', v_api_role);
     EXECUTE format('GRANT USAGE ON SEQUENCE api.inbound_queue_seq TO %I', v_admin_role);
 
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON api.rest_exchange TO %I', v_api_role);
+    -- Exchange tables persist full request/response payloads including
+    -- truncated SQLERRM for failed handlers. The api role (request execution)
+    -- needs INSERT/UPDATE to log its own activity but MUST NOT be able to
+    -- read other rows — otherwise a compromised api session leaks every
+    -- handler exception across the deployment. Admin retains full access for
+    -- ops triage; idempotent against earlier deploys that granted SELECT
+    -- to api.
+    EXECUTE format('GRANT INSERT, UPDATE ON api.rest_exchange TO %I', v_api_role);
+    EXECUTE format('REVOKE SELECT ON api.rest_exchange FROM %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.rest_exchange TO %I', v_admin_role);
 
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON api.rpc_exchange TO %I', v_api_role);
+    EXECUTE format('GRANT INSERT, UPDATE ON api.rpc_exchange TO %I', v_api_role);
+    EXECUTE format('REVOKE SELECT ON api.rpc_exchange FROM %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.rpc_exchange TO %I', v_admin_role);
 
-    EXECUTE format('GRANT SELECT, INSERT ON api.mcp_exchange TO %I', v_api_role);
+    EXECUTE format('GRANT INSERT ON api.mcp_exchange TO %I', v_api_role);
+    EXECUTE format('REVOKE SELECT ON api.mcp_exchange FROM %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.mcp_exchange TO %I', v_admin_role);
 
     EXECUTE format('GRANT SELECT ON api.inbound_queue_with_protocol TO %I', v_api_role);

@@ -14,6 +14,63 @@
 DO $$ BEGIN RAISE NOTICE '→ Installing handler registration functions'; END $$;
 
 -- ============================================================================
+-- Shared: Handler Name Validation
+-- ============================================================================
+-- Reject handler names that would: (a) collide on PostgreSQL's 63-byte
+-- identifier truncation when prefixed (rest_/rpc_/mcp_tool_), or (b) embed
+-- characters that escape the format('%I') quoting we rely on. ASCII-only;
+-- internationalisation is intentionally out of scope.
+
+CREATE OR REPLACE FUNCTION internal.validate_handler_name(p_name text)
+RETURNS void
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+BEGIN
+    IF p_name IS NULL OR length(p_name) = 0 THEN
+        RAISE EXCEPTION 'handler name must be non-empty';
+    END IF;
+    IF p_name !~ '^[a-zA-Z][a-zA-Z0-9_.\-]{0,48}$' THEN
+        RAISE EXCEPTION 'invalid handler name %; must match ^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$ (1-49 chars, ASCII alnum/underscore/dot/hyphen, leading letter)',
+            p_name
+            USING HINT = 'PostgreSQL identifier limit is 63 bytes; pgmi caps at 49 to leave room for prefixes (rest_/rpc_/mcp_tool_) without silent truncation that would cause function-name collisions.';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.validate_handler_name(text) IS
+    'Rejects handler names that risk PostgreSQL identifier truncation (>49 chars) or break format(%I) quoting. ASCII-only.';
+
+-- ============================================================================
+-- Shared: Random Dollar-Quote Boundary
+-- ============================================================================
+-- Avoid predictable boundaries (UUID-derived) so a malicious handler body
+-- cannot pre-compute a sentinel that breaks out of the dollar-quoted block
+-- during EXECUTE. Loops if the random nonce happens to appear in the body
+-- (vanishingly unlikely with 64-bit entropy).
+
+CREATE OR REPLACE FUNCTION internal.random_dollar_quote_boundary(p_body text)
+RETURNS text
+LANGUAGE plpgsql VOLATILE STRICT PARALLEL SAFE AS $$
+DECLARE
+    v_boundary text;
+    v_attempts int := 0;
+BEGIN
+    LOOP
+        v_boundary := 'hb_' || encode(extensions.gen_random_bytes(8), 'hex');
+        IF position('$' || v_boundary || '$' IN p_body) = 0 THEN
+            RETURN v_boundary;
+        END IF;
+        v_attempts := v_attempts + 1;
+        IF v_attempts > 8 THEN
+            RAISE EXCEPTION 'could not generate non-colliding dollar-quote boundary after % attempts', v_attempts;
+        END IF;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.random_dollar_quote_boundary(text) IS
+    'Returns a fresh dollar-quote tag (hb_<16 hex>) guaranteed not to appear inside p_body. Eliminates predictable-boundary injection paths in CREATE FUNCTION assembly.';
+
+-- ============================================================================
 -- Shared: Capture pg_proc Snapshot
 -- ============================================================================
 
@@ -88,6 +145,9 @@ DECLARE
     v_snapshot record;
     v_handler_exec_sql text;
     v_def_hash bytea;
+
+    v_input_schema api.json_schema;
+    v_output_schema api.json_schema;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -106,6 +166,8 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
+    v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
+    v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
 
     RAISE DEBUG 'register REST: id=%, uri=%, method=%', v_id, v_uri, v_http_method;
 
@@ -121,8 +183,13 @@ BEGIN
     END;
     v_response_headers := COALESCE(p_metadata->'responseHeaders', '{}'::jsonb);
 
-    v_function_name := COALESCE(v_name, 'rest_handler_' || replace(v_id::text, '-', '_'));
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    IF v_name IS NOT NULL THEN
+        PERFORM internal.validate_handler_name(v_name);
+        v_function_name := v_name;
+    ELSE
+        v_function_name := 'rest_handler_' || replace(v_id::text, '-', '_');
+    END IF;
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.rest_request)
@@ -157,7 +224,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        title, description
+        title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rest', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
@@ -165,7 +232,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_title, v_description
+        v_title, v_description, v_input_schema, v_output_schema
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -187,7 +254,9 @@ $%s$ LANGUAGE plpgsql$sql$,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
         title = EXCLUDED.title,
-        description = EXCLUDED.description;
+        description = EXCLUDED.description,
+        input_json_schema = EXCLUDED.input_json_schema,
+        output_json_schema = EXCLUDED.output_json_schema;
 
     INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log)
     VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log)
@@ -236,6 +305,9 @@ DECLARE
     v_def_hash bytea;
 
     v_existing_handler uuid;
+
+    v_input_schema api.json_schema;
+    v_output_schema api.json_schema;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -246,6 +318,9 @@ BEGIN
     IF v_method_name IS NULL THEN
         RAISE EXCEPTION 'RPC handler metadata requires "methodName"';
     END IF;
+
+    v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
+    v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
 
     SELECT handler_object_id INTO v_existing_handler
     FROM api.rpc_route
@@ -274,8 +349,9 @@ BEGIN
     END;
     v_response_headers := COALESCE(p_metadata->'responseHeaders', '{}'::jsonb);
 
+    PERFORM internal.validate_handler_name(v_method_name);
     v_function_name := 'rpc_' || replace(replace(v_method_name, '.', '_'), '-', '_');
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.rpc_request)
@@ -310,7 +386,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        title, description
+        title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rpc', v_handler_oid::regprocedure, v_function_name,
         v_accepts, v_produces, v_response_headers, v_requires_auth,
@@ -318,7 +394,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_title, v_description
+        v_title, v_description, v_input_schema, v_output_schema
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_func = EXCLUDED.handler_func,
@@ -340,7 +416,9 @@ $%s$ LANGUAGE plpgsql$sql$,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
         title = EXCLUDED.title,
-        description = EXCLUDED.description;
+        description = EXCLUDED.description,
+        input_json_schema = EXCLUDED.input_json_schema,
+        output_json_schema = EXCLUDED.output_json_schema;
 
     INSERT INTO api.rpc_route (handler_object_id, method_name, auto_log)
     VALUES (v_id, v_method_name, v_auto_log)
@@ -386,6 +464,9 @@ DECLARE
     v_snapshot record;
     v_handler_exec_sql text;
     v_def_hash bytea;
+
+    v_output_schema api.json_schema;
+    v_tags text[];
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -405,17 +486,24 @@ BEGIN
     v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     v_input_schema := p_metadata->'inputSchema';
+    v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
     v_uri_template := p_metadata->>'uriTemplate';
     v_mime_type := COALESCE(p_metadata->>'mimeType', 'application/json');
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
+    v_tags := CASE
+        WHEN p_metadata->'tags' IS NOT NULL
+        THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'tags'))
+        ELSE '{}'::text[]
+    END;
 
     RAISE DEBUG 'register MCP: id=%, type=%, name=%', v_id, v_type, v_name;
 
     v_handler_type := ('mcp_' || v_type)::api.handler_type;
 
+    PERFORM internal.validate_handler_name(v_name);
     v_function_name := 'mcp_' || v_type || '_' || replace(replace(v_name, '.', '_'), '-', '_');
-    v_boundary := 'hb_' || replace(v_id::text, '-', '');
+    v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
         $sql$CREATE OR REPLACE FUNCTION %I.%I(request api.mcp_request)
@@ -450,7 +538,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         accepts, produces, response_headers, requires_auth,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
-        title, description
+        title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, v_handler_type, v_handler_oid::regprocedure, v_function_name,
         ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth,
@@ -458,7 +546,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_title, v_description
+        v_title, v_description, v_input_schema::api.json_schema, v_output_schema
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_type = EXCLUDED.handler_type,
@@ -478,17 +566,20 @@ $%s$ LANGUAGE plpgsql$sql$,
         language_name = EXCLUDED.language_name,
         owner_name = EXCLUDED.owner_name,
         title = EXCLUDED.title,
-        description = EXCLUDED.description;
+        description = EXCLUDED.description,
+        input_json_schema = EXCLUDED.input_json_schema,
+        output_json_schema = EXCLUDED.output_json_schema;
 
-    INSERT INTO api.mcp_route (handler_object_id, mcp_type, mcp_name, input_schema, uri_template, mime_type, arguments)
-    VALUES (v_id, v_type, v_name, v_input_schema, v_uri_template, v_mime_type, v_arguments)
+    INSERT INTO api.mcp_route (handler_object_id, mcp_type, mcp_name, input_schema, uri_template, mime_type, arguments, tags)
+    VALUES (v_id, v_type, v_name, v_input_schema, v_uri_template, v_mime_type, v_arguments, v_tags)
     ON CONFLICT (handler_object_id) DO UPDATE SET
         mcp_type = EXCLUDED.mcp_type,
         mcp_name = EXCLUDED.mcp_name,
         input_schema = EXCLUDED.input_schema,
         uri_template = EXCLUDED.uri_template,
         mime_type = EXCLUDED.mime_type,
-        arguments = EXCLUDED.arguments;
+        arguments = EXCLUDED.arguments,
+        tags = EXCLUDED.tags;
 
     RAISE DEBUG 'register MCP: Registered % %', v_type, v_name;
 END;

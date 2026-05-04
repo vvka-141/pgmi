@@ -10,34 +10,31 @@ import (
 
 var aiCmd = &cobra.Command{
 	Use:   "ai",
-	Short: "AI assistant documentation and skills",
-	Long: `Machine-readable documentation for AI coding assistants.
+	Short: "Print pgmi documentation for AI assistants (llms.txt-style)",
+	Long: `Print machine-readable pgmi documentation. Designed for AI coding assistants
+(Claude Code, Copilot, Gemini, Cursor) to ingest as context.
 
-This command group provides structured, markdown-formatted documentation
-that AI assistants (Claude Code, GitHub Copilot, Gemini CLI, etc.) can
-parse and learn from.
+  pgmi ai                       Overview and index (this is the entrypoint)
+  pgmi ai skills                List embedded skills
+  pgmi ai skill pgmi-sql        Print one skill's full content
+  pgmi ai templates             List per-template guides
+  pgmi ai template advanced     Print one template's guide
 
-When an AI assistant encounters pgmi, it can run these commands to
-understand the tool's philosophy, conventions, and best practices.
-
-Example AI workflow:
-  1. pgmi ai              # Get overview and index
-  2. pgmi ai skills       # List available skills
-  3. pgmi ai skill pgmi-sql  # Load SQL conventions`,
+All output goes to stdout for piping or redirection.`,
 	RunE: runAIOverview,
 }
 
 var aiSkillsCmd = &cobra.Command{
 	Use:   "skills",
-	Short: "List all available AI skills",
-	Long:  `List all embedded skills with their descriptions.`,
+	Short: "List embedded skills",
+	Long:  `Print the name and description of every embedded skill as a markdown table.`,
 	RunE:  runAISkills,
 }
 
 var aiSkillCmd = &cobra.Command{
 	Use:               "skill <name>",
-	Short:             "Show content of a specific skill",
-	Long:              `Output the full content of a skill for AI consumption.`,
+	Short:             "Print one skill's full content",
+	Long:              `Print the full markdown content of one embedded skill to stdout.`,
 	Args:              RequireSkillName,
 	ValidArgsFunction: completeSkillNames,
 	RunE:              runAISkill,
@@ -45,15 +42,15 @@ var aiSkillCmd = &cobra.Command{
 
 var aiTemplatesCmd = &cobra.Command{
 	Use:   "templates",
-	Short: "List template documentation",
-	Long:  `List available template documentation for AI assistants.`,
+	Short: "List per-template AI guides",
+	Long:  `Print the names of every embedded template-specific AI guide.`,
 	RunE:  runAITemplates,
 }
 
 var aiTemplateCmd = &cobra.Command{
 	Use:               "template <name>",
-	Short:             "Show AI documentation for a template",
-	Long:              `Output template-specific documentation and skills.`,
+	Short:             "Print one template's AI guide",
+	Long:              `Print the full markdown of one template's AI guide to stdout.`,
 	Args:              RequireTemplateName,
 	ValidArgsFunction: completeAITemplateNames,
 	RunE:              runAITemplate,
@@ -132,8 +129,8 @@ func runAITemplates(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stdout, "No template documentation embedded yet.")
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, "Available templates (use `pgmi templates list`):")
-		fmt.Fprintln(os.Stdout, "  - basic: Simple structure for learning")
-		fmt.Fprintln(os.Stdout, "  - advanced: Production patterns with API handlers")
+		fmt.Fprintln(os.Stdout, "  - basic: Linear migrations, minimal structure")
+		fmt.Fprintln(os.Stdout, "  - advanced: Metadata-driven deployment, REST/RPC/MCP handler registry")
 		return nil
 	}
 
@@ -151,8 +148,7 @@ func runAITemplate(cmd *cobra.Command, args []string) error {
 
 	content, err := ai.GetTemplateDoc(name)
 	if err != nil {
-		// If no embedded doc, try to provide useful fallback
-		return fmt.Errorf("template documentation '%s' not found.\n\nUse `pgmi templates describe %s` for basic info, or check the template's README.md after running `pgmi init myproject --template %s`", name, name, name)
+		return fmt.Errorf("no AI guide embedded for template %q\nrun `pgmi templates describe %s` for the basic structure, or scaffold and read its README", name, name)
 	}
 
 	fmt.Fprint(os.Stdout, content)

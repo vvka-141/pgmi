@@ -134,7 +134,7 @@ func testTemplateStructure(t *testing.T, templateName string) {
 				require.True(t, info.IsDir(), "%s should be a directory", dirName)
 			}
 			// Verify lib/ contains the expected nested directories
-			libDirs := []string{"lib/api", "lib/core", "lib/utils"}
+			libDirs := []string{"lib/api", "lib/core", "lib/common"}
 			for _, dirPath := range libDirs {
 				info, err := efs.Stat(dirPath)
 				require.NoError(t, err, "Advanced template should have %s directory", dirPath)

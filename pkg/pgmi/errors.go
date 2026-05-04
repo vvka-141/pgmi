@@ -1,8 +1,13 @@
 package pgmi
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Sentinel errors for common failure scenarios.
@@ -32,6 +37,10 @@ var (
 
 	// ErrConnectionFailed indicates database connection failed.
 	ErrConnectionFailed = errors.New("connection failed")
+
+	// ErrConcurrentDeploy indicates another pgmi deployment is already in
+	// progress against the target database (Go-side advisory lock contention).
+	ErrConcurrentDeploy = errors.New("concurrent deployment in progress")
 )
 
 // ExitCodeForError returns the appropriate exit code for an error.
@@ -42,8 +51,16 @@ func ExitCodeForError(err error) int {
 		return ExitSuccess
 	}
 
+	// SIGINT / Ctrl-C produces context.Canceled when the deploy goroutine
+	// observes the cancelled context. Map to 130 per Unix convention (128 + SIGINT).
+	if errors.Is(err, context.Canceled) {
+		return ExitInterrupted
+	}
+
 	// Check for sentinel errors
 	switch {
+	case errors.Is(err, ErrConcurrentDeploy):
+		return ExitConcurrentDeploy
 	case errors.Is(err, ErrInvalidConfig):
 		return ExitConfigError
 	case errors.Is(err, ErrDeploySQLNotFound):
@@ -78,4 +95,54 @@ func ExitCodeForError(err error) int {
 	}
 
 	return ExitGeneralError
+}
+
+// FormatError renders an error for CLI output. For plain errors it returns the
+// message. If the chain contains a *pgconn.PgError, it appends the DETAIL,
+// HINT, and WHERE context fields that PostgreSQL attached to the error but
+// that err.Error() omits, matching the diagnostic fields psql surfaces.
+//
+// Password material embedded in connection strings is scrubbed before return:
+// any `password=<value>` query-style fragment or `user:<password>@` URI
+// fragment is replaced with a `[redacted]` marker. pgmi today does not leak
+// passwords into its own errors, but defence in depth is cheap.
+func FormatError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(err.Error())
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Detail != "" {
+			fmt.Fprintf(&b, "\nDETAIL: %s", pgErr.Detail)
+		}
+		if pgErr.Hint != "" {
+			fmt.Fprintf(&b, "\nHINT: %s", pgErr.Hint)
+		}
+		if pgErr.Where != "" {
+			fmt.Fprintf(&b, "\nWHERE: %s", pgErr.Where)
+		}
+	}
+
+	return redactPasswords(b.String())
+}
+
+// passwordKVPattern matches libpq-style `password=<value>` and key=value
+// connection string fragments. Terminates at whitespace, ampersand, or end.
+var passwordKVPattern = regexp.MustCompile(`(?i)password=[^\s&'"]*`)
+
+// passwordURIPattern matches `user:password@host` inside URI connection strings.
+// The password group is everything between : and @, non-greedy.
+var passwordURIPattern = regexp.MustCompile(`(://[^:/@\s]+):[^@\s]*@`)
+
+// redactPasswords replaces password-looking substrings with `[redacted]`.
+// Handles both libpq keyword form (`password=secret`) and URI form
+// (`postgresql://user:secret@host/db`).
+func redactPasswords(s string) string {
+	s = passwordKVPattern.ReplaceAllString(s, "password=[redacted]")
+	s = passwordURIPattern.ReplaceAllString(s, "$1:[redacted]@")
+	return s
 }

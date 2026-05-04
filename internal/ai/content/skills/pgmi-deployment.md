@@ -140,7 +140,7 @@ pgmi recursively scans the provided path for SQL files:
 ├── migrations/
 │   ├── 001_schema.sql           → pg_temp._pgmi_source (access via pgmi_source_view)
 │   └── 002_data.sql             → pg_temp._pgmi_source (access via pgmi_source_view)
-├── utils/
+├── common/
 │   └── helpers.sql              → pg_temp._pgmi_source (access via pgmi_source_view)
 └── __test__/
     ├── test_schema.sql          → pg_temp._pgmi_test_source (ISOLATED)
@@ -734,7 +734,7 @@ $ pgmi deploy ./myapp -d mydb --param env=production
 
 NOTICE: Initializing deployment for myapp (env=production)
 NOTICE: Executing: ./init.sql
-NOTICE: Created schema: utils
+NOTICE: Created schema: common
 NOTICE: Created schema: internal
 NOTICE: Created schema: core
 NOTICE: Created schema: api

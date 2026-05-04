@@ -187,8 +187,13 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_customer_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) TO %I', v_customer_role);
+    -- upsert_user is privileged: only internal.setup_auth_session (SECURITY DEFINER
+    -- running as owner) may provision users. Revoking from PUBLIC, api, and customer
+    -- closes the identity-overwrite attack path while keeping the gateway flow
+    -- functional. PUBLIC has default EXECUTE on new functions unless revoked.
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) FROM PUBLIC';
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) FROM %I', v_api_role);
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION membership.upsert_user(TEXT,TEXT,TEXT,TEXT,BOOLEAN) FROM %I', v_customer_role);
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '  ✓ membership functions installed'; END $$;

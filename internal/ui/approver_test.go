@@ -46,11 +46,14 @@ func TestForcedApprover_OutputContainsDbName(t *testing.T) {
 	if !strings.Contains(out, "my_production_db") {
 		t.Errorf("Expected output to contain database name, got:\n%s", out)
 	}
-	if !strings.Contains(out, "DANGER") {
-		t.Errorf("Expected output to contain DANGER warning, got:\n%s", out)
+	if !strings.Contains(out, "--force") {
+		t.Errorf("Expected output to mention --force, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Proceeding with database overwrite") {
-		t.Errorf("Expected output to contain proceeding message, got:\n%s", out)
+	if !strings.Contains(out, "DROP DATABASE") {
+		t.Errorf("Expected output to contain DROP DATABASE warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "now.") {
+		t.Errorf("Expected output to contain final 'now.' line, got:\n%s", out)
 	}
 }
 
@@ -230,8 +233,8 @@ func TestInteractiveApprover_OutputContainsWarning(t *testing.T) {
 	if !strings.Contains(out, "testdb") {
 		t.Errorf("Expected database name in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "permanently delete") {
-		t.Errorf("Expected deletion warning, got:\n%s", out)
+	if !strings.Contains(out, "DROP and RECREATE") {
+		t.Errorf("Expected DROP and RECREATE warning, got:\n%s", out)
 	}
 }
 

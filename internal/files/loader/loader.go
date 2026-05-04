@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -258,8 +259,11 @@ func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pg
 // This eliminates the need for users to call pgmi_init_params() in deploy.sql.
 // Parameters are immediately accessible via current_setting('pgmi.key').
 func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
-	for key := range params {
+	for key, value := range params {
 		if err := validateParameterKey(key); err != nil {
+			return err
+		}
+		if err := validateParameterValue(key, value); err != nil {
 			return err
 		}
 	}
@@ -358,6 +362,21 @@ var keyPattern = regexp.MustCompile(`^[a-zA-Z0-9_]{1,63}$`)
 func validateParameterKey(key string) error {
 	if !keyPattern.MatchString(key) {
 		return fmt.Errorf("invalid parameter key '%s': must be alphanumeric with underscores, 1-63 characters (PostgreSQL identifier limit)", key)
+	}
+	return nil
+}
+
+// validateParameterValue rejects NUL bytes and invalid UTF-8. Both would
+// cause pgx to fail cryptically much later; fail fast at the boundary
+// instead. Values ARE allowed to contain any other character including
+// control chars — PostgreSQL session GUCs accept them, and we do not
+// interpret the content ourselves.
+func validateParameterValue(key, value string) error {
+	if idx := strings.IndexByte(value, 0); idx >= 0 {
+		return fmt.Errorf("invalid parameter value for '%s': contains NUL byte at offset %d", key, idx)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("invalid parameter value for '%s': not valid UTF-8", key)
 	}
 	return nil
 }

@@ -57,7 +57,7 @@ END;
             'type', 'tool',
             'name', 'test_error_tool',
             'description', 'MCP tool that throws for testing',
-            'inputSchema', '{}'::jsonb,
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'requiresAuth', false
         ),
         $body$
@@ -158,14 +158,20 @@ END;
     -- Exchange table: full error logged for debugging
     -- ========================================================================
 
-    v_mcp_response := api.mcp_call_tool('test_error_tool', '{}'::jsonb, NULL, 'err-req-1');
+    v_mcp_response := api.mcp_call_tool('test_error_tool', '{}'::jsonb, NULL, '"err-req-1"'::jsonb);
 
     IF (v_mcp_response).envelope->>'jsonrpc' != '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP error should be JSON-RPC 2.0 format';
     END IF;
 
-    IF (v_mcp_response).envelope->'error' IS NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP tool error should have error object';
+    -- MCP spec: tool *execution* failures MUST use result.isError=true, NOT
+    -- the JSON-RPC error envelope. Reflects the C1 fix from Wave A.
+    IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: Tool execution failure must NOT use JSON-RPC error channel (got %)', (v_mcp_response).envelope->'error';
+    END IF;
+
+    IF ((v_mcp_response).envelope->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP tool execution failure must set result.isError=true';
     END IF;
 
     IF (v_mcp_response).envelope->>'id' != 'err-req-1' THEN

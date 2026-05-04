@@ -38,13 +38,13 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 | Aspect | **basic** | **advanced** |
 |--------|-----------|--------------|
 | **Purpose** | Learning pgmi fundamentals | Production-ready deployments |
-| **Structure** | Flat with `migrations/` folder | Domain-organized (utils/api/core/internal) |
-| **Execution Model** | Directory-based phases | Metadata-driven topological sort |
-| **Ordering** | Alphabetical (lexicographic) | Explicit dependencies + sort keys |
+| **Structure** | Flat with `migrations/` folder | Domain-organized (common/api/core/internal) |
+| **Execution Model** | Directory-based phases | Metadata-driven UNNEST sort key ordering |
+| **Ordering** | Alphabetical (lexicographic) | Explicit sort keys (lexicographic on keys) |
 | **Tracking** | None (stateless) | UUID-based in `internal.deployment_script_execution_log` |
 | **Metadata** | Optional/absent | Required `<pgmi-meta>` blocks |
-| **Dependencies** | Implicit (directory structure) | Explicit (`<dependsOn>`, `<group>`) |
-| **Schemas** | `public` (default) | Four-schema (utils/api/core/internal) |
+| **Dependencies** | Implicit (directory structure) | Implicit via sort key layering |
+| **Schemas** | `public` (default) | Four-schema (common/api/core/internal) |
 | **Role Hierarchy** | None | Three-tier (owner/admin/api) |
 | **HTTP Framework** | No | Yes (routing, handlers, queuing) |
 | **Idempotency** | Manual (user-written) | Metadata-driven (`idempotent` flag) |
@@ -92,13 +92,19 @@ basic/
 ```
 advanced/
 ├── deploy.sql                          # Metadata-driven orchestrator
-├── init.sql                            # Role hierarchy & schemas
+├── session.xml                         # Session metadata
+├── pgmi.yaml                           # Project configuration
 ├── README.md                           # Comprehensive guide
+├── ARCHITECTURE.md                     # Architecture documentation
 ├── api/
-│   └── examples.sql                    # Example API handlers
+│   ├── examples.sql                    # Example API handlers
+│   └── __test__/
+│       ├── _setup.sql                  # API test fixture
+│       └── test_authenticated_api.sql  # Authentication tests
 ├── lib/                                # Reusable library code
+│   ├── README.md                       # Library documentation
 │   ├── api/                            # Multi-protocol API framework
-│   │   ├── 01-types.sql                # Core types (http_request, http_response, etc.)
+│   │   ├── 01-types.sql                # Core types
 │   │   ├── 02-handler-registry.sql     # Handler metadata storage
 │   │   ├── 03-rest-routes.sql          # REST route definitions
 │   │   ├── 04-rpc-routes.sql           # JSON-RPC route definitions
@@ -106,33 +112,51 @@ advanced/
 │   │   ├── 06-queue-infrastructure.sql # Async task queue
 │   │   ├── 07-helpers.sql              # Response builders, error helpers
 │   │   ├── 08-registration.sql         # Handler registration functions
-│   │   └── 09-gateways.sql             # Protocol gateway functions
+│   │   ├── 09-gateways.sql             # Protocol gateway functions
+│   │   ├── 10-mcp-protocol.sql         # MCP protocol handler
+│   │   └── views.sql                   # API views
 │   ├── core/
-│   │   └── foundation.sql              # Domain schema setup
-│   ├── internal/
-│   │   ├── foundation.sql              # Deployment tracking infrastructure
-│   │   └── text-attributes.sql         # Text attribute utilities
-│   ├── utils/
-│   │   ├── cast_utils.sql              # Type conversion utilities
-│   │   └── text_utils.sql              # String utilities with inline tests
+│   │   ├── foundation.sql              # Domain schema setup
+│   │   └── attached-properties.sql     # Attached property utilities
+│   ├── common/
+│   │   ├── cast.sql                    # Safe type casting (`?|` operator, try_cast overloads)
+│   │   ├── encoding.sql                # Bytea encoding domains (utf8/latin1/win1252) and converters
+│   │   └── text.sql                    # Text utilities with inline tests
 │   └── __test__/                       # Library tests
 │       ├── test_api_protocols.sql      # REST/RPC/MCP protocol tests
 │       ├── test_auth_enforcement.sql   # Authentication tests
 │       ├── test_error_handling.sql     # Error mapping tests
 │       ├── test_handler_lifecycle.sql  # Handler registration tests
+│       ├── test_mcp_protocol.sql       # MCP protocol tests
 │       └── test_migrations_tracking.sql # Deployment tracking tests
+├── membership/                         # Membership domain
+│   ├── 01-schema.sql                   # Membership schema
+│   ├── 02-views.sql                    # Membership views
+│   ├── 03-functions.sql                # Membership functions
+│   ├── 04-claims.sql                   # Claims handling
+│   ├── 05-current-user.sql             # Current user context
+│   ├── 06-rls.sql                      # Row-level security
+│   └── __test__/
+│       ├── _setup.sql                  # Membership test fixture
+│       ├── test_account_linking.sql    # Account linking tests
+│       ├── test_default_org.sql        # Default org tests
+│       ├── test_invite_flow.sql        # Invite flow tests
+│       └── test_user_upsert.sql        # User upsert tests
+├── tools/
+│   ├── mcp-gateway.py                  # MCP gateway tool
+│   └── requirements.txt                # Python dependencies
 └── __test__/
     └── README.md                       # Test documentation
 ```
 
 **Key Features:**
-- Metadata-driven execution (topological sort)
+- Metadata-driven execution (UNNEST sort key ordering)
 - UUID-based script tracking (survives renames)
 - Four-schema architecture (internal, core, api, public)
 - Three-tier role hierarchy (owner/admin/api)
 - Multi-protocol API framework (REST, JSON-RPC, MCP)
 - Authentication enforcement via handler metadata
-- Inline testing patterns (in lib/utils/)
+- Inline testing patterns (in lib/common/)
 - Comprehensive deployment history
 - Optional test plan persistence via `pgmi_persist_test_plan()`
 
@@ -145,7 +169,7 @@ advanced/
 - Production database deployments
 - Multi-schema applications
 - API-first database design
-- Complex dependency management
+- Complex multi-phase execution ordering
 - Auditable deployment history
 
 ---
@@ -246,10 +270,10 @@ END $$;
 
 **Production Example (Metadata-Driven):**
 See `internal/scaffold/templates/advanced/deploy.sql` for complete metadata-driven orchestration with:
-- Topological sort by dependencies
+- Sort key ordering via UNNEST
 - Idempotency tracking
 - Execution order calculation
-- Cycle detection
+- Multi-phase execution support
 
 ### Step 5: Test Your Template
 
@@ -335,7 +359,7 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 
 ## Metadata Format Specification (Advanced Template)
 
-The advanced template uses XML metadata blocks to declare script identity, dependencies, and execution characteristics.
+The advanced template uses XML metadata blocks to declare script identity and execution characteristics.
 
 ### Metadata Block Structure
 
@@ -346,16 +370,9 @@ The advanced template uses XML metadata blocks to declare script identity, depen
     idempotent="true|false">
   <description>Human-readable purpose of this file</description>
   <sortKeys>
-    <key>layer-uuid/sequence-number</key>
-    <key>another-layer-uuid/sequence-number</key>
+    <key>layer/sequence-number</key>
+    <key>another-layer/sequence-number</key>
   </sortKeys>
-  <membership>
-    <group id="group-uuid"/>
-  </membership>
-  <dependency>
-    <dependsOn id="prerequisite-uuid"/>
-    <dependsOn id="another-prerequisite-uuid"/>
-  </dependency>
 </pgmi-meta>
 */
 
@@ -370,7 +387,7 @@ The advanced template uses XML metadata blocks to declare script identity, depen
 - **Characteristics:**
   - Survives file rename/move operations
   - Used in `internal.deployment_script_execution_log`
-  - Referenced by other scripts via `<dependsOn>`
+  - Used in `internal.deployment_script_execution_log` for tracking
 - **Generation:**
   ```bash
   # Linux/Mac
@@ -406,51 +423,33 @@ The advanced template uses XML metadata blocks to declare script identity, depen
 
 #### `<sortKeys>` (OPTIONAL)
 - **Type:** List of `<key>` elements
-- **Purpose:** Control execution order within dependency graph
-- **Format:** `<layer-uuid>/<sequence-number>`
-  - `layer-uuid`: Groups scripts into execution layers
-  - `sequence-number`: Relative ordering within layer (0001, 0002, etc.)
+- **Purpose:** Control execution order via lexicographic sort key ordering
+- **Format:** Any string convention (e.g., `<layer>/<sequence>`)
 - **Behavior:**
-  - Scripts with lower sequence numbers execute first
-  - Multiple sort keys provide multi-level ordering
+  - Each key generates a separate execution entry in `pgmi_plan_view`
+  - Multiple keys = multi-phase execution (file runs multiple times)
+  - Order: `sort_key ASC, path ASC` (deterministic)
 - **Example:**
   ```xml
   <sortKeys>
-    <key>00000000-0000-0000-0000-000000000000/0001</key>
-    <key>11111111-1111-1111-1111-111111111111/0010</key>
+    <key>10-common/0010</key>
+    <key>50-seed/0020</key>
   </sortKeys>
   ```
 - **Use Cases:**
   - Ensure foundation scripts run before domain scripts
-  - Order within schema (utils → internal → core → api)
+  - Order within schema (common → internal → core → api)
+  - Multi-phase execution (create schema early, seed data later)
 
-#### `<membership>` (OPTIONAL)
-- **Type:** List of `<group>` elements
-- **Purpose:** Declare script belongs to logical groups
-- **Format:** `<group id="uuid"/>`
-- **Usage:** Future extensibility (filtering, conditional execution)
-- **Example:**
-  ```xml
-  <membership>
-    <group id="dddddddd-dddd-dddd-dddd-dddddddddddd"/>
-  </membership>
-  ```
+#### `<membership>` (XSD-DEFINED, NOT PARSED)
+- Defined in `internal/metadata/schema.xsd` but NOT parsed by Go's `Metadata` struct
+- XSD validates the XML, but the data is silently ignored
+- Do not rely on this element in deploy.sql
 
-#### `<dependency>` (OPTIONAL)
-- **Type:** List of `<dependsOn>` elements
-- **Purpose:** Declare explicit prerequisites (must execute before this script)
-- **Format:** `<dependsOn id="prerequisite-uuid"/>`
-- **Behavior:**
-  - Creates directed edge in dependency graph
-  - Topological sort ensures prerequisites run first
-  - Cycle detection prevents circular dependencies
-- **Example:**
-  ```xml
-  <dependency>
-    <dependsOn id="a1b2c3d4-e5f6-7890-abcd-ef1234567890"/>
-    <dependsOn id="b2c3d4e5-f6a7-8901-bcde-f12345678901"/>
-  </dependency>
-  ```
+#### `<dependency>` (XSD-DEFINED, NOT PARSED)
+- Defined in `internal/metadata/schema.xsd` but NOT parsed by Go's `Metadata` struct
+- There is no dependency graph or topological sort — execution order is purely sort key based
+- Do not rely on this element in deploy.sql
 
 ### Complete Example
 
@@ -463,16 +462,10 @@ The advanced template uses XML metadata blocks to declare script identity, depen
   <sortKeys>
     <key>00000000-0000-0000-0000-000000000000/0002</key>
   </sortKeys>
-  <membership>
-    <group id="dddddddd-dddd-dddd-dddd-dddddddddddd"/>
-  </membership>
-  <dependency>
-    <dependsOn id="a1b2c3d4-e5f6-7890-abcd-ef1234567890"/>
-  </dependency>
 </pgmi-meta>
 */
 
-CREATE OR REPLACE FUNCTION utils.slugify(input_text TEXT)
+CREATE OR REPLACE FUNCTION common.slugify(input_text TEXT)
 RETURNS TEXT AS $$
 BEGIN
     RETURN lower(regexp_replace(input_text, '[^a-zA-Z0-9]+', '-', 'g'));
@@ -482,7 +475,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 -- Inline test (non-transactional, runs immediately)
 DO $$
 BEGIN
-    IF utils.slugify('Hello World!') != 'hello-world-' THEN
+    IF common.slugify('Hello World!') != 'hello-world-' THEN
         RAISE EXCEPTION 'Slugify test failed';
     END IF;
 END $$;
@@ -490,114 +483,65 @@ END $$;
 
 ---
 
-## Dependency Resolution Algorithm
+## Execution Order Algorithm
 
-The advanced template's `deploy.sql` implements topological sorting to determine execution order.
+The execution order is determined by `pgmi_plan_view` using simple UNNEST and lexicographic ordering.
 
-### Algorithm Overview
+### How It Works
 
-**Input:** Set of scripts with metadata (`id`, `dependsOn`, `sortKeys`)
-**Output:** Linear execution order respecting dependencies
+**Input:** Source files with optional `<pgmi-meta>` sort keys
+**Output:** Linear execution order via `pgmi_plan_view`
 
-**Steps:**
+**Mechanism:**
 
-1. **Build Dependency Graph**
-   ```sql
-   -- For each script, extract:
-   -- - id (node identifier)
-   -- - dependsOn IDs (incoming edges)
-   -- - sortKeys (ordering hints)
-   ```
-
-2. **Detect Cycles**
-   ```sql
-   -- Depth-first search for back edges
-   -- If cycle found: RAISE EXCEPTION with cycle path
-   ```
-
-3. **Topological Sort (Kahn's Algorithm)**
-   ```sql
-   -- Initialize: Find all nodes with no incoming edges
-   -- While queue not empty:
-   --   1. Dequeue node with lowest sort_key
-   --   2. Add to execution order (assign execution_order++)
-   --   3. Remove node from graph
-   --   4. Enqueue newly-freed nodes (whose dependencies now satisfied)
-   ```
-
-4. **Assign Execution Order**
-   ```sql
-   -- Populate pg_temp.pgmi_plan_view with scripts in topological order
-   -- execution_order: 1, 2, 3, ... N
-   ```
-
-### Pseudo-code
-
-```
-function topological_sort(scripts):
-    graph = build_graph(scripts)
-
-    if has_cycle(graph):
-        raise error("Circular dependency detected")
-
-    in_degree = calculate_in_degrees(graph)
-    queue = [node for node in graph if in_degree[node] == 0]
-    execution_order = []
-
-    while queue not empty:
-        # Sort by sort_keys for deterministic ordering
-        queue.sort(by=sort_keys)
-
-        node = queue.dequeue()
-        execution_order.append(node)
-
-        for neighbor in graph[node].outgoing_edges:
-            in_degree[neighbor] -= 1
-            if in_degree[neighbor] == 0:
-                queue.enqueue(neighbor)
-
-    if len(execution_order) != len(graph):
-        raise error("Graph has cycles (should have been caught earlier)")
-
-    return execution_order
+```sql
+-- pgmi_plan_view joins sources with metadata and UNNESTs sort keys
+SELECT
+    s.path, s.content,
+    md5(s.path::bytea)::uuid AS generic_id,
+    m.id,
+    COALESCE(m.idempotent, true) AS idempotent,
+    unnested.sort_key,
+    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
+FROM pg_temp._pgmi_source s
+LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
+CROSS JOIN LATERAL UNNEST(
+    COALESCE(NULLIF(m.sort_keys, '{}'), ARRAY[s.path])
+) AS unnested(sort_key)
+ORDER BY unnested.sort_key, s.path;
 ```
 
-### Example Dependency Graph
+**Key behaviors:**
+- Files with metadata: each sort key generates a separate execution entry
+- Files without metadata: file path is used as sort key (lexicographic order)
+- Multi-phase: a file with N sort keys appears N times in the plan
+- Deterministic: `ORDER BY sort_key, path` with `ROW_NUMBER()` for tie-breaking
 
-**Scripts:**
-```
-A: init.sql (no dependencies)
-B: utils/text_utils.sql (depends on A)
-C: utils/cast_utils.sql (depends on A)
-D: internal/foundation.sql (depends on A)
-E: core/foundation.sql (depends on D)
-F: api/foundation.sql (depends on D, E)
-```
+### Example
 
-**Graph:**
+**Scripts with sort keys:**
 ```
-A → B
-A → C
-A → D → E → F
-     ↓
-     F
+common/cast.sql         → sortKeys: ['10-common/0010']
+common/text.sql         → sortKeys: ['10-common/0020']
+core/foundation.sql     → sortKeys: ['20-internal/0000']
+api/foundation.sql      → sortKeys: ['30-core/0000']
+roles.sql               → sortKeys: ['00-bootstrap/0020', '50-seed/0010']
 ```
 
-**Execution Order:**
+**Resulting execution order:**
 ```
-1. A (no dependencies)
-2. B, C, D (all depend only on A, sorted by sort_keys)
-3. E (depends on D)
-4. F (depends on D and E)
+1. roles.sql          (sort_key: 00-bootstrap/0020)  ← first phase
+2. cast.sql           (sort_key: 10-common/0010)
+3. text.sql           (sort_key: 10-common/0020)
+4. foundation.sql     (sort_key: 20-internal/0000)
+5. api/foundation.sql (sort_key: 30-core/0000)
+6. roles.sql          (sort_key: 50-seed/0010)       ← second phase
 ```
 
 ### Implementation Location
 
-See `internal/scaffold/templates/advanced/deploy.sql` (lines 50-280) for complete implementation with:
-- Metadata parsing from `<pgmi-meta>` blocks
-- Dependency graph construction
-- Cycle detection with path reporting
-- Topological sort with sort_key tie-breaking
+See `internal/contract/api-v1.sql` for the view definition.
+See `internal/scaffold/templates/advanced/deploy.sql` for usage in the execution loop.
 
 ---
 
@@ -609,10 +553,10 @@ The advanced template organizes code into four schemas by concern:
 
 | Schema | Purpose | Ownership | Example Contents |
 |--------|---------|-----------|------------------|
-| **utils** | Pure utility functions (no side effects) | Database Owner | `try_cast_uuid()`, `slugify()`, text/date helpers |
+| **common** | Cross-cutting primitives (casting, encoding, text) | Database Owner | `try_cast()`, `slugify()`, `common.utf8` domain |
 | **internal** | Infrastructure, deployment & test tracking | Database Owner | `deployment_script_execution_log`, `unittest_script`, `generate_test_script()` |
 | **core** | Domain business logic | Database Owner | Your application tables, domain functions |
-| **api** | External interface (HTTP routes, public API) | Database Owner | `http_route`, request handlers, queues |
+| **api** | External interface (HTTP routes, public API) | Database Owner | `handler` registry, protocol-specific route tables (`rest_route`, `rpc_route`, `mcp_route`), request handlers |
 
 **Rationale:**
 - **Separation of concerns:** Clear boundaries between infrastructure, utilities, domain, and interface
@@ -623,10 +567,10 @@ The advanced template organizes code into four schemas by concern:
 **Privileges:**
 ```sql
 -- Admin: Full access to all schemas
-GRANT ALL ON SCHEMA utils, internal, core, api TO <database>_admin;
+GRANT ALL ON SCHEMA common, internal, core, api TO <database>_admin;
 
 -- API: Read-only + execute specific functions
-GRANT USAGE ON SCHEMA utils, api TO <database>_api;
+GRANT USAGE ON SCHEMA common, api TO <database>_api;
 GRANT SELECT ON ALL TABLES IN SCHEMA api TO <database>_api;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO <database>_api;
 ```
@@ -662,67 +606,47 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO myapp_api;
 
 ### HTTP Framework
 
-The advanced template includes a built-in HTTP routing framework for PostgreSQL-backed APIs.
+The advanced template includes a built-in multi-protocol framework (REST, JSON-RPC, MCP) for PostgreSQL-backed APIs.
 
 **Core Components:**
 
-1. **Route Registry** (`api.http_route` table)
-   ```sql
-   CREATE TABLE api.http_route (
-       object_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-       route_name           TEXT NOT NULL UNIQUE,
-       handler_function_name TEXT NOT NULL,
-       address_regexp       TEXT NOT NULL, -- POSIX regex for URL
-       method_regexp        TEXT NOT NULL, -- POSIX regex for HTTP method
-       sequence_number      INT NOT NULL,
-       auto_log             BOOLEAN DEFAULT true,
-       volatility           TEXT DEFAULT 'VOLATILE',
-       language_name        TEXT DEFAULT 'plpgsql'
-   );
-   ```
+1. **Handler Registry** (`api.handler` table) — single table for all protocols, with
+   `handler_type` enum distinguishing `rest` / `rpc` / `mcp_tool` / `mcp_resource` / `mcp_prompt`.
+   Carries pg_proc snapshot columns (`returns_type`, `volatility`, `parallel`, `security`, etc.),
+   `input_json_schema` / `output_json_schema` (`api.json_schema` domain), `response_headers`
+   (jsonb), and `requires_auth`. Protocol-specific routing lives in sibling tables
+   (`api.rest_route`, `api.rpc_route`, `api.mcp_route`).
 
-2. **Handler Functions** (user-defined)
+2. **Handler Functions** — declared via registration helpers, not `INSERT`. Each helper
+   validates the handler name (`^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$`), generates a random
+   dollar-quote boundary, creates the function, captures pg_proc metadata, and links the
+   route:
    ```sql
-   CREATE FUNCTION api.handle_hello_world(p_request jsonb)
-   RETURNS jsonb AS $$
+   SELECT api.create_or_replace_rest_handler(
+       jsonb_build_object(
+           'id',         'e1000001-0001-4000-8000-000000000001'::uuid,
+           'uri',        '^/hello$',                  -- query string is stripped before match
+           'httpMethod', '^GET$',
+           'name',       'hello_world',
+           'requiresAuth', false
+       ),
+       $body$
    BEGIN
-       RETURN jsonb_build_object(
-           'status', 200,
-           'headers', jsonb_build_object('Content-Type', 'application/json'),
-           'body', jsonb_build_object('message', 'Hello, World!')
-       );
+       RETURN api.json_response(200, jsonb_build_object('message', 'Hello, World!'));
    END;
-   $$ LANGUAGE plpgsql SECURITY DEFINER;
-   ```
-
-3. **Request Queue** (optional, for async processing)
-   ```sql
-   CREATE TABLE api.http_request_queue (
-       request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-       route_name TEXT NOT NULL,
-       request_data jsonb NOT NULL,
-       created_at TIMESTAMPTZ DEFAULT now(),
-       processed_at TIMESTAMPTZ,
-       status TEXT DEFAULT 'pending'
+       $body$
    );
    ```
 
-**Example Route Definition:**
-```sql
-INSERT INTO api.http_route (
-    route_name,
-    handler_function_name,
-    address_regexp,
-    method_regexp,
-    sequence_number
-) VALUES (
-    'hello_world',
-    'api.handle_hello_world',
-    '^/hello/?$',          -- Matches /hello or /hello/
-    '^GET$',               -- Only GET requests
-    100
-);
-```
+3. **Exchange Tables** (`api.rest_exchange`, `api.rpc_exchange`, `api.mcp_exchange`) —
+   persistent request/response log, populated per invocation when `autoLog` is set.
+   Exception paths record `sqlstate=<code> detail=<truncated>` rather than raw `SQLERRM`
+   so attacker-supplied input does not leak through the log.
+
+**Example Route Resolution:**
+
+Routes are resolved inside `api.rest_invoke` / `api.rpc_invoke` / `api.mcp_call_tool`;
+you do not `INSERT` directly. The registration helpers own the mapping.
 
 **Request/Response Contract:**
 
@@ -1018,7 +942,7 @@ FROM api.http_incoming_queue q
 
 #### Error Response Headers
 
-When errors occur, `api.http_invoke()` adds metadata to response headers:
+When errors occur, `api.rest_invoke()` adds metadata to response headers:
 
 ```sql
 v_response.headers := v_std_headers
@@ -1214,13 +1138,13 @@ func TestAdvancedTemplateDeployment(t *testing.T) {
 
 ### SQL Testing (Template-Specific)
 
-**Inline Tests (in utils/):**
+**Inline Tests (in common/):**
 ```sql
 -- Immediate execution (not in __test__)
 SELECT CASE
-    WHEN utils.try_cast_uuid('not-a-uuid') IS NULL
+    WHEN common.try_cast('not-a-uuid', NULL::uuid) IS NULL
     THEN true
-    ELSE (SELECT error('try_cast_uuid should return NULL for invalid input'))
+    ELSE (SELECT error('common.try_cast(text, null::uuid) should return NULL for invalid input'))
 END;
 ```
 
@@ -1282,7 +1206,7 @@ go build -o pgmi.exe ./cmd/pgmi
 - Missing closing tag (`</pgmi-meta>`)
 - Invalid UUID format (not lowercase, wrong length)
 - Typo in `idempotent` value (must be exactly `true` or `false`)
-- Unclosed `<dependsOn>` or `<key>` tags
+- Unclosed `<key>` tags
 
 **Solution:**
 ```xml
@@ -1295,29 +1219,16 @@ go build -o pgmi.exe ./cmd/pgmi
     idempotent="true">
 ```
 
-### Circular Dependency Detected
+### Scripts Executing in Wrong Order
 
-**Symptom:** `Error: Circular dependency detected: A → B → C → A`
+**Symptom:** A script runs before its prerequisite
 
-**Cause:** Scripts have cyclic `<dependsOn>` references
+**Cause:** Sort keys not properly layered
 
 **Solution:**
-1. Review dependency graph
-2. Remove unnecessary dependencies
-3. Refactor to break cycle (extract common dependency)
-
-**Example:**
-```
-A depends on B
-B depends on C
-C depends on A  ← Cycle!
-
-Refactor:
-D (new common foundation)
-A depends on D
-B depends on D
-C depends on D
-```
+1. Review sort key conventions — prerequisites need lower sort keys
+2. Use layer-based naming: `00-bootstrap/`, `10-common/`, `20-internal/`, `30-core/`, `40-api/`
+3. Check `pgmi metadata plan ./myproject` to preview execution order
 
 ### Missing Required Parameters
 
@@ -1381,9 +1292,6 @@ migrations/
   <sortKeys>
     <key>00000000-0000-0000-0000-000000000000/0001</key>
   </sortKeys>
-  <dependency>
-    <dependsOn id="prerequisite-uuid"/>
-  </dependency>
 </pgmi-meta>
 */
 

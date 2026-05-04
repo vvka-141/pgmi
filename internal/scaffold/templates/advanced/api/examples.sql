@@ -37,7 +37,7 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --        - httpMethod:   POSIX regex matched against the HTTP method (default: any)
 --        - name:         Becomes the PostgreSQL function name (api.<name>)
 --        - description:  Human-readable — shown in pgAdmin and introspection views
---        - language:     Handler language: plpgsql (default), sql, plv8
+--        - language:     Handler language: plpgsql (default) or sql
 --        - requiresAuth: If true, gateway rejects requests without x-user-id header
 --        - autoLog:      If true, request/response logged to api.rest_exchange
 --
@@ -173,8 +173,23 @@ END $$;
 SELECT api.create_or_replace_rpc_handler(
     jsonb_build_object(
         'id', 'e2000001-0001-4000-8000-000000000001',
-        'methodName', 'math.sum',          -- JSON-RPC method name
-        'description', 'Calculate sum of two numbers'
+        'methodName', 'math.sum',
+        'description', 'Calculate sum of two numbers',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'required', jsonb_build_array('a', 'b'),
+            'properties', jsonb_build_object(
+                'a', jsonb_build_object('type', 'number', 'description', 'First addend'),
+                'b', jsonb_build_object('type', 'number', 'description', 'Second addend')
+            )
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'result', jsonb_build_object('type', 'number', 'description', 'Sum of a and b')
+            )
+        ),
+        'responseHeaders', jsonb_build_object('x-include-schema', 'true')
     ),
     $body$
 DECLARE
@@ -263,33 +278,48 @@ END $$;
 -- Demonstrates an MCP tool handler. MCP tools differ from REST/RPC:
 -- - Discovered via api.mcp_list_tools() (clients enumerate capabilities)
 -- - Called via api.mcp_call_tool(name, arguments, context, request_id)
--- - Request is api.mcp_request (arguments jsonb, uri text, context jsonb, request_id text)
+-- - Request is api.mcp_request (arguments jsonb, uri text, context jsonb, request_id jsonb)
 -- - Response is api.mcp_response (JSON-RPC 2.0 envelope)
 -- - Use api.mcp_tool_result() and api.mcp_text() to build responses
 
 SELECT api.create_or_replace_mcp_handler(
     jsonb_build_object(
         'id', 'e3000001-0001-4000-8000-000000000001',
-        'type', 'tool',                     -- MCP type: tool, resource, or prompt
+        'type', 'tool',
         'name', 'database_info',
         'description', 'Get database version and connection info',
-        'inputSchema', jsonb_build_object(   -- JSON Schema for tool inputs
+        'inputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(),
             'required', jsonb_build_array()
-        )
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'database', jsonb_build_object('type', 'string', 'description', 'Current database name'),
+                'version',  jsonb_build_object('type', 'string', 'description', 'PostgreSQL server version string'),
+                'user',     jsonb_build_object('type', 'string', 'description', 'Connected role name')
+            )
+        ),
+        'tags', jsonb_build_array('system', 'introspection')
     ),
     $body$
+DECLARE
+    v_structured jsonb;
 BEGIN
-    -- Build a tool result containing text content blocks
+    v_structured := jsonb_build_object(
+        'database', current_database(),
+        'version',  version(),
+        'user',     current_user
+    );
+    -- Emit both a text content block (human/model fallback) AND structuredContent
+    -- per MCP 2025-06-18+: when outputSchema is declared, structuredContent
+    -- SHOULD conform to it and content remains a text rendering for the model.
     RETURN api.mcp_tool_result(
-        jsonb_build_array(api.mcp_text(format(
-            'Database: %s, Version: %s, User: %s',
-            current_database(),
-            version(),
-            current_user
-        ))),
-        (request).request_id
+        jsonb_build_array(api.mcp_text(v_structured::text)),
+        (request).request_id,
+        false,
+        v_structured
     );
 END;
     $body$
@@ -301,7 +331,7 @@ DECLARE
     v_response api.mcp_response;
 BEGIN
     -- api.mcp_call_tool(name, arguments, context, request_id)
-    v_response := api.mcp_call_tool('database_info', '{}'::jsonb, NULL, 'demo-1');
+    v_response := api.mcp_call_tool('database_info', '{}'::jsonb, NULL, '"demo-1"'::jsonb);
     RAISE DEBUG '  → MCP tool database_info  envelope=%', (v_response).envelope;
 END $$;
 
@@ -361,7 +391,7 @@ DECLARE
     v_response api.mcp_response;
 BEGIN
     -- api.mcp_read_resource(uri, context, request_id)
-    v_response := api.mcp_read_resource('postgres:///api/handler', NULL, 'demo-2');
+    v_response := api.mcp_read_resource('postgres:///api/handler', NULL, '"demo-2"'::jsonb);
     RAISE DEBUG '  → MCP resource postgres:///api/handler  envelope=%', (v_response).envelope;
 END $$;
 
@@ -421,7 +451,7 @@ BEGIN
     v_response := api.mcp_get_prompt(
         'sql_assistant',
         '{"task": "find all critical path activities", "tables": "project_design.activity"}'::jsonb,
-        NULL, 'demo-3'
+        NULL, '"demo-3"'::jsonb
     );
     RAISE DEBUG '  → MCP prompt sql_assistant  envelope=%', (v_response).envelope;
 END $$;
@@ -523,6 +553,15 @@ DECLARE
 BEGIN
     v_schema := COALESCE((request).arguments->>'schema', 'public');
 
+    IF v_schema LIKE 'pg\_%' ESCAPE '\'
+       OR v_schema = 'information_schema'
+       OR v_schema = 'internal' THEN
+        RETURN api.mcp_tool_error(
+            format('Schema "%s" is not accessible via this tool', v_schema),
+            (request).request_id
+        );
+    END IF;
+
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'table_name', t.tablename,
         'table_type', CASE WHEN v.viewname IS NOT NULL THEN 'view' ELSE 'table' END,
@@ -551,9 +590,31 @@ END;
 DO $$
 DECLARE
     v_response api.mcp_response;
+    v_env jsonb;
 BEGIN
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, 'demo-4');
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, '"demo-4"'::jsonb);
     RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, NULL, '"demo-4b"'::jsonb);
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject pg_catalog schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(pg_catalog) rejected';
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, NULL, '"demo-4c"'::jsonb);
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject information_schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(information_schema) rejected';
+
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, NULL, '"demo-4d"'::jsonb);
+    v_env := (v_response).envelope;
+    IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: list_tables must reject internal schema';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables(internal) rejected';
 END $$;
 
 -- ============================================================================
@@ -641,7 +702,7 @@ BEGIN
         'describe_table',
         '{"table":"handler","schema":"api"}'::jsonb,
         '{"user_id":"test|123"}'::jsonb,
-        'demo-5'
+        '"demo-5"'::jsonb
     );
     RAISE DEBUG '  -> MCP tool describe_table  envelope=%', (v_response).envelope;
 END $$;

@@ -176,10 +176,10 @@ BEGIN
     EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
 
     -- Configure search_path for each role
-    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_owner_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, utils, pg_temp', v_admin_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = api, core, extensions, utils, pg_temp', v_api_role);
-    EXECUTE format('ALTER ROLE %I SET search_path = api, membership, core, extensions, utils, pg_temp', v_customer_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, common, pg_temp', v_owner_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = core, api, internal, extensions, common, pg_temp', v_admin_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, core, extensions, common, pg_temp', v_api_role);
+    EXECUTE format('ALTER ROLE %I SET search_path = api, membership, core, extensions, common, pg_temp', v_customer_role);
 
     -- Transfer database ownership
     EXECUTE format('ALTER DATABASE %I OWNER TO %I', current_database(), v_owner_role);
@@ -196,7 +196,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS hstore SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS plv8;
+-- No plv8: unblocks managed cloud PostgreSQL (RDS, Azure Flexible Server,
+-- Google Cloud SQL). Handlers ship as plpgsql / sql; add plv8 yourself via
+-- a sortKeys-005+ file if you need JavaScript handlers AND your provider
+-- supports the extension.
 
 
 -- ============================================================================
@@ -219,28 +222,28 @@ BEGIN
     CREATE SCHEMA IF NOT EXISTS internal;
     CREATE SCHEMA IF NOT EXISTS core;
     CREATE SCHEMA IF NOT EXISTS api;
-    CREATE SCHEMA IF NOT EXISTS utils;
+    CREATE SCHEMA IF NOT EXISTS common;
     CREATE SCHEMA IF NOT EXISTS membership;
 
     COMMENT ON SCHEMA internal IS 'Deployment infrastructure and system tables. Not for application use.';
     COMMENT ON SCHEMA core IS 'Core domain entities and business logic. The heart of your application.';
     COMMENT ON SCHEMA api IS 'Public API layer. Functions and views exposed to applications and external clients.';
-    COMMENT ON SCHEMA utils IS 'Shared utility functions available to all roles.';
+    COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
     COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
     REVOKE ALL ON SCHEMA public FROM PUBLIC;
-    REVOKE ALL ON SCHEMA utils, api, core, internal, membership FROM PUBLIC;
+    REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
 
-    EXECUTE format('GRANT USAGE ON SCHEMA utils TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
+    EXECUTE format('GRANT USAGE ON SCHEMA common TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA api TO %I, %I', v_api_role, v_customer_role);
     EXECUTE format('GRANT USAGE ON SCHEMA core TO %I', v_api_role);
     EXECUTE format('GRANT USAGE ON SCHEMA membership TO %I, %I, %I', v_admin_role, v_api_role, v_customer_role);
 
     EXECUTE format(
-        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, utils, pg_temp',
+        'ALTER DATABASE %I SET search_path = core, api, membership, internal, extensions, common, pg_temp',
         current_database()
     );
-    SET search_path TO core, api, membership, internal, extensions, utils, pg_temp;
+    SET search_path TO core, api, membership, internal, extensions, common, pg_temp;
 
     RAISE NOTICE '[pgmi] Schemas configured';
 END $schemas$;
@@ -298,7 +301,7 @@ COMMENT ON COLUMN internal.deployment_script_execution_log.xact_id IS 'PostgreSQ
 COMMENT ON COLUMN internal.deployment_script_execution_log.file_path IS 'Original file path at execution time. May change if files are renamed.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script is re-runnable. Non-idempotent scripts execute only once per object_id.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.sort_key IS 'Execution ordering key from <pgmi-meta sortKeys="...">. NULL for path-ordered scripts.';
-COMMENT ON COLUMN internal.deployment_script_execution_log.executed_at IS 'Timestamp when execution completed successfully.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.executed_at IS 'Timestamp when execution completed.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.executed_by IS 'Database role that executed the script (usually the owner role).';
 
 CREATE INDEX IF NOT EXISTS ix_deployment_script_execution_log_object_id
@@ -425,17 +428,18 @@ END $$;
 -- ============================================================================
 -- EXECUTE DEPLOYMENT
 -- ============================================================================
-DO $$ BEGIN RAISE NOTICE '[pgmi] Acquiring deployment lock...'; END $$;
-SELECT pg_advisory_lock(hashtext('pgmi_deploy_' || current_database()));
-
+-- Transaction-scoped advisory lock: auto-released on COMMIT or ROLLBACK so
+-- a mid-deploy failure never leaves the lock held until session disconnect.
+-- Session-scoped pg_advisory_lock was error-prone: if deploy() raised and
+-- the client session stayed open for another operation, the lock lingered.
 BEGIN;
+    SELECT pg_advisory_xact_lock(hashtext('pgmi_deploy_' || current_database()));
+    DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
     SELECT pg_temp.deploy();
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;
 COMMIT;
-
-SELECT pg_advisory_unlock(hashtext('pgmi_deploy_' || current_database()));
 DO $$ 
 BEGIN 
     RAISE NOTICE '[pgmi] Deployment lock released'; 

@@ -14,10 +14,15 @@
 DO $$ BEGIN RAISE NOTICE '→ Installing handler registry'; END $$;
 
 -- ============================================================================
--- Handler Registry Table (inherits identity from core.entity)
+-- Handler Registry Table
 -- ============================================================================
+-- object_id core.entity_id opts this table into the DDL-trigger entity
+-- standards: created_at and deleted_at columns are injected automatically by
+-- core_entity_table_standards.
 
 CREATE TABLE IF NOT EXISTS api.handler (
+    object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
+
     handler_type api.handler_type NOT NULL,
     handler_func regprocedure NOT NULL UNIQUE,
     handler_function_name text NOT NULL,
@@ -42,16 +47,36 @@ CREATE TABLE IF NOT EXISTS api.handler (
     owner_name name NOT NULL,
 
     title text,
-    description text
-) INHERITS (core.entity);
+    description text,
 
+    input_json_schema    api.json_schema,
+    output_json_schema   api.json_schema,
+    input_xml_schema     api.xml_schema,
+    output_xml_schema    api.xml_schema
+);
+
+-- Evolution path: keep columns when DROP DOMAIN CASCADE removed them during
+-- api.json_schema rebuild (see lib/api/01-types.sql).
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
+
+-- Fail fast if the entity-standards DDL trigger did not inject created_at /
+-- deleted_at. Prevents opaque downstream errors on INSERT.
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'api.handler'::regclass AND contype = 'p'
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'api.handler'::regclass
+          AND attname = 'created_at' AND NOT attisdropped
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'api.handler'::regclass
+          AND attname = 'deleted_at' AND NOT attisdropped
     ) THEN
-        ALTER TABLE api.handler ADD PRIMARY KEY (object_id);
+        RAISE EXCEPTION 'api.handler missing created_at/deleted_at — core_entity_table_standards event trigger did not fire'
+            USING HINT = 'Verify lib/core/entity-standards.sql ran and the deployment role is superuser.';
     END IF;
 END $$;
 
@@ -62,7 +87,7 @@ CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 -- ============================================================================
 
 COMMENT ON TABLE api.handler IS
-    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as immutable snapshot. Inherits identity from core.entity.';
+    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as an immutable snapshot. object_id core.entity_id opts the table into entity lifecycle standards (created_at, deleted_at injected by the DDL trigger).';
 
 COMMENT ON COLUMN api.handler.handler_type IS
     'Protocol type: rest, rpc, mcp_tool, mcp_resource, mcp_prompt, queue';
@@ -116,13 +141,25 @@ COMMENT ON COLUMN api.handler.security IS
     'Execution context: definer (runs as function owner) or invoker (runs as calling user).';
 
 COMMENT ON COLUMN api.handler.language_name IS
-    'Implementation language: sql, plpgsql, plv8, etc.';
+    'Implementation language: sql or plpgsql (any other language extension the deployment has installed also works).';
 
 COMMENT ON COLUMN api.handler.owner_name IS
     'Role that owns the handler function.';
 
 COMMENT ON COLUMN api.handler.description IS
     'Human-readable description (typically from pg_description or handler metadata).';
+
+COMMENT ON COLUMN api.handler.input_json_schema IS
+    'JSON Schema describing request parameters. Returned by api.mcp_list_tools() as inputSchema and by discovery endpoints for all protocols.';
+
+COMMENT ON COLUMN api.handler.output_json_schema IS
+    'JSON Schema describing response structure. Returned by api.mcp_list_tools() as outputSchema. For REST/RPC handlers, the gateway merges it into responses when response_headers contains x-include-schema=true.';
+
+COMMENT ON COLUMN api.handler.input_xml_schema IS
+    'XML Schema (XSD) describing request parameters for XML-based handlers.';
+
+COMMENT ON COLUMN api.handler.output_xml_schema IS
+    'XML Schema (XSD) describing response structure for XML-based handlers.';
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.handler - central handler registry with pg_proc snapshot';

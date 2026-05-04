@@ -14,29 +14,19 @@ import (
 
 var initCmd = &cobra.Command{
 	Use:   "init [target_path]",
-	Short: "Initialize a new pgmi project",
-	Long: `Initialize a pgmi project into the specified directory.
+	Short: "Scaffold a new pgmi project",
+	Long: `Scaffold a new pgmi project (deploy.sql, directory layout, README).
 
-The init command initializes a pgmi project with:
-- deploy.sql orchestrator script
-- Directory structure for SQL files
-- README with usage instructions
+  pgmi init                  Scaffold in the current directory (wizard if TTY)
+  pgmi init ./demo           Scaffold in ./demo
+  pgmi init ./demo -t basic  Skip the wizard, use the basic template
 
-When target_path is omitted, defaults to the current directory.
-In an interactive terminal, a guided wizard helps select template and configure connection.
-Target directory must be empty or non-existent (pgmi.yaml and .env are allowed).
+Templates:
+  basic     Linear migrations, minimal structure
+  advanced  Metadata-driven deployment with the api/ membership/ libraries
 
-Examples:
-  pgmi init                      # Initialize in current directory (interactive wizard)
-  pgmi init .                    # Initialize in current directory
-  pgmi init ./myproject          # Initialize in ./myproject
-  pgmi init /absolute/path       # Initialize at absolute path
-
-Available templates:
-  basic    - Simple structure for learning (migrations/)
-  advanced - Production-ready with metadata-driven deployment
-
-Use 'pgmi templates list' to see all available templates with descriptions.`,
+Target directory must be empty (pgmi.yaml and .env are tolerated).
+Run ` + "`pgmi templates list`" + ` for full template descriptions.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeDirectories,
 	RunE:              runInit,
@@ -108,7 +98,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	if !scaffold.IsValidTemplate(selectedTemplate) {
 		templates, _ := scaffold.ListTemplates()
-		return fmt.Errorf("invalid template '%s'. Available templates: %v\n\nUse 'pgmi templates list' for detailed descriptions", selectedTemplate, templates)
+		return fmt.Errorf("unknown template %q (available: %v)\nrun `pgmi templates list` for descriptions", selectedTemplate, templates)
 	}
 
 	// Create scaffolder
@@ -119,36 +109,27 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create project: %w", err)
 	}
 
-	// Display file tree
-	tree, err := scaffold.BuildFileTree(targetPath)
-	if err != nil {
-		// Non-fatal - just skip tree display
-		fmt.Fprintf(os.Stderr, "\nProject initialized successfully in '%s' using template '%s'\n\n", targetPath, selectedTemplate)
-	} else {
-		fmt.Fprintf(os.Stderr, "\nProject initialized successfully using template '%s'\n\n", selectedTemplate)
-		fmt.Fprintln(os.Stderr, "Created structure:")
-		fmt.Fprint(os.Stderr, tree)
+	// File tree is the data the user asked for → stdout.
+	// Status prose (what was done, next steps) → stderr.
+	fmt.Fprintf(os.Stderr, "Wrote %s (%s template).\n", targetPath, selectedTemplate)
+	if tree, err := scaffold.BuildFileTree(targetPath); err == nil {
+		fmt.Fprintln(os.Stdout, tree)
 	}
 
-	// If user configured connection in the wizard, save it
 	if setupConnection && !connResult.Cancelled {
-		fmt.Fprintln(os.Stderr, "")
 		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Connection setup failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "WARNING: could not save connection: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Connection saved to %s\n", filepath.Join(targetPath, "pgmi.yaml"))
+			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(targetPath, "pgmi.yaml"))
 			offerSavePgpass(&connResult.Config)
 		}
 	}
 
-	// Next steps
-	fmt.Fprintln(os.Stderr, "\nNext steps:")
+	fmt.Fprintln(os.Stderr, "\nNext:")
 	if targetPath != "." {
 		fmt.Fprintf(os.Stderr, "  cd %s\n", targetPath)
 	}
-	fmt.Fprintln(os.Stderr, "  pgmi deploy . --database mydb")
-	fmt.Fprintln(os.Stderr, "  # Or with parameters:")
-	fmt.Fprintln(os.Stderr, "  pgmi deploy . --database mydb --param key=value")
+	fmt.Fprintln(os.Stderr, "  pgmi deploy . -d mydb")
 
 	return nil
 }
@@ -175,6 +156,6 @@ func isInitBlocked(targetPath string) (bool, string) {
 	}
 
 	absPath, _ := filepath.Abs(targetPath)
-	return true, fmt.Sprintf("directory '%s' is not empty\n\nBlocking files/directories: %v\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n  - Choose a different location: pgmi init ./new-project\n  - Remove existing files manually\n  - pgmi.yaml and .env are allowed", absPath, blocking)
+	return true, fmt.Sprintf("directory %q is not empty (blocking: %v)\nremove the files or scaffold elsewhere: pgmi init ./new-project", absPath, blocking)
 }
 

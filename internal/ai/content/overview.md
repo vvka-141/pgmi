@@ -27,12 +27,17 @@ pgmi deploy ./myproject -c "..." --param run_tests=true
 
 pgmi creates temporary tables in `pg_temp` schema:
 
-| Table | Purpose |
-|-------|---------|
-| `pgmi_source` | All SQL files with path, content, metadata |
-| `pgmi_plan_view` | VIEW ordering files for execution |
-| `pgmi_parameter` | CLI parameters (`--param key=value`) |
-| `pgmi_test_source` | Test files from `__test__/` directories |
+| View | Purpose |
+|------|---------|
+| `pgmi_source_view` | All SQL files with path, content, metadata (excludes deploy.sql and `__test__/`) |
+| `pgmi_plan_view` | Execution order derived from `<pgmi-meta>` sortKeys |
+| `pgmi_parameter_view` | CLI parameters (`--param key=value`) |
+| `pgmi_test_source_view` | Test files from `__test__/` directories |
+| `pgmi_test_directory_view` | Test directory hierarchy |
+| `pgmi_source_metadata_view` | Parsed `<pgmi-meta>` blocks |
+
+All names end in `_view` — they are the stable public API. Do not query the
+`_pgmi_*` internal tables directly; they are implementation details.
 
 ### deploy.sql Pattern
 

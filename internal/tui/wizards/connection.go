@@ -27,7 +27,7 @@ type pgxTester struct{}
 
 func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) (string, error) {
 	if cfg.AuthMethod != pgmi.AuthMethodStandard {
-		return fmt.Sprintf("Configuration ready for %s authentication", cfg.AuthMethod.String()), nil
+		return fmt.Sprintf("%s authentication configured (not tested — token is fetched at deploy time)", cfg.AuthMethod.String()), nil
 	}
 
 	var connStr string
@@ -972,7 +972,7 @@ func (w ConnectionWizard) viewTestConnection() string {
 		b.WriteString(" Connecting...")
 	} else if w.testDone {
 		if w.testOK {
-			b.WriteString(w.styles.Success.Render("✓ Connected successfully"))
+			b.WriteString(w.styles.Success.Render("✓ Connected"))
 			b.WriteString("\n")
 			b.WriteString(w.styles.Description.Render(w.testInfo))
 			b.WriteString("\n\n")

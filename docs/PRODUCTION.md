@@ -18,6 +18,31 @@ This applies to PgBouncer, Pgpool-II, AWS RDS Proxy, Azure PgBouncer, and any ot
 
 ---
 
+## Managed cloud PostgreSQL
+
+Both pgmi templates (`basic` and `advanced`) work against any PostgreSQL 14+ instance. Where they differ is what the **advanced template** requires from the deployment connection:
+
+1. **Superuser** — `lib/core/entity-standards.sql` installs a DDL event trigger, which requires `rolsuper`. pgmi fails fast with an actionable error if the connection role is not superuser. Basic template has no such requirement.
+2. **Extensions** — `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.
+3. **Role creation** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles during the superuser phase.
+
+| Provider | Basic template | Advanced template | Notes |
+|----------|----------------|-------------------|-------|
+| Self-hosted / Docker / Kubernetes | ✅ | ✅ | Full control; nothing special required. |
+| AWS RDS for PostgreSQL | ✅ | ❌ | No superuser. The `rds_superuser` role can install whitelisted extensions but cannot create event triggers. Workaround: strip `lib/core/entity-standards.sql` and add `created_at`/`deleted_at` manually on every entity table. |
+| AWS Aurora PostgreSQL | ✅ | ❌ | Same superuser limitation as RDS. Same workaround applies. |
+| Azure Database for PostgreSQL — Flexible Server | ✅ | ⚠️ | `azure_pg_admin` role allows most DDL but event triggers require Microsoft support to enable on a per-server basis. If enabled, advanced template works. |
+| Azure Cosmos DB for PostgreSQL (formerly Citus) | ✅ | ⚠️ | Citus-specific semantics; advanced template not validated. Sharded-table column-inject behaviour of the DDL trigger is untested. |
+| Google Cloud SQL for PostgreSQL | ✅ | ❌ | No superuser; event triggers unavailable. Same workaround as AWS RDS. |
+| Google AlloyDB | ✅ | ❌ | Inherits Cloud SQL limitations. |
+| Supabase | ✅ | ❌ | No superuser exposed; `supabase_admin` cannot create event triggers. Workaround: strip entity-standards; bring your own `updated_at` trigger per table. |
+| Neon | ✅ | ❌ | No superuser. Same workaround. |
+| Railway / Render / Fly.io (managed instances) | ✅ | Varies | Check whether the service exposes a superuser role. If yes, advanced template works. |
+
+> **Cutting the advanced template down for managed cloud**: delete `lib/core/entity-standards.sql` and edit each entity table to declare `created_at timestamptz NOT NULL DEFAULT now()` and `deleted_at timestamptz` explicitly. Nothing else in the advanced template requires superuser after that — the rest of the framework (handler registry, MCP protocol, RLS policies, API keys) works on every managed provider tested.
+
+---
+
 ## Deployment strategies
 
 ### Single-transaction deployment

@@ -46,7 +46,7 @@ END;
         RAISE EXCEPTION 'Handler invocation failed: %', (v_response).status_code;
     END IF;
 
-    RAISE NOTICE '  + Handler invoked successfully';
+    RAISE NOTICE '  + Handler invoked';
 
     -- Verify queue logging
     SELECT COUNT(*) INTO v_queue_count
@@ -161,6 +161,108 @@ END;
     RAISE NOTICE '  + Accept: text/html, application/json, text/plain -> 200';
 
     RAISE NOTICE '+ Content Negotiation tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: REST route resolution strips query string before regex match.
+-- Patterns no longer need '(\?.*)?$' boilerplate.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_handler_id uuid := 'ffffffff-c004-4000-8000-000000000001';
+    v_response api.http_response;
+BEGIN
+    RAISE NOTICE '-> Testing REST query-string-aware routing';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', v_handler_id,
+            'uri', '^/qs-probe$',  -- No '(\?.*)?$' needed; gateway strips query string
+            'httpMethod', '^GET$',
+            'name', 'qs_probe',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, jsonb_build_object('matched', true));
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke('GET', '/qs-probe', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'route should match bare path: %', (v_response).status_code;
+    END IF;
+
+    v_response := api.rest_invoke('GET', '/qs-probe?foo=bar&baz=quux', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'route should match path with query string (gateway strips it): %', (v_response).status_code;
+    END IF;
+
+    RAISE NOTICE '  + REST routes match path-only; query string ignored';
+END $$;
+
+-- ============================================================================
+-- Test: handler registration rejects names that risk identifier truncation
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_caught boolean := false;
+BEGIN
+    RAISE NOTICE '-> Testing handler name validation';
+
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object(
+                'id', 'ffffffff-c005-4000-8000-000000000001',
+                'uri', '^/long$',
+                'httpMethod', '^GET$',
+                -- 60 chars - over the 49 limit
+                'name', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'requiresAuth', false
+            ),
+            'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM ~ 'invalid handler name' THEN
+            v_caught := true;
+        ELSE
+            RAISE;
+        END IF;
+    END;
+
+    IF NOT v_caught THEN
+        RAISE EXCEPTION 'expected handler-name validation error for 60-char name';
+    END IF;
+
+    -- Empty name (rejected by IS NULL check or regex)
+    v_caught := false;
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object(
+                'id', 'ffffffff-c006-4000-8000-000000000001',
+                'uri', '^/empty$',
+                'httpMethod', '^GET$',
+                'name', '',
+                'requiresAuth', false
+            ),
+            'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM ~ 'handler name|invalid handler name' THEN
+            v_caught := true;
+        ELSE
+            RAISE;
+        END IF;
+    END;
+
+    IF NOT v_caught THEN
+        RAISE EXCEPTION 'expected validation error for empty handler name';
+    END IF;
+
+    RAISE NOTICE '  + Handler name validation rejects oversized and empty names';
 END $$;
 
 DO $$
