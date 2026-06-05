@@ -26,6 +26,8 @@ Both pgmi templates (`basic` and `advanced`) work against any PostgreSQL 14+ ins
 2. **Extensions** — `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.
 3. **Role creation** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles during the superuser phase.
 
+The advanced template ships with opinionated system patterns enabled. A ❌ below means the provider cannot run the template **as generated** — specifically the superuser-only DDL event trigger in `lib/core/entity-standards.sql`. Removing that one file (see the note under the table) lets the rest run on every provider listed. The marks flag intentional over-completeness, not a broken template.
+
 | Provider | Basic template | Advanced template | Notes |
 |----------|----------------|-------------------|-------|
 | Self-hosted / Docker / Kubernetes | ✅ | ✅ | Full control; nothing special required. |

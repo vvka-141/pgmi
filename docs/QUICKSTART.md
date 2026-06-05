@@ -1,6 +1,6 @@
 # Getting Started with pgmi
 
-This guide takes you from zero to a working deployment in about 10 minutes. Every command is copy-paste ready — no placeholders to fill in.
+This guide takes you from zero to a working deployment in about 10 minutes. The commands are concrete — the only values you supply are your local PostgreSQL password and the database name.
 
 **What you'll do:**
 1. Install pgmi
@@ -18,7 +18,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. Ever
 
 ## Step 1: Install pgmi
 
-The recommended way is `go install`. This downloads the pgmi source code, compiles it into a binary, and places it in your Go bin directory — making it available as a command on your machine, just like any other installed program.
+This tutorial installs from source with `go install` — a single command that works anywhere the Go toolchain is present. For prebuilt binaries (recommended for CI and production, and no Go toolchain needed), see the [README install options](../README.md#install).
 
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
@@ -323,7 +323,7 @@ This is what makes pgmi different from migration tools: PostgreSQL itself is the
 
 ## Choosing a template
 
-pgmi provides two templates for `pgmi init`. Start with **basic** for learning, graduate to **advanced** for production.
+pgmi provides two templates for `pgmi init`. Start with **basic** when you want a small migration scaffold. Reach for **advanced** when you want a large, editable reference system — metadata tracking, roles, schemas, audit logging, and API/MCP patterns you adapt to your needs. Advanced is not a "more production" version of basic; it's a different, richer starting point you own and trim.
 
 | Feature | Basic | Advanced |
 |---------|-------|----------|
@@ -343,7 +343,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** for learning, 
 - Linear migrations without complex ordering needs
 
 **When to use advanced:**
-- Production deployments with idempotency requirements
+- You want pre-built patterns for script tracking, idempotency, role separation, audit logging, or API/MCP integration — and you're comfortable adapting or removing what doesn't apply
 - Large projects with explicit execution phases
 - Teams that benefit from script tracking and audit logging
 - Projects integrating with AI assistants via MCP

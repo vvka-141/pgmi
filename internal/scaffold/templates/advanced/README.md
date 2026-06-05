@@ -1,6 +1,6 @@
 # Advanced Template
 
-PostgreSQL as your application server - HTTP routing, business logic, and data in one transactional system.
+An optional architecture where PostgreSQL is your application server — HTTP routing, business logic, and data in one transactional system. Treat it as a starting point to own and adapt, not a worldview pgmi requires.
 
 > **New to this approach?** Read [ARCHITECTURE.md](ARCHITECTURE.md) first to understand the "Application as Dataset" philosophy, layered schema design, and when this template is right for your project.
 
@@ -110,7 +110,7 @@ func handleREST(w http.ResponseWriter, r *http.Request) {
 
 ```
 myproject/
-├── lib/                      # FRAMEWORK (don't modify unless extending)
+├── lib/                      # Pre-built framework — extend around it; see "Trimming the template"
 │   ├── api/                  # HTTP framework (types, routing, gateways)
 │   ├── core/                 # Managed object infrastructure
 │   ├── internal/             # Deployment tracking, text attributes
@@ -132,6 +132,18 @@ myproject/
 | `api/` | Your HTTP handlers (REST, RPC, MCP) | Yes - your application code |
 | `__test__/` | Your application tests | Yes - add tests here |
 | `deploy.sql` | Deployment phases, transaction control, infrastructure bootstrap | Yes - customize deployment |
+
+## Trimming the template
+
+This template is a working reference system, not a framework you must keep whole. The `lib/` files are coupled and tested — extend *around* them in root directories rather than editing internals — but you are meant to own the result and cut what you don't need.
+
+**Safe to delete:**
+- `api/examples.sql` — placeholder REST/RPC/MCP handlers. Replace with your own.
+- `lib/core/entity-standards.sql` — the superuser-only DDL event trigger. Required strip for managed providers without superuser access (most AWS RDS tiers, Cloud SQL, Supabase, Neon). After removing it, declare `created_at`/`deleted_at` explicitly on entity tables.
+
+**Load-bearing — removing these is a rework, not a delete:**
+- **Role hierarchy and schema grants** — `database_owner/admin/api/customer` own every object and back every `GRANT` and RLS policy. If your org manages roles externally, override the role *names* via parameters (see Parameters below); don't delete the hierarchy.
+- **MCP support** — woven through the shared API files (types, handler registry, helpers, gateways), not isolated to the `*-mcp-*` files. If you don't use MCP, simply don't register MCP handlers — the protocol code stays dormant and harmless. Physically removing it means editing the framework's core files.
 
 ## Quick Start
 
