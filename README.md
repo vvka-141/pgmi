@@ -5,8 +5,8 @@
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
-pgmi runs your PostgreSQL deployments—but **you** control the transactions, order, and logic.
-Unlike migration frameworks that decide when to commit and what to run, pgmi loads your files into PostgreSQL temp tables and runs your `deploy.sql`—a script **you** write in SQL that controls the deployment.
+pgmi gives PostgreSQL a deployment session containing your project files, then runs the `deploy.sql` **you** write. Test inside the transaction, branch on environment, audit changes, and commit atomically.
+Unlike migration frameworks that decide when to commit and what to run, pgmi hands control to your SQL: **you** own the transactions, order, and logic.
 
 ![pgmi deployment flow](pgmi-deploy.png)
 
@@ -43,9 +43,42 @@ pgmi deploy ./myapp --database mydb
 
 Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
 
-The quick example above shows the core pattern: query files, execute with `EXECUTE`. The scaffolded templates use `pgmi_plan_view` (which adds metadata-driven ordering) instead of `pgmi_source_view` (raw access). See [Session API](docs/session-api.md) for when to use each.
+The quick example above shows the core pattern: query files, execute with `EXECUTE`. The **basic** scaffold template uses `pgmi_source_view` (raw access, path-ordered); the **advanced** template uses `pgmi_plan_view` (metadata-driven ordering). See [Session API](docs/session-api.md) for when to use each.
 
 pgmi loads **all** project files — not just SQL. Your `deploy.sql` can read JSON configuration, XML reference data, and CSV seeds from the same session views, processing them with PostgreSQL's built-in JSON, XML, and string functions. See [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for data ingestion patterns.
+
+## Test-gated deployments
+
+Tests live in `__test__/` or `__tests__/` directories. The `CALL pgmi_test()` macro runs them inside your deployment transaction with automatic savepoint isolation — so a failing test aborts the whole deploy and your database stays untouched:
+
+```sql
+-- deploy.sql
+BEGIN;
+
+-- ... your migrations ...
+
+-- Each test runs in its own savepoint and rolls back automatically;
+-- a RAISE EXCEPTION fails the test and aborts the transaction.
+CALL pgmi_test();
+
+COMMIT;
+```
+
+The macro wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails, the entire transaction aborts and your database remains unchanged.
+
+Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
+
+```sql
+-- __test__/test_users.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'test@example.com') THEN
+        RAISE EXCEPTION 'Expected user not found';
+    END IF;
+END $$;
+```
+
+See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the gated deployment pattern.
 
 ## Install
 
@@ -59,18 +92,22 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
+Prefer a package manager or a checksum-verified binary (recommended for CI and production):
+
 **Homebrew (macOS/Linux):**
 ```bash
 brew install vvka-141/pgmi/pgmi
 ```
 
-**Debian/Ubuntu:**
+**Debian/Ubuntu (APT, GPG-verified):**
 ```bash
 curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-sudo apt install pgmi
+sudo apt update && sudo apt install pgmi
 ```
 
-**Go (all platforms):**
+**Direct download:** grab an archive from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) and verify it against the published `checksums.txt`.
+
+**From source** (requires the Go toolchain):
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
 ```
@@ -135,7 +172,7 @@ pgmi init myapp --template basic # Create a project
 | Template | Purpose |
 |----------|---------|
 | `basic` | Learning and simple projects. Linear migrations, minimal structure. |
-| `advanced` | Production. Multi-schema, role hierarchy, MCP integration, metadata-driven. |
+| `advanced` | Full PostgreSQL application template: multi-schema, role hierarchy, audit logging, MCP integration, metadata-driven ordering. A working reference system to own and adapt — not a framework to adopt wholesale. Requires a superuser for initial role setup — see the [Production Guide](docs/PRODUCTION.md) for managed-cloud caveats. |
 
 ## AI assistant support
 
@@ -174,40 +211,6 @@ Override per-environment:
 pgmi deploy . -d staging_db --param env=staging
 ```
 
-## Built-in testing
-
-Tests live in `__test__/` or `__tests__/` directories. Use the `CALL pgmi_test()` macro in your `deploy.sql` to run them with automatic savepoint isolation:
-
-```sql
--- deploy.sql
-BEGIN;
-
--- ... your migrations ...
-
--- Run tests with automatic savepoint isolation
--- Each test runs in its own savepoint and rolls back automatically
--- Test failures raise exceptions, aborting the transaction
-CALL pgmi_test();
-
-COMMIT;
-```
-
-The macro automatically wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails (via `RAISE EXCEPTION`), the entire transaction aborts and your database remains unchanged.
-
-Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
-
-```sql
--- __test__/test_users.sql
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'test@example.com') THEN
-        RAISE EXCEPTION 'Expected user not found';
-    END IF;
-END $$;
-```
-
-See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the gated deployment pattern.
-
 ## Authentication
 
 pgmi supports:
@@ -244,4 +247,4 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 [Mozilla Public License 2.0](LICENSE). Template code in `internal/scaffold/templates/` is [MIT licensed](internal/scaffold/templates/LICENSE)—code you generate is yours.
 
-Copyright 2024-2025 Alexey Evlampiev
+Copyright 2024-2026 Alexey Evlampiev

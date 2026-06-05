@@ -2,7 +2,7 @@
 
 This directory contains the framework code that powers the advanced template. It provides HTTP routing, entity management, deployment tracking, and utility functions.
 
-**Most users should NOT modify these files.** Instead, extend functionality in root-level directories (`api/`, `core/`, `common/`).
+**Don't edit these files in place** — they're coupled and tested. Extend functionality in root-level directories (`api/`, `core/`, `common/`). You *can* remove whole capabilities you don't need — see "Trimming the template" in the [template README](../README.md) for what's safe to delete and what's load-bearing.
 
 ## Directory Structure
 
@@ -113,7 +113,7 @@ Tests for the framework itself (not your application).
 
 ## Extension Points
 
-**DON'T modify lib/ files.** Instead:
+**Don't edit lib/ internals in place.** Instead:
 
 1. **Add handlers**: Create files in `api/` (root level)
 2. **Add domain tables**: Create files in `core/` (root level, create if needed)

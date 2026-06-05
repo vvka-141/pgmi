@@ -6,6 +6,8 @@ This document describes the architectural philosophy behind the advanced templat
 
 **Your application IS the PostgreSQL database.**
 
+This is one architecture pgmi enables, not one it requires — basic deployments use none of it. Adopt the parts that fit your project and drop the rest.
+
 In this paradigm:
 - The database is not "storage for your application" - it IS the application
 - All application state lives in PostgreSQL as a carefully modeled dataset
