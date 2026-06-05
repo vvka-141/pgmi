@@ -106,29 +106,3 @@ func completeDirectories(cmd *cobra.Command, args []string, toComplete string) (
 	// Let the shell handle directory completion
 	return nil, cobra.ShellCompDirectiveFilterDirs
 }
-
-// completeAITemplateNames provides shell completion for AI template documentation names.
-func completeAITemplateNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) > 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-
-	templates, err := ai.ListTemplateDocs()
-	if err != nil || len(templates) == 0 {
-		// Fall back to scaffold templates if no AI docs available
-		templates, err = scaffold.ListTemplates()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveError
-		}
-	}
-
-	var matches []string
-	for _, t := range templates {
-		if strings.HasPrefix(t, toComplete) {
-			matches = append(matches, t)
-		}
-	}
-
-	return matches, cobra.ShellCompDirectiveNoFileComp
-}
-

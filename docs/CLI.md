@@ -430,28 +430,42 @@ pgmi ai skill pgmi-cli
 pgmi ai skill pgmi-testing-review
 ```
 
-### pgmi ai templates
+### pgmi ai setup
 
 ```bash
-pgmi ai templates
+pgmi ai setup [--assistant claude] [--global] [--dry-run] [--force]
 ```
 
-Lists available template documentation.
-
-### pgmi ai template
+Materializes pgmi guidance into a coding assistant's skill directory so the
+assistant learns the execution model before it edits the project. Defaults to
+the Claude skill under `.claude/skills/pgmi/` (project-local, safe to commit).
 
 ```bash
-pgmi ai template <name>
+pgmi ai setup                    # detect .claude/, write the Claude skill
+pgmi ai setup --global           # write to ~/.claude/skills/pgmi/ instead
+pgmi ai setup --dry-run          # print planned changes, write nothing
 ```
 
-Outputs AI-focused documentation for a specific template:
+The generated skill is self-contained — it teaches the core model even with no
+pgmi binary installed — and points to `pgmi ai skill <name>` for depth. Files
+are stamped; re-running is idempotent and a hand-edited file is not overwritten
+without `--force`. `setup` also offers a one-line managed pointer in the project
+`CLAUDE.md` (`--claude-md` / `--no-claude-md` to decide non-interactively).
+
+In non-interactive contexts (CI), pass `--assistant` explicitly.
+
+### pgmi ai check
 
 ```bash
-# Basic template guide
-pgmi ai template basic
+pgmi ai check [--assistant claude] [--global]
+```
 
-# Advanced template architecture
-pgmi ai template advanced
+Reports whether the guidance exists and whether it matches this binary's
+version. Exits non-zero when guidance is missing, stale, or hand-edited, so it
+can gate CI:
+
+```bash
+pgmi ai check || pgmi ai setup --assistant claude
 ```
 
 ### AI Workflow Example
@@ -551,7 +565,7 @@ pgmi completion fish > ~/.config/fish/completions/pgmi.fish
 pgmi completion powershell | Out-String | Invoke-Expression
 ```
 
-Completion covers commands, flags, template names (for `init --template`), SSL mode values, and AI skill/template names (for `ai skill` / `ai template`).
+Completion covers commands, flags, template names (for `init --template`), SSL mode values, AI skill names (for `ai skill`), and assistant names (for `ai setup` / `ai check`).
 
 ---
 

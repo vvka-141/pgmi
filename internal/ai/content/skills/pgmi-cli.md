@@ -354,19 +354,32 @@ pgmi version 0.6.0
 
 **Purpose:** AI-digestible documentation for coding assistants
 
-**Subcommands:**
+**Pull subcommands (stdout):**
 ```bash
 pgmi ai                    # Overview (llms.txt style)
 pgmi ai skills             # List all embedded skills
 pgmi ai skill <name>       # Get full skill content
-pgmi ai templates          # List template documentation
-pgmi ai template <name>    # Get template-specific guide
 ```
 
+**Push subcommands (materialize files):**
+```bash
+pgmi ai setup              # Write guidance into .claude/skills/pgmi/ (+ offer CLAUDE.md pointer)
+pgmi ai check              # Report whether that guidance exists and is current
+```
+
+`setup`/`check` are the discovery surface — an assistant opening a pgmi project
+cold needs a committed skill to learn pgmi exists. `setup` generates that skill
+from the same `internal/ai/content/` source the pull commands serve; the skill is
+self-contained on the core model and delegates depth back to `pgmi ai skill`.
+`setup` is scaffolding (like `init`), not deployment orchestration — its
+`--dry-run` previews file writes, which is legitimate.
+
 **Philosophy:**
-- Output goes to stdout (not stderr) so AI can capture it
+- Pull output goes to stdout (not stderr) so AI can capture it
 - Markdown format - universally understood by AI assistants
 - Skills preserve YAML frontmatter for metadata parsing
+- Generated files are stamped; re-running `setup` is idempotent and never
+  silently overwrites a hand-edited file (gate overwrite behind `--force`)
 
 **Examples:**
 ```bash

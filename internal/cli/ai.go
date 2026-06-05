@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/spf13/cobra"
+	"github.com/vvka-141/pgmi/internal/ai"
 )
 
 var aiCmd = &cobra.Command{
@@ -17,10 +17,11 @@ var aiCmd = &cobra.Command{
   pgmi ai                       Overview and index (this is the entrypoint)
   pgmi ai skills                List embedded skills
   pgmi ai skill pgmi-sql        Print one skill's full content
-  pgmi ai templates             List per-template guides
-  pgmi ai template advanced     Print one template's guide
+  pgmi ai setup                 Write pgmi guidance into .claude/skills/pgmi/
+  pgmi ai check                 Report whether that guidance is current
 
-All output goes to stdout for piping or redirection.`,
+Pull commands (overview, skills, skill) print to stdout for piping. setup and
+check write files and report status on stderr.`,
 	RunE: runAIOverview,
 }
 
@@ -40,28 +41,10 @@ var aiSkillCmd = &cobra.Command{
 	RunE:              runAISkill,
 }
 
-var aiTemplatesCmd = &cobra.Command{
-	Use:   "templates",
-	Short: "List per-template AI guides",
-	Long:  `Print the names of every embedded template-specific AI guide.`,
-	RunE:  runAITemplates,
-}
-
-var aiTemplateCmd = &cobra.Command{
-	Use:               "template <name>",
-	Short:             "Print one template's AI guide",
-	Long:              `Print the full markdown of one template's AI guide to stdout.`,
-	Args:              RequireTemplateName,
-	ValidArgsFunction: completeAITemplateNames,
-	RunE:              runAITemplate,
-}
-
 func init() {
 	rootCmd.AddCommand(aiCmd)
 	aiCmd.AddCommand(aiSkillsCmd)
 	aiCmd.AddCommand(aiSkillCmd)
-	aiCmd.AddCommand(aiTemplatesCmd)
-	aiCmd.AddCommand(aiTemplateCmd)
 }
 
 func runAIOverview(cmd *cobra.Command, args []string) error {
@@ -108,47 +91,6 @@ func runAISkill(cmd *cobra.Command, args []string) error {
 	content, err := ai.GetSkill(name)
 	if err != nil {
 		return err
-	}
-
-	fmt.Fprint(os.Stdout, content)
-	return nil
-}
-
-func runAITemplates(cmd *cobra.Command, args []string) error {
-	templates, err := ai.ListTemplateDocs()
-	if err != nil {
-		return fmt.Errorf("failed to list templates: %w", err)
-	}
-
-	fmt.Fprintln(os.Stdout, "# pgmi Template Documentation")
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "Use `pgmi ai template <name>` for detailed AI guidance.")
-	fmt.Fprintln(os.Stdout)
-
-	if len(templates) == 0 {
-		fmt.Fprintln(os.Stdout, "No template documentation embedded yet.")
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, "Available templates (use `pgmi templates list`):")
-		fmt.Fprintln(os.Stdout, "  - basic: Linear migrations, minimal structure")
-		fmt.Fprintln(os.Stdout, "  - advanced: Metadata-driven deployment, REST/RPC/MCP handler registry")
-		return nil
-	}
-
-	fmt.Fprintln(os.Stdout, "| Template | Command |")
-	fmt.Fprintln(os.Stdout, "|----------|---------|")
-	for _, t := range templates {
-		fmt.Fprintf(os.Stdout, "| %s | `pgmi ai template %s` |\n", t, t)
-	}
-
-	return nil
-}
-
-func runAITemplate(cmd *cobra.Command, args []string) error {
-	name := args[0]
-
-	content, err := ai.GetTemplateDoc(name)
-	if err != nil {
-		return fmt.Errorf("no AI guide embedded for template %q\nrun `pgmi templates describe %s` for the basic structure, or scaffold and read its README", name, name)
 	}
 
 	fmt.Fprint(os.Stdout, content)
