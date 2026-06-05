@@ -132,10 +132,12 @@ pgmi templates list                            # List templates
 pgmi templates describe <name>                 # Template details
 pgmi ai skills                                 # List AI skills
 pgmi ai skill <name>                           # Get skill content
+pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/
+pgmi ai check                                  # Report whether that guidance is current
 ```
 
 ## Learn More
 
 - `pgmi ai skill pgmi-sql` - Complete SQL conventions
 - `pgmi ai skill pgmi-philosophy` - Architectural principles
-- `pgmi ai template advanced` - Production template guide
+- `pgmi ai skill pgmi-templates` - Production template guide

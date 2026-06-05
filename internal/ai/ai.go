@@ -150,31 +150,3 @@ func parseSkillFrontmatter(content, path string) SkillInfo {
 
 	return info
 }
-
-// GetTemplateDoc returns AI-focused documentation for a template
-func GetTemplateDoc(name string) (string, error) {
-	path := fmt.Sprintf("content/templates/%s.md", name)
-	content, err := contentFS.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("template documentation '%s' not found", name)
-	}
-	return string(content), nil
-}
-
-// ListTemplateDocs returns available template documentation
-func ListTemplateDocs() ([]string, error) {
-	entries, err := contentFS.ReadDir("content/templates")
-	if err != nil {
-		// No templates directory yet - return empty
-		return nil, nil
-	}
-
-	var templates []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			name := strings.TrimSuffix(entry.Name(), ".md")
-			templates = append(templates, name)
-		}
-	}
-	return templates, nil
-}
