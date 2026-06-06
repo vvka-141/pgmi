@@ -184,6 +184,8 @@ export PGMI_CONNECTION_STRING="postgresql://dev:devpass@localhost:5432/postgres"
 pgmi deploy .   # Connects via env var, targets myapp_dev from pgmi.yaml
 ```
 
+`.env` is loaded from the **project path** (the deploy argument), not the directory you launch `pgmi` from — `pgmi deploy path/to/app` reads `path/to/app/.env`. A `.env` in your shell's current directory is ignored. Real environment variables always take precedence over `.env` values.
+
 ### CI/CD Pipeline
 
 ```yaml
