@@ -75,6 +75,10 @@ pgmi sets session variables using `set_config($1, $2, false)`. If the PostgreSQL
 
 **Mitigation:** Use `log_statement = 'ddl'` or `'none'` on deployment targets. Most production setups already do this. If you must use `'all'`, ensure server logs are treated as sensitive and access-controlled.
 
+> **Role passwords are a sharper case.** `CREATE/ALTER ROLE … PASSWORD '…'` is **DDL**, so the cleartext password is written to the server log under `log_statement = 'ddl'` *or* `'all'` — `--params-file` does not change this (the value is in the SQL regardless of how it reached pgmi). The advanced template sets role passwords this way. To close this:
+> - Set `log_statement = 'none'` for the deployment window, or wrap the role DDL in `SET LOCAL log_statement = 'none';` (requires the superuser the advanced template already uses for role setup).
+> - Or pass a **pre-hashed SCRAM verifier** instead of a cleartext password: `ALTER ROLE x PASSWORD 'SCRAM-SHA-256$4096:…'`. PostgreSQL stores the verifier verbatim, so cleartext never transits the wire or the log. (This is what `psql \password` produces client-side.)
+
 ### User SQL Leaking Secrets
 
 **Risk: User-controlled** — pgmi cannot and should not prevent this.
@@ -126,9 +130,11 @@ rm -f "$RUNNER_TEMP/params.env"
 
 This avoids process list exposure entirely. The file exists only for the duration of the deployment.
 
-### Acceptable: Direct `--param` in Containers
+### Exception: Direct `--param` only in fully isolated ephemeral containers
 
-In ephemeral containers where process list isolation is guaranteed:
+`--params-file` is the default for secrets. Passing them inline with `--param` is a
+**deliberate risk-acceptance**, justified only when process-list exposure is provably
+moot — and even then, prefer a file when it costs nothing:
 
 ```bash
 pgmi deploy ./migrations -d myapp \
@@ -136,10 +142,12 @@ pgmi deploy ./migrations -d myapp \
   --param "api_key=$API_KEY"
 ```
 
-This is fine when:
+Acceptable **only** when all of these hold:
 - The container runs a single process
 - No other users share the host
 - The container is destroyed after the pipeline completes
+
+If in doubt, use `--params-file`. Never use a hardcoded secret literal on the command line.
 
 ### GitHub Actions Example
 

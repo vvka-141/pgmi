@@ -95,9 +95,14 @@ want in CI.
   confirmation prompt. These are for **local or disposable databases**. Using them
   against a database you care about destroys it. Require explicit intent; never
   add them reflexively to a command.
-- **Never pass secrets as `--param`.** Parameters land in session variables that
-  are visible via `SHOW ALL` and `pg_settings`. Put credentials in the connection
-  string or environment (`PGPASSWORD`, `.pgpass`).
+- **Never put secrets on the command line.** `--param key=secret` leaks to the
+  process list (`ps`), shell history, and CI logs. Passing secrets *as parameters*
+  is fine and expected — just use `--params-file` (or a CI/CD-generated seeding
+  file), not argv. Caveat: values are still readable via `SHOW ALL`/`pg_settings`
+  within the deploy session, and a password used in `ALTER ROLE ... PASSWORD` can
+  reach the server log under `log_statement=ddl`/`all` — set `log_statement`
+  accordingly. The connection password belongs in the connection string or
+  environment (`PGPASSWORD`, `.pgpass`).
 
 ## Advanced-only
 

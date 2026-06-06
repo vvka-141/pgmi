@@ -241,10 +241,13 @@ pgmi deploy ./migrations
 # Create database and deploy
 pgmi deploy ./migrations -d mydb --overwrite --force
 
-# With parameters
+# With parameters (non-secret values only on the command line)
 pgmi deploy ./migrations \
   --param env=production \
-  --param admin_password=secret
+  --param enable_audit=true
+
+# Secrets go in a params file, never on the command line (argv leaks to ps/CI logs)
+pgmi deploy ./migrations --params-file secrets.env
 
 # Explicit connection string
 pgmi deploy ./migrations \
@@ -525,29 +528,32 @@ func parseParams(paramFlags []string) (map[string]string, error) {
 # Single parameter
 pgmi deploy . --param env=production
 
-# Multiple parameters
+# Multiple non-secret parameters
 pgmi deploy . \
   --param env=production \
-  --param admin_password="SecurePass123!" \
   --param enable_audit=true
 ```
 
-**Params File (`.env` format):**
+**Params File (`.env` format) — the channel for secrets:**
 ```bash
-# params.env
+# secrets.env  (generate from your secret store; add to .gitignore)
 env=production
 admin_password=SecurePass123!
 enable_audit=true
 ```
 
 ```bash
-pgmi deploy . --params-file params.env
+pgmi deploy . --params-file secrets.env
 ```
 
 **Security Note:**
-- Parameters visible in process list (`ps aux`)
-- Prefer params file for secrets (better, but still not ideal)
-- Best: Use connection string for database credentials, avoid passing secrets as params
+- Passing secrets *as parameters* is supported and expected — use `--params-file`
+  (or a CI/CD-generated seeding file), never `--param` on the command line.
+- `--param key=secret` leaks to the process list (`ps aux`), shell history, and CI logs.
+- Caveat: param values are readable via `SHOW ALL` within the deploy session, and a
+  password in `ALTER ROLE ... PASSWORD` can reach the server log under
+  `log_statement=ddl`/`all` — set `log_statement` accordingly.
+- The connection password belongs in the connection string / environment (`PGPASSWORD`, `.pgpass`).
 
 ---
 

@@ -149,11 +149,27 @@ This template is a working reference system, not a framework you must keep whole
 
 ### 1. Deploy
 
+Role passwords are required (see [Parameters](#parameters)). Pass them via a
+params file, **never as command-line `--param`** — values on the command line
+leak to the process list (`ps`), shell history, and CI logs. Use strong,
+generated values; the names below are placeholders.
+
 ```bash
-pgmi deploy . --database myapp_dev \
-  --param database_admin_password="AdminPass123!" \
-  --param database_customer_password="CustomerPass123!"
+# Write the secrets file (add it to .gitignore), deploy, then remove it.
+umask 077
+cat > secrets.env <<'EOF'
+database_admin_password=CHANGE_ME
+database_customer_password=CHANGE_ME
+EOF
+
+pgmi deploy . --database myapp_dev --params-file secrets.env
+
+rm -f secrets.env
 ```
+
+In CI, generate `secrets.env` from your pipeline's secret store. See the
+[pgmi Security Guide](https://github.com/vvka-141/pgmi/blob/main/docs/SECURITY.md)
+for the full CI pattern.
 
 ### 2. Test the Examples
 
@@ -350,6 +366,9 @@ END;
 | `database_customer_role` | `<dbname>_customer` | No | Customer role (LOGIN, RLS-restricted) |
 | `env` | `development` | No | Environment name |
 
+Pass the required password parameters via `--params-file` (or a CI/CD-generated
+seeding file), never as command-line `--param` — see [Deploy](#1-deploy).
+
 ## Role Hierarchy
 
 ```
@@ -409,10 +428,9 @@ pgmi_test('.*/api/.*');
 ## Troubleshooting
 
 ### "Required parameter missing"
+Provide the required password parameters via a params file (see [Deploy](#1-deploy)) — not on the command line:
 ```bash
-pgmi deploy . -d mydb \
-  --param database_admin_password="..." \
-  --param database_customer_password="..."
+pgmi deploy . -d mydb --params-file secrets.env
 ```
 
 ### Script execution order issues
