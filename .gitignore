@@ -16,6 +16,9 @@ bin/
 dist/
 pgmi
 
+# Local Go build/test cache (GOCACHE)
+.gocache/
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -38,8 +41,13 @@ go.work.sum
 # Claude Code artifacts (proprietary - keep locally only)
 .claude/
 
-# Claude instructions (proprietary - keep locally only)
+# Other coding-assistant artifacts (keep locally only)
+.agents/
+.codex/
+
+# Coding-assistant instructions (proprietary - keep locally only)
 CLAUDE.md
+AGENTS.md
 
 # Private assets (code reviews, design docs, change requests)
 .private/
