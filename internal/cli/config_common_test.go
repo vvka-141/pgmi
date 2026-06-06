@@ -10,6 +10,94 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestLoadProjectConfig_EnvIsProjectScoped(t *testing.T) {
+	const (
+		keyTarget = "PGMI_TEST_ENV_TARGET"
+		keyCwd    = "PGMI_TEST_ENV_CWD_ONLY"
+	)
+
+	tests := []struct {
+		name        string
+		projectEnv  string // contents of <project>/.env, "" means no file
+		cwdEnv      string // contents of <cwd>/.env, "" means no file
+		wantTarget  string // expected os.Getenv(keyTarget)
+		wantCwdOnly string // expected os.Getenv(keyCwd)
+	}{
+		{
+			name:        "loads project .env, not cwd .env",
+			projectEnv:  keyTarget + "=from_project\n",
+			cwdEnv:      keyTarget + "=from_cwd\n" + keyCwd + "=leaked\n",
+			wantTarget:  "from_project",
+			wantCwdOnly: "",
+		},
+		{
+			name:        "missing project .env does not fall back to cwd",
+			projectEnv:  "",
+			cwdEnv:      keyTarget + "=from_cwd\n" + keyCwd + "=leaked\n",
+			wantTarget:  "",
+			wantCwdOnly: "",
+		},
+		{
+			name:        "loads project .env when no cwd .env exists",
+			projectEnv:  keyTarget + "=from_project\n",
+			cwdEnv:      "",
+			wantTarget:  "from_project",
+			wantCwdOnly: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projectDir := t.TempDir()
+			cwdDir := t.TempDir()
+			if tt.projectEnv != "" {
+				writeEnvFile(t, projectDir, tt.projectEnv)
+			}
+			if tt.cwdEnv != "" {
+				writeEnvFile(t, cwdDir, tt.cwdEnv)
+			}
+
+			t.Chdir(cwdDir)
+			// godotenv never overrides an already-set var, so start clean.
+			unsetEnv(t, keyTarget)
+			unsetEnv(t, keyCwd)
+
+			if _, err := loadProjectConfig(projectDir); err != nil {
+				t.Fatalf("loadProjectConfig() error = %v", err)
+			}
+
+			if got := os.Getenv(keyTarget); got != tt.wantTarget {
+				t.Errorf("%s = %q, want %q", keyTarget, got, tt.wantTarget)
+			}
+			if got := os.Getenv(keyCwd); got != tt.wantCwdOnly {
+				t.Errorf("%s = %q, want %q (cwd .env must not leak in)", keyCwd, got, tt.wantCwdOnly)
+			}
+		})
+	}
+}
+
+func writeEnvFile(t *testing.T, dir, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(contents), 0600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	prev, had := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if had {
+			os.Setenv(key, prev)
+		} else {
+			os.Unsetenv(key)
+		}
+	})
+}
+
 func TestAuthMethodToString(t *testing.T) {
 	tests := []struct {
 		method pgmi.AuthMethod

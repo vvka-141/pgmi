@@ -157,10 +157,12 @@ func resolveEffectiveTimeout(
 	return flagTimeout, nil
 }
 
-// loadProjectConfig loads godotenv and project configuration.
+// loadProjectConfig loads the project's .env and pgmi.yaml from sourcePath.
+// .env is project-scoped (sourcePath/.env), never the process CWD, so the
+// resolved target and credentials match the project being deployed.
 // Returns nil config if pgmi.yaml does not exist (not an error).
 func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
-	_ = godotenv.Load()
+	_ = godotenv.Load(filepath.Join(sourcePath, ".env"))
 
 	projectCfg, err := config.Load(sourcePath)
 	if err != nil {
