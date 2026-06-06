@@ -285,7 +285,7 @@ END;
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool',
         '{}'::jsonb,
-        '{"user_id": "user789"}'::jsonb,
+        '{"user_id": "test|user789"}'::jsonb,
         '"req-2"'::jsonb
     );
 
@@ -313,6 +313,70 @@ END;
     END IF;
 
     RAISE NOTICE '  ✓ MCP: Public tool succeeds without auth';
+
+    -- ========================================================================
+    -- Hardening (PGMI-16): present-but-malformed identities are rejected across
+    -- REST, RPC, and MCP; identity must not leak across successive calls.
+    -- ========================================================================
+
+    -- REST: malformed x-user-id (no provider|subject pipe) → 401
+    v_response := api.rest_invoke(
+        'GET', '/test-protected-rest',
+        'x-user-id=>alice'::extensions.hstore, NULL::bytea
+    );
+    IF (v_response).status_code != 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: malformed x-user-id must return 401, got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: malformed x-user-id (no pipe) rejected with 401';
+
+    -- REST: empty-provider identity (leading pipe) → 401 (provider must be non-empty)
+    v_response := api.rest_invoke(
+        'GET', '/test-protected-rest',
+        'x-user-id=>|alice'::extensions.hstore, NULL::bytea
+    );
+    IF (v_response).status_code != 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: leading-pipe x-user-id must return 401, got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: empty-provider x-user-id (|subject) rejected with 401';
+
+    -- RPC: malformed x-user-id → -32001
+    v_route_id := api.rpc_resolve('test.protected');
+    v_response := api.rpc_invoke(
+        v_route_id,
+        'x-user-id=>alice'::extensions.hstore,
+        convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "m"}', 'UTF8')
+    );
+    v_content := api.content_json((v_response).content);
+    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: malformed RPC x-user-id should return -32001, got %', v_content->'error';
+    END IF;
+    RAISE NOTICE '  ✓ RPC: malformed x-user-id (no pipe) rejected with -32001';
+
+    -- MCP: malformed user_id (no pipe) → -32001
+    v_mcp_response := api.mcp_call_tool(
+        'test_protected_tool', '{}'::jsonb, '{"user_id": "alice"}'::jsonb, '"req-malformed"'::jsonb
+    );
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: malformed MCP user_id should return -32001, got %', (v_mcp_response).envelope->'error';
+    END IF;
+    RAISE NOTICE '  ✓ MCP: malformed user_id (no pipe) rejected with -32001';
+
+    -- MCP: identity must not leak across calls. Call 1 authenticates; call 2
+    -- omits context and must NOT inherit call 1's identity (proves GUC reset).
+    v_mcp_response := api.mcp_call_tool(
+        'test_protected_tool', '{}'::jsonb, '{"user_id": "test|alice"}'::jsonb, '"req-leak-1"'::jsonb
+    );
+    IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: authenticated MCP call should succeed, got %', (v_mcp_response).envelope->'error';
+    END IF;
+
+    v_mcp_response := api.mcp_call_tool(
+        'test_protected_tool', '{}'::jsonb, NULL, '"req-leak-2"'::jsonb
+    );
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: identity leaked into a no-context MCP call (expected -32001), got %', (v_mcp_response).envelope->'error';
+    END IF;
+    RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;
