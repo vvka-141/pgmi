@@ -19,8 +19,9 @@
 **Setting up production?**
 1. [CONNECTIONS.md](CONNECTIONS.md) — Connection architecture (cloud auth, SSL, poolers)
 2. [SECURITY.md](SECURITY.md) — Secrets and CI/CD patterns
-3. [PRODUCTION.md](PRODUCTION.md) — Performance and rollback strategies
-4. [CLI.md](CLI.md) — All flags and exit codes
+3. [CICD.md](CICD.md) — Deploy from GitHub Actions and other pipelines
+4. [PRODUCTION.md](PRODUCTION.md) — Performance and rollback strategies
+5. [CLI.md](CLI.md) — All flags and exit codes
 
 **Adding tests?**
 1. [TESTING.md](TESTING.md) — `CALL pgmi_test()` and fixtures
@@ -68,6 +69,7 @@
 - **[MCP.md](MCP.md)** — Model Context Protocol for AI assistants
 
 ### Operations
+- **[CICD.md](CICD.md)** — Deploy from GitHub Actions and other pipelines
 - **[PRODUCTION.md](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 
 ### AI Integration

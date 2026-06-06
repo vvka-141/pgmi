@@ -116,6 +116,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stdout, tree)
 	}
 
+	if caveat := managedCloudCaveat(selectedTemplate); caveat != "" {
+		fmt.Fprintln(os.Stderr, caveat)
+	}
+
 	if setupConnection && !connResult.Cancelled {
 		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: could not save connection: %v\n", err)
@@ -134,6 +138,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+
+// managedCloudCaveat returns a post-scaffold heads-up for templates that need a
+// superuser on managed clouds, or "" when the template carries no such caveat.
+func managedCloudCaveat(template string) string {
+	if template != "advanced" {
+		return ""
+	}
+	return "Heads-up (advanced template on managed cloud): the superuser-only DDL\n" +
+		"event trigger in lib/core/entity-standards.sql fails on providers without a\n" +
+		"superuser role (AWS RDS, Cloud SQL, Supabase, Neon). Adaptation steps:\n" +
+		"https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql"
+}
 
 // isInitBlocked checks if the target directory has non-pgmi files that would block init.
 // Returns (true, reason) if blocked, (false, "") if safe to proceed.

@@ -41,6 +41,22 @@ func TestRunInit_AdvancedTemplate(t *testing.T) {
 	}
 }
 
+func TestManagedCloudCaveat(t *testing.T) {
+	if got := managedCloudCaveat("basic"); got != "" {
+		t.Errorf("basic template should have no managed-cloud caveat, got %q", got)
+	}
+
+	adv := managedCloudCaveat("advanced")
+	if adv == "" {
+		t.Fatal("advanced template should emit a managed-cloud caveat")
+	}
+	for _, want := range []string{"entity-standards.sql", "superuser", "PRODUCTION.md#managed-cloud-postgresql"} {
+		if !strings.Contains(adv, want) {
+			t.Errorf("advanced caveat missing %q; got: %s", want, adv)
+		}
+	}
+}
+
 func TestRunInit_InvalidTemplate(t *testing.T) {
 	targetDir := t.TempDir()
 	projectDir := filepath.Join(targetDir, "myapp")

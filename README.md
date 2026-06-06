@@ -124,7 +124,9 @@ pgmi deploy . --database mydb --overwrite --force
 
 This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
 
-See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough.
+> **Requirement:** pgmi needs a **direct** PostgreSQL connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
+
+See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 
 ## When pgmi makes sense
 
@@ -155,6 +157,7 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 | [Testing](docs/TESTING.md) | Database tests with automatic rollback |
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
+| [CI/CD](docs/CICD.md) | Deploy from GitHub Actions and other pipelines |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
 | [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
