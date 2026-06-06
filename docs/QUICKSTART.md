@@ -10,7 +10,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 5. Verify the deployment
 
 **What you need:**
-- PostgreSQL running on `localhost:5432` (the default)
+- PostgreSQL running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
 - Go 1.22+ installed ([download here](https://go.dev/dl/))
 
@@ -223,6 +223,12 @@ What this does:
 
 **Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
 
+> **CI/CD:** pin the pgmi session API with `--compat 1` so a pgmi upgrade can't change your deploy's behavior, and drop `--overwrite` for incremental deploys:
+> ```bash
+> pgmi deploy . -d myapp --compat 1 --force
+> ```
+> See the [CI/CD Guide](CICD.md) for a complete pipeline example.
+
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
@@ -376,6 +382,7 @@ Now that you have a working project:
 | Understand the session tables and helper functions | [Session API Reference](session-api.md) |
 | Use metadata for script tracking and ordering | [Metadata Guide](METADATA.md) |
 | Prepare for production deployment | [Production Guide](PRODUCTION.md) |
+| Deploy from a CI/CD pipeline | [CI/CD Guide](CICD.md) |
 | Handle secrets in CI/CD | [Security Guide](SECURITY.md) |
 
 ---
