@@ -29,22 +29,39 @@ DO $$ BEGIN RAISE NOTICE '→ Installing protocol gateways'; END $$;
 -- subject strings (no pipe) are rejected so that casual attempts to forge
 -- x-user-id: alice fail closed.
 
+CREATE OR REPLACE FUNCTION internal.set_auth_user_id(p_user_id text)
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_max_len constant int := 4096;
+BEGIN
+    PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
+    IF p_user_id IS NOT NULL
+       AND length(p_user_id) <= v_max_len
+       AND position('|' IN p_user_id) > 1                 -- non-empty provider prefix
+       AND position('|' IN p_user_id) < length(p_user_id) -- non-empty subject suffix
+    THEN
+        PERFORM set_config('auth.user_id', p_user_id, true);
+        PERFORM set_config('auth.idp_subject', p_user_id, true);
+    END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION api.set_auth_context(p_headers extensions.hstore)
 RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_user_id text;
     v_max_len constant int := 4096;
 BEGIN
-    v_user_id := p_headers->'x-user-id';
-
-    IF v_user_id IS NOT NULL
-       AND length(v_user_id) <= v_max_len
-       AND position('|' IN v_user_id) > 0
-       AND position('|' IN v_user_id) < length(v_user_id) THEN
-        PERFORM set_config('auth.user_id', v_user_id, true);
-        PERFORM set_config('auth.idp_subject', v_user_id, true);
-    END IF;
+    -- Reset every auth GUC before conditionally setting it: gateways run
+    -- per-request in a possibly reused session, and set_config(is_local=>true)
+    -- is transaction-scoped, so an unreset GUC would bleed request N's identity
+    -- into request N+1 when N+1 omits the header.
+    PERFORM internal.set_auth_user_id(p_headers->'x-user-id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    PERFORM set_config('auth.token', '', true);
 
     IF p_headers->'x-user-email' IS NOT NULL AND length(p_headers->'x-user-email') <= v_max_len THEN
         PERFORM set_config('auth.user_email', p_headers->'x-user-email', true);
@@ -163,9 +180,13 @@ BEGIN
 
     RAISE DEBUG 'rest_invoke: Matched route %', v_route.route_name;
 
-    IF v_route.requires_auth AND (p_headers->'x-user-id') IS NULL THEN
+    -- Resolve identity first, then gate on session state (not header presence)
+    -- so a present-but-malformed x-user-id fails closed.
+    PERFORM api.set_auth_context(p_headers);
+
+    IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
-        RETURN api.problem_response(401, 'Unauthorized', 'Authentication required: x-user-id header missing');
+        RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
     END IF;
 
     IF p_headers->'accept' IS NOT NULL
@@ -181,8 +202,6 @@ BEGIN
         );
     END IF;
 
-    PERFORM api.set_auth_context(p_headers);
-
     v_request := (p_method, p_url, p_headers, p_content)::api.rest_request;
 
     BEGIN
@@ -197,7 +216,12 @@ BEGIN
         -- value rather than corrupting the root shape. Non-JSON or malformed
         -- bodies are passed through unchanged (RAISE DEBUG, not silent swallow).
         IF v_route.output_json_schema IS NOT NULL
-           AND v_route.response_headers->>'x-include-schema' = 'true' THEN
+           AND COALESCE((
+               SELECT lower(value) = 'true'
+               FROM jsonb_each_text(v_route.response_headers)
+               WHERE lower(key) = 'x-include-schema'
+               LIMIT 1
+           ), false) THEN
             DECLARE
                 v_body jsonb;
                 v_merged jsonb;
@@ -388,12 +412,14 @@ BEGIN
 
     RAISE DEBUG 'rpc_invoke: Matched method %', v_handler.method_name;
 
-    IF v_handler.requires_auth AND (p_headers->'x-user-id') IS NULL THEN
-        RAISE DEBUG 'rpc_invoke: Auth required but missing';
-        RETURN api.jsonrpc_error(-32001, 'Authentication required: x-user-id header missing', v_json_id);
-    END IF;
-
+    -- Resolve identity first, then gate on session state (not header presence)
+    -- so a present-but-malformed x-user-id fails closed.
     PERFORM api.set_auth_context(p_headers);
+
+    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RAISE DEBUG 'rpc_invoke: Auth required but missing';
+        RETURN api.jsonrpc_error(-32001, 'Authentication required', v_json_id);
+    END IF;
 
     v_request := (p_route_id, p_headers, p_content)::api.rpc_request;
 
@@ -409,7 +435,12 @@ BEGIN
         -- result is "Any" type. Skip for error responses (result absent) or
         -- when result is not a JSON object.
         IF v_handler.output_json_schema IS NOT NULL
-           AND v_handler.response_headers->>'x-include-schema' = 'true' THEN
+           AND COALESCE((
+               SELECT lower(value) = 'true'
+               FROM jsonb_each_text(v_handler.response_headers)
+               WHERE lower(key) = 'x-include-schema'
+               LIMIT 1
+           ), false) THEN
             DECLARE
                 v_body jsonb;
                 v_merged jsonb;
@@ -527,13 +558,15 @@ BEGIN
 
     RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
 
-    IF p_context IS NOT NULL THEN
-        IF p_context->>'user_id' IS NOT NULL THEN
-            PERFORM set_config('auth.user_id', p_context->>'user_id', true);
-        END IF;
-        IF p_context->>'tenant_id' IS NOT NULL THEN
-            PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-        END IF;
+    -- Reset every auth GUC, then set from context, so a malformed id (no
+    -- provider|subject pipe) is rejected and a prior request's identity cannot
+    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
+    PERFORM internal.set_auth_user_id(p_context->>'user_id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.token', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'tenant_id' IS NOT NULL THEN
+        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
@@ -610,13 +643,15 @@ BEGIN
 
     RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
 
-    IF p_context IS NOT NULL THEN
-        IF p_context->>'user_id' IS NOT NULL THEN
-            PERFORM set_config('auth.user_id', p_context->>'user_id', true);
-        END IF;
-        IF p_context->>'tenant_id' IS NOT NULL THEN
-            PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-        END IF;
+    -- Reset every auth GUC, then set from context, so a malformed id (no
+    -- provider|subject pipe) is rejected and a prior request's identity cannot
+    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
+    PERFORM internal.set_auth_user_id(p_context->>'user_id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.token', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'tenant_id' IS NOT NULL THEN
+        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
@@ -688,13 +723,15 @@ BEGIN
 
     RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
 
-    IF p_context IS NOT NULL THEN
-        IF p_context->>'user_id' IS NOT NULL THEN
-            PERFORM set_config('auth.user_id', p_context->>'user_id', true);
-        END IF;
-        IF p_context->>'tenant_id' IS NOT NULL THEN
-            PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-        END IF;
+    -- Reset every auth GUC, then set from context, so a malformed id (no
+    -- provider|subject pipe) is rejected and a prior request's identity cannot
+    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
+    PERFORM internal.set_auth_user_id(p_context->>'user_id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.token', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'tenant_id' IS NOT NULL THEN
+        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
     END IF;
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
@@ -878,4 +915,5 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.setup_auth_session(extensions.hstore) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.set_auth_user_id(text) TO %I', v_api_role);
 END $$;

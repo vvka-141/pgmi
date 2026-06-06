@@ -144,6 +144,7 @@ END;
             'type', 'tool',
             'name', 'schema_tool_alpha',
             'description', 'Alpha schema test tool',
+            'requiresAuth', false,
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'outputSchema', jsonb_build_object(
                 'type', 'object',
@@ -169,6 +170,7 @@ END;
             'type', 'tool',
             'name', 'schema_tool_beta',
             'description', 'Beta schema test tool',
+            'requiresAuth', false,
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'tags', jsonb_build_array('beta', 'schema-test')
         ),
@@ -241,6 +243,57 @@ END;
     RAISE NOTICE '  + mcp_list_tools(p_tags) filters by tag overlap; empty array = no filter';
 
     RAISE NOTICE '✓ Schema and tags tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: x-include-schema directive is matched case-insensitively (PGMI-10A)
+-- A handler registering a mixed-case key (X-Include-Schema) or value (TRUE)
+-- must still trigger $schema injection — the directive lookup must not depend
+-- on the exact case stored in response_headers.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_handler_id uuid := 'ffffffff-0002-4000-8000-00000000000a';
+    v_response   api.http_response;
+    v_body       jsonb;
+BEGIN
+    RAISE NOTICE '-> Testing x-include-schema case-insensitivity';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', v_handler_id,
+            'uri', '^/schema-case(\?.*)?$',
+            'httpMethod', '^GET$',
+            'name', 'schema_case_test',
+            'requiresAuth', false,
+            'outputSchema', jsonb_build_object(
+                'type', 'object',
+                'properties', jsonb_build_object('ok', jsonb_build_object('type', 'boolean'))
+            ),
+            'responseHeaders', jsonb_build_object('X-Include-Schema', 'TRUE')
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, jsonb_build_object('ok', true));
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke('GET', '/schema-case', ''::extensions.hstore, NULL::bytea);
+    v_body := api.content_json((v_response).content);
+
+    IF NOT v_body ? '$schema' THEN
+        RAISE EXCEPTION 'mixed-case X-Include-Schema:TRUE must trigger $schema injection: %', v_body;
+    END IF;
+
+    -- directive must still be stripped from the wire regardless of case
+    IF (v_response).headers ? 'x-include-schema' THEN
+        RAISE EXCEPTION 'x-include-schema directive must not leak to the wire: %', (v_response).headers;
+    END IF;
+
+    RAISE NOTICE '  + x-include-schema matched case-insensitively (key + value)';
+    RAISE NOTICE '✓ x-include-schema case-insensitivity test passed';
 END $$;
 
 -- ============================================================================
