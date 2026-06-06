@@ -232,9 +232,11 @@ This template requires the following parameters:
 ## Example Usage
 
 ```bash
+# Non-secret params on the command line; secrets via a params file
+# (admin_password etc. — never as command-line --param; argv leaks to ps/CI logs).
 pgmi deploy . \
   --param database_owner=myapp_owner \
-  --param admin_password="SecurePass123!"
+  --params-file secrets.env
 ```
 ```
 
@@ -1238,10 +1240,12 @@ go build -o pgmi.exe ./cmd/pgmi
 
 **Solution:**
 ```bash
-# Advanced template requires these
-pgmi deploy . \
-  --param database_admin_password="SecurePass123!" \
-  --param database_api_password="ApiPass123!"
+# Advanced template requires these — pass via a params file, not on the
+# command line (argv leaks to ps, shell history, and CI logs):
+#   secrets.env:
+#     database_admin_password=...
+#     database_api_password=...
+pgmi deploy . --params-file secrets.env
 ```
 
 **Find required params:** Check template's README.md "Required Parameters" section
