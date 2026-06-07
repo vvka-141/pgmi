@@ -63,7 +63,6 @@ func Execute() error {
 }
 
 func init() {
-	rootCmd.PersistentFlags().Bool("help", false, "Help for pgmi")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output for all commands")
 }
 
@@ -71,7 +70,7 @@ func init() {
 func getVerboseFlag(cmd *cobra.Command) bool {
 	verbose, err := cmd.Flags().GetBool("verbose")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to get verbose flag: %v\n", err)
+		fmt.Fprintf(os.Stderr, "WARNING: failed to get verbose flag: %v\n", err)
 		return false
 	}
 	return verbose
