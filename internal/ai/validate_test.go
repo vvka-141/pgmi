@@ -22,7 +22,7 @@ func TestGeneratedSkillSetConformance(t *testing.T) {
 }
 
 func TestValidateSkillSet_MissingSKILL(t *testing.T) {
-	files := []PlannedFile{{RelPath: "pgmi/references/foo.md", Content: "hello"}}
+	files := []PlannedFile{{RelPath: "pgmi/foo.md", Content: "hello"}}
 	errs := ValidateSkillSet(files)
 	if len(errs) == 0 {
 		t.Error("expected error for missing SKILL.md")
@@ -57,50 +57,37 @@ func TestValidateSkillSet_NameDirMismatch(t *testing.T) {
 	}
 }
 
-func TestValidateSkillSet_NestedReferences(t *testing.T) {
+func TestValidateSkillSet_NestedSubdirectory(t *testing.T) {
 	files := []PlannedFile{
 		{RelPath: "pgmi/SKILL.md", Content: "---\nname: pgmi\ndescription: test\n---\n# body\n"},
-		{RelPath: "pgmi/references/deep/nested.md", Content: "x"},
+		{RelPath: "pgmi/sub/nested.md", Content: "x"},
 	}
 	errs := ValidateSkillSet(files)
 	found := false
 	for _, e := range errs {
-		if e.File == "pgmi/references/deep/nested.md" {
+		if e.File == "pgmi/sub/nested.md" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected error for nested reference")
+		t.Error("expected error for nested subdirectory")
 	}
 }
 
-func TestGeneratedSkillSet_HasReferences(t *testing.T) {
+func TestGeneratedSkillSet_HasDepthFiles(t *testing.T) {
 	stamp := Stamp{Version: "1.0.0", Source: ModulePath}
 	files, err := GenerateSetup("claude", stamp)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	refCount := 0
+	depthCount := 0
 	for _, f := range files {
-		if len(f.RelPath) > 0 && contains(f.RelPath, "/references/") {
-			refCount++
+		if f.RelPath != "pgmi/SKILL.md" && len(f.RelPath) > 0 {
+			depthCount++
 		}
 	}
-	if refCount == 0 {
-		t.Error("expected at least one reference file")
+	if depthCount == 0 {
+		t.Error("expected at least one depth file alongside SKILL.md")
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && findSubstring(s, sub))
-}
-
-func findSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

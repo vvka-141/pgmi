@@ -74,15 +74,15 @@ func ValidateSkillSet(files []PlannedFile) []ValidationError {
 	}
 
 	for _, f := range files {
-		if !strings.Contains(f.RelPath, "/references/") {
+		if f.RelPath == skillFile.RelPath {
 			continue
 		}
-		refParts := strings.Split(f.RelPath, "/references/")
-		if len(refParts) != 2 {
+		afterDir := strings.TrimPrefix(f.RelPath, dirName+"/")
+		if afterDir == f.RelPath {
 			continue
 		}
-		if strings.Contains(refParts[1], "/") {
-			errs = append(errs, ValidationError{File: f.RelPath, Message: "references must be one level deep (no subdirectories)"})
+		if strings.Contains(afterDir, "/") {
+			errs = append(errs, ValidationError{File: f.RelPath, Message: "depth files must be direct children of the skill directory (no subdirectories)"})
 		}
 	}
 
@@ -101,7 +101,7 @@ func extractFrontmatter(content string) string {
 }
 
 func frontmatterField(fm, key string) string {
-	for _, line := range strings.Split(fm, "\n") {
+	for line := range strings.SplitSeq(fm, "\n") {
 		line = strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(line, key+":"); ok {
 			return strings.TrimSpace(rest)

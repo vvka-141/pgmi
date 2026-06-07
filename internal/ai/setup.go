@@ -94,26 +94,37 @@ func (codexSkillsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error)
 		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
 	}
 
-	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
-	files := []PlannedFile{
-		{RelPath: SkillDirName + "/SKILL.md", Content: body},
-	}
-
 	skills, err := ListSkills()
 	if err != nil {
-		return nil, fmt.Errorf("list skills for references: %w", err)
+		return nil, fmt.Errorf("list skills for depth files: %w", err)
 	}
+
+	var depthSection strings.Builder
+	depthSection.WriteString("\n\n## Depth files\n\n")
+	depthSection.WriteString("Load the relevant file from this skill directory when working in that area:\n\n")
+
+	var depthFiles []PlannedFile
 	for _, s := range skills {
 		content, readErr := contentFS.ReadFile(s.FilePath)
 		if readErr != nil {
 			continue
 		}
-		files = append(files, PlannedFile{
-			RelPath: SkillDirName + "/references/" + s.Name + ".md",
+		depthFiles = append(depthFiles, PlannedFile{
+			RelPath: SkillDirName + "/" + s.Name + ".md",
 			Content: string(content),
 		})
+		desc := s.Description
+		if desc == "" {
+			desc = s.Name
+		}
+		fmt.Fprintf(&depthSection, "- `${CLAUDE_SKILL_DIR}/%s.md` — %s\n", s.Name, desc)
 	}
 
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	body += depthSection.String()
+
+	files := []PlannedFile{{RelPath: SkillDirName + "/SKILL.md", Content: body}}
+	files = append(files, depthFiles...)
 	return files, nil
 }
 
@@ -149,26 +160,37 @@ func (claudeAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
 		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
 	}
 
-	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
-	files := []PlannedFile{
-		{RelPath: SkillDirName + "/SKILL.md", Content: body},
-	}
-
 	skills, err := ListSkills()
 	if err != nil {
-		return nil, fmt.Errorf("list skills for references: %w", err)
+		return nil, fmt.Errorf("list skills for depth files: %w", err)
 	}
+
+	var depthSection strings.Builder
+	depthSection.WriteString("\n\n## Depth files\n\n")
+	depthSection.WriteString("Load the relevant file from this skill directory when working in that area:\n\n")
+
+	var depthFiles []PlannedFile
 	for _, s := range skills {
 		content, readErr := contentFS.ReadFile(s.FilePath)
 		if readErr != nil {
 			continue
 		}
-		files = append(files, PlannedFile{
-			RelPath: SkillDirName + "/references/" + s.Name + ".md",
+		depthFiles = append(depthFiles, PlannedFile{
+			RelPath: SkillDirName + "/" + s.Name + ".md",
 			Content: string(content),
 		})
+		desc := s.Description
+		if desc == "" {
+			desc = s.Name
+		}
+		fmt.Fprintf(&depthSection, "- `${CLAUDE_SKILL_DIR}/%s.md` — %s\n", s.Name, desc)
 	}
 
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	body += depthSection.String()
+
+	files := []PlannedFile{{RelPath: SkillDirName + "/SKILL.md", Content: body}}
+	files = append(files, depthFiles...)
 	return files, nil
 }
 
