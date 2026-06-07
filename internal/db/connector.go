@@ -33,6 +33,12 @@ func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
 		fmt.Fprintln(os.Stderr, notice.Message)
+		if notice.Detail != "" {
+			fmt.Fprintf(os.Stderr, "DETAIL: %s\n", notice.Detail)
+		}
+		if notice.Hint != "" {
+			fmt.Fprintf(os.Stderr, "HINT: %s\n", notice.Hint)
+		}
 	}
 }
 

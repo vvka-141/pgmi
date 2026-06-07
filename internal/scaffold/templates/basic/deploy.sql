@@ -33,7 +33,11 @@ BEGIN
     )
     LOOP
         RAISE DEBUG 'Executing: %', v_file.path;
-        EXECUTE v_file.content;
+        BEGIN
+            EXECUTE v_file.content;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM;
+        END;
     END LOOP;
 
     -- Seed admin user using the parameter
