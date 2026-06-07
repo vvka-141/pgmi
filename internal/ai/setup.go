@@ -41,7 +41,7 @@ type Adapter interface {
 }
 
 // SupportedAssistants lists the assistant names AdapterFor accepts.
-var SupportedAssistants = []string{"claude", "agents", "codex", "opencode"}
+var SupportedAssistants = []string{"claude", "agents", "codex", "opencode", "codex-skills"}
 
 // AdapterFor returns the adapter for an assistant name.
 func AdapterFor(name string) (Adapter, error) {
@@ -50,6 +50,8 @@ func AdapterFor(name string) (Adapter, error) {
 		return claudeAdapter{}, nil
 	case "agents", "codex", "opencode":
 		return agentsAdapter{}, nil
+	case "codex-skills":
+		return codexSkillsAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported assistant %q (supported: %s)", name, strings.Join(SupportedAssistants, ", "))
 	}
@@ -76,6 +78,42 @@ func GenerateSetup(assistant string, stamp Stamp) ([]PlannedFile, error) {
 	for i := range files {
 		files[i].Content = RenderManaged(files[i].Content, stamp)
 	}
+	return files, nil
+}
+
+type codexSkillsAdapter struct{}
+
+func (codexSkillsAdapter) Name() string { return "codex-skills" }
+
+func (codexSkillsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	wrapper, err := readContent("content/setup/claude-skill.md")
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(wrapper, coreMarker) {
+		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
+	}
+
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	files := []PlannedFile{
+		{RelPath: SkillDirName + "/SKILL.md", Content: body},
+	}
+
+	skills, err := ListSkills()
+	if err != nil {
+		return nil, fmt.Errorf("list skills for references: %w", err)
+	}
+	for _, s := range skills {
+		content, readErr := contentFS.ReadFile(s.FilePath)
+		if readErr != nil {
+			continue
+		}
+		files = append(files, PlannedFile{
+			RelPath: SkillDirName + "/references/" + s.Name + ".md",
+			Content: string(content),
+		})
+	}
+
 	return files, nil
 }
 

@@ -72,7 +72,7 @@ func init() {
 	aiCmd.AddCommand(aiSetupCmd)
 	aiCmd.AddCommand(aiCheckCmd)
 
-	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, codex, opencode)")
+	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, codex, opencode, codex-skills)")
 	aiSetupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Write to ~/.claude/ instead of the project")
 	aiSetupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "Print planned file changes, write nothing")
 	aiSetupCmd.Flags().BoolVar(&setupForce, "force", false, "Overwrite a hand-edited skill file")
@@ -81,7 +81,7 @@ func init() {
 	aiSetupCmd.MarkFlagsMutuallyExclusive("claude-md", "no-claude-md")
 	_ = aiSetupCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 
-	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, codex, opencode)")
+	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, codex, opencode, codex-skills)")
 	aiCheckCmd.Flags().BoolVar(&checkGlobal, "global", false, "Check ~/.claude/ instead of the project")
 	_ = aiCheckCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 }
@@ -240,6 +240,8 @@ func skillsRoot(assistant string, global bool) (string, error) {
 		switch assistant {
 		case "codex":
 			return filepath.Join(home, ".codex"), nil
+		case "codex-skills":
+			return filepath.Join(home, ".codex", "skills"), nil
 		case "opencode":
 			return filepath.Join(home, ".config", "opencode"), nil
 		case "agents":
@@ -251,6 +253,8 @@ func skillsRoot(assistant string, global bool) (string, error) {
 	switch assistant {
 	case "agents", "codex", "opencode":
 		return ".", nil
+	case "codex-skills":
+		return filepath.Join(".codex", "skills"), nil
 	default:
 		return filepath.Join(".claude", "skills"), nil
 	}
