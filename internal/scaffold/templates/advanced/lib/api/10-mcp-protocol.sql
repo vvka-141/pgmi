@@ -307,16 +307,12 @@ BEGIN
         RETURN ROW(NULL::jsonb)::api.mcp_response;
     END IF;
 
-    -- Set up authentication context from p_context parameter
-    -- This populates session variables that handlers and RLS policies can use
-    IF p_context IS NOT NULL THEN
-        IF p_context->>'user_id' IS NOT NULL THEN
-            PERFORM set_config('auth.user_id', p_context->>'user_id', true);
-        END IF;
-        IF p_context->>'tenant_id' IS NOT NULL THEN
-            PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-        END IF;
-    END IF;
+    -- Reset and apply validated auth context unconditionally, before any method
+    -- (including discovery: tools/list, resources/list, prompts/list). Calling
+    -- with NULL clears identity, so a forged id (no provider|subject pipe) is
+    -- rejected and a prior request's identity cannot bleed into a context-less
+    -- request through the discovery filter.
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     -- Route to appropriate handler based on method
     CASE v_method
@@ -363,8 +359,11 @@ BEGIN
     END CASE;
 
 EXCEPTION WHEN OTHERS THEN
-    -- Catch any unhandled exceptions and return as JSON-RPC error
-    RETURN api.mcp_error(-32603, 'Internal error: ' || SQLERRM, v_id);
+    -- Log detail for operators; return a sanitized message so table/constraint/
+    -- column names and schema paths are not exposed to the client. Mirrors
+    -- rest_invoke / rpc_invoke / the invocation handlers.
+    RAISE WARNING 'mcp_handle_request: sqlstate=% detail=%', SQLSTATE, SQLERRM;
+    RETURN api.mcp_error(-32603, 'Internal error', v_id);
 END;
 $$;
 

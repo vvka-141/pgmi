@@ -48,6 +48,23 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION internal.apply_mcp_auth_context(p_context jsonb)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM internal.set_auth_user_id(p_context->>'user_id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.token', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'tenant_id' IS NOT NULL THEN
+        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.apply_mcp_auth_context(jsonb) IS
+    'MCP auth-context trust boundary: unconditionally resets auth GUCs, then applies a validated user_id (provider|subject) and optional tenant_id from p_context. Called with p_context NULL to clear identity. Shared by the MCP dispatcher and invocation handlers.';
+
 CREATE OR REPLACE FUNCTION api.set_auth_context(p_headers extensions.hstore)
 RETURNS void
 LANGUAGE plpgsql AS $$
@@ -558,16 +575,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_call_tool: Auth required but missing';
@@ -643,16 +651,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Auth required but missing';
@@ -723,16 +722,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_get_prompt: Auth required but missing';
@@ -916,4 +906,5 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.setup_auth_session(extensions.hstore) TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.set_auth_user_id(text) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.apply_mcp_auth_context(jsonb) TO %I', v_api_role);
 END $$;

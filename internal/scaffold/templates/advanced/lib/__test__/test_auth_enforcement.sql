@@ -378,5 +378,77 @@ END;
     END IF;
     RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
+    -- ========================================================================
+    -- PGMI-26: the MCP dispatcher (mcp_handle_request) must apply the same
+    -- validated, reset-first auth context to the discovery path (tools/list),
+    -- and must not leak raw SQLERRM to the client.
+    -- ========================================================================
+
+    PERFORM set_config('auth.user_id', '', true);
+
+    -- Discovery with a forged, malformed identity (no provider|subject pipe)
+    -- must NOT reveal auth-gated tools, but must still list public ones.
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-1","method":"tools/list"}'::jsonb,
+        '{"user_id":"alice"}'::jsonb
+    );
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_protected_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: forged context exposed auth-gated tool via dispatcher tools/list';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_public_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: dispatcher tools/list hid a public tool';
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: forged context does not expose auth-gated tools in tools/list';
+
+    -- Identity must not bleed into a later context-less discovery request.
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-2","method":"tools/call","params":{"name":"test_protected_tool","arguments":{}}}'::jsonb,
+        '{"user_id":"test|alice"}'::jsonb
+    );
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-3","method":"tools/list"}'::jsonb,
+        NULL
+    );
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_protected_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: identity bled into a context-less dispatcher tools/list';
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: identity does not bleed into context-less discovery';
+
+    -- A failing handler invoked through the dispatcher must not surface raw
+    -- error detail (table/column names, SQLERRM) to the client.
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-a007-4000-8000-000000000001',
+            'type', 'tool',
+            'name', 'test_throwing_tool',
+            'description', 'Always raises',
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RAISE EXCEPTION 'pgmi_secret_detail_marker in handler';
+END;
+        $body$
+    );
+
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"err-1","method":"tools/call","params":{"name":"test_throwing_tool","arguments":{}}}'::jsonb,
+        NULL
+    );
+    IF (v_mcp_response).envelope::text LIKE '%pgmi_secret_detail_marker%' THEN
+        RAISE EXCEPTION 'TEST FAILED: raw handler error detail leaked to MCP client: %', (v_mcp_response).envelope;
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
+
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;
