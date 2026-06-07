@@ -11,8 +11,8 @@ func generate(t *testing.T) PlannedFile {
 	if err != nil {
 		t.Fatalf("GenerateSetup: %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 file, got %d", len(files))
+	if len(files) == 0 {
+		t.Fatal("expected at least 1 file")
 	}
 	return files[0]
 }

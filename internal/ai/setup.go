@@ -112,9 +112,26 @@ func (claudeAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
 	}
 
 	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
-	return []PlannedFile{
+	files := []PlannedFile{
 		{RelPath: SkillDirName + "/SKILL.md", Content: body},
-	}, nil
+	}
+
+	skills, err := ListSkills()
+	if err != nil {
+		return nil, fmt.Errorf("list skills for references: %w", err)
+	}
+	for _, s := range skills {
+		content, readErr := contentFS.ReadFile(s.FilePath)
+		if readErr != nil {
+			continue
+		}
+		files = append(files, PlannedFile{
+			RelPath: SkillDirName + "/references/" + s.Name + ".md",
+			Content: string(content),
+		})
+	}
+
+	return files, nil
 }
 
 func readContent(path string) (string, error) {
