@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
 ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
-CREATE INDEX IF NOT EXISTS ix_mcp_route_name ON api.mcp_route(mcp_name);
+-- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.
 CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
 
 COMMENT ON COLUMN api.mcp_route.tags IS

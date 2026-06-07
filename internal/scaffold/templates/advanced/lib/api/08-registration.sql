@@ -23,7 +23,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing handler registration functions'; END $$
 
 CREATE OR REPLACE FUNCTION internal.validate_handler_name(p_name text)
 RETURNS void
-LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE AS $$
 BEGIN
     IF p_name IS NULL OR length(p_name) = 0 THEN
         RAISE EXCEPTION 'handler name must be non-empty';
