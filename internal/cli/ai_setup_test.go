@@ -195,6 +195,7 @@ func TestRunAISetupAndCheck_EndToEnd(t *testing.T) {
 func TestRunAISetup_DryRunWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	os.WriteFile("deploy.sql", []byte("-- deploy\n"), 0644)
 
 	setupAssistant = "claude"
 	setupGlobal = false
