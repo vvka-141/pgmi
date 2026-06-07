@@ -6,7 +6,6 @@
     <parameter key="database_admin_role" description="Database admin role (LOGIN, full access)" />
     <parameter key="database_admin_password" description="Database admin password"/>
     <parameter key="database_api_role" description="API group role (NOLOGIN, permission bundle)" />
-    <parameter key="database_api_password" description="Password for API role (if LOGIN)" />
     <parameter key="database_customer_role" description="Customer role (LOGIN, RLS-restricted)" />
     <parameter key="database_customer_password" description="Password for customer role (REQUIRED)"/>
     <parameter key="env" description="Deployment environment"/>

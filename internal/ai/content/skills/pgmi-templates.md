@@ -161,9 +161,11 @@ advanced/
 - Optional test plan persistence via `pgmi_persist_test_plan()`
 
 **Parameter Contract:**
-- `database_admin_password` (REQUIRED) - Password for admin role
-- `database_api_password` (optional) - Password for API role (defaults to generated)
+- `database_admin_password` (REQUIRED) - Password for the admin LOGIN role
+- `database_customer_password` (REQUIRED) - Password for the customer LOGIN role
 - `env` (optional) - Environment identifier (dev/staging/prod)
+
+The API role is a NOLOGIN group role (a permission bundle), so it has no password.
 
 **Use Cases:**
 - Production database deployments
@@ -594,8 +596,9 @@ CREATE ROLE myapp_owner NOLOGIN;
 CREATE ROLE myapp_admin LOGIN PASSWORD '${database_admin_password}';
 GRANT myapp_owner TO myapp_admin; -- Can act as owner
 
--- API for application (least privilege)
-CREATE ROLE myapp_api LOGIN PASSWORD '${database_api_password}';
+-- API is a NOLOGIN group role (a permission bundle); no password.
+-- LOGIN roles (admin, customer) are GRANTed membership to inherit it.
+CREATE ROLE myapp_api NOLOGIN;
 GRANT USAGE ON SCHEMA api TO myapp_api;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO myapp_api;
 ```
@@ -1130,8 +1133,8 @@ func TestAdvancedTemplateDeployment(t *testing.T) {
         Overwrite:        true,
         Force:            true,
         Parameters:       map[string]string{
-            "database_admin_password": "TestPass123!",
-            "database_api_password":   "ApiPass123!",
+            "database_admin_password":    "TestPass123!",
+            "database_customer_password": "CustPass123!",
         },
     })
     require.NoError(t, err)
@@ -1244,7 +1247,7 @@ go build -o pgmi.exe ./cmd/pgmi
 # command line (argv leaks to ps, shell history, and CI logs):
 #   secrets.env:
 #     database_admin_password=...
-#     database_api_password=...
+#     database_customer_password=...
 pgmi deploy . --params-file secrets.env
 ```
 
@@ -1328,5 +1331,5 @@ cd myproject
 - **Scaffolder Implementation:** `internal/scaffold/scaffold.go`
 - **CLI Commands:** `internal/cli/init.go`, `internal/cli/templates.go`
 - **pgmi-sql skill:** SQL coding standards and helper functions
-- **pgmi-philosophy skill:** Execution fabric principles and plan-based model
+- **pgmi-deployment skill:** Execution internals and plan-based model
 
