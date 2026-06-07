@@ -27,7 +27,7 @@ import (
 type Metadata struct {
 	XMLName     xml.Name `xml:"pgmi-meta"`
 	ID          uuid.UUID    `xml:"id,attr"`
-	Idempotent  bool         `xml:"idempotent,attr"`
+	Idempotent  *bool        `xml:"idempotent,attr"`
 	Description string       `xml:"description"`
 	SortKeys    SortKeysElement `xml:"sortKeys"`
 }

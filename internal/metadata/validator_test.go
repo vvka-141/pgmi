@@ -7,11 +7,13 @@ import (
 	"github.com/google/uuid"
 )
 
+func boolPtr(b bool) *bool { return &b }
+
 // TestValidate_AllValid tests validation of fully valid metadata
 func TestValidate_AllValid(t *testing.T) {
 	meta := &Metadata{
 		ID:          uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Idempotent:  true,
+		Idempotent:  boolPtr(true),
 		SortKeys:    SortKeysElement{Keys: []string{"test/001"}},
 		Description: "Test script",
 	}
@@ -30,7 +32,7 @@ func TestValidate_AllValid(t *testing.T) {
 func TestValidate_MinimalValid(t *testing.T) {
 	meta := &Metadata{
 		ID:         uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Idempotent: false,
+		Idempotent: boolPtr(false),
 		SortKeys:   SortKeysElement{Keys: []string{"001"}},
 	}
 
@@ -44,7 +46,7 @@ func TestValidate_MinimalValid(t *testing.T) {
 func TestValidate_NilUUID(t *testing.T) {
 	meta := &Metadata{
 		ID:         uuid.Nil,
-		Idempotent: true,
+		Idempotent: boolPtr(true),
 		SortKeys:   SortKeysElement{Keys: []string{"001"}},
 	}
 
@@ -67,11 +69,28 @@ func TestValidate_NilUUID(t *testing.T) {
 	}
 }
 
+// TestValidate_MissingIdempotent tests rejection of an absent idempotent attribute
+func TestValidate_MissingIdempotent(t *testing.T) {
+	meta := &Metadata{
+		ID:       uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
+		SortKeys: SortKeysElement{Keys: []string{"001"}},
+	}
+
+	result := Validate(meta, "noidem.sql")
+	if result.Valid {
+		t.Error("Expected invalid result when idempotent is absent")
+	}
+
+	if !strings.Contains(result.ErrorString(), "idempotent attribute is required") {
+		t.Errorf("Expected error about required idempotent, got: %s", result.ErrorString())
+	}
+}
+
 // TestValidate_EmptySortKey tests rejection of empty sortKey
 func TestValidate_EmptySortKey(t *testing.T) {
 	meta := &Metadata{
 		ID:         uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Idempotent: true,
+		Idempotent: boolPtr(true),
 		SortKeys:   SortKeysElement{Keys: []string{""}},
 	}
 
@@ -90,7 +109,7 @@ func TestValidate_EmptySortKey(t *testing.T) {
 func TestValidate_WhitespaceOnlySortKey(t *testing.T) {
 	meta := &Metadata{
 		ID:         uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Idempotent: true,
+		Idempotent: boolPtr(true),
 		SortKeys:   SortKeysElement{Keys: []string{"   \t\n  "}},
 	}
 
@@ -109,7 +128,7 @@ func TestValidate_WhitespaceOnlySortKey(t *testing.T) {
 func TestValidate_WhitespaceOnlyDescription(t *testing.T) {
 	meta := &Metadata{
 		ID:          uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Idempotent:  true,
+		Idempotent:  boolPtr(true),
 		SortKeys:    SortKeysElement{Keys: []string{"001"}},
 		Description: "   \n\t   ",
 	}
@@ -130,7 +149,7 @@ func TestValidate_WhitespaceOnlyDescription(t *testing.T) {
 func TestValidate_MultipleErrors(t *testing.T) {
 	meta := &Metadata{
 		ID:          uuid.Nil,                            // Error 1: nil ID
-		Idempotent:  true,
+		Idempotent:  boolPtr(true),
 		SortKeys:    SortKeysElement{Keys: []string{""}}, // Error 2: empty sortKey
 		Description: "   ",                               // Error 3: whitespace description
 	}

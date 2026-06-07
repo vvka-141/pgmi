@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/params"
@@ -158,9 +161,44 @@ func (sm *SessionManager) scanAndValidateFiles(sourcePath string) (pgmi.FileScan
 		return pgmi.FileScanResult{}, fmt.Errorf("failed to scan directory %q: %w", sourcePath, err)
 	}
 
+	if err := validateNoDuplicateScriptIDs(scanResult.Files); err != nil {
+		return pgmi.FileScanResult{}, err
+	}
+
 	sm.logger.Verbose("Found %d files to load", len(scanResult.Files))
 
 	return scanResult, nil
+}
+
+// validateNoDuplicateScriptIDs fails fast when two files share a <pgmi-meta id>.
+// A shared id makes the second one-time script silently skip on deploy (its id
+// already has an execution-log row), so this is rejected before any connection
+// or SQL execution. Returns an ErrInvalidConfig (exit code 10) naming the id and
+// every conflicting file.
+func validateNoDuplicateScriptIDs(files []pgmi.FileMetadata) error {
+	pathsByID := make(map[uuid.UUID][]string)
+	for _, f := range files {
+		if f.Metadata == nil || f.Metadata.ID == uuid.Nil {
+			continue
+		}
+		pathsByID[f.Metadata.ID] = append(pathsByID[f.Metadata.ID], f.Path)
+	}
+
+	var conflicts []string
+	for id, paths := range pathsByID {
+		if len(paths) > 1 {
+			sort.Strings(paths)
+			conflicts = append(conflicts, fmt.Sprintf("  %s: %s", id, strings.Join(paths, ", ")))
+		}
+	}
+
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return fmt.Errorf("duplicate <pgmi-meta id> across files; each script must have a unique id:\n%s: %w",
+			strings.Join(conflicts, "\n"), pgmi.ErrInvalidConfig)
+	}
+
+	return nil
 }
 
 // connectToDatabase establishes a connection to the target database.

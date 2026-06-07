@@ -170,7 +170,7 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 			// Metadata found and valid - convert to public type
 			scriptMetadata = &pgmi.ScriptMetadata{
 				ID:          meta.ID,
-				Idempotent:  meta.Idempotent,
+				Idempotent:  *meta.Idempotent,
 				SortKeys:    meta.SortKeys.Keys,
 				Description: meta.Description,
 			}
