@@ -131,10 +131,13 @@ jsonb_build_object(
 ## Commands Reference
 
 ```bash
-pgmi init <name> [--template basic|advanced]  # Create project
-pgmi deploy <path> -c <conn> [-d <db>]        # Deploy to database
+pgmi init <name> [--template basic|advanced]   # Create project
+pgmi deploy <path> --connection <conn>         # Deploy to database
 pgmi templates list                            # List templates
 pgmi templates describe <name>                 # Template details
+pgmi metadata scaffold <path> [--write]        # Generate/inject <pgmi-meta> blocks
+pgmi metadata validate <path> [--json]         # Validate metadata (no DB needed)
+pgmi metadata plan <path> [--json]             # Show execution order (no DB needed)
 pgmi ai skills                                 # List AI skills
 pgmi ai skill <name>                           # Get skill content
 pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/

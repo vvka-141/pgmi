@@ -104,6 +104,24 @@ want in CI.
   accordingly. The connection password belongs in the connection string or
   environment (`PGPASSWORD`, `.pgpass`).
 
+## Deterministic tools — prefer these over reasoning
+
+When working in an advanced-template project, use `pgmi metadata` instead of
+hand-authoring `<pgmi-meta>` blocks or guessing execution order:
+
+```bash
+pgmi metadata scaffold ./project --write   # inject valid <pgmi-meta> with UUID + sortKeys
+pgmi metadata validate ./project --json    # XML/XSD validity + duplicate-id check
+pgmi metadata plan ./project --json        # files in pgmi_plan_view execution order
+```
+
+Workflow: when adding a file to an advanced-template project, run `scaffold
+--write` to generate metadata, then `validate` to confirm correctness, then
+`plan` to verify execution order before deploying. Do not hand-author
+`<pgmi-meta>` blocks or infer order from file names.
+
+All three commands are filesystem-only — no database connection required.
+
 ## Advanced-only
 
 The following apply **only** in an advanced-template project (gated behind its
