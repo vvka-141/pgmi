@@ -39,7 +39,10 @@ var aiSetupCmd = &cobra.Command{
 
   pgmi ai setup                       Detect .claude/, write the Claude skill
   pgmi ai setup --assistant claude    Same, explicit
-  pgmi ai setup --global              Write to ~/.claude/skills/pgmi/ instead
+  pgmi ai setup --assistant agents    Write AGENTS.md (Codex, opencode, etc.)
+  pgmi ai setup --assistant codex     Same as agents (--global writes ~/.codex/)
+  pgmi ai setup --assistant opencode  Same as agents (--global writes ~/.config/opencode/)
+  pgmi ai setup --global              Write to the global location instead
   pgmi ai setup --dry-run             Print planned changes, write nothing
 
 The skill is generated from embedded content and stamped with this binary's
@@ -69,7 +72,7 @@ func init() {
 	aiCmd.AddCommand(aiSetupCmd)
 	aiCmd.AddCommand(aiCheckCmd)
 
-	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude)")
+	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, codex, opencode)")
 	aiSetupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Write to ~/.claude/ instead of the project")
 	aiSetupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "Print planned file changes, write nothing")
 	aiSetupCmd.Flags().BoolVar(&setupForce, "force", false, "Overwrite a hand-edited skill file")
@@ -78,7 +81,7 @@ func init() {
 	aiSetupCmd.MarkFlagsMutuallyExclusive("claude-md", "no-claude-md")
 	_ = aiSetupCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 
-	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude)")
+	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, codex, opencode)")
 	aiCheckCmd.Flags().BoolVar(&checkGlobal, "global", false, "Check ~/.claude/ instead of the project")
 	_ = aiCheckCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 }
@@ -89,7 +92,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	root, err := skillsRoot(setupGlobal)
+	root, err := skillsRoot(assistant, setupGlobal)
 	if err != nil {
 		return err
 	}
@@ -131,7 +134,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if !setupGlobal {
+	if !setupGlobal && assistant == "claude" {
 		if err := maybeWriteClaudeMd(); err != nil {
 			return err
 		}
@@ -165,7 +168,7 @@ func runAICheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	root, err := skillsRoot(checkGlobal)
+	root, err := skillsRoot(assistant, checkGlobal)
 	if err != nil {
 		return err
 	}
@@ -224,15 +227,29 @@ func resolveAssistant(name string) (string, error) {
 	return name, nil
 }
 
-func skillsRoot(global bool) (string, error) {
+func skillsRoot(assistant string, global bool) (string, error) {
 	if global {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("locate home directory: %w", err)
 		}
-		return filepath.Join(home, ".claude", "skills"), nil
+		switch assistant {
+		case "codex":
+			return filepath.Join(home, ".codex"), nil
+		case "opencode":
+			return filepath.Join(home, ".config", "opencode"), nil
+		case "agents":
+			return home, nil
+		default:
+			return filepath.Join(home, ".claude", "skills"), nil
+		}
 	}
-	return filepath.Join(".claude", "skills"), nil
+	switch assistant {
+	case "agents", "codex", "opencode":
+		return ".", nil
+	default:
+		return filepath.Join(".claude", "skills"), nil
+	}
 }
 
 func buildStamp() ai.Stamp {

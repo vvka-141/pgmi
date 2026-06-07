@@ -41,13 +41,15 @@ type Adapter interface {
 }
 
 // SupportedAssistants lists the assistant names AdapterFor accepts.
-var SupportedAssistants = []string{"claude"}
+var SupportedAssistants = []string{"claude", "agents", "codex", "opencode"}
 
 // AdapterFor returns the adapter for an assistant name.
 func AdapterFor(name string) (Adapter, error) {
 	switch name {
 	case "claude":
 		return claudeAdapter{}, nil
+	case "agents", "codex", "opencode":
+		return agentsAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported assistant %q (supported: %s)", name, strings.Join(SupportedAssistants, ", "))
 	}
@@ -75,6 +77,25 @@ func GenerateSetup(assistant string, stamp Stamp) ([]PlannedFile, error) {
 		files[i].Content = RenderManaged(files[i].Content, stamp)
 	}
 	return files, nil
+}
+
+type agentsAdapter struct{}
+
+func (agentsAdapter) Name() string { return "agents" }
+
+func (agentsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	wrapper, err := readContent("content/setup/agents-md.md")
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(wrapper, coreMarker) {
+		return nil, fmt.Errorf("agents-md.md is missing the %s marker", coreMarker)
+	}
+
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	return []PlannedFile{
+		{RelPath: "AGENTS.md", Content: body},
+	}, nil
 }
 
 type claudeAdapter struct{}

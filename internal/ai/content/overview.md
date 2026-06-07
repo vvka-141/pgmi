@@ -141,6 +141,7 @@ pgmi metadata plan <path> [--json]             # Show execution order (no DB nee
 pgmi ai skills                                 # List AI skills
 pgmi ai skill <name>                           # Get skill content
 pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/
+pgmi ai setup --assistant agents               # Write AGENTS.md (Codex, opencode, etc.)
 pgmi ai check                                  # Report whether that guidance is current
 ```
 
