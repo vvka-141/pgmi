@@ -401,27 +401,45 @@ END;
 
     v_list := api.mcp_list_resources();
 
-    -- Static: MUST emit `uri`, MUST NOT emit `uriTemplate`
+    -- Static resource: in resources/list, MUST emit `uri`, never `uriTemplate`.
     IF NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_list->'resources') r
         WHERE r->>'name' = 'static_catalog'
           AND r->>'uri' = 'postgres:///catalog'
           AND NOT (r ? 'uriTemplate')
     ) THEN
-        RAISE EXCEPTION 'Static resource must emit `uri` (not `uriTemplate`): %', v_list;
+        RAISE EXCEPTION 'Static resource must emit `uri` in resources/list: %', v_list;
     END IF;
 
-    -- Templated: MUST emit `uriTemplate`, MUST NOT emit `uri`
-    IF NOT EXISTS (
+    -- Templated resource MUST NOT appear in resources/list.
+    IF EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_list->'resources') r
+        WHERE r->>'name' = 'templated_doc'
+    ) THEN
+        RAISE EXCEPTION 'Templated resource must not appear in resources/list: %', v_list;
+    END IF;
+
+    v_list := api.mcp_list_resource_templates();
+
+    -- Templated resource: in resources/templates/list, MUST emit `uriTemplate`.
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'resourceTemplates') r
         WHERE r->>'name' = 'templated_doc'
           AND r->>'uriTemplate' = 'postgres:///docs/{doc_id}'
           AND NOT (r ? 'uri')
     ) THEN
-        RAISE EXCEPTION 'Templated resource must emit `uriTemplate` (not `uri`): %', v_list;
+        RAISE EXCEPTION 'Templated resource must emit `uriTemplate` in resources/templates/list: %', v_list;
     END IF;
 
-    RAISE NOTICE '  + mcp_list_resources distinguishes static uri from uriTemplate';
+    -- Static resource MUST NOT appear in resources/templates/list.
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'resourceTemplates') r
+        WHERE r->>'name' = 'static_catalog'
+    ) THEN
+        RAISE EXCEPTION 'Static resource must not appear in resources/templates/list: %', v_list;
+    END IF;
+
+    RAISE NOTICE '  + resources/list and resources/templates/list split static uri from uriTemplate';
 
     RAISE NOTICE '✓ MCP list auth/uri tests passed';
 END $$;

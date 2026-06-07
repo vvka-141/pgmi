@@ -542,6 +542,13 @@ $$;
 -- Exception handling follows MCP spec: tool execution failures return
 -- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
 -- JSON-RPC -32601 is reserved for "tool not found" (true protocol error).
+--
+-- M-API3 decision: an unknown tool/resource/prompt NAME returns -32601, not
+-- -32602. Reference SDKs treat the name as a param and use -32602, but pgmi
+-- keeps -32601 deliberately: it is internally consistent (api.jsonrpc_error
+-- maps -32601 -> 404 "not found", the correct REST bridge), and -32602 stays
+-- reserved for malformed params. The dispatcher ELSE branch uses -32601 for
+-- unknown JSON-RPC methods.
 
 DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
@@ -637,12 +644,17 @@ DECLARE
 BEGIN
     RAISE DEBUG 'mcp_read_resource: %', p_uri;
 
+    -- Deterministic precedence when more than one template matches: most
+    -- specific (longest template) first, mcp_name as a stable tiebreak. Without
+    -- this, the chosen handler (and its requires_auth) would be nondeterministic.
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
     INTO v_handler
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
     WHERE r.mcp_type = 'resource'
-      AND p_uri ~ api.uri_template_to_regex(r.uri_template);
+      AND p_uri ~ api.uri_template_to_regex(r.uri_template)
+    ORDER BY length(r.uri_template) DESC, r.mcp_name
+    LIMIT 1;
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Resource not found';
@@ -830,16 +842,16 @@ LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
-    -- A resource with no RFC 6570 {placeholder} is a static URI per MCP spec;
-    -- emit as `uri`. Otherwise emit as `uriTemplate` (RFC 6570 Level 1 subset).
+    -- resources/list returns concrete Resource objects only (required `uri`).
+    -- Templated resources (RFC 6570 {placeholder}) are returned by the separate
+    -- resources/templates/list method (api.mcp_list_resource_templates).
     SELECT jsonb_build_object('resources', COALESCE(jsonb_agg(
         jsonb_strip_nulls(
             jsonb_build_object(
                 'name', r.mcp_name,
                 'title', h.title,
                 'description', h.description,
-                'uri', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN NULL ELSE r.uri_template END,
-                'uriTemplate', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN r.uri_template ELSE NULL END,
+                'uri', r.uri_template,
                 'mimeType', r.mime_type
             )
         )
@@ -847,12 +859,43 @@ AS $$
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
     WHERE r.mcp_type = 'resource'
+      AND r.uri_template !~ '\{[^}]+\}'
       AND (NOT h.requires_auth
            OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
 $$;
 
 COMMENT ON FUNCTION api.mcp_list_resources() IS
-    'MCP resource discovery. Emits uri (static) or uriTemplate (RFC 6570 placeholders detected) based on uri_template shape. Hides auth-required resources from unauthenticated sessions.';
+    'MCP resources/list discovery. Emits only concrete Resource objects (static uri). Templated resources are served by resources/templates/list. Hides auth-required resources from unauthenticated sessions.';
+
+CREATE OR REPLACE FUNCTION api.mcp_list_resource_templates()
+RETURNS jsonb
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = api, pg_temp
+AS $$
+    -- resources/templates/list returns ResourceTemplate objects (required
+    -- `uriTemplate`) for resources whose uri carries an RFC 6570 placeholder.
+    SELECT jsonb_build_object('resourceTemplates', COALESCE(jsonb_agg(
+        jsonb_strip_nulls(
+            jsonb_build_object(
+                'name', r.mcp_name,
+                'title', h.title,
+                'description', h.description,
+                'uriTemplate', r.uri_template,
+                'mimeType', r.mime_type
+            )
+        )
+    ), '[]'::jsonb))
+    FROM api.mcp_route r
+    JOIN api.handler h ON h.object_id = r.handler_object_id
+    WHERE r.mcp_type = 'resource'
+      AND r.uri_template ~ '\{[^}]+\}'
+      AND (NOT h.requires_auth
+           OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
+$$;
+
+COMMENT ON FUNCTION api.mcp_list_resource_templates() IS
+    'MCP resources/templates/list discovery. Emits ResourceTemplate objects (uriTemplate) for resources with RFC 6570 placeholders. Hides auth-required resources from unauthenticated sessions.';
 
 CREATE OR REPLACE FUNCTION api.mcp_list_prompts()
 RETURNS jsonb
@@ -891,6 +934,7 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.mcp_read_resource() - MCP resource read';
     RAISE NOTICE '  ✓ api.mcp_get_prompt() - MCP prompt expansion';
     RAISE NOTICE '  ✓ api.mcp_list_tools/resources/prompts() - MCP discovery';
+    RAISE NOTICE '  ✓ api.mcp_list_resource_templates() - MCP templated-resource discovery';
 END $$;
 
 -- ============================================================================

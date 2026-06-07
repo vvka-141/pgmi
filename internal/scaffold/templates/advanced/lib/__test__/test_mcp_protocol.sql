@@ -58,21 +58,37 @@ BEGIN
     RAISE NOTICE '  + Initialize without protocolVersion returns -32602';
 
     -- ========================================================================
-    -- Test: Initialize with unsupported protocol version
+    -- Test: Initialize negotiates an unknown version to the server's best
+    -- (per the MCP lifecycle, the server suggests a version it supports rather
+    -- than erroring).
     -- ========================================================================
 
     v_response := api.mcp_initialize('{"protocolVersion":"1999-01-01"}'::jsonb, '"init-3"'::jsonb);
     v_envelope := (v_response).envelope;
 
-    IF v_envelope->'error' IS NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: Initialize with unsupported version should error';
+    IF v_envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: Initialize with unknown version should negotiate, not error: %', v_envelope->'error';
     END IF;
 
-    IF (v_envelope->'error'->>'code')::int != -32602 THEN
-        RAISE EXCEPTION 'TEST FAILED: Initialize unsupported version should return -32602';
+    IF v_envelope->'result'->>'protocolVersion' != '2025-11-05' THEN
+        RAISE EXCEPTION 'TEST FAILED: unknown version should negotiate to server best 2025-11-05, got %', v_envelope->'result'->>'protocolVersion';
     END IF;
 
-    RAISE NOTICE '  + Initialize with unsupported version returns -32602';
+    RAISE NOTICE '  + Initialize negotiates unknown version to server best (2025-11-05)';
+
+    -- ========================================================================
+    -- Test: a current client version (2025-06-18) completes initialize and is
+    -- echoed back.
+    -- ========================================================================
+
+    v_response := api.mcp_initialize('{"protocolVersion":"2025-06-18"}'::jsonb, '"init-4"'::jsonb);
+    v_envelope := (v_response).envelope;
+
+    IF v_envelope->'result'->>'protocolVersion' != '2025-06-18' THEN
+        RAISE EXCEPTION 'TEST FAILED: supported version 2025-06-18 should be echoed, got %', v_envelope->'result'->>'protocolVersion';
+    END IF;
+
+    RAISE NOTICE '  + Initialize echoes a supported client version (2025-06-18)';
 
     RAISE NOTICE '+ MCP Initialize tests passed';
 END $$;
@@ -322,6 +338,75 @@ END;
     RAISE NOTICE '  + Round-trip: tools/call returns expected result';
 
     RAISE NOTICE '+ MCP Full Round-Trip tests passed';
+END $$;
+
+DO $$
+DECLARE
+    v_response api.mcp_response;
+    v_envelope jsonb;
+BEGIN
+    RAISE NOTICE '→ Testing MCP resource templates discovery + deterministic routing';
+
+    -- resources/templates/list exposes the templated table_schema resource.
+    -- (table_schema requires auth, so provide an authenticated context.)
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-1","method":"resources/templates/list"}'::jsonb, '{"user_id":"test|disco"}'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'resourceTemplates') AS rt
+        WHERE rt->>'name' = 'table_schema' AND rt->>'uriTemplate' = 'postgres:///{schema}/{table}'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: resources/templates/list missing table_schema uriTemplate, got %', v_envelope->'result';
+    END IF;
+    RAISE NOTICE '  + resources/templates/list returns the table_schema template';
+
+    -- resources/list must not contain templated entries, and every entry must
+    -- carry a concrete uri (never uriTemplate).
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-2","method":"resources/list"}'::jsonb, '{"user_id":"test|disco"}'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'resources') AS r
+        WHERE r->>'name' = 'table_schema' OR r ? 'uriTemplate' OR (r->>'uri') IS NULL
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: resources/list must contain only concrete uri entries, got %', v_envelope->'result';
+    END IF;
+    RAISE NOTICE '  + resources/list contains only concrete uri entries';
+
+    -- Deterministic routing: two overlapping templates both match mcptest:///x;
+    -- the most specific (longest template) wins, consistently.
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'ffffffff-b001-4000-8000-000000000001', 'type', 'resource',
+            'name', 'overlap_short', 'description', 'short', 'uriTemplate', 'mcptest:///{a}',
+            'mimeType', 'application/json', 'requiresAuth', false),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object('uri', (request).uri, 'mimeType', 'application/json', 'text', 'handler=short')),
+        (request).request_id);
+END;
+        $body$
+    );
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'ffffffff-b002-4000-8000-000000000001', 'type', 'resource',
+            'name', 'overlap_long', 'description', 'long', 'uriTemplate', 'mcptest:///{aa}',
+            'mimeType', 'application/json', 'requiresAuth', false),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object('uri', (request).uri, 'mimeType', 'application/json', 'text', 'handler=long')),
+        (request).request_id);
+END;
+        $body$
+    );
+
+    v_response := api.mcp_read_resource('mcptest:///x', NULL, '"ovl-1"'::jsonb);
+    v_envelope := (v_response).envelope;
+    IF v_envelope->'error' IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: overlapping resource read errored: %', v_envelope->'error';
+    END IF;
+    IF v_envelope->'result'->'contents'->0->>'text' != 'handler=long' THEN
+        RAISE EXCEPTION 'TEST FAILED: overlapping templates did not route to the longest (deterministic) handler, got %', v_envelope->'result';
+    END IF;
+    RAISE NOTICE '  + Overlapping resource templates route deterministically (longest wins)';
 END $$;
 
 DO $$

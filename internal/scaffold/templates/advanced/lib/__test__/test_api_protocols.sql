@@ -485,14 +485,21 @@ END;
         RAISE EXCEPTION 'TEST FAILED: mcp_list_resources missing resources key';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM jsonb_array_elements(v_list->'resources') AS resource
-        WHERE resource->>'name' = 'test_resource'
-    ) THEN
-        RAISE EXCEPTION 'TEST FAILED: test_resource not in list';
+    -- test_resource is templated (test:///{id}); it belongs to
+    -- resources/templates/list, not resources/list.
+    v_list := api.mcp_list_resource_templates();
+    IF v_list->'resourceTemplates' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: mcp_list_resource_templates missing resourceTemplates key';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP list_resources returns resources array with test_resource';
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'resourceTemplates') AS resource
+        WHERE resource->>'name' = 'test_resource' AND resource->>'uriTemplate' = 'test:///{id}'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: test_resource not in resource templates list';
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP list_resource_templates returns templated test_resource';
 
     v_list := api.mcp_list_prompts();
     IF v_list->'prompts' IS NULL THEN
