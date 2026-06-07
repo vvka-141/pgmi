@@ -426,9 +426,9 @@ deployCmd.Flags().BoolVar(&overwrite, "overwrite", false, "Drop and recreate dat
 **2. String Flags**
 ```go
 var connection string
-deployCmd.Flags().StringVarP(&connection, "connection", "c", "", "Connection string")
+deployCmd.Flags().StringVar(&connection, "connection", "", "Connection string")
 
-// Usage: --connection "..." or -c "..."
+// Usage: --connection "..." (no short flag)
 ```
 
 **3. StringArray Flags (Multiple Values)**
@@ -885,7 +885,7 @@ func init() {
 | Boolean switch | `--overwrite` | Enable feature |
 | Multiple values | `--param k1=v1 --param k2=v2` | Key-value pairs |
 | Duration | `--timeout 30m` | Time limits |
-| Short + long | `-c "..." / --connection "..."` | Convenience |
+| Short + long | `-U user / --username user` | Convenience |
 
 ### Flag Validation
 

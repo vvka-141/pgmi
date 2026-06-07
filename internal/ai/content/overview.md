@@ -15,10 +15,10 @@ pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tab
 pgmi init myproject --template basic
 
 # Deploy to database
-pgmi deploy ./myproject -c "postgresql://user:pass@host/db"
+pgmi deploy ./myproject --connection "postgresql://user:pass@host/db"
 
 # Run tests
-pgmi deploy ./myproject -c "..." --param run_tests=true
+pgmi deploy ./myproject --connection "..." --param run_tests=true
 ```
 
 ## Core Concepts
@@ -63,7 +63,7 @@ v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- Conditional logic based on parameters
 IF COALESCE(current_setting('pgmi.run_tests', true), 'false') = 'true' THEN
-    pgmi_test();
+    CALL pgmi_test();
 END IF;
 ```
 

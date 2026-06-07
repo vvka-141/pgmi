@@ -53,7 +53,7 @@ One connection for entire deployment (session-centric model)
 
 - `internal/db/parser.go` - Connection string parsing
 - `internal/db/connector.go` - Standard connector implementation
-- `internal/db/azure_connector.go` - Azure Entra ID connector
+- `internal/db/connector.go` (Azure via newAzureConnector()) - Azure Entra ID connector
 - `pkg/pgmi/connector.go` - `Connector` interface definition
 
 ---
@@ -332,7 +332,7 @@ When adding new auth methods:
 **Implementation Files:**
 - `internal/db/token_provider.go` - TokenProvider interface
 - `internal/db/azure_token_provider.go` - Azure credential implementations
-- `internal/db/azure_connector.go` - AzureEntraIDConnector
+- `internal/db/connector.go` (Azure via newAzureConnector()) - AzureEntraIDConnector
 - `internal/db/resolver.go` - AzureFlags, environment variable loading
 
 **Architecture:**

@@ -303,13 +303,13 @@ SELECT * FROM pg_temp.pgmi_test_plan();
 SELECT * FROM pg_temp.pgmi_test_plan('.*/api/.*');
 ```
 
-**`pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
+**`CALL pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
 ```sql
 -- Run all tests
-pgmi_test();
+CALL pgmi_test();
 
 -- Run filtered tests
-pgmi_test('.*/pre-deployment/.*');
+CALL pgmi_test('.*/pre-deployment/.*');
 ```
 
 ## Design Heuristics
