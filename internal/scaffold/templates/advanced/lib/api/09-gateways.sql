@@ -220,12 +220,7 @@ BEGIN
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
     END IF;
 
-    IF p_headers->'accept' IS NOT NULL
-       AND p_headers->'accept' NOT LIKE '%*/*%'
-       AND NOT EXISTS (
-           SELECT 1 FROM unnest(v_route.produces) AS p
-           WHERE p_headers->'accept' LIKE '%' || p || '%'
-       ) THEN
+    IF NOT api.accept_matches(p_headers->'accept', v_route.produces) THEN
         RETURN api.problem_response(
             406,
             'Not Acceptable',
