@@ -15,10 +15,10 @@ pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tab
 pgmi init myproject --template basic
 
 # Deploy to database
-pgmi deploy ./myproject -c "postgresql://user:pass@host/db"
+pgmi deploy ./myproject --connection "postgresql://user:pass@host/db"
 
 # Run tests
-pgmi deploy ./myproject -c "..." --param run_tests=true
+pgmi deploy ./myproject --connection "..." --param run_tests=true
 ```
 
 ## Core Concepts
@@ -63,7 +63,7 @@ v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
 -- Conditional logic based on parameters
 IF COALESCE(current_setting('pgmi.run_tests', true), 'false') = 'true' THEN
-    pgmi_test();
+    CALL pgmi_test();
 END IF;
 ```
 
@@ -73,13 +73,17 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 
 | Skill | Use When |
 |-------|----------|
-| `pgmi-sql` | Writing SQL/PL/pgSQL code |
+| `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
 | `pgmi-philosophy` | Understanding architectural decisions |
-| `pgmi-cli` | Adding CLI commands or flags |
-| `pgmi-templates` | Creating/modifying scaffold templates |
-| `pgmi-testing-review` | Writing or reviewing tests |
-| `pgmi-postgres-review` | Reviewing SQL for correctness |
-| `pgmi-api-architecture` | REST/RPC/MCP protocol design |
+| `pgmi-system-design` | Designing features the pgmi way (physical/logical/API layering) |
+| `pgmi-templates` | Creating or modifying scaffold templates |
+| `pgmi-testing-review` | Writing, organizing, or debugging tests |
+| `pgmi-postgres-review` | Writing SQL with correctness and performance guidance |
+| `pgmi-metadata-system` | Working with `<pgmi-meta>` blocks, sortKeys, execution ordering |
+| `pgmi-test-architecture` | Organizing `__test__/` directories and test strategy |
+| `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
+| `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
+| `pgmi-mcp` | MCP handler implementation (advanced template) |
 
 ## SQL Conventions
 
@@ -126,13 +130,17 @@ jsonb_build_object(
 ## Commands Reference
 
 ```bash
-pgmi init <name> [--template basic|advanced]  # Create project
-pgmi deploy <path> -c <conn> [-d <db>]        # Deploy to database
+pgmi init <name> [--template basic|advanced]   # Create project
+pgmi deploy <path> --connection <conn>         # Deploy to database
 pgmi templates list                            # List templates
 pgmi templates describe <name>                 # Template details
+pgmi metadata scaffold <path> [--write]        # Generate/inject <pgmi-meta> blocks
+pgmi metadata validate <path> [--json]         # Validate metadata (no DB needed)
+pgmi metadata plan <path> [--json]             # Show execution order (no DB needed)
 pgmi ai skills                                 # List AI skills
 pgmi ai skill <name>                           # Get skill content
 pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/
+pgmi ai setup --assistant agents               # Write AGENTS.md (Codex, opencode, etc.)
 pgmi ai check                                  # Report whether that guidance is current
 ```
 

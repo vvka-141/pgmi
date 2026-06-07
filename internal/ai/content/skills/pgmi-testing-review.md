@@ -1,6 +1,6 @@
 ---
 name: pgmi-testing-review
-description: "Use when reviewing tests in SQL or Go"
+description: "Use when writing, organizing, or debugging tests in a pgmi project"
 user_invocable: true
 ---
 

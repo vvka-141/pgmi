@@ -15,12 +15,12 @@ import (
 
 // Connection pool configuration constants
 const (
-	// DefaultMaxConns limits concurrent connections to prevent resource exhaustion
-	// during long-running deployments.
-	DefaultMaxConns = 5
+	// DefaultMaxConns limits concurrent connections. pgmi uses exactly one session
+	// connection; a second slot handles rare concurrent health checks.
+	DefaultMaxConns = 2
 
-	// DefaultMinConns maintains at least one connection in the pool.
-	DefaultMinConns = 1
+	// DefaultMinConns avoids eagerly dialing throwaway connections.
+	DefaultMinConns = 0
 
 	// DefaultMaxConnIdleTime keeps connections alive during long deployments
 	// to avoid reconnection overhead.
@@ -33,6 +33,12 @@ func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
 		fmt.Fprintln(os.Stderr, notice.Message)
+		if notice.Detail != "" {
+			fmt.Fprintf(os.Stderr, "DETAIL: %s\n", notice.Detail)
+		}
+		if notice.Hint != "" {
+			fmt.Fprintf(os.Stderr, "HINT: %s\n", notice.Hint)
+		}
 	}
 }
 

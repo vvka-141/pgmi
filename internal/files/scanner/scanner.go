@@ -82,8 +82,8 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 
 		relPath := file.RelativePath()
 
-		// Exclude deploy.sql (case-insensitive)
-		if strings.ToLower(filepath.Base(file.Path())) == "deploy.sql" {
+		// Exclude only the root deploy.sql (not nested ones like examples/deploy.sql)
+		if strings.ToLower(relPath) == "deploy.sql" {
 			return nil
 		}
 

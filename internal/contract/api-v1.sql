@@ -107,7 +107,7 @@ CROSS JOIN LATERAL UNNEST(
     )
 ) AS unnested(sort_key)
 
-ORDER BY unnested.sort_key, s.path;
+;
 
 COMMENT ON VIEW pg_temp.pgmi_plan_view IS
     'Execution plan with multi-phase support via UNNEST(sort_keys).

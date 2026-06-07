@@ -178,21 +178,19 @@ END;
         RAISE EXCEPTION 'TEST FAILED: MCP error should preserve request_id in envelope.id';
     END IF;
 
-    IF ((v_mcp_response).envelope->'error'->>'code')::int != -32603 THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP tool error code should be -32603, got %', (v_mcp_response).envelope->'error'->>'code';
+    -- Client should receive sanitized error via result.content (NOT envelope.error)
+    IF (v_mcp_response).envelope->'result'->'content'->0->>'text' LIKE '%Deliberate MCP test error%' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error should NOT expose internal exception, got: %',
+            (v_mcp_response).envelope->'result'->'content'->0->>'text';
     END IF;
 
-    -- Client should receive sanitized error
-    IF (v_mcp_response).envelope->'error'->>'message' LIKE '%Deliberate MCP test error%' THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP error should NOT expose internal exception to clients';
-    END IF;
-
-    IF (v_mcp_response).envelope->'error'->>'message' != 'Internal error' THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP error message should be sanitized, got: %', (v_mcp_response).envelope->'error'->>'message';
+    IF (v_mcp_response).envelope->'result'->'content'->0->>'text' != 'Tool execution failed' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP error should be sanitized to "Tool execution failed", got: %',
+            (v_mcp_response).envelope->'result'->'content'->0->>'text';
     END IF;
 
     -- Full error should be logged in exchange table for debugging
-    SELECT (response).envelope->'error'->>'message'
+    SELECT (response).envelope->'result'->'content'->0->>'text'
     INTO v_exchange_detail
     FROM api.mcp_exchange
     WHERE handler_object_id = 'ffffffff-e003-4000-8000-000000000001'::uuid

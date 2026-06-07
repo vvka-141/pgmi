@@ -11,8 +11,8 @@ func generate(t *testing.T) PlannedFile {
 	if err != nil {
 		t.Fatalf("GenerateSetup: %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 file, got %d", len(files))
+	if len(files) == 0 {
+		t.Fatal("expected at least 1 file")
 	}
 	return files[0]
 }
@@ -43,7 +43,7 @@ func TestGenerateSetup_ClaudeSkill(t *testing.T) {
 }
 
 func TestGenerateSetup_UnsupportedAssistant(t *testing.T) {
-	if _, err := GenerateSetup("codex", Stamp{}); err == nil {
+	if _, err := GenerateSetup("unknown", Stamp{}); err == nil {
 		t.Fatal("expected error for unsupported assistant")
 	}
 }
@@ -99,9 +99,39 @@ func TestParseManaged_StaleNotEdited(t *testing.T) {
 	}
 }
 
+func TestGenerateSetup_AgentsMd(t *testing.T) {
+	files, err := GenerateSetup("agents", Stamp{Version: "1.0.0", Source: ModulePath})
+	if err != nil {
+		t.Fatalf("GenerateSetup(agents): %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	f := files[0]
+	if f.RelPath != "AGENTS.md" {
+		t.Errorf("RelPath = %q, want AGENTS.md", f.RelPath)
+	}
+	for _, want := range []string{
+		"pgmi",
+		"deploy.sql",
+		"pgmi_plan_view",
+		"CALL pgmi_test()",
+		ModulePath,
+	} {
+		if !strings.Contains(f.Content, want) {
+			t.Errorf("generated AGENTS.md missing %q", want)
+		}
+	}
+	if strings.Contains(f.Content, coreMarker) {
+		t.Errorf("core marker %q was not substituted", coreMarker)
+	}
+}
+
 func TestAdapterFor(t *testing.T) {
-	if _, err := AdapterFor("claude"); err != nil {
-		t.Errorf("claude should be supported: %v", err)
+	for _, name := range []string{"claude", "agents", "codex", "opencode"} {
+		if _, err := AdapterFor(name); err != nil {
+			t.Errorf("%s should be supported: %v", name, err)
+		}
 	}
 	if _, err := AdapterFor("nope"); err == nil {
 		t.Error("expected error for unknown assistant")

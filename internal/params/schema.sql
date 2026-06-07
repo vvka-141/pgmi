@@ -250,7 +250,7 @@ Example:
 -- Validates regex syntax before use in test filtering (fail-fast on bad patterns)
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_validate_pattern(p_pattern TEXT)
 RETURNS TEXT
-LANGUAGE plpgsql STABLE
+LANGUAGE plpgsql IMMUTABLE
 AS $$
 BEGIN
     IF p_pattern IS NULL THEN
@@ -402,7 +402,7 @@ DECLARE
     v_path TEXT;
     v_parts TEXT[];
 BEGIN
-    -- 🧩 1. Normalize the path
+    -- 1. Normalize the path
     v_path := trim(both ' ' from in_path);
     v_path := replace(v_path, E'\\', '/');                              -- convert backslashes
     IF v_path !~ '^\./' THEN
@@ -410,7 +410,7 @@ BEGIN
     END IF;
     v_path := regexp_replace(v_path, '/{2,}', '/', 'g');                -- collapse duplicate slashes
 
-    -- 🧩 2. Compute components
+    -- 2. Compute components
     v_parts := string_to_array(v_path, '/');
 
     v_row.path               := v_path;

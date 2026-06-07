@@ -7,23 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 )
 
-// DefaultMaxFileSize is the default per-file size cap for scanned SQL files.
-// Anything over this is almost certainly a mistake (a binary asset landed in
-// the source tree, a runaway artifact, a ZIP bomb). Override with the
-// PGMI_MAX_FILE_SIZE environment variable (bytes; must be a positive integer).
 const DefaultMaxFileSize int64 = 10 * 1024 * 1024 // 10 MiB
 
-// maxFileSize returns the effective per-file size cap, honoring PGMI_MAX_FILE_SIZE.
-func maxFileSize() int64 {
+var maxFileSize = sync.OnceValue(func() int64 {
 	if raw := os.Getenv("PGMI_MAX_FILE_SIZE"); raw != "" {
 		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
 			return n
 		}
 	}
 	return DefaultMaxFileSize
-}
+})
 
 // osFile implements File interface for OS filesystem
 type osFile struct {

@@ -3,10 +3,13 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestForcedApprover_ApprovesAfterCountdown(t *testing.T) {
@@ -100,8 +103,8 @@ func TestForcedApprover_NewForcedApprover(t *testing.T) {
 	if fa.output == nil {
 		t.Error("Expected non-nil output writer")
 	}
-	if fa.sleepFn == nil {
-		t.Error("Expected non-nil sleep function")
+	if fa.sleepFn != nil {
+		t.Error("Expected nil sleepFn in production (ctx-aware select path)")
 	}
 }
 
@@ -274,6 +277,56 @@ func TestNewInteractiveApprover(t *testing.T) {
 	}
 	if ia.output == nil {
 		t.Error("Expected non-nil output writer")
+	}
+}
+
+func TestForcedApprover_CtxCancelRespondsPromptly(t *testing.T) {
+	var output bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+
+	approver := &ForcedApprover{
+		output:  &output,
+		sleepFn: nil,
+	}
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	approved, err := approver.RequestApproval(ctx, "testdb")
+	elapsed := time.Since(start)
+
+	if approved {
+		t.Fatal("Expected denial on ctx cancel")
+	}
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("Expected context canceled, got: %v", err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Ctrl-C should respond within 500ms, took %v", elapsed)
+	}
+}
+
+func TestInteractiveApprover_EOFReturnsDenied(t *testing.T) {
+	var output bytes.Buffer
+	input := &errorReader{err: io.EOF}
+
+	approver := &InteractiveApprover{
+		input:  input,
+		output: &output,
+	}
+
+	approved, err := approver.RequestApproval(context.Background(), "mydb")
+	if approved {
+		t.Fatal("Expected denial on EOF")
+	}
+	if !errors.Is(err, pgmi.ErrApprovalDenied) {
+		t.Fatalf("Expected ErrApprovalDenied, got: %v", err)
+	}
+	if !strings.Contains(output.String(), "No input available") {
+		t.Errorf("Expected guidance message, got: %s", output.String())
 	}
 }
 

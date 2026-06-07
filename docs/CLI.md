@@ -543,6 +543,7 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 | `12` | User denied overwrite approval |
 | `13` | SQL execution failed |
 | `14` | `deploy.sql` not found |
+| `15` | Concurrent deploy detected |
 | `130` | Interrupted by SIGINT (Ctrl-C) — Unix convention 128+SIGINT |
 
 ---

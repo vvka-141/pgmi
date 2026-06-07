@@ -104,6 +104,24 @@ want in CI.
   accordingly. The connection password belongs in the connection string or
   environment (`PGPASSWORD`, `.pgpass`).
 
+## Deterministic tools — prefer these over reasoning
+
+When working in an advanced-template project, use `pgmi metadata` instead of
+hand-authoring `<pgmi-meta>` blocks or guessing execution order:
+
+```bash
+pgmi metadata scaffold ./project --write   # inject valid <pgmi-meta> with UUID + sortKeys
+pgmi metadata validate ./project --json    # XML/XSD validity + duplicate-id check
+pgmi metadata plan ./project --json        # files in pgmi_plan_view execution order
+```
+
+Workflow: when adding a file to an advanced-template project, run `scaffold
+--write` to generate metadata, then `validate` to confirm correctness, then
+`plan` to verify execution order before deploying. Do not hand-author
+`<pgmi-meta>` blocks or infer order from file names.
+
+All three commands are filesystem-only — no database connection required.
+
 ## Advanced-only
 
 The following apply **only** in an advanced-template project (gated behind its
@@ -122,13 +140,16 @@ This file is the core model, kept deliberately short. For full detail on a
 specific area, run (if the `pgmi` binary is installed):
 
 ```bash
-pgmi ai skill pgmi-sql            # SQL/PL/pgSQL conventions, deploy.sql patterns
-pgmi ai skill pgmi-philosophy     # why pgmi refuses orchestration flags
-pgmi ai skill pgmi-testing-review # test structure and isolation
-pgmi ai skill pgmi-templates      # template internals, basic and advanced
+pgmi ai skill pgmi-sql              # SQL/PL/pgSQL conventions, deploy.sql patterns
+pgmi ai skill pgmi-philosophy       # why pgmi refuses orchestration flags
+pgmi ai skill pgmi-metadata-system  # <pgmi-meta> blocks, sortKeys, execution ordering
+pgmi ai skill pgmi-test-architecture # __test__/ dirs, fixture naming, isolation
+pgmi ai skill pgmi-testing-review   # writing and debugging tests
+pgmi ai skill postgresql-patterns   # EXECUTE, format(), composite types, dynamic SQL
+pgmi ai skill pgmi-templates        # template internals, basic and advanced
 pgmi ai skill pgmi-api-architecture # advanced: REST/RPC/MCP design
-pgmi ai skill pgmi-mcp            # advanced: MCP handler implementation
-pgmi ai skills                    # full list
+pgmi ai skill pgmi-mcp              # advanced: MCP handler implementation
+pgmi ai skills                      # full list
 ```
 
 If `pgmi` is not on PATH, install it with:

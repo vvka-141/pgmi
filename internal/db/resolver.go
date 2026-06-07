@@ -138,11 +138,6 @@ func LoadFromEnvironment() *EnvVars {
 	}
 }
 
-// HasAzureCredentials returns true if Azure Entra ID environment variables are set.
-func (e *EnvVars) HasAzureCredentials() bool {
-	return e.AZURE_TENANT_ID != "" || e.AZURE_CLIENT_ID != ""
-}
-
 // ResolveConnectionParams resolves connection parameters using PostgreSQL-standard precedence:
 //
 // 1. Connection string flag (--connection) - if provided, parse and use directly

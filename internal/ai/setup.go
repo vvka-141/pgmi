@@ -41,13 +41,17 @@ type Adapter interface {
 }
 
 // SupportedAssistants lists the assistant names AdapterFor accepts.
-var SupportedAssistants = []string{"claude"}
+var SupportedAssistants = []string{"claude", "agents", "codex", "opencode", "codex-skills"}
 
 // AdapterFor returns the adapter for an assistant name.
 func AdapterFor(name string) (Adapter, error) {
 	switch name {
 	case "claude":
 		return claudeAdapter{}, nil
+	case "agents", "codex", "opencode":
+		return agentsAdapter{}, nil
+	case "codex-skills":
+		return codexSkillsAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported assistant %q (supported: %s)", name, strings.Join(SupportedAssistants, ", "))
 	}
@@ -77,6 +81,72 @@ func GenerateSetup(assistant string, stamp Stamp) ([]PlannedFile, error) {
 	return files, nil
 }
 
+type codexSkillsAdapter struct{}
+
+func (codexSkillsAdapter) Name() string { return "codex-skills" }
+
+func (codexSkillsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	wrapper, err := readContent("content/setup/claude-skill.md")
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(wrapper, coreMarker) {
+		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
+	}
+
+	skills, err := ListSkills()
+	if err != nil {
+		return nil, fmt.Errorf("list skills for depth files: %w", err)
+	}
+
+	var depthSection strings.Builder
+	depthSection.WriteString("\n\n## Depth files\n\n")
+	depthSection.WriteString("Load the relevant file from this skill directory when working in that area:\n\n")
+
+	var depthFiles []PlannedFile
+	for _, s := range skills {
+		content, readErr := contentFS.ReadFile(s.FilePath)
+		if readErr != nil {
+			continue
+		}
+		depthFiles = append(depthFiles, PlannedFile{
+			RelPath: SkillDirName + "/" + s.Name + ".md",
+			Content: string(content),
+		})
+		desc := s.Description
+		if desc == "" {
+			desc = s.Name
+		}
+		fmt.Fprintf(&depthSection, "- `${CLAUDE_SKILL_DIR}/%s.md` — %s\n", s.Name, desc)
+	}
+
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	body += depthSection.String()
+
+	files := []PlannedFile{{RelPath: SkillDirName + "/SKILL.md", Content: body}}
+	files = append(files, depthFiles...)
+	return files, nil
+}
+
+type agentsAdapter struct{}
+
+func (agentsAdapter) Name() string { return "agents" }
+
+func (agentsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	wrapper, err := readContent("content/setup/agents-md.md")
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(wrapper, coreMarker) {
+		return nil, fmt.Errorf("agents-md.md is missing the %s marker", coreMarker)
+	}
+
+	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
+	return []PlannedFile{
+		{RelPath: "AGENTS.md", Content: body},
+	}, nil
+}
+
 type claudeAdapter struct{}
 
 func (claudeAdapter) Name() string { return "claude" }
@@ -90,10 +160,38 @@ func (claudeAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
 		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
 	}
 
+	skills, err := ListSkills()
+	if err != nil {
+		return nil, fmt.Errorf("list skills for depth files: %w", err)
+	}
+
+	var depthSection strings.Builder
+	depthSection.WriteString("\n\n## Depth files\n\n")
+	depthSection.WriteString("Load the relevant file from this skill directory when working in that area:\n\n")
+
+	var depthFiles []PlannedFile
+	for _, s := range skills {
+		content, readErr := contentFS.ReadFile(s.FilePath)
+		if readErr != nil {
+			continue
+		}
+		depthFiles = append(depthFiles, PlannedFile{
+			RelPath: SkillDirName + "/" + s.Name + ".md",
+			Content: string(content),
+		})
+		desc := s.Description
+		if desc == "" {
+			desc = s.Name
+		}
+		fmt.Fprintf(&depthSection, "- `${CLAUDE_SKILL_DIR}/%s.md` — %s\n", s.Name, desc)
+	}
+
 	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
-	return []PlannedFile{
-		{RelPath: SkillDirName + "/SKILL.md", Content: body},
-	}, nil
+	body += depthSection.String()
+
+	files := []PlannedFile{{RelPath: SkillDirName + "/SKILL.md", Content: body}}
+	files = append(files, depthFiles...)
+	return files, nil
 }
 
 func readContent(path string) (string, error) {

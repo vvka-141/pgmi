@@ -22,17 +22,25 @@ func TestResolveAssistant(t *testing.T) {
 	if got, err := resolveAssistant("claude"); err != nil || got != "claude" {
 		t.Errorf("resolveAssistant(claude) = %q, %v", got, err)
 	}
-	if _, err := resolveAssistant("codex"); err == nil {
+	if got, err := resolveAssistant("agents"); err != nil || got != "agents" {
+		t.Errorf("resolveAssistant(agents) = %q, %v", got, err)
+	}
+	if got, err := resolveAssistant("codex"); err != nil || got != "codex" {
+		t.Errorf("resolveAssistant(codex) = %q, %v", got, err)
+	}
+	if got, err := resolveAssistant("opencode"); err != nil || got != "opencode" {
+		t.Errorf("resolveAssistant(opencode) = %q, %v", got, err)
+	}
+	if _, err := resolveAssistant("unknown"); err == nil {
 		t.Error("expected error for unsupported assistant")
 	}
-	// Empty in a non-interactive test process must require --assistant.
 	if _, err := resolveAssistant(""); err == nil {
 		t.Error("expected error when assistant unset in non-interactive mode")
 	}
 }
 
 func TestSkillsRoot(t *testing.T) {
-	local, err := skillsRoot(false)
+	local, err := skillsRoot("claude", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +48,7 @@ func TestSkillsRoot(t *testing.T) {
 		t.Errorf("local root = %q", local)
 	}
 
-	global, err := skillsRoot(true)
+	global, err := skillsRoot("claude", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +195,7 @@ func TestRunAISetupAndCheck_EndToEnd(t *testing.T) {
 func TestRunAISetup_DryRunWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	os.WriteFile("deploy.sql", []byte("-- deploy\n"), 0644)
 
 	setupAssistant = "claude"
 	setupGlobal = false

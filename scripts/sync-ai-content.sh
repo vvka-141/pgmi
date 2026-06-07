@@ -20,14 +20,15 @@ mkdir -p "$TARGET_DIR"
 SKILLS=(
     "pgmi-philosophy"
     "pgmi-sql"
-    "pgmi-cli"
+    "pgmi-system-design"
     "pgmi-templates"
     "pgmi-testing-review"
     "pgmi-postgres-review"
     "pgmi-api-architecture"
     "pgmi-mcp"
-    "pgmi-connections"
-    "pgmi-deployment"
+    "pgmi-metadata-system"
+    "pgmi-test-architecture"
+    "postgresql-patterns"
 )
 
 synced=0

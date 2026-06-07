@@ -33,7 +33,7 @@ func NewForcedApprover(verbose bool) pgmi.Approver {
 	return &ForcedApprover{
 		verbose:   verbose,
 		output:    os.Stderr,
-		sleepFn:   time.Sleep,
+		sleepFn:   nil,
 		showSkull: tui.IsInteractive() && os.Getenv("PGMI_NO_BANNER") == "",
 	}
 }

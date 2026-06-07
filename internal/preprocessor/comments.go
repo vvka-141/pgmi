@@ -93,11 +93,8 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool) string {
 	// Byte widths of each rune — needed so length-preserving mode writes the
 	// correct number of placeholder spaces for multi-byte runes.
 	runeBytes := make([]int, len(runes))
-	bytePos := 0
 	for idx, r := range runes {
-		w := runeByteLen(r)
-		runeBytes[idx] = w
-		bytePos += w
+		runeBytes[idx] = runeByteLen(r)
 	}
 
 	i := 0

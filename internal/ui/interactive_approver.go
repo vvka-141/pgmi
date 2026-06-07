@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,6 +77,10 @@ func (a *InteractiveApprover) RequestApproval(ctx context.Context, dbName string
 		return false, ctx.Err()
 	case err := <-errChan:
 		wg.Wait()
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(a.output, "\nNo input available. Use --force to bypass confirmation in non-interactive mode.")
+			return false, pgmi.ErrApprovalDenied
+		}
 		return false, fmt.Errorf("failed to read input: %w", err)
 	case input := <-inputChan:
 		wg.Wait()
