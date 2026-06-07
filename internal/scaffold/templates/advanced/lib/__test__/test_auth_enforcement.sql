@@ -450,5 +450,50 @@ END;
     END IF;
     RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
 
+    -- ========================================================================
+    -- PGMI-33: the gateway JIT-provisions a membership.user row for a first-time
+    -- authenticated identity, so api.current_user_id() resolves and /me +
+    -- /organizations work without any out-of-band row creation.
+    -- ========================================================================
+
+    v_response := api.rest_invoke(
+        'GET', '/me',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: /me for a freshly-authenticated identity should be 200 (JIT-provisioned), got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF v_content->>'email' != 'jit-pgmi33@example.com' THEN
+        RAISE EXCEPTION 'TEST FAILED: /me returned wrong/absent user, got %', v_content;
+    END IF;
+    RAISE NOTICE '  ✓ REST: /me JIT-provisions a first-time identity (200, current_user_id resolves)';
+
+    v_response := api.rest_invoke(
+        'GET', '/organizations',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: /organizations should be 200, got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF jsonb_array_length(v_content->'organizations') < 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: /organizations should list the auto-created personal org, got %', v_content;
+    END IF;
+    RAISE NOTICE '  ✓ REST: /organizations returns the JIT-provisioned personal org';
+
+    -- Idempotent: a repeat request must not error on duplicate provisioning.
+    v_response := api.rest_invoke(
+        'GET', '/me',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: repeated /me should stay 200 (idempotent provisioning), got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: JIT provisioning is idempotent across repeated requests';
+
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;

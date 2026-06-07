@@ -56,9 +56,15 @@ BEGIN
     PERFORM set_config('auth.user_email', '', true);
     PERFORM set_config('auth.token', '', true);
     PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'user_email' IS NOT NULL THEN
+        PERFORM set_config('auth.user_email', p_context->>'user_email', true);
+    END IF;
     IF p_context->>'tenant_id' IS NOT NULL THEN
         PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
     END IF;
+    -- JIT-provision so current_user_id() resolves; no-op when the context omits
+    -- a valid identity or email. Idempotent across pooled requests.
+    PERFORM internal.provision_current_user(p_context->>'user_email');
 END;
 $$;
 
@@ -97,36 +103,44 @@ $$;
 COMMENT ON FUNCTION api.set_auth_context(extensions.hstore) IS
     'Gateway-only trust boundary: maps x-user-id (format provider|subject_id), x-user-email, x-tenant-id, authorization headers into session GUCs. Callers MUST be a trusted gateway that has already verified the identity — these headers carry no integrity check.';
 
-CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
+-- JIT-provisions the membership.user row for the currently-authenticated
+-- identity. Reads the already-validated auth.idp_subject GUC (set by
+-- set_auth_context / apply_mcp_auth_context via set_auth_user_id, which
+-- guarantees provider|subject form) so provisioning shares the gateway's
+-- validation. Idempotent (membership.upsert_user upserts), safe to call on
+-- every request in a pooled session. SECURITY DEFINER so it can reach
+-- upsert_user, which is revoked from the api/customer roles.
+CREATE OR REPLACE FUNCTION internal.provision_current_user(p_email text)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = api, membership, extensions, pg_temp
 AS $$
 DECLARE
-    v_subject text;
-    v_email text;
-    v_provider text;
-    v_subject_id text;
+    v_subject text := NULLIF(current_setting('auth.idp_subject', true), '');
 BEGIN
-    v_subject := p_headers->'x-user-id';
-    IF v_subject IS NULL OR length(v_subject) > 4096 THEN
+    IF v_subject IS NULL OR p_email IS NULL OR length(p_email) > 4096 THEN
         RETURN;
     END IF;
+    PERFORM membership.upsert_user(
+        api.parse_idp_provider(v_subject),
+        api.parse_idp_subject_id(v_subject),
+        p_email
+    );
+END;
+$$;
 
-    IF position('|' IN v_subject) = 0 THEN
-        RETURN;
-    END IF;
-
-    PERFORM set_config('auth.idp_subject', v_subject, true);
-    PERFORM set_config('auth.user_id', v_subject, true);
-
-    v_email := p_headers->'x-user-email';
-    IF v_email IS NOT NULL AND length(v_email) <= 4096 THEN
-        v_provider := api.parse_idp_provider(v_subject);
-        v_subject_id := api.parse_idp_subject_id(v_subject);
-        PERFORM membership.upsert_user(v_provider, v_subject_id, v_email);
-    END IF;
+-- Gateway auth path: set the validated trust-boundary GUCs, then JIT-provision
+-- the membership.user row so api.current_user_id() resolves on first request.
+CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = api, membership, extensions, pg_temp
+AS $$
+BEGIN
+    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.provision_current_user(p_headers->'x-user-email');
 END;
 $$;
 
@@ -199,7 +213,7 @@ BEGIN
 
     -- Resolve identity first, then gate on session state (not header presence)
     -- so a present-but-malformed x-user-id fails closed.
-    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.setup_auth_session(p_headers);
 
     IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
@@ -431,7 +445,7 @@ BEGIN
 
     -- Resolve identity first, then gate on session state (not header presence)
     -- so a present-but-malformed x-user-id fails closed.
-    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.setup_auth_session(p_headers);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rpc_invoke: Auth required but missing';
@@ -951,4 +965,5 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.setup_auth_session(extensions.hstore) TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.set_auth_user_id(text) TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.apply_mcp_auth_context(jsonb) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.provision_current_user(text) TO %I', v_api_role);
 END $$;
