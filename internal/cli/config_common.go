@@ -39,18 +39,12 @@ type connectionFlags struct {
 	sslRootCert    string
 }
 
-// resolvedConnection holds the resolved connection configuration.
-type resolvedConnection struct {
-	ConnConfig    *pgmi.ConnectionConfig
-	MaintenanceDB string
-}
-
 // resolveConnectionFromFlags resolves connection configuration from flags and project config.
 func resolveConnectionFromFlags(
 	flags connectionFlags,
 	projectCfg *config.ProjectConfig,
 	verbose bool,
-) (*resolvedConnection, error) {
+) (*pgmi.ConnectionConfig, string, error) {
 	granularFlags := &db.GranularConnFlags{
 		Host:     flags.host,
 		Port:     flags.port,
@@ -83,17 +77,14 @@ func resolveConnectionFromFlags(
 
 	connConfig, maintenanceDB, err := resolveConnection(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, projectCfg, verbose)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if flags.password != "" && connConfig.Password == "" {
 		connConfig.Password = flags.password
 	}
 
-	return &resolvedConnection{
-		ConnConfig:    connConfig,
-		MaintenanceDB: maintenanceDB,
-	}, nil
+	return connConfig, maintenanceDB, nil
 }
 
 // loadMergedParameters loads and merges parameters from all sources.

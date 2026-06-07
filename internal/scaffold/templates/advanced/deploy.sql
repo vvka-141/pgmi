@@ -365,7 +365,7 @@ BEGIN
             encode(extensions.digest(convert_to(p.content, 'UTF8'), 'sha256'), 'hex') AS checksum
         FROM pg_temp.pgmi_plan_view p
         JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file AND s.path != './session.xml'
+        WHERE s.is_sql_file
         ORDER BY p.execution_order
     )
     LOOP

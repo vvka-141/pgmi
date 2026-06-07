@@ -173,21 +173,21 @@ func init() {
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
 func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
-	resolved, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg, verbose)
+	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
-	targetDB, err := resolveTargetDatabase(deployFlags.database, resolved.ConnConfig.Database, true, "deploy", verbose)
+	targetDB, err := resolveTargetDatabase(deployFlags.database, connConfig.Database, true, "deploy", verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
-	maintenanceDB := determineMaintenanceDB(deployFlags.database, resolved.ConnConfig.Database, resolved.MaintenanceDB)
-	resolved.ConnConfig.Database = targetDB
+	maintenanceDB := determineMaintenanceDB(deployFlags.database, connConfig.Database, resolvedMaintenanceDB)
+	connConfig.Database = targetDB
 
 	if verbose {
-		logConnectionVerbose(resolved.ConnConfig, maintenanceDB, true)
+		logConnectionVerbose(connConfig, maintenanceDB, true)
 	}
 
 	parameters, err := loadMergedParameters(projectCfg, deployFlags.paramsFiles, deployFlags.params, verbose)
@@ -202,19 +202,19 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *co
 
 	return pgmi.DeploymentConfig{
 		SourcePath:          sourcePath,
-		DatabaseName:        resolved.ConnConfig.Database,
+		DatabaseName:        connConfig.Database,
 		MaintenanceDatabase: maintenanceDB,
-		ConnectionString:    db.BuildConnectionString(resolved.ConnConfig),
+		ConnectionString:    db.BuildConnectionString(connConfig),
 		Overwrite:           deployFlags.overwrite,
 		Force:               deployFlags.force,
 		Parameters:          parameters,
 		Compat:              deployFlags.compat,
 		Timeout:             timeout,
 		Verbose:             verbose,
-		AuthMethod:          resolved.ConnConfig.AuthMethod,
-		AzureTenantID:       resolved.ConnConfig.AzureTenantID,
-		AzureClientID:       resolved.ConnConfig.AzureClientID,
-		AzureClientSecret:   resolved.ConnConfig.AzureClientSecret,
+		AuthMethod:          connConfig.AuthMethod,
+		AzureTenantID:       connConfig.AzureTenantID,
+		AzureClientID:       connConfig.AzureClientID,
+		AzureClientSecret:   connConfig.AzureClientSecret,
 	}, nil
 }
 
