@@ -41,10 +41,24 @@ var aiSkillCmd = &cobra.Command{
 	RunE:              runAISkill,
 }
 
+var aiContractCmd = &cobra.Command{
+	Use:   "contract",
+	Short: "Print the machine-readable session-API contract",
+	Long: `Print the pgmi session-API contract as JSON. Agents should query this
+before writing SQL against pgmi views/functions to avoid hallucinating
+identifiers.
+
+Output includes: view names and columns, test function signatures,
+step types, exit codes, and preprocessor macro forms.`,
+	Args: cobra.NoArgs,
+	RunE: runAIContract,
+}
+
 func init() {
 	rootCmd.AddCommand(aiCmd)
 	aiCmd.AddCommand(aiSkillsCmd)
 	aiCmd.AddCommand(aiSkillCmd)
+	aiCmd.AddCommand(aiContractCmd)
 }
 
 func runAIOverview(cmd *cobra.Command, args []string) error {
@@ -94,5 +108,14 @@ func runAISkill(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprint(os.Stdout, content)
+	return nil
+}
+
+func runAIContract(cmd *cobra.Command, args []string) error {
+	out, err := ai.GetContractJSON()
+	if err != nil {
+		return fmt.Errorf("failed to generate contract: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, out)
 	return nil
 }
