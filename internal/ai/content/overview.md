@@ -73,13 +73,18 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 
 | Skill | Use When |
 |-------|----------|
-| `pgmi-sql` | Writing SQL/PL/pgSQL code |
+| `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
 | `pgmi-philosophy` | Understanding architectural decisions |
 | `pgmi-cli` | Adding CLI commands or flags |
-| `pgmi-templates` | Creating/modifying scaffold templates |
-| `pgmi-testing-review` | Writing or reviewing tests |
-| `pgmi-postgres-review` | Reviewing SQL for correctness |
-| `pgmi-api-architecture` | REST/RPC/MCP protocol design |
+| `pgmi-templates` | Creating or modifying scaffold templates |
+| `pgmi-testing-review` | Writing, organizing, or debugging tests |
+| `pgmi-postgres-review` | Writing SQL with correctness and performance guidance |
+| `pgmi-metadata-system` | Working with `<pgmi-meta>` blocks, sortKeys, execution ordering |
+| `pgmi-test-architecture` | Organizing `__test__/` directories and test strategy |
+| `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
+| `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
+| `pgmi-mcp` | MCP handler implementation (advanced template) |
+| `pgmi-connections` | Auth and connection providers |
 
 ## SQL Conventions
 

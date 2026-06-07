@@ -122,13 +122,16 @@ This file is the core model, kept deliberately short. For full detail on a
 specific area, run (if the `pgmi` binary is installed):
 
 ```bash
-pgmi ai skill pgmi-sql            # SQL/PL/pgSQL conventions, deploy.sql patterns
-pgmi ai skill pgmi-philosophy     # why pgmi refuses orchestration flags
-pgmi ai skill pgmi-testing-review # test structure and isolation
-pgmi ai skill pgmi-templates      # template internals, basic and advanced
+pgmi ai skill pgmi-sql              # SQL/PL/pgSQL conventions, deploy.sql patterns
+pgmi ai skill pgmi-philosophy       # why pgmi refuses orchestration flags
+pgmi ai skill pgmi-metadata-system  # <pgmi-meta> blocks, sortKeys, execution ordering
+pgmi ai skill pgmi-test-architecture # __test__/ dirs, fixture naming, isolation
+pgmi ai skill pgmi-testing-review   # writing and debugging tests
+pgmi ai skill postgresql-patterns   # EXECUTE, format(), composite types, dynamic SQL
+pgmi ai skill pgmi-templates        # template internals, basic and advanced
 pgmi ai skill pgmi-api-architecture # advanced: REST/RPC/MCP design
-pgmi ai skill pgmi-mcp            # advanced: MCP handler implementation
-pgmi ai skills                    # full list
+pgmi ai skill pgmi-mcp              # advanced: MCP handler implementation
+pgmi ai skills                      # full list
 ```
 
 If `pgmi` is not on PATH, install it with:

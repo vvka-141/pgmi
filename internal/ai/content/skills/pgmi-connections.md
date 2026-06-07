@@ -1055,7 +1055,7 @@ pgmi deploy ./migrations -d myapp --sslmode verify-full
 
 ## See Also
 
-- **pgmi-deployment skill:** Session-centric model, execution flow
+- **pgmi-philosophy skill:** Session-centric model, execution fabric principles
 - **pgmi-cli skill:** CLI design philosophy, flags, parameters
 - **CLAUDE.md:** Two-database pattern, CLI design implications
 - **PostgreSQL Connection Strings:** https://www.postgresql.org/docs/current/libpq-connect.html

@@ -1,6 +1,6 @@
 ---
 name: pgmi-postgres-review
-description: "Use when reviewing SQL/PL/pgSQL for correctness and performance"
+description: "Use when writing SQL/PL/pgSQL and need correctness and performance guidance"
 user_invocable: true
 ---
 

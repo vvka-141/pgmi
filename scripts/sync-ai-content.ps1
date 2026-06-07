@@ -34,7 +34,9 @@ $essentialSkills = @(
     "pgmi-api-architecture",
     "pgmi-mcp",
     "pgmi-connections",
-    "pgmi-deployment"
+    "pgmi-metadata-system",
+    "pgmi-test-architecture",
+    "postgresql-patterns"
 )
 
 $synced = 0

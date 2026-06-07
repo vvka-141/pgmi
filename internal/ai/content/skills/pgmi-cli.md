@@ -922,7 +922,7 @@ if !fileExists(path) {
 
 ## See Also
 
-- **pgmi-deployment skill:** Execution flow, plan-based model
+- **pgmi-philosophy skill:** Execution fabric principles, plan-based model
 - **pgmi-connections skill:** Connection factory, Connector interface
 - **CLAUDE.md:** CLI design philosophy, timeout rationale
 - **Cobra Documentation:** https://github.com/spf13/cobra
