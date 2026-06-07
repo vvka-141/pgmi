@@ -124,7 +124,7 @@ pgmi deploy . --database mydb --overwrite --force
 
 This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
 
-> **Requirement:** pgmi needs a **direct** PostgreSQL connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
+> **Requirement:** pgmi needs **PostgreSQL 11+** and a **direct** connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
 
 See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 

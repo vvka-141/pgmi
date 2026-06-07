@@ -152,8 +152,15 @@ func resolveEffectiveTimeout(
 // .env is project-scoped (sourcePath/.env), never the process CWD, so the
 // resolved target and credentials match the project being deployed.
 // Returns nil config if pgmi.yaml does not exist (not an error).
-func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
-	_ = godotenv.Load(filepath.Join(sourcePath, ".env"))
+func loadProjectConfig(sourcePath string, verbose bool) (*config.ProjectConfig, error) {
+	envPath := filepath.Join(sourcePath, ".env")
+	if err := godotenv.Load(envPath); err != nil && verbose {
+		// A missing .env is normal and stays silent; surface only a real parse
+		// error (file present but unreadable/malformed) so it isn't lost.
+		if _, statErr := os.Stat(envPath); statErr == nil {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] failed to load %s: %v\n", envPath, err)
+		}
+	}
 
 	projectCfg, err := config.Load(sourcePath)
 	if err != nil {

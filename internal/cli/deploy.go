@@ -222,7 +222,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
 
-	projectCfg, err := loadProjectConfig(sourcePath)
+	projectCfg, err := loadProjectConfig(sourcePath, verbose)
 	if err != nil {
 		return err
 	}

@@ -326,11 +326,7 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 // insertMetadata inserts script metadata into the pg_temp.pgmi_source_metadata table.
 // Only processes files that have metadata (FileMetadata.Metadata != nil).
 func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
-	insertSQL := `
-		INSERT INTO pg_temp._pgmi_source_metadata
-		(path, id, idempotent, sort_keys, description)
-		VALUES ($1, $2, $3, $4, $5)
-	`
+	insertSQL := `INSERT INTO pg_temp._pgmi_source_metadata (path, id, idempotent, sort_keys, description) VALUES ($1, $2, $3, $4, $5)`
 
 	batch := &pgx.Batch{}
 	var labels []string

@@ -9,9 +9,8 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-func TestDeploy_ReadDeploySQLFails_AfterSessionPrep(t *testing.T) {
+func TestDeploy_SessionPrepErrorPropagates(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
-	fileScanner := &mockFileScanner{readErr: fmt.Errorf("deploy.sql not found")}
 
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return &mockConnector{}, nil
@@ -22,7 +21,7 @@ func TestDeploy_ReadDeploySQLFails_AfterSessionPrep(t *testing.T) {
 		err:     fmt.Errorf("session prep reached"),
 	}
 
-	svc := NewDeploymentService(connFactory, &mockApprover{}, &mockLogger{}, sessPreparer, fileScanner, dbMgr)
+	svc := NewDeploymentService(connFactory, &mockApprover{}, &mockLogger{}, sessPreparer, &mockFileScanner{}, dbMgr)
 	svc.mgmtConnector = successfulMgmtConn()
 
 	err := svc.Deploy(context.Background(), validConfig())

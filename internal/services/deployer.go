@@ -14,8 +14,7 @@ import (
 type managementDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
 
 // DeploymentService implements the Deployer interface.
-// Thread-Safety: NOT safe for concurrent Deploy() calls on the same instance.
-// Create separate instances for concurrent deployments.
+// Not safe for concurrent Deploy() calls on the same instance.
 type DeploymentService struct {
 	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error)
 	approver         pgmi.Approver
@@ -26,18 +25,10 @@ type DeploymentService struct {
 	mgmtConnector    managementDBConnFunc
 }
 
+var _ pgmi.Deployer = (*DeploymentService)(nil)
+
 // NewDeploymentService creates a new DeploymentService with all dependencies injected.
-//
-// Panic vs. Error Boundary Rationale:
-//   - Panics on nil dependencies: These are programmer errors that should fail loudly
-//     at application startup, not during request handling. Fail-fast at construction
-//     time prevents cryptic nil pointer dereferences deep in call stacks.
-//   - Returns errors for runtime conditions: Configuration validation, connection failures,
-//     and file system errors are recoverable runtime conditions that should be handled
-//     by the caller, not panics.
-//
-// This distinction ensures unrecoverable setup errors are caught immediately while
-// allowing graceful error handling for recoverable operational conditions.
+// Panics on nil dependencies (programmer error); returns errors for runtime conditions.
 func NewDeploymentService(
 	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
 	approver pgmi.Approver,

@@ -62,7 +62,7 @@ func TestLoadProjectConfig_EnvIsProjectScoped(t *testing.T) {
 			unsetEnv(t, keyTarget)
 			unsetEnv(t, keyCwd)
 
-			if _, err := loadProjectConfig(projectDir); err != nil {
+			if _, err := loadProjectConfig(projectDir, false); err != nil {
 				t.Fatalf("loadProjectConfig() error = %v", err)
 			}
 

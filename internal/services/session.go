@@ -27,10 +27,7 @@ type SessionManager struct {
 }
 
 // NewSessionManager creates a new SessionManager with all dependencies injected.
-//
-// Panics if any dependency is nil. This is intentional fail-fast behavior
-// to prevent cryptic nil pointer dereferences later. Panics indicate
-// programmer error (incorrect dependency injection setup).
+// Panics on nil dependencies (programmer error).
 func NewSessionManager(
 	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
 	fileScanner pgmi.FileScanner,
@@ -114,9 +111,9 @@ func (sm *SessionManager) PrepareSession(
 	// instead of a cryptic mid-deploy SQL error. The lock is session-
 	// scoped; releasing the pg_temp session on disconnect releases it.
 	//
-	// The key is derived from the DB name via hashtextextended so two
-	// deployments against DIFFERENT databases on the same cluster do not
-	// block each other.
+	// The key is derived from the DB name via hashtextextended (PostgreSQL 11+,
+	// pgmi's minimum supported version) so two deployments against DIFFERENT
+	// databases on the same cluster do not block each other.
 	var lockAcquired bool
 	if err := conn.QueryRow(
 		ctx,

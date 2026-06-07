@@ -336,7 +336,9 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 	}
 }
 
-func TestDeploy_ReadDeploySQLFails(t *testing.T) {
+// Session preparation runs before deploy.sql is read, so a scanner read error
+// is never reached: the session-prep error surfaces first.
+func TestDeploy_SessionPrepPrecedesDeploySQLRead(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 	fileScanner := &mockFileScanner{readErr: fmt.Errorf("deploy.sql not found: %w", pgmi.ErrDeploySQLNotFound)}
 	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
