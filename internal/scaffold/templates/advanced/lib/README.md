@@ -62,7 +62,6 @@ Base tables and patterns for domain modeling.
 |------|---------|
 | `foundation.sql` | `core.entity_id` domain (opt-in marker) |
 | `entity-standards.sql` | DDL event trigger that injects `created_at`/`deleted_at` on tables declaring `object_id core.entity_id` |
-| `attached-properties.sql` | Key-value property attachment system |
 
 **Opt-In Entity Standards:**
 ```sql

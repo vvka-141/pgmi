@@ -56,17 +56,12 @@ SELECT
     h.leakproof,
     h.security,
     h.language_name,
-    h.owner_name,
-
-    EXISTS (
-        SELECT 1 FROM core.attached_text
-        WHERE weakref_object_id = h.object_id
-    ) AS has_attached_properties
+    h.owner_name
 
 FROM api.handler h;
 
 COMMENT ON VIEW api.vw_handler_info IS
-    'Power-user analysis view for handlers. Includes lifecycle age, health checks (function_exists, definition_drifted), route bindings, and attached properties indicator.';
+    'Power-user analysis view for handlers. Includes lifecycle age, health checks (function_exists, definition_drifted), and route bindings.';
 
 -- ============================================================================
 -- Handler Statistics View (GROUPING SETS)
