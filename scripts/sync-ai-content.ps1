@@ -27,13 +27,12 @@ if (-not (Test-Path $targetDir)) {
 $essentialSkills = @(
     "pgmi-philosophy",
     "pgmi-sql",
-    "pgmi-cli",
+    "pgmi-system-design",
     "pgmi-templates",
     "pgmi-testing-review",
     "pgmi-postgres-review",
     "pgmi-api-architecture",
     "pgmi-mcp",
-    "pgmi-connections",
     "pgmi-metadata-system",
     "pgmi-test-architecture",
     "postgresql-patterns"

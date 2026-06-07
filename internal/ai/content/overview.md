@@ -75,7 +75,7 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 |-------|----------|
 | `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
 | `pgmi-philosophy` | Understanding architectural decisions |
-| `pgmi-cli` | Adding CLI commands or flags |
+| `pgmi-system-design` | Designing features the pgmi way (physical/logical/API layering) |
 | `pgmi-templates` | Creating or modifying scaffold templates |
 | `pgmi-testing-review` | Writing, organizing, or debugging tests |
 | `pgmi-postgres-review` | Writing SQL with correctness and performance guidance |
@@ -84,7 +84,6 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 | `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
 | `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
 | `pgmi-mcp` | MCP handler implementation (advanced template) |
-| `pgmi-connections` | Auth and connection providers |
 
 ## SQL Conventions
 
