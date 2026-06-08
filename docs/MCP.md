@@ -414,7 +414,7 @@ If `requiresAuth` is true and `user_id` is missing from context, the gateway ret
   "jsonrpc": "2.0",
   "id": "req-1",
   "error": {
-    "code": -32601,
+    "code": -32602,
     "message": "Tool not found: unknown_tool"
   }
 }

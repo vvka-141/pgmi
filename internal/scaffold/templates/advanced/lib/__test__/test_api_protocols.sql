@@ -409,8 +409,8 @@ END;
         RAISE EXCEPTION 'TEST FAILED: MCP nonexistent_tool_xyz should have error object';
     END IF;
 
-    IF (v_envelope->'error'->>'code')::int != -32601 THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP error should use code -32601 (Method not found)';
+    IF (v_envelope->'error'->>'code')::int != -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP unknown tool should use code -32602 (Invalid params)';
     END IF;
 
     RAISE NOTICE '  ✓ MCP nonexistent tool returns JSON-RPC 2.0 error';

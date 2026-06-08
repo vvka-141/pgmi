@@ -550,14 +550,14 @@ $$;
 -- ============================================================================
 -- Exception handling follows MCP spec: tool execution failures return
 -- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
--- JSON-RPC -32601 is reserved for "tool not found" (true protocol error).
 --
--- M-API3 decision: an unknown tool/resource/prompt NAME returns -32601, not
--- -32602. Reference SDKs treat the name as a param and use -32602, but pgmi
--- keeps -32601 deliberately: it is internally consistent (api.jsonrpc_error
--- maps -32601 -> 404 "not found", the correct REST bridge), and -32602 stays
--- reserved for malformed params. The dispatcher ELSE branch uses -32601 for
--- unknown JSON-RPC methods.
+-- An unknown tool/resource/prompt NAME returns -32602 (Invalid params): the
+-- method (tools/call, resources/read, prompts/get) was found and dispatched
+-- correctly — only the name/uri argument identifies nothing. The spec
+-- standardizes not-found to -32602 (SEP-2164,
+-- https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164).
+-- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
+-- methods (the dispatcher ELSE branch). Auth failures keep -32001.
 
 DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
@@ -586,7 +586,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_call_tool: Tool not found';
-        RETURN api.mcp_error(-32601, 'Tool not found: ' || p_name, p_request_id);
+        RETURN api.mcp_error(-32602, 'Tool not found: ' || p_name, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
@@ -667,7 +667,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Resource not found';
-        RETURN api.mcp_error(-32601, 'Resource not found: ' || p_uri, p_request_id);
+        RETURN api.mcp_error(-32602, 'Resource not found: ' || p_uri, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
@@ -738,7 +738,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_get_prompt: Prompt not found';
-        RETURN api.mcp_error(-32601, 'Prompt not found: ' || p_name, p_request_id);
+        RETURN api.mcp_error(-32602, 'Prompt not found: ' || p_name, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
