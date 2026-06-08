@@ -502,14 +502,16 @@ The advanced template includes a Python gateway (`tools/mcp-gateway.py`) that br
 
 **Requirements:**
 - Python 3.8+
-- `psycopg2` or `psycopg` (PostgreSQL adapter)
-- `flask` (HTTP server)
+- `psycopg[binary]>=3.0` (psycopg 3) — the only dependency, pinned in `tools/requirements.txt`
+
+The gateway uses the Python standard library's `http.server`; it does **not**
+use Flask, gunicorn, or psycopg2.
 
 ### Starting the Gateway
 
 ```bash
 cd myproject/tools
-pip install psycopg2-binary flask
+pip install -r requirements.txt
 export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
 python mcp-gateway.py
 ```
@@ -540,17 +542,15 @@ The gateway extracts authentication from HTTP headers:
 
 ### Production Deployment
 
+The shipped gateway is a single-process `http.server` reference implementation.
 For production, consider:
 
 1. **Reverse Proxy**: Place behind nginx/Caddy that validates JWTs and injects X-User-Id
 2. **Connection Pooling**: Use PgBouncer for connection management
-3. **WSGI Server**: Run with gunicorn for multiple workers
-4. **TLS**: Terminate SSL at the load balancer
-
-```bash
-# Example with gunicorn
-gunicorn -w 4 -b 0.0.0.0:8080 'mcp-gateway:app'
-```
+3. **TLS**: Terminate SSL at the load balancer
+4. **Scaling**: run multiple gateway processes behind the proxy, or adapt the
+   handler to your own ASGI/WSGI server — the gateway exposes no WSGI `app`
+   object, so it cannot be served with `gunicorn` as-is.
 
 ## Built-in Example Tools
 

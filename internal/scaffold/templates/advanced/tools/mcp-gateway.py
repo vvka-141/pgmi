@@ -78,7 +78,9 @@ Security Notes:
     - Never expose directly to the internet without authentication
 
 For production deployments, consider:
-    - Running with gunicorn: gunicorn -w 4 -b 0.0.0.0:8080 'mcp-gateway:app'
+    - Running several gateway processes behind the reverse proxy (this is a
+      single-process stdlib http.server; there is no WSGI 'app' object to hand
+      to gunicorn)
     - Connection pooling with PgBouncer
     - TLS termination at the load balancer
 """
