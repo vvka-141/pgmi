@@ -37,16 +37,22 @@ Every database operation uses **parameterized queries** (`$1`, `$2` placeholders
 
 ## What pgmi Logs
 
-pgmi logs **parameter counts only**, never keys or values — even in `--verbose` mode.
-
-Note: `--verbose` also sets `client_min_messages = 'debug'` on the PostgreSQL session, which enables `RAISE DEBUG` output from SQL scripts. Ensure your SQL scripts do not leak secrets via `RAISE DEBUG`.
+The **pgmi core CLI** logs **parameter counts only**, never keys or values — even in `--verbose` mode.
 
 ```
 ✓ Loaded 3 parameters into pg_temp._pgmi_parameter
 [VERBOSE] CLI parameters override 2 value(s)
 ```
 
-No parameter name, value, or hint about content ever appears in pgmi's output.
+No parameter name, value, or hint about content ever appears in **pgmi's own (core CLI) output**.
+
+### Your SQL controls its own logging
+
+This guarantee covers only pgmi core. Your `deploy.sql` and template SQL run with full access to the parameters and can print whatever they choose — `RAISE NOTICE`, audit tables, debug logs. pgmi does not redact those for you.
+
+- `--verbose` sets `client_min_messages = 'debug'` on the session, enabling `RAISE DEBUG` output from your SQL. Ensure your scripts do not leak secrets via `RAISE DEBUG`.
+- **Redact by default.** When logging parameters from SQL, mask secret-like keys. The advanced template's `deploy.sql` masks keys matching `(password|secret|token|key|credential|auth)` (see PGMI-46); follow the same pattern in your own scripts.
+- A password reaching the server via `ALTER ROLE ... PASSWORD` can land in the PostgreSQL server log under `log_statement = ddl`/`all` — set `log_statement` accordingly.
 
 ## Threat Model
 
@@ -225,7 +231,7 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 | Vector | Risk | pgmi's Control | Your Action |
 |--------|------|----------------|-------------|
 | SQL injection | None | Parameterized queries | — |
-| pgmi log leakage | None | Only counts logged | — |
+| pgmi core log leakage | None | Core CLI logs counts only | Redact secrets in your own `RAISE NOTICE`/audit logging |
 | Process list (`/proc`) | Medium | `--params-file` available | Use `--params-file` for secrets |
 | PostgreSQL server logs | Medium | Cannot control | Set `log_statement = 'ddl'` |
 | User SQL printing secrets | User-controlled | Not pgmi's domain | Review deploy scripts |
