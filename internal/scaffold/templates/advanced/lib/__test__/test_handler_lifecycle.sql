@@ -160,6 +160,33 @@ END;
     END IF;
     RAISE NOTICE '  + Accept: text/html, application/json, text/plain -> 200';
 
+    -- ========================================================================
+    -- PGMI-31: media-range Accept must not false-406, and a superstring
+    -- subtype must not false-accept.
+    -- ========================================================================
+
+    -- Accept: application/* matches a JSON-producing handler (no false 406).
+    v_response := api.rest_invoke(
+        'GET', '/test-content-nego',
+        'accept=>application/*'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'Accept: application/* should match application/json (200), got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  + Accept: application/* -> 200 (media range, no false 406)';
+
+    -- Accept: application/json-patch+json must NOT match application/json.
+    v_response := api.rest_invoke(
+        'GET', '/test-content-nego',
+        'accept=>application/json-patch+json'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 406 THEN
+        RAISE EXCEPTION 'Accept: application/json-patch+json must NOT match application/json (expected 406), got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  + Accept: application/json-patch+json -> 406 (no false accept)';
+
     RAISE NOTICE '+ Content Negotiation tests passed';
 END $$;
 

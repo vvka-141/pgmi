@@ -40,7 +40,7 @@ func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
 	}
 
 	if err := writePgpassEntry(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save .pgpass: %v\n", err)
+		fmt.Fprintf(os.Stderr, "WARNING: failed to save .pgpass: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Tip: provide password via $PGPASSWORD or connection string.")
 		return
 	}

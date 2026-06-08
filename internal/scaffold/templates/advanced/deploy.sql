@@ -125,7 +125,21 @@ BEGIN
 END;
 $$;
 
-
+-- ============================================================================
+-- CAPABILITY GUARD: fail fast on a non-superuser connection
+-- ============================================================================
+-- The advanced template installs a DDL event trigger (core_entity_table_
+-- standards), and CREATE EVENT TRIGGER is superuser-only. Managed providers
+-- (AWS RDS, GCP Cloud SQL, Supabase, Neon) do not grant superuser. Detect this
+-- before creating any roles or schemas so the operator gets an actionable
+-- message instead of a cryptic mid-deploy failure.
+DO $guard$
+BEGIN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+        RAISE EXCEPTION 'pgmi advanced template requires a superuser deployment connection; current role % is not superuser', current_user
+            USING HINT = 'CREATE EVENT TRIGGER (used by lib/core/entity-standards.sql) is superuser-only and managed clouds (RDS, Cloud SQL, Supabase, Neon) do not grant it. Connect as a superuser, or remove lib/core/entity-standards.sql to deploy without the entity-standards event trigger. See docs/PRODUCTION.md.';
+    END IF;
+END $guard$;
 
 -- ============================================================================
 -- SUPERUSER PHASE: Roles, Extensions, Ownership

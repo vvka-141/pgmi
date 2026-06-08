@@ -124,7 +124,7 @@ pgmi deploy . --database mydb --overwrite --force
 
 This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
 
-> **Requirement:** pgmi needs a **direct** PostgreSQL connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
+> **Requirement:** pgmi needs **PostgreSQL 11+** and a **direct** connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
 
 See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 
@@ -182,9 +182,12 @@ pgmi init myapp --template basic # Create a project
 pgmi embeds AI-digestible documentation directly in the binary. AI coding assistants (Claude Code, GitHub Copilot, Gemini CLI) can discover and learn pgmi patterns:
 
 ```bash
-pgmi ai                    # Overview for AI assistants
+pgmi ai                    # Overview for AI assistants (llms.txt style)
 pgmi ai skills             # List embedded skills
-pgmi ai skill pgmi-sql     # Load SQL conventions
+pgmi ai skill pgmi-sql     # Print one skill's full content
+pgmi ai contract           # Print the session API contract (views/functions)
+pgmi ai setup              # Materialize a discoverable skill into the project
+pgmi ai check              # Report whether that skill exists and is current
 ```
 
 When you tell an AI assistant "use pgmi for this project", it can query these commands to understand pgmi's philosophy, conventions, and best practices.

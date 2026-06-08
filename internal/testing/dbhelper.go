@@ -28,6 +28,11 @@ var (
 
 func getOrStartTestContainer() (string, error) {
 	testContainerOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				testContainerErr = fmt.Errorf("testcontainer startup panicked: %v", r)
+			}
+		}()
 		ctx := context.Background()
 		container, err := testinfra.StartSimplePostgres(ctx)
 		if err != nil {

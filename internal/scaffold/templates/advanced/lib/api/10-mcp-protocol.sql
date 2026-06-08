@@ -18,7 +18,8 @@
 
     Protocol Compliance:
     - JSON-RPC 2.0 envelope format
-    - MCP specification versions: 2024-11-05, 2025-03-26
+    - MCP specification versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-05
+      (unknown versions negotiate down to the server's best supported version)
 
     Usage from HTTP Gateway:
       SELECT (api.mcp_handle_request($request_json, $context_json)).envelope;
@@ -122,8 +123,9 @@ COMMENT ON FUNCTION api.mcp_server_capabilities() IS
 --   Error:   {jsonrpc: "2.0", id: "...", error: {code: -32602, message: "..."}}
 --
 -- Supported Protocol Versions:
---   - "2024-11-05" (widely supported)
---   - "2025-03-26" (latest)
+--   - "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-05"
+--   - An unknown version negotiates to the server's best (newest) supported
+--     version rather than erroring, per the MCP lifecycle.
 --
 -- Example Request:
 --   {"jsonrpc": "2.0", "id": "1", "method": "initialize",
@@ -145,7 +147,9 @@ CREATE OR REPLACE FUNCTION api.mcp_initialize(
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_client_version text;
-    v_supported_versions text[] := ARRAY['2024-11-05', '2025-03-26'];
+    -- Ascending order: the last element is the server's best (newest) version.
+    v_supported_versions text[] := ARRAY['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-05'];
+    v_negotiated_version text;
 BEGIN
     v_client_version := p_params->>'protocolVersion';
 
@@ -153,18 +157,19 @@ BEGIN
         RETURN api.mcp_error(-32602, 'Missing required parameter: protocolVersion', p_request_id);
     END IF;
 
-    IF NOT v_client_version = ANY(v_supported_versions) THEN
-        RETURN api.mcp_error(
-            -32602,
-            format('Unsupported protocol version: %s. Supported: %s',
-                   v_client_version, array_to_string(v_supported_versions, ', ')),
-            p_request_id
-        );
+    -- Negotiate per the MCP lifecycle: echo the client's version if supported,
+    -- otherwise return the server's best supported version and let the client
+    -- decide whether to proceed or disconnect. (Erroring on mismatch breaks
+    -- current clients that propose a newer date than the server knows.)
+    IF v_client_version = ANY(v_supported_versions) THEN
+        v_negotiated_version := v_client_version;
+    ELSE
+        v_negotiated_version := v_supported_versions[array_upper(v_supported_versions, 1)];
     END IF;
 
     RETURN api.mcp_success(
         jsonb_build_object(
-            'protocolVersion', v_client_version,
+            'protocolVersion', v_negotiated_version,
             'serverInfo', api.mcp_server_info(),
             'capabilities', api.mcp_server_capabilities()
         ),
@@ -224,6 +229,7 @@ $$;
 --   | tools/list               | api.mcp_list_tools()             |
 --   | tools/call               | api.mcp_call_tool()              |
 --   | resources/list           | api.mcp_list_resources()         |
+--   | resources/templates/list | api.mcp_list_resource_templates()|
 --   | resources/read           | api.mcp_read_resource()          |
 --   | prompts/list             | api.mcp_list_prompts()           |
 --   | prompts/get              | api.mcp_get_prompt()             |
@@ -307,16 +313,12 @@ BEGIN
         RETURN ROW(NULL::jsonb)::api.mcp_response;
     END IF;
 
-    -- Set up authentication context from p_context parameter
-    -- This populates session variables that handlers and RLS policies can use
-    IF p_context IS NOT NULL THEN
-        IF p_context->>'user_id' IS NOT NULL THEN
-            PERFORM set_config('auth.user_id', p_context->>'user_id', true);
-        END IF;
-        IF p_context->>'tenant_id' IS NOT NULL THEN
-            PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-        END IF;
-    END IF;
+    -- Reset and apply validated auth context unconditionally, before any method
+    -- (including discovery: tools/list, resources/list, prompts/list). Calling
+    -- with NULL clears identity, so a forged id (no provider|subject pipe) is
+    -- rejected and a prior request's identity cannot bleed into a context-less
+    -- request through the discovery filter.
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     -- Route to appropriate handler based on method
     CASE v_method
@@ -339,6 +341,9 @@ BEGIN
 
         WHEN 'resources/list' THEN
             RETURN api.mcp_success(api.mcp_list_resources(), v_id);
+
+        WHEN 'resources/templates/list' THEN
+            RETURN api.mcp_success(api.mcp_list_resource_templates(), v_id);
 
         WHEN 'resources/read' THEN
             RETURN api.mcp_read_resource(
@@ -363,8 +368,11 @@ BEGIN
     END CASE;
 
 EXCEPTION WHEN OTHERS THEN
-    -- Catch any unhandled exceptions and return as JSON-RPC error
-    RETURN api.mcp_error(-32603, 'Internal error: ' || SQLERRM, v_id);
+    -- Log detail for operators; return a sanitized message so table/constraint/
+    -- column names and schema paths are not exposed to the client. Mirrors
+    -- rest_invoke / rpc_invoke / the invocation handlers.
+    RAISE WARNING 'mcp_handle_request: sqlstate=% detail=%', SQLSTATE, SQLERRM;
+    RETURN api.mcp_error(-32603, 'Internal error', v_id);
 END;
 $$;
 

@@ -418,9 +418,13 @@ Hint: <actionable_guidance>
 
 ### Bootstrap Phase
 
-**Create Tracking Table**:
+**Create Tracking Table** (illustrative — a *simplified* schema for teaching the
+pattern; the advanced template's real `internal.deployment_script_execution_log`
+uses `deployment_script_object_id`, `deployment_script_content_checksum`,
+`file_path`, mandatory FKs, etc. — see `internal/scaffold/templates/advanced/deploy.sql`):
 ```sql
-CREATE TABLE IF NOT EXISTS internal.deployment_script_execution_log (
+-- Simplified illustrative tracking table (not the shipped schema):
+CREATE TABLE IF NOT EXISTS example_script_log (
     script_id UUID NOT NULL,
     path TEXT NOT NULL,
     idempotent BOOLEAN NOT NULL,
@@ -472,7 +476,7 @@ BEGIN
 
     -- Check execution log
     SELECT * INTO v_exec_log
-    FROM internal.deployment_script_execution_log
+    FROM example_script_log
     WHERE script_id = p_script_id;
 
     -- Determine if should execute
@@ -489,7 +493,7 @@ BEGIN
     END IF;
 
     -- Update execution log
-    INSERT INTO internal.deployment_script_execution_log
+    INSERT INTO example_script_log
         (script_id, path, idempotent, sort_key, checksum, execution_order, executed_at)
     VALUES
         (v_script.generic_id, v_script.path, v_script.idempotent,

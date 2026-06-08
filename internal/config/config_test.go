@@ -47,6 +47,21 @@ timeout: 10m
 	assert.Equal(t, "10m", cfg.Timeout)
 }
 
+func TestLoad_RejectsUnknownField(t *testing.T) {
+	dir := t.TempDir()
+	// "usernmae" is a typo for "username"; strict decoding must reject it rather
+	// than silently dropping it and falling back to env/defaults.
+	content := `connection:
+  host: myhost
+  usernmae: oops
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0644))
+
+	_, err := Load(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "usernmae")
+}
+
 func TestLoad_MinimalYAML(t *testing.T) {
 	dir := t.TempDir()
 	content := `params:

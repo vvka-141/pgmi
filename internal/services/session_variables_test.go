@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/files/loader"
@@ -194,7 +195,15 @@ func createSchemaAndLoadSessionVariables(ctx context.Context, conn *pgxpool.Conn
 		return err
 	}
 
-	return fileLoader.LoadParametersIntoSession(ctx, conn, cliParams)
+	if err := fileLoader.LoadParametersIntoSession(ctx, conn, cliParams); err != nil {
+		return err
+	}
+
+	// Apply the public API contract (pgmi_parameter_view and friends), which
+	// deploy.sql — and these tests — query. Without it the internal _pgmi_*
+	// tables exist but the public views do not.
+	_, err := contract.Apply(ctx, conn, "")
+	return err
 }
 
 func getTestConnectionString(t *testing.T) string {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +42,18 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	existingCfg, err := config.Load(targetDir)
-	if err == nil && existingCfg != nil {
+	switch {
+	case errors.Is(err, config.ErrConfigNotFound):
+		// No existing config — safe to create without prompting.
+	case err != nil:
+		// pgmi.yaml exists but is malformed; prompt before clobbering it
+		// rather than silently overwriting (and losing) the user's file.
+		fmt.Fprintf(os.Stderr, "pgmi.yaml exists but could not be parsed: %v\n", err)
+		if !tui.PromptContinue("Overwrite the unparseable pgmi.yaml?") {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+	case existingCfg != nil:
 		fmt.Fprintln(os.Stderr, "pgmi.yaml exists.")
 		if !tui.PromptContinue("Overwrite connection settings?") {
 			fmt.Fprintln(os.Stderr, "Cancelled.")

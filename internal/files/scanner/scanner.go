@@ -1,10 +1,12 @@
 package scanner
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
@@ -153,6 +155,17 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		return pgmi.FileMetadata{}, err
 	}
 
+	// pgmi loads project files into PostgreSQL TEXT columns, so a NUL byte or
+	// invalid UTF-8 would otherwise surface as a cryptic database error at load
+	// time. Fail early with the offending path — pgmi projects are text/source
+	// trees.
+	if bytes.IndexByte(content, 0) >= 0 {
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text and does not support binary files", unixPath)
+	}
+	if !utf8.Valid(content) {
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text", unixPath)
+	}
+
 	var scriptMetadata *pgmi.ScriptMetadata
 	isTestFile := pgmi.IsTestPath(unixPath)
 	isSQLFile := pgmi.IsSQLExtension(extension)
@@ -170,7 +183,7 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 			// Metadata found and valid - convert to public type
 			scriptMetadata = &pgmi.ScriptMetadata{
 				ID:          meta.ID,
-				Idempotent:  meta.Idempotent,
+				Idempotent:  *meta.Idempotent,
 				SortKeys:    meta.SortKeys.Keys,
 				Description: meta.Description,
 			}

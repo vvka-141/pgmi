@@ -274,7 +274,7 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN btrim($1) ~ '^\s*[+-]?\d+\s*$' THEN
+        WHEN btrim($1) ~ '^[+-]?\d+$' THEN
             CASE
                 WHEN btrim($1)::numeric BETWEEN -2147483648 AND 2147483647
                 THEN btrim($1)::integer
@@ -383,7 +383,7 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN btrim($1) ~ '^\s*[+-]?\d+\s*$' THEN
+        WHEN btrim($1) ~ '^[+-]?\d+$' THEN
             CASE
                 WHEN btrim($1)::numeric BETWEEN -9223372036854775808 AND 9223372036854775807
                 THEN btrim($1)::bigint

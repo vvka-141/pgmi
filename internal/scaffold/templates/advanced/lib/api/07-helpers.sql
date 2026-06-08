@@ -115,6 +115,34 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     ) || '$';
 $$;
 
+-- HTTP Accept content negotiation. Returns true when the client accepts at
+-- least one of the server's produced media types. Parses the Accept header
+-- into media ranges (split on ',', drop ';q='/parameters) and matches each
+-- against p_produces with wildcard support: */* and type/*. Substring matching
+-- is avoided so application/* matches application/json (no false 406) and
+-- application/json-patch+json does NOT match application/json (no false accept).
+-- Absent/empty Accept, or a route that declares no produced types, accepts all.
+CREATE OR REPLACE FUNCTION api.accept_matches(p_accept text, p_produces text[])
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE
+        WHEN p_accept IS NULL OR btrim(p_accept) = '' THEN true
+        WHEN p_produces IS NULL OR cardinality(p_produces) = 0 THEN true
+        ELSE EXISTS (
+            SELECT 1
+            FROM unnest(string_to_array(p_accept, ',')) AS raw_range
+            CROSS JOIN LATERAL (
+                SELECT lower(btrim(split_part(raw_range, ';', 1))) AS media_range
+            ) r
+            CROSS JOIN unnest(p_produces) AS produced
+            WHERE r.media_range = '*/*'
+               OR r.media_range = lower(btrim(produced))
+               OR (right(r.media_range, 2) = '/*'
+                   AND split_part(r.media_range, '/', 1) = lower(split_part(btrim(produced), '/', 1)))
+        )
+    END;
+$$;
+
 CREATE OR REPLACE FUNCTION api.query_params(url text)
 RETURNS extensions.hstore
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
@@ -145,6 +173,26 @@ DECLARE
     v_decoded text;
     v_quoted text;
 BEGIN
+    -- Test accept_matches (PGMI-31 content negotiation)
+    IF NOT api.accept_matches('application/*', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: media range application/* should match application/json';
+    END IF;
+    IF api.accept_matches('application/json-patch+json', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: application/json-patch+json must NOT match application/json';
+    END IF;
+    IF NOT api.accept_matches('*/*', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: */* should match anything';
+    END IF;
+    IF NOT api.accept_matches(NULL, ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: absent Accept should match';
+    END IF;
+    IF NOT api.accept_matches('text/html, application/json;q=0.9', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: a later media range with q-param should still match';
+    END IF;
+    IF api.accept_matches('text/html', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: unrelated type must not match';
+    END IF;
+
     -- Test url_decode
     v_decoded := api.url_decode('John%20Doe');
     IF v_decoded != 'John Doe' THEN

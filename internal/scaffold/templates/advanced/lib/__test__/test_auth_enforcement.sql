@@ -378,5 +378,122 @@ END;
     END IF;
     RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
+    -- ========================================================================
+    -- PGMI-26: the MCP dispatcher (mcp_handle_request) must apply the same
+    -- validated, reset-first auth context to the discovery path (tools/list),
+    -- and must not leak raw SQLERRM to the client.
+    -- ========================================================================
+
+    PERFORM set_config('auth.user_id', '', true);
+
+    -- Discovery with a forged, malformed identity (no provider|subject pipe)
+    -- must NOT reveal auth-gated tools, but must still list public ones.
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-1","method":"tools/list"}'::jsonb,
+        '{"user_id":"alice"}'::jsonb
+    );
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_protected_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: forged context exposed auth-gated tool via dispatcher tools/list';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_public_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: dispatcher tools/list hid a public tool';
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: forged context does not expose auth-gated tools in tools/list';
+
+    -- Identity must not bleed into a later context-less discovery request.
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-2","method":"tools/call","params":{"name":"test_protected_tool","arguments":{}}}'::jsonb,
+        '{"user_id":"test|alice"}'::jsonb
+    );
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-3","method":"tools/list"}'::jsonb,
+        NULL
+    );
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_protected_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: identity bled into a context-less dispatcher tools/list';
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: identity does not bleed into context-less discovery';
+
+    -- A failing handler invoked through the dispatcher must not surface raw
+    -- error detail (table/column names, SQLERRM) to the client.
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-a007-4000-8000-000000000001',
+            'type', 'tool',
+            'name', 'test_throwing_tool',
+            'description', 'Always raises',
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RAISE EXCEPTION 'pgmi_secret_detail_marker in handler';
+END;
+        $body$
+    );
+
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"err-1","method":"tools/call","params":{"name":"test_throwing_tool","arguments":{}}}'::jsonb,
+        NULL
+    );
+    IF (v_mcp_response).envelope::text LIKE '%pgmi_secret_detail_marker%' THEN
+        RAISE EXCEPTION 'TEST FAILED: raw handler error detail leaked to MCP client: %', (v_mcp_response).envelope;
+    END IF;
+    RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
+
+    -- ========================================================================
+    -- PGMI-33: the gateway JIT-provisions a membership.user row for a first-time
+    -- authenticated identity, so api.current_user_id() resolves and /me +
+    -- /organizations work without any out-of-band row creation.
+    -- ========================================================================
+
+    v_response := api.rest_invoke(
+        'GET', '/me',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: /me for a freshly-authenticated identity should be 200 (JIT-provisioned), got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF v_content->>'email' != 'jit-pgmi33@example.com' THEN
+        RAISE EXCEPTION 'TEST FAILED: /me returned wrong/absent user, got %', v_content;
+    END IF;
+    RAISE NOTICE '  ✓ REST: /me JIT-provisions a first-time identity (200, current_user_id resolves)';
+
+    v_response := api.rest_invoke(
+        'GET', '/organizations',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: /organizations should be 200, got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF jsonb_array_length(v_content->'organizations') < 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: /organizations should list the auto-created personal org, got %', v_content;
+    END IF;
+    RAISE NOTICE '  ✓ REST: /organizations returns the JIT-provisioned personal org';
+
+    -- Idempotent: a repeat request must not error on duplicate provisioning.
+    v_response := api.rest_invoke(
+        'GET', '/me',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: repeated /me should stay 200 (idempotent provisioning), got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: JIT provisioning is idempotent across repeated requests';
+
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;

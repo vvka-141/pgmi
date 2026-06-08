@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     -- expansion only. Level 2+ operators (+ reserved, ? query, / path,
     -- . label, ; param, & form, # fragment) would silently mis-route.
     -- Reject them at registration instead of producing broken URIs.
+    --
+    -- Resource-routing precedence: when more than one template matches a URI,
+    -- api.mcp_read_resource picks the most specific (longest uri_template) with
+    -- mcp_name as a stable tiebreak, so routing is deterministic.
     CONSTRAINT ck_uri_template_level1_only CHECK (
         uri_template IS NULL
         OR uri_template !~ '\{[+?#./;&]'
@@ -43,7 +47,7 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
 ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
-CREATE INDEX IF NOT EXISTS ix_mcp_route_name ON api.mcp_route(mcp_name);
+-- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.
 CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
 
 COMMENT ON COLUMN api.mcp_route.tags IS

@@ -72,6 +72,9 @@
 - **[CICD.md](CICD.md)** — Deploy from GitHub Actions and other pipelines
 - **[PRODUCTION.md](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 
+### Recipes (advanced, opt-in)
+- **[recipes/semantic-mcp-tool-curation.md](recipes/semantic-mcp-tool-curation.md)** — Surface the relevant subset of agent tools by embedding similarity (provider-abstracted; for tool-overload scale)
+
 ### AI Integration
 ```bash
 pgmi ai                    # Overview for AI assistants

@@ -140,6 +140,36 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "ADO.NET with quoted password containing a semicolon",
+			connStr: "Host=localhost;Database=mydb;Username=user;Password='p;a=ss'",
+			want: &pgmi.ConnectionConfig{
+				Host:             "localhost",
+				Port:             5432,
+				Database:         "mydb",
+				Username:         "user",
+				Password:         "p;a=ss",
+				SSLMode:          "",
+				AuthMethod:       pgmi.AuthMethodStandard,
+				AdditionalParams: map[string]string{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ADO.NET with double-quoted password and doubled quote",
+			connStr: `Host=localhost;Database=mydb;Username=user;Password="a""b;c"`,
+			want: &pgmi.ConnectionConfig{
+				Host:             "localhost",
+				Port:             5432,
+				Database:         "mydb",
+				Username:         "user",
+				Password:         `a"b;c`,
+				SSLMode:          "",
+				AuthMethod:       pgmi.AuthMethodStandard,
+				AdditionalParams: map[string]string{},
+			},
+			wantErr: false,
+		},
+		{
 			name:    "ADO.NET with Server instead of Host",
 			connStr: "Server=localhost;Port=5432;Database=mydb;User Id=user;Pwd=pass",
 			want: &pgmi.ConnectionConfig{

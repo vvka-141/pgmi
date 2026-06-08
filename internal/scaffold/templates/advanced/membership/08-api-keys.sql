@@ -130,7 +130,7 @@ COMMENT ON TABLE membership.api_key IS
     'API keys for machine-to-machine authentication. The full key is shown only at creation; only its SHA-256 hash is persisted.';
 
 COMMENT ON COLUMN membership.api_key.key_id IS
-    'Short identifier (8 alphanumeric) stored unhashed for O(1) lookup. Part of the full key: {prefix}_{key_id}_{secret}.';
+    'Short identifier (12 hex chars) stored unhashed for O(1) lookup. Part of the full key: {prefix}_{key_id}_{secret}.';
 
 COMMENT ON COLUMN membership.api_key.key_hash IS
     'SHA-256 hex of the full API key.';
@@ -183,20 +183,14 @@ RETURNS TABLE (
 LANGUAGE sql VOLATILE AS $$
     WITH c_raw AS (
         SELECT
-            encode(extensions.gen_random_bytes(6), 'base64') AS raw_id,
+            encode(extensions.gen_random_bytes(6), 'hex') AS key_id,
             encode(extensions.gen_random_bytes(32), 'hex') AS secret
-    ),
-    c_key_id AS (
-        SELECT
-            substring(regexp_replace(c_raw.raw_id, '[^A-Za-z0-9]', '', 'g'), 1, 8) AS key_id,
-            c_raw.secret
-        FROM c_raw
     ),
     c_full_key AS (
         SELECT
-            c_key_id.key_id,
-            membership.api_key_prefix() || '_' || c_key_id.key_id || '_' || c_key_id.secret AS full_key
-        FROM c_key_id
+            c_raw.key_id,
+            membership.api_key_prefix() || '_' || c_raw.key_id || '_' || c_raw.secret AS full_key
+        FROM c_raw
     )
     SELECT
         c_full_key.key_id,
@@ -206,7 +200,7 @@ LANGUAGE sql VOLATILE AS $$
 $$;
 
 COMMENT ON FUNCTION membership.generate_api_key_material IS
-    'Generate API key components: key_id (8 alphanumeric chars), full key ({prefix}_{id}_{secret}), and SHA-256 hash.';
+    'Generate API key components: key_id (12 hex chars, uniform length), full key ({prefix}_{id}_{secret}), and SHA-256 hash.';
 
 -- ============================================================================
 -- Create API Key

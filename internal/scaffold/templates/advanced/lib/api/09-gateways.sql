@@ -48,6 +48,29 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION internal.apply_mcp_auth_context(p_context jsonb)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM internal.set_auth_user_id(p_context->>'user_id');
+    PERFORM set_config('auth.user_email', '', true);
+    PERFORM set_config('auth.token', '', true);
+    PERFORM set_config('auth.tenant_id', '', true);
+    IF p_context->>'user_email' IS NOT NULL THEN
+        PERFORM set_config('auth.user_email', p_context->>'user_email', true);
+    END IF;
+    IF p_context->>'tenant_id' IS NOT NULL THEN
+        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
+    END IF;
+    -- JIT-provision so current_user_id() resolves; no-op when the context omits
+    -- a valid identity or email. Idempotent across pooled requests.
+    PERFORM internal.provision_current_user(p_context->>'user_email');
+END;
+$$;
+
+COMMENT ON FUNCTION internal.apply_mcp_auth_context(jsonb) IS
+    'MCP auth-context trust boundary: unconditionally resets auth GUCs, then applies a validated user_id (provider|subject) and optional tenant_id from p_context. Called with p_context NULL to clear identity. Shared by the MCP dispatcher and invocation handlers.';
+
 CREATE OR REPLACE FUNCTION api.set_auth_context(p_headers extensions.hstore)
 RETURNS void
 LANGUAGE plpgsql AS $$
@@ -80,36 +103,44 @@ $$;
 COMMENT ON FUNCTION api.set_auth_context(extensions.hstore) IS
     'Gateway-only trust boundary: maps x-user-id (format provider|subject_id), x-user-email, x-tenant-id, authorization headers into session GUCs. Callers MUST be a trusted gateway that has already verified the identity — these headers carry no integrity check.';
 
-CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
+-- JIT-provisions the membership.user row for the currently-authenticated
+-- identity. Reads the already-validated auth.idp_subject GUC (set by
+-- set_auth_context / apply_mcp_auth_context via set_auth_user_id, which
+-- guarantees provider|subject form) so provisioning shares the gateway's
+-- validation. Idempotent (membership.upsert_user upserts), safe to call on
+-- every request in a pooled session. SECURITY DEFINER so it can reach
+-- upsert_user, which is revoked from the api/customer roles.
+CREATE OR REPLACE FUNCTION internal.provision_current_user(p_email text)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = api, membership, extensions, pg_temp
 AS $$
 DECLARE
-    v_subject text;
-    v_email text;
-    v_provider text;
-    v_subject_id text;
+    v_subject text := NULLIF(current_setting('auth.idp_subject', true), '');
 BEGIN
-    v_subject := p_headers->'x-user-id';
-    IF v_subject IS NULL OR length(v_subject) > 4096 THEN
+    IF v_subject IS NULL OR p_email IS NULL OR length(p_email) > 4096 THEN
         RETURN;
     END IF;
+    PERFORM membership.upsert_user(
+        api.parse_idp_provider(v_subject),
+        api.parse_idp_subject_id(v_subject),
+        p_email
+    );
+END;
+$$;
 
-    IF position('|' IN v_subject) = 0 THEN
-        RETURN;
-    END IF;
-
-    PERFORM set_config('auth.idp_subject', v_subject, true);
-    PERFORM set_config('auth.user_id', v_subject, true);
-
-    v_email := p_headers->'x-user-email';
-    IF v_email IS NOT NULL AND length(v_email) <= 4096 THEN
-        v_provider := api.parse_idp_provider(v_subject);
-        v_subject_id := api.parse_idp_subject_id(v_subject);
-        PERFORM membership.upsert_user(v_provider, v_subject_id, v_email);
-    END IF;
+-- Gateway auth path: set the validated trust-boundary GUCs, then JIT-provision
+-- the membership.user row so api.current_user_id() resolves on first request.
+CREATE OR REPLACE FUNCTION internal.setup_auth_session(p_headers extensions.hstore)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = api, membership, extensions, pg_temp
+AS $$
+BEGIN
+    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.provision_current_user(p_headers->'x-user-email');
 END;
 $$;
 
@@ -182,19 +213,14 @@ BEGIN
 
     -- Resolve identity first, then gate on session state (not header presence)
     -- so a present-but-malformed x-user-id fails closed.
-    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.setup_auth_session(p_headers);
 
     IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
     END IF;
 
-    IF p_headers->'accept' IS NOT NULL
-       AND p_headers->'accept' NOT LIKE '%*/*%'
-       AND NOT EXISTS (
-           SELECT 1 FROM unnest(v_route.produces) AS p
-           WHERE p_headers->'accept' LIKE '%' || p || '%'
-       ) THEN
+    IF NOT api.accept_matches(p_headers->'accept', v_route.produces) THEN
         RETURN api.problem_response(
             406,
             'Not Acceptable',
@@ -414,7 +440,7 @@ BEGIN
 
     -- Resolve identity first, then gate on session state (not header presence)
     -- so a present-but-malformed x-user-id fails closed.
-    PERFORM api.set_auth_context(p_headers);
+    PERFORM internal.setup_auth_session(p_headers);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rpc_invoke: Auth required but missing';
@@ -525,6 +551,13 @@ $$;
 -- Exception handling follows MCP spec: tool execution failures return
 -- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
 -- JSON-RPC -32601 is reserved for "tool not found" (true protocol error).
+--
+-- M-API3 decision: an unknown tool/resource/prompt NAME returns -32601, not
+-- -32602. Reference SDKs treat the name as a param and use -32602, but pgmi
+-- keeps -32601 deliberately: it is internally consistent (api.jsonrpc_error
+-- maps -32601 -> 404 "not found", the correct REST bridge), and -32602 stays
+-- reserved for malformed params. The dispatcher ELSE branch uses -32601 for
+-- unknown JSON-RPC methods.
 
 DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
@@ -558,16 +591,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_call_tool: Auth required but missing';
@@ -629,12 +653,17 @@ DECLARE
 BEGIN
     RAISE DEBUG 'mcp_read_resource: %', p_uri;
 
+    -- Deterministic precedence when more than one template matches: most
+    -- specific (longest template) first, mcp_name as a stable tiebreak. Without
+    -- this, the chosen handler (and its requires_auth) would be nondeterministic.
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
     INTO v_handler
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
     WHERE r.mcp_type = 'resource'
-      AND p_uri ~ api.uri_template_to_regex(r.uri_template);
+      AND p_uri ~ api.uri_template_to_regex(r.uri_template)
+    ORDER BY length(r.uri_template) DESC, r.mcp_name
+    LIMIT 1;
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Resource not found';
@@ -643,16 +672,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Auth required but missing';
@@ -723,16 +743,7 @@ BEGIN
 
     RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
 
-    -- Reset every auth GUC, then set from context, so a malformed id (no
-    -- provider|subject pipe) is rejected and a prior request's identity cannot
-    -- leak into an MCP call that omits context. Mirrors api.set_auth_context.
-    PERFORM internal.set_auth_user_id(p_context->>'user_id');
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.token', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    IF p_context->>'tenant_id' IS NOT NULL THEN
-        PERFORM set_config('auth.tenant_id', p_context->>'tenant_id', true);
-    END IF;
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_get_prompt: Auth required but missing';
@@ -840,16 +851,16 @@ LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = api, pg_temp
 AS $$
-    -- A resource with no RFC 6570 {placeholder} is a static URI per MCP spec;
-    -- emit as `uri`. Otherwise emit as `uriTemplate` (RFC 6570 Level 1 subset).
+    -- resources/list returns concrete Resource objects only (required `uri`).
+    -- Templated resources (RFC 6570 {placeholder}) are returned by the separate
+    -- resources/templates/list method (api.mcp_list_resource_templates).
     SELECT jsonb_build_object('resources', COALESCE(jsonb_agg(
         jsonb_strip_nulls(
             jsonb_build_object(
                 'name', r.mcp_name,
                 'title', h.title,
                 'description', h.description,
-                'uri', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN NULL ELSE r.uri_template END,
-                'uriTemplate', CASE WHEN r.uri_template ~ '\{[^}]+\}' THEN r.uri_template ELSE NULL END,
+                'uri', r.uri_template,
                 'mimeType', r.mime_type
             )
         )
@@ -857,12 +868,43 @@ AS $$
     FROM api.mcp_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id
     WHERE r.mcp_type = 'resource'
+      AND r.uri_template !~ '\{[^}]+\}'
       AND (NOT h.requires_auth
            OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
 $$;
 
 COMMENT ON FUNCTION api.mcp_list_resources() IS
-    'MCP resource discovery. Emits uri (static) or uriTemplate (RFC 6570 placeholders detected) based on uri_template shape. Hides auth-required resources from unauthenticated sessions.';
+    'MCP resources/list discovery. Emits only concrete Resource objects (static uri). Templated resources are served by resources/templates/list. Hides auth-required resources from unauthenticated sessions.';
+
+CREATE OR REPLACE FUNCTION api.mcp_list_resource_templates()
+RETURNS jsonb
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = api, pg_temp
+AS $$
+    -- resources/templates/list returns ResourceTemplate objects (required
+    -- `uriTemplate`) for resources whose uri carries an RFC 6570 placeholder.
+    SELECT jsonb_build_object('resourceTemplates', COALESCE(jsonb_agg(
+        jsonb_strip_nulls(
+            jsonb_build_object(
+                'name', r.mcp_name,
+                'title', h.title,
+                'description', h.description,
+                'uriTemplate', r.uri_template,
+                'mimeType', r.mime_type
+            )
+        )
+    ), '[]'::jsonb))
+    FROM api.mcp_route r
+    JOIN api.handler h ON h.object_id = r.handler_object_id
+    WHERE r.mcp_type = 'resource'
+      AND r.uri_template ~ '\{[^}]+\}'
+      AND (NOT h.requires_auth
+           OR NULLIF(current_setting('auth.user_id', true), '') IS NOT NULL);
+$$;
+
+COMMENT ON FUNCTION api.mcp_list_resource_templates() IS
+    'MCP resources/templates/list discovery. Emits ResourceTemplate objects (uriTemplate) for resources with RFC 6570 placeholders. Hides auth-required resources from unauthenticated sessions.';
 
 CREATE OR REPLACE FUNCTION api.mcp_list_prompts()
 RETURNS jsonb
@@ -901,6 +943,7 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.mcp_read_resource() - MCP resource read';
     RAISE NOTICE '  ✓ api.mcp_get_prompt() - MCP prompt expansion';
     RAISE NOTICE '  ✓ api.mcp_list_tools/resources/prompts() - MCP discovery';
+    RAISE NOTICE '  ✓ api.mcp_list_resource_templates() - MCP templated-resource discovery';
 END $$;
 
 -- ============================================================================
@@ -916,4 +959,6 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.setup_auth_session(extensions.hstore) TO %I', v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION internal.set_auth_user_id(text) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.apply_mcp_auth_context(jsonb) TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION internal.provision_current_user(text) TO %I', v_api_role);
 END $$;

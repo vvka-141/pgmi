@@ -30,6 +30,17 @@ func Validate(m *Metadata, filePath string) ValidationResult {
 				"  Generate with: uuidgen (Linux/Mac), [guid]::NewGuid() (PowerShell), or https://www.uuidgenerator.net/")
 	}
 
+	// Required attribute: idempotent. A missing attribute is rejected (rather
+	// than silently defaulting to false) so the author makes an explicit choice
+	// — an omitted idempotent="true" on a view/function silently turns it into a
+	// one-time script that stops updating after the first deploy.
+	if m.Idempotent == nil {
+		result.AddError(
+			"idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n" +
+				"  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n" +
+				"  false: the script runs once per id (tracked one-time migration).")
+	}
+
 	// Optional: sortKeys validation (if present, keys must be non-empty)
 	if len(m.SortKeys.Keys) > 0 {
 		for i, key := range m.SortKeys.Keys {

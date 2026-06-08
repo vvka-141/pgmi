@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -48,7 +50,14 @@ func Load(sourcePath string) (*ProjectConfig, error) {
 	}
 
 	var cfg ProjectConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	// Reject unknown fields so a typo (e.g. `usernmae:`) is a clear error rather
+	// than a silently-ignored key that falls back to env/defaults.
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return &cfg, nil // empty file: zero-value config, not an error
+		}
 		return nil, err
 	}
 	return &cfg, nil

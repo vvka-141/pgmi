@@ -2,12 +2,49 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
+
+func TestValidateNoDuplicateScriptIDs(t *testing.T) {
+	id1 := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	id2 := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+
+	t.Run("duplicate id is rejected", func(t *testing.T) {
+		files := []pgmi.FileMetadata{
+			{Path: "./b.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
+			{Path: "./a.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
+		}
+		err := validateNoDuplicateScriptIDs(files)
+		if err == nil {
+			t.Fatal("expected error for duplicate id, got nil")
+		}
+		if !errors.Is(err, pgmi.ErrInvalidConfig) {
+			t.Errorf("expected ErrInvalidConfig (exit 10), got: %v", err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, id1.String()) || !strings.Contains(msg, "./a.sql") || !strings.Contains(msg, "./b.sql") {
+			t.Errorf("error should name the id and both files, got: %s", msg)
+		}
+	})
+
+	t.Run("unique ids and metadata-less files pass", func(t *testing.T) {
+		files := []pgmi.FileMetadata{
+			{Path: "./a.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
+			{Path: "./b.sql", Metadata: &pgmi.ScriptMetadata{ID: id2}},
+			{Path: "./c.sql", Metadata: nil},
+			{Path: "./d.txt", Metadata: nil},
+		}
+		if err := validateNoDuplicateScriptIDs(files); err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+	})
+}
 
 func TestNewSessionManager_NilDeps(t *testing.T) {
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {

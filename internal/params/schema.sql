@@ -166,7 +166,7 @@ CREATE TEMP TABLE pg_temp._pgmi_test_directory
 );
 
 CREATE INDEX ix_pgmi_test_directory_parent ON pg_temp._pgmi_test_directory(parent_path);
-GRANT SELECT, INSERT ON TABLE pg_temp._pgmi_test_directory TO PUBLIC;
+GRANT SELECT ON TABLE pg_temp._pgmi_test_directory TO PUBLIC;
 
 COMMENT ON TABLE pg_temp._pgmi_test_directory IS
     'Hierarchical test directory structure. Populated by Go, used by pgmi_test_plan() function.';
@@ -188,7 +188,7 @@ CREATE TEMP TABLE pg_temp._pgmi_test_source
 );
 
 CREATE INDEX ix_pgmi_test_source_directory ON pg_temp._pgmi_test_source(directory);
-GRANT SELECT, INSERT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
+GRANT SELECT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
 
 COMMENT ON TABLE pg_temp._pgmi_test_source IS
     'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
@@ -439,7 +439,7 @@ BEGIN
              ELSE NULL
         END;
 
-    -- 🧩 3. Insert & return the row
+    -- 3. Insert & return the row
     INSERT INTO pg_temp._pgmi_source VALUES (
         v_row.path, v_row.name, v_row.directory, v_row.extension,
         v_row.depth, v_row.content, v_row.size_bytes,

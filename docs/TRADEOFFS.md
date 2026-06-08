@@ -39,9 +39,13 @@ When a migration fails, pgmi shows:
 execution failed: ERROR: relation "users" does not exist (SQLSTATE 42P01)
 ```
 
-What it doesn't show: the `Detail`, `Hint`, and `Where` fields from PostgreSQL's error response. pgmi doesn't parse SQL, track line numbers, or maintain source maps.
+pgmi surfaces PostgreSQL's `DETAIL`, `HINT`, and `WHERE` fields when the server
+sends them (see `pkg/pgmi/errors.go` `FormatError`). What it can't tell you is
+*which project file* the failing statement came from: pgmi doesn't parse SQL,
+track line numbers, or maintain source maps.
 
-**Mitigation:** Use exception blocks in deploy.sql to capture which file failed:
+**Mitigation:** Wrap execution in exception blocks in deploy.sql to enrich the
+error with the failing file path:
 
 ```sql
 BEGIN

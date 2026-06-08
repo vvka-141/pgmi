@@ -15,6 +15,31 @@ func newTestScanner() (*Scanner, *filesystem.MemoryFileSystem) {
 	return NewScannerWithFS(checksum.New(), fs), fs
 }
 
+func TestScanDirectory_RejectsNonTextFiles(t *testing.T) {
+	t.Run("NUL byte", func(t *testing.T) {
+		s, fs := newTestScanner()
+		fs.AddFile("deploy.sql", "SELECT 1;")
+		fs.AddFile("data/blob.bin", "ok\x00binary")
+		_, err := s.ScanDirectory("/project")
+		if err == nil || !strings.Contains(err.Error(), "NUL byte") {
+			t.Fatalf("expected NUL-byte error naming the file, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "blob.bin") {
+			t.Fatalf("error should name the offending file, got: %v", err)
+		}
+	})
+
+	t.Run("invalid UTF-8", func(t *testing.T) {
+		s, fs := newTestScanner()
+		fs.AddFile("deploy.sql", "SELECT 1;")
+		fs.AddFile("data/bad.txt", "valid then \xff\xfe invalid")
+		_, err := s.ScanDirectory("/project")
+		if err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+			t.Fatalf("expected UTF-8 error, got: %v", err)
+		}
+	})
+}
+
 func TestNewScanner_NilCalculator(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

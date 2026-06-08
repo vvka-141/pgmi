@@ -37,7 +37,7 @@ CREATE TABLE test (id INT);
 		t.Errorf("Expected ID %s, got %s", expectedID, meta.ID)
 	}
 
-	if !meta.Idempotent {
+	if meta.Idempotent == nil || !*meta.Idempotent {
 		t.Error("Expected idempotent=true")
 	}
 
@@ -69,7 +69,7 @@ SELECT 1;
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if meta.Idempotent {
+	if meta.Idempotent == nil || *meta.Idempotent {
 		t.Error("Expected idempotent=false")
 	}
 
@@ -345,7 +345,7 @@ func TestExtract_BooleanParsing(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Unexpected error: %v", err)
 				}
-				if meta.Idempotent != tc.expected {
+				if meta.Idempotent == nil || *meta.Idempotent != tc.expected {
 					t.Errorf("Expected idempotent=%v, got %v", tc.expected, meta.Idempotent)
 				}
 			}
