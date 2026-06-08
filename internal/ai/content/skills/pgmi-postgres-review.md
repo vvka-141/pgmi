@@ -407,8 +407,8 @@ BEGIN
     -- Execute
     EXECUTE v_content;
 
-    -- Track execution
-    INSERT INTO internal.deployment_script_execution_log (script_id, checksum)
+    -- Track execution (illustrative table; not the shipped exec-log schema)
+    INSERT INTO example_script_log (script_id, checksum)
     VALUES (p_path, v_checksum);
 
     RETURN 0; -- Success
@@ -706,8 +706,10 @@ $$ LANGUAGE plpgsql;
 **Pattern**: Track all DDL and critical DML.
 
 ```sql
--- Execution log (who, what, when)
-CREATE TABLE internal.deployment_script_execution_log (
+-- Execution log (who, what, when) — illustrative; the advanced template's real
+-- internal.deployment_script_execution_log uses deployment_script_object_id,
+-- deployment_script_content_checksum, file_path and mandatory FKs.
+CREATE TABLE example_script_log (
     execution_order SERIAL PRIMARY KEY,
     script_id TEXT NOT NULL,
     checksum TEXT NOT NULL,

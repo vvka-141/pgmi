@@ -125,7 +125,7 @@ BEGIN
 END $$;
 ```
 
-**Security Note**: Never pass secrets as parameters (passwords, API keys, tokens). Use PostgreSQL connection strings or environment variables.
+**Security Note**: Never pass secrets on the command line — `--param key=secret` leaks to `ps`, shell history, and CI logs. Passing secrets *as parameters* is supported and expected; supply them via `--params-file` or a CI-generated seeding file. Use PostgreSQL connection strings or environment variables for the connection password.
 
 ### 4. Dual Checksum Strategy
 
@@ -303,13 +303,13 @@ SELECT * FROM pg_temp.pgmi_test_plan();
 SELECT * FROM pg_temp.pgmi_test_plan('.*/api/.*');
 ```
 
-**`CALL pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
+**`pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
 ```sql
 -- Run all tests
-CALL pgmi_test();
+pgmi_test();
 
 -- Run filtered tests
-CALL pgmi_test('.*/pre-deployment/.*');
+pgmi_test('.*/pre-deployment/.*');
 ```
 
 ## Design Heuristics

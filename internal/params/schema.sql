@@ -439,7 +439,7 @@ BEGIN
              ELSE NULL
         END;
 
-    -- 🧩 3. Insert & return the row
+    -- 3. Insert & return the row
     INSERT INTO pg_temp._pgmi_source VALUES (
         v_row.path, v_row.name, v_row.directory, v_row.extension,
         v_row.depth, v_row.content, v_row.size_bytes,

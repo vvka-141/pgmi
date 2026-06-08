@@ -182,9 +182,12 @@ pgmi init myapp --template basic # Create a project
 pgmi embeds AI-digestible documentation directly in the binary. AI coding assistants (Claude Code, GitHub Copilot, Gemini CLI) can discover and learn pgmi patterns:
 
 ```bash
-pgmi ai                    # Overview for AI assistants
+pgmi ai                    # Overview for AI assistants (llms.txt style)
 pgmi ai skills             # List embedded skills
-pgmi ai skill pgmi-sql     # Load SQL conventions
+pgmi ai skill pgmi-sql     # Print one skill's full content
+pgmi ai contract           # Print the session API contract (views/functions)
+pgmi ai setup              # Materialize a discoverable skill into the project
+pgmi ai check              # Report whether that skill exists and is current
 ```
 
 When you tell an AI assistant "use pgmi for this project", it can query these commands to understand pgmi's philosophy, conventions, and best practices.

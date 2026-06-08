@@ -38,14 +38,14 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 | Aspect | **basic** | **advanced** |
 |--------|-----------|--------------|
 | **Purpose** | Learning pgmi fundamentals | Production-ready deployments |
-| **Structure** | Flat with `migrations/` folder | Domain-organized (common/api/core/internal) |
+| **Structure** | Flat with `migrations/` folder | Domain-organized (common/api/core/internal/membership) |
 | **Execution Model** | Directory-based phases | Metadata-driven UNNEST sort key ordering |
 | **Ordering** | Alphabetical (lexicographic) | Explicit sort keys (lexicographic on keys) |
 | **Tracking** | None (stateless) | UUID-based in `internal.deployment_script_execution_log` |
 | **Metadata** | Optional/absent | Required `<pgmi-meta>` blocks |
 | **Dependencies** | Implicit (directory structure) | Implicit via sort key layering |
-| **Schemas** | `public` (default) | Four-schema (common/api/core/internal) |
-| **Role Hierarchy** | None | Three-tier (owner/admin/api) |
+| **Schemas** | `public` (default) | Five-schema (common/api/core/internal/membership) |
+| **Role Hierarchy** | None | Four-tier (owner → admin → api → customer) |
 | **HTTP Framework** | No | Yes (routing, handlers, queuing) |
 | **Idempotency** | Manual (user-written) | Metadata-driven (`idempotent` flag) |
 | **Lines of Code** | ~100 | ~1500 |
@@ -117,7 +117,7 @@ advanced/
 │   │   └── views.sql                   # API views
 │   ├── core/
 │   │   ├── foundation.sql              # Domain schema setup
-│   │   └── attached-properties.sql     # Attached property utilities
+│   │   └── entity-standards.sql        # Entity table standards (DDL event trigger)
 │   ├── common/
 │   │   ├── cast.sql                    # Safe type casting (`?|` operator, try_cast overloads)
 │   │   ├── encoding.sql                # Bytea encoding domains (utf8/latin1/win1252) and converters
@@ -152,8 +152,8 @@ advanced/
 **Key Features:**
 - Metadata-driven execution (UNNEST sort key ordering)
 - UUID-based script tracking (survives renames)
-- Four-schema architecture (internal, core, api, public)
-- Three-tier role hierarchy (owner/admin/api)
+- Five-schema architecture (common, api, core, internal, membership)
+- Four-tier role hierarchy (owner → admin → api → customer)
 - Multi-protocol API framework (REST, JSON-RPC, MCP)
 - Authentication enforcement via handler metadata
 - Inline testing patterns (in lib/common/)

@@ -463,12 +463,12 @@ DECLARE
     v_count INT;
 BEGIN
     -- Insert test data
-    INSERT INTO internal.deployment_script_execution_log (script_id, path, idempotent)
+    INSERT INTO example_script_log (script_id, path, idempotent)
     VALUES (v_script_id, 'test.sql', false);
 
     -- Verify tracking
     SELECT COUNT(*) INTO v_count
-    FROM internal.deployment_script_execution_log
+    FROM example_script_log
     WHERE script_id = v_script_id;
 
     IF v_count != 1 THEN
@@ -477,7 +477,7 @@ BEGIN
 
     -- Test idempotency check
     IF EXISTS (
-        SELECT 1 FROM internal.deployment_script_execution_log
+        SELECT 1 FROM example_script_log
         WHERE script_id = v_script_id AND idempotent = true
     ) THEN
         RAISE EXCEPTION 'TEST FAILED: Idempotent flag should be false';
@@ -566,7 +566,7 @@ BEGIN
         BEGIN
             -- Check if already executed (if tracking is enabled)
             IF EXISTS (
-                SELECT 1 FROM internal.deployment_script_execution_log
+                SELECT 1 FROM example_script_log
                 WHERE script_id = v_file.id
                   AND (NOT v_file.idempotent OR checksum = v_file.checksum)
             ) THEN
