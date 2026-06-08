@@ -36,14 +36,19 @@ COMMENT ON FUNCTION membership.api_key_prefix IS
     'Prefix segment of API keys. Reads the pgmi.api_key_prefix GUC or defaults to "pgmi". Format: {prefix}_{key_id}_{secret}.';
 
 -- ============================================================================
--- Constant-time String Comparison
+-- Hash-safe String Comparison
 -- ============================================================================
--- Eliminates the timing side-channel in hash comparisons. Plain `=` on text
--- short-circuits on the first differing byte, leaking the length of the match
--- prefix. This helper XORs every byte and accumulates differences so execution
--- time is independent of where inputs diverge.
+-- Best-effort timing-leak-resistant equality for SHA-256 hashes. Plain `=` on
+-- text short-circuits on the first differing byte, leaking the length of the
+-- match prefix; this helper XORs every byte and accumulates differences so the
+-- loop does not short-circuit. PL/pgSQL cannot guarantee true constant time
+-- (JIT, scheduling, branch prediction, caches add variation), so this is named
+-- eq_hash_safe, not eq_constant_time: it compares hashes, so any residual
+-- timing leak reveals at most hash-prefix similarity, never raw key bytes.
 
-CREATE OR REPLACE FUNCTION membership.eq_constant_time(a text, b text)
+DROP FUNCTION IF EXISTS membership.eq_constant_time(text, text);
+
+CREATE OR REPLACE FUNCTION membership.eq_hash_safe(a text, b text)
 RETURNS boolean
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
 DECLARE
@@ -64,8 +69,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION membership.eq_constant_time(text, text) IS
-    'Constant-time equality compare for hex/text secrets. Runtime is independent of where inputs diverge, eliminating the timing side-channel present in plain `=`.';
+COMMENT ON FUNCTION membership.eq_hash_safe(text, text) IS
+    'Hash-safe equality compare for SHA-256 hashes. Avoids the early-exit of plain `=`; not a true constant-time guarantee (PL/pgSQL cannot deliver one), but because it compares hashes any residual timing leak reveals at most hash-prefix similarity, not raw key bytes.';
 
 -- ============================================================================
 -- API Key Status Enum
@@ -351,7 +356,7 @@ BEGIN
     END IF;
 
     v_computed_hash := encode(extensions.digest(p_raw_key, 'sha256'), 'hex');
-    IF NOT membership.eq_constant_time(v_computed_hash, v_key.key_hash) THEN
+    IF NOT membership.eq_hash_safe(v_computed_hash, v_key.key_hash) THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, v_key_id, 'invalid secret'::text;
         RETURN;
     END IF;
