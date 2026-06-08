@@ -329,7 +329,7 @@ This is what makes pgmi different from migration tools: PostgreSQL itself is the
 
 ## Choosing a template
 
-pgmi provides two templates for `pgmi init`. Start with **basic** when you want a small migration scaffold. Reach for **advanced** when you want a large, editable reference system — metadata tracking, roles, schemas, audit logging, and API/MCP patterns you adapt to your needs. Advanced is not a "more production" version of basic; it's a different, richer starting point you own and trim.
+pgmi provides two templates for `pgmi init`. Start with **basic** when you want a small migration scaffold. Reach for **advanced** when you want a large, editable reference system — metadata tracking, roles, schemas, audit logging, and API/MCP patterns you adapt to your needs. Advanced is not a "more production" version of basic; it's a different, richer starting point you own and trim. **Either can be production** depending on the project — advanced is _more complete_, not _more production_.
 
 | Feature | Basic | Advanced |
 |---------|-------|----------|
