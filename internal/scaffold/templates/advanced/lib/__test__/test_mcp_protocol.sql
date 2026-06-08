@@ -70,11 +70,11 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: Initialize with unknown version should negotiate, not error: %', v_envelope->'error';
     END IF;
 
-    IF v_envelope->'result'->>'protocolVersion' != '2025-11-05' THEN
-        RAISE EXCEPTION 'TEST FAILED: unknown version should negotiate to server best 2025-11-05, got %', v_envelope->'result'->>'protocolVersion';
+    IF v_envelope->'result'->>'protocolVersion' != '2025-11-25' THEN
+        RAISE EXCEPTION 'TEST FAILED: unknown version should negotiate to server best 2025-11-25, got %', v_envelope->'result'->>'protocolVersion';
     END IF;
 
-    RAISE NOTICE '  + Initialize negotiates unknown version to server best (2025-11-05)';
+    RAISE NOTICE '  + Initialize negotiates unknown version to server best (2025-11-25)';
 
     -- ========================================================================
     -- Test: a current client version (2025-06-18) completes initialize and is
