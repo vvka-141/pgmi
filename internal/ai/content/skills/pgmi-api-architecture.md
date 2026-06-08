@@ -211,7 +211,93 @@ api.mcp_get_prompt(name, arguments, context, request_id) → api.mcp_response
 
 ---
 
+## Layered Data Architecture (physical → logical → API)
+
+Separate three layers. API handlers should sit on the **logical** layer, not on physical tables.
+
+| Layer | What lives here | Returns |
+|-------|-----------------|---------|
+| Physical | Base tables, constraints, indexes, RLS policies | rows |
+| Logical | Functions + views that model entities and business reads/writes | full entity tuples / summary rows |
+| API | REST/RPC/MCP handlers | formatted JSON/XML (`api.*_response`) |
+
+A handler's job is **formatting and protocol**, not query construction. Push the query into the logical layer; the handler selects from it and shapes the response. This keeps handlers about JSON/XML, not SQL.
+
+### 1. CRUD functions return the whole entity
+
+A logical read/write that operates on a single entity returns that entity's **full tuple** — not just its id, not a status flag. Callers and the API layer then have everything to render or chain, from one transaction snapshot.
+
+```sql
+-- ✅ Returns the entity's rowtype, kept in lockstep with the table
+CREATE FUNCTION project_design.rename_project(p_id uuid, p_title text)
+RETURNS project_design.project
+LANGUAGE sql AS $$
+    UPDATE project_design.project
+       SET title = p_title, updated_at = now()
+     WHERE object_id = p_id
+    RETURNING *;
+$$;
+```
+
+Use `RETURNS <schema>.<table>` (or `SETOF <table>`, or a summary view's rowtype) so the return type tracks the schema automatically.
+
+### 2. Entity-summary views carry the computed fields users want
+
+A logical view over a parent entity should assemble the overview a user expects on a list/detail screen — child counts and a few well-chosen aggregates next to the base columns. This is the value other frameworks fail to put at the user's fingertips for sortable tables and overview pages.
+
+```sql
+CREATE VIEW project_design.vw_project_summary
+WITH (security_invoker = true) AS
+SELECT
+    p.*,
+    -- lazy: a scalar subquery is only evaluated for columns the caller selects
+    (SELECT count(*) FROM project_design.activity a
+      WHERE a.project_object_id = p.object_id)        AS activity_count,
+    (SELECT max(a.created_at) FROM project_design.activity a
+      WHERE a.project_object_id = p.object_id)        AS last_activity_at
+FROM project_design.project p;
+```
+
+- **Reason from the business/user** — each derived field answers a real overview question. Don't compute everything because you can.
+- Keep derived columns as **scalar subqueries or `LEFT JOIN LATERAL`** so an unselected column costs nothing.
+- Mark the view `security_invoker = true` so RLS applies to the calling role.
+
+### 3. Parameterize hot access patterns as partial views / table functions
+
+When an entity is almost always read by a known key (current user, tenant, partition), expose a function that **requires** that key and applies it internally. This removes the `WHERE` boilerplate from every higher-level function and keeps it correct in one place.
+
+```sql
+-- Required key, applied (and authorized) internally
+CREATE FUNCTION api.my_projects()
+RETURNS SETOF project_design.vw_project_summary
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    SELECT * FROM project_design.vw_project_summary
+     WHERE owner_object_id = api.current_user_id();
+$$;
+```
+
+The handler is then nearly pure formatting:
+
+```sql
+-- REST handler body: query the logical layer, serialize the result
+SELECT api.json_response(200, jsonb_agg(to_jsonb(s)))
+FROM api.my_projects() s;
+```
+
+### Keep logical functions inlinable
+
+The planner can **inline** a SQL function (fold it into the calling query so indexes and predicates push through) when it is a single `SELECT`, `LANGUAGE sql`, **not** `SECURITY DEFINER`, has **no `SET` clause** (e.g. `SET search_path` blocks inlining), and is marked `STABLE`/`IMMUTABLE` + `PARALLEL SAFE` as appropriate.
+
+- Prefer `LANGUAGE sql` over `plpgsql` for single-statement reads/writes — SQL inlines, PL/pgSQL does not.
+- **Avoid optional parameters that only filter or transform the function's result rows** — they fence off inlining and re-implement what SQL already does. Let the caller add `WHERE`/`SELECT` on the function's output instead. (A *required* keying param applied internally, as in §3, is the opposite — it belongs inside.)
+
+### Handler registration is read by humans
+
+`create_or_replace_*_handler` blocks are the most-read SQL in an app. Format them for a developer skimming the file: aligned metadata, the body as clean SQL, and a `description` that is **concise and informative** (what it does + the entity, in one line). A minimal comment is welcome only where the SQL would otherwise puzzle a reader.
+
 ## Rich Document Pattern
+
+> The Rich Document Pattern is the API-layer face of the logical architecture above: a handler selects from an entity-summary view/function (§2–§3) and serializes it. The inline-subquery form below is fine for a one-off response shape; promote it to a summary view once more than one handler needs the same fields.
 
 ### Principle: Return Everything the UI Needs
 
@@ -352,7 +438,7 @@ The `api.jsonrpc_error()` function maps JSON-RPC codes to HTTP status:
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-06-08
 **Incident Reference**: RPC auth failures returning HTTP 200 instead of 401
-**Lesson**: REST/RPC are HTTP-first (status codes matter); MCP is JSON-RPC 2.0 (uses error objects)
+**Lesson**: REST/RPC are HTTP-first (status codes matter); MCP is JSON-RPC 2.0 (uses error objects). Handlers sit on a logical layer (entity-tuple functions + summary views), not physical tables — they format, the logical layer queries.
 
