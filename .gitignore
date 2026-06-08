@@ -22,6 +22,10 @@ pgmi
 # Test binary, built with `go test -c`
 *.test
 
+# Python bytecode artifacts (e.g. from compiling the MCP gateway template)
+__pycache__/
+*.pyc
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*

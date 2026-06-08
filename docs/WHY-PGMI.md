@@ -107,7 +107,7 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic** for learning and simple projects, **advanced** for production with metadata-driven deployment. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for details.
+pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic**, a small, explicit migration scaffold, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — either can be production depending on your project. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for the canonical comparison.
 
 But consider simpler tools if:
 

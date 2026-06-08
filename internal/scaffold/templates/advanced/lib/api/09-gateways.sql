@@ -164,6 +164,7 @@ DECLARE
     v_route record;
     v_version text;
     v_path text;
+    v_content_type text;
     v_start_time timestamptz;
     v_execution_ms numeric;
 BEGIN
@@ -192,7 +193,7 @@ BEGIN
     -- '^/users/\d+$' without hand-anchoring '(\?.*)?$'.
     v_path := api.url_path(p_url);
 
-    SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.produces, h.requires_auth,
+    SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.accepts, h.produces, h.requires_auth,
            h.output_json_schema,
            r.route_name, r.auto_log
     INTO v_route
@@ -218,6 +219,20 @@ BEGIN
     IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
+    END IF;
+
+    -- Enforce the handler's declared accepts against the request Content-Type.
+    -- Only when the request carries a Content-Type (a body); the default
+    -- accepts of {*/*} matches everything, so this only bites handlers that
+    -- explicitly narrow the types they accept.
+    v_content_type := btrim(split_part(COALESCE(p_headers->'content-type', ''), ';', 1));
+    IF v_content_type <> ''
+       AND NOT api.accept_matches(array_to_string(v_route.accepts, ', '), ARRAY[v_content_type]) THEN
+        RETURN api.problem_response(
+            415,
+            'Unsupported Media Type',
+            format('Supported request content types: %s', array_to_string(v_route.accepts, ', '))
+        );
     END IF;
 
     IF NOT api.accept_matches(p_headers->'accept', v_route.produces) THEN
@@ -304,20 +319,37 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+    DECLARE
+        v_sqlstate text := SQLSTATE;
+        v_status int;
+        v_title text;
+        v_client_detail text;
+    BEGIN
         RAISE DEBUG 'rest_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log SQLSTATE + truncated SQLERRM. Full SQLERRM may include
-        -- attacker-supplied input or PII (handlers commonly raise with
+        -- Map common constraint violations to 4xx instead of a blanket 500 so
+        -- clients, caches, and retry logic see the right class. Messages stay
+        -- generic per class — SQLERRM/DETAIL are never sent to the client.
+        CASE v_sqlstate
+            WHEN '23505' THEN v_status := 409; v_title := 'Conflict';             v_client_detail := 'Resource already exists';
+            WHEN '23514' THEN v_status := 422; v_title := 'Unprocessable Entity'; v_client_detail := 'A submitted value violates a constraint';
+            WHEN '23502' THEN v_status := 400; v_title := 'Bad Request';          v_client_detail := 'A required value is missing';
+            WHEN '23503' THEN v_status := 400; v_title := 'Bad Request';          v_client_detail := 'References a resource that does not exist';
+            ELSE              v_status := 500; v_title := 'Internal Server Error'; v_client_detail := 'An internal error occurred';
+        END CASE;
+
+        -- Logged copy keeps SQLSTATE + truncated SQLERRM. Full SQLERRM may
+        -- include attacker-supplied input or PII (handlers commonly raise
         -- "Invalid email: <user_input>"); truncating limits the blast radius
         -- if exchange-table grants ever loosen.
-        v_response := api.problem_response(500, 'Internal Server Error',
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200));
+        v_response := api.problem_response(v_status, v_title,
+            'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200));
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
-            'x-error-sqlstate', SQLSTATE
+            'x-error-sqlstate', v_sqlstate
         ]);
         IF v_route.object_id IS NOT NULL THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
@@ -325,7 +357,8 @@ BEGIN
         END IF;
 
         -- Return sanitized error to client (hide internal details)
-        RETURN api.problem_response(500, 'Internal Server Error', 'An internal error occurred');
+        RETURN api.problem_response(v_status, v_title, v_client_detail);
+    END;
     END;
 END;
 $$;
@@ -522,17 +555,40 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+    DECLARE
+        v_sqlstate text := SQLSTATE;
+        v_status int;
+        v_rpc_code int;
+        v_client_msg text;
+    BEGIN
         RAISE DEBUG 'rpc_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
-        v_response := api.jsonrpc_error(-32603,
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), v_json_id);
+        -- Map common constraint violations to a 4xx HTTP status. JSON-RPC has
+        -- no code for "conflict", so the precise status rides on the HTTP
+        -- response while the error code stays in its correct class: -32602
+        -- (Invalid params) for client-caused errors, -32603 for server errors.
+        CASE v_sqlstate
+            WHEN '23505' THEN v_status := 409; v_rpc_code := -32602; v_client_msg := 'Resource already exists';
+            WHEN '23514' THEN v_status := 422; v_rpc_code := -32602; v_client_msg := 'A submitted value violates a constraint';
+            WHEN '23502' THEN v_status := 400; v_rpc_code := -32602; v_client_msg := 'A required value is missing';
+            WHEN '23503' THEN v_status := 400; v_rpc_code := -32602; v_client_msg := 'References a resource that does not exist';
+            ELSE              v_status := 500; v_rpc_code := -32603; v_client_msg := 'Internal error';
+        END CASE;
+
+        -- Logged copy keeps SQLSTATE + truncated SQLERRM (see rest_invoke for
+        -- the truncation rationale).
+        v_response := api.json_response(v_status, jsonb_build_object(
+            'jsonrpc', '2.0',
+            'error', jsonb_build_object('code', v_rpc_code,
+                'message', 'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200)),
+            'id', v_json_id
+        ));
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
-            'x-error-sqlstate', SQLSTATE
+            'x-error-sqlstate', v_sqlstate
         ]);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
@@ -540,7 +596,12 @@ BEGIN
         END IF;
 
         -- Return sanitized error to client (hide internal details)
-        RETURN api.jsonrpc_error(-32603, 'Internal error', v_json_id);
+        RETURN api.json_response(v_status, jsonb_build_object(
+            'jsonrpc', '2.0',
+            'error', jsonb_build_object('code', v_rpc_code, 'message', v_client_msg),
+            'id', v_json_id
+        ));
+    END;
     END;
 END;
 $$;
@@ -550,14 +611,14 @@ $$;
 -- ============================================================================
 -- Exception handling follows MCP spec: tool execution failures return
 -- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
--- JSON-RPC -32601 is reserved for "tool not found" (true protocol error).
 --
--- M-API3 decision: an unknown tool/resource/prompt NAME returns -32601, not
--- -32602. Reference SDKs treat the name as a param and use -32602, but pgmi
--- keeps -32601 deliberately: it is internally consistent (api.jsonrpc_error
--- maps -32601 -> 404 "not found", the correct REST bridge), and -32602 stays
--- reserved for malformed params. The dispatcher ELSE branch uses -32601 for
--- unknown JSON-RPC methods.
+-- An unknown tool/resource/prompt NAME returns -32602 (Invalid params): the
+-- method (tools/call, resources/read, prompts/get) was found and dispatched
+-- correctly — only the name/uri argument identifies nothing. The spec
+-- standardizes not-found to -32602 (SEP-2164,
+-- https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164).
+-- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
+-- methods (the dispatcher ELSE branch). Auth failures keep -32001.
 
 DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
@@ -586,7 +647,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_call_tool: Tool not found';
-        RETURN api.mcp_error(-32601, 'Tool not found: ' || p_name, p_request_id);
+        RETURN api.mcp_error(-32602, 'Tool not found: ' || p_name, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
@@ -667,7 +728,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Resource not found';
-        RETURN api.mcp_error(-32601, 'Resource not found: ' || p_uri, p_request_id);
+        RETURN api.mcp_error(-32602, 'Resource not found: ' || p_uri, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
@@ -738,7 +799,7 @@ BEGIN
 
     IF v_handler.handler_exec_sql IS NULL THEN
         RAISE DEBUG 'mcp_get_prompt: Prompt not found';
-        RETURN api.mcp_error(-32601, 'Prompt not found: ' || p_name, p_request_id);
+        RETURN api.mcp_error(-32602, 'Prompt not found: ' || p_name, p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;

@@ -77,7 +77,7 @@ For Claude Desktop, add to `~/.config/claude/claude_desktop_config.json`:
 
 pgmi implements MCP using JSON-RPC 2.0:
 
-- **Supported protocol versions**: `2024-11-05`, `2025-03-26`
+- **Supported protocol versions**: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` (an unknown-newer proposal negotiates down to the server's best supported version)
 - **Transport**: HTTP POST to `/mcp` endpoint
 - **Authentication**: Context parameter (not HTTP headers)
 
@@ -92,7 +92,8 @@ pgmi implements MCP using JSON-RPC 2.0:
 | `api.mcp_read_resource(uri, context, id jsonb)` | Read a resource |
 | `api.mcp_get_prompt(name, args, context, id jsonb)` | Expand a prompt |
 | `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` | Tool discovery; hides `requires_auth` tools when `auth.user_id` is unset; surfaces tags as `_meta.tags`; `p_tags` filter matches by overlap (NULL or empty array = no filter) |
-| `api.mcp_list_resources()` | Resource discovery; emits `uri` for static resources, `uriTemplate` for RFC 6570 templates; same auth-hide semantics |
+| `api.mcp_list_resources()` | Concrete-resource discovery (`resources/list`); emits `uri` objects only; same auth-hide semantics |
+| `api.mcp_list_resource_templates()` | Template discovery (`resources/templates/list`); emits `uriTemplate` objects (RFC 6570); same auth-hide semantics |
 | `api.mcp_list_prompts()` | Prompt discovery; same auth-hide semantics |
 
 `request_id` is **jsonb** across the MCP API so JSON-RPC 2.0 id types (string, integer, null) round-trip verbatim. Passing a raw text literal (`'req-1'`) fails domain parsing — use `'"req-1"'::jsonb` or `'42'::jsonb`.
@@ -113,6 +114,7 @@ The dispatcher (`api.mcp_handle_request`) routes requests by method. Any method 
 | `tools/list` | `api.mcp_list_tools()` |
 | `tools/call` | `api.mcp_call_tool(name, args, context, id)` |
 | `resources/list` | `api.mcp_list_resources()` |
+| `resources/templates/list` | `api.mcp_list_resource_templates()` |
 | `resources/read` | `api.mcp_read_resource(uri, context, id)` |
 | `prompts/list` | `api.mcp_list_prompts()` |
 | `prompts/get` | `api.mcp_get_prompt(name, args, context, id)` |
@@ -414,7 +416,7 @@ If `requiresAuth` is true and `user_id` is missing from context, the gateway ret
   "jsonrpc": "2.0",
   "id": "req-1",
   "error": {
-    "code": -32601,
+    "code": -32602,
     "message": "Tool not found: unknown_tool"
   }
 }
@@ -500,14 +502,16 @@ The advanced template includes a Python gateway (`tools/mcp-gateway.py`) that br
 
 **Requirements:**
 - Python 3.8+
-- `psycopg2` or `psycopg` (PostgreSQL adapter)
-- `flask` (HTTP server)
+- `psycopg[binary]>=3.0` (psycopg 3) — the only dependency, pinned in `tools/requirements.txt`
+
+The gateway uses the Python standard library's `http.server`; it does **not**
+use Flask, gunicorn, or psycopg2.
 
 ### Starting the Gateway
 
 ```bash
 cd myproject/tools
-pip install psycopg2-binary flask
+pip install -r requirements.txt
 export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
 python mcp-gateway.py
 ```
@@ -516,8 +520,16 @@ python mcp-gateway.py
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/mcp` | POST | MCP JSON-RPC endpoint |
+| `/mcp` | POST | MCP JSON-RPC endpoint. Honors `Accept` (responds `application/json`; no SSE), validates and echoes the `MCP-Protocol-Version` header |
+| `/mcp` | GET | `405 Method Not Allowed` — the gateway offers no server-initiated SSE stream |
 | `/health` | GET | Health check (for load balancers) |
+
+The gateway implements the Streamable HTTP transport's request/response path:
+a POST whose `MCP-Protocol-Version` header names an unsupported revision is
+rejected with `400`; an `Accept` header that admits neither `application/json`
+nor a wildcard is rejected with `406`. A server→client SSE stream on `GET /mcp`
+is intentionally not implemented (the gateway emits no server-initiated
+notifications).
 
 ### Authentication Headers
 
@@ -530,17 +542,15 @@ The gateway extracts authentication from HTTP headers:
 
 ### Production Deployment
 
+The shipped gateway is a single-process `http.server` reference implementation.
 For production, consider:
 
 1. **Reverse Proxy**: Place behind nginx/Caddy that validates JWTs and injects X-User-Id
 2. **Connection Pooling**: Use PgBouncer for connection management
-3. **WSGI Server**: Run with gunicorn for multiple workers
-4. **TLS**: Terminate SSL at the load balancer
-
-```bash
-# Example with gunicorn
-gunicorn -w 4 -b 0.0.0.0:8080 'mcp-gateway:app'
-```
+3. **TLS**: Terminate SSL at the load balancer
+4. **Scaling**: run multiple gateway processes behind the proxy, or adapt the
+   handler to your own ASGI/WSGI server — the gateway exposes no WSGI `app`
+   object, so it cannot be served with `gunicorn` as-is.
 
 ## Built-in Example Tools
 

@@ -544,7 +544,7 @@ SELECT api.create_or_replace_mcp_handler(
             ),
             'required', jsonb_build_array()
         ),
-        'requiresAuth', false
+        'requiresAuth', true
     ),
     $body$
 DECLARE
@@ -592,29 +592,39 @@ DECLARE
     v_response api.mcp_response;
     v_env jsonb;
 BEGIN
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, '"demo-4"'::jsonb);
+    -- list_tables requires auth; pass an authenticated context so these calls
+    -- exercise the schema-rejection logic rather than short-circuiting on auth.
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, '{"user_id":"demo|admin"}'::jsonb, '"demo-4"'::jsonb);
     RAISE DEBUG '  -> MCP tool list_tables(api)  envelope=%', (v_response).envelope;
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, NULL, '"demo-4b"'::jsonb);
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"pg_catalog"}'::jsonb, '{"user_id":"demo|admin"}'::jsonb, '"demo-4b"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject pg_catalog schema';
     END IF;
     RAISE DEBUG '  ✓ list_tables(pg_catalog) rejected';
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, NULL, '"demo-4c"'::jsonb);
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"information_schema"}'::jsonb, '{"user_id":"demo|admin"}'::jsonb, '"demo-4c"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject information_schema';
     END IF;
     RAISE DEBUG '  ✓ list_tables(information_schema) rejected';
 
-    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, NULL, '"demo-4d"'::jsonb);
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"internal"}'::jsonb, '{"user_id":"demo|admin"}'::jsonb, '"demo-4d"'::jsonb);
     v_env := (v_response).envelope;
     IF v_env->'error' IS NULL AND (v_env->'result'->>'isError')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: list_tables must reject internal schema';
     END IF;
     RAISE DEBUG '  ✓ list_tables(internal) rejected';
+
+    -- Unauthenticated call is now rejected with -32001 (requiresAuth=true).
+    v_response := api.mcp_call_tool('list_tables', '{"schema":"api"}'::jsonb, NULL, '"demo-4e"'::jsonb);
+    v_env := (v_response).envelope;
+    IF (v_env->'error'->>'code')::int != -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: unauthenticated list_tables must return -32001, got %', v_env->'error';
+    END IF;
+    RAISE DEBUG '  ✓ list_tables unauthenticated rejected';
 END $$;
 
 -- ============================================================================

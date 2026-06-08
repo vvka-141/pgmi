@@ -377,11 +377,11 @@ BEGIN
     END IF;
 END $$;
 
--- Using assert (PostgreSQL 9.5+)
-SELECT assert(
-    COUNT(*) = 5,
-    'Expected 5 users after migration'
-) FROM users;
+-- Using the ASSERT statement (PostgreSQL 9.5+)
+DO $$
+BEGIN
+    ASSERT (SELECT COUNT(*) FROM users) = 5, 'Expected 5 users after migration';
+END $$;
 
 -- Complex validation
 DO $$

@@ -143,6 +143,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     END;
 $$;
 
+-- Single-value query-string parser. hstore cannot hold duplicate keys, so for
+-- a repeated key (?tag=a&tag=b) this keeps the FIRST occurrence. Use
+-- api.query_params_multi() when a parameter may legitimately repeat.
 CREATE OR REPLACE FUNCTION api.query_params(url text)
 RETURNS extensions.hstore
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
@@ -159,6 +162,37 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     FROM params WHERE param != '';
 $$;
 
+COMMENT ON FUNCTION api.query_params(text) IS
+    'Single-value query-string parser (hstore). Repeated keys collapse to the first value; use api.query_params_multi() to preserve all values.';
+
+-- Multi-value query-string parser. Returns jsonb mapping each key to a JSON
+-- array of all its values in order, so ?tag=a&tag=b yields {"tag": ["a","b"]}.
+-- A single-value param is a one-element array the caller unwraps with ->>0.
+CREATE OR REPLACE FUNCTION api.query_params_multi(url text)
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    WITH params AS (
+        SELECT
+            api.url_decode(split_part(param, '=', 1)) AS key,
+            api.url_decode(COALESCE(nullif(split_part(param, '=', 2), ''), '')) AS value,
+            ordinality
+        FROM unnest(string_to_array(split_part(url, '?', 2), '&')) WITH ORDINALITY AS t(param, ordinality)
+        WHERE param != ''
+    )
+    SELECT COALESCE(
+        jsonb_object_agg(key, arr),
+        '{}'::jsonb
+    )
+    FROM (
+        SELECT key, jsonb_agg(value ORDER BY ordinality) AS arr
+        FROM params
+        GROUP BY key
+    ) grouped;
+$$;
+
+COMMENT ON FUNCTION api.query_params_multi(text) IS
+    'Multi-value query-string parser (jsonb). Each key maps to a JSON array of all its values in order; preserves duplicate keys that api.query_params() would drop.';
+
 CREATE OR REPLACE FUNCTION api.url_path(url text)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
@@ -169,6 +203,7 @@ $$;
 DO $$
 DECLARE
     v_params extensions.hstore;
+    v_params_multi jsonb;
     v_path text;
     v_decoded text;
     v_quoted text;
@@ -261,6 +296,19 @@ BEGIN
     END IF;
     IF v_params->'filter' != 'a+b' THEN
         RAISE EXCEPTION 'query_params url decode plus failed: got %', v_params->'filter';
+    END IF;
+
+    -- query_params drops repeated keys (first wins); query_params_multi keeps all
+    IF api.query_params('/f?tag=a&tag=b')->'tag' != 'a' THEN
+        RAISE EXCEPTION 'query_params should keep first value for repeated key';
+    END IF;
+
+    v_params_multi := api.query_params_multi('/f?tag=a&tag=b&q=hi');
+    IF v_params_multi->'tag' != '["a", "b"]'::jsonb THEN
+        RAISE EXCEPTION 'query_params_multi must preserve duplicate keys: got %', v_params_multi->'tag';
+    END IF;
+    IF v_params_multi->'q'->>0 != 'hi' THEN
+        RAISE EXCEPTION 'query_params_multi single value should be a one-element array: got %', v_params_multi->'q';
     END IF;
 
     v_path := api.url_path('/api/users?name=john');

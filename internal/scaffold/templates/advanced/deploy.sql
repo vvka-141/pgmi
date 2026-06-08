@@ -106,7 +106,8 @@ BEGIN
         PERFORM set_config('pgmi.' || v_param.key, v_param.value, false);
         RAISE NOTICE '[pgmi] Parameter: % = %',
             v_param.original_key,
-            CASE WHEN v_param.key ~ 'password' THEN '********' ELSE v_param.value END;
+            CASE WHEN lower(v_param.key) ~ '(password|secret|token|key|credential|auth)'
+                 THEN '********' ELSE v_param.value END;
     END LOOP;
 END $$;
 

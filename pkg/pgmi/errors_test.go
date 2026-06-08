@@ -33,6 +33,10 @@ func TestExitCodeForError(t *testing.T) {
 		{"context.Canceled", context.Canceled, pgmi.ExitInterrupted},
 		{"wrapped context.Canceled", fmt.Errorf("aborted: %w", context.Canceled), pgmi.ExitInterrupted},
 
+		// --timeout expiry
+		{"context.DeadlineExceeded", context.DeadlineExceeded, pgmi.ExitTimeout},
+		{"wrapped context.DeadlineExceeded", fmt.Errorf("deploy: %w", context.DeadlineExceeded), pgmi.ExitTimeout},
+
 		// wrapped sentinel errors
 		{"wrapped ErrInvalidConfig", fmt.Errorf("config problem: %w", pgmi.ErrInvalidConfig), pgmi.ExitConfigError},
 		{"wrapped ErrDeploySQLNotFound", fmt.Errorf("missing: %w", pgmi.ErrDeploySQLNotFound), pgmi.ExitDeploySQLMissing},

@@ -86,6 +86,12 @@ type codexSkillsAdapter struct{}
 func (codexSkillsAdapter) Name() string { return "codex-skills" }
 
 func (codexSkillsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	return skillSetupFiles(core)
+}
+
+// skillSetupFiles builds the SKILL.md wrapper plus one depth file per skill.
+// Shared by the Claude and Codex skill adapters, which differ only in Name().
+func skillSetupFiles(core string) ([]PlannedFile, error) {
 	wrapper, err := readContent("content/setup/claude-skill.md")
 	if err != nil {
 		return nil, err
@@ -152,46 +158,7 @@ type claudeAdapter struct{}
 func (claudeAdapter) Name() string { return "claude" }
 
 func (claudeAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
-	wrapper, err := readContent("content/setup/claude-skill.md")
-	if err != nil {
-		return nil, err
-	}
-	if !strings.Contains(wrapper, coreMarker) {
-		return nil, fmt.Errorf("claude-skill.md is missing the %s marker", coreMarker)
-	}
-
-	skills, err := ListSkills()
-	if err != nil {
-		return nil, fmt.Errorf("list skills for depth files: %w", err)
-	}
-
-	var depthSection strings.Builder
-	depthSection.WriteString("\n\n## Depth files\n\n")
-	depthSection.WriteString("Load the relevant file from this skill directory when working in that area:\n\n")
-
-	var depthFiles []PlannedFile
-	for _, s := range skills {
-		content, readErr := contentFS.ReadFile(s.FilePath)
-		if readErr != nil {
-			continue
-		}
-		depthFiles = append(depthFiles, PlannedFile{
-			RelPath: SkillDirName + "/" + s.Name + ".md",
-			Content: string(content),
-		})
-		desc := s.Description
-		if desc == "" {
-			desc = s.Name
-		}
-		fmt.Fprintf(&depthSection, "- `${CLAUDE_SKILL_DIR}/%s.md` — %s\n", s.Name, desc)
-	}
-
-	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
-	body += depthSection.String()
-
-	files := []PlannedFile{{RelPath: SkillDirName + "/SKILL.md", Content: body}}
-	files = append(files, depthFiles...)
-	return files, nil
+	return skillSetupFiles(core)
 }
 
 func readContent(path string) (string, error) {

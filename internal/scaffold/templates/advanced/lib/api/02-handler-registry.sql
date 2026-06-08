@@ -99,7 +99,7 @@ COMMENT ON COLUMN api.handler.handler_function_name IS
     'Fully qualified function name (schema.function) for display and debugging.';
 
 COMMENT ON COLUMN api.handler.accepts IS
-    'MIME types this handler accepts. Default: */*';
+    'MIME types this handler accepts for request bodies. Default */* accepts any. rest_invoke enforces it: a request whose Content-Type matches none of these returns 415.';
 
 COMMENT ON COLUMN api.handler.produces IS
     'MIME types this handler produces. Default: application/json';

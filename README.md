@@ -8,6 +8,12 @@
 pgmi gives PostgreSQL a deployment session containing your project files, then runs the `deploy.sql` **you** write. Test inside the transaction, branch on environment, audit changes, and commit atomically.
 Unlike migration frameworks that decide when to commit and what to run, pgmi hands control to your SQL: **you** own the transactions, order, and logic.
 
+**Why it feels different:**
+
+- **Your SQL owns the deploy** — transactions, execution order, idempotency, and retries live in `deploy.sql`, not in the tool.
+- **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
+- **AI- and MCP-native** — the binary ships embedded skills (`pgmi ai`), and the advanced template includes a Model Context Protocol backend.
+
 ![pgmi deployment flow](pgmi-deploy.png)
 
 
@@ -124,9 +130,17 @@ pgmi deploy . --database mydb --overwrite --force
 
 This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
 
-> **Requirement:** pgmi needs **PostgreSQL 11+** and a **direct** connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
+> **Requirement:** the pgmi CLI and the basic template need **PostgreSQL 11+** (the advanced template needs **15+** — see the [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) and a **direct** connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
 
 See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
+
+## Choose your path
+
+- **Just deploying SQL?** → the **basic** template: a small, explicit migration scaffold (`pgmi init myapp --template basic`).
+- **Building an app, API, or MCP backend?** → the **advanced** template: a large, editable reference system (roles, RLS, audit logging, REST/RPC/MCP) you own and trim.
+- **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) and the honest [Tradeoffs](docs/TRADEOFFS.md).
+
+Not sure which template? The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table — both templates are production-capable; advanced is _more complete_, not _more production_. Check the [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) for version requirements (CLI + basic: PostgreSQL 11+; advanced: 15+).
 
 ## When pgmi makes sense
 
@@ -144,22 +158,34 @@ See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
 
 ## Documentation
 
+**Start here**
+
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/QUICKSTART.md) | Your first deployment in 10 minutes |
-| [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
-| [Coming from Flyway/Liquibase](docs/COMING-FROM.md) | Migration guides |
+| [Getting Started](docs/QUICKSTART.md) | Your first deployment in 10 minutes (binary-first) |
 | [deploy.sql Guide](docs/DEPLOY-GUIDE.md) | Authoring patterns: data ingestion, environment branching, multi-phase |
-| [Connections](docs/CONNECTIONS.md) | Connection architecture: cloud auth, SSL, poolers, IaC |
+| [Testing](docs/TESTING.md) | Database tests with automatic rollback |
+
+**Why pgmi exists** (deep dives)
+
+| Essay | Description |
+|-------|-------------|
+| [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
+| [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
+| [Coming from Flyway/Liquibase](docs/COMING-FROM.md) | Migration guides |
+
+**Reference**
+
+| Guide | Description |
+|-------|-------------|
 | [CLI Reference](docs/CLI.md) | All commands, flags, exit codes |
 | [Configuration](docs/CONFIGURATION.md) | pgmi.yaml reference |
 | [Session API](docs/session-api.md) | Temp tables and helper functions |
-| [Testing](docs/TESTING.md) | Database tests with automatic rollback |
+| [Connections](docs/CONNECTIONS.md) | Connection architecture: cloud auth, SSL, poolers, IaC |
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [CI/CD](docs/CICD.md) | Deploy from GitHub Actions and other pipelines |
-| [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring |
-| [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
+| [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
 
 ## Templates
@@ -174,7 +200,7 @@ pgmi init myapp --template basic # Create a project
 
 | Template | Purpose |
 |----------|---------|
-| `basic` | Learning and simple projects. Linear migrations, minimal structure. |
+| `basic` | A small, explicit migration scaffold — linear migrations, minimal structure. Production-capable. |
 | `advanced` | Full PostgreSQL application template: multi-schema, role hierarchy, audit logging, MCP integration, metadata-driven ordering. A working reference system to own and adapt — not a framework to adopt wholesale. Requires a superuser for initial role setup — see the [Production Guide](docs/PRODUCTION.md) for managed-cloud caveats. |
 
 ## AI assistant support

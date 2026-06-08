@@ -21,7 +21,7 @@ All mutations flow through SECURITY DEFINER functions so the membership and acti
 | Function | Purpose |
 |----------|---------|
 | `membership.create_api_key(user_id, organization_id, display_name, expires_at?, activated_at?)` | Issue a new key. Returns `out_api_key` (show to the user exactly once), `out_key_id`, `out_object_id`. Also inserts a `membership.user_identity` row with `provider='apikey'` so the existing JWT/OIDC auth pipeline resolves the key to the owning user. |
-| `membership.validate_api_key(raw_key)` | Validate at request time. Returns `is_valid`, `user_id`, `organization_id`, `key_id`, `reason`. Updates `last_used_at` on success. Constant-time hash compare (no short-circuit on partial matches). |
+| `membership.validate_api_key(raw_key)` | Validate at request time. Returns `is_valid`, `user_id`, `organization_id`, `key_id`, `reason`. Updates `last_used_at` on success. Hash-safe compare (no short-circuit on partial matches). |
 | `membership.disable_api_key(key_id)` / `enable_api_key(key_id)` | Temporarily block / restore. Reversible. |
 | `membership.revoke_api_key(key_id)` | Permanent. Deletes the matching `user_identity` row so the key cannot be re-enabled into a working identity. |
 
@@ -60,7 +60,7 @@ This means RLS policies keyed on `api.current_user_id()` or `auth.idp_subject` w
 
 ## Security posture
 
-- **Constant-time compare** — `membership.eq_constant_time(text, text)` XOR-folds byte-wise so execution time does not leak prefix-match length. A known `key_id` (public) does not help an attacker binary-search the hash.
+- **Hash-safe compare** — `membership.eq_hash_safe(text, text)` XOR-folds byte-wise so the comparison does not short-circuit on the first differing byte. PL/pgSQL cannot guarantee true constant time, but because it compares SHA-256 hashes, any residual timing leak reveals at most hash-prefix similarity, never raw key bytes. A known `key_id` (public) does not help an attacker binary-search the hash.
 - **No admin write path** — `INSERT, UPDATE, DELETE, TRUNCATE` revoked on `membership.api_key` from the admin role. All mutations route through the SECURITY DEFINER functions above.
 - **Inactive principal rejection** — checked on every validation, not just at issue time.
 - **RLS on `membership.api_key`** — customers see their own organization's keys; admin role has read access for ops triage.

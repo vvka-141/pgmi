@@ -227,16 +227,6 @@ func TestTestConfig_Validate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "valid config with list only mode",
-			config: pgmi.TestConfig{
-				SourcePath:       "./myapp",
-				DatabaseName:     "test_db",
-				ConnectionString: "postgresql://localhost:5432/postgres",
-				ListOnly:         true,
-			},
-			wantError: false,
-		},
-		{
 			name: "missing source path",
 			config: pgmi.TestConfig{
 				DatabaseName:     "test_db",

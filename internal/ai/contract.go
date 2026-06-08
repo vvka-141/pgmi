@@ -88,6 +88,7 @@ func GetContract() Contract {
 			{Code: pgmi.ExitExecutionFailed, Name: "ExitExecutionFailed", Description: "SQL execution failed"},
 			{Code: pgmi.ExitDeploySQLMissing, Name: "ExitDeploySQLMissing", Description: "deploy.sql not found"},
 			{Code: pgmi.ExitConcurrentDeploy, Name: "ExitConcurrentDeploy", Description: "Another pgmi deployment is in progress"},
+			{Code: pgmi.ExitTimeout, Name: "ExitTimeout", Description: "Operation exceeded --timeout (context deadline exceeded)"},
 			{Code: pgmi.ExitInterrupted, Name: "ExitInterrupted", Description: "Process interrupted by SIGINT (Ctrl-C)"},
 		},
 		Macros: []ContractMacro{

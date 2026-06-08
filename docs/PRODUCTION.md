@@ -18,9 +18,24 @@ This applies to PgBouncer, Pgpool-II, AWS RDS Proxy, Azure PgBouncer, and any ot
 
 ---
 
+## PostgreSQL compatibility
+
+The minimum PostgreSQL version depends on which layer you use:
+
+| Layer | Min PostgreSQL | What drives the floor |
+|-------|----------------|-----------------------|
+| pgmi core / CLI | 11+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
+| basic template | 11+ | Plain SQL migrations — no extensions, roles, or version-specific syntax. |
+| advanced template | 15+ | `WITH (security_invoker = true)` views (PostgreSQL 15) underpin the RLS model; also needs **superuser** (DDL event trigger), the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions, and role creation. |
+| API / MCP features | 15+ | Ship inside the advanced template, so they share its floor. |
+
+The 11+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **15+**: `security_invoker` views, which the membership/RLS model relies on, were introduced in PostgreSQL 15.
+
+---
+
 ## Managed cloud PostgreSQL
 
-Both pgmi templates (`basic` and `advanced`) work against any PostgreSQL 14+ instance. Where they differ is what the **advanced template** requires from the deployment connection:
+The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection:
 
 1. **Superuser** — `lib/core/entity-standards.sql` installs a DDL event trigger, which requires `rolsuper`. pgmi fails fast with an actionable error if the connection role is not superuser. Basic template has no such requirement.
 2. **Extensions** — `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.

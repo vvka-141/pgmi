@@ -18,7 +18,7 @@
 
     Protocol Compliance:
     - JSON-RPC 2.0 envelope format
-    - MCP specification versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-05
+    - MCP specification versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25
       (unknown versions negotiate down to the server's best supported version)
 
     Usage from HTTP Gateway:
@@ -123,7 +123,7 @@ COMMENT ON FUNCTION api.mcp_server_capabilities() IS
 --   Error:   {jsonrpc: "2.0", id: "...", error: {code: -32602, message: "..."}}
 --
 -- Supported Protocol Versions:
---   - "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-05"
+--   - "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"
 --   - An unknown version negotiates to the server's best (newest) supported
 --     version rather than erroring, per the MCP lifecycle.
 --
@@ -148,7 +148,7 @@ LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_client_version text;
     -- Ascending order: the last element is the server's best (newest) version.
-    v_supported_versions text[] := ARRAY['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-05'];
+    v_supported_versions text[] := ARRAY['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];
     v_negotiated_version text;
 BEGIN
     v_client_version := p_params->>'protocolVersion';

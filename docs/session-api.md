@@ -186,13 +186,17 @@ For iterating over parameters or building dynamic logic:
 -- List all parameters
 SELECT key, value, description FROM pg_temp.pgmi_parameter_view;
 
--- Iterate over parameters dynamically
+-- Iterate over parameters dynamically.
+-- Redact secret-like keys by default — values may be passwords, tokens, etc.
 DO $$
 DECLARE
     v_param RECORD;
 BEGIN
     FOR v_param IN SELECT key, value FROM pg_temp.pgmi_parameter_view LOOP
-        RAISE NOTICE 'Parameter: % = %', v_param.key, v_param.value;
+        RAISE NOTICE 'Parameter: % = %',
+            v_param.key,
+            CASE WHEN lower(v_param.key) ~ '(password|secret|token|key|credential|auth)'
+                 THEN '********' ELSE v_param.value END;
     END LOOP;
 END $$;
 ```

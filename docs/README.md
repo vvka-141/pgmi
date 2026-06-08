@@ -39,7 +39,7 @@
 | Which view should I use? | `pgmi_plan_view` for deployment, `pgmi_source_view` for introspection — see [session-api.md](session-api.md#which-view-should-i-use) |
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [session-api.md](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [TESTING.md](TESTING.md) |
-| What's the difference between templates? | Basic = learning, Advanced = production — see [QUICKSTART.md](QUICKSTART.md#choosing-a-template) |
+| What's the difference between templates? | Basic = small migration scaffold, Advanced = richer reference app — both production-capable; see [QUICKSTART.md](QUICKSTART.md#choosing-a-template) |
 | How do I filter which files run? | `WHERE` clause on `pg_temp.pgmi_plan_view` — see [session-api.md](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI.md](CLI.md#exit-codes) |
 

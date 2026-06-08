@@ -92,8 +92,18 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 
 	content := strings.Join(lines, "\n") + "\n"
 
-	// Write with restricted permissions (0600 required by PostgreSQL on Unix)
-	return os.WriteFile(path, []byte(content), 0600)
+	// Atomic write: write to a sibling .tmp then os.Rename so a crash mid-write
+	// can't leave a truncated/empty .pgpass (it holds user credentials).
+	// 0600 is required by PostgreSQL on Unix.
+	tmpPath := path + ".pgmi-tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // escapePgpass escapes colons and backslashes in a .pgpass field value.

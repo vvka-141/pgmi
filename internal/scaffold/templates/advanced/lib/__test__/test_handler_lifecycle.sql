@@ -137,6 +137,48 @@ END;
     RAISE NOTICE '  + Accept: application/xml -> 406 Not Acceptable';
 
     -- ========================================================================
+    -- Test: handler.accepts enforcement -> 415 on unsupported request body type
+    -- ========================================================================
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'dddddddd-0050-4000-8000-000000000001',
+            'uri', '^/test-accepts$',
+            'httpMethod', '^POST$',
+            'name', 'test_accepts',
+            'description', 'Handler that only accepts application/json bodies',
+            'autoLog', false,
+            'requiresAuth', false,
+            'accepts', jsonb_build_array('application/json')
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, jsonb_build_object('ok', true));
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke(
+        'POST', '/test-accepts',
+        extensions.hstore('content-type', 'application/json; charset=utf-8'),
+        convert_to('{}', 'UTF8')
+    );
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'Content-Type application/json should be accepted (200), got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  + Content-Type: application/json -> 200 (declared accepts)';
+
+    v_response := api.rest_invoke(
+        'POST', '/test-accepts',
+        extensions.hstore('content-type', 'application/xml'),
+        convert_to('<x/>', 'UTF8')
+    );
+    IF (v_response).status_code != 415 THEN
+        RAISE EXCEPTION 'Content-Type application/xml should return 415, got %', (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  + Content-Type: application/xml -> 415 Unsupported Media Type';
+
+    -- ========================================================================
     -- Test: No Accept header -> 200 (no preference)
     -- ========================================================================
 

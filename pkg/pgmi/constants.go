@@ -24,6 +24,7 @@ const (
 	ExitExecutionFailed  = 13 // SQL execution failed
 	ExitDeploySQLMissing = 14 // deploy.sql not found
 	ExitConcurrentDeploy = 15 // Another pgmi deployment is in progress against the same database
+	ExitTimeout          = 16 // Operation exceeded --timeout (context deadline exceeded)
 	ExitInterrupted      = 130 // Process interrupted by SIGINT (Ctrl-C) — Unix convention 128+SIGINT
 )
 

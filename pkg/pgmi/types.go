@@ -99,9 +99,6 @@ type TestConfig struct {
 	// FilterPattern is a POSIX regex to filter tests (default: ".*" matches all)
 	FilterPattern string
 
-	// ListOnly prints tests without executing them (dry-run mode)
-	ListOnly bool
-
 	// Parameters are key-value pairs for parameterized tests (optional)
 	Parameters map[string]string
 
