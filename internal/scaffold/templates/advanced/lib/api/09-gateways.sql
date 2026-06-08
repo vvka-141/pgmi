@@ -164,6 +164,7 @@ DECLARE
     v_route record;
     v_version text;
     v_path text;
+    v_content_type text;
     v_start_time timestamptz;
     v_execution_ms numeric;
 BEGIN
@@ -192,7 +193,7 @@ BEGIN
     -- '^/users/\d+$' without hand-anchoring '(\?.*)?$'.
     v_path := api.url_path(p_url);
 
-    SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.produces, h.requires_auth,
+    SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.accepts, h.produces, h.requires_auth,
            h.output_json_schema,
            r.route_name, r.auto_log
     INTO v_route
@@ -218,6 +219,20 @@ BEGIN
     IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
+    END IF;
+
+    -- Enforce the handler's declared accepts against the request Content-Type.
+    -- Only when the request carries a Content-Type (a body); the default
+    -- accepts of {*/*} matches everything, so this only bites handlers that
+    -- explicitly narrow the types they accept.
+    v_content_type := btrim(split_part(COALESCE(p_headers->'content-type', ''), ';', 1));
+    IF v_content_type <> ''
+       AND NOT api.accept_matches(array_to_string(v_route.accepts, ', '), ARRAY[v_content_type]) THEN
+        RETURN api.problem_response(
+            415,
+            'Unsupported Media Type',
+            format('Supported request content types: %s', array_to_string(v_route.accepts, ', '))
+        );
     END IF;
 
     IF NOT api.accept_matches(p_headers->'accept', v_route.produces) THEN
