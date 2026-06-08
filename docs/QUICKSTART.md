@@ -12,17 +12,26 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 **What you need:**
 - PostgreSQL running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
-- Go 1.22+ installed ([download here](https://go.dev/dl/))
+
+No Go toolchain required — the quickstart installs a prebuilt binary. (Installing from source with `go install` is an optional alternative; see Step 1.)
 
 ---
 
 ## Step 1: Install pgmi
 
-This tutorial installs from source with `go install` — a single command that works anywhere the Go toolchain is present. For prebuilt binaries (recommended for CI and production, and no Go toolchain needed), see the [README install options](../README.md#install).
+Install the prebuilt binary — no Go toolchain needed.
 
+**macOS / Linux:**
 ```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
 ```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
+```
+
+Prefer a package manager or a checksum-verified download? `brew install vvka-141/pgmi/pgmi`, APT, or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive all work — see the [full install options](../README.md#install).
 
 Verify the installation:
 
@@ -36,12 +45,23 @@ You should see output like:
 pgmi version 0.x.x
 ```
 
-> **If `pgmi` is not found**, your Go bin directory is not in your PATH. Add it:
->
-> - **Linux/macOS**: Add `export PATH="$PATH:$(go env GOPATH)/bin"` to your `~/.bashrc` or `~/.zshrc`, then restart your terminal.
-> - **Windows PowerShell**: Add `$env:Path += ";$(go env GOPATH)\bin"` or add the path permanently through System Settings → Environment Variables.
->
-> Run `go env GOPATH` to see where Go installs binaries. The `pgmi` executable will be in the `bin` subfolder of that directory.
+> **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
+
+<details>
+<summary>Install from source (optional — requires Go 1.22+)</summary>
+
+```bash
+go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+```
+
+If `pgmi` is then not found, your Go bin directory is not on your PATH:
+
+- **Linux/macOS**: add `export PATH="$PATH:$(go env GOPATH)/bin"` to your `~/.bashrc` or `~/.zshrc`, then restart your terminal.
+- **Windows PowerShell**: add `$env:Path += ";$(go env GOPATH)\bin"`, or set it permanently via System Settings → Environment Variables.
+
+Run `go env GOPATH` to see where Go installs binaries; `pgmi` is in the `bin` subfolder.
+
+</details>
 
 **Alternative installation methods:**
 
