@@ -126,20 +126,9 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 		AdditionalParams: make(map[string]string),
 	}
 
-	parts := strings.Split(connStr, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(kv[0])
-		value := strings.TrimSpace(kv[1])
+	for _, kv := range splitADONETPairs(connStr) {
+		key := kv.key
+		value := kv.value
 
 		switch strings.ToLower(key) {
 		case "host", "server":
@@ -183,6 +172,80 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 	}
 
 	return config, nil
+}
+
+type adoPair struct {
+	key   string
+	value string
+}
+
+// splitADONETPairs splits an ADO.NET connection string into key/value pairs,
+// honoring ADO.NET quoting: a value may be wrapped in single or double quotes
+// to contain ';' or '=', and a doubled quote inside is a literal quote. Without
+// this, a password containing ';' would be truncated by a naive split.
+func splitADONETPairs(s string) []adoPair {
+	var pairs []adoPair
+	i, n := 0, len(s)
+	for i < n {
+		for i < n && (s[i] == ' ' || s[i] == ';') { // skip separators/spaces
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		keyStart := i
+		for i < n && s[i] != '=' && s[i] != ';' {
+			i++
+		}
+		if i >= n || s[i] != '=' { // malformed token without '='; skip it
+			for i < n && s[i] != ';' {
+				i++
+			}
+			continue
+		}
+		key := strings.TrimSpace(s[keyStart:i])
+		i++ // consume '='
+
+		for i < n && s[i] == ' ' { // skip spaces before value
+			i++
+		}
+
+		var value string
+		if i < n && (s[i] == '\'' || s[i] == '"') {
+			quote := s[i]
+			i++
+			var sb strings.Builder
+			for i < n {
+				if s[i] == quote {
+					if i+1 < n && s[i+1] == quote { // doubled quote = literal
+						sb.WriteByte(quote)
+						i += 2
+						continue
+					}
+					i++ // closing quote
+					break
+				}
+				sb.WriteByte(s[i])
+				i++
+			}
+			value = sb.String()
+			for i < n && s[i] != ';' { // discard trailing junk up to ';'
+				i++
+			}
+		} else {
+			valStart := i
+			for i < n && s[i] != ';' {
+				i++
+			}
+			value = strings.TrimSpace(s[valStart:i])
+		}
+
+		if key != "" {
+			pairs = append(pairs, adoPair{key: key, value: value})
+		}
+	}
+	return pairs
 }
 
 // BuildConnectionString converts a ConnectionConfig back to a PostgreSQL URI format.
