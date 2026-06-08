@@ -187,7 +187,7 @@ class MCPHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Custom log format."""
-        print(f"[MCP] {args[0]}")
+        print(f"[MCP] {format % args if args else format}")
 
 
 def main():
