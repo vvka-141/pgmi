@@ -99,6 +99,7 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 
 		if err := pool.Ping(ctx); err != nil {
 			pool.Close()
+			pool = nil
 			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
 		}
 
@@ -106,6 +107,12 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 	})
 
 	if err != nil {
+		// Defensive: if retries exhausted after a success-then-fail sequence,
+		// make sure we don't hand back a stale pool.
+		if pool != nil {
+			pool.Close()
+			pool = nil
+		}
 		return nil, err
 	}
 

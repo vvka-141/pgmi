@@ -57,6 +57,12 @@ func ExitCodeForError(err error) int {
 		return ExitInterrupted
 	}
 
+	// --timeout expiry surfaces as context.DeadlineExceeded; distinguish it
+	// from a generic failure so operators can tell "timed out" from "SQL failed".
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ExitTimeout
+	}
+
 	// Check for sentinel errors
 	switch {
 	case errors.Is(err, ErrConcurrentDeploy):
