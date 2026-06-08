@@ -202,5 +202,68 @@ END;
 
     RAISE NOTICE '  ✓ MCP: Client gets sanitized error, exchange table has full error for debugging';
 
+    -- ========================================================================
+    -- Test: constraint violations map to 4xx (not a blanket 500)
+    -- An uncaught unique_violation is semantically 409 Conflict.
+    -- ========================================================================
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-e004-4000-8000-000000000001',
+            'uri', '^/test-conflict-rest$',
+            'httpMethod', '^GET$',
+            'name', 'test_conflict_rest',
+            'description', 'Handler that raises unique_violation',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RAISE unique_violation USING MESSAGE = 'duplicate key value for test';
+END;
+        $body$
+    );
+
+    PERFORM api.create_or_replace_rpc_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-e005-4000-8000-000000000001',
+            'methodName', 'test.conflict',
+            'description', 'RPC handler that raises unique_violation',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RAISE unique_violation USING MESSAGE = 'duplicate key value for test';
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke('GET', '/test-conflict-rest', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code != 409 THEN
+        RAISE EXCEPTION 'TEST FAILED: REST unique_violation should map to 409, got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF v_content->>'detail' LIKE '%duplicate key value for test%' THEN
+        RAISE EXCEPTION 'TEST FAILED: REST 409 must not leak the raw SQLERRM to clients';
+    END IF;
+    RAISE NOTICE '  ✓ REST: unique_violation maps to sanitized 409 Conflict';
+
+    v_route_id := api.rpc_resolve('test.conflict');
+    v_response := api.rpc_invoke(
+        v_route_id,
+        ''::extensions.hstore,
+        convert_to('{"jsonrpc": "2.0", "method": "test.conflict", "id": "conf-1"}', 'UTF8')
+    );
+    IF (v_response).status_code != 409 THEN
+        RAISE EXCEPTION 'TEST FAILED: RPC unique_violation should map to HTTP 409, got %', (v_response).status_code;
+    END IF;
+    v_content := api.content_json((v_response).content);
+    IF (v_content->'error'->>'code')::int != -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: RPC client-error should use code -32602, got %', v_content->'error'->>'code';
+    END IF;
+    IF v_content->'error'->>'message' LIKE '%duplicate key value for test%' THEN
+        RAISE EXCEPTION 'TEST FAILED: RPC 409 must not leak the raw SQLERRM to clients';
+    END IF;
+    RAISE NOTICE '  ✓ RPC: unique_violation maps to sanitized HTTP 409 / -32602';
+
     RAISE NOTICE '✓ Gateway Error Handling tests passed';
 END $$;

@@ -304,20 +304,37 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+    DECLARE
+        v_sqlstate text := SQLSTATE;
+        v_status int;
+        v_title text;
+        v_client_detail text;
+    BEGIN
         RAISE DEBUG 'rest_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log SQLSTATE + truncated SQLERRM. Full SQLERRM may include
-        -- attacker-supplied input or PII (handlers commonly raise with
+        -- Map common constraint violations to 4xx instead of a blanket 500 so
+        -- clients, caches, and retry logic see the right class. Messages stay
+        -- generic per class — SQLERRM/DETAIL are never sent to the client.
+        CASE v_sqlstate
+            WHEN '23505' THEN v_status := 409; v_title := 'Conflict';             v_client_detail := 'Resource already exists';
+            WHEN '23514' THEN v_status := 422; v_title := 'Unprocessable Entity'; v_client_detail := 'A submitted value violates a constraint';
+            WHEN '23502' THEN v_status := 400; v_title := 'Bad Request';          v_client_detail := 'A required value is missing';
+            WHEN '23503' THEN v_status := 400; v_title := 'Bad Request';          v_client_detail := 'References a resource that does not exist';
+            ELSE              v_status := 500; v_title := 'Internal Server Error'; v_client_detail := 'An internal error occurred';
+        END CASE;
+
+        -- Logged copy keeps SQLSTATE + truncated SQLERRM. Full SQLERRM may
+        -- include attacker-supplied input or PII (handlers commonly raise
         -- "Invalid email: <user_input>"); truncating limits the blast radius
         -- if exchange-table grants ever loosen.
-        v_response := api.problem_response(500, 'Internal Server Error',
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200));
+        v_response := api.problem_response(v_status, v_title,
+            'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200));
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
-            'x-error-sqlstate', SQLSTATE
+            'x-error-sqlstate', v_sqlstate
         ]);
         IF v_route.object_id IS NOT NULL THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
@@ -325,7 +342,8 @@ BEGIN
         END IF;
 
         -- Return sanitized error to client (hide internal details)
-        RETURN api.problem_response(500, 'Internal Server Error', 'An internal error occurred');
+        RETURN api.problem_response(v_status, v_title, v_client_detail);
+    END;
     END;
 END;
 $$;
@@ -522,17 +540,40 @@ BEGIN
         RETURN v_response;
 
     EXCEPTION WHEN OTHERS THEN
+    DECLARE
+        v_sqlstate text := SQLSTATE;
+        v_status int;
+        v_rpc_code int;
+        v_client_msg text;
+    BEGIN
         RAISE DEBUG 'rpc_invoke: Handler exception: %', SQLERRM;
         v_execution_ms := extract(epoch FROM (clock_timestamp() - v_start_time)) * 1000;
 
-        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
-        v_response := api.jsonrpc_error(-32603,
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), v_json_id);
+        -- Map common constraint violations to a 4xx HTTP status. JSON-RPC has
+        -- no code for "conflict", so the precise status rides on the HTTP
+        -- response while the error code stays in its correct class: -32602
+        -- (Invalid params) for client-caused errors, -32603 for server errors.
+        CASE v_sqlstate
+            WHEN '23505' THEN v_status := 409; v_rpc_code := -32602; v_client_msg := 'Resource already exists';
+            WHEN '23514' THEN v_status := 422; v_rpc_code := -32602; v_client_msg := 'A submitted value violates a constraint';
+            WHEN '23502' THEN v_status := 400; v_rpc_code := -32602; v_client_msg := 'A required value is missing';
+            WHEN '23503' THEN v_status := 400; v_rpc_code := -32602; v_client_msg := 'References a resource that does not exist';
+            ELSE              v_status := 500; v_rpc_code := -32603; v_client_msg := 'Internal error';
+        END CASE;
+
+        -- Logged copy keeps SQLSTATE + truncated SQLERRM (see rest_invoke for
+        -- the truncation rationale).
+        v_response := api.json_response(v_status, jsonb_build_object(
+            'jsonrpc', '2.0',
+            'error', jsonb_build_object('code', v_rpc_code,
+                'message', 'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200)),
+            'id', v_json_id
+        ));
         v_response.headers := extensions.hstore(ARRAY[
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
-            'x-error-sqlstate', SQLSTATE
+            'x-error-sqlstate', v_sqlstate
         ]);
         IF v_handler.object_id IS NOT NULL THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
@@ -540,7 +581,12 @@ BEGIN
         END IF;
 
         -- Return sanitized error to client (hide internal details)
-        RETURN api.jsonrpc_error(-32603, 'Internal error', v_json_id);
+        RETURN api.json_response(v_status, jsonb_build_object(
+            'jsonrpc', '2.0',
+            'error', jsonb_build_object('code', v_rpc_code, 'message', v_client_msg),
+            'id', v_json_id
+        ));
+    END;
     END;
 END;
 $$;
