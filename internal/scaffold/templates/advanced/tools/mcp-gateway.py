@@ -34,10 +34,16 @@ Setup:
        }
 
 Environment Variables:
-    DATABASE_URL  - PostgreSQL connection string (required)
-                   Example: postgresql://postgres:secret@localhost:5432/mydb
-    PORT          - HTTP port (default: 8080)
-    HOST          - HTTP host (default: 0.0.0.0)
+    DATABASE_URL          - PostgreSQL connection string (required)
+                           Example: postgresql://postgres:secret@localhost:5432/mydb
+    PORT                  - HTTP port (default: 8080)
+    HOST                  - HTTP host (default: 127.0.0.1). Bind to 0.0.0.0 only
+                           behind a trusted reverse proxy that authenticates.
+    MCP_ALLOWED_ORIGINS   - Comma-separated Origin allowlist for browser clients
+                           (default: http://localhost:PORT, http://127.0.0.1:PORT).
+                           A request with an Origin header not on this list is
+                           rejected (DNS-rebinding protection). Non-browser clients
+                           that send no Origin are allowed.
 
 Endpoints:
     POST /mcp     - MCP JSON-RPC endpoint
@@ -61,9 +67,11 @@ Example Usage:
         -d '{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"database_info","arguments":{}}}'
 
 Security Notes:
+    - Binds to 127.0.0.1 by default; validates the Origin header against an
+      allowlist (DNS-rebinding protection) and returns sanitized errors.
     - This gateway trusts the X-User-Id header for authentication
     - In production, place behind a reverse proxy that validates JWTs
-      and injects X-User-Id after verification
+      and injects X-User-Id after verification (and set HOST=0.0.0.0 only then)
     - Never expose directly to the internet without authentication
 
 For production deployments, consider:
@@ -80,8 +88,19 @@ import psycopg
 
 # Configuration from environment
 DATABASE_URL = os.environ.get("DATABASE_URL")
-HOST = os.environ.get("HOST", "0.0.0.0")
+HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8080"))
+
+
+def _allowed_origins():
+    """Origin allowlist for DNS-rebinding protection (browser clients)."""
+    configured = os.environ.get("MCP_ALLOWED_ORIGINS")
+    if configured:
+        return {o.strip() for o in configured.split(",") if o.strip()}
+    return {f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"}
+
+
+ALLOWED_ORIGINS = _allowed_origins()
 
 
 class MCPHandler(BaseHTTPRequestHandler):
@@ -91,6 +110,13 @@ class MCPHandler(BaseHTTPRequestHandler):
         """Handle POST requests to /mcp endpoint."""
         if self.path != "/mcp":
             self.send_error(404, "Not Found")
+            return
+
+        # DNS-rebinding protection: a browser client sends Origin; reject any
+        # value not on the allowlist. Non-browser clients send no Origin.
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            self.send_error(403, "Forbidden: Origin not allowed")
             return
 
         # Read and parse request body
@@ -124,11 +150,21 @@ class MCPHandler(BaseHTTPRequestHandler):
                 ).fetchone()
                 envelope = result[0] if result else None
         except Exception as e:
+            # Log the detail server-side; return a sanitized message so raw
+            # exception text / tracebacks are not exposed to the client.
+            self.log_message("dispatch error: " + str(e))
             self.send_json_response(500, {
                 "jsonrpc": "2.0",
                 "id": request.get("id"),
-                "error": {"code": -32603, "message": str(e)}
+                "error": {"code": -32603, "message": "Internal error"}
             })
+            return
+
+        # A NULL envelope means a JSON-RPC notification (no response). Per MCP
+        # Streamable HTTP, accepted notifications return 202 with no body.
+        if envelope is None:
+            self.send_response(202)
+            self.end_headers()
             return
 
         self.send_json_response(200, envelope)
