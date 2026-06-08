@@ -77,7 +77,7 @@ For Claude Desktop, add to `~/.config/claude/claude_desktop_config.json`:
 
 pgmi implements MCP using JSON-RPC 2.0:
 
-- **Supported protocol versions**: `2024-11-05`, `2025-03-26`
+- **Supported protocol versions**: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` (an unknown-newer proposal negotiates down to the server's best supported version)
 - **Transport**: HTTP POST to `/mcp` endpoint
 - **Authentication**: Context parameter (not HTTP headers)
 
@@ -92,7 +92,8 @@ pgmi implements MCP using JSON-RPC 2.0:
 | `api.mcp_read_resource(uri, context, id jsonb)` | Read a resource |
 | `api.mcp_get_prompt(name, args, context, id jsonb)` | Expand a prompt |
 | `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` | Tool discovery; hides `requires_auth` tools when `auth.user_id` is unset; surfaces tags as `_meta.tags`; `p_tags` filter matches by overlap (NULL or empty array = no filter) |
-| `api.mcp_list_resources()` | Resource discovery; emits `uri` for static resources, `uriTemplate` for RFC 6570 templates; same auth-hide semantics |
+| `api.mcp_list_resources()` | Concrete-resource discovery (`resources/list`); emits `uri` objects only; same auth-hide semantics |
+| `api.mcp_list_resource_templates()` | Template discovery (`resources/templates/list`); emits `uriTemplate` objects (RFC 6570); same auth-hide semantics |
 | `api.mcp_list_prompts()` | Prompt discovery; same auth-hide semantics |
 
 `request_id` is **jsonb** across the MCP API so JSON-RPC 2.0 id types (string, integer, null) round-trip verbatim. Passing a raw text literal (`'req-1'`) fails domain parsing — use `'"req-1"'::jsonb` or `'42'::jsonb`.
@@ -113,6 +114,7 @@ The dispatcher (`api.mcp_handle_request`) routes requests by method. Any method 
 | `tools/list` | `api.mcp_list_tools()` |
 | `tools/call` | `api.mcp_call_tool(name, args, context, id)` |
 | `resources/list` | `api.mcp_list_resources()` |
+| `resources/templates/list` | `api.mcp_list_resource_templates()` |
 | `resources/read` | `api.mcp_read_resource(uri, context, id)` |
 | `prompts/list` | `api.mcp_list_prompts()` |
 | `prompts/get` | `api.mcp_get_prompt(name, args, context, id)` |
