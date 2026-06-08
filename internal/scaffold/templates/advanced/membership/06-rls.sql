@@ -98,6 +98,52 @@ END $$;
 DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user'; END $$;
 
 -- ============================================================================
+-- RLS on membership.user_role
+-- ============================================================================
+-- A customer may see only their own role assignments.
+
+ALTER TABLE membership.user_role ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS user_role_own_only ON membership.user_role;
+    EXECUTE format($policy$
+        CREATE POLICY user_role_own_only ON membership.user_role
+            FOR SELECT
+            TO %I
+            USING (user_object_id = api.current_user_id())
+    $policy$, v_customer_role);
+END $$;
+
+DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user_role'; END $$;
+
+-- ============================================================================
+-- RLS on membership.role
+-- ============================================================================
+-- Decision: roles are a global, non-tenant catalog (object_id, name,
+-- description) with no per-user/per-tenant data — public-read to the customer
+-- role. RLS is still enabled so the table is not left uncovered.
+
+ALTER TABLE membership.role ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+BEGIN
+    DROP POLICY IF EXISTS role_public_read ON membership.role;
+    EXECUTE format($policy$
+        CREATE POLICY role_public_read ON membership.role
+            FOR SELECT
+            TO %I
+            USING (true)
+    $policy$, v_customer_role);
+END $$;
+
+DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on role'; END $$;
+
+-- ============================================================================
 -- Customer role table grants (RLS restricts actual visibility)
 -- ============================================================================
 
@@ -109,6 +155,28 @@ BEGIN
     EXECUTE format('GRANT SELECT ON membership.organization_member TO %I', v_customer_role);
     EXECUTE format('GRANT SELECT ON membership.user_identity TO %I', v_customer_role);
     EXECUTE format('GRANT SELECT ON membership."user" TO %I', v_customer_role);
+    EXECUTE format('GRANT SELECT ON membership.user_role TO %I', v_customer_role);
+    EXECUTE format('GRANT SELECT ON membership.role TO %I', v_customer_role);
+END $$;
+
+-- Regression guard: every membership table the customer role can SELECT must
+-- have RLS enabled, so a future table added to the blanket grant cannot leak.
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+    v_unprotected TEXT;
+BEGIN
+    SELECT string_agg(c.relname, ', ')
+    INTO v_unprotected
+    FROM pg_class c
+    WHERE c.relnamespace = 'membership'::regnamespace
+      AND c.relkind = 'r'
+      AND has_table_privilege(v_customer_role, c.oid, 'SELECT')
+      AND NOT c.relrowsecurity;
+
+    IF v_unprotected IS NOT NULL THEN
+        RAISE EXCEPTION 'membership table(s) granted to % without RLS: %', v_customer_role, v_unprotected;
+    END IF;
 END $$;
 
 DO $$
