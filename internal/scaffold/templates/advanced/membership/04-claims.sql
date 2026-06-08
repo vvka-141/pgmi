@@ -22,10 +22,10 @@ SELECT
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles,
     (SELECT COALESCE(array_agg(sub.organization_id), '{}')
      FROM (SELECT DISTINCT om2.organization_id FROM membership.organization_member om2
-           WHERE om2.user_id = u.object_id AND om2.status = 'active' LIMIT 1000) sub) AS member_org_ids,
+           WHERE om2.user_id = u.object_id AND om2.status = 'active') sub) AS member_org_ids,
     (SELECT COALESCE(array_agg(sub.object_id), '{}')
      FROM (SELECT DISTINCT o2.object_id FROM membership.organization o2
-           WHERE o2.owner_user_id = u.object_id AND o2.is_active LIMIT 1000) sub) AS owner_org_ids,
+           WHERE o2.owner_user_id = u.object_id AND o2.is_active) sub) AS owner_org_ids,
     COALESCE(
         jsonb_agg(DISTINCT jsonb_build_object('provider', ui.idp_provider, 'subject_id', ui.idp_subject_id))
         FILTER (WHERE ui.object_id IS NOT NULL),
