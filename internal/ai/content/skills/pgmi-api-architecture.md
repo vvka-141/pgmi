@@ -260,6 +260,7 @@ FROM project_design.project p;
 
 - **Reason from the business/user** — each derived field answers a real overview question. Don't compute everything because you can.
 - Keep derived columns as **scalar subqueries or `LEFT JOIN LATERAL`** so an unselected column costs nothing.
+- **Assemble these set-based — never a row-by-row loop.** Counts and aggregates belong in the view's SQL (`count(*)`, `LATERAL`, window functions), not in a PL/pgSQL loop that queries per parent row.
 - Mark the view `security_invoker = true` so RLS applies to the calling role.
 
 ### 3. Parameterize hot access patterns as partial views / table functions

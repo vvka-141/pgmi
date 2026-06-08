@@ -96,6 +96,8 @@ END $$;
 COMMIT;
 ```
 
+> This loop is justified because it orchestrates dynamic `EXECUTE` of file content — work SQL can't express as a set. It is **not** a license to loop over data: inside your migrations and logical layer, manipulate rows set-based (`UPDATE … WHERE`, `INSERT … SELECT`, aggregates), not row by row.
+
 ### 3. Parameter System: Session Configuration Variables
 
 **Automatic Initialization**:

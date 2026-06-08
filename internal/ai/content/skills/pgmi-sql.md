@@ -17,6 +17,7 @@ user_invocable: true
 
 **SQL-First Approach:**
 - Prefer pure SQL over PL/pgSQL when possible
+- **Think in sets, not rows** — one `UPDATE` / `INSERT … SELECT` / `MERGE` over a set beats a `FOR … LOOP` (or cursor) that touches rows one at a time. A row-by-row loop for data work is an anti-pattern; loops are for orchestrating dynamic `EXECUTE` (e.g. deploy.sql iterating `pgmi_plan_view`), not for manipulating data.
 - Use PostgreSQL's native functionality (don't reinvent)
 - Prioritize robustness, conciseness, and elegance
 - When in doubt, test the simplest solution first
