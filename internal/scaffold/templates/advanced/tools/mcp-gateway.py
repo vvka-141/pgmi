@@ -46,7 +46,10 @@ Environment Variables:
                            that send no Origin are allowed.
 
 Endpoints:
-    POST /mcp     - MCP JSON-RPC endpoint
+    POST /mcp     - MCP JSON-RPC endpoint. Honors the Accept header (returns
+                    application/json; no SSE stream) and validates/echoes the
+                    MCP-Protocol-Version header.
+    GET  /mcp     - 405 Method Not Allowed (no server-initiated SSE stream)
     GET  /health  - Health check (for load balancers)
 
 Example Usage:
@@ -102,6 +105,23 @@ def _allowed_origins():
 
 ALLOWED_ORIGINS = _allowed_origins()
 
+# MCP revisions this transport accepts in the MCP-Protocol-Version header.
+# Keep in sync with v_supported_versions in lib/api/10-mcp-protocol.sql.
+SUPPORTED_PROTOCOL_VERSIONS = (
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25",
+)
+# Assumed when a client omits the header (Streamable HTTP backwards compat).
+DEFAULT_PROTOCOL_VERSION = "2025-03-26"
+
+
+def _accepts_json(accept_header):
+    """True if an Accept header admits application/json (or a wildcard)."""
+    types = [t.split(";")[0].strip() for t in accept_header.split(",")]
+    return any(t in ("application/json", "application/*", "*/*") for t in types)
+
 
 class MCPHandler(BaseHTTPRequestHandler):
     """HTTP request handler for MCP JSON-RPC requests."""
@@ -118,6 +138,30 @@ class MCPHandler(BaseHTTPRequestHandler):
         if origin is not None and origin not in ALLOWED_ORIGINS:
             self.send_error(403, "Forbidden: Origin not allowed")
             return
+
+        # Content negotiation: this endpoint only emits application/json (no
+        # SSE stream). Honor a present Accept; a client that accepts neither
+        # JSON nor a wildcard gets 406 rather than a mismatched body.
+        accept = self.headers.get("Accept")
+        if accept and not _accepts_json(accept):
+            self.send_error(406, "Not Acceptable: endpoint returns application/json")
+            return
+
+        # MCP-Protocol-Version is a transport-level header sent after
+        # initialization. Absent → assume the default; present-but-unsupported
+        # → 400. The negotiated value is echoed on every response below.
+        pv = self.headers.get("MCP-Protocol-Version") or DEFAULT_PROTOCOL_VERSION
+        if pv not in SUPPORTED_PROTOCOL_VERSIONS:
+            self.send_json_response(400, {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32600,
+                    "message": f"Unsupported MCP-Protocol-Version: {pv}"
+                }
+            })
+            return
+        self.protocol_version = pv
 
         # Read and parse request body
         content_length = int(self.headers.get("Content-Length", 0))
@@ -164,15 +208,25 @@ class MCPHandler(BaseHTTPRequestHandler):
         # Streamable HTTP, accepted notifications return 202 with no body.
         if envelope is None:
             self.send_response(202)
+            if getattr(self, "protocol_version", None):
+                self.send_header("MCP-Protocol-Version", self.protocol_version)
             self.end_headers()
             return
 
         self.send_json_response(200, envelope)
 
     def do_GET(self):
-        """Handle GET requests (health check only)."""
+        """Handle GET requests."""
         if self.path == "/health":
             self.send_json_response(200, {"status": "healthy"})
+            return
+        if self.path == "/mcp":
+            # Streamable HTTP: this gateway offers no server-initiated SSE
+            # stream, so answer GET on the MCP endpoint with 405 (not 404) and
+            # advertise the supported method.
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.end_headers()
             return
         self.send_error(404, "Not Found")
 
@@ -182,6 +236,8 @@ class MCPHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if getattr(self, "protocol_version", None):
+            self.send_header("MCP-Protocol-Version", self.protocol_version)
         self.end_headers()
         self.wfile.write(body)
 

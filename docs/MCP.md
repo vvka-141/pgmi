@@ -516,8 +516,16 @@ python mcp-gateway.py
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/mcp` | POST | MCP JSON-RPC endpoint |
+| `/mcp` | POST | MCP JSON-RPC endpoint. Honors `Accept` (responds `application/json`; no SSE), validates and echoes the `MCP-Protocol-Version` header |
+| `/mcp` | GET | `405 Method Not Allowed` — the gateway offers no server-initiated SSE stream |
 | `/health` | GET | Health check (for load balancers) |
+
+The gateway implements the Streamable HTTP transport's request/response path:
+a POST whose `MCP-Protocol-Version` header names an unsupported revision is
+rejected with `400`; an `Accept` header that admits neither `application/json`
+nor a wildcard is rejected with `406`. A server→client SSE stream on `GET /mcp`
+is intentionally not implemented (the gateway emits no server-initiated
+notifications).
 
 ### Authentication Headers
 
