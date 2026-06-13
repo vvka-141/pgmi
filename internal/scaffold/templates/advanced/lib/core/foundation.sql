@@ -31,3 +31,66 @@ COMMENT ON DOMAIN core.entity_id IS
 DO $$ BEGIN
     RAISE NOTICE '  ✓ core.entity_id - domain marker for entity tables';
 END $$;
+
+-- ============================================================================
+-- core.apply_org_rls(regclass) - canonical multi-tenant RLS for domain tables
+-- ============================================================================
+-- One call installs the standard org-scoped ENABLE + FORCE RLS policy set on a
+-- domain table, keyed on api.current_member_org_ids() — the same tenant anchor
+-- the membership tables use. FORCE (not just ENABLE) means the policies bind
+-- even for the table owner, so a SECURITY DEFINER handler that forgets an
+-- explicit organization_id predicate is still constrained to the caller's
+-- orgs. That closes the most common multi-tenant footgun: a kernel mutation
+-- running as owner, where ENABLE-only RLS would not apply.
+--
+-- Requirements: the table has an `organization_id uuid` column (and, when
+-- p_has_created_by, a `created_by_user_id uuid` column). The org predicate
+-- matches the membership-table policies exactly: ANY over the STABLE
+-- api.current_member_org_ids() array (the array form, not a subquery — ANY of a
+-- (SELECT array) would compare uuid against the array as a whole). The scalar
+-- created_by check is wrapped as (SELECT ...) so the planner caches it.
+
+CREATE OR REPLACE FUNCTION core.apply_org_rls(
+    p_table          regclass,
+    p_has_created_by boolean DEFAULT true
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rel          text;
+    v_scope        text := 'organization_id = ANY (api.current_member_org_ids())';
+    v_insert_check text;
+BEGIN
+    SELECT relname INTO v_rel FROM pg_class WHERE oid = p_table;
+
+    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', p_table);
+    EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', p_table);
+
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_select', p_table);
+    EXECUTE format('CREATE POLICY %I ON %s FOR SELECT USING (%s)',
+        v_rel || '_select', p_table, v_scope);
+
+    v_insert_check := v_scope;
+    IF p_has_created_by THEN
+        v_insert_check := v_insert_check || ' AND created_by_user_id = (SELECT api.current_user_id())';
+    END IF;
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_insert', p_table);
+    EXECUTE format('CREATE POLICY %I ON %s FOR INSERT WITH CHECK (%s)',
+        v_rel || '_insert', p_table, v_insert_check);
+
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_update', p_table);
+    EXECUTE format('CREATE POLICY %I ON %s FOR UPDATE USING (%s) WITH CHECK (%s)',
+        v_rel || '_update', p_table, v_scope, v_scope);
+
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_delete', p_table);
+    EXECUTE format('CREATE POLICY %I ON %s FOR DELETE USING (%s)',
+        v_rel || '_delete', p_table, v_scope);
+END;
+$$;
+
+COMMENT ON FUNCTION core.apply_org_rls(regclass, boolean) IS
+    'Installs the standard org-scoped ENABLE+FORCE RLS policy set (select/insert/update/delete) on a domain table, keyed on api.current_member_org_ids(). Pass p_has_created_by=false for tables without a created_by_user_id column. FORCE RLS constrains the owner too, so SECURITY DEFINER kernels stay tenant-scoped even without an explicit predicate.';
+
+DO $$ BEGIN
+    RAISE NOTICE '  ✓ core.apply_org_rls() - one-call multi-tenant RLS for domain tables';
+END $$;
