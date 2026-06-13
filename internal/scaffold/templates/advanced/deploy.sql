@@ -80,6 +80,26 @@ WHERE value IS NULL
   AND key ~ 'password$'
   AND EXISTS (SELECT 1 FROM pg_temp.deployment_parameter WHERE key = 'env' AND value = 'dev');
 
+-- The dev defaults above (env=dev, role passwords -> 'postgres') are a local
+-- convenience, never a production posture. Announce them loudly so a real
+-- deployment can never silently ship with weak default credentials.
+DO $$
+DECLARE
+    v_env          text;
+    v_defaulted_pw text;
+BEGIN
+    SELECT value INTO v_env FROM pg_temp.deployment_parameter WHERE key = 'env';
+
+    SELECT string_agg(original_key, ', ' ORDER BY original_key)
+    INTO v_defaulted_pw
+    FROM pg_temp.deployment_parameter
+    WHERE key ~ 'password$' AND value = 'postgres';
+
+    IF v_env = 'dev' AND v_defaulted_pw IS NOT NULL THEN
+        RAISE WARNING 'pgmi: env=dev — role password(s) defaulted to ''postgres'' (%). This is for local/disposable databases only. For any shared or production deploy, pass --param env=<non-dev> and explicit *_password values.', v_defaulted_pw;
+    END IF;
+END $$;
+
 
 DO $$
 DECLARE

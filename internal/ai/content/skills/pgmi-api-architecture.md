@@ -296,6 +296,15 @@ The planner can **inline** a SQL function (fold it into the calling query so ind
 
 `create_or_replace_*_handler` blocks are the most-read SQL in an app. Format them for a developer skimming the file: aligned metadata, the body as clean SQL, and a `description` that is **concise and informative** (what it does + the entity, in one line). A minimal comment is welcome only where the SQL would otherwise puzzle a reader.
 
+## Handler Body Structure
+
+Handler bodies follow a strict **materialize → validate → probe → execute** four-phase pattern. The full reference — with safe-casting rules, the 404-vs-422 decision tree, and complete create/update/delete/list examples — is in **`pgmi-handler-patterns`**. Load it before writing or reviewing any `api/*-handlers.sql`. The non-negotiables:
+
+- **Never use raw casts** (`::uuid`, `::integer`, …) on user input — always `common.try_cast()`, then check for NULL and return a 422.
+- **Never use EXCEPTION blocks** in handler bodies — every outcome is a `RETURN api.problem_response(...)`. The four-phase pattern replaces exception handling entirely; SQLSTATE→HTTP mapping is a gateway-level concern, not a handler one.
+- **Handlers call kernel functions** — they do not `INSERT`/`UPDATE`/`DELETE` physical tables. The kernel returns the full entity row (§1 above); the handler formats it.
+- **Materialize all inputs** into typed local variables before any validation or use.
+
 ## Rich Document Pattern
 
 > The Rich Document Pattern is the API-layer face of the logical architecture above: a handler selects from an entity-summary view/function (§2–§3) and serializes it. The inline-subquery form below is fine for a one-off response shape; promote it to a summary view once more than one handler needs the same fields.
@@ -433,6 +442,7 @@ The `api.jsonrpc_error()` function maps JSON-RPC codes to HTTP status:
 
 ## Integration with Other Skills
 
+- **`pgmi-handler-patterns`**: Handler body four-phase pattern, safe casting, HTTP status codes
 - **`pgmi-mcp`**: MCP-specific implementation patterns
 - **`pgmi-http-review`**: HTTP compliance review guidelines
 - **`pgmi-sql-change-protocol`**: Mandatory workflow for SQL changes

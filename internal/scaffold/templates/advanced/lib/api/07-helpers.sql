@@ -333,12 +333,19 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     )::api.http_response;
 $$;
 
+-- Drop the pre-RFC-9457 signature so the extended one below is the only
+-- problem_response; an added-parameter overload would make 3-arg calls
+-- ambiguous. CREATE OR REPLACE cannot change the parameter count.
+DROP FUNCTION IF EXISTS api.problem_response(integer, text, text, text, text);
+
 CREATE OR REPLACE FUNCTION api.problem_response(
     status_code integer,
     title text,
     detail text DEFAULT NULL,
     type_uri text DEFAULT NULL,
-    instance text DEFAULT NULL
+    instance text DEFAULT NULL,
+    code text DEFAULT NULL,
+    invalid_params jsonb DEFAULT NULL
 ) RETURNS api.http_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT (
@@ -350,12 +357,27 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                 'title', title,
                 'status', status_code,
                 'detail', detail,
-                'instance', instance
+                'instance', instance,
+                'code', code,
+                'invalid-params', invalid_params
             ))::text,
             'UTF8'
         )
     )::api.http_response;
 $$;
+
+COMMENT ON FUNCTION api.problem_response(integer, text, text, text, text, text, jsonb) IS
+    'RFC 9457 problem+json response. Optional code is a stable machine-readable token; invalid_params is a jsonb array of {name,reason} (build with api.invalid_param). NULL members are stripped.';
+
+-- RFC 9457 invalid-params member constructor: one {name, reason} entry.
+CREATE OR REPLACE FUNCTION api.invalid_param(p_name text, p_reason text)
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT jsonb_build_object('name', p_name, 'reason', p_reason);
+$$;
+
+COMMENT ON FUNCTION api.invalid_param(text, text) IS
+    'Builds one RFC 9457 invalid-params entry {name, reason}; aggregate several into a jsonb array for api.problem_response(..., invalid_params => ...).';
 
 CREATE OR REPLACE FUNCTION api.error_response(
     status_code integer,
@@ -380,6 +402,90 @@ BEGIN
     v_content := api.content_json((v_response).content);
     IF v_content->>'title' != 'Not Found' THEN
         RAISE EXCEPTION 'problem_response failed';
+    END IF;
+    IF v_content ? 'code' OR v_content ? 'invalid-params' THEN
+        RAISE EXCEPTION 'problem_response should strip absent code/invalid-params members';
+    END IF;
+
+    -- RFC 9457 fields surface when provided
+    v_response := api.problem_response(
+        422, 'Unprocessable', 'Validation failed',
+        code => 'validation_error',
+        invalid_params => jsonb_build_array(api.invalid_param('total', 'must be positive'))
+    );
+    v_content := api.content_json((v_response).content);
+    IF v_content->>'code' != 'validation_error' THEN
+        RAISE EXCEPTION 'problem_response code member missing';
+    END IF;
+    IF v_content->'invalid-params'->0->>'name' != 'total' THEN
+        RAISE EXCEPTION 'problem_response invalid-params member missing';
+    END IF;
+END $$;
+
+-- ============================================================================
+-- List Pagination
+-- ============================================================================
+-- Uniform ?limit/?offset parsing for list handlers: clamps limit to [0, max]
+-- and offset to >= 0, and returns a ready 422 in o_error when either value is
+-- present but not an integer. Callers check `(o_error).status_code IS NOT NULL`
+-- and return o_error before running the query. Fetch o_limit + 1 rows to derive
+-- a boolean hasMore without a second count query.
+
+CREATE OR REPLACE FUNCTION api.pagination_params(
+    p_q       extensions.hstore,
+    p_default integer DEFAULT 50,
+    p_max     integer DEFAULT 200,
+    OUT o_limit  integer,
+    OUT o_offset integer,
+    OUT o_error  api.http_response
+)
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT
+        LEAST(GREATEST(COALESCE(common.try_cast(p_q->'limit', NULL::integer), p_default), 0), p_max),
+        GREATEST(COALESCE(common.try_cast(p_q->'offset', NULL::integer), 0), 0),
+        CASE
+            WHEN NULLIF(p_q->'limit', '') IS NOT NULL
+                 AND common.try_cast(p_q->'limit', NULL::integer) IS NULL
+                THEN api.problem_response(422, 'Unprocessable', 'limit must be an integer',
+                        invalid_params => jsonb_build_array(api.invalid_param('limit', 'must be an integer')))
+            WHEN NULLIF(p_q->'offset', '') IS NOT NULL
+                 AND common.try_cast(p_q->'offset', NULL::integer) IS NULL
+                THEN api.problem_response(422, 'Unprocessable', 'offset must be an integer',
+                        invalid_params => jsonb_build_array(api.invalid_param('offset', 'must be an integer')))
+            ELSE NULL
+        END;
+$$;
+
+COMMENT ON FUNCTION api.pagination_params(extensions.hstore, integer, integer) IS
+    'Parses ?limit/?offset from a query hstore: clamps limit to [0,p_max] (default p_default) and offset to >=0; sets o_error to a 422 problem_response when either is present but non-integer. Callers return o_error when its status_code is not null.';
+
+-- Inline tests
+DO $$
+DECLARE
+    v_page record;
+BEGIN
+    -- Defaults when nothing supplied
+    v_page := api.pagination_params(''::extensions.hstore);
+    IF v_page.o_limit <> 50 OR v_page.o_offset <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+        RAISE EXCEPTION 'pagination_params defaults failed (limit=%, offset=%)', v_page.o_limit, v_page.o_offset;
+    END IF;
+
+    -- Clamp to max and floor offset at 0
+    v_page := api.pagination_params('limit=>5000, offset=>-3'::extensions.hstore);
+    IF v_page.o_limit <> 200 OR v_page.o_offset <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+        RAISE EXCEPTION 'pagination_params clamping failed (limit=%, offset=%)', v_page.o_limit, v_page.o_offset;
+    END IF;
+
+    -- Non-integer limit -> 422 in o_error
+    v_page := api.pagination_params('limit=>abc'::extensions.hstore);
+    IF (v_page.o_error).status_code <> 422 THEN
+        RAISE EXCEPTION 'pagination_params should 422 on non-integer limit, got %', (v_page.o_error).status_code;
+    END IF;
+
+    -- limit=0 is honored (empty page), not treated as missing
+    v_page := api.pagination_params('limit=>0'::extensions.hstore);
+    IF v_page.o_limit <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+        RAISE EXCEPTION 'pagination_params should honor limit=0, got %', v_page.o_limit;
     END IF;
 END $$;
 

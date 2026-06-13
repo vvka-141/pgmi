@@ -111,6 +111,39 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
+-- Shared: Drop a Renamed Handler's Orphaned Function
+-- ============================================================================
+-- Re-registering an existing handler id under a new name points the registry
+-- at a new pg_proc entry but leaves the old function behind — unreachable
+-- through the gateway yet still callable and accumulating on every rename.
+-- Drop the previous function before creating the replacement so renames do not
+-- leak dead code. p_request_type is the (template-controlled) argument type;
+-- it is interpolated with %s because regtype names must not be %I-quoted.
+
+CREATE OR REPLACE FUNCTION internal.drop_renamed_handler(
+    p_object_id uuid,
+    p_schema text,
+    p_new_function_name text,
+    p_request_type text
+) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_old text;
+BEGIN
+    SELECT handler_function_name INTO v_old
+    FROM api.handler
+    WHERE object_id = p_object_id;
+
+    IF v_old IS NOT NULL AND v_old <> p_new_function_name THEN
+        EXECUTE format('DROP FUNCTION IF EXISTS %I.%I(%s)', p_schema, v_old, p_request_type);
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.drop_renamed_handler(uuid, text, text, text) IS
+    'Drops the previously-registered handler function for an object_id when the new registration uses a different function name, preventing orphaned pg_proc entries on rename.';
+
+-- ============================================================================
 -- REST Handler Registration
 -- ============================================================================
 
@@ -199,6 +232,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_function_schema, v_function_name, v_boundary, p_handler_body, v_boundary
     );
 
+    PERFORM internal.drop_renamed_handler(v_id, v_function_schema, v_function_name, 'api.rest_request');
     EXECUTE v_function_sql;
 
     SELECT oid INTO v_handler_oid
@@ -361,6 +395,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_function_schema, v_function_name, v_boundary, p_handler_body, v_boundary
     );
 
+    PERFORM internal.drop_renamed_handler(v_id, v_function_schema, v_function_name, 'api.rpc_request');
     EXECUTE v_function_sql;
 
     SELECT oid INTO v_handler_oid
@@ -513,6 +548,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_function_schema, v_function_name, v_boundary, p_handler_body, v_boundary
     );
 
+    PERFORM internal.drop_renamed_handler(v_id, v_function_schema, v_function_name, 'api.mcp_request');
     EXECUTE v_function_sql;
 
     SELECT oid INTO v_handler_oid

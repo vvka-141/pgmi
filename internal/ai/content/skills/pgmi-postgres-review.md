@@ -1047,6 +1047,36 @@ All handler registration uses these **camelCase** keys:
 - [ ] Handler metadata keys follow standard naming (httpMethod, autoLog, inputSchema)?
 - [ ] JSON content follows JSON conventions, not PostgreSQL conventions?
 
+### Handler Compliance (api/*-handlers.sql)
+
+Apply this section only when reviewing files matching `api/*-handlers.sql`. It enforces the four-phase doctrine in `pgmi-handler-patterns`. Any single failure here is at least a HIGH finding — these are the antipatterns that look correct in isolation but break the transactional/HTTP contract.
+
+**No raw casts on user input**
+- [ ] Every path param, query param, and body field is parsed with `common.try_cast(text, NULL::type)` — **zero** raw `::uuid` / `::integer` / `::numeric` / `::boolean` / `::timestamp` casts on caller-supplied text?
+- [ ] Dates parsed as `common.try_cast(..., NULL::timestamp)::date` (no `date` overload exists)?
+- [ ] Enum values validated against an allowlist *before* casting to the enum type?
+
+**No EXCEPTION blocks**
+- [ ] Handler body contains **zero** `EXCEPTION` / `BEGIN...EXCEPTION...END` blocks?
+- [ ] Error responses use `api.problem_response(status, title, detail)` returns, not caught-and-translated exceptions?
+
+**Four-phase structure**
+- [ ] All inputs materialized into typed locals at the top (no inline `v_b->>'field'` in kernel calls or response formatting)?
+- [ ] Required fields → 422; optional field present-but-malformed → 422?
+
+**Probes before mutation**
+- [ ] PUT/DELETE target existence → 404; sub-resource parent → 404?
+- [ ] Create uniqueness → 409; update uniqueness excluding self (`AND id <> v_id`) → 409?
+- [ ] Body FK reference existence → 422; duplicate association → 409?
+- [ ] State-machine mutations guard the transition in the kernel `UPDATE ... WHERE id=$ AND status=$` (not just a handler probe) to close the read-check-write race?
+
+**Status codes & boundary**
+- [ ] 201 on create, 200 on update/action, 204 on delete; 400 only for a malformed path param?
+- [ ] 404-vs-422 correct: path resource missing → 404, body-referenced entity missing → 422?
+- [ ] Handler contains **no** direct `INSERT`/`UPDATE`/`DELETE` on physical tables — it calls a kernel that returns the full entity row, formatted via `core.*_json`?
+- [ ] Kernel returns `RETURNS core.<entity>` / `SETOF`, never `uuid` / `void` / a status flag?
+- [ ] A test asserts the error path does not leak internals (`detail !~* 'PL/pgSQL|CONTEXT|ERROR|SQLSTATE'`)?
+
 ---
 
 **End of pgmi-postgres-review**

@@ -842,6 +842,8 @@ COMMIT;
 
 ### Error Handling Patterns
 
+> **⚠ SCOPE WARNING — not for API handler bodies.** The `EXCEPTION` / error-handling patterns in this section apply to **deploy-time orchestration** (`deploy.sql`, migrations, background/queue processing) and **gateway-level catch blocks** only. They do **not** belong inside REST/RPC/MCP handler bodies. A handler must signal every outcome by *returning* `api.problem_response(...)` via the four-phase pattern (materialize → validate → probe → execute) — never by throwing and catching. Catching an exception in a handler opens a per-request savepoint, produces the wrong HTTP status, and leaks `SQLERRM` internals to the client. See `pgmi-handler-patterns`.
+
 **Pattern 1: Graceful Degradation**
 ```sql
 DO $$
@@ -1213,9 +1215,11 @@ GROUP BY error_history->-1->>'sqlstate'
 ORDER BY occurrences DESC;
 ```
 
-### Pattern: HTTP Status Code Mapping
+### Pattern: HTTP Status Code Mapping (Gateway-Level Only)
 
-When building HTTP APIs backed by PostgreSQL, map SQLSTATE to appropriate HTTP status codes:
+> **⚠ SCOPE WARNING.** This SQLSTATE→HTTP mapping is the **gateway-level catch-all** that wraps handler invocation and sanitizes *unhandled* exceptions into a 500 (or a transient 503). It is **not** a pattern to use inside handler bodies. Inside a handler, do not let a constraint violation surface as an exception and then map it — probe for the condition first and `RETURN api.problem_response(409|422|404, ...)` explicitly. Mapping `23503`→400 inside a handler gives the wrong status and a leaky message where a probed 422 with a human-readable reference name is correct. See `pgmi-handler-patterns`.
+
+When building HTTP APIs backed by PostgreSQL, the gateway maps SQLSTATE to appropriate HTTP status codes for unhandled exceptions:
 
 ```sql
 CREATE OR REPLACE FUNCTION sqlstate_to_http_status(p_sqlstate text)

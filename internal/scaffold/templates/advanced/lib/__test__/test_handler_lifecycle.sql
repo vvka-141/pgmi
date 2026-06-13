@@ -335,6 +335,68 @@ BEGIN
 END $$;
 
 DO $$
+DECLARE
+    v_id uuid := 'ffffffff-c007-4000-8000-000000000001';
+    v_alpha_exists boolean;
+    v_beta_exists boolean;
+    v_registered text;
+BEGIN
+    RAISE NOTICE '-> Testing handler rename drops the orphaned function';
+
+    -- Register under the first name
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', v_id, 'uri', '^/rename-test$', 'httpMethod', '^GET$',
+            'name', 'rename_alpha', 'requiresAuth', false
+        ),
+        'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
+    );
+
+    SELECT EXISTS(
+        SELECT 1 FROM pg_proc
+        WHERE pronamespace = 'api'::regnamespace AND proname = 'rename_alpha'
+          AND proargtypes[0] = 'api.rest_request'::regtype
+    ) INTO v_alpha_exists;
+    IF NOT v_alpha_exists THEN
+        RAISE EXCEPTION 'rename test setup: api.rename_alpha should exist after first registration';
+    END IF;
+
+    -- Re-register the SAME id under a new name
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', v_id, 'uri', '^/rename-test$', 'httpMethod', '^GET$',
+            'name', 'rename_beta', 'requiresAuth', false
+        ),
+        'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
+    );
+
+    SELECT EXISTS(
+        SELECT 1 FROM pg_proc
+        WHERE pronamespace = 'api'::regnamespace AND proname = 'rename_alpha'
+          AND proargtypes[0] = 'api.rest_request'::regtype
+    ) INTO v_alpha_exists;
+    SELECT EXISTS(
+        SELECT 1 FROM pg_proc
+        WHERE pronamespace = 'api'::regnamespace AND proname = 'rename_beta'
+          AND proargtypes[0] = 'api.rest_request'::regtype
+    ) INTO v_beta_exists;
+
+    IF v_alpha_exists THEN
+        RAISE EXCEPTION 'orphaned function api.rename_alpha was not dropped on rename';
+    END IF;
+    IF NOT v_beta_exists THEN
+        RAISE EXCEPTION 'replacement function api.rename_beta should exist after rename';
+    END IF;
+
+    SELECT handler_function_name INTO v_registered FROM api.handler WHERE object_id = v_id;
+    IF v_registered <> 'rename_beta' THEN
+        RAISE EXCEPTION 'registry should point at rename_beta, got %', v_registered;
+    END IF;
+
+    RAISE NOTICE '  + Renaming a handler drops the old function and leaves no orphan';
+END $$;
+
+DO $$
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '===============================================================';

@@ -952,6 +952,92 @@ BEGIN
 END $$;
 
 -- ============================================================================
+-- try_cast(text, timestamptz) - Parse text as timestamp with time zone
+-- ============================================================================
+-- Same epoch/ISO strategy as the timestamp overload, but offset-aware: ISO
+-- inputs carrying an explicit offset (e.g. '2025-01-15T14:30:00+02:00') are
+-- preserved. STABLE (not IMMUTABLE): offset-less inputs are interpreted in the
+-- session TimeZone, so the result depends on session state.
+
+CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value timestamptz)
+RETURNS timestamptz
+LANGUAGE plpgsql
+STABLE PARALLEL SAFE
+AS $$
+DECLARE
+    v_input TEXT;
+    v_numeric NUMERIC;
+BEGIN
+    IF $1 IS NULL THEN
+        RETURN $2;
+    END IF;
+
+    v_input := btrim($1);
+    IF v_input = '' THEN
+        RETURN $2;
+    END IF;
+
+    -- Unix epoch: pure numeric (seconds, or milliseconds by magnitude)
+    IF v_input ~ '^\-?\d+(\.\d+)?$' THEN
+        BEGIN
+            v_numeric := v_input::numeric;
+            IF abs(v_numeric) >= 10000000000 THEN
+                RETURN to_timestamp(v_numeric / 1000.0);
+            ELSIF v_numeric BETWEEN -62135596800 AND 253402300799 THEN
+                RETURN to_timestamp(v_numeric);
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Fall through to native parser
+        END;
+    END IF;
+
+    BEGIN
+        RETURN v_input::timestamptz;
+    EXCEPTION
+        WHEN OTHERS THEN
+            RETURN $2;
+    END;
+END;
+$$;
+
+COMMENT ON FUNCTION common.try_cast(text, timestamptz) IS
+    'Try to parse text as timestamptz using Unix epoch (seconds/milliseconds) or standard formats; preserves explicit ISO offsets. Returns default value on failure.';
+
+-- Inline tests
+DO $$
+DECLARE
+    v_default timestamptz := '2025-01-01 00:00:00+00'::timestamptz;
+    v_result timestamptz;
+BEGIN
+    -- ISO-8601 with explicit offset is preserved as the same instant
+    v_result := common.try_cast('2025-01-15T14:30:00+02:00', v_default);
+    IF v_result != '2025-01-15T12:30:00+00'::timestamptz THEN
+        RAISE EXCEPTION 'try_cast(timestamptz) failed: explicit offset should be honored';
+    END IF;
+
+    -- Unix epoch seconds
+    v_result := common.try_cast('1705327800', v_default);
+    IF v_result != to_timestamp(1705327800) THEN
+        RAISE EXCEPTION 'try_cast(timestamptz) failed: epoch seconds should parse';
+    END IF;
+
+    -- Unix epoch milliseconds
+    v_result := common.try_cast('1705327800000', v_default);
+    IF v_result != to_timestamp(1705327800) THEN
+        RAISE EXCEPTION 'try_cast(timestamptz) failed: epoch milliseconds should parse';
+    END IF;
+
+    -- Invalid and empty return the default
+    IF common.try_cast('not a timestamp', v_default) != v_default THEN
+        RAISE EXCEPTION 'try_cast(timestamptz) failed: invalid input should return default';
+    END IF;
+    IF common.try_cast('', v_default) != v_default THEN
+        RAISE EXCEPTION 'try_cast(timestamptz) failed: empty input should return default';
+    END IF;
+END $$;
+
+-- ============================================================================
 -- Grant Permissions
 -- ============================================================================
 
