@@ -322,6 +322,7 @@ BEGIN;
             ROLLBACK TO sp_test_order_status;
 
         ROLLBACK TO sp_orders_setup;        ← Undo orders fixture
+        RELEASE SAVEPOINT sp_orders_setup;  ← Clean up savepoint
 
         SAVEPOINT sp_admin_setup;           ← Admin fixture (adds role)
         ... admin/_setup.sql ...
@@ -331,10 +332,12 @@ BEGIN;
             ROLLBACK TO sp_test_admin_access;
 
         ROLLBACK TO sp_admin_setup;         ← Undo admin fixture
+        RELEASE SAVEPOINT sp_admin_setup;   ← Clean up savepoint
 
     ROLLBACK TO sp_root_setup;              ← Undo root fixture
+    RELEASE SAVEPOINT sp_root_setup;        ← Clean up savepoint
 
-ROLLBACK;
+COMMIT;                                     ← Migrations persist, test data gone
 ```
 
 **What each test sees:**
