@@ -17,17 +17,26 @@ SELECT object_id, email, display_name, email_verified, created_at, updated_at
 FROM membership."user"
 WHERE is_active = true;
 
+COMMENT ON VIEW membership.vw_active_users IS
+    'Active users only. Excludes soft-deleted accounts.';
+
 CREATE OR REPLACE VIEW membership.vw_active_organizations
 WITH (security_invoker = true) AS
 SELECT object_id, name, slug, owner_user_id, is_personal, created_at, updated_at
 FROM membership.organization
 WHERE is_active = true;
 
+COMMENT ON VIEW membership.vw_active_organizations IS
+    'Active organizations only. Excludes soft-deleted organizations.';
+
 CREATE OR REPLACE VIEW membership.vw_user_owned_organizations
 WITH (security_invoker = true) AS
 SELECT o.object_id, o.name, o.slug, o.owner_user_id, o.is_personal, o.created_at
 FROM membership.organization o
 WHERE o.is_active = true;
+
+COMMENT ON VIEW membership.vw_user_owned_organizations IS
+    'Organizations owned by a user. Filtered to active orgs only.';
 
 CREATE OR REPLACE VIEW membership.vw_user_memberships
 WITH (security_invoker = true) AS
@@ -46,15 +55,24 @@ FROM membership.organization_member om
 JOIN membership.organization o ON o.object_id = om.organization_id
 WHERE o.is_active = true;
 
+COMMENT ON VIEW membership.vw_user_memberships IS
+    'All memberships (active + pending) with joined org details. Base view for vw_active_memberships and vw_pending_invitations.';
+
 CREATE OR REPLACE VIEW membership.vw_active_memberships
 WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
 WHERE status = 'active';
 
+COMMENT ON VIEW membership.vw_active_memberships IS
+    'Active memberships only. Filters vw_user_memberships to status = active.';
+
 CREATE OR REPLACE VIEW membership.vw_pending_invitations
 WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
 WHERE status = 'pending';
+
+COMMENT ON VIEW membership.vw_pending_invitations IS
+    'Pending invitations only. Filters vw_user_memberships to status = pending.';
 
 DO $$
 DECLARE

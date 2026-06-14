@@ -305,6 +305,9 @@ $%s$ LANGUAGE plpgsql$sql$,
 END;
 $func$;
 
+COMMENT ON FUNCTION api.create_or_replace_rest_handler(jsonb, text) IS
+    'Registers a REST handler: creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.rest_route. SECURITY DEFINER.';
+
 -- ============================================================================
 -- RPC Handler Registration
 -- ============================================================================
@@ -465,6 +468,9 @@ $%s$ LANGUAGE plpgsql$sql$,
 END;
 $func$;
 
+COMMENT ON FUNCTION api.create_or_replace_rpc_handler(jsonb, text) IS
+    'Registers an RPC handler: creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.rpc_route. SECURITY DEFINER.';
+
 -- ============================================================================
 -- MCP Handler Registration
 -- ============================================================================
@@ -620,6 +626,9 @@ $%s$ LANGUAGE plpgsql$sql$,
     RAISE DEBUG 'register MCP: Registered % %', v_type, v_name;
 END;
 $func$;
+
+COMMENT ON FUNCTION api.create_or_replace_mcp_handler(jsonb, text) IS
+    'Registers an MCP handler (tool/resource/prompt): creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.mcp_route. SECURITY DEFINER.';
 
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.create_or_replace_rest_handler() - REST handler registration';

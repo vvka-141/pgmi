@@ -23,17 +23,26 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT content::common.utf8::jsonb;
 $$;
 
+COMMENT ON FUNCTION api.content_json(bytea) IS
+    'Casts request body (bytea) to jsonb via UTF-8 text.';
+
 CREATE OR REPLACE FUNCTION api.content_text(content bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT content::common.utf8::text;
 $$;
 
+COMMENT ON FUNCTION api.content_text(bytea) IS
+    'Casts request body (bytea) to text via UTF-8.';
+
 CREATE OR REPLACE FUNCTION api.header(headers extensions.hstore, name text)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT headers->lower(name);
 $$;
+
+COMMENT ON FUNCTION api.header(extensions.hstore, text) IS
+    'Case-insensitive header lookup. Lowercases the name before hstore lookup.';
 
 -- Inline tests
 DO $$

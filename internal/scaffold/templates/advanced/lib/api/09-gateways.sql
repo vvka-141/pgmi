@@ -363,6 +363,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.rest_invoke(text, text, extensions.hstore, bytea) IS
+    'REST gateway. Routes method+url to a registered handler, enforces auth and content negotiation, logs exchanges. SECURITY DEFINER.';
+
 CREATE OR REPLACE FUNCTION api.rest_invoke(
     p_method text,
     p_url text,
@@ -411,6 +414,12 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.rest_invoke(text, text, extensions.hstore, jsonb) IS
+    'REST gateway overload: auto-sets content-type to application/json when a jsonb body is provided.';
+
+COMMENT ON FUNCTION api.rest_invoke(text, text, extensions.hstore, xml) IS
+    'REST gateway overload: auto-sets content-type to application/xml when an xml body is provided.';
+
 -- ============================================================================
 -- RPC Resolution
 -- ============================================================================
@@ -423,6 +432,9 @@ SET search_path = api, pg_temp
 AS $$
     SELECT handler_object_id FROM api.rpc_route WHERE method_name = p_method_name;
 $$;
+
+COMMENT ON FUNCTION api.rpc_resolve(text) IS
+    'Resolves an RPC method name to its handler UUID. Returns NULL if not registered.';
 
 -- ============================================================================
 -- RPC Gateway
@@ -606,6 +618,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.rpc_invoke(uuid, extensions.hstore, bytea) IS
+    'RPC gateway. Invokes a handler by UUID, enforces auth, maps constraint violations to JSON-RPC error codes. SECURITY DEFINER.';
+
 -- ============================================================================
 -- MCP Tool Invocation
 -- ============================================================================
@@ -692,6 +707,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.mcp_call_tool(text, jsonb, jsonb, jsonb) IS
+    'MCP tools/call. Resolves tool by name, applies auth context, invokes handler. Execution failures use result.isError=true per MCP spec.';
+
 -- ============================================================================
 -- MCP Resource Read
 -- ============================================================================
@@ -768,6 +786,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.mcp_read_resource(text, jsonb, jsonb) IS
+    'MCP resources/read. Matches URI against registered templates with longest-match precedence.';
+
 -- ============================================================================
 -- MCP Prompt Expansion
 -- ============================================================================
@@ -838,6 +859,9 @@ BEGIN
     END;
 END;
 $$;
+
+COMMENT ON FUNCTION api.mcp_get_prompt(text, jsonb, jsonb, jsonb) IS
+    'MCP prompts/get. Resolves prompt by name, applies auth context, returns expanded messages.';
 
 -- ============================================================================
 -- MCP Discovery Functions
