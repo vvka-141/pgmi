@@ -215,8 +215,9 @@ func BuildFileTree(rootPath string) (string, error) {
 
 	sb.WriteString(absPath + "/\n")
 
-	// Walk the directory tree
 	dirCache := make(map[string][]fs.DirEntry)
+	var levelIsLast []bool
+
 	err = filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -232,7 +233,6 @@ func BuildFileTree(rootPath string) (string, error) {
 		}
 
 		depth := strings.Count(relPath, string(os.PathSeparator))
-		indent := strings.Repeat("│   ", depth)
 
 		parentDir := filepath.Dir(path)
 		entries, ok := dirCache[parentDir]
@@ -253,12 +253,23 @@ func BuildFileTree(rootPath string) (string, error) {
 			}
 		}
 
+		for len(levelIsLast) <= depth {
+			levelIsLast = append(levelIsLast, false)
+		}
+		levelIsLast[depth] = isLast
+
+		var indent strings.Builder
+		for i := range depth {
+			if levelIsLast[i] {
+				indent.WriteString("    ")
+			} else {
+				indent.WriteString("│   ")
+			}
+		}
+
 		branch := "├── "
 		if isLast {
 			branch = "└── "
-			if depth > 0 {
-				indent = indent[:len(indent)-4] + "    "
-			}
 		}
 
 		name := entry.Name()
@@ -266,7 +277,7 @@ func BuildFileTree(rootPath string) (string, error) {
 			name += "/"
 		}
 
-		sb.WriteString(indent + branch + name + "\n")
+		sb.WriteString(indent.String() + branch + name + "\n")
 
 		return nil
 	})
