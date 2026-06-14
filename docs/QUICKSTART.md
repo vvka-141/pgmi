@@ -42,7 +42,8 @@ pgmi --version
 You should see output like:
 
 ```
-pgmi version 0.x.x
+pgmi 0.x.x (compat 1)
+Commit: <sha>, Built: <date>, Platform: <os>/<arch>
 ```
 
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.

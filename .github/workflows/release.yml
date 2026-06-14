@@ -9,8 +9,39 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Pre-release verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+
+      - name: Tests
+        run: go test -race -timeout 10m ./...
+
+      - name: Connection & security tests
+        run: go test -race -tags conntest -timeout 5m ./internal/db/conntest/...
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
   release:
     name: Release
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

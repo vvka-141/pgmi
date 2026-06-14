@@ -19,6 +19,9 @@ pgmi
 # Local Go build/test cache (GOCACHE)
 .gocache/
 
+# Local Go module cache (GOMODCACHE)
+.gomodcache/
+
 # Test binary, built with `go test -c`
 *.test
 

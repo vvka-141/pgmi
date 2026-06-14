@@ -75,6 +75,16 @@ func GetContract() Contract {
 				Args:    []string{"pattern text DEFAULT NULL", "callback text DEFAULT 'pg_temp.pgmi_test_callback'"},
 				Returns: []string{"sql text"},
 			},
+			{
+				Name:    "pgmi_is_sql_file",
+				Args:    []string{"filename text"},
+				Returns: []string{"boolean"},
+			},
+			{
+				Name:    "pgmi_persist_test_plan",
+				Args:    []string{"target_schema text", "pattern text DEFAULT NULL"},
+				Returns: []string{"void"},
+			},
 		},
 		StepTypes: []string{"fixture", "test", "teardown"},
 		ExitCodes: []ContractExitCode{
