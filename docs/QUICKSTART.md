@@ -133,13 +133,14 @@ cd myapp
 
 > **Interactive setup**: if you run `pgmi init myapp` (without flags) on a TTY, an interactive wizard walks you through template choice and connection setup, saving a `pgmi.yaml` for later `pgmi deploy` runs. Add `--template <name>` to skip the template prompt, or set `PGMI_NON_INTERACTIVE=1` / `CI=1` to bypass wizards entirely.
 >
-> If you already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them.
+> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them. Basic template users can ignore this.
 
 This creates a ready-to-deploy project:
 
 ```
 myapp/
 ├── deploy.sql              ← Your deployment logic (the brain)
+├── project.json            ← Project metadata (read by deploy.sql, not by pgmi)
 ├── pgmi.yaml               ← Connection defaults (the config)
 ├── migrations/             ← Your SQL files go here
 │   ├── 001_users.sql

@@ -2,7 +2,22 @@ DO $$
 DECLARE
     v_user "user";
     v_original_id INT;
+    v_config JSONB;
 BEGIN
+    -- Verify project data is accessible (pgmi loads ALL files, not just SQL)
+    SELECT content::jsonb INTO v_config
+    FROM pg_temp.pgmi_source_view
+    WHERE path = './project.json';
+
+    IF v_config IS NULL THEN
+        RAISE EXCEPTION 'project.json should be accessible via pgmi_source_view';
+    END IF;
+
+    IF v_config ->> 'app_name' IS NULL THEN
+        RAISE EXCEPTION 'project.json should contain app_name';
+    END IF;
+
+    -- Verify CRUD operations
     v_user := get_user('alice@test.com');
     IF v_user.name != 'Alice' THEN
         RAISE EXCEPTION 'get_user failed: expected Alice, got %', v_user.name;

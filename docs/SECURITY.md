@@ -33,7 +33,7 @@ Go process (in-memory map)
 Session ends → temp table dropped, session variables gone
 ```
 
-Every database operation uses **parameterized queries** (`$1`, `$2` placeholders). Parameter values are never interpolated into SQL strings. This eliminates SQL injection as a vector.
+Every pgmi-internal database operation uses **parameterized queries** (`$1`, `$2` placeholders). Parameter values are never interpolated into SQL strings by pgmi itself. This eliminates SQL injection in pgmi's own code; your `deploy.sql` and application SQL are your responsibility.
 
 ## What pgmi Logs
 
@@ -230,7 +230,7 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 
 | Vector | Risk | pgmi's Control | Your Action |
 |--------|------|----------------|-------------|
-| SQL injection | None | Parameterized queries | — |
+| SQL injection (pgmi internals) | None | Parameterized queries | Review your own SQL for injection |
 | pgmi core log leakage | None | Core CLI logs counts only | Redact secrets in your own `RAISE NOTICE`/audit logging |
 | Process list (`/proc`) | Medium | `--params-file` available | Use `--params-file` for secrets |
 | PostgreSQL server logs | Medium | Cannot control | Set `log_statement = 'ddl'` |

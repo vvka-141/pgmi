@@ -120,9 +120,10 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 	return map[string]TemplateDescription{
 		"basic": {
 			Short: "Linear migrations, minimal structure",
-			Long:  "A small starter project: deploy.sql executes the files in migrations/ in lexicographic order. No metadata, no idempotency tracking, no advanced libraries.",
+			Long:  "A small starter project: deploy.sql executes migrations in order, reads project.json for metadata, and branches on environment. No metadata system, no idempotency tracking, no advanced libraries.",
 			Structure: []string{
 				"├── deploy.sql",
+				"├── project.json",
 				"├── pgmi.yaml",
 				"├── README.md",
 				"├── migrations/",
@@ -134,7 +135,8 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 			},
 			Features: []string{
 				"Linear migration ordering by filename",
-				"deploy.sql runs every file in migrations/",
+				"Environment-aware deployment (--param env=production skips dev seeding)",
+				"Non-SQL project data loading (project.json via pgmi_source_view)",
 				"Test scaffolding via __test__/ (CALL pgmi_test())",
 			},
 			BestFor: "Learning pgmi, small projects, prototypes",

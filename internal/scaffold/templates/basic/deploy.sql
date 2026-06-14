@@ -1,30 +1,35 @@
--- ============================================================================
 -- deploy.sql - Deployment Orchestrator (Basic Template)
--- ============================================================================
--- This file controls HOW your SQL gets executed. pgmi loads your files into
--- session-scoped temporary tables, then hands control to this script.
 --
--- Available:
---   pg_temp.pgmi_source_view     - Your SQL files (path, content, directory, etc.)
+-- pgmi loads your project files into session-scoped temp tables, then runs
+-- this script. Available:
+--   pg_temp.pgmi_source_view     - ALL project files (SQL, JSON, CSV, etc.)
 --   pg_temp.pgmi_parameter_view  - CLI params (--param key=value)
---   current_setting('pgmi.key', true) - Get parameter value (NULL if not set)
+--   current_setting('pgmi.key', true) - Parameter value (NULL if not set)
 --   CALL pgmi_test()             - Run tests with savepoint isolation
--- ============================================================================
 
-
--- ============================================================================
--- DEPLOYMENT
--- ============================================================================
 BEGIN;
 
--- Run migrations in path order (001_, 002_, etc.)
 DO $$
 DECLARE
-    v_file RECORD;
-    v_admin_email TEXT;
-    v_user RECORD;
+    v_file    RECORD;
+    v_env     TEXT;
+    v_config  JSONB;
+    v_user    RECORD;
 BEGIN
-    -- Execute migration files in alphabetical order
+    v_env := COALESCE(current_setting('pgmi.env', true), 'development');
+
+    -- Load project metadata from a non-SQL file (pgmi loads ALL files, not just SQL)
+    SELECT content::jsonb INTO v_config
+    FROM pg_temp.pgmi_source_view
+    WHERE path = './project.json';
+
+    RAISE NOTICE '[%] Deploying % v% (% file(s) in project)',
+        v_env,
+        v_config ->> 'app_name',
+        v_config ->> 'version',
+        (SELECT count(*) FROM pg_temp.pgmi_source_view);
+
+    -- Execute migration files in path order
     FOR v_file IN (
         SELECT path, content
         FROM pg_temp.pgmi_source_view
@@ -40,12 +45,15 @@ BEGIN
         END;
     END LOOP;
 
-    -- Seed admin user using the parameter
-    -- Parameters are passed via: pgmi deploy . --param admin_email=you@example.com
-    v_admin_email := COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com');
-    EXECUTE format('SELECT * FROM upsert_user(%L, %L)', v_admin_email, 'Administrator')
-        INTO v_user;
-    RAISE NOTICE 'Admin user ready: % (id=%)', v_user.email, v_user.id;
+    -- Environment-aware seeding: only in non-production
+    IF v_env IS DISTINCT FROM 'production' THEN
+        EXECUTE format(
+            'SELECT * FROM upsert_user(%L, %L)',
+            COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com'),
+            'Administrator'
+        ) INTO v_user;
+        RAISE NOTICE 'Dev seed: admin user ready (% id=%)', v_user.email, v_user.id;
+    END IF;
 END $$;
 
 -- Run tests (savepoint ensures test side effects roll back)
@@ -55,12 +63,12 @@ ROLLBACK TO SAVEPOINT _tests;
 
 COMMIT;
 
-DO $$ 
-BEGIN 
+DO $$
+BEGIN
     RAISE NOTICE $ascii$
-  ___   ___  _  _ ___ 
+  ___   ___  _  _ ___
  |   \ / _ \| \| | __|
- | |) | (_) | .` | _| 
- |___/ \___/|_|\_|___|                          
-    $ascii$; 
+ | |) | (_) | .` | _|
+ |___/ \___/|_|\_|___|
+    $ascii$;
 END $$;
