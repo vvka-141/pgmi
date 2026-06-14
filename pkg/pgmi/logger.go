@@ -5,13 +5,13 @@ package pgmi
 type Logger interface {
 	// Verbose logs detailed diagnostic information.
 	// Only logged when verbose mode is enabled.
-	Verbose(format string, args ...interface{})
+	Verbose(format string, args ...any)
 
 	// Info logs informational messages about normal operations.
 	// Always logged regardless of verbose mode.
-	Info(format string, args ...interface{})
+	Info(format string, args ...any)
 
 	// Error logs error messages.
 	// Always logged regardless of verbose mode.
-	Error(format string, args ...interface{})
+	Error(format string, args ...any)
 }

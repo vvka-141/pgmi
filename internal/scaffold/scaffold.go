@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -127,7 +128,7 @@ func (s *Scaffolder) processTemplate(content, projectName, filePath string) stri
 	return content
 }
 
-func (s *Scaffolder) logVerbose(format string, args ...interface{}) {
+func (s *Scaffolder) logVerbose(format string, args ...any) {
 	if s.verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
 	}
@@ -156,12 +157,7 @@ func IsValidTemplate(name string) bool {
 	if err != nil {
 		return false
 	}
-	for _, t := range templates {
-		if t == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(templates, name)
 }
 
 // ManagedFiles are files that pgmi itself creates/manages,

@@ -24,7 +24,7 @@ func (f *memoryFileInfo) Size() int64        { return f.size }
 func (f *memoryFileInfo) Mode() fs.FileMode  { return f.mode }
 func (f *memoryFileInfo) ModTime() time.Time { return f.modTime }
 func (f *memoryFileInfo) IsDir() bool        { return f.isDir }
-func (f *memoryFileInfo) Sys() interface{}   { return nil }
+func (f *memoryFileInfo) Sys() any            { return nil }
 
 // memoryFile implements File interface for in-memory files
 type memoryFile struct {

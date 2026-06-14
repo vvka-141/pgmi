@@ -11,10 +11,10 @@ func NewNullLogger() *NullLogger {
 }
 
 // Verbose is a no-op.
-func (l *NullLogger) Verbose(format string, args ...interface{}) {}
+func (l *NullLogger) Verbose(format string, args ...any) {}
 
 // Info is a no-op.
-func (l *NullLogger) Info(format string, args ...interface{}) {}
+func (l *NullLogger) Info(format string, args ...any) {}
 
 // Error is a no-op.
-func (l *NullLogger) Error(format string, args ...interface{}) {}
+func (l *NullLogger) Error(format string, args ...any) {}
