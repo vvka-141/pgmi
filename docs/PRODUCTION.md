@@ -514,18 +514,26 @@ pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 ```yaml
 deploy:
   runs-on: ubuntu-latest
+  env:
+    PGMI_VERSION: v1.0.0          # pin a release; do not float to @latest in CI
   steps:
     - uses: actions/checkout@v4
 
-    - name: Install pgmi
+    - name: Install pgmi (pinned, checksum-verified)
       run: |
-        curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       env:
         PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
       run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
+        pgmi deploy . -d ${{ vars.DATABASE_NAME }} --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -549,7 +557,7 @@ deploy:
       tar -xzf "${file}" pgmi
       install pgmi /usr/local/bin/pgmi
   script:
-    - pgmi deploy . -d $DATABASE_NAME --compat 1 --param env=production
+    - pgmi deploy . -d $DATABASE_NAME --compat 1 --force --param env=production
 ```
 
 ### Azure DevOps
@@ -566,6 +574,7 @@ steps:
           --host $PGHOST \
           --azure \
           --sslmode require \
+          --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -593,6 +602,7 @@ deploy:
           --host ${{ vars.AZURE_PG_HOST }} \
           --azure \
           --sslmode require \
+          --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -632,6 +642,7 @@ deploy:
           -U ${{ vars.RDS_USER }} \
           --aws --aws-region ${{ vars.AWS_REGION }} \
           --sslmode require \
+          --force \
           --param env=production \
           --compat 1 \
           --timeout 15m
@@ -670,6 +681,7 @@ deploy:
         pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
           -U ${{ vars.CLOUDSQL_USER }} \
           --google --google-instance ${{ vars.CLOUDSQL_INSTANCE }} \
+          --force \
           --param env=production \
           --compat 1 \
           --timeout 15m
