@@ -57,7 +57,7 @@ Why these choices:
   change your deploy.
 - **`--compat 1`** pins the pgmi session API so a pgmi upgrade can't change your
   deploy's behavior. Bump it deliberately after testing the new default. See
-  [CLI Reference](CLI.md#understanding---compat-api-versioning).
+  [CLI Reference](CLI.md#understanding-compat-api-versioning).
 - **`--force`** skips the interactive confirmation (there is no TTY in CI). It does
   **not** drop your database — that is `--overwrite`, which belongs only on
   throwaway/test databases, never production.
