@@ -82,7 +82,7 @@ func formatValidationErrors(result ValidationResult, filePath string) error {
 
 	msg.WriteString("\nSee metadata format documentation:\n")
 	msg.WriteString("  Schema: internal/metadata/schema.xsd\n")
-	msg.WriteString("  Generate template: pgmi metadata scaffold <path> --dry-run\n")
+	msg.WriteString("  Generate template: pgmi metadata scaffold <path>\n")
 
 	return fmt.Errorf("%s", msg.String())
 }

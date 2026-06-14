@@ -296,8 +296,7 @@ pgmi metadata scaffold <project_path> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--write` | | Write metadata to files (without this flag, dry-run only) |
-| `--dry-run` | `true` | Preview changes without modifying files |
+| `--write` | | Write metadata to files (without this flag, preview only) |
 | `--idempotent` | `true` | Mark generated scripts as idempotent |
 
 ```bash
@@ -429,6 +428,14 @@ pgmi ai skill pgmi-cli
 # Load testing patterns
 pgmi ai skill pgmi-testing-review
 ```
+
+### pgmi ai contract
+
+```bash
+pgmi ai contract
+```
+
+Prints the machine-readable session-API contract as JSON. Agents should query this before writing SQL against pgmi views/functions to avoid hallucinating identifiers. Output includes view names and columns, test function signatures, step types, exit codes, and preprocessor macro forms.
 
 ### pgmi ai setup
 
