@@ -1,11 +1,53 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCreateProject_ProjectJsonSubstitution(t *testing.T) {
+	tests := []struct {
+		name        string
+		projectName string
+	}{
+		{"simple name", "myapp"},
+		{"name with quotes", `my"app`},
+		{"name with backslash", `my\app`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targetDir := filepath.Join(t.TempDir(), "project")
+
+			scaffolder := NewScaffolder(false)
+			err := scaffolder.CreateProject(tt.projectName, "basic", targetDir)
+			if err != nil {
+				t.Fatalf("CreateProject failed: %v", err)
+			}
+
+			data, err := os.ReadFile(filepath.Join(targetDir, "project.json"))
+			if err != nil {
+				t.Fatalf("project.json not created: %v", err)
+			}
+
+			if !json.Valid(data) {
+				t.Fatalf("project.json is not valid JSON after substitution of %q:\n%s", tt.projectName, data)
+			}
+
+			var parsed map[string]string
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				t.Fatalf("project.json unmarshal failed: %v", err)
+			}
+
+			if parsed["app_name"] != tt.projectName {
+				t.Errorf("app_name = %q, want %q", parsed["app_name"], tt.projectName)
+			}
+		})
+	}
+}
 
 // TestIsDirectoryEmpty tests the directory emptiness validation
 func TestIsDirectoryEmpty(t *testing.T) {

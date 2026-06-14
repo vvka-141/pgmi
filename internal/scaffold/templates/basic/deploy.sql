@@ -19,7 +19,7 @@ BEGIN
     v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
     -- Load project metadata from a non-SQL file (pgmi loads ALL files, not just SQL)
-    SELECT content::jsonb INTO v_config
+    SELECT content::jsonb INTO STRICT v_config
     FROM pg_temp.pgmi_source_view
     WHERE path = './project.json';
 

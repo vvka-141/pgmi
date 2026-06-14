@@ -5,12 +5,12 @@ A PostgreSQL project deployed by pgmi — with environment-aware logic, project 
 ## Quick Start
 
 ```bash
-pgmi deploy --param admin_email=you@example.com
+pgmi deploy . --param admin_email=you@example.com
 ```
 
 Production (skips dev seeding):
 ```bash
-pgmi deploy --param env=production
+pgmi deploy . --param env=production
 ```
 
 ## What This Does

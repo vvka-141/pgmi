@@ -79,9 +79,9 @@ The file contents are read into memory and never logged. See [Pipeline Patterns]
 
 pgmi sets session variables using `set_config($1, $2, false)`. If the PostgreSQL server has `log_statement = 'all'`, the resolved parameter values will appear in server logs. This is PostgreSQL's behavior, not pgmi's.
 
-**Mitigation:** Use `log_statement = 'ddl'` or `'none'` on deployment targets. Most production setups already do this. If you must use `'all'`, ensure server logs are treated as sensitive and access-controlled.
+**Mitigation:** For pgmi's `set_config()` calls, `log_statement = 'ddl'` is sufficient — `set_config` is a function call, not DDL, so it won't appear in the log. If you must use `'all'`, ensure server logs are treated as sensitive and access-controlled.
 
-> **Role passwords are a sharper case.** `CREATE/ALTER ROLE … PASSWORD '…'` is **DDL**, so the cleartext password is written to the server log under `log_statement = 'ddl'` *or* `'all'` — `--params-file` does not change this (the value is in the SQL regardless of how it reached pgmi). The advanced template sets role passwords this way. To close this:
+> **Role passwords are a sharper case.** `CREATE/ALTER ROLE … PASSWORD '…'` is **DDL**, so the cleartext password is written to the server log under `log_statement = 'ddl'` *or* `'all'` — `--params-file` does not change this (the value is in the SQL regardless of how it reached pgmi). The advanced template sets role passwords this way. For role-password deployments:
 > - Set `log_statement = 'none'` for the deployment window, or wrap the role DDL in `SET LOCAL log_statement = 'none';` (requires the superuser the advanced template already uses for role setup).
 > - Or pass a **pre-hashed SCRAM verifier** instead of a cleartext password: `ALTER ROLE x PASSWORD 'SCRAM-SHA-256$4096:…'`. PostgreSQL stores the verifier verbatim, so cleartext never transits the wire or the log. (This is what `psql \password` produces client-side.)
 
@@ -233,7 +233,7 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 | SQL injection (pgmi internals) | None | Parameterized queries | Review your own SQL for injection |
 | pgmi core log leakage | None | Core CLI logs counts only | Redact secrets in your own `RAISE NOTICE`/audit logging |
 | Process list (`/proc`) | Medium | `--params-file` available | Use `--params-file` for secrets |
-| PostgreSQL server logs | Medium | Cannot control | Set `log_statement = 'ddl'` |
+| PostgreSQL server logs | Medium | Cannot control | `ddl` for pgmi params; `none` or SCRAM for role passwords |
 | User SQL printing secrets | User-controlled | Not pgmi's domain | Review deploy scripts |
 | Session variable visibility | Low | Session-scoped | Don't persist session vars |
 | Shell history | Low | `--params-file` available | Use `--params-file` or env files |

@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -96,7 +97,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 		}
 
 		// Process template variables
-		processedContent := s.processTemplate(string(content), projectName)
+		processedContent := s.processTemplate(string(content), projectName, relPath)
 
 		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
 		if ManagedFiles[filepath.Base(targetFilePath)] {
@@ -116,8 +117,13 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 }
 
 // processTemplate replaces template variables in content
-func (s *Scaffolder) processTemplate(content, projectName string) string {
-	content = strings.ReplaceAll(content, "{{PROJECT_NAME}}", projectName)
+func (s *Scaffolder) processTemplate(content, projectName, filePath string) string {
+	name := projectName
+	if strings.HasSuffix(filePath, ".json") {
+		escaped, _ := json.Marshal(name)
+		name = string(escaped[1 : len(escaped)-1])
+	}
+	content = strings.ReplaceAll(content, "{{PROJECT_NAME}}", name)
 	return content
 }
 
