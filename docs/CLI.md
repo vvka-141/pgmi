@@ -440,17 +440,27 @@ Prints the machine-readable session-API contract as JSON. Agents should query th
 ### pgmi ai setup
 
 ```bash
-pgmi ai setup [--assistant claude] [--global] [--dry-run] [--force]
+pgmi ai setup [--assistant <name>] [--global] [--dry-run] [--force]
+              [--claude-md | --no-claude-md]
 ```
 
 Materializes pgmi guidance into a coding assistant's skill directory so the
 assistant learns the execution model before it edits the project. Defaults to
 the Claude skill under `.claude/skills/pgmi/` (project-local, safe to commit).
 
+| Assistant | Local target | Global target (`--global`) |
+|-----------|-------------|---------------------------|
+| `claude` (default) | `.claude/skills/pgmi/` | `~/.claude/skills/pgmi/` |
+| `agents` | `AGENTS.md` | `~/.agents/AGENTS.md` |
+| `codex` | `.codex/` | `~/.codex/` |
+| `opencode` | current dir | `~/.config/opencode/` |
+| `codex-skills` | `.codex/skills/` | `~/.codex/skills/` |
+
 ```bash
-pgmi ai setup                    # detect .claude/, write the Claude skill
-pgmi ai setup --global           # write to ~/.claude/skills/pgmi/ instead
-pgmi ai setup --dry-run          # print planned changes, write nothing
+pgmi ai setup                        # detect .claude/, write the Claude skill
+pgmi ai setup --assistant agents     # write AGENTS.md (Codex, opencode, etc.)
+pgmi ai setup --global               # write to ~/.claude/skills/pgmi/ instead
+pgmi ai setup --dry-run              # print planned changes, write nothing
 ```
 
 The generated skill is self-contained — it teaches the core model even with no
