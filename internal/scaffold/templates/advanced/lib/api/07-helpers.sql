@@ -105,11 +105,17 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     ) FROM parts;
 $$;
 
+COMMENT ON FUNCTION api.url_decode(text) IS
+    'Decodes percent-encoded URL strings. Handles %HH sequences and + as space; invalid or trailing percent sequences are preserved as literals.';
+
 CREATE OR REPLACE FUNCTION api.regexp_quote(p_text text)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT regexp_replace(p_text, '([\\.^$|?*+()[\]{}])', '\\\1', 'g');
 $$;
+
+COMMENT ON FUNCTION api.regexp_quote(text) IS
+    'Escapes POSIX regex metacharacters so the input can be used as a literal in a regex pattern.';
 
 CREATE OR REPLACE FUNCTION api.uri_template_to_regex(p_template text)
 RETURNS text
@@ -123,6 +129,9 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
         'g'
     ) || '$';
 $$;
+
+COMMENT ON FUNCTION api.uri_template_to_regex(text) IS
+    'Converts a URI template (e.g. /users/{id}) to an anchored POSIX regex where each {param} matches one path segment.';
 
 -- HTTP Accept content negotiation. Returns true when the client accepts at
 -- least one of the server's produced media types. Parses the Accept header
@@ -151,6 +160,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         )
     END;
 $$;
+
+COMMENT ON FUNCTION api.accept_matches(text, text[]) IS
+    'HTTP content negotiation. Returns true when the Accept header matches at least one of the produced media types; supports */*, type/* wildcards. NULL or empty Accept accepts all.';
 
 -- Single-value query-string parser. hstore cannot hold duplicate keys, so for
 -- a repeated key (?tag=a&tag=b) this keeps the FIRST occurrence. Use
@@ -207,6 +219,9 @@ RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT split_part(url, '?', 1);
 $$;
+
+COMMENT ON FUNCTION api.url_path(text) IS
+    'Extracts the path component from a URL by stripping the query string.';
 
 -- Inline tests
 DO $$
@@ -342,6 +357,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     )::api.http_response;
 $$;
 
+COMMENT ON FUNCTION api.json_response(integer, jsonb) IS
+    'Builds an HTTP response with application/json content-type and the given status code.';
+
 -- Drop the pre-RFC-9457 signature so the extended one below is the only
 -- problem_response; an added-parameter overload would make 3-arg calls
 -- ambiguous. CREATE OR REPLACE cannot change the parameter count.
@@ -395,6 +413,9 @@ CREATE OR REPLACE FUNCTION api.error_response(
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.problem_response(status_code, message);
 $$;
+
+COMMENT ON FUNCTION api.error_response(integer, text) IS
+    'Convenience wrapper around api.problem_response for simple error messages with no detail or type URI.';
 
 -- Inline tests
 DO $$
@@ -514,6 +535,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     ));
 $$;
 
+COMMENT ON FUNCTION api.jsonrpc_success(jsonb, jsonb) IS
+    'JSON-RPC 2.0 success response. Returns HTTP 200 with {jsonrpc, result, id}.';
+
 CREATE OR REPLACE FUNCTION api.jsonrpc_error(
     code integer,
     message text,
@@ -537,6 +561,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         )
     );
 $$;
+
+COMMENT ON FUNCTION api.jsonrpc_error(integer, text, jsonb) IS
+    'JSON-RPC 2.0 error response. Maps standard error codes (-32700..-32603, -32001) to HTTP status codes.';
 
 -- Inline tests
 DO $$
@@ -585,6 +612,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     )::api.mcp_response;
 $$;
 
+COMMENT ON FUNCTION api.mcp_success(jsonb, jsonb) IS
+    'MCP JSON-RPC 2.0 success envelope. request_id is jsonb to preserve the original JSON type (string, integer, or null).';
+
 CREATE OR REPLACE FUNCTION api.mcp_error(
     code integer,
     message text,
@@ -605,6 +635,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     )::api.mcp_response;
 $$;
 
+COMMENT ON FUNCTION api.mcp_error(integer, text, jsonb, jsonb) IS
+    'MCP JSON-RPC 2.0 error envelope. Use for protocol-level errors (parse, method-not-found); tool execution failures use api.mcp_tool_error instead.';
+
 CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     content jsonb,
     request_id jsonb,
@@ -622,6 +655,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     );
 $$;
 
+COMMENT ON FUNCTION api.mcp_tool_result(jsonb, jsonb, boolean, jsonb) IS
+    'MCP tool invocation result. is_error signals application-level failure (still uses the success envelope per MCP spec). structured_content carries typed output when the tool declares an outputSchema.';
+
 CREATE OR REPLACE FUNCTION api.mcp_tool_error(
     message text,
     request_id jsonb
@@ -634,6 +670,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     );
 $$;
 
+COMMENT ON FUNCTION api.mcp_tool_error(text, jsonb) IS
+    'Convenience wrapper: builds an MCP tool result with isError=true and the message as a text content item.';
+
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
     request_id jsonb
@@ -645,6 +684,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     );
 $$;
 
+COMMENT ON FUNCTION api.mcp_resource_result(jsonb, jsonb) IS
+    'MCP resources/read success response. contents is the JSON array of resource content items.';
+
 CREATE OR REPLACE FUNCTION api.mcp_resource_error(
     message text,
     request_id jsonb
@@ -652,6 +694,9 @@ CREATE OR REPLACE FUNCTION api.mcp_resource_error(
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_error(-32603, message, request_id);
 $$;
+
+COMMENT ON FUNCTION api.mcp_resource_error(text, jsonb) IS
+    'MCP resource error. Wraps the message as a -32603 internal error in the JSON-RPC error envelope.';
 
 CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
     messages jsonb,
@@ -664,6 +709,9 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     );
 $$;
 
+COMMENT ON FUNCTION api.mcp_prompt_result(jsonb, jsonb) IS
+    'MCP prompts/get success response. messages is the JSON array of prompt messages.';
+
 CREATE OR REPLACE FUNCTION api.mcp_prompt_error(
     message text,
     request_id jsonb
@@ -672,11 +720,17 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT api.mcp_error(-32603, message, request_id);
 $$;
 
+COMMENT ON FUNCTION api.mcp_prompt_error(text, jsonb) IS
+    'MCP prompt error. Wraps the message as a -32603 internal error in the JSON-RPC error envelope.';
+
 CREATE OR REPLACE FUNCTION api.mcp_text(content text)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT jsonb_build_object('type', 'text', 'text', content);
 $$;
+
+COMMENT ON FUNCTION api.mcp_text(text) IS
+    'Builds an MCP text content item {type: "text", text: ...} for use in tool results and prompt messages.';
 
 -- Inline tests for MCP response builders
 DO $$
