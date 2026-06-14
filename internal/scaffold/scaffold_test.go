@@ -16,6 +16,8 @@ func TestCreateProject_ProjectJsonSubstitution(t *testing.T) {
 		{"simple name", "myapp"},
 		{"name with quotes", `my"app`},
 		{"name with backslash", `my\app`},
+		{"unicode name", "日本語プロジェクト"},
+		{"emoji name", "my-app-🚀"},
 	}
 
 	for _, tt := range tests {
