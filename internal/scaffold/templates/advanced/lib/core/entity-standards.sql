@@ -114,6 +114,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION core.entity_table_ddl_hook() IS
+    'Event-trigger function (core_entity_table_standards) that runs core.apply_entity_table_standards on every table created or altered via DDL.';
+
 -- CREATE EVENT TRIGGER requires superuser. Wrap in SET ROLE reset, restore
 -- the owner role in all exit paths so a failure here cannot leave the session
 -- with elevated privileges.
