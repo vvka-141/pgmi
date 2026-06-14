@@ -10,7 +10,7 @@ The session API contract (`pgmi_source_view`, `pgmi_plan_view`, `pgmi_test_plan`
 
 ### Highlights
 
-- **Cloud-compat verified**: removed `plv8` from advanced template; deploys clean on AWS RDS, Azure Flexible Server, Google Cloud SQL, Supabase, Neon. Integration test now exercises the advanced template against a stock Postgres testcontainer end-to-end (19 SQL test steps, idempotent redeploy).
+- **Cloud-compat verified**: removed `plv8` from advanced template; basic template deploys on all major managed providers. Advanced template requires superuser for the DDL event trigger — see the [cloud compatibility matrix](docs/PRODUCTION.md) for provider-specific details and the one-file workaround. Integration test now exercises the advanced template against a stock Postgres testcontainer end-to-end (19 SQL test steps, idempotent redeploy).
 - **API-key authentication** for machine-to-machine access in the advanced template: SHA-256 hashed keys with constant-time compare, tied to the existing `auth.user_identity` provider hierarchy, with disable / re-enable / revoke / expiry / activation-window lifecycle.
 - **Entity standards via DDL event triggers**: `core.entity_id` UUID domain marker triggers a superuser-escalated event handler that uniformly stamps `created_at`, `updated_at`, `deleted_at`, ownership columns, and audit triggers across every table that uses the marker. Replaces the old inheritance-based approach.
 - **REST/RPC/MCP routing**: handler registry (`api.handler`) backs all three protocols, with JSON-RPC 2.0 envelope semantics, MCP `tools/call` spec compliance (`result.isError`, `structuredContent`, `_meta.tags`, RFC 6570 URI templates), and the same tag-based dispatch wiring across protocols.

@@ -76,7 +76,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -ldflags="-s -w -X main.version=dev-${{ github.sha }}" \
+          go build -ldflags="-s -w -X github.com/vvka-141/pgmi/internal/cli.version=dev-${{ github.sha }}" \
             -o dist/pgmi-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} \
             ./cmd/pgmi
 

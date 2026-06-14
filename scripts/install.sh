@@ -3,7 +3,7 @@ set -e
 
 # pgmi installer for Linux and macOS
 # Usage: curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
-# Or with specific version: PGMI_VERSION=v1.0.0 curl -sSL ... | bash
+# Or with specific version: curl -sSL ... | PGMI_VERSION=v1.0.0 bash
 # Windows: use scripts/install.ps1 instead (irm .../install.ps1 | iex)
 
 REPO="vvka-141/pgmi"

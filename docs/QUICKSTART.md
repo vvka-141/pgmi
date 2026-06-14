@@ -48,7 +48,7 @@ pgmi version 0.x.x
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
 
 <details>
-<summary>Install from source (optional — requires Go 1.22+)</summary>
+<summary>Install from source (optional — requires Go 1.25+)</summary>
 
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
@@ -253,7 +253,7 @@ What this does:
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-NOTICE: Admin user ready: admin@example.com (id=1)
+NOTICE: Dev seed: admin user ready (admin@example.com id=1)
 NOTICE: [pgmi] Test suite started
 NOTICE: [pgmi] Fixture: ./__test__/_setup.sql
 NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql

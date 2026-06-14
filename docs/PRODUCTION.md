@@ -535,13 +535,21 @@ deploy:
 ```yaml
 deploy:
   stage: deploy
-  image: golang:1.22
-  before_script:
-    - go install github.com/vvka-141/pgmi/cmd/pgmi@latest
-  script:
-    - pgmi deploy . -d $DATABASE_NAME --param env=production
+  image: ubuntu:latest
   variables:
+    PGMI_VERSION: v1.0.0
     PGMI_CONNECTION_STRING: $DATABASE_URL
+  before_script:
+    - |
+      file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+      base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+      curl -fsSLO "${base}/${file}"
+      curl -fsSLO "${base}/checksums.txt"
+      sha256sum --ignore-missing -c checksums.txt
+      tar -xzf "${file}" pgmi
+      install pgmi /usr/local/bin/pgmi
+  script:
+    - pgmi deploy . -d $DATABASE_NAME --compat 1 --param env=production
 ```
 
 ### Azure DevOps
@@ -606,7 +614,16 @@ deploy:
         aws-region: ${{ vars.AWS_REGION }}
 
     - name: Install pgmi
-      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+      env:
+        PGMI_VERSION: v1.0.0
+      run: |
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       run: |
@@ -616,6 +633,7 @@ deploy:
           --aws --aws-region ${{ vars.AWS_REGION }} \
           --sslmode require \
           --param env=production \
+          --compat 1 \
           --timeout 15m
 ```
 
@@ -636,7 +654,16 @@ deploy:
         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
     - name: Install pgmi
-      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+      env:
+        PGMI_VERSION: v1.0.0
+      run: |
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       run: |
@@ -644,6 +671,7 @@ deploy:
           -U ${{ vars.CLOUDSQL_USER }} \
           --google --google-instance ${{ vars.CLOUDSQL_INSTANCE }} \
           --param env=production \
+          --compat 1 \
           --timeout 15m
 ```
 
