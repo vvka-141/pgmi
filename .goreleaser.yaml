@@ -2,10 +2,6 @@ version: 2
 
 project_name: pgmi
 
-before:
-  hooks:
-    - go generate ./...
-
 builds:
   - id: pgmi
     binary: pgmi
