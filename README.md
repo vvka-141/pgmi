@@ -5,7 +5,7 @@
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
-pgmi gives PostgreSQL a deployment session containing your project files, then runs the `deploy.sql` **you** write. Test inside the transaction, branch on environment, audit changes, and commit atomically.
+pgmi is a PostgreSQL-native deployment tool that loads your project files into a database session, then runs the `deploy.sql` **you** write. Test inside the transaction, branch on environment, audit changes, and commit atomically.
 Unlike migration frameworks that decide when to commit and what to run, pgmi hands control to your SQL: **you** own the transactions, order, and logic.
 
 **Why it feels different:**
