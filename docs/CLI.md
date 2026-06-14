@@ -261,8 +261,8 @@ Use `pgmi templates list` to see all available templates with descriptions.
 
 | Template | Purpose |
 |----------|---------|
-| `basic` | Minimal structure for learning. Simple `migrations/` folder with `deploy.sql`. |
-| `advanced` | Production-ready. 4-schema architecture, role hierarchy, metadata-driven deployment. |
+| `basic` | Low-ceremony, production-capable for small systems. Linear `migrations/` with `deploy.sql`. Runs on any provider. |
+| `advanced` | Full reference app. 4-schema architecture, role hierarchy, metadata-driven deployment. Requires superuser (DDL event trigger). |
 
 ### Examples
 

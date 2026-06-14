@@ -139,7 +139,7 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 				"Non-SQL project data loading (project.json via pgmi_source_view)",
 				"Test scaffolding via __test__/ (CALL pgmi_test())",
 			},
-			BestFor: "Learning pgmi, small projects, prototypes",
+			BestFor: "Small-to-medium projects, explicit control, any managed provider",
 		},
 		"advanced": {
 			Short: "Metadata-driven deployment, REST/RPC/MCP handler registry",
@@ -165,7 +165,7 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 				"JWT + API-key authentication with multi-provider identity",
 				"REST/RPC/MCP routing with handler registry (api.handler)",
 				"Row-level security policies on membership tables",
-				"Deploys on RDS, Azure Flexible Server, Cloud SQL, Supabase, Neon",
+				"Targets stock PostgreSQL — superuser required for DDL event trigger (see docs/PRODUCTION.md for managed-cloud workaround)",
 			},
 			BestFor: "Production deployments, multi-tenant apps, AI-integrated apps",
 		},
