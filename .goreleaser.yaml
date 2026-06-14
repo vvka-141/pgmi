@@ -23,7 +23,7 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -31,7 +31,7 @@ archives:
       {{- .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - LICENSE
       - README.md
@@ -82,9 +82,9 @@ release:
     irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
     ```
 
-    **Homebrew (macOS/Linux):**
+    **Homebrew (macOS):**
     ```
-    brew install vvka-141/pgmi/pgmi
+    brew install --cask vvka-141/pgmi/pgmi
     ```
 
     **Debian / Ubuntu (APT):**
@@ -115,8 +115,10 @@ release:
 
     **Full changelog**: https://github.com/vvka-141/pgmi/compare/{{ .PreviousTag }}...{{ .Tag }}
 
-brews:
+homebrew_casks:
   - name: pgmi
+    binaries:
+      - pgmi
     repository:
       owner: vvka-141
       name: homebrew-pgmi
@@ -124,14 +126,15 @@ brews:
     commit_author:
       name: pgmi-bot
       email: bot@pgmi.dev
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/vvka-141/pgmi"
     description: "PostgreSQL-native deployment driver"
-    license: "MPL-2.0"
-    install: |
-      bin.install "pgmi"
-    test: |
-      system "#{bin}/pgmi", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/pgmi"]
+          end
 
 nfpms:
   - id: pgmi

@@ -31,7 +31,7 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
-Prefer a package manager or a checksum-verified download? `brew install vvka-141/pgmi/pgmi`, APT, or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive all work — see the [full install options](../README.md#install).
+Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), APT, or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive all work — see the [full install options](../README.md#install).
 
 Verify the installation:
 
@@ -70,7 +70,7 @@ Run `go env GOPATH` to see where Go installs binaries; `pgmi` is in the `bin` su
 <summary>macOS (Homebrew)</summary>
 
 ```bash
-brew install vvka-141/pgmi/pgmi
+brew install --cask vvka-141/pgmi/pgmi
 ```
 </details>
 

@@ -67,9 +67,9 @@ irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | i
 
 Prefer a package manager or a checksum-verified binary (recommended for CI and production):
 
-**Homebrew (macOS/Linux):**
+**Homebrew (macOS):**
 ```bash
-brew install vvka-141/pgmi/pgmi
+brew install --cask vvka-141/pgmi/pgmi
 ```
 
 **Debian/Ubuntu (APT, GPG-verified):**

@@ -22,9 +22,14 @@ A patch release: a correctness fix to the advanced template's try-cast operator,
 ### Internal
 
 - Go bumped to 1.25 in all workflows; noop GoReleaser hook removed.
+- GoReleaser config modernized to current v2 schema (`archives.formats`, `homebrew_casks`) so `goreleaser check` passes clean in the release gate.
 - `.gomodcache/` (local `GOMODCACHE`) added to `.gitignore`.
 - `interface{}` → `any`, manual contains loops → `slices.Contains`.
 - New contract column-level and default-value drift tests.
+
+### Distribution change
+
+- **Homebrew is now a Cask, macOS-only.** GoReleaser removed the Homebrew *formula* path (`brews`), so pgmi ships as a Cask: `brew install --cask vvka-141/pgmi/pgmi`. **Linux Homebrew is no longer supported** — Linux users should use the APT repo (`dl.cloudsmith.io/.../pgmi`), the install script, a GitHub Releases archive, or `go install`.
 
 ### Verification gates
 
