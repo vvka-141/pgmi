@@ -51,7 +51,7 @@ Exit codes:
   10  invalid configuration       13  SQL execution failed
   11  connection failed           14  deploy.sql not found
   12  user denied overwrite       15  concurrent deploy in progress
-  130 interrupted (SIGINT)`,
+  16  timeout exceeded            130 interrupted (SIGINT)`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runDeploy,
