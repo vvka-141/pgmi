@@ -4,7 +4,7 @@ Machine-to-machine authentication for agents, MCP clients, and CI pipelines. Shi
 
 ## Key format
 
-```
+```text
 {prefix}_{key_id}_{secret}
 ```
 

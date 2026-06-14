@@ -120,9 +120,10 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 	return map[string]TemplateDescription{
 		"basic": {
 			Short: "Linear migrations, minimal structure",
-			Long:  "A small starter project: deploy.sql executes the files in migrations/ in lexicographic order. No metadata, no idempotency tracking, no advanced libraries.",
+			Long:  "A small starter project: deploy.sql executes migrations in order, reads project.json for metadata, and branches on environment. No metadata system, no idempotency tracking, no advanced libraries.",
 			Structure: []string{
 				"├── deploy.sql",
+				"├── project.json",
 				"├── pgmi.yaml",
 				"├── README.md",
 				"├── migrations/",
@@ -134,14 +135,15 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 			},
 			Features: []string{
 				"Linear migration ordering by filename",
-				"deploy.sql runs every file in migrations/",
+				"Environment-aware deployment (--param env=production skips dev seeding)",
+				"Non-SQL project data loading (project.json via pgmi_source_view)",
 				"Test scaffolding via __test__/ (CALL pgmi_test())",
 			},
-			BestFor: "Learning pgmi, small projects, prototypes",
+			BestFor: "Small-to-medium projects, explicit control, any managed provider",
 		},
 		"advanced": {
 			Short: "Metadata-driven deployment, REST/RPC/MCP handler registry",
-			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), JWT authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
+			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), API-key and identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
 			Structure: []string{
 				"├── deploy.sql",
 				"├── pgmi.yaml",
@@ -158,12 +160,12 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 			},
 			Features: []string{
 				"<pgmi-meta> sortKeys for multi-phase execution ordering",
-				"Idempotency via script-UUID tracking in core.script",
+				"Idempotency via script-UUID tracking in internal.deployment_script",
 				"Role hierarchy: owner → admin → api → customer",
-				"JWT + API-key authentication with multi-provider identity",
+				"API-key and multi-provider identity authentication (JWT validated at gateway)",
 				"REST/RPC/MCP routing with handler registry (api.handler)",
 				"Row-level security policies on membership tables",
-				"Deploys on RDS, Azure Flexible Server, Cloud SQL, Supabase, Neon",
+				"Targets stock PostgreSQL — superuser required for DDL event trigger (see docs/PRODUCTION.md for managed-cloud workaround)",
 			},
 			BestFor: "Production deployments, multi-tenant apps, AI-integrated apps",
 		},

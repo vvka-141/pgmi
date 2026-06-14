@@ -2,10 +2,12 @@ package scaffold
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -96,7 +98,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 		}
 
 		// Process template variables
-		processedContent := s.processTemplate(string(content), projectName)
+		processedContent := s.processTemplate(string(content), projectName, relPath)
 
 		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
 		if ManagedFiles[filepath.Base(targetFilePath)] {
@@ -116,12 +118,17 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 }
 
 // processTemplate replaces template variables in content
-func (s *Scaffolder) processTemplate(content, projectName string) string {
-	content = strings.ReplaceAll(content, "{{PROJECT_NAME}}", projectName)
+func (s *Scaffolder) processTemplate(content, projectName, filePath string) string {
+	name := projectName
+	if strings.HasSuffix(filePath, ".json") {
+		escaped, _ := json.Marshal(name)
+		name = string(escaped[1 : len(escaped)-1])
+	}
+	content = strings.ReplaceAll(content, "{{PROJECT_NAME}}", name)
 	return content
 }
 
-func (s *Scaffolder) logVerbose(format string, args ...interface{}) {
+func (s *Scaffolder) logVerbose(format string, args ...any) {
 	if s.verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
 	}
@@ -150,12 +157,7 @@ func IsValidTemplate(name string) bool {
 	if err != nil {
 		return false
 	}
-	for _, t := range templates {
-		if t == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(templates, name)
 }
 
 // ManagedFiles are files that pgmi itself creates/manages,
@@ -213,8 +215,9 @@ func BuildFileTree(rootPath string) (string, error) {
 
 	sb.WriteString(absPath + "/\n")
 
-	// Walk the directory tree
 	dirCache := make(map[string][]fs.DirEntry)
+	var levelIsLast []bool
+
 	err = filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -230,7 +233,6 @@ func BuildFileTree(rootPath string) (string, error) {
 		}
 
 		depth := strings.Count(relPath, string(os.PathSeparator))
-		indent := strings.Repeat("│   ", depth)
 
 		parentDir := filepath.Dir(path)
 		entries, ok := dirCache[parentDir]
@@ -251,12 +253,23 @@ func BuildFileTree(rootPath string) (string, error) {
 			}
 		}
 
+		for len(levelIsLast) <= depth {
+			levelIsLast = append(levelIsLast, false)
+		}
+		levelIsLast[depth] = isLast
+
+		var indent strings.Builder
+		for i := range depth {
+			if levelIsLast[i] {
+				indent.WriteString("    ")
+			} else {
+				indent.WriteString("│   ")
+			}
+		}
+
 		branch := "├── "
 		if isLast {
 			branch = "└── "
-			if depth > 0 {
-				indent = indent[:len(indent)-4] + "    "
-			}
 		}
 
 		name := entry.Name()
@@ -264,7 +277,7 @@ func BuildFileTree(rootPath string) (string, error) {
 			name += "/"
 		}
 
-		sb.WriteString(indent + branch + name + "\n")
+		sb.WriteString(indent.String() + branch + name + "\n")
 
 		return nil
 	})

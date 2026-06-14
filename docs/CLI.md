@@ -261,8 +261,8 @@ Use `pgmi templates list` to see all available templates with descriptions.
 
 | Template | Purpose |
 |----------|---------|
-| `basic` | Minimal structure for learning. Simple `migrations/` folder with `deploy.sql`. |
-| `advanced` | Production-ready. 4-schema architecture, role hierarchy, metadata-driven deployment. |
+| `basic` | Low-ceremony, production-capable for small systems. Linear `migrations/` with `deploy.sql`. Runs on any provider. |
+| `advanced` | Full reference app. 4-schema architecture, role hierarchy, metadata-driven deployment. Requires superuser (DDL event trigger). |
 
 ### Examples
 
@@ -296,8 +296,7 @@ pgmi metadata scaffold <project_path> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--write` | | Write metadata to files (without this flag, dry-run only) |
-| `--dry-run` | `true` | Preview changes without modifying files |
+| `--write` | | Write metadata to files (without this flag, preview only) |
 | `--idempotent` | `true` | Mark generated scripts as idempotent |
 
 ```bash
@@ -430,20 +429,38 @@ pgmi ai skill pgmi-cli
 pgmi ai skill pgmi-testing-review
 ```
 
+### pgmi ai contract
+
+```bash
+pgmi ai contract
+```
+
+Prints the machine-readable session-API contract as JSON. Agents should query this before writing SQL against pgmi views/functions to avoid hallucinating identifiers. Output includes view names and columns, test function signatures, step types, exit codes, and preprocessor macro forms.
+
 ### pgmi ai setup
 
 ```bash
-pgmi ai setup [--assistant claude] [--global] [--dry-run] [--force]
+pgmi ai setup [--assistant <name>] [--global] [--dry-run] [--force]
+              [--claude-md | --no-claude-md]
 ```
 
 Materializes pgmi guidance into a coding assistant's skill directory so the
 assistant learns the execution model before it edits the project. Defaults to
 the Claude skill under `.claude/skills/pgmi/` (project-local, safe to commit).
 
+| Assistant | Local target | Global target (`--global`) |
+|-----------|-------------|---------------------------|
+| `claude` (default) | `.claude/skills/pgmi/` | `~/.claude/skills/pgmi/` |
+| `agents` | `AGENTS.md` | `~/.agents/AGENTS.md` |
+| `codex` | `.codex/` | `~/.codex/` |
+| `opencode` | current dir | `~/.config/opencode/` |
+| `codex-skills` | `.codex/skills/` | `~/.codex/skills/` |
+
 ```bash
-pgmi ai setup                    # detect .claude/, write the Claude skill
-pgmi ai setup --global           # write to ~/.claude/skills/pgmi/ instead
-pgmi ai setup --dry-run          # print planned changes, write nothing
+pgmi ai setup                        # detect .claude/, write the Claude skill
+pgmi ai setup --assistant agents     # write AGENTS.md (Codex, opencode, etc.)
+pgmi ai setup --global               # write to ~/.claude/skills/pgmi/ instead
+pgmi ai setup --dry-run              # print planned changes, write nothing
 ```
 
 The generated skill is self-contained — it teaches the core model even with no

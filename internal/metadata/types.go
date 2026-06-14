@@ -53,7 +53,7 @@ type ValidationResult struct {
 }
 
 // AddError appends an error message to the validation result and marks it as invalid.
-func (v *ValidationResult) AddError(format string, args ...interface{}) {
+func (v *ValidationResult) AddError(format string, args ...any) {
 	v.Valid = false
 	v.Errors = append(v.Errors, fmt.Sprintf(format, args...))
 }

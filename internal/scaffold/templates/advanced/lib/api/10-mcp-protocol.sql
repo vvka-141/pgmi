@@ -69,6 +69,9 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
     );
 $$;
 
+COMMENT ON FUNCTION api.mcp_server_info() IS
+    'Server identity for MCP handshake. Configurable via mcp.server_name / mcp.server_version GUCs; defaults to database name and 1.0.0.';
+
 -- ============================================================================
 -- MCP Server Capabilities
 -- ============================================================================
@@ -178,6 +181,9 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION api.mcp_initialize(jsonb, jsonb) IS
+    'MCP handshake. Negotiates protocol version (supported: 2024-11-05 through 2025-11-25), returns serverInfo and capabilities.';
+
 -- ============================================================================
 -- MCP Ping Handler
 -- ============================================================================
@@ -202,6 +208,9 @@ RETURNS api.mcp_response
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success('{}'::jsonb, p_request_id);
 $$;
+
+COMMENT ON FUNCTION api.mcp_ping(jsonb) IS
+    'MCP keepalive. Returns an empty result with the echoed request id.';
 
 -- ============================================================================
 -- MCP Unified Request Dispatcher
@@ -375,6 +384,9 @@ EXCEPTION WHEN OTHERS THEN
     RETURN api.mcp_error(-32603, 'Internal error', v_id);
 END;
 $$;
+
+COMMENT ON FUNCTION api.mcp_handle_request(jsonb, jsonb) IS
+    'MCP unified dispatcher. Routes JSON-RPC 2.0 requests to initialize/ping/tools/resources/prompts handlers. Returns NULL envelope for notifications. SECURITY DEFINER.';
 
 -- ============================================================================
 -- Inline Tests (validate during deployment)

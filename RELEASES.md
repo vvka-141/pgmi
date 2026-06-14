@@ -1,5 +1,44 @@
 # Releases
 
+## v0.10.1 — 2026-06-14
+
+28 commits, 63 files changed, +1,206 / -493 lines since v0.10.0.
+
+A patch release: a correctness fix to the advanced template's try-cast operator, a hardened release pipeline, and a documentation/contract accuracy pass. The session API contract is **unchanged at v1**; existing `deploy.sql` files continue to work without modification.
+
+### Highlights
+
+- **Try-cast operator renamed `?|` → `api.?>`** (advanced template, `lib/common/cast.sql`). The old `?|` name collided with PostgreSQL's built-in jsonb `?|` operator, so any handler that loaded both the jsonb operators and the try-cast operators had ambiguous resolution. The operator is now `api.?>`, created in the `api` schema so it resolves inside handler bodies (handler `search_path`: `api, internal, extensions, pg_temp`). Covers `uuid`, `boolean`, `integer`, `bigint`, `numeric`, `interval`, `timestamp`, `timestamptz`.
+- **Release pipeline now gated.** Tagging `v*` previously went straight to GoReleaser with no checks. A `verify` job now runs lint, the full test suite, the connection/security suite, and `goreleaser check` *before* the publish job — a broken config or red test fails the gate and skips publishing instead of cutting a bad release.
+- **`pgmi ai contract` accuracy.** The machine-readable contract now emits `pgmi_is_sql_file()` and `pgmi_persist_test_plan()`, matching the documented v1 API surface; AI assistants no longer see a contract that's narrower than the docs.
+
+### Fixes
+
+- **`install.sh` now verifies the download checksum**, matching `install.ps1` (the POSIX installer previously skipped integrity verification).
+- **`--force` help** corrected to describe the actual 5-second countdown.
+- **Exit-code documentation synced** across `docs/CLI.md`, `AGENTS.md`, and `docs/QUICKSTART.md` — codes `15`/`16`/`130` and the real `pgmi <ver> (compat <n>)` version format.
+- Numerous documentation corrections: GitHub anchor links, template positioning, `pgmi ai setup` assistant/flag coverage, and `COMMENT ON` across basic and advanced template objects.
+
+### Internal
+
+- Go bumped to 1.25 in all workflows; noop GoReleaser hook removed.
+- `.gomodcache/` (local `GOMODCACHE`) added to `.gitignore`.
+- `interface{}` → `any`, manual contains loops → `slices.Contains`.
+- New contract column-level and default-value drift tests.
+
+### Verification gates
+
+| Gate | Result |
+|------|--------|
+| `go test -short ./...` (27 packages) | PASS |
+| `go build ./cmd/pgmi` | PASS |
+| `go test ./...` (full integration) / `goreleaser check` | **gated in CI** (new `verify` job runs before publish) |
+
+### Upgrade notes
+
+- No `deploy.sql` changes required — session API is at v1.
+- **Advanced template only:** if you used the try-cast operator by its `?|` name in handler SQL, switch to `api.?>`. The `common.try_cast(...)` function form is unchanged.
+
 ## v0.10.0 — 2026-05-04
 
 20 commits, 100 files changed, +4,707 / -1,798 lines since v0.9.1.
@@ -10,7 +49,7 @@ The session API contract (`pgmi_source_view`, `pgmi_plan_view`, `pgmi_test_plan`
 
 ### Highlights
 
-- **Cloud-compat verified**: removed `plv8` from advanced template; deploys clean on AWS RDS, Azure Flexible Server, Google Cloud SQL, Supabase, Neon. Integration test now exercises the advanced template against a stock Postgres testcontainer end-to-end (19 SQL test steps, idempotent redeploy).
+- **Cloud-compat verified**: removed `plv8` from advanced template; basic template deploys on all major managed providers. Advanced template requires superuser for the DDL event trigger — see the [cloud compatibility matrix](docs/PRODUCTION.md) for provider-specific details and the one-file workaround. Integration test now exercises the advanced template against a stock Postgres testcontainer end-to-end (19 SQL test steps, idempotent redeploy).
 - **API-key authentication** for machine-to-machine access in the advanced template: SHA-256 hashed keys with constant-time compare, tied to the existing `auth.user_identity` provider hierarchy, with disable / re-enable / revoke / expiry / activation-window lifecycle.
 - **Entity standards via DDL event triggers**: `core.entity_id` UUID domain marker triggers a superuser-escalated event handler that uniformly stamps `created_at`, `updated_at`, `deleted_at`, ownership columns, and audit triggers across every table that uses the marker. Replaces the old inheritance-based approach.
 - **REST/RPC/MCP routing**: handler registry (`api.handler`) backs all three protocols, with JSON-RPC 2.0 envelope semantics, MCP `tools/call` spec compliance (`result.isError`, `structuredContent`, `_meta.tags`, RFC 6570 URI templates), and the same tag-based dispatch wiring across protocols.

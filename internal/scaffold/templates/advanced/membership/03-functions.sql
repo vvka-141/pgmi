@@ -23,6 +23,9 @@ AS $$
     WHERE idp_provider = p_provider AND idp_subject_id = p_subject_id;
 $$;
 
+COMMENT ON FUNCTION membership.get_identity(TEXT, TEXT) IS
+    'Returns the user_identity row for a provider+subject pair. NULL if not linked.';
+
 CREATE OR REPLACE FUNCTION membership.get_user_by_identity(p_provider TEXT, p_subject_id TEXT)
 RETURNS membership."user"
 LANGUAGE sql STABLE
@@ -32,6 +35,9 @@ AS $$
     WHERE ui.idp_provider = p_provider AND ui.idp_subject_id = p_subject_id;
 $$;
 
+COMMENT ON FUNCTION membership.get_user_by_identity(TEXT, TEXT) IS
+    'Resolves a provider+subject pair to the linked user record. NULL if no matching identity.';
+
 CREATE OR REPLACE FUNCTION membership.get_user_identities(p_user_id UUID)
 RETURNS SETOF membership.user_identity
 LANGUAGE sql STABLE
@@ -39,12 +45,18 @@ AS $$
     SELECT * FROM membership.user_identity WHERE user_object_id = p_user_id;
 $$;
 
+COMMENT ON FUNCTION membership.get_user_identities(UUID) IS
+    'Returns all identity provider links for a user. Empty set if user has no linked identities.';
+
 CREATE OR REPLACE FUNCTION membership.get_user_by_email(p_email TEXT)
 RETURNS membership."user"
 LANGUAGE sql STABLE
 AS $$
     SELECT * FROM membership."user" WHERE email = lower(trim(p_email));
 $$;
+
+COMMENT ON FUNCTION membership.get_user_by_email(TEXT) IS
+    'Looks up a user by email. Normalizes input (lowercase + trim) before matching.';
 
 -- ============================================================================
 -- Organization Access
@@ -59,6 +71,9 @@ AS $$
     LIMIT 1;
 $$;
 
+COMMENT ON FUNCTION membership.get_user_default_organization(UUID) IS
+    'Returns the personal organization for a user. Every user gets one on first sign-in.';
+
 CREATE OR REPLACE FUNCTION membership.count_user_owned_organizations(p_user_id UUID)
 RETURNS BIGINT
 LANGUAGE sql STABLE
@@ -67,12 +82,18 @@ AS $$
     WHERE owner_user_id = p_user_id AND is_active = true;
 $$;
 
+COMMENT ON FUNCTION membership.count_user_owned_organizations(UUID) IS
+    'Counts active organizations owned by a user. Used by can_create_organization for quota checks.';
+
 CREATE OR REPLACE FUNCTION membership.can_create_organization(p_user_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql STABLE
 AS $$
     SELECT membership.count_user_owned_organizations(p_user_id) < 5;
 $$;
+
+COMMENT ON FUNCTION membership.can_create_organization(UUID) IS
+    'Returns true if the user owns fewer than 5 active organizations. Hardcoded quota — change the limit here.';
 
 CREATE OR REPLACE FUNCTION membership.has_organization_access(p_user_id UUID, p_org_id UUID)
 RETURNS BOOLEAN
@@ -84,6 +105,9 @@ AS $$
     );
 $$;
 
+COMMENT ON FUNCTION membership.has_organization_access(UUID, UUID) IS
+    'Security predicate: true if the user is an active member of the organization.';
+
 CREATE OR REPLACE FUNCTION membership.is_organization_owner(p_user_id UUID, p_org_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql STABLE
@@ -94,6 +118,9 @@ AS $$
     );
 $$;
 
+COMMENT ON FUNCTION membership.is_organization_owner(UUID, UUID) IS
+    'Security predicate: true if the user owns the organization and it is active.';
+
 CREATE OR REPLACE FUNCTION membership.get_member_role(p_user_id UUID, p_org_id UUID)
 RETURNS membership.member_role
 LANGUAGE sql STABLE
@@ -101,6 +128,9 @@ AS $$
     SELECT role FROM membership.organization_member
     WHERE user_id = p_user_id AND organization_id = p_org_id AND status = 'active';
 $$;
+
+COMMENT ON FUNCTION membership.get_member_role(UUID, UUID) IS
+    'Returns the member_role for a user in an organization. NULL if not an active member.';
 
 -- ============================================================================
 -- User Provisioning (upsert)
@@ -177,6 +207,9 @@ BEGIN
     RETURN v_user_id;
 END;
 $$;
+
+COMMENT ON FUNCTION membership.upsert_user(TEXT, TEXT, TEXT, TEXT, BOOLEAN) IS
+    'JIT user provisioning. Creates user + identity + personal org on first sign-in, updates on subsequent. SECURITY DEFINER — only callable by the gateway auth session setup.';
 
 DO $$
 DECLARE

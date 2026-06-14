@@ -83,6 +83,9 @@ BEGIN
     END IF;
 END $$;
 
+COMMENT ON TYPE membership.api_key_status IS
+    'API key lifecycle: active (usable), disabled (temporarily blocked, reversible), revoked (permanent, irreversible).';
+
 -- ============================================================================
 -- API Key Table
 -- ============================================================================

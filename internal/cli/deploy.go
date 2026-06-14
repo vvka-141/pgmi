@@ -51,7 +51,7 @@ Exit codes:
   10  invalid configuration       13  SQL execution failed
   11  connection failed           14  deploy.sql not found
   12  user denied overwrite       15  concurrent deploy in progress
-  130 interrupted (SIGINT)`,
+  16  timeout exceeded            130 interrupted (SIGINT)`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runDeploy,
@@ -145,7 +145,7 @@ func init() {
 		"Drop and recreate the database\n"+
 			"Requires interactive confirmation unless --force is used")
 	deployCmd.Flags().BoolVar(&deployFlags.force, "force", false,
-		"Skip interactive approval prompt for destructive operations\n"+
+		"Replace the interactive approval prompt with a 5-second countdown (Ctrl-C aborts)\n"+
 			"Only affects the confirmation dialog, not deployment behavior\n"+
 			"Use with --overwrite for CI/CD pipelines")
 

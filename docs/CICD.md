@@ -27,7 +27,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      PGMI_VERSION: v1.0.0          # pin a release; do not float to @latest in CI
+      PGMI_VERSION: v0.10.0         # pin to a specific release tag
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v4
@@ -93,12 +93,12 @@ The three steps — install, connect via secret, `pgmi deploy … --compat 1` �
 anywhere. Alternatives for the install step:
 
 - **Install script, pinned:**
-  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v1.0.0 bash`
-  (convenient; does not checksum-verify). The `PGMI_VERSION` prefix must sit on
+  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.10.0 bash`
+  (verifies the download against `checksums.txt`). The `PGMI_VERSION` prefix must sit on
   `bash`, not `curl`, or the script falls back to the latest release.
 - **Debian/Ubuntu runners (APT, GPG-verified):**
   `curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash && sudo apt install -y pgmi`.
-- **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v1.0.0`
+- **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v0.10.0`
   — pin the tag (never `@latest`); note this requires the Go toolchain and compiles
   from source, so it is slower and less reproducible than a release binary.
 

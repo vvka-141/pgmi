@@ -514,18 +514,26 @@ pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 ```yaml
 deploy:
   runs-on: ubuntu-latest
+  env:
+    PGMI_VERSION: v0.10.0         # pin to a specific release tag
   steps:
     - uses: actions/checkout@v4
 
-    - name: Install pgmi
+    - name: Install pgmi (pinned, checksum-verified)
       run: |
-        curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       env:
         PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
       run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
+        pgmi deploy . -d ${{ vars.DATABASE_NAME }} --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -535,13 +543,21 @@ deploy:
 ```yaml
 deploy:
   stage: deploy
-  image: golang:1.22
-  before_script:
-    - go install github.com/vvka-141/pgmi/cmd/pgmi@latest
-  script:
-    - pgmi deploy . -d $DATABASE_NAME --param env=production
+  image: ubuntu:latest
   variables:
+    PGMI_VERSION: v0.10.0
     PGMI_CONNECTION_STRING: $DATABASE_URL
+  before_script:
+    - |
+      file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+      base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+      curl -fsSLO "${base}/${file}"
+      curl -fsSLO "${base}/checksums.txt"
+      sha256sum --ignore-missing -c checksums.txt
+      tar -xzf "${file}" pgmi
+      install pgmi /usr/local/bin/pgmi
+  script:
+    - pgmi deploy . -d $DATABASE_NAME --compat 1 --force --param env=production
 ```
 
 ### Azure DevOps
@@ -558,6 +574,7 @@ steps:
           --host $PGHOST \
           --azure \
           --sslmode require \
+          --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -585,6 +602,7 @@ deploy:
           --host ${{ vars.AZURE_PG_HOST }} \
           --azure \
           --sslmode require \
+          --compat 1 --force \
           --param env=production \
           --timeout 15m
 ```
@@ -606,7 +624,16 @@ deploy:
         aws-region: ${{ vars.AWS_REGION }}
 
     - name: Install pgmi
-      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+      env:
+        PGMI_VERSION: v0.10.0
+      run: |
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       run: |
@@ -615,7 +642,9 @@ deploy:
           -U ${{ vars.RDS_USER }} \
           --aws --aws-region ${{ vars.AWS_REGION }} \
           --sslmode require \
+          --force \
           --param env=production \
+          --compat 1 \
           --timeout 15m
 ```
 
@@ -636,14 +665,25 @@ deploy:
         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
     - name: Install pgmi
-      run: go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+      env:
+        PGMI_VERSION: v0.10.0
+      run: |
+        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
+        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
+        curl -fsSLO "${base}/${file}"
+        curl -fsSLO "${base}/checksums.txt"
+        sha256sum --ignore-missing -c checksums.txt
+        tar -xzf "${file}" pgmi
+        sudo install pgmi /usr/local/bin/pgmi
 
     - name: Deploy
       run: |
         pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
           -U ${{ vars.CLOUDSQL_USER }} \
           --google --google-instance ${{ vars.CLOUDSQL_INSTANCE }} \
+          --force \
           --param env=production \
+          --compat 1 \
           --timeout 15m
 ```
 

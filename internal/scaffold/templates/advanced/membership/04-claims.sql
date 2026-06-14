@@ -37,6 +37,9 @@ LEFT JOIN membership.role r ON r.object_id = ur.role_object_id
 LEFT JOIN membership.user_identity ui ON ui.user_object_id = u.object_id
 GROUP BY u.object_id, u.email, u.display_name, u.email_verified, u.is_active;
 
+COMMENT ON VIEW membership.vw_user_claims IS
+    'Aggregate user claims: roles, org memberships, identities. Admin-only view for dashboard and audit use.';
+
 DO $$
 DECLARE
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');

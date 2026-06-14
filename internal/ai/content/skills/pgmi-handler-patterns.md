@@ -94,7 +94,7 @@ The advanced template provides these overloads (defined in `lib/common/cast.sql`
 | `timestamptz` | `common.try_cast(text, NULL::timestamptz)` | NULL |
 | **`date`** | **No overload** — use `common.try_cast(text, NULL::timestamp)::date` | NULL |
 
-> `lib/common/cast.sql` also defines a `?|` try-cast operator (`text ?| default`). Prefer the explicit `common.try_cast()` function form in handlers: it is schema-qualified, so it always resolves regardless of the handler's effective search_path, and it reads unambiguously. Reach for the operator only in tight expressions where it genuinely improves readability.
+> `lib/common/cast.sql` also defines a `?>` try-cast operator in the `api` schema (`text ?> default`). Both the operator and the `common.try_cast()` function resolve in handlers (handler search_path includes `api`). Use whichever form reads better in context.
 
 ### Rules
 

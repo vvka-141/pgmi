@@ -24,7 +24,7 @@ func NewConsoleLogger(verbose bool) *ConsoleLogger {
 }
 
 // Verbose logs detailed diagnostic information if verbose mode is enabled.
-func (l *ConsoleLogger) Verbose(format string, args ...interface{}) {
+func (l *ConsoleLogger) Verbose(format string, args ...any) {
 	if !l.verbose {
 		return
 	}
@@ -38,7 +38,7 @@ func (l *ConsoleLogger) Verbose(format string, args ...interface{}) {
 }
 
 // Info logs informational messages about normal operations.
-func (l *ConsoleLogger) Info(format string, args ...interface{}) {
+func (l *ConsoleLogger) Info(format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(args) > 0 {
@@ -49,7 +49,7 @@ func (l *ConsoleLogger) Info(format string, args ...interface{}) {
 }
 
 // Error logs error messages.
-func (l *ConsoleLogger) Error(format string, args ...interface{}) {
+func (l *ConsoleLogger) Error(format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(args) > 0 {

@@ -276,7 +276,7 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 
 	// Output results
 	if validateJSON {
-		result := map[string]interface{}{
+		result := map[string]any{
 			"total_files":            len(scanResult.Files),
 			"files_with_metadata":    filesWithMetadata,
 			"files_without_metadata": filesWithoutMetadata,
@@ -397,7 +397,7 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 
 	// Output plan
 	if planJSON {
-		result := map[string]interface{}{
+		result := map[string]any{
 			"total_files": len(plan),
 			"plan":        plan,
 		}

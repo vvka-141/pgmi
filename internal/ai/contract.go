@@ -41,11 +41,11 @@ func GetContract() Contract {
 		Views: []ContractView{
 			{
 				Name:    "pgmi_source_view",
-				Columns: []string{"path", "content", "directory", "is_sql_file", "pgmi_checksum"},
+				Columns: []string{"path", "name", "directory", "extension", "depth", "content", "size_bytes", "checksum", "pgmi_checksum", "path_parts", "is_sql_file", "is_test_file", "parent_folder_name"},
 			},
 			{
 				Name:    "pgmi_parameter_view",
-				Columns: []string{"key", "value"},
+				Columns: []string{"key", "value", "type", "required", "default_value", "description"},
 			},
 			{
 				Name:    "pgmi_plan_view",
@@ -57,23 +57,33 @@ func GetContract() Contract {
 			},
 			{
 				Name:    "pgmi_test_source_view",
-				Columns: []string{"path", "content", "directory", "depth"},
+				Columns: []string{"path", "directory", "filename", "content", "is_fixture"},
 			},
 			{
 				Name:    "pgmi_test_directory_view",
-				Columns: []string{"directory", "depth", "has_fixture"},
+				Columns: []string{"path", "parent_path", "depth"},
 			},
 		},
 		Functions: []ContractFunction{
 			{
 				Name:    "pgmi_test_plan",
-				Args:    []string{"pattern text DEFAULT '.*'"},
+				Args:    []string{"pattern text DEFAULT NULL"},
 				Returns: []string{"ordinal", "step_type", "script_path", "directory", "depth"},
 			},
 			{
 				Name:    "pgmi_test_generate",
-				Args:    []string{"pattern text DEFAULT '.*'", "callback text DEFAULT 'pg_temp.pgmi_test_callback'"},
+				Args:    []string{"pattern text DEFAULT NULL", "callback text DEFAULT 'pg_temp.pgmi_test_callback'"},
 				Returns: []string{"sql text"},
+			},
+			{
+				Name:    "pgmi_is_sql_file",
+				Args:    []string{"filename text"},
+				Returns: []string{"boolean"},
+			},
+			{
+				Name:    "pgmi_persist_test_plan",
+				Args:    []string{"target_schema text", "pattern text DEFAULT NULL"},
+				Returns: []string{"void"},
 			},
 		},
 		StepTypes: []string{"fixture", "test", "teardown"},

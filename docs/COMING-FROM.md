@@ -21,7 +21,7 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 ### What changes
 
 **Before (Flyway):**
-```
+```text
 migrations/
 ├── V1__create_users.sql
 ├── V2__add_email.sql
@@ -33,7 +33,7 @@ flyway.user=postgres
 ```
 
 **After (pgmi):**
-```
+```text
 myapp/
 ├── deploy.sql              # You write deployment logic
 ├── pgmi.yaml               # Connection defaults
@@ -134,7 +134,7 @@ myapp/
 ### What changes
 
 **Before (Liquibase):**
-```
+```text
 db/
 ├── changelog.xml
 ├── changes/
@@ -144,7 +144,7 @@ db/
 ```
 
 **After (pgmi):**
-```
+```text
 myapp/
 ├── deploy.sql
 ├── pgmi.yaml
@@ -255,7 +255,7 @@ pgmi deploy . --database mydb
 ### Migration steps
 
 1. **Organize files**:
-   ```
+   ```text
    myapp/
    ├── deploy.sql
    ├── pgmi.yaml

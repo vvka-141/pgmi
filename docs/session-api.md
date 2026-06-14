@@ -17,8 +17,10 @@ When you run `pgmi deploy ./myproject`, here's what happens:
 │  2. PREPARE SESSION                                                      │
 │     pgmi creates temporary tables and views (two-tier API):              │
 │                                                                          │
-│     Internal tables: _pgmi_source, _pgmi_parameter, _pgmi_test_source    │
+│     Internal tables: _pgmi_source, _pgmi_parameter, _pgmi_source_metadata│
+│                      _pgmi_test_source, _pgmi_test_directory             │
 │     Public views:    pgmi_source_view, pgmi_parameter_view, pgmi_plan_view│
+│                      pgmi_source_metadata_view                           │
 │                      pgmi_test_source_view, pgmi_test_directory_view     │
 │                                                                          │
 │     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG)│
@@ -449,8 +451,10 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 ```
 
 **Test execution emits notices:**
+- `NOTICE: [pgmi] Test suite started`
 - `NOTICE: [pgmi] Fixture: ./path/to/_setup.sql`
 - `NOTICE: [pgmi] Test: ./path/to/test_example.sql`
+- `NOTICE: [pgmi] Test suite completed (N steps)`
 
 With `--verbose`, DEBUG messages show rollback and teardown events (`[pgmi] Rollback: ...`, `[pgmi] Teardown: ...`).
 
@@ -470,15 +474,51 @@ SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'my_callback');
 
 The generated structure looks like:
 ```sql
-SAVEPOINT pgmi_fixture_1;           -- Top-level SQL
-DO $$ ... EXECUTE fixture ... $$;   -- Test content via EXECUTE
-SAVEPOINT pgmi_test_1;              -- Top-level SQL
+SAVEPOINT __pgmi_d1__;              -- Directory savepoint (top-level SQL)
+DO $$ ... EXECUTE fixture ... $$;   -- Fixture content via EXECUTE
+SAVEPOINT __pgmi_t2__;              -- Per-directory test savepoint (top-level SQL)
 DO $$ ... EXECUTE test ... $$;      -- Test content via EXECUTE
-ROLLBACK TO SAVEPOINT pgmi_test_1;  -- Top-level SQL (undoes test)
-ROLLBACK TO SAVEPOINT pgmi_fixture_1; -- Top-level SQL (undoes fixture)
+ROLLBACK TO SAVEPOINT __pgmi_t2__;  -- Undoes test side effects
+DO $$ ... EXECUTE test2 ... $$;     -- Next test in same directory
+ROLLBACK TO SAVEPOINT __pgmi_t2__;  -- Undoes test2 side effects
+ROLLBACK TO SAVEPOINT __pgmi_d1__;  -- Teardown: undoes fixture
+RELEASE SAVEPOINT __pgmi_d1__;      -- Clean up savepoint
 ```
 
 This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, not inside a DO block.
+
+#### Custom Callbacks
+
+The second argument to `pgmi_test()` is the name of a callback function that receives lifecycle events. Your function must accept a single `pg_temp.pgmi_test_event` argument and return `void`:
+
+```sql
+CREATE FUNCTION pg_temp.my_callback(e pg_temp.pgmi_test_event)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    CASE e.event
+        WHEN 'suite_start'    THEN RAISE NOTICE 'Starting test suite';
+        WHEN 'suite_end'      THEN RAISE NOTICE 'Completed % steps', e.ordinal;
+        WHEN 'test_start'     THEN RAISE NOTICE 'Running: %', e.path;
+        WHEN 'test_end'       THEN RAISE NOTICE 'Passed: %', e.path;
+        ELSE NULL;
+    END CASE;
+END $$;
+```
+
+**`pgmi_test_event` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | text | Event name (see below) |
+| `path` | text | Script path (NULL for suite and teardown events) |
+| `directory` | text | Test directory containing the script |
+| `depth` | integer | Nesting level (0 = root `__test__/`) |
+| `ordinal` | integer | Execution order (1-based) |
+| `context` | jsonb | Extensible payload for custom data |
+
+**Event types:** `suite_start`, `fixture_start`, `fixture_end`, `test_start`, `test_end`, `rollback`, `teardown_start`, `teardown_end`, `suite_end`.
+
+The default callback (`pgmi_test_callback`) emits NOTICE for fixtures and tests, DEBUG for rollback and teardown. You can call it from your custom callback for events you don't want to handle specially.
 
 #### pgmi_persist_test_plan(schema, pattern) Function
 

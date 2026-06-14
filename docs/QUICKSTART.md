@@ -42,13 +42,14 @@ pgmi --version
 You should see output like:
 
 ```
-pgmi version 0.x.x
+pgmi 0.x.x (compat 1)
+Commit: <sha>, Built: <date>, Platform: <os>/<arch>
 ```
 
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
 
 <details>
-<summary>Install from source (optional — requires Go 1.22+)</summary>
+<summary>Install from source (optional — requires Go 1.25+)</summary>
 
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
@@ -133,13 +134,14 @@ cd myapp
 
 > **Interactive setup**: if you run `pgmi init myapp` (without flags) on a TTY, an interactive wizard walks you through template choice and connection setup, saving a `pgmi.yaml` for later `pgmi deploy` runs. Add `--template <name>` to skip the template prompt, or set `PGMI_NON_INTERACTIVE=1` / `CI=1` to bypass wizards entirely.
 >
-> If you already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them.
+> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them. Basic template users can ignore this.
 
 This creates a ready-to-deploy project:
 
 ```
 myapp/
 ├── deploy.sql              ← Your deployment logic (the brain)
+├── project.json            ← Project metadata (read by deploy.sql, not by pgmi)
 ├── pgmi.yaml               ← Connection defaults (the config)
 ├── migrations/             ← Your SQL files go here
 │   ├── 001_users.sql
@@ -252,7 +254,7 @@ What this does:
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-NOTICE: Admin user ready: admin@example.com (id=1)
+NOTICE: Dev seed: admin user ready (admin@example.com id=1)
 NOTICE: [pgmi] Test suite started
 NOTICE: [pgmi] Fixture: ./__test__/_setup.sql
 NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql

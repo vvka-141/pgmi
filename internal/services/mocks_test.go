@@ -112,6 +112,6 @@ func (m *mockDatabaseManager) TerminateConnections(_ context.Context, _ pgmi.DBC
 
 type mockLogger struct{}
 
-func (m *mockLogger) Verbose(_ string, _ ...interface{}) {}
-func (m *mockLogger) Info(_ string, _ ...interface{})    {}
-func (m *mockLogger) Error(_ string, _ ...interface{})   {}
+func (m *mockLogger) Verbose(_ string, _ ...any) {}
+func (m *mockLogger) Info(_ string, _ ...any)    {}
+func (m *mockLogger) Error(_ string, _ ...any)   {}
