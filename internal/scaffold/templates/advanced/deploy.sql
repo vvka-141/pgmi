@@ -114,7 +114,7 @@ BEGIN
     FROM pg_temp.deployment_parameter;
 
     IF v_missing IS NOT NULL THEN
-        RAISE EXCEPTION 'Missing required parameters: %. Provide via: pgmi deploy --param <key>=<value>', v_missing;
+        RAISE EXCEPTION 'Missing required parameters: %. Provide via --params-file secrets.env (recommended for passwords) or --param <key>=<value>', v_missing;
     END IF;
 
     IF v_redundant IS NOT NULL THEN
@@ -156,9 +156,14 @@ $$;
 -- message instead of a cryptic mid-deploy failure.
 DO $guard$
 BEGIN
-    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
-        RAISE EXCEPTION 'pgmi advanced template requires a superuser deployment connection; current role % is not superuser', current_user
-            USING HINT = 'CREATE EVENT TRIGGER (used by lib/core/entity-standards.sql) is superuser-only and managed clouds (RDS, Cloud SQL, Supabase, Neon) do not grant it. Connect as a superuser, or remove lib/core/entity-standards.sql to deploy without the entity-standards event trigger. See docs/PRODUCTION.md.';
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+       AND EXISTS (
+           SELECT 1 FROM pg_temp.pgmi_source_view
+           WHERE path LIKE '%/entity-standards.sql'
+       )
+    THEN
+        RAISE EXCEPTION 'pgmi advanced template requires a superuser connection when lib/core/entity-standards.sql is present; current role % is not superuser', current_user
+            USING HINT = 'CREATE EVENT TRIGGER is superuser-only and managed clouds (RDS, Cloud SQL, Supabase, Neon) do not grant it. Connect as a superuser, or remove lib/core/entity-standards.sql and add created_at/deleted_at columns explicitly on entity tables. See docs/PRODUCTION.md.';
     END IF;
 END $guard$;
 

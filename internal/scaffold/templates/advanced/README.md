@@ -422,7 +422,7 @@ To filter tests, pass a pattern to the macro in deploy.sql:
 
 ```sql
 -- Run only API tests
-pgmi_test('.*/api/.*');
+CALL pgmi_test('.*/api/.*');
 ```
 
 ## Troubleshooting

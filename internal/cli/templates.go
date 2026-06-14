@@ -143,7 +143,7 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 		},
 		"advanced": {
 			Short: "Metadata-driven deployment, REST/RPC/MCP handler registry",
-			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), JWT authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
+			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), API-key and identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
 			Structure: []string{
 				"├── deploy.sql",
 				"├── pgmi.yaml",
@@ -160,9 +160,9 @@ func getTemplateDescriptions() map[string]TemplateDescription {
 			},
 			Features: []string{
 				"<pgmi-meta> sortKeys for multi-phase execution ordering",
-				"Idempotency via script-UUID tracking in core.script",
+				"Idempotency via script-UUID tracking in internal.deployment_script",
 				"Role hierarchy: owner → admin → api → customer",
-				"JWT + API-key authentication with multi-provider identity",
+				"API-key and multi-provider identity authentication (JWT validated at gateway)",
 				"REST/RPC/MCP routing with handler registry (api.handler)",
 				"Row-level security policies on membership tables",
 				"Targets stock PostgreSQL — superuser required for DDL event trigger (see docs/PRODUCTION.md for managed-cloud workaround)",

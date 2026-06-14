@@ -4,14 +4,22 @@ A PostgreSQL project deployed by pgmi — with environment-aware logic, project 
 
 ## Quick Start
 
+Set your database password and deploy:
+
 ```bash
-pgmi deploy . --param admin_email=you@example.com
+export PGPASSWORD="your-postgres-password"    # or use a connection string
+pgmi deploy . -d {{PROJECT_NAME}} --overwrite --force
 ```
 
-Production (skips dev seeding):
+`--overwrite --force` drops and recreates the database — use only for local development.
+For an existing database, deploy incrementally (no `--overwrite`):
+
 ```bash
-pgmi deploy . --param env=production
+pgmi deploy . -d {{PROJECT_NAME}} --param env=production
 ```
+
+Edit `pgmi.yaml` to set connection defaults (host, port, username) so you
+don't need to repeat them on every command.
 
 ## What This Does
 
