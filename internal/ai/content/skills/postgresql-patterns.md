@@ -286,8 +286,8 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT;
 
 **✅ Solution 2**: Use pgmi's try_cast utilities:
 ```sql
--- Uses ?| operator for fallback
-SELECT '2024-13-45' ?| '2024-01-01'::date;
+-- Uses ?> operator for fallback
+SELECT '2024-13-45' ?> '2024-01-01'::date;
 -- Returns: 2024-01-01 (fallback)
 ```
 

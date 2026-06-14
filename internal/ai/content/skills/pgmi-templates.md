@@ -119,7 +119,7 @@ advanced/
 │   │   ├── foundation.sql              # Domain schema setup
 │   │   └── entity-standards.sql        # Entity table standards (DDL event trigger)
 │   ├── common/
-│   │   ├── cast.sql                    # Safe type casting (`?|` operator, try_cast overloads)
+│   │   ├── cast.sql                    # Safe type casting (`?>` operator, try_cast overloads)
 │   │   ├── encoding.sql                # Bytea encoding domains (utf8/latin1/win1252) and converters
 │   │   └── text.sql                    # Text utilities with inline tests
 │   └── __test__/                       # Library tests

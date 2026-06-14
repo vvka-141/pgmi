@@ -17,7 +17,10 @@
 -- boolean, integer, bigint, and numeric types.
 -- ============================================================================
 
--- Idempotency: Drop existing operators before recreating
+-- Operators are created in the api schema so they resolve inside handler
+-- bodies (handler search_path: api, internal, extensions, pg_temp).
+
+-- Drop old ?| operators (renamed to ?>)
 DROP OPERATOR IF EXISTS ?| (text, uuid) CASCADE;
 DROP OPERATOR IF EXISTS ?| (text, boolean) CASCADE;
 DROP OPERATOR IF EXISTS ?| (text, integer) CASCADE;
@@ -25,6 +28,16 @@ DROP OPERATOR IF EXISTS ?| (text, bigint) CASCADE;
 DROP OPERATOR IF EXISTS ?| (text, numeric) CASCADE;
 DROP OPERATOR IF EXISTS ?| (text, interval) CASCADE;
 DROP OPERATOR IF EXISTS ?| (text, timestamp) CASCADE;
+
+-- Drop current ?> for idempotency
+DROP OPERATOR IF EXISTS api.?> (text, uuid) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, boolean) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, integer) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, bigint) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, numeric) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, interval) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, timestamp) CASCADE;
+DROP OPERATOR IF EXISTS api.?> (text, timestamptz) CASCADE;
 
 DO $$
 BEGIN
@@ -40,7 +53,7 @@ END $$;
 -- Example:
 --   SELECT common.try_cast('550e8400-e29b-41d4-a716-446655440000', extensions.uuid_nil());
 --   SELECT common.try_cast('invalid', extensions.uuid_nil());  -- Returns nil UUID
---   SELECT '550e8400e29b41d4a716446655440000' ?| extensions.uuid_nil();  -- Operator syntax
+--   SELECT '550e8400e29b41d4a716446655440000' ?> extensions.uuid_nil();  -- Operator syntax
 
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value uuid)
 RETURNS uuid
@@ -58,14 +71,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, uuid) IS
     'Try to parse text as UUID, returning default value on failure. Accepts standard (with dashes) and compact (without dashes) formats.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = uuid,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, uuid) IS
-    'Try-cast operator: parse left as UUID or return right as default. Example: ''text'' ?| extensions.uuid_nil()';
+COMMENT ON OPERATOR api.?> (text, uuid) IS
+    'Try-cast operator: parse left as UUID or return right as default. Example: ''text'' ?> extensions.uuid_nil()';
 
 -- Inline tests
 DO $$
@@ -79,11 +92,11 @@ BEGIN
     IF common.try_cast('invalid', extensions.uuid_nil()) != extensions.uuid_nil() THEN
         RAISE EXCEPTION 'try_cast(uuid) failed: invalid input should return default';
     END IF;
-    IF ('550e8400-e29b-41d4-a716-446655440000' ?| extensions.uuid_nil()) = extensions.uuid_nil() THEN
-        RAISE EXCEPTION 'operator ?|(uuid) failed: valid UUID should parse';
+    IF ('550e8400-e29b-41d4-a716-446655440000' ?> extensions.uuid_nil()) = extensions.uuid_nil() THEN
+        RAISE EXCEPTION 'operator ?>(uuid) failed: valid UUID should parse';
     END IF;
-    IF ('invalid' ?| extensions.uuid_nil()) != extensions.uuid_nil() THEN
-        RAISE EXCEPTION 'operator ?|(uuid) failed: invalid input should return default';
+    IF ('invalid' ?> extensions.uuid_nil()) != extensions.uuid_nil() THEN
+        RAISE EXCEPTION 'operator ?>(uuid) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -162,14 +175,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, boolean) IS
     'Try to parse text as boolean. Accepts: true/t/yes/y/on/1 (true), false/f/no/n/off/0 (false). Case insensitive. Returns default on unrecognized input.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = boolean,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, boolean) IS
-    'Try-cast operator: parse left as boolean or return right as default. Example: ''yes'' ?| false';
+COMMENT ON OPERATOR api.?> (text, boolean) IS
+    'Try-cast operator: parse left as boolean or return right as default. Example: ''yes'' ?> false';
 
 -- Inline tests
 DO $$
@@ -241,14 +254,14 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    IF ('yes' ?| false) != true THEN
-        RAISE EXCEPTION 'operator ?|(boolean) failed: "yes" should parse as true';
+    IF ('yes' ?> false) != true THEN
+        RAISE EXCEPTION 'operator ?>(boolean) failed: "yes" should parse as true';
     END IF;
-    IF ('no' ?| true) != false THEN
-        RAISE EXCEPTION 'operator ?|(boolean) failed: "no" should parse as false';
+    IF ('no' ?> true) != false THEN
+        RAISE EXCEPTION 'operator ?>(boolean) failed: "no" should parse as false';
     END IF;
-    IF ('invalid' ?| false) != false THEN
-        RAISE EXCEPTION 'operator ?|(boolean) failed: invalid input should return default';
+    IF ('invalid' ?> false) != false THEN
+        RAISE EXCEPTION 'operator ?>(boolean) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -287,14 +300,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, integer) IS
     'Try to parse text as integer (32-bit). Handles signs, whitespace, leading zeros. Returns default if invalid or out of range.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = integer,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, integer) IS
-    'Try-cast operator: parse left as integer or return right as default. Example: ''42'' ?| 0';
+COMMENT ON OPERATOR api.?> (text, integer) IS
+    'Try-cast operator: parse left as integer or return right as default. Example: ''42'' ?> 0';
 
 -- Inline tests
 DO $$
@@ -356,11 +369,11 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    IF ('42' ?| 0) != 42 THEN
-        RAISE EXCEPTION 'operator ?|(integer) failed: "42" should parse';
+    IF ('42' ?> 0) != 42 THEN
+        RAISE EXCEPTION 'operator ?>(integer) failed: "42" should parse';
     END IF;
-    IF ('invalid' ?| -1) != -1 THEN
-        RAISE EXCEPTION 'operator ?|(integer) failed: invalid input should return default';
+    IF ('invalid' ?> -1) != -1 THEN
+        RAISE EXCEPTION 'operator ?>(integer) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -396,14 +409,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, bigint) IS
     'Try to parse text as bigint (64-bit). Handles signs, whitespace, leading zeros. Returns default if invalid or out of range.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = bigint,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, bigint) IS
-    'Try-cast operator: parse left as bigint or return right as default. Example: ''1705327800000'' ?| 0';
+COMMENT ON OPERATOR api.?> (text, bigint) IS
+    'Try-cast operator: parse left as bigint or return right as default. Example: ''1705327800000'' ?> 0';
 
 -- Inline tests
 DO $$
@@ -453,11 +466,11 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    IF ('1705327800000' ?| 0::bigint) != 1705327800000 THEN
-        RAISE EXCEPTION 'operator ?|(bigint) failed: large value should parse';
+    IF ('1705327800000' ?> 0::bigint) != 1705327800000 THEN
+        RAISE EXCEPTION 'operator ?>(bigint) failed: large value should parse';
     END IF;
-    IF ('invalid' ?| -1::bigint) != -1 THEN
-        RAISE EXCEPTION 'operator ?|(bigint) failed: invalid input should return default';
+    IF ('invalid' ?> -1::bigint) != -1 THEN
+        RAISE EXCEPTION 'operator ?>(bigint) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -495,14 +508,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, numeric) IS
     'Try to parse text as numeric (arbitrary precision). Handles integers, decimals, scientific notation. Returns default on failure.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = numeric,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, numeric) IS
-    'Try-cast operator: parse left as numeric or return right as default. Example: ''19.99'' ?| 0';
+COMMENT ON OPERATOR api.?> (text, numeric) IS
+    'Try-cast operator: parse left as numeric or return right as default. Example: ''19.99'' ?> 0';
 
 -- Inline tests
 DO $$
@@ -569,14 +582,14 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    IF ('19.99' ?| 0::numeric) != 19.99 THEN
-        RAISE EXCEPTION 'operator ?|(numeric) failed: decimal should parse';
+    IF ('19.99' ?> 0::numeric) != 19.99 THEN
+        RAISE EXCEPTION 'operator ?>(numeric) failed: decimal should parse';
     END IF;
-    IF ('1.5e10' ?| 0::numeric) != 15000000000 THEN
-        RAISE EXCEPTION 'operator ?|(numeric) failed: scientific notation should parse';
+    IF ('1.5e10' ?> 0::numeric) != 15000000000 THEN
+        RAISE EXCEPTION 'operator ?>(numeric) failed: scientific notation should parse';
     END IF;
-    IF ('invalid' ?| (-1)::numeric) != -1 THEN
-        RAISE EXCEPTION 'operator ?|(numeric) failed: invalid input should return default';
+    IF ('invalid' ?> (-1)::numeric) != -1 THEN
+        RAISE EXCEPTION 'operator ?>(numeric) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -665,14 +678,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, interval) IS
     'Try to parse text as interval using ISO-8601, .NET TimeSpan, or natural language formats. Returns default value on failure.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = interval,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, interval) IS
-    'Try-cast operator: parse left as interval or return right as default. Example: ''2 days'' ?| ''0''::interval';
+COMMENT ON OPERATOR api.?> (text, interval) IS
+    'Try-cast operator: parse left as interval or return right as default. Example: ''2 days'' ?> ''0''::interval';
 
 -- Inline tests
 DO $$
@@ -767,17 +780,17 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    v_result := '2 days 3 hours' ?| v_default;
+    v_result := '2 days 3 hours' ?> v_default;
     IF v_result = v_default THEN
-        RAISE EXCEPTION 'operator ?|(interval) failed: "2 days 3 hours" should parse';
+        RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" should parse';
     END IF;
     IF v_result != make_interval(days => 2, hours => 3) THEN
-        RAISE EXCEPTION 'operator ?|(interval) failed: "2 days 3 hours" incorrect result';
+        RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" incorrect result';
     END IF;
 
-    v_result := 'invalid' ?| v_default;
+    v_result := 'invalid' ?> v_default;
     IF v_result != v_default THEN
-        RAISE EXCEPTION 'operator ?|(interval) failed: invalid input should return default';
+        RAISE EXCEPTION 'operator ?>(interval) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -857,14 +870,14 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, timestamp) IS
     'Try to parse text as timestamp using Unix epoch (seconds/milliseconds) or standard formats. Returns default value on failure.';
 
-CREATE OPERATOR ?| (
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = timestamp,
     PROCEDURE = common.try_cast
 );
 
-COMMENT ON OPERATOR ?| (text, timestamp) IS
-    'Try-cast operator: parse left as timestamp or return right as default. Example: ''2025-01-15'' ?| CURRENT_TIMESTAMP';
+COMMENT ON OPERATOR api.?> (text, timestamp) IS
+    'Try-cast operator: parse left as timestamp or return right as default. Example: ''2025-01-15'' ?> CURRENT_TIMESTAMP';
 
 -- Inline tests
 DO $$
@@ -939,15 +952,15 @@ BEGIN
     END IF;
 
     -- Test operator syntax
-    v_result := '2025-01-15 14:30:00' ?| v_default;
+    v_result := '2025-01-15 14:30:00' ?> v_default;
     v_expected := '2025-01-15 14:30:00'::timestamp;
     IF v_result != v_expected THEN
-        RAISE EXCEPTION 'operator ?|(timestamp) failed: ISO-8601 format should parse correctly';
+        RAISE EXCEPTION 'operator ?>(timestamp) failed: ISO-8601 format should parse correctly';
     END IF;
 
-    v_result := 'invalid' ?| v_default;
+    v_result := 'invalid' ?> v_default;
     IF v_result != v_default THEN
-        RAISE EXCEPTION 'operator ?|(timestamp) failed: invalid input should return default';
+        RAISE EXCEPTION 'operator ?>(timestamp) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -1004,6 +1017,15 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, timestamptz) IS
     'Try to parse text as timestamptz using Unix epoch (seconds/milliseconds) or standard formats; preserves explicit ISO offsets. Returns default value on failure.';
 
+CREATE OPERATOR api.?> (
+    LEFTARG = text,
+    RIGHTARG = timestamptz,
+    PROCEDURE = common.try_cast
+);
+
+COMMENT ON OPERATOR api.?> (text, timestamptz) IS
+    'Try-cast operator: parse left as timestamptz or return right as default. Example: ''2025-01-15T14:30:00+02:00'' ?> CURRENT_TIMESTAMP';
+
 -- Inline tests
 DO $$
 DECLARE
@@ -1059,13 +1081,14 @@ BEGIN
     RAISE NOTICE '  ✓ common.try_cast(text, numeric) - numeric try-cast with default';
     RAISE NOTICE '  ✓ common.try_cast(text, interval) - interval try-cast with default';
     RAISE NOTICE '  ✓ common.try_cast(text, timestamp) - timestamp try-cast with default';
-    RAISE NOTICE '  ✓ operator ?|(text, uuid) - UUID try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, boolean) - boolean try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, integer) - integer try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, bigint) - bigint try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, numeric) - numeric try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, interval) - interval try-cast operator';
-    RAISE NOTICE '  ✓ operator ?|(text, timestamp) - timestamp try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, uuid) - UUID try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, boolean) - boolean try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, integer) - integer try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, bigint) - bigint try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, numeric) - numeric try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, interval) - interval try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, timestamp) - timestamp try-cast operator';
+    RAISE NOTICE '  ✓ operator api.?>(text, timestamptz) - timestamptz try-cast operator';
     RAISE NOTICE '  ✓ common.uuid_is_nil(uuid) - nil UUID check';
 END $$;
 

@@ -39,19 +39,19 @@ Before flagging "unknown" or "non-standard" objects, **ALWAYS verify they're not
 PostgreSQL allows custom operators for domain-specific syntax:
 
 ```sql
--- Example: pgmi advanced template defines try-cast operator
-CREATE OPERATOR ?| (
+-- Example: pgmi advanced template defines try-cast operator in api schema
+CREATE OPERATOR api.?> (
     LEFTARG = text,
     RIGHTARG = uuid,
     PROCEDURE = common.try_cast
 );
 
 -- Later usage is VALID if operator defined first
-SELECT metadata->>'id' ?| NULL::uuid;  -- ✓ Valid with custom ?| operator
+SELECT metadata->>'id' ?> NULL::uuid;  -- ✓ Valid with custom ?> operator
 ```
 
 **Verification Steps**:
-1. Search codebase for `CREATE OPERATOR <symbol>` (e.g., `CREATE OPERATOR ?|`)
+1. Search codebase for `CREATE OPERATOR <symbol>` (e.g., `CREATE OPERATOR api.?>`)
 2. Check metadata `<sortKeys>` to verify execution order (lower = earlier)
 3. Verify operator is defined before used
 4. **Only flag if**: Operator used but never defined, OR defined after usage
@@ -62,7 +62,7 @@ SELECT metadata->>'id' ?| NULL::uuid;  -- ✓ Valid with custom ?| operator
 
 ```sql
 -- ✅ CORRECT PATTERN: NULL sentinel for explicit error handling
-v_id := metadata->>'id' ?| NULL::uuid;
+v_id := metadata->>'id' ?> NULL::uuid;
 
 IF v_id IS NULL THEN
     IF metadata->'id' IS NULL THEN
@@ -79,14 +79,14 @@ END IF;
 3. Code then checks for NULL and provides distinct error messages for "missing" vs "invalid format"
 
 **DO NOT FLAG as bugs**:
-- `value ?| NULL::uuid` followed by explicit NULL check
-- `COALESCE(value ?| NULL::boolean, false)` - NULL sentinel with outer fallback
-- Any `?| NULL::type` pattern with subsequent validation logic
+- `value ?> NULL::uuid` followed by explicit NULL check
+- `COALESCE(value ?> NULL::boolean, false)` - NULL sentinel with outer fallback
+- Any `?> NULL::type` pattern with subsequent validation logic
 
 **Only flag if**: NULL result is used without validation (silent failure).
 
 **Common Custom Operators in Sophisticated Codebases**:
-- `?|` - Try-cast with default
+- `?>` - Try-cast with default (created in `api` schema, resolves in handlers)
 - `=>` - Key-value pairs (hstore)
 - `@>` / `<@` - Containment (jsonb, arrays)
 - `||` - Concatenation (arrays, strings)
@@ -169,8 +169,8 @@ pgmi uses **metadata sortKeys** in `<pgmi-meta>` blocks to control file executio
 
 **Example Verification**:
 ```
-cast.sql:    sortKey 001/000 (defines ?| operator)
-foundation.sql:    sortKey 004/000 (uses ?| operator)
+cast.sql:    sortKey 001/000 (defines ?> operator)
+foundation.sql:    sortKey 004/000 (uses ?> operator)
 001 < 004 → ✓ Correct order, no issue
 ```
 

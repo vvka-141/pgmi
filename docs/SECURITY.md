@@ -51,7 +51,7 @@ No parameter name, value, or hint about content ever appears in **pgmi's own (co
 This guarantee covers only pgmi core. Your `deploy.sql` and template SQL run with full access to the parameters and can print whatever they choose — `RAISE NOTICE`, audit tables, debug logs. pgmi does not redact those for you.
 
 - `--verbose` sets `client_min_messages = 'debug'` on the session, enabling `RAISE DEBUG` output from your SQL. Ensure your scripts do not leak secrets via `RAISE DEBUG`.
-- **Redact by default.** When logging parameters from SQL, mask secret-like keys. The advanced template's `deploy.sql` masks keys matching `(password|secret|token|key|credential|auth)` (see PGMI-46); follow the same pattern in your own scripts.
+- **Redact by default.** When logging parameters from SQL, mask secret-like keys. The advanced template's `deploy.sql` masks keys matching `(password|secret|token|key|credential|auth)`; follow the same pattern in your own scripts.
 - A password reaching the server via `ALTER ROLE ... PASSWORD` can land in the PostgreSQL server log under `log_statement = ddl`/`all` — set `log_statement` accordingly.
 
 ## Threat Model

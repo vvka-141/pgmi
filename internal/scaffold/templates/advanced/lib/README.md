@@ -86,7 +86,7 @@ Pure utility functions and domain types shared across every schema.
 
 | File | Purpose |
 |------|---------|
-| `cast.sql` | Safe type casting with `?|` operator and `common.try_cast(text, default)` overloads |
+| `cast.sql` | Safe type casting with `?>` operator and `common.try_cast(text, default)` overloads |
 | `encoding.sql` | Bytea encoding domain types (`common.utf8`, `common.latin1`, `common.win1252`) and converters |
 | `text.sql` | Text manipulation (regex helpers, semantic fingerprint) |
 

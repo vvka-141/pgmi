@@ -53,39 +53,6 @@ The quick example above shows the core pattern: query files, execute with `EXECU
 
 pgmi loads **all** project files — not just SQL. Your `deploy.sql` can read JSON configuration, XML reference data, and CSV seeds from the same session views, processing them with PostgreSQL's built-in JSON, XML, and string functions. See [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for data ingestion patterns.
 
-## Test-gated deployments
-
-Tests live in `__test__/` or `__tests__/` directories. The `CALL pgmi_test()` macro runs them inside your deployment transaction with automatic savepoint isolation — so a failing test aborts the whole deploy and your database stays untouched:
-
-```sql
--- deploy.sql
-BEGIN;
-
--- ... your migrations ...
-
--- Each test runs in its own savepoint and rolls back automatically;
--- a RAISE EXCEPTION fails the test and aborts the transaction.
-CALL pgmi_test();
-
-COMMIT;
-```
-
-The macro wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails, the entire transaction aborts and your database remains unchanged.
-
-Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
-
-```sql
--- __test__/test_users.sql
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'test@example.com') THEN
-        RAISE EXCEPTION 'Expected user not found';
-    END IF;
-END $$;
-```
-
-See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the gated deployment pattern.
-
 ## Install
 
 **macOS / Linux:**
@@ -155,6 +122,39 @@ pgmi is a good fit when you need:
 pgmi handles simple linear migrations out of the box — the basic template does exactly this. Its additional power is there when you need it.
 
 See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
+
+## Test-gated deployments
+
+Tests live in `__test__/` or `__tests__/` directories. The `CALL pgmi_test()` macro runs them inside your deployment transaction with automatic savepoint isolation — so a failing test aborts the whole deploy and your database stays untouched:
+
+```sql
+-- deploy.sql
+BEGIN;
+
+-- ... your migrations ...
+
+-- Each test runs in its own savepoint and rolls back automatically;
+-- a RAISE EXCEPTION fails the test and aborts the transaction.
+CALL pgmi_test();
+
+COMMIT;
+```
+
+The macro wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails, the entire transaction aborts and your database remains unchanged.
+
+Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
+
+```sql
+-- __test__/test_users.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'test@example.com') THEN
+        RAISE EXCEPTION 'Expected user not found';
+    END IF;
+END $$;
+```
+
+See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the gated deployment pattern.
 
 ## Documentation
 
