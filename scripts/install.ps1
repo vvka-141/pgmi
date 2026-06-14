@@ -8,7 +8,7 @@
 .EXAMPLE
     irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 .EXAMPLE
-    $env:PGMI_VERSION = "v0.9.0"; irm ... | iex
+    $env:PGMI_VERSION = "v0.10.0"; irm ... | iex
 #>
 
 Set-StrictMode -Version Latest
