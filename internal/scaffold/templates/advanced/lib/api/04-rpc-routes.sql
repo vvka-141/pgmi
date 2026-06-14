@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS api.rpc_route (
 CREATE INDEX IF NOT EXISTS ix_rpc_route_method
     ON api.rpc_route(method_name);
 
+COMMENT ON TABLE api.rpc_route IS
+    'JSON-RPC method routing. Maps a unique method name to a handler for dispatch by api.rpc_invoke.';
+COMMENT ON COLUMN api.rpc_route.method_name IS
+    'JSON-RPC method name. Looked up by api.rpc_resolve during dispatch.';
+COMMENT ON COLUMN api.rpc_route.auto_log IS
+    'When true, the gateway logs request/response to api.rpc_exchange after invocation.';
+
 -- ============================================================================
 -- Grant Permissions
 -- ============================================================================

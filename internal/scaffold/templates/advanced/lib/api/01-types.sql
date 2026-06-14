@@ -30,6 +30,9 @@ BEGIN
     END IF;
 END $$;
 
+COMMENT ON TYPE api.handler_type IS
+    'Protocol discriminator for handler registration. Determines which route table and gateway a handler uses.';
+
 -- ============================================================================
 -- REST Request Type
 -- ============================================================================
@@ -46,6 +49,9 @@ BEGIN
     END IF;
 END $$;
 
+COMMENT ON TYPE api.rest_request IS
+    'Inbound REST request envelope passed to handler functions. Content is raw bytea — use api.content_json() or api.content_text() to decode.';
+
 -- ============================================================================
 -- RPC Request Type
 -- ============================================================================
@@ -60,6 +66,9 @@ BEGIN
         );
     END IF;
 END $$;
+
+COMMENT ON TYPE api.rpc_request IS
+    'Inbound JSON-RPC request envelope. Route is pre-resolved to a handler UUID; content is the raw request body.';
 
 -- ============================================================================
 -- MCP Request Type
@@ -97,6 +106,9 @@ BEGIN
     END IF;
 END $$;
 
+COMMENT ON TYPE api.mcp_request IS
+    'Inbound MCP request envelope. request_id is jsonb to preserve JSON-RPC 2.0 id semantics (string, integer, or null).';
+
 -- ============================================================================
 -- HTTP Response Type (Unified for REST and RPC)
 -- ============================================================================
@@ -112,6 +124,9 @@ BEGIN
     END IF;
 END $$;
 
+COMMENT ON TYPE api.http_response IS
+    'Outbound HTTP response envelope shared by REST and RPC gateways. Content is raw bytea for protocol neutrality.';
+
 -- ============================================================================
 -- MCP Response Type (JSON-RPC 2.0 Compliant)
 -- ============================================================================
@@ -124,6 +139,9 @@ BEGIN
         );
     END IF;
 END $$;
+
+COMMENT ON TYPE api.mcp_response IS
+    'Outbound MCP response. Single jsonb envelope field contains the full JSON-RPC 2.0 result or error object.';
 
 -- ============================================================================
 -- Schema Domain Types

@@ -50,6 +50,20 @@ CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
 -- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.
 CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
 
+COMMENT ON TABLE api.mcp_route IS
+    'Model Context Protocol routing. Stores tool, resource, and prompt metadata for MCP dispatch and discovery.';
+COMMENT ON COLUMN api.mcp_route.mcp_type IS
+    'Protocol capability type: tool, resource, or prompt. Determines which gateway function handles requests.';
+COMMENT ON COLUMN api.mcp_route.mcp_name IS
+    'Unique capability name exposed to MCP clients. Used for dispatch and in list responses.';
+COMMENT ON COLUMN api.mcp_route.input_schema IS
+    'JSON Schema describing expected arguments for tools. Sent to clients in tools/list for input validation.';
+COMMENT ON COLUMN api.mcp_route.uri_template IS
+    'RFC 6570 Level 1 URI template for resources. Used by api.mcp_read_resource to match incoming URIs.';
+COMMENT ON COLUMN api.mcp_route.mime_type IS
+    'MIME type for resource responses. Defaults to application/json.';
+COMMENT ON COLUMN api.mcp_route.arguments IS
+    'Argument metadata for prompts. JSON array of {name, description, required} sent to clients in prompts/list.';
 COMMENT ON COLUMN api.mcp_route.tags IS
     'Freeform tags for filtering tools via api.mcp_list_tools(p_tags). GIN-indexed for efficient && (overlap) queries.';
 
