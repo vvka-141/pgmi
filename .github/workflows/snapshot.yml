@@ -2,8 +2,6 @@ name: Snapshot Build
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
 
 permissions:
   contents: write
