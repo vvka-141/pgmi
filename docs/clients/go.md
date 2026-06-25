@@ -1,0 +1,48 @@
+# Go Client Generation
+
+Generate Go types and client code from your deployment's `/openapi.json`.
+
+## oapi-codegen
+
+The standard Go OpenAPI code generator. Produces types, client, and server stubs.
+
+```bash
+go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+
+# Generate types + client
+oapi-codegen -generate types,client \
+  -package api \
+  -o api/client.gen.go \
+  http://localhost:3000/openapi.json
+```
+
+Usage:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "yourproject/api"
+)
+
+func main() {
+    client, _ := api.NewClientWithResponses("http://localhost:3000")
+    resp, _ := client.HelloWorldWithResponse(context.Background(), &api.HelloWorldParams{
+        Name: ptr("World"),
+    })
+    fmt.Println(resp.JSON200.Message)
+}
+
+func ptr[T any](v T) *T { return &v }
+```
+
+## go generate
+
+Add a `generate.go` file so `go generate ./...` keeps the client current:
+
+```go
+//go:generate oapi-codegen -generate types,client -package api -o client.gen.go http://localhost:3000/openapi.json
+package api
+```

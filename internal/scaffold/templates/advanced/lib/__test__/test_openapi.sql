@@ -132,3 +132,30 @@ BEGIN
 
     RAISE NOTICE '✓ OpenAPI 3.1 generator tests passed';
 END $$;
+
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_html text;
+BEGIN
+    RAISE NOTICE '-> Testing API explorer endpoint';
+
+    v_response := api.rest_invoke('GET', '/docs');
+
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'GET /docs returned %, expected 200', (v_response).status_code;
+    END IF;
+
+    v_html := convert_from((v_response).content, 'UTF8');
+
+    IF v_html NOT LIKE '%api-reference%' THEN
+        RAISE EXCEPTION 'GET /docs should contain Scalar API reference script tag';
+    END IF;
+
+    IF v_html NOT LIKE '%/openapi.json%' THEN
+        RAISE EXCEPTION 'GET /docs should reference /openapi.json';
+    END IF;
+
+    RAISE NOTICE '  + GET /docs returns HTML with Scalar API reference';
+    RAISE NOTICE '✓ API explorer tests passed';
+END $$;

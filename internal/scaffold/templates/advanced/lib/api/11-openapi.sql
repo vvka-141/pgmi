@@ -178,7 +178,46 @@ END;
     $body$
 );
 
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'a7f02000-0004-4000-8000-00000000a002',
+        'uri', '^/docs(\?.*)?$',
+        'httpMethod', '^GET$',
+        'name', 'openapi_docs',
+        'title', 'Interactive API Explorer',
+        'description', 'Renders a Scalar API reference UI pointing at /openapi.json.',
+        'requiresAuth', false,
+        'autoLog', false,
+        'produces', jsonb_build_array('text/html')
+    ),
+    $body$
+DECLARE
+    v_html text;
+    v_resp api.http_response;
+BEGIN
+    v_html := '<!doctype html>'
+        || '<html>'
+        || '<head>'
+        || '<title>' || current_database() || ' API Reference</title>'
+        || '<meta charset="utf-8"/>'
+        || '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
+        || '</head>'
+        || '<body>'
+        || '<script id="api-reference" data-url="/openapi.json"></script>'
+        || '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>'
+        || '</body>'
+        || '</html>';
+
+    v_resp.status_code := 200;
+    v_resp.headers := extensions.hstore(ARRAY['content-type', 'text/html; charset=utf-8']);
+    v_resp.content := convert_to(v_html, 'UTF8');
+    RETURN v_resp;
+END;
+    $body$
+);
+
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.openapi_document() - OpenAPI 3.1 generator';
     RAISE NOTICE '  ✓ GET /openapi.json - self-describing REST contract';
+    RAISE NOTICE '  ✓ GET /docs - interactive Scalar API explorer';
 END $$;
