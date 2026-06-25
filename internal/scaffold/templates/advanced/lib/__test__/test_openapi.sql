@@ -101,5 +101,34 @@ BEGIN
 
     RAISE NOTICE '  + Path/method conversion utilities work';
 
+    -- ========================================================================
+    -- Schema coverage: REST examples have output schemas
+    -- ========================================================================
+
+    IF EXISTS (
+        SELECT 1 FROM api.vw_handler_info
+        WHERE has_rest_route AND NOT has_output_schema
+          AND handler_function_name NOT LIKE 'openapi_%'
+    ) THEN
+        RAISE EXCEPTION 'REST handlers without output schema: %',
+            (SELECT string_agg(handler_function_name, ', ')
+             FROM api.vw_handler_info
+             WHERE has_rest_route AND NOT has_output_schema
+               AND handler_function_name NOT LIKE 'openapi_%');
+    END IF;
+
+    RAISE NOTICE '  + Schema coverage: all REST handlers declare output schema';
+
+    -- ========================================================================
+    -- OpenAPI document includes declared schemas (not fallback object)
+    -- ========================================================================
+
+    IF v_paths->'/hello'->'get'->'responses'->'200'->'content'->'application/json'->'schema'->>'type' = 'object'
+       AND v_paths->'/hello'->'get'->'responses'->'200'->'content'->'application/json'->'schema'->'properties' IS NULL THEN
+        RAISE EXCEPTION '/hello response schema should have properties (not bare object fallback)';
+    END IF;
+
+    RAISE NOTICE '  + Declared schemas appear in OpenAPI document';
+
     RAISE NOTICE '✓ OpenAPI 3.1 generator tests passed';
 END $$;

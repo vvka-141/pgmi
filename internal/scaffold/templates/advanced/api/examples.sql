@@ -57,7 +57,15 @@ SELECT api.create_or_replace_rest_handler(
         'uri', '^/hello(\\?.*)?$',
         'httpMethod', '^GET$',
         'name', 'hello_world',
-        'description', 'Simple hello world endpoint'
+        'description', 'Simple hello world endpoint',
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'message', jsonb_build_object('type', 'string'),
+                'timestamp', jsonb_build_object('type', 'string', 'format', 'date-time')
+            ),
+            'required', jsonb_build_array('message', 'timestamp')
+        )
     ),
     -- Handler body: invoked by the router when the URL matches.
     -- "request" is the api.rest_request parameter injected by the framework.
@@ -98,7 +106,20 @@ SELECT api.create_or_replace_rest_handler(
         'uri', '^/echo(\\?.*)?$',
         'httpMethod', '^POST$',
         'name', 'echo',
-        'description', 'Echo back the request body'
+        'description', 'Echo back the request body',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'description', 'Any JSON payload to echo back'
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'method', jsonb_build_object('type', 'string'),
+                'url', jsonb_build_object('type', 'string'),
+                'body', jsonb_build_object('type', 'object')
+            ),
+            'required', jsonb_build_array('method', 'url', 'body')
+        )
     ),
     -- The handler body echoes back method, URL, and parsed JSON body.
     $body$
@@ -138,8 +159,16 @@ SELECT api.create_or_replace_rest_handler(
         'httpMethod', '^GET$',
         'name', 'health_check',
         'description', 'Kubernetes liveness probe endpoint',
-        'autoLog', false,        -- Don't flood rest_exchange with probe traffic
-        'requiresAuth', false    -- Probes don't carry JWT tokens
+        'autoLog', false,
+        'requiresAuth', false,
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'status', jsonb_build_object('type', 'string', 'enum', jsonb_build_array('healthy')),
+                'timestamp', jsonb_build_object('type', 'string', 'format', 'date-time')
+            ),
+            'required', jsonb_build_array('status', 'timestamp')
+        )
     ),
     $body$
 BEGIN
@@ -240,7 +269,20 @@ SELECT api.create_or_replace_rpc_handler(
     jsonb_build_object(
         'id', 'e2000001-0002-4000-8000-000000000001',
         'methodName', 'system.time',
-        'description', 'Get current server time'
+        'description', 'Get current server time',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(),
+            'required', jsonb_build_array()
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'timestamp', jsonb_build_object('type', 'string', 'format', 'date-time'),
+                'timezone', jsonb_build_object('type', 'string')
+            ),
+            'required', jsonb_build_array('timestamp', 'timezone')
+        )
     ),
     $body$
 BEGIN
@@ -467,7 +509,19 @@ SELECT api.create_or_replace_rest_handler(
         'httpMethod', '^GET$',
         'name', 'get_current_user',
         'description', 'Get authenticated user profile from membership schema',
-        'requiresAuth', true
+        'requiresAuth', true,
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'user_id', jsonb_build_object('type', 'string'),
+                'email', jsonb_build_object('type', 'string', 'format', 'email'),
+                'display_name', jsonb_build_object('type', 'string'),
+                'email_verified', jsonb_build_object('type', 'boolean'),
+                'member_org_ids', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid')),
+                'owner_org_ids', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid'))
+            ),
+            'required', jsonb_build_array('user_id', 'email')
+        )
     ),
     $body$
 DECLARE
@@ -503,7 +557,25 @@ SELECT api.create_or_replace_rest_handler(
         'httpMethod', '^GET$',
         'name', 'list_organizations',
         'description', 'List organizations the authenticated user belongs to (RLS-filtered)',
-        'requiresAuth', true
+        'requiresAuth', true,
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'organizations', jsonb_build_object(
+                    'type', 'array',
+                    'items', jsonb_build_object(
+                        'type', 'object',
+                        'properties', jsonb_build_object(
+                            'id', jsonb_build_object('type', 'string', 'format', 'uuid'),
+                            'name', jsonb_build_object('type', 'string'),
+                            'slug', jsonb_build_object('type', 'string'),
+                            'is_personal', jsonb_build_object('type', 'boolean')
+                        )
+                    )
+                )
+            ),
+            'required', jsonb_build_array('organizations')
+        )
     ),
     $body$
 DECLARE

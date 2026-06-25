@@ -49,6 +49,10 @@ SELECT
     array_to_string(h.produces, ', ') AS produces_formatted,
     h.requires_auth,
 
+    h.input_json_schema IS NOT NULL AS has_input_schema,
+    h.output_json_schema IS NOT NULL AS has_output_schema,
+    h.input_json_schema IS NOT NULL AND h.output_json_schema IS NOT NULL AS schema_complete,
+
     h.returns_type::text AS returns_type_name,
     h.returns_set,
     h.volatility,
