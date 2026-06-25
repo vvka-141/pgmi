@@ -16,9 +16,9 @@ DO $$ BEGIN RAISE NOTICE '→ Installing handler registry'; END $$;
 -- ============================================================================
 -- Handler Registry Table
 -- ============================================================================
--- object_id core.entity_id opts this table into the DDL-trigger entity
--- standards: created_at and deleted_at columns are injected automatically by
--- core_entity_table_standards.
+-- object_id core.entity_id opts this table into entity lifecycle standards:
+-- created_at and deleted_at columns are injected by the deploy-end sweep.
+-- The inline call below ensures columns exist immediately for indexes.
 
 CREATE TABLE IF NOT EXISTS api.handler (
     object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -62,23 +62,7 @@ ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_sch
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
 
--- Fail fast if the entity-standards DDL trigger did not inject created_at /
--- deleted_at. Prevents opaque downstream errors on INSERT.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_attribute
-        WHERE attrelid = 'api.handler'::regclass
-          AND attname = 'created_at' AND NOT attisdropped
-    ) OR NOT EXISTS (
-        SELECT 1 FROM pg_attribute
-        WHERE attrelid = 'api.handler'::regclass
-          AND attname = 'deleted_at' AND NOT attisdropped
-    ) THEN
-        RAISE EXCEPTION 'api.handler missing created_at/deleted_at — core_entity_table_standards event trigger did not fire'
-            USING HINT = 'Verify lib/core/entity-standards.sql ran and the deployment role is superuser.';
-    END IF;
-END $$;
+DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('api.handler'); END $$;
 
 CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 
@@ -87,7 +71,7 @@ CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
 -- ============================================================================
 
 COMMENT ON TABLE api.handler IS
-    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as an immutable snapshot. object_id core.entity_id opts the table into entity lifecycle standards (created_at, deleted_at injected by the DDL trigger).';
+    'Central registry for all protocol handlers (REST, RPC, MCP). Captures pg_proc metadata at registration time as an immutable snapshot. object_id core.entity_id opts the table into entity lifecycle standards (created_at, deleted_at injected by the deploy-end sweep).';
 
 COMMENT ON COLUMN api.handler.handler_type IS
     'Protocol type: rest, rpc, mcp_tool, mcp_resource, mcp_prompt, queue';

@@ -61,24 +61,34 @@ Base tables and patterns for domain modeling.
 | File | Purpose |
 |------|---------|
 | `foundation.sql` | `core.entity_id` domain (opt-in marker) |
-| `entity-standards.sql` | DDL event trigger that injects `created_at`/`deleted_at` on tables declaring `object_id core.entity_id` |
+| `entity-standards.sql` | Deploy-end sweep that injects `created_at`/`deleted_at` on tables declaring `object_id core.entity_id`. No superuser required. |
 
-**Opt-In Entity Standards:**
+**Opt-In Entity Standards (dual-mode):**
+
+The deploy-end sweep automatically finds every table with `object_id core.entity_id` and injects `created_at`/`deleted_at`. No per-table boilerplate required.
+
 ```sql
--- Declare object_id as core.entity_id; the trigger handles the rest.
--- Works identically for plain and partitioned tables.
 CREATE TABLE core.customer (
     object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL
 );
-
--- Injected automatically by core_entity_table_standards:
---   created_at timestamptz NOT NULL DEFAULT now()
---   deleted_at timestamptz NULL
+-- created_at/deleted_at injected automatically by deploy-end sweep
 ```
 
-Index strategy is left to you — the trigger does not create any indexes. Add whatever partial or covering indexes fit your access pattern.
+When you need the lifecycle columns immediately (e.g., for a partial index), call the reconcile function inline:
+
+```sql
+CREATE TABLE core.customer (
+    object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL
+);
+DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('core.customer'); END $$;
+CREATE INDEX ix_customer_active ON core.customer(email) WHERE deleted_at IS NULL;
+```
+
+The inline call is idempotent — the later sweep re-touching the same table is free. Index strategy is left to you — the reconcile does not create any indexes.
 
 ### `common/` - Cross-Cutting Primitives
 
@@ -103,7 +113,7 @@ Tests for the framework itself (not your application).
 |------|-------|
 | `test_api_protocols.sql` | REST/RPC/MCP gateway functions |
 | `test_auth_enforcement.sql` | Authentication requirements |
-| `test_entity_standards.sql` | DDL-trigger entity standards (`created_at`/`deleted_at` injection) |
+| `test_entity_standards.sql` | Entity standards reconcile (`created_at`/`deleted_at` injection, sweep + inline call) |
 | `test_error_handling.sql` | Error classification and HTTP status mapping |
 | `test_handler_lifecycle.sql` | Handler registration, name validation, query-string routing |
 | `test_mcp_protocol.sql` | MCP `initialize` / `ping` / dispatcher + JSON-RPC 2.0 compliance |

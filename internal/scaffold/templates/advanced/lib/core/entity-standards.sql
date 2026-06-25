@@ -3,10 +3,9 @@
     id="a7f02000-0002-4000-8000-000000000001"
     idempotent="true">
   <description>
-    Entity table standards: DDL event trigger that injects created_at and
-    deleted_at columns on tables declaring object_id core.entity_id. Index
-    strategy is deliberately left to the schema author — this trigger does not
-    create any indexes.
+    Entity table standards: deploy-time reconcile that injects created_at and
+    deleted_at columns on tables declaring object_id core.entity_id. No
+    superuser required. Index strategy is left to the schema author.
   </description>
   <sortKeys>
     <key>003/002</key>
@@ -16,10 +15,9 @@
 
 DO $$ BEGIN RAISE NOTICE '→ Installing entity table standards'; END $$;
 
-CREATE OR REPLACE FUNCTION core.apply_entity_table_standards(p_table regclass)
+CREATE OR REPLACE FUNCTION pg_temp.apply_entity_table_standards(p_table regclass)
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
 SET search_path = pg_catalog, core
 AS $$
 DECLARE
@@ -68,7 +66,7 @@ BEGIN
         );
         EXECUTE format(
             'COMMENT ON COLUMN %s.created_at IS %L',
-            p_table, 'Row creation timestamp (injected by core entity standards trigger)'
+            p_table, 'Row creation timestamp (injected by entity standards reconcile)'
         );
     END IF;
 
@@ -85,7 +83,7 @@ BEGIN
         );
         EXECUTE format(
             'COMMENT ON COLUMN %s.deleted_at IS %L',
-            p_table, 'Soft-delete timestamp; NULL while active (injected by core entity standards trigger)'
+            p_table, 'Soft-delete timestamp; NULL while active (injected by entity standards reconcile)'
         );
     END IF;
 
@@ -93,71 +91,58 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION core.apply_entity_table_standards(regclass) IS
-    'Injects created_at and deleted_at columns on tables declaring object_id core.entity_id. Does not create indexes — index strategy is the schema author''s decision.';
-
-CREATE OR REPLACE FUNCTION core.entity_table_ddl_hook()
-RETURNS event_trigger
+CREATE OR REPLACE FUNCTION pg_temp.apply_entity_standards_all()
+RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
 SET search_path = pg_catalog, core
 AS $$
 DECLARE
-    cmd record;
+    v_tbl regclass;
+    v_missing text;
 BEGIN
-    FOR cmd IN
-        SELECT * FROM pg_event_trigger_ddl_commands()
-        WHERE object_type = 'table'
+    FOR v_tbl IN
+        SELECT c.oid::regclass
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid
+        WHERE c.relkind IN ('r', 'p')
+          AND NOT c.relispartition
+          AND a.attname = 'object_id'
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.atttypid = 'core.entity_id'::regtype
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_temp')
+          AND n.nspname NOT LIKE 'pg_toast%'
     LOOP
-        PERFORM core.apply_entity_table_standards(cmd.objid::regclass);
+        PERFORM pg_temp.apply_entity_table_standards(v_tbl);
     END LOOP;
+
+    SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ')
+    INTO v_missing
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid
+    WHERE c.relkind IN ('r', 'p')
+      AND NOT c.relispartition
+      AND a.attname = 'object_id'
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+      AND a.atttypid = 'core.entity_id'::regtype
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_temp')
+      AND n.nspname NOT LIKE 'pg_toast%'
+      AND (
+          NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.oid AND attname = 'created_at' AND attnum > 0 AND NOT attisdropped)
+          OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.oid AND attname = 'deleted_at' AND attnum > 0 AND NOT attisdropped)
+      );
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Entity standards conformance failure: tables still missing created_at/deleted_at after sweep: %', v_missing
+            USING HINT = 'This should not happen — investigate pg_temp.apply_entity_table_standards().';
+    END IF;
 END;
 $$;
 
-COMMENT ON FUNCTION core.entity_table_ddl_hook() IS
-    'Event-trigger function (core_entity_table_standards) that runs core.apply_entity_table_standards on every table created or altered via DDL.';
-
--- CREATE EVENT TRIGGER requires superuser. Wrap in SET ROLE reset, restore
--- the owner role in all exit paths so a failure here cannot leave the session
--- with elevated privileges.
-DO $su$
-DECLARE
-    v_owner_role text := pg_temp.deployment_setting('database_owner_role');
-    v_is_super   boolean;
-    v_installed  boolean;
-BEGIN
-    EXECUTE 'RESET ROLE';
-
-    SELECT rolsuper INTO v_is_super FROM pg_roles WHERE rolname = current_user;
-    IF NOT COALESCE(v_is_super, false) THEN
-        EXECUTE format('SET ROLE %I', v_owner_role);
-        RAISE EXCEPTION 'pgmi advanced template requires a superuser deployment connection; current role % is not superuser', current_user
-            USING HINT = 'Connect as a superuser (or a role with CREATEROLE + SUPERUSER) to install the core_entity_table_standards event trigger, or disable entity-standards by removing lib/core/entity-standards.sql from the deployment.';
-    END IF;
-
-    EXECUTE 'DROP EVENT TRIGGER IF EXISTS core_entity_table_standards';
-    EXECUTE format(
-        'CREATE EVENT TRIGGER core_entity_table_standards '
-        'ON ddl_command_end '
-        'WHEN TAG IN (''CREATE TABLE'', ''ALTER TABLE'') '
-        'EXECUTE FUNCTION core.entity_table_ddl_hook()'
-    );
-
-    SELECT EXISTS (
-        SELECT 1 FROM pg_event_trigger WHERE evtname = 'core_entity_table_standards'
-    ) INTO v_installed;
-    IF NOT v_installed THEN
-        EXECUTE format('SET ROLE %I', v_owner_role);
-        RAISE EXCEPTION 'core_entity_table_standards event trigger was not installed despite no error; refusing to continue';
-    END IF;
-
-    EXECUTE format('SET ROLE %I', v_owner_role);
-EXCEPTION WHEN OTHERS THEN
-    EXECUTE format('SET ROLE %I', v_owner_role);
-    RAISE;
-END $su$;
-
 DO $$ BEGIN
-    RAISE NOTICE '  ✓ core.apply_entity_table_standards(regclass) - column injection';
-    RAISE NOTICE '  ✓ core_entity_table_standards - DDL event trigger (requires superuser)';
+    RAISE NOTICE '  ✓ pg_temp.apply_entity_table_standards(regclass) - column injection';
+    RAISE NOTICE '  ✓ pg_temp.apply_entity_standards_all() - deploy-end sweep';
 END $$;

@@ -112,19 +112,7 @@ CREATE TABLE IF NOT EXISTS membership.api_key (
     CONSTRAINT ck_api_key_key_hash_not_empty CHECK (length(key_hash) = 64)
 );
 
--- Fail fast if the entity-standards DDL trigger did not inject created_at /
--- deleted_at (partial indexes below reference deleted_at).
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_attribute
-        WHERE attrelid = 'membership.api_key'::regclass
-          AND attname = 'deleted_at' AND NOT attisdropped
-    ) THEN
-        RAISE EXCEPTION 'membership.api_key missing deleted_at — core_entity_table_standards event trigger did not fire'
-            USING HINT = 'Verify lib/core/entity-standards.sql ran and the deployment role is superuser.';
-    END IF;
-END $$;
+DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('membership.api_key'); END $$;
 
 CREATE INDEX IF NOT EXISTS ix_api_key_org
     ON membership.api_key(organization_id)

@@ -14,7 +14,7 @@ An optional architecture where PostgreSQL is your application server — HTTP ro
 
 **Prerequisites:** Familiarity with PostgreSQL functions, views, and transactions. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full decision guide.
 
-**Deployment connection must be a superuser.** `lib/core/entity-standards.sql` installs a DDL event trigger (`core_entity_table_standards`) — `CREATE EVENT TRIGGER` is a superuser-only operation. pgmi fails fast at install time with an actionable error if the connection lacks `rolsuper`. Managed PostgreSQL providers that do not expose superuser access (most AWS RDS tiers, some Azure Flexible Server configurations) cannot run this template as-is. If that applies to you: strip `lib/core/entity-standards.sql` from the deployment and add `created_at`/`deleted_at` columns explicitly on every entity table.
+**No superuser required.** The template works with any role that can create roles, schemas, and extensions. Entity lifecycle standards (`created_at`/`deleted_at`) are enforced by a deploy-end sweep over `pg_temp` functions — no DDL event trigger, no superuser privilege. Compatible with managed PostgreSQL providers (AWS RDS, Cloud SQL, Azure Flexible Server, Supabase, Neon).
 
 ## Deployment Architecture
 
@@ -139,7 +139,7 @@ This template is a working reference system, not a framework you must keep whole
 
 **Safe to delete:**
 - `api/examples.sql` — placeholder REST/RPC/MCP handlers. Replace with your own.
-- `lib/core/entity-standards.sql` — the superuser-only DDL event trigger. Required strip for managed providers without superuser access (most AWS RDS tiers, Cloud SQL, Supabase, Neon). After removing it, declare `created_at`/`deleted_at` explicitly on entity tables.
+- `lib/core/entity-standards.sql` — the deploy-end entity standards sweep. Without it, declare `created_at`/`deleted_at` explicitly on entity tables.
 
 **Load-bearing — removing these is a rework, not a delete:**
 - **Role hierarchy and schema grants** — `database_owner/admin/api/customer` own every object and back every `GRANT` and RLS policy. If your org manages roles externally, override the role *names* via parameters (see Parameters below); don't delete the hierarchy.

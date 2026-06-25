@@ -147,27 +147,6 @@ END;
 $$;
 
 -- ============================================================================
--- CAPABILITY GUARD: fail fast on a non-superuser connection
--- ============================================================================
--- The advanced template installs a DDL event trigger (core_entity_table_
--- standards), and CREATE EVENT TRIGGER is superuser-only. Managed providers
--- (AWS RDS, GCP Cloud SQL, Supabase, Neon) do not grant superuser. Detect this
--- before creating any roles or schemas so the operator gets an actionable
--- message instead of a cryptic mid-deploy failure.
-DO $guard$
-BEGIN
-    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
-       AND EXISTS (
-           SELECT 1 FROM pg_temp.pgmi_source_view
-           WHERE path LIKE '%/entity-standards.sql'
-       )
-    THEN
-        RAISE EXCEPTION 'pgmi advanced template requires a superuser connection when lib/core/entity-standards.sql is present; current role % is not superuser', current_user
-            USING HINT = 'CREATE EVENT TRIGGER is superuser-only and managed clouds (RDS, Cloud SQL, Supabase, Neon) do not grant it. Connect as a superuser, or remove lib/core/entity-standards.sql and add created_at/deleted_at columns explicitly on entity tables. See docs/PRODUCTION.md.';
-    END IF;
-END $guard$;
-
--- ============================================================================
 -- SUPERUSER PHASE: Roles, Extensions, Ownership
 -- ============================================================================
 DO $superuser$
@@ -476,6 +455,7 @@ BEGIN;
     SELECT pg_advisory_xact_lock(hashtext('pgmi_deploy_' || current_database()));
     DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
     SELECT pg_temp.deploy();
+    SELECT pg_temp.apply_entity_standards_all();
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;
