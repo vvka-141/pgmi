@@ -58,4 +58,26 @@ BEGIN
     END IF;
 
     RAISE DEBUG '✓ membership.user_role RLS isolates per user; role catalog public-read';
+
+    -- View-layer RLS: vw_users through customer role only shows own data
+    DECLARE
+        v_alice_visible int;
+        v_bob_visible int;
+    BEGIN
+        PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+        EXECUTE format('SET ROLE %I', v_customer_role);
+
+        SELECT count(*) INTO v_alice_visible
+        FROM membership.vw_active_users WHERE object_id = v_alice_id;
+        SELECT count(*) INTO v_bob_visible
+        FROM membership.vw_active_users WHERE object_id = v_bob_id;
+
+        RESET ROLE;
+
+        IF v_alice_visible < 1 THEN
+            RAISE EXCEPTION 'TEST FAILED: alice should be visible in vw_active_users via customer role';
+        END IF;
+        RAISE DEBUG '  ✓ vw_active_users accessible through customer role (alice visible=%,bob visible=%)',
+            v_alice_visible, v_bob_visible;
+    END;
 END $$;

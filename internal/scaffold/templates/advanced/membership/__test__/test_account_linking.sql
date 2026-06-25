@@ -25,6 +25,36 @@ BEGIN
     END IF;
     RAISE DEBUG '  ✓ User has 2 linked identities';
 
+    -- View-layer: vw_user_identities shows both providers
+    IF (SELECT count(*) FROM membership.vw_user_identities
+        WHERE user_object_id = v_alice_id) != 2 THEN
+        RAISE EXCEPTION 'TEST FAILED: vw_user_identities should show 2 entries for alice';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM membership.vw_user_identities
+        WHERE user_object_id = v_alice_id AND idp_provider = 'azure-ad'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: vw_user_identities missing azure-ad identity';
+    END IF;
+    RAISE DEBUG '  ✓ vw_user_identities shows both google and azure-ad';
+
+    -- View-layer: vw_user_claims aggregates identities
+    DECLARE
+        v_claims record;
+    BEGIN
+        SELECT identities, member_org_ids, roles INTO v_claims
+        FROM membership.vw_user_claims WHERE user_id = v_alice_id;
+
+        IF jsonb_array_length(v_claims.identities) != 2 THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_user_claims should have 2 identities, got %', jsonb_array_length(v_claims.identities);
+        END IF;
+        IF array_length(v_claims.member_org_ids, 1) < 1 THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_user_claims should show at least 1 org membership';
+        END IF;
+        RAISE DEBUG '  ✓ vw_user_claims aggregates identities (%) and org memberships (%)',
+            jsonb_array_length(v_claims.identities), array_length(v_claims.member_org_ids, 1);
+    END;
+
     v_unverified_id := membership.upsert_user('local', 'unverified-001', 'unverified@example.com', 'Unverified', false);
     v_unverified_user_id := membership.upsert_user('google', 'unverified-google', 'unverified@example.com', 'Unverified Google', false);
     IF v_unverified_user_id != v_unverified_id THEN

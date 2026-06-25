@@ -46,6 +46,23 @@ BEGIN
     END IF;
     RAISE DEBUG '  ✓ Re-upsert updates display_name';
 
+    -- View-layer: vw_users shows correct role aggregation
+    DECLARE
+        v_view_roles text[];
+        v_view_email text;
+    BEGIN
+        SELECT email, roles INTO v_view_email, v_view_roles
+        FROM membership.vw_users WHERE object_id = v_alice_id;
+
+        IF v_view_email != 'alice@example.com' THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_users email mismatch: %', v_view_email;
+        END IF;
+        IF v_view_roles != '{}' THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_users roles should be empty array for user with no roles, got %', v_view_roles;
+        END IF;
+        RAISE DEBUG '  ✓ vw_users shows correct attributes and empty roles array';
+    END;
+
     RAISE DEBUG '✓ User upsert tests passed';
 END $$;
 

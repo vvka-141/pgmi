@@ -98,6 +98,39 @@ BEGIN
 
     RAISE DEBUG '  ✓ auth.idp_subject=apikey|% resolves to alice', v_created.out_key_id;
 
+    -- View-layer: vw_user_claims includes the apikey identity
+    DECLARE
+        v_claims_identities jsonb;
+        v_has_apikey boolean;
+    BEGIN
+        SELECT identities INTO v_claims_identities
+        FROM membership.vw_user_claims WHERE user_id = v_alice_id;
+
+        SELECT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(v_claims_identities) elem
+            WHERE elem->>'provider' = 'apikey' AND elem->>'subject_id' = v_created.out_key_id
+        ) INTO v_has_apikey;
+
+        IF NOT v_has_apikey THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_user_claims should include apikey identity';
+        END IF;
+        RAISE DEBUG '  ✓ vw_user_claims includes apikey|% identity', v_created.out_key_id;
+    END;
+
+    -- View-layer: vw_current_user resolves from apikey identity
+    DECLARE
+        v_current record;
+    BEGIN
+        SELECT * INTO v_current FROM api.vw_current_user;
+        IF v_current.user_id != v_alice_id THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_current_user should resolve to alice via apikey identity';
+        END IF;
+        IF v_current.email != 'alice@example.com' THEN
+            RAISE EXCEPTION 'TEST FAILED: vw_current_user email mismatch';
+        END IF;
+        RAISE DEBUG '  ✓ vw_current_user resolves alice via apikey identity';
+    END;
+
     PERFORM set_config('auth.idp_subject', '', true);
 
     -- ========================================================================

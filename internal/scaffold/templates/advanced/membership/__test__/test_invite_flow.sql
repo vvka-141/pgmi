@@ -27,6 +27,21 @@ BEGIN
     END IF;
     RAISE DEBUG '  ✓ Invitation created as pending';
 
+    -- View-layer: bob appears in vw_pending_invitations, not vw_active_memberships
+    IF NOT EXISTS (
+        SELECT 1 FROM membership.vw_pending_invitations
+        WHERE user_id = v_bob_id AND organization_id = v_org_id
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: pending bob not in vw_pending_invitations';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM membership.vw_active_memberships
+        WHERE user_id = v_bob_id AND organization_id = v_org_id
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: pending bob should NOT be in vw_active_memberships';
+    END IF;
+    RAISE DEBUG '  ✓ vw_pending_invitations shows bob; vw_active_memberships does not';
+
     UPDATE membership.organization_member
     SET status = 'active', joined_at = now()
     WHERE organization_id = v_org_id AND user_id = v_bob_id;
@@ -42,6 +57,21 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: joined_at should be set';
     END IF;
     RAISE DEBUG '  ✓ Invitation accepted (pending → active)';
+
+    -- View-layer: after accept, bob moves to vw_active_memberships
+    IF NOT EXISTS (
+        SELECT 1 FROM membership.vw_active_memberships
+        WHERE user_id = v_bob_id AND organization_id = v_org_id AND role = 'reader'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: accepted bob not in vw_active_memberships';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM membership.vw_pending_invitations
+        WHERE user_id = v_bob_id AND organization_id = v_org_id
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: accepted bob should NOT remain in vw_pending_invitations';
+    END IF;
+    RAISE DEBUG '  ✓ After accept: bob in vw_active_memberships, gone from vw_pending_invitations';
 
     RAISE DEBUG '✓ Invitation flow tests passed';
 END $$;
