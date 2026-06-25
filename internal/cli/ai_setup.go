@@ -15,6 +15,7 @@ import (
 
 var (
 	setupAssistant  string
+	setupAll        bool
 	setupGlobal     bool
 	setupDryRun     bool
 	setupForce      bool
@@ -37,13 +38,17 @@ var aiSetupCmd = &cobra.Command{
 	Short: "Write pgmi guidance for a coding assistant",
 	Long: `Write a pgmi skill into a coding assistant's skill directory.
 
-  pgmi ai setup                       Detect .claude/, write the Claude skill
-  pgmi ai setup --assistant claude    Same, explicit
-  pgmi ai setup --assistant agents    Write AGENTS.md (Codex, opencode, etc.)
-  pgmi ai setup --assistant codex     Same as agents (--global writes ~/.codex/)
-  pgmi ai setup --assistant opencode  Same as agents (--global writes ~/.config/opencode/)
-  pgmi ai setup --global              Write to the global location instead
-  pgmi ai setup --dry-run             Print planned changes, write nothing
+  pgmi ai setup                          Claude skill (default)
+  pgmi ai setup --assistant cursor       Cursor rules (.cursor/rules/pgmi.mdc)
+  pgmi ai setup --assistant copilot      GitHub Copilot (.github/copilot-instructions.md)
+  pgmi ai setup --assistant windsurf     Windsurf rules (.windsurf/rules/pgmi.md)
+  pgmi ai setup --assistant cline        Cline rules (.clinerules/pgmi.md)
+  pgmi ai setup --assistant antigravity  Google Antigravity (.agents/skills/pgmi/)
+  pgmi ai setup --assistant agents       AGENTS.md (also serves Junie, Codex, opencode)
+  pgmi ai setup --all                    Write guidance for every assistant
+  pgmi ai setup --all --force            Same, overwriting hand-edited files
+  pgmi ai setup --global                 Write to the global location instead
+  pgmi ai setup --dry-run                Print planned changes, write nothing
 
 The skill is generated from embedded content and stamped with this binary's
 version. Default target is project-local .claude/skills/pgmi/ (commit it to
@@ -72,73 +77,84 @@ func init() {
 	aiCmd.AddCommand(aiSetupCmd)
 	aiCmd.AddCommand(aiCheckCmd)
 
-	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, codex, opencode, codex-skills)")
+	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
+	aiSetupCmd.Flags().BoolVar(&setupAll, "all", false, "Write guidance for every supported assistant")
 	aiSetupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Write to ~/.claude/ instead of the project")
 	aiSetupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "Print planned file changes, write nothing")
 	aiSetupCmd.Flags().BoolVar(&setupForce, "force", false, "Overwrite a hand-edited skill file")
 	aiSetupCmd.Flags().BoolVar(&setupClaudeMd, "claude-md", false, "Add the managed pgmi pointer to CLAUDE.md")
 	aiSetupCmd.Flags().BoolVar(&setupNoClaudeMd, "no-claude-md", false, "Skip the CLAUDE.md pointer")
 	aiSetupCmd.MarkFlagsMutuallyExclusive("claude-md", "no-claude-md")
+	aiSetupCmd.MarkFlagsMutuallyExclusive("assistant", "all")
+	aiSetupCmd.MarkFlagsMutuallyExclusive("all", "global")
 	_ = aiSetupCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 
-	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, codex, opencode, codex-skills)")
+	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
 	aiCheckCmd.Flags().BoolVar(&checkGlobal, "global", false, "Check ~/.claude/ instead of the project")
 	_ = aiCheckCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 }
 
 func runAISetup(cmd *cobra.Command, args []string) error {
-	assistant, err := resolveAssistant(setupAssistant)
-	if err != nil {
-		return err
-	}
-
 	if !setupGlobal && !isPgmiProject() {
 		return fmt.Errorf("not a pgmi project (no deploy.sql or pgmi.yaml found)\nRun from a pgmi project directory, or use --global for user-wide setup")
 	}
 
-	root, err := skillsRoot(assistant, setupGlobal)
+	assistants, err := resolveSetupAssistants()
 	if err != nil {
 		return err
 	}
 
 	stamp := buildStamp()
-	files, err := ai.GenerateSetup(assistant, stamp)
-	if err != nil {
-		return err
-	}
-
 	conflicts := 0
-	for _, f := range files {
-		target := filepath.Join(root, filepath.FromSlash(f.RelPath))
-		action, err := classifyFile(target, f.Content)
+	wroteClaudeVariant := false
+
+	for _, assistant := range assistants {
+		root, err := skillsRoot(assistant, setupGlobal)
 		if err != nil {
 			return err
 		}
 
-		switch action {
-		case actionUnchanged:
-			// Silent: nothing to do is the common idempotent case.
-		case actionConflict:
-			if !setupForce {
-				conflicts++
-				fmt.Fprintf(os.Stderr, "edited     %s (hand-edited; re-run with --force to overwrite)\n", displayPath(target))
-				continue
-			}
-			if err := applyWrite(target, f.Content, "overwrite", "overwrote"); err != nil {
+		files, err := ai.GenerateSetup(assistant, stamp)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range files {
+			target := filepath.Join(root, filepath.FromSlash(f.RelPath))
+			action, err := classifyFile(target, f.Content)
+			if err != nil {
 				return err
 			}
-		case actionCreate:
-			if err := applyWrite(target, f.Content, "create", "created"); err != nil {
-				return err
+
+			switch action {
+			case actionUnchanged:
+				// Silent: nothing to do is the common idempotent case.
+			case actionConflict:
+				if !setupForce {
+					conflicts++
+					fmt.Fprintf(os.Stderr, "edited     %s (hand-edited; re-run with --force to overwrite)\n", displayPath(target))
+					continue
+				}
+				if err := applyWrite(target, f.Content, "overwrite", "overwrote"); err != nil {
+					return err
+				}
+			case actionCreate:
+				if err := applyWrite(target, f.Content, "create", "created"); err != nil {
+					return err
+				}
+			case actionUpdate:
+				if err := applyWrite(target, f.Content, "update", "updated"); err != nil {
+					return err
+				}
 			}
-		case actionUpdate:
-			if err := applyWrite(target, f.Content, "update", "updated"); err != nil {
-				return err
-			}
+		}
+
+		if assistant == "claude" {
+			wroteClaudeVariant = true
 		}
 	}
 
-	if !setupGlobal && assistant == "claude" {
+	if !setupGlobal && wroteClaudeVariant {
 		if err := maybeWriteClaudeMd(); err != nil {
 			return err
 		}
@@ -151,6 +167,17 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, "Dry run: no files written.")
 	}
 	return nil
+}
+
+func resolveSetupAssistants() ([]string, error) {
+	if setupAll {
+		return ai.AllCanonicalAssistants, nil
+	}
+	name, err := resolveAssistant(setupAssistant)
+	if err != nil {
+		return nil, err
+	}
+	return []string{name}, nil
 }
 
 // applyWrite writes a file unless --dry-run, reporting the action on stderr.
@@ -255,6 +282,16 @@ func skillsRoot(assistant string, global bool) (string, error) {
 		return ".", nil
 	case "codex-skills":
 		return filepath.Join(".codex", "skills"), nil
+	case "antigravity":
+		return filepath.Join(".agents", "skills"), nil
+	case "cursor":
+		return ".cursor", nil
+	case "copilot":
+		return ".github", nil
+	case "windsurf":
+		return ".windsurf", nil
+	case "cline":
+		return ".clinerules", nil
 	default:
 		return filepath.Join(".claude", "skills"), nil
 	}

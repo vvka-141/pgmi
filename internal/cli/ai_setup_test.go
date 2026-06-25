@@ -19,17 +19,10 @@ func claudeContent(t *testing.T) string {
 }
 
 func TestResolveAssistant(t *testing.T) {
-	if got, err := resolveAssistant("claude"); err != nil || got != "claude" {
-		t.Errorf("resolveAssistant(claude) = %q, %v", got, err)
-	}
-	if got, err := resolveAssistant("agents"); err != nil || got != "agents" {
-		t.Errorf("resolveAssistant(agents) = %q, %v", got, err)
-	}
-	if got, err := resolveAssistant("codex"); err != nil || got != "codex" {
-		t.Errorf("resolveAssistant(codex) = %q, %v", got, err)
-	}
-	if got, err := resolveAssistant("opencode"); err != nil || got != "opencode" {
-		t.Errorf("resolveAssistant(opencode) = %q, %v", got, err)
+	for _, name := range ai.SupportedAssistants {
+		if got, err := resolveAssistant(name); err != nil || got != name {
+			t.Errorf("resolveAssistant(%s) = %q, %v", name, got, err)
+		}
 	}
 	if _, err := resolveAssistant("unknown"); err == nil {
 		t.Error("expected error for unsupported assistant")
@@ -54,6 +47,24 @@ func TestSkillsRoot(t *testing.T) {
 	}
 	if !filepath.IsAbs(global) || !strings.HasSuffix(global, filepath.Join(".claude", "skills")) {
 		t.Errorf("global root = %q, want absolute path ending in .claude/skills", global)
+	}
+
+	cases := map[string]string{
+		"antigravity": filepath.Join(".agents", "skills"),
+		"cursor":      ".cursor",
+		"copilot":     ".github",
+		"windsurf":    ".windsurf",
+		"cline":       ".clinerules",
+	}
+	for name, want := range cases {
+		got, err := skillsRoot(name, false)
+		if err != nil {
+			t.Errorf("skillsRoot(%s): %v", name, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("skillsRoot(%s) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -261,6 +272,47 @@ func TestUpsertClaudeMdPointer_DanglingBegin(t *testing.T) {
 	}
 	if strings.Contains(s, "leftover") {
 		t.Errorf("dangling content should be absorbed, got:\n%s", s)
+	}
+}
+
+func TestRunAISetup_All(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("deploy.sql", []byte("-- deploy\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	setupAssistant = ""
+	setupAll = true
+	setupGlobal = false
+	setupDryRun = false
+	setupForce = false
+	setupClaudeMd = false
+	setupNoClaudeMd = true
+	t.Cleanup(func() {
+		setupAll = false
+		setupNoClaudeMd = false
+		setupAssistant = ""
+	})
+
+	if err := runAISetup(aiSetupCmd, nil); err != nil {
+		t.Fatalf("setup --all: %v", err)
+	}
+
+	expected := map[string]string{
+		"claude":      filepath.Join(".claude", "skills", "pgmi", "SKILL.md"),
+		"agents":      "AGENTS.md",
+		"codex-skills": filepath.Join(".codex", "skills", "pgmi", "SKILL.md"),
+		"antigravity": filepath.Join(".agents", "skills", "pgmi", "SKILL.md"),
+		"cursor":      filepath.Join(".cursor", "rules", "pgmi.mdc"),
+		"copilot":     filepath.Join(".github", "copilot-instructions.md"),
+		"windsurf":    filepath.Join(".windsurf", "rules", "pgmi.md"),
+		"cline":       filepath.Join(".clinerules", "pgmi.md"),
+	}
+	for name, path := range expected {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("--all: %s file missing at %s: %v", name, path, err)
+		}
 	}
 }
 

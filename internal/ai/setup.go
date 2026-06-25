@@ -41,7 +41,17 @@ type Adapter interface {
 }
 
 // SupportedAssistants lists the assistant names AdapterFor accepts.
-var SupportedAssistants = []string{"claude", "agents", "codex", "opencode", "codex-skills"}
+var SupportedAssistants = []string{
+	"claude", "agents", "codex", "opencode", "codex-skills",
+	"antigravity", "cursor", "copilot", "windsurf", "cline",
+}
+
+// AllCanonicalAssistants lists one entry per distinct output target, used by --all.
+// Aliases (codex, opencode → agents) are excluded to avoid writing the same file twice.
+var AllCanonicalAssistants = []string{
+	"claude", "agents", "codex-skills",
+	"antigravity", "cursor", "copilot", "windsurf", "cline",
+}
 
 // AdapterFor returns the adapter for an assistant name.
 func AdapterFor(name string) (Adapter, error) {
@@ -49,9 +59,19 @@ func AdapterFor(name string) (Adapter, error) {
 	case "claude":
 		return claudeAdapter{}, nil
 	case "agents", "codex", "opencode":
-		return agentsAdapter{}, nil
+		return singleFileAdapter{name: "agents", template: "agents-md.md", relPath: "AGENTS.md"}, nil
 	case "codex-skills":
 		return codexSkillsAdapter{}, nil
+	case "antigravity":
+		return antigravityAdapter{}, nil
+	case "cursor":
+		return singleFileAdapter{name: "cursor", template: "cursor-rules.md", relPath: "rules/pgmi.mdc"}, nil
+	case "copilot":
+		return singleFileAdapter{name: "copilot", template: "agents-md.md", relPath: "copilot-instructions.md"}, nil
+	case "windsurf":
+		return singleFileAdapter{name: "windsurf", template: "agents-md.md", relPath: "rules/pgmi.md"}, nil
+	case "cline":
+		return singleFileAdapter{name: "cline", template: "agents-md.md", relPath: "pgmi.md"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported assistant %q (supported: %s)", name, strings.Join(SupportedAssistants, ", "))
 	}
@@ -134,23 +154,35 @@ func skillSetupFiles(core string) ([]PlannedFile, error) {
 	return files, nil
 }
 
-type agentsAdapter struct{}
+type singleFileAdapter struct {
+	name     string
+	template string
+	relPath  string
+}
 
-func (agentsAdapter) Name() string { return "agents" }
+func (a singleFileAdapter) Name() string { return a.name }
 
-func (agentsAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
-	wrapper, err := readContent("content/setup/agents-md.md")
+func (a singleFileAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	wrapper, err := readContent("content/setup/" + a.template)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.Contains(wrapper, coreMarker) {
-		return nil, fmt.Errorf("agents-md.md is missing the %s marker", coreMarker)
+		return nil, fmt.Errorf("%s is missing the %s marker", a.template, coreMarker)
 	}
 
 	body := strings.ReplaceAll(wrapper, coreMarker, strings.TrimSpace(core))
 	return []PlannedFile{
-		{RelPath: "AGENTS.md", Content: body},
+		{RelPath: a.relPath, Content: body},
 	}, nil
+}
+
+type antigravityAdapter struct{}
+
+func (antigravityAdapter) Name() string { return "antigravity" }
+
+func (antigravityAdapter) Files(core string, stamp Stamp) ([]PlannedFile, error) {
+	return skillSetupFiles(core)
 }
 
 type claudeAdapter struct{}

@@ -128,12 +128,84 @@ func TestGenerateSetup_AgentsMd(t *testing.T) {
 }
 
 func TestAdapterFor(t *testing.T) {
-	for _, name := range []string{"claude", "agents", "codex", "opencode"} {
+	for _, name := range SupportedAssistants {
 		if _, err := AdapterFor(name); err != nil {
 			t.Errorf("%s should be supported: %v", name, err)
 		}
 	}
 	if _, err := AdapterFor("nope"); err == nil {
 		t.Error("expected error for unknown assistant")
+	}
+}
+
+func TestGenerateSetup_Antigravity(t *testing.T) {
+	files, err := GenerateSetup("antigravity", Stamp{Version: "1.0.0", Source: ModulePath})
+	if err != nil {
+		t.Fatalf("GenerateSetup(antigravity): %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected at least 1 file")
+	}
+	if files[0].RelPath != "pgmi/SKILL.md" {
+		t.Errorf("RelPath = %q, want pgmi/SKILL.md", files[0].RelPath)
+	}
+	if strings.Contains(files[0].Content, coreMarker) {
+		t.Errorf("core marker %q was not substituted", coreMarker)
+	}
+}
+
+func TestGenerateSetup_SingleFileAdapters(t *testing.T) {
+	cases := []struct {
+		name    string
+		relPath string
+	}{
+		{"cursor", "rules/pgmi.mdc"},
+		{"copilot", "copilot-instructions.md"},
+		{"windsurf", "rules/pgmi.md"},
+		{"cline", "pgmi.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := GenerateSetup(tc.name, Stamp{Version: "1.0.0", Source: ModulePath})
+			if err != nil {
+				t.Fatalf("GenerateSetup(%s): %v", tc.name, err)
+			}
+			if len(files) != 1 {
+				t.Fatalf("expected 1 file, got %d", len(files))
+			}
+			f := files[0]
+			if f.RelPath != tc.relPath {
+				t.Errorf("RelPath = %q, want %q", f.RelPath, tc.relPath)
+			}
+			for _, want := range []string{"pgmi", "deploy.sql", ModulePath} {
+				if !strings.Contains(f.Content, want) {
+					t.Errorf("generated %s missing %q", tc.name, want)
+				}
+			}
+			if strings.Contains(f.Content, coreMarker) {
+				t.Errorf("core marker %q was not substituted", coreMarker)
+			}
+			m := ParseManaged(f.Content)
+			if !m.HasStamp {
+				t.Error("expected managed stamp")
+			}
+			if m.Edited() {
+				t.Error("freshly generated file should not be reported as edited")
+			}
+		})
+	}
+}
+
+func TestGenerateSetup_CursorHasFrontmatter(t *testing.T) {
+	files, err := GenerateSetup("cursor", Stamp{Version: "1.0.0", Source: ModulePath})
+	if err != nil {
+		t.Fatalf("GenerateSetup(cursor): %v", err)
+	}
+	f := files[0]
+	if !strings.Contains(f.Content, "alwaysApply: true") {
+		t.Error("cursor output missing .mdc frontmatter (alwaysApply)")
+	}
+	if !strings.Contains(f.Content, "description:") {
+		t.Error("cursor output missing .mdc frontmatter (description)")
 	}
 }
