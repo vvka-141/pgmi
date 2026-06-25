@@ -472,6 +472,101 @@ END;
     $body$
 );
 
+-- ============================================================================
+-- GET /admin/maintenance/purge-exchanges
+-- ============================================================================
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'a7f02000-0005-4000-8000-000000000008',
+        'uri', '^/admin/maintenance/purge-exchanges(\?.*)?$',
+        'httpMethod', '^GET$',
+        'name', 'admin_purge_exchanges',
+        'description', 'Single-batch exchange purge for admin UI polling',
+        'requiresAuth', true,
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'deleted', jsonb_build_object('type', 'object',
+                    'properties', jsonb_build_object(
+                        'rest', jsonb_build_object('type', 'integer'),
+                        'rpc', jsonb_build_object('type', 'integer'),
+                        'mcp', jsonb_build_object('type', 'integer')
+                    )),
+                'totalDeleted', jsonb_build_object('type', 'integer'),
+                'cutoff', jsonb_build_object('type', 'string', 'format', 'date-time'),
+                'hasMore', jsonb_build_object('type', 'boolean')
+            ),
+            'required', jsonb_build_array('deleted', 'totalDeleted', 'cutoff', 'hasMore')
+        )
+    ),
+    $body$
+DECLARE
+    v_q extensions.hstore;
+    v_retention_days int;
+    v_batch_size int;
+    v_cutoff timestamptz;
+    v_rest_deleted int;
+    v_rpc_deleted int;
+    v_mcp_deleted int;
+    v_has_more boolean;
+BEGIN
+    v_q := api.query_params((request).url);
+    v_retention_days := COALESCE(common.try_cast(v_q -> 'retention_days', null::int), 30);
+    v_batch_size := COALESCE(common.try_cast(v_q -> 'batch_size', null::int), 5000);
+
+    IF v_retention_days < 1 THEN
+        RETURN api.problem_response(422, 'Unprocessable Entity', 'retention_days must be >= 1');
+    END IF;
+    IF v_batch_size < 1 OR v_batch_size > 50000 THEN
+        RETURN api.problem_response(422, 'Unprocessable Entity', 'batch_size must be 1-50000');
+    END IF;
+
+    v_cutoff := now() - (v_retention_days || ' days')::interval;
+
+    DELETE FROM api.rest_exchange
+    WHERE ctid = ANY (ARRAY(
+        SELECT ctid FROM api.rest_exchange
+        WHERE enqueued_at < v_cutoff
+        LIMIT v_batch_size));
+    GET DIAGNOSTICS v_rest_deleted = ROW_COUNT;
+
+    DELETE FROM api.rpc_exchange
+    WHERE ctid = ANY (ARRAY(
+        SELECT ctid FROM api.rpc_exchange
+        WHERE enqueued_at < v_cutoff
+        LIMIT v_batch_size));
+    GET DIAGNOSTICS v_rpc_deleted = ROW_COUNT;
+
+    DELETE FROM api.mcp_exchange
+    WHERE ctid = ANY (ARRAY(
+        SELECT ctid FROM api.mcp_exchange
+        WHERE enqueued_at < v_cutoff
+        LIMIT v_batch_size));
+    GET DIAGNOSTICS v_mcp_deleted = ROW_COUNT;
+
+    v_has_more := EXISTS (
+        SELECT 1 FROM api.rest_exchange WHERE enqueued_at < v_cutoff
+        UNION ALL
+        SELECT 1 FROM api.rpc_exchange WHERE enqueued_at < v_cutoff
+        UNION ALL
+        SELECT 1 FROM api.mcp_exchange WHERE enqueued_at < v_cutoff
+    );
+
+    RETURN api.json_response(200, jsonb_build_object(
+        'deleted', jsonb_build_object(
+            'rest', v_rest_deleted,
+            'rpc', v_rpc_deleted,
+            'mcp', v_mcp_deleted
+        ),
+        'totalDeleted', v_rest_deleted + v_rpc_deleted + v_mcp_deleted,
+        'cutoff', v_cutoff,
+        'hasMore', v_has_more
+    ));
+END;
+    $body$
+);
+
 DO $$ BEGIN
     RAISE DEBUG '  + GET /admin/dashboard - combined summaries';
     RAISE DEBUG '  + GET /admin/handlers - handler list with health';
@@ -480,4 +575,5 @@ DO $$ BEGIN
     RAISE DEBUG '  + GET /admin/exchanges - paginated exchange list';
     RAISE DEBUG '  + GET /admin/exchanges/stats - exchange statistics';
     RAISE DEBUG '  + GET /admin/exchanges/:id/replay - exchange replay SQL';
+    RAISE DEBUG '  + GET /admin/maintenance/purge-exchanges - batch exchange retention';
 END $$;
