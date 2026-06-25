@@ -117,6 +117,47 @@ No frontmatter here.
 	}
 }
 
+func TestGetClientDoctrine(t *testing.T) {
+	content, err := GetClientDoctrine()
+	if err != nil {
+		t.Fatalf("GetClientDoctrine: %v", err)
+	}
+	for _, want := range []string{"/openapi.json", "Anti-Copy Directive", "DO NOT copy"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("doctrine missing %q", want)
+		}
+	}
+}
+
+func TestGetClientIdiom_SeededLangs(t *testing.T) {
+	for _, lang := range SupportedClientLangs {
+		t.Run(lang, func(t *testing.T) {
+			content, err := GetClientIdiom(lang)
+			if err != nil {
+				t.Fatalf("GetClientIdiom(%s): %v", lang, err)
+			}
+			if content == "" {
+				t.Fatalf("GetClientIdiom(%s) returned empty", lang)
+			}
+			for _, want := range []string{"/openapi.json", "Anti-Copy Directive", "DO NOT copy"} {
+				if !strings.Contains(content, want) {
+					t.Errorf("%s idiom missing %q", lang, want)
+				}
+			}
+		})
+	}
+}
+
+func TestGetClientIdiom_Unknown(t *testing.T) {
+	content, err := GetClientIdiom("brainfuck")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != "" {
+		t.Error("expected empty string for unknown language")
+	}
+}
+
 func TestGetSkillNames(t *testing.T) {
 	names, err := GetSkillNames()
 	if err != nil {

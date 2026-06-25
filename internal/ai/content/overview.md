@@ -139,8 +139,10 @@ pgmi metadata validate <path> [--json]         # Validate metadata (no DB needed
 pgmi metadata plan <path> [--json]             # Show execution order (no DB needed)
 pgmi ai skills                                 # List AI skills
 pgmi ai skill <name>                           # Get skill content
+pgmi ai client [lang]                          # API client guidance (ts, python, go, csharp, rust)
 pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/
 pgmi ai setup --assistant agents               # Write AGENTS.md (Codex, opencode, etc.)
+pgmi ai setup --all                            # Write guidance for every assistant
 pgmi ai check                                  # Report whether that guidance is current
 ```
 
@@ -149,3 +151,4 @@ pgmi ai check                                  # Report whether that guidance is
 - `pgmi ai skill pgmi-sql` - Complete SQL conventions
 - `pgmi ai skill pgmi-philosophy` - Architectural principles
 - `pgmi ai skill pgmi-templates` - Production template guide
+- `pgmi ai client [lang]` - Consuming the API from code? Client guidance for TypeScript, Python, Go, C#, Rust

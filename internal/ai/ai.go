@@ -116,6 +116,29 @@ func GetSkillNames() ([]string, error) {
 	return names, nil
 }
 
+// SupportedClientLangs lists the language idioms seeded in content/client/.
+var SupportedClientLangs = []string{"typescript", "python", "go", "csharp", "rust"}
+
+// GetClientDoctrine returns the language-agnostic API client guidance.
+func GetClientDoctrine() (string, error) {
+	content, err := contentFS.ReadFile("content/client/doctrine.md")
+	if err != nil {
+		return "", fmt.Errorf("failed to read client doctrine: %w", err)
+	}
+	return string(content), nil
+}
+
+// GetClientIdiom returns the language-specific API client skeleton.
+// Returns empty string and nil error for unknown languages.
+func GetClientIdiom(lang string) (string, error) {
+	path := fmt.Sprintf("content/client/%s.md", lang)
+	content, err := contentFS.ReadFile(path)
+	if err != nil {
+		return "", nil
+	}
+	return string(content), nil
+}
+
 // parseSkillFrontmatter extracts name and description from YAML frontmatter
 func parseSkillFrontmatter(content, path string) SkillInfo {
 	info := SkillInfo{

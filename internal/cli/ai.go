@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/ai"
@@ -19,9 +20,10 @@ var aiCmd = &cobra.Command{
   pgmi ai skill pgmi-sql        Print one skill's full content
   pgmi ai setup                 Write pgmi guidance into .claude/skills/pgmi/
   pgmi ai check                 Report whether that guidance is current
+  pgmi ai client [lang]         API client guidance (typescript, python, go, csharp, rust)
 
-Pull commands (overview, skills, skill) print to stdout for piping. setup and
-check write files and report status on stderr.`,
+Pull commands (overview, skills, skill, client) print to stdout for piping.
+setup and check write files and report status on stderr.`,
 	RunE: runAIOverview,
 }
 
@@ -54,11 +56,34 @@ step types, exit codes, and preprocessor macro forms.`,
 	RunE: runAIContract,
 }
 
+var aiClientCmd = &cobra.Command{
+	Use:   "client [lang]",
+	Short: "Print API client guidance for AI coding agents",
+	Long: `Print guidance for generating a typed API client from the deployment's
+live OpenAPI spec. Without a language argument, prints the language-agnostic
+doctrine (decision tree, invariants, anti-copy directive). With a language,
+adds a transport-core skeleton and recommended generator.
+
+  pgmi ai client              Doctrine only
+  pgmi ai client typescript   TypeScript skeleton + openapi-typescript
+  pgmi ai client python       Python skeleton + openapi-python-client
+  pgmi ai client go           Go skeleton + oapi-codegen
+  pgmi ai client csharp       C# skeleton + NSwag
+  pgmi ai client rust         Rust skeleton + openapi-generator
+
+This is the APPLICATION API (deployed handlers). For the SESSION API
+(temp views/functions for deploy.sql), use pgmi ai contract.`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeClientLangs,
+	RunE:              runAIClient,
+}
+
 func init() {
 	rootCmd.AddCommand(aiCmd)
 	aiCmd.AddCommand(aiSkillsCmd)
 	aiCmd.AddCommand(aiSkillCmd)
 	aiCmd.AddCommand(aiContractCmd)
+	aiCmd.AddCommand(aiClientCmd)
 }
 
 func runAIOverview(cmd *cobra.Command, args []string) error {
@@ -118,4 +143,44 @@ func runAIContract(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintln(os.Stdout, out)
 	return nil
+}
+
+func runAIClient(cmd *cobra.Command, args []string) error {
+	doctrine, err := ai.GetClientDoctrine()
+	if err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		fmt.Fprint(os.Stdout, doctrine)
+		return nil
+	}
+
+	lang := args[0]
+	idiom, err := ai.GetClientIdiom(lang)
+	if err != nil {
+		return err
+	}
+
+	if idiom == "" {
+		fmt.Fprint(os.Stdout, doctrine)
+		fmt.Fprintf(os.Stdout, "\n---\n\nNo built-in idiom for %q. Any OpenAPI generator works — point it at `/openapi.json`.\n", lang)
+		return nil
+	}
+
+	fmt.Fprint(os.Stdout, idiom)
+	return nil
+}
+
+func completeClientLangs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	var matches []string
+	for _, lang := range ai.SupportedClientLangs {
+		if strings.HasPrefix(lang, toComplete) {
+			matches = append(matches, lang)
+		}
+	}
+	return matches, cobra.ShellCompDirectiveNoFileComp
 }
