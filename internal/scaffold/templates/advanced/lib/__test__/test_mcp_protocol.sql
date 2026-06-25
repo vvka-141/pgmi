@@ -347,25 +347,35 @@ DECLARE
 BEGIN
     RAISE NOTICE '→ Testing MCP resource templates discovery + deterministic routing';
 
-    -- resources/templates/list exposes the templated table_schema resource.
-    -- (table_schema requires auth, so provide an authenticated context.)
-    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-1","method":"resources/templates/list"}'::jsonb, '{"user_id":"test|disco"}'::jsonb);
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'ffffffff-a001-4000-8000-000000000001', 'type', 'resource',
+            'name', 'test_templated_res', 'description', 'Test resource template',
+            'uriTemplate', 'testproto:///{schema}/{table}',
+            'mimeType', 'application/json', 'requiresAuth', false),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object('uri', (request).uri, 'mimeType', 'application/json', 'text', 'ok')),
+        (request).request_id);
+END;
+        $body$
+    );
+
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-1","method":"resources/templates/list"}'::jsonb);
     v_envelope := (v_response).envelope;
     IF NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'resourceTemplates') AS rt
-        WHERE rt->>'name' = 'table_schema' AND rt->>'uriTemplate' = 'postgres:///{schema}/{table}'
+        WHERE rt->>'name' = 'test_templated_res' AND rt->>'uriTemplate' = 'testproto:///{schema}/{table}'
     ) THEN
-        RAISE EXCEPTION 'TEST FAILED: resources/templates/list missing table_schema uriTemplate, got %', v_envelope->'result';
+        RAISE EXCEPTION 'TEST FAILED: resources/templates/list missing test_templated_res, got %', v_envelope->'result';
     END IF;
-    RAISE NOTICE '  + resources/templates/list returns the table_schema template';
+    RAISE NOTICE '  + resources/templates/list returns the test_templated_res template';
 
-    -- resources/list must not contain templated entries, and every entry must
-    -- carry a concrete uri (never uriTemplate).
-    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-2","method":"resources/list"}'::jsonb, '{"user_id":"test|disco"}'::jsonb);
+    v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt-2","method":"resources/list"}'::jsonb);
     v_envelope := (v_response).envelope;
     IF EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_envelope->'result'->'resources') AS r
-        WHERE r->>'name' = 'table_schema' OR r ? 'uriTemplate' OR (r->>'uri') IS NULL
+        WHERE r ? 'uriTemplate' OR (r->>'uri') IS NULL
     ) THEN
         RAISE EXCEPTION 'TEST FAILED: resources/list must contain only concrete uri entries, got %', v_envelope->'result';
     END IF;
