@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +75,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	switch {
 	case cfgErr == nil:
 		info.ConfigFile = "ok"
-	case cfgErr == config.ErrConfigNotFound:
+	case errors.Is(cfgErr, config.ErrConfigNotFound):
 		info.ConfigFile = "absent"
 	default:
 		info.ConfigFile = fmt.Sprintf("error: %v", cfgErr)
