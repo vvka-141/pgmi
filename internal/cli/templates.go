@@ -52,7 +52,7 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 	for _, t := range templates {
 		desc, ok := descriptions[t]
 		if !ok {
-			desc = TemplateDescription{Short: "(no description)"}
+			desc = templateDescription{Short: "(no description)"}
 		}
 		fmt.Fprintf(os.Stdout, "%-12s %s\n", t, desc.Short)
 		if desc.BestFor != "" {
@@ -106,8 +106,8 @@ func runTemplatesDescribe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// TemplateDescription contains metadata about a template
-type TemplateDescription struct {
+// templateDescription contains metadata about a template
+type templateDescription struct {
 	Short     string
 	Long      string
 	Structure []string
@@ -116,8 +116,8 @@ type TemplateDescription struct {
 }
 
 // getTemplateDescriptions returns descriptions for all templates
-func getTemplateDescriptions() map[string]TemplateDescription {
-	return map[string]TemplateDescription{
+func getTemplateDescriptions() map[string]templateDescription {
+	return map[string]templateDescription{
 		"basic": {
 			Short: "Linear migrations, minimal structure",
 			Long:  "A small starter project: deploy.sql executes migrations in order, reads project.json for metadata, and branches on environment. No metadata system, no idempotency tracking, no advanced libraries.",

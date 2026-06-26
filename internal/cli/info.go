@@ -109,7 +109,10 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	}
 
 	if infoFlags.jsonOutput {
-		b, _ := json.MarshalIndent(info, "", "  ")
+		b, err := json.MarshalIndent(info, "", "  ")
+		if err != nil {
+			return fmt.Errorf("json marshal error: %w", err)
+		}
 		fmt.Println(string(b))
 		return nil
 	}
