@@ -1,3 +1,8 @@
+---
+title: "TypeScript"
+weight: 20
+---
+
 # TypeScript Client Generation
 
 Generate TypeScript types and a fetch-based client from your deployment's `/openapi.json`.

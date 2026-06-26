@@ -1,3 +1,8 @@
+---
+title: "Configuration"
+weight: 70
+---
+
 # Configuration Reference (pgmi.yaml)
 
 ## Overview

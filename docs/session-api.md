@@ -1,3 +1,8 @@
+---
+title: "Session API"
+weight: 160
+---
+
 # pgmi Session API Reference
 
 > **The "AHA moment":** pgmi doesn't execute your SQL—it loads your files into PostgreSQL session tables and lets your SQL decide what to do with them.

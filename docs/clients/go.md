@@ -1,3 +1,8 @@
+---
+title: "Go"
+weight: 30
+---
+
 # Go Client Generation
 
 Generate Go types and client code from your deployment's `/openapi.json`.

@@ -1,3 +1,8 @@
+---
+title: "Connections"
+weight: 60
+---
+
 # Connection Architecture
 
 How pgmi connects to every PostgreSQL target — from localhost to multi-cloud managed services.

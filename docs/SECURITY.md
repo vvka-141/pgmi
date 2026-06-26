@@ -1,3 +1,8 @@
+---
+title: "Security"
+weight: 110
+---
+
 # Security Guide
 
 pgmi handles sensitive parameters (passwords, API keys, tokens) as part of database deployments. This guide covers pgmi's security model, known threat vectors, and recommended practices for CI/CD pipelines.

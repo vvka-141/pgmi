@@ -1,3 +1,8 @@
+---
+title: "HTTP collections"
+weight: 70
+---
+
 # HTTP Collections
 
 For ad-hoc API exploration without codegen, generate importable request files from `/openapi.json`.

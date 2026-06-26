@@ -16,6 +16,11 @@ bin/
 dist/
 pgmi
 
+# Hugo website build artifacts
+website/public/
+website/resources/
+.hugo_build.lock
+
 # Local Go build/test cache (GOCACHE)
 .gocache/
 

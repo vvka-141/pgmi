@@ -1,3 +1,8 @@
+---
+title: "Coming from other tools"
+weight: 40
+---
+
 # Coming from Other Tools
 
 This guide helps you migrate to pgmi from other database deployment tools. Each section maps familiar concepts to pgmi equivalents and shows a concrete migration path.

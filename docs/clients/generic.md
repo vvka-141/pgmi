@@ -1,3 +1,8 @@
+---
+title: "Generic (any language)"
+weight: 60
+---
+
 # Generic Client Generation (Any Language)
 
 The OpenAPI Generator project supports 50+ languages and frameworks. Use it when no language-specific tool is a better fit.

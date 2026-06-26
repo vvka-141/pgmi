@@ -1,3 +1,8 @@
+---
+title: "Production"
+weight: 120
+---
+
 # Production Guide
 
 This guide covers considerations for running pgmi in production environments: performance, rollback strategies, monitoring, and operational patterns.

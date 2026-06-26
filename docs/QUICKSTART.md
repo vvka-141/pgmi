@@ -1,3 +1,8 @@
+---
+title: "Quickstart"
+weight: 30
+---
+
 # Getting Started with pgmi
 
 This guide takes you from zero to a working deployment in about 10 minutes. The commands are concrete — the only values you supply are your local PostgreSQL password and the database name.

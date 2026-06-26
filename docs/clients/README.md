@@ -1,3 +1,8 @@
+---
+title: "Overview"
+weight: 10
+---
+
 # Client Generation
 
 The advanced template serves an OpenAPI 3.1 specification at `GET /openapi.json` and an interactive explorer at `GET /docs`. Use these to generate typed clients in any language.

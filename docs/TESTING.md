@@ -1,3 +1,8 @@
+---
+title: "Testing"
+weight: 100
+---
+
 # Database Testing with pgmi
 
 This guide teaches you how to test your PostgreSQL code using pgmi — from your first test to hierarchical fixtures. Every example is copy-paste ready.

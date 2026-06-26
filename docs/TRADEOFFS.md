@@ -1,3 +1,8 @@
+---
+title: "Trade-offs"
+weight: 170
+---
+
 # Honest Limitations
 
 pgmi trades framework-managed complexity for SQL-level control. That trade has real costs. This page lists them honestly so you can decide if they apply to your team and project.

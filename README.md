@@ -158,6 +158,8 @@ See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the g
 
 ## Documentation
 
+📖 Browse the full docs as a searchable site at **<https://vvka-141.github.io/pgmi/>** (built from this `docs/` directory). The links below open the same pages on GitHub.
+
 **Start here**
 
 | Guide | Description |

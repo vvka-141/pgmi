@@ -1,3 +1,8 @@
+---
+title: "CLI reference"
+weight: 50
+---
+
 # CLI Reference
 
 Complete reference for all pgmi commands. Every example is copy-paste ready.

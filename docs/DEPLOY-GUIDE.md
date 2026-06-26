@@ -1,3 +1,8 @@
+---
+title: "deploy.sql guide"
+weight: 80
+---
+
 # deploy.sql Authoring Guide
 
 This guide covers patterns for writing `deploy.sql` — from basic file execution to data ingestion, environment branching, and multi-phase deployments. Every example is copy-paste ready.

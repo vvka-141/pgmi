@@ -1,3 +1,8 @@
+---
+title: "MCP integration"
+weight: 140
+---
+
 # Model Context Protocol (MCP) Integration
 
 pgmi's advanced template includes a complete MCP server implementation, enabling AI assistants (Claude Desktop, VS Code Copilot, etc.) to interact with your PostgreSQL database through tools, resources, and prompts.

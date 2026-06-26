@@ -1,3 +1,8 @@
+---
+title: "API versioning"
+weight: 10
+---
+
 # Change Request: API Versioning for pgmi Session Interface
 
 > **Status: IMPLEMENTED**

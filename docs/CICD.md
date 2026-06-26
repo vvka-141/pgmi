@@ -1,3 +1,8 @@
+---
+title: "CI/CD"
+weight: 130
+---
+
 # CI/CD
 
 Deploy pgmi projects from any CI system. The pattern is always the same: install a

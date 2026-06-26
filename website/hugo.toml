@@ -1,0 +1,49 @@
+baseURL = "https://vvka-141.github.io/pgmi/"
+title = "pgmi"
+enableGitInfo = false
+
+# Book theme: keep menu derived from the page tree, enable search.
+[params]
+  BookTheme = "auto"
+  BookToC = true
+  BookSearch = true
+  BookRepo = "https://github.com/vvka-141/pgmi"
+  BookEditPath = "edit/main"
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3
+
+[module]
+  [[module.imports]]
+    path = "github.com/alex-shpak/hugo-book"
+
+  # Declaring any mount replaces the project defaults, so re-declare them all.
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  # Single-source: repo-root docs/ is surfaced under /docs/ at build time.
+  [[module.mounts]]
+    source = "../docs"
+    target = "content/docs"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
+  [[module.mounts]]
+    source = "i18n"
+    target = "i18n"
+  [[module.mounts]]
+    source = "archetypes"
+    target = "archetypes"

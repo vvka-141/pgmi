@@ -1,3 +1,8 @@
+---
+title: "Semantic MCP curation"
+weight: 10
+---
+
 # Recipe: Semantic Agent-Tool Curation
 
 > **Use this only at tool-overload scale.** When an agent has *dozens* of tools,

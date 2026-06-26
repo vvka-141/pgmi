@@ -1,3 +1,8 @@
+---
+title: "C#"
+weight: 50
+---
+
 # C# Client Generation
 
 Generate a typed C# client from your deployment's `/openapi.json`.

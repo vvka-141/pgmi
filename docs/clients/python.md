@@ -1,3 +1,8 @@
+---
+title: "Python"
+weight: 40
+---
+
 # Python Client Generation
 
 Generate a typed Python client from your deployment's `/openapi.json`.

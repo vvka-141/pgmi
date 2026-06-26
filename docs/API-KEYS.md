@@ -1,3 +1,8 @@
+---
+title: "API keys"
+weight: 150
+---
+
 # API Key Authentication
 
 Machine-to-machine authentication for agents, MCP clients, and CI pipelines. Ships with the advanced template in `membership/08-api-keys.sql`.

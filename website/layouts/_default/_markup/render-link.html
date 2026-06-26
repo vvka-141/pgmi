@@ -1,0 +1,29 @@
+{{- /*
+  Resolve GitHub-flavored relative .md links at build time so docs/*.md stay
+  valid on GitHub while rendering correct site URLs here.
+    - resolves to a published page -> internal site URL
+    - escapes the published docs tree (e.g. repo-root README) -> GitHub source
+    - unresolved within /docs -> warn (genuine broken link)
+*/ -}}
+{{- $dest := .Destination -}}
+{{- $parts := split $dest "#" -}}
+{{- $pathPart := index $parts 0 -}}
+{{- $frag := "" -}}
+{{- if gt (len $parts) 1 }}{{ $frag = index $parts 1 }}{{ end -}}
+{{- if and (not (strings.Contains $pathPart "://")) (not (strings.HasPrefix $dest "/")) (not (strings.HasPrefix $dest "#")) (strings.HasSuffix (lower $pathPart) ".md") -}}
+  {{- $rel := lower (strings.TrimSuffix ".md" $pathPart) -}}
+  {{- $abs := path.Join (path.Dir .Page.Path) $rel -}}
+  {{- with site.GetPage $abs -}}
+    {{- $dest = .RelPermalink -}}
+    {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}
+  {{- else -}}
+    {{- if not (strings.HasPrefix $abs "/docs") -}}
+      {{- $repoRel := path.Join (path.Dir (replace $.Page.File.Path "\\" "/")) $pathPart -}}
+      {{- $dest = printf "%s/blob/main/%s" (site.Params.BookRepo | default "https://github.com/vvka-141/pgmi") $repoRel -}}
+      {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}
+    {{- else -}}
+      {{- warnf "render-link: broken internal .md link %q on page %s" $.Destination $.Page.Path -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $dest }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>

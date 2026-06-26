@@ -1,3 +1,8 @@
+---
+title: "Why pgmi"
+weight: 20
+---
+
 # Why pgmi?
 
 pgmi takes a different approach to database deployments. This document explains when that approach makes sense—and when it doesn't.
