@@ -349,6 +349,26 @@ $$;
 
 ---
 
+## Handler Registration Metadata
+
+`api.create_or_replace_rest_handler(metadata jsonb, body text)` — the metadata
+object's keys are **camelCase**. The ones that bite if you get them wrong:
+
+| Key | Required | Default | Notes |
+|-----|----------|---------|-------|
+| `id` | yes | — | Stable UUID. Reusing it updates the handler in place; a rename (same `id`, new `name`) is safe. |
+| `uri` | yes | — | **POSIX regex**, anchored yourself and tolerant of a query string: `^/orders(\?.*)?$`. |
+| `httpMethod` | no | `^(GET\|POST\|PUT\|DELETE\|PATCH)$` | POSIX regex, e.g. `^POST$`. |
+| `name` | yes | — | Becomes function `api.<name>`. Must match `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` (ASCII, ≤49 chars, leading letter). |
+| `requiresAuth` | no | **`true`** | Omitting it makes the endpoint **authenticated** — 401 without resolved identity. Set `false` for a public endpoint. |
+| `autoLog` | no | **`true`** | Request logging. |
+| `inputSchema` / `outputSchema` | no | — | JSON Schema, validated **at registration time**; an empty `{}` is rejected (needs a real keyword like `type`/`properties`/`required`). |
+
+The body is the *inside* of a function — `DECLARE … BEGIN … END;` only,
+dollar-quoted with `$body$`, never the `CREATE FUNCTION` header or a trailing
+`LANGUAGE` clause. The single parameter is always `request`
+(`(request).content`, `(request).url`, `(request).headers`, `(request).method`).
+
 ## Complete Example: Create Handler
 
 ```sql

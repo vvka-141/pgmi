@@ -83,6 +83,7 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 | `pgmi-test-architecture` | Organizing `__test__/` directories and test strategy |
 | `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
 | `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
+| `pgmi-handler-patterns` | Writing REST/RPC handler bodies — the four-phase defensive doctrine (advanced template) |
 | `pgmi-mcp` | MCP handler implementation (advanced template) |
 
 ## SQL Conventions

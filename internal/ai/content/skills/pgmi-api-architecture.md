@@ -180,15 +180,27 @@ IF v_handler.requires_auth AND current_setting('auth.user_id', true) IS NULL THE
 END IF;
 ```
 
-### Unified Session Variables
+### Session Variables & the Advanced-Template Auth Model
 
-All protocols populate the same session variables when authenticated:
-- `auth.user_id` - Primary user identifier
-- `auth.tenant_id` - Tenant/organization identifier
-- `auth.user_email` - User email (REST/RPC only)
-- `auth.token` - Authorization header (REST/RPC only)
+When a request authenticates, the gateway populates session GUCs that downstream
+SQL (RLS, handlers) reads. The snippets above are protocol-illustrative; in the
+**shipped advanced template** the concrete, authoritative model is:
 
-These enable RLS/CLS regardless of which protocol the request used.
+- Identity arrives as the `x-user-id` header in **`provider|subject`** form
+  (e.g. `google|alice-123`). A raw value without the `|` separator fails closed.
+- The gateway sets the **`auth.idp_subject`** GUC from that header and resolves it
+  to a membership user; handlers read identity via **`api.vw_current_user`**.
+- `requiresAuth` (handler metadata) **defaults to `true`** — if omitted or set, the
+  gateway returns 401 when no user resolves. Set `'requiresAuth', false` for a
+  public endpoint.
+- The template is **multi-organization**: there is no single "current tenant" GUC.
+  Scope queries to the caller's orgs with
+  `WHERE org_id = ANY(api.current_member_org_ids())`, not an `auth.tenant_id`.
+
+In tests, set identity with
+`set_config('auth.idp_subject', 'google|alice-123', true)` and pass a matching
+`('x-user-id=>google|alice-123')::extensions.hstore` header to `api.rest_invoke`.
+See `pgmi-handler-patterns` and `lib/api/09-gateways.sql` for the gateway flow.
 
 ---
 
