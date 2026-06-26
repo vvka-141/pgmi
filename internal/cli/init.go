@@ -129,11 +129,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Fprintln(os.Stderr, "\nNext:")
-	if targetPath != "." {
-		fmt.Fprintf(os.Stderr, "  cd %s\n", targetPath)
+	dbName := "mydb"
+	if setupConnection && !connResult.Cancelled && connResult.Config.Database != "" {
+		dbName = connResult.Config.Database
 	}
-	fmt.Fprintln(os.Stderr, "  pgmi deploy . -d mydb")
+
+	fmt.Fprintln(os.Stderr, "\nNext:")
+	fmt.Fprintf(os.Stderr, "  pgmi deploy %s -d %s\n", targetPath, dbName)
 
 	return nil
 }
