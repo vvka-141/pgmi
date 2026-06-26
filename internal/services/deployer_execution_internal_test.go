@@ -117,7 +117,7 @@ func TestExecuteDeploySQL_DirectExecution_Internal(t *testing.T) {
 	`
 	svc := newServiceWithReadContent(deploySQL)
 
-	if err := svc.executeDeploySQL(ctx, conn, "/fake/path"); err != nil {
+	if _, err := svc.executeDeploySQL(ctx, conn, "/fake/path"); err != nil {
 		t.Fatalf("executeDeploySQL failed: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestExecuteDeploySQL_SyntaxError_Internal(t *testing.T) {
 
 	svc := newServiceWithReadContent("SELCT INVALID SYNTAX;")
 
-	err = svc.executeDeploySQL(ctx, conn, "/fake/path")
+	_, err = svc.executeDeploySQL(ctx, conn, "/fake/path")
 	if err == nil {
 		t.Fatal("Expected error for invalid SQL")
 	}
@@ -170,7 +170,7 @@ func TestExecuteDeploySQL_ReadError_Internal(t *testing.T) {
 		&mockDatabaseManager{},
 	)
 
-	err := svc.executeDeploySQL(context.Background(), nil, "/nonexistent")
+	_, err := svc.executeDeploySQL(context.Background(), nil, "/nonexistent")
 	if err == nil {
 		t.Fatal("Expected error for missing deploy.sql")
 	}

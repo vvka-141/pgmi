@@ -302,7 +302,29 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// Set up verbose timing handler for notices
+	if verbose {
+		deployStart := time.Now()
+		origHandler := db.NoticeHandler
+		db.NoticeHandler = func(message, detail, hint string) {
+			prefix := fmt.Sprintf("[%.2fs] ", time.Since(deployStart).Seconds())
+			fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
+			if detail != "" {
+				fmt.Fprintf(os.Stderr, "%sDETAIL: %s\n", prefix, detail)
+			}
+			if hint != "" {
+				fmt.Fprintf(os.Stderr, "%sHINT: %s\n", prefix, hint)
+			}
+		}
+		defer func() { db.NoticeHandler = origHandler }()
+	}
+
 	err = deployer.Deploy(ctx, config)
+
+	// Print summary line to stderr
+	if result := deployer.LastResult(); result != nil {
+		printDeploySummary(result, err)
+	}
 
 	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
 	// maps to 130 (ExitInterrupted). Deployer may return nil or an unrelated wrap;
@@ -316,6 +338,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return err
+}
+
+func printDeploySummary(result *services.DeployResult, deployErr error) {
+	d := fmt.Sprintf("%.2fs", result.Duration.Seconds())
+	if deployErr == nil {
+		parts := fmt.Sprintf("%d files loaded", result.FilesLoaded)
+		if result.TestMacros > 0 {
+			parts += fmt.Sprintf(", %d test macro(s) expanded", result.TestMacros)
+		}
+		fmt.Fprintf(os.Stderr, "%s %s in %s\n", ui.SuccessIcon(), parts, d)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s Failed after %s — see error above\n", ui.FailIcon(), d)
+	}
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.

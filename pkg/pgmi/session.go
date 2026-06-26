@@ -16,6 +16,8 @@ type Session struct {
 	pool    *pgxpool.Pool
 	conn    *pgxpool.Conn
 	onClose func()
+
+	FilesLoaded int
 }
 
 // NewSession creates a new Session. Panics if pool or conn is nil.

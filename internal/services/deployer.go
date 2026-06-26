@@ -4,12 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
+
+// DeployResult contains statistics from a completed deployment.
+type DeployResult struct {
+	FilesLoaded int
+	TestMacros  int
+	Duration    time.Duration
+	Database    string
+}
 
 type managementDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
 
@@ -23,6 +32,13 @@ type DeploymentService struct {
 	fileScanner      pgmi.FileScanner
 	dbManager        pgmi.DatabaseManager
 	mgmtConnector    managementDBConnFunc
+	lastResult       *DeployResult
+}
+
+// LastResult returns statistics from the most recent Deploy call,
+// or nil if Deploy has not been called.
+func (s *DeploymentService) LastResult() *DeployResult {
+	return s.lastResult
 }
 
 var _ pgmi.Deployer = (*DeploymentService)(nil)
@@ -93,21 +109,28 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 
 // Deploy executes a deployment using the provided configuration.
 // This method orchestrates the deployment workflow by calling smaller, focused methods.
+// After Deploy returns, call LastResult() for deployment statistics.
 func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentConfig) error {
+	start := time.Now()
+	s.lastResult = &DeployResult{Database: config.DatabaseName}
+
 	// Validate and parse configuration
 	connConfig, err := s.validateAndParseConfig(config)
 	if err != nil {
+		s.lastResult.Duration = time.Since(start)
 		return err
 	}
 
 	// Handle overwrite workflow if requested (drop and recreate database)
 	if config.Overwrite {
 		if err := s.handleOverwrite(ctx, connConfig, config); err != nil {
+			s.lastResult.Duration = time.Since(start)
 			return fmt.Errorf("overwrite workflow failed: %w", err)
 		}
 	} else {
 		// If not overwriting, ensure database exists (create if missing)
 		if err := s.ensureDatabaseExists(ctx, connConfig, config); err != nil {
+			s.lastResult.Duration = time.Since(start)
 			return fmt.Errorf("failed to ensure database exists: %w", err)
 		}
 	}
@@ -119,12 +142,18 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	s.logger.Info("Preparing session: scanning files, loading parameters")
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
+		s.lastResult.Duration = time.Since(start)
 		return err // Error already wrapped by SessionManager
 	}
 	defer session.Close()
 
+	s.lastResult.FilesLoaded = session.FilesLoaded
+
 	s.logger.Info("Executing deploy.sql")
-	if err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath); err != nil {
+	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath)
+	s.lastResult.TestMacros = macroCount
+	s.lastResult.Duration = time.Since(start)
+	if err != nil {
 		return err
 	}
 
@@ -163,23 +192,24 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 
 // executeDeploySQL reads, preprocesses, and executes the deploy.sql file.
 // Preprocessing expands CALL pgmi_test() macros by querying pgmi_test_plan() from SQL.
+// Returns the number of test macros expanded and any error.
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
 	sourcePath string,
-) error {
+) (int, error) {
 	s.logger.Verbose("Reading deploy.sql")
 
 	deploySQL, err := s.fileScanner.ReadDeploySQL(sourcePath)
 	if err != nil {
-		return fmt.Errorf("failed to read deploy.sql: %w", err)
+		return 0, fmt.Errorf("failed to read deploy.sql: %w", err)
 	}
 
 	// Preprocess: expand CALL pgmi_test() macros by querying pgmi_test_plan() from SQL
 	pipeline := preprocessor.NewPipeline()
 	result, err := pipeline.Process(ctx, conn, deploySQL)
 	if err != nil {
-		return fmt.Errorf("failed to preprocess deploy.sql: %w", err)
+		return 0, fmt.Errorf("failed to preprocess deploy.sql: %w", err)
 	}
 
 	if result.MacroCount > 0 {
@@ -189,10 +219,10 @@ func (s *DeploymentService) executeDeploySQL(
 	// Execute preprocessed deploy.sql as a single script
 	_, err = conn.Exec(ctx, result.ExpandedSQL)
 	if err != nil {
-		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+		return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
 
-	return nil
+	return result.MacroCount, nil
 }
 
 func validateOverwriteTarget(targetDB, managementDB string) error {

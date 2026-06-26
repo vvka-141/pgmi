@@ -139,6 +139,7 @@ func (sm *SessionManager) PrepareSession(
 
 	// Create Session object to encapsulate resources
 	session := pgmi.NewSession(pool, conn, connectorCleanup)
+	session.FilesLoaded = len(scanResult.Files)
 	success = true
 	return session, nil
 }

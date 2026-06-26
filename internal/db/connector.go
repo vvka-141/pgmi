@@ -27,18 +27,27 @@ const (
 	DefaultMaxConnIdleTime = 30 * time.Minute
 )
 
+// NoticeHandler is called for each PostgreSQL NOTICE/WARNING during execution.
+// Replaceable to support timing prefixes in verbose mode.
+var NoticeHandler func(message, detail, hint string) = DefaultNoticeHandler
+
+// DefaultNoticeHandler prints notices to stderr without decoration.
+func DefaultNoticeHandler(message, detail, hint string) {
+	fmt.Fprintln(os.Stderr, message)
+	if detail != "" {
+		fmt.Fprintf(os.Stderr, "DETAIL: %s\n", detail)
+	}
+	if hint != "" {
+		fmt.Fprintf(os.Stderr, "HINT: %s\n", hint)
+	}
+}
+
 func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MaxConns = DefaultMaxConns
 	poolConfig.MinConns = DefaultMinConns
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		fmt.Fprintln(os.Stderr, notice.Message)
-		if notice.Detail != "" {
-			fmt.Fprintf(os.Stderr, "DETAIL: %s\n", notice.Detail)
-		}
-		if notice.Hint != "" {
-			fmt.Fprintf(os.Stderr, "HINT: %s\n", notice.Hint)
-		}
+		NoticeHandler(notice.Message, notice.Detail, notice.Hint)
 	}
 }
 
