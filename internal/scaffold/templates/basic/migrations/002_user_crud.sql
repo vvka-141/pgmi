@@ -23,12 +23,12 @@ COMMENT ON FUNCTION get_user(TEXT) IS
 
 CREATE OR REPLACE FUNCTION delete_user(p_email TEXT)
 RETURNS BOOLEAN
-LANGUAGE plpgsql
+LANGUAGE SQL
 AS $$
-BEGIN
-    DELETE FROM "user" WHERE email = p_email;
-    RETURN FOUND;
-END;
+    WITH deleted AS (
+        DELETE FROM "user" WHERE email = p_email RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM deleted);
 $$;
 
 COMMENT ON FUNCTION delete_user(TEXT) IS
