@@ -25,7 +25,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API key authentication'; END $$;
 
 CREATE OR REPLACE FUNCTION membership.api_key_prefix()
 RETURNS text
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT COALESCE(
         NULLIF(current_setting('pgmi.api_key_prefix', true), ''),
         'pgmi'
