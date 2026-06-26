@@ -241,6 +241,35 @@ pgmi deploy . --connection "postgresql://user@host/postgres" -d myapp
 
 ---
 
+## pgmi info
+
+Show a project structure summary without connecting to a database.
+
+```bash
+pgmi info [path] [flags]
+```
+
+Inspects a pgmi project directory and reports file counts by directory, template type, deploy.sql presence, test coverage, and metadata usage.
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit structured JSON to stdout |
+
+### Examples
+
+```bash
+# Inspect current directory
+pgmi info
+
+# Inspect a specific project
+pgmi info ./myproject
+
+# JSON output for scripting
+pgmi info ./myproject --json
+```
+
+---
+
 ## pgmi init
 
 Scaffold a new pgmi project.
