@@ -37,8 +37,11 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --        - name:         Becomes the PostgreSQL function name (api.<name>)
 --        - description:  Human-readable — shown in pgAdmin and introspection views
 --        - language:     Handler language: plpgsql (default) or sql
---        - requiresAuth: If true, gateway rejects requests without x-user-id header
---        - autoLog:      If true, request/response logged to api.rest_exchange
+--        - requiresAuth: If true, gateway rejects requests without a resolved user.
+--                        DEFAULTS TO TRUE — omit it and the endpoint is authenticated.
+--                        Set 'requiresAuth', false explicitly for public endpoints.
+--        - autoLog:      If true, request/response logged to api.rest_exchange (default true)
+--        - outputSchema: REQUIRED on every REST handler (the OpenAPI test enforces it).
 --
 --   2. HANDLER BODY (text): The function body executed when the route matches.
 --      - The function receives a single parameter called "request" (api.rest_request)
