@@ -573,6 +573,80 @@ END $$;
 
 ---
 
+## View-Layer Testing
+
+### Assert Through Views, Not Just Tables
+
+When a view applies business logic (joins, aggregation, soft-delete filtering, computed columns), test the view — not the raw table.
+
+**Pattern**: INSERT fixture → SELECT FROM view → assert the transformation.
+
+```sql
+-- ❌ BAD: Only tests raw table
+INSERT INTO membership.organization_member (...) VALUES (..., 'pending');
+SELECT status FROM membership.organization_member WHERE ...;
+
+-- ✅ GOOD: Tests the view contract
+INSERT INTO membership.organization_member (...) VALUES (..., 'pending');
+-- Pending member should appear in invitations view, NOT active memberships
+IF NOT EXISTS (SELECT 1 FROM membership.vw_pending_invitations WHERE ...) THEN
+    RAISE EXCEPTION 'pending member not in vw_pending_invitations';
+END IF;
+IF EXISTS (SELECT 1 FROM membership.vw_active_memberships WHERE ...) THEN
+    RAISE EXCEPTION 'pending member should NOT be in vw_active_memberships';
+END IF;
+```
+
+**When to use view assertions**:
+- Views with joins (e.g., `vw_users` aggregates roles via LEFT JOIN)
+- Views with soft-delete filters (e.g., `vw_active_users` WHERE is_active)
+- Views with computed columns (e.g., `vw_handler_info.definition_drifted`)
+- Views with aggregation (e.g., `vw_user_claims` with array_agg)
+
+**When raw-table assertions are fine**:
+- Storage-only tables with no business-logic view
+- Testing INSERT/UPDATE mechanics directly
+
+### Soft-Delete View Coverage
+
+Always test that soft-deleted records are filtered by the view but remain in the raw table:
+
+```sql
+-- Active: visible in view
+IF NOT EXISTS (SELECT 1 FROM membership.vw_active_users WHERE object_id = v_id) THEN ...
+
+-- Deactivate
+UPDATE membership."user" SET is_active = false WHERE object_id = v_id;
+
+-- Invisible in view, still in table
+IF EXISTS (SELECT 1 FROM membership.vw_active_users WHERE object_id = v_id) THEN ...
+IF NOT EXISTS (SELECT 1 FROM membership."user" WHERE object_id = v_id) THEN ...
+```
+
+### Session-Scoped View Testing
+
+For views that depend on session context (e.g., `vw_current_user`, `vw_user_claims`), set `auth.idp_subject` before selecting:
+
+```sql
+PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+SELECT * FROM api.vw_current_user;  -- resolves to alice
+```
+
+### Test-Layer Responsibility Split
+
+View tests own business-logic transformations (joins, aggregation, filtering). Handler/API tests own the API contract (routing, auth gate, JSON shape, status codes). Don't duplicate:
+
+- If a view test already verifies that soft-deleted users are filtered, the handler test for `GET /me` does NOT need to re-verify soft-delete filtering — just that the endpoint returns 200 with the right JSON shape.
+- Every endpoint retains its integration test (reachability + auth + serialization).
+
+**Review Checklist**:
+- [ ] Views with business logic tested via SELECT, not just raw table?
+- [ ] Soft-delete filtering tested through views?
+- [ ] Session-scoped views tested with `set_config('auth.idp_subject', ...)`?
+- [ ] Handler tests don't re-assert business logic already covered by view tests?
+
+---
+
 ## Test Coverage Expectations
 
 ### Critical Path Coverage
