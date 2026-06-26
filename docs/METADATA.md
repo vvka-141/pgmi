@@ -6,7 +6,7 @@ weight: 90
 
 # Script Metadata Guide
 
-pgmi supports optional XML metadata blocks in SQL files that enable powerful deployment features: path-independent tracking, idempotency control, and explicit execution ordering.
+pgmi supports optional XML metadata blocks in SQL files that control deployment behavior: path-independent tracking, idempotency control, and explicit execution ordering.
 
 ---
 

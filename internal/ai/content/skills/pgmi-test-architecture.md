@@ -49,7 +49,7 @@ END $$;
 - Deployment stops immediately on first failure (fail-fast)
 - Error messages appear naturally in deployment output
 - No framework to maintain, document, or explain
-- Works seamlessly with PostgreSQL's transactional semantics
+- Uses PostgreSQL's transactional semantics directly
 
 ## Test Isolation Model
 

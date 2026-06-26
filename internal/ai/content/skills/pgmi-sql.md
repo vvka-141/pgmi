@@ -350,7 +350,7 @@ Templates can define their own helper functions for parameter access with valida
 - Deployment stops on first failure (fail-fast)
 - Error messages appear naturally in output
 - No framework to maintain, document, or explain
-- Works seamlessly with PostgreSQL's transactional semantics
+- Uses PostgreSQL's transactional semantics directly
 
 ### Test Examples
 

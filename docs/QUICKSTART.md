@@ -232,7 +232,7 @@ The basic template queries `pg_temp.pgmi_source_view` (raw file access); the adv
 
 ### migrations/ — your SQL files
 
-These are regular SQL files. Nothing special about them — no annotations required, no magic comments. The basic template creates a `"user"` table (`001_users.sql`) and CRUD functions (`002_user_crud.sql`).
+These are regular SQL files — no annotations or special comments required. The basic template creates a `"user"` table (`001_users.sql`) and CRUD functions (`002_user_crud.sql`).
 
 ---
 
@@ -348,7 +348,7 @@ Here's the entire model in four points:
 
 1. **pgmi loaded your files** (everything in the project folder) into PostgreSQL temporary tables and views (`pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`)
 2. **pgmi ran `deploy.sql`**, which queries those views and directly executes files using `EXECUTE v_file.content`
-3. **Your SQL files are regular SQL** — no framework magic, no special syntax
+3. **Your SQL files are regular SQL** — no framework conventions, no special syntax
 4. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
 
 This is what makes pgmi different from migration tools: PostgreSQL itself is the deployment engine. You write the logic in SQL, and pgmi just provides the infrastructure to get your files into the database session.

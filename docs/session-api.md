@@ -6,7 +6,7 @@ weight: 160
 
 # pgmi Session API Reference
 
-> **The "AHA moment":** pgmi doesn't execute your SQL—it loads your files into PostgreSQL session tables and lets your SQL decide what to do with them.
+> **Core model:** pgmi doesn't interpret your SQL — it loads your files into PostgreSQL session tables and hands control to `deploy.sql`, which decides what to do with them.
 
 ## How pgmi Actually Works
 

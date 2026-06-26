@@ -224,7 +224,7 @@ Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.
 
 ---
 
-## What happens under the hood
+## Execution model
 
 Here's the structure pgmi generates for the example above. Understanding this is optional, but it explains why the guarantee works.
 

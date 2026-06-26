@@ -60,7 +60,7 @@ $$ LANGUAGE plpgsql;
 - Deployment stops immediately on first failure (fail-fast)
 - Error messages appear naturally in output
 - No framework to learn, maintain, or document
-- Works seamlessly with PostgreSQL transactions
+- Runs within PostgreSQL transactions directly
 
 ---
 
