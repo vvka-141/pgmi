@@ -199,17 +199,18 @@ func ResolveConnectionParams(
 		enabledCount++
 	}
 	if enabledCount > 1 {
-		return nil, "", fmt.Errorf("cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google")
+		return nil, "", fmt.Errorf("cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google: %w", pgmi.ErrInvalidConfig)
 	}
 
 	// Check for conflicts: connection string XOR granular flags
 	if connStringFlag != "" && !granularFlags.IsEmpty() {
 		return nil, "", fmt.Errorf(
-			"cannot specify both --connection and granular flags (-h, -p, -U)\n" +
-				"Choose one approach:\n" +
-				"  1. Connection string: --connection \"postgresql://user@localhost:5432/postgres\"\n" +
-				"  2. Granular flags: -h localhost -p 5432 -U myuser -d mydb\n" +
-				"  3. Environment variables: export PGHOST=localhost PGPORT=5432 PGUSER=myuser",
+			"cannot specify both --connection and granular flags (-h, -p, -U)\n"+
+				"Choose one approach:\n"+
+				"  1. Connection string: --connection \"postgresql://user@localhost:5432/postgres\"\n"+
+				"  2. Granular flags: -h localhost -p 5432 -U myuser -d mydb\n"+
+				"  3. Environment variables: export PGHOST=localhost PGPORT=5432 PGUSER=myuser: %w",
+			pgmi.ErrInvalidConfig,
 		)
 	}
 
@@ -386,7 +387,7 @@ func applyCertParams(cfg *pgmi.ConnectionConfig, flags *CertFlags, env *EnvVars,
 func resolveFromConnectionString(connStr string, envVars *EnvVars) (*pgmi.ConnectionConfig, string, error) {
 	config, err := ParseConnectionString(connStr)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid connection string: %w", err)
+		return nil, "", fmt.Errorf("invalid connection string: %w: %w", err, pgmi.ErrInvalidConfig)
 	}
 
 	// Apply PGSSLMODE from environment if not specified in connection string
@@ -448,16 +449,16 @@ func resolveFromGranularParams(
 	// Port: flag > PGPORT > pgmi.yaml > default
 	if flags.Port != 0 {
 		if err := validatePort(flags.Port); err != nil {
-			return nil, "", fmt.Errorf("invalid --port flag: %w", err)
+			return nil, "", fmt.Errorf("invalid --port flag: %w: %w", err, pgmi.ErrInvalidConfig)
 		}
 		cfg.Port = flags.Port
 	} else if envVars.PGPORT != "" {
 		port, err := strconv.Atoi(envVars.PGPORT)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer", envVars.PGPORT)
+			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer: %w", envVars.PGPORT, pgmi.ErrInvalidConfig)
 		}
 		if err := validatePort(port); err != nil {
-			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': %w", envVars.PGPORT, err)
+			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': %w: %w", envVars.PGPORT, err, pgmi.ErrInvalidConfig)
 		}
 		cfg.Port = port
 	} else if pc.Port != 0 {
@@ -516,7 +517,7 @@ func resolveFromGranularParams(
 	if envVars.PGCONNECT_TIMEOUT != "" {
 		seconds, err := strconv.Atoi(envVars.PGCONNECT_TIMEOUT)
 		if err != nil || seconds < 0 {
-			return nil, "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds)", envVars.PGCONNECT_TIMEOUT)
+			return nil, "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds): %w", envVars.PGCONNECT_TIMEOUT, pgmi.ErrInvalidConfig)
 		}
 		cfg.ConnectTimeout = time.Duration(seconds) * time.Second
 	}

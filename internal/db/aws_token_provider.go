@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // AWSIAMTokenProvider acquires IAM authentication tokens for RDS.
@@ -23,13 +24,13 @@ type AWSIAMTokenProvider struct {
 // username is the database user configured for IAM authentication.
 func NewAWSIAMTokenProvider(endpoint, region, username string) (*AWSIAMTokenProvider, error) {
 	if endpoint == "" {
-		return nil, fmt.Errorf("AWS IAM auth requires endpoint (host:port)")
+		return nil, fmt.Errorf("AWS IAM auth requires endpoint (host:port): %w", pgmi.ErrInvalidConfig)
 	}
 	if region == "" {
-		return nil, fmt.Errorf("AWS IAM auth requires region (use --aws-region or $AWS_REGION)")
+		return nil, fmt.Errorf("AWS IAM auth requires region (use --aws-region or $AWS_REGION): %w", pgmi.ErrInvalidConfig)
 	}
 	if username == "" {
-		return nil, fmt.Errorf("AWS IAM auth requires database username")
+		return nil, fmt.Errorf("AWS IAM auth requires database username: %w", pgmi.ErrInvalidConfig)
 	}
 
 	return &AWSIAMTokenProvider{

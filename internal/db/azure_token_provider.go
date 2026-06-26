@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // AzureServicePrincipalProvider acquires tokens using Service Principal credentials.
@@ -22,7 +23,7 @@ type AzureServicePrincipalProvider struct {
 // All three parameters (tenantID, clientID, clientSecret) are required.
 func NewAzureServicePrincipalProvider(tenantID, clientID, clientSecret string) (*AzureServicePrincipalProvider, error) {
 	if tenantID == "" || clientID == "" || clientSecret == "" {
-		return nil, fmt.Errorf("azure service principal requires tenantID, clientID, and clientSecret")
+		return nil, fmt.Errorf("azure service principal requires tenantID, clientID, and clientSecret: %w", pgmi.ErrInvalidConfig)
 	}
 
 	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)

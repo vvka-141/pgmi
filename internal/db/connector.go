@@ -206,10 +206,10 @@ func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 // newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
 func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 	if config.GoogleInstance == "" {
-		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires --google-instance (project:region:instance)")
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires --google-instance (project:region:instance): %w", pgmi.ErrInvalidConfig)
 	}
 	if config.Username == "" {
-		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires username (-U)")
+		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires username (-U): %w", pgmi.ErrInvalidConfig)
 	}
 
 	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
