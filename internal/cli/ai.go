@@ -2,11 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/ai"
+	"github.com/vvka-141/pgmi/internal/ui"
 )
 
 var aiCmd = &cobra.Command{
@@ -92,8 +92,7 @@ func runAIOverview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get AI overview: %w", err)
 	}
 
-	// Output to stdout (not stderr) so AI can capture it
-	fmt.Fprint(os.Stdout, content)
+	ui.Page(content)
 	return nil
 }
 
@@ -103,23 +102,26 @@ func runAISkills(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to list skills: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "# Available pgmi Skills")
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "Use `pgmi ai skill <name>` to get full skill content.")
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "| Skill | Description |")
-	fmt.Fprintln(os.Stdout, "|-------|-------------|")
+	w, done := ui.PageWriter()
+	defer done()
+
+	fmt.Fprintln(w, "# Available pgmi Skills")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use `pgmi ai skill <name>` to get full skill content.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "| Skill | Description |")
+	fmt.Fprintln(w, "|-------|-------------|")
 
 	for _, s := range skills {
 		desc := s.Description
 		if desc == "" {
 			desc = "(no description)"
 		}
-		fmt.Fprintf(os.Stdout, "| `%s` | %s |\n", s.Name, desc)
+		fmt.Fprintf(w, "| `%s` | %s |\n", s.Name, desc)
 	}
 
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintf(os.Stdout, "Total: %d skills\n", len(skills))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Total: %d skills\n", len(skills))
 
 	return nil
 }
@@ -132,7 +134,7 @@ func runAISkill(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprint(os.Stdout, content)
+	ui.Page(content)
 	return nil
 }
 
@@ -141,7 +143,7 @@ func runAIContract(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate contract: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, out)
+	ui.Page(out + "\n")
 	return nil
 }
 
@@ -152,7 +154,7 @@ func runAIClient(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(args) == 0 {
-		fmt.Fprint(os.Stdout, doctrine)
+		ui.Page(doctrine)
 		return nil
 	}
 
@@ -163,12 +165,11 @@ func runAIClient(cmd *cobra.Command, args []string) error {
 	}
 
 	if idiom == "" {
-		fmt.Fprint(os.Stdout, doctrine)
-		fmt.Fprintf(os.Stdout, "\n---\n\nNo built-in idiom for %q. Any OpenAPI generator works — point it at `/openapi.json`.\n", lang)
+		ui.Page(doctrine + fmt.Sprintf("\n---\n\nNo built-in idiom for %q. Any OpenAPI generator works — point it at `/openapi.json`.\n", lang))
 		return nil
 	}
 
-	fmt.Fprint(os.Stdout, idiom)
+	ui.Page(idiom)
 	return nil
 }
 
