@@ -20,6 +20,8 @@ pgmi
 website/public/
 website/resources/
 .hugo_build.lock
+.hugo-cache-review/
+.hugo-public-review/
 
 # Local Go build/test cache (GOCACHE)
 .gocache/

@@ -1,6 +1,8 @@
 baseURL = "https://vvka-141.github.io/pgmi/"
 title = "pgmi"
 enableGitInfo = false
+enableRobotsTXT = true
+disableKinds = ["taxonomy", "term"]
 
 # Book theme: keep menu derived from the page tree, enable search.
 [params]
@@ -9,6 +11,8 @@ enableGitInfo = false
   BookSearch = true
   BookRepo = "https://github.com/vvka-141/pgmi"
   BookEditPath = "edit/main"
+  BookFavicon = "favicon.svg"
+  description = "pgmi is a PostgreSQL-native execution fabric: it loads your project files into session-scoped temp tables and lets your own deploy.sql drive deployment. An execution fabric, not a migration framework."
 
 [markup.goldmark.renderer]
   unsafe = true

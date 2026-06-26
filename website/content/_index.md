@@ -1,6 +1,7 @@
 ---
 title: pgmi
 type: docs
+description: "pgmi is a PostgreSQL-native execution fabric: it loads your project files into session-scoped temp tables and hands control to your own deploy.sql. An execution fabric, not a migration framework — you write the deployment logic in SQL."
 ---
 
 # pgmi
@@ -12,10 +13,9 @@ tables, then hands control to your `deploy.sql`. Execution order, transactions,
 idempotency, locking, rollback — you write them in SQL, not in tool
 configuration. Most tools decide those things for you; pgmi gets out of the way.
 
-```text
-Traditional:  Your files → Tool decides order + transactions → Database
-pgmi:         Your files → PostgreSQL temp tables → YOUR deploy.sql decides → Database
-```
+> **Most tools** — your files → the tool decides order & transactions → database
+>
+> **pgmi** — your files → PostgreSQL temp tables → *your* `deploy.sql` decides → database
 
 ## Why it exists
 
