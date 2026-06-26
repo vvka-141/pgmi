@@ -14,12 +14,8 @@ user_invocable: true
 - general-purpose (any security-sensitive code)
 - change-planner (security-critical changes)
 
-**Depends On**: pgmi-review-philosophy
-
 **Auto-Load With**:
 - `pgmi-sql` skill (SQL injection prevention)
-- `pgmi-connections` skill (connection security)
-- `pgmi-cli` skill (secret handling)
 - Keywords: "security", "auth", "encrypt", "secret", "password", "token", "RLS"
 
 **Load For**: Preventing security vulnerabilities, secure coding patterns, compliance

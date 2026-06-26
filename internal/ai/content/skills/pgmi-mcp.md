@@ -657,7 +657,6 @@ Tools should validate arguments against their inputSchema. Use context7 to verif
 ## See Also
 
 - **`pgmi-api-architecture`**: HTTP-first protocol design principles
-- **`pgmi-mcp-review`**: MCP code review checklist
 - **`docs/MCP.md`**: Full MCP documentation for users
 - **MCP Specification**: Fetch via context7 for current details
 

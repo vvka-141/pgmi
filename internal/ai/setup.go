@@ -43,14 +43,14 @@ type Adapter interface {
 // SupportedAssistants lists the assistant names AdapterFor accepts.
 var SupportedAssistants = []string{
 	"claude", "agents", "codex", "opencode", "codex-skills",
-	"antigravity", "cursor", "copilot", "windsurf", "cline",
+	"antigravity", "cursor", "copilot", "windsurf", "cline", "gemini",
 }
 
 // AllCanonicalAssistants lists one entry per distinct output target, used by --all.
 // Aliases (codex, opencode → agents) are excluded to avoid writing the same file twice.
 var AllCanonicalAssistants = []string{
 	"claude", "agents", "codex-skills",
-	"antigravity", "cursor", "copilot", "windsurf", "cline",
+	"antigravity", "cursor", "copilot", "windsurf", "cline", "gemini",
 }
 
 // AdapterFor returns the adapter for an assistant name.
@@ -72,6 +72,8 @@ func AdapterFor(name string) (Adapter, error) {
 		return singleFileAdapter{name: "windsurf", template: "agents-md.md", relPath: "rules/pgmi.md"}, nil
 	case "cline":
 		return singleFileAdapter{name: "cline", template: "agents-md.md", relPath: "pgmi.md"}, nil
+	case "gemini":
+		return singleFileAdapter{name: "gemini", template: "agents-md.md", relPath: "GEMINI.md"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported assistant %q (supported: %s)", name, strings.Join(SupportedAssistants, ", "))
 	}

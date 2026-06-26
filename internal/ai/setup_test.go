@@ -163,6 +163,7 @@ func TestGenerateSetup_SingleFileAdapters(t *testing.T) {
 		{"copilot", "copilot-instructions.md"},
 		{"windsurf", "rules/pgmi.md"},
 		{"cline", "pgmi.md"},
+		{"gemini", "GEMINI.md"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

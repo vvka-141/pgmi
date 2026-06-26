@@ -14,7 +14,7 @@ user_invocable: true
 - general-purpose (when writing testable code)
 - change-planner (planning test strategies)
 
-**Depends On**: pgmi-review-philosophy, pgmi-sql (PostgreSQL testing - if exists), pgmi-golang-review (Go testing)
+**Depends On**: pgmi-sql (PostgreSQL testing)
 
 **Auto-Load With**:
 - `pgmi-sql` skill (PostgreSQL testing)

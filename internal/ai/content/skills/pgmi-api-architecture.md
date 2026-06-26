@@ -8,7 +8,6 @@ user_invocable: false
 **Purpose**: Documents the fundamental architectural principle that REST, RPC, and MCP in pgmi's advanced template are all HTTP-native protocols designed to run behind a web server/gateway.
 
 **Auto-Load With**:
-- `pgmi-http-review` (HTTP compliance)
 - `pgmi-mcp` (MCP implementation)
 - File patterns: `**/api/*.sql`, `**/gateways.sql`
 - Keywords: "gateway", "protocol", "REST", "RPC", "MCP"
@@ -456,8 +455,6 @@ The `api.jsonrpc_error()` function maps JSON-RPC codes to HTTP status:
 
 - **`pgmi-handler-patterns`**: Handler body four-phase pattern, safe casting, HTTP status codes
 - **`pgmi-mcp`**: MCP-specific implementation patterns
-- **`pgmi-http-review`**: HTTP compliance review guidelines
-- **`pgmi-sql-change-protocol`**: Mandatory workflow for SQL changes
 
 ---
 

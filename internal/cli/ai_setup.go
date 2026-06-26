@@ -45,6 +45,7 @@ var aiSetupCmd = &cobra.Command{
   pgmi ai setup --assistant cline        Cline rules (.clinerules/pgmi.md)
   pgmi ai setup --assistant antigravity  Google Antigravity (.agents/skills/pgmi/)
   pgmi ai setup --assistant agents       AGENTS.md (also serves Junie, Codex, opencode)
+  pgmi ai setup --assistant gemini       GEMINI.md (Gemini CLI / Code Assist)
   pgmi ai setup --all                    Write guidance for every assistant
   pgmi ai setup --all --force            Same, overwriting hand-edited files
   pgmi ai setup --global                 Write to the global location instead
@@ -77,7 +78,7 @@ func init() {
 	aiCmd.AddCommand(aiSetupCmd)
 	aiCmd.AddCommand(aiCheckCmd)
 
-	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
+	aiSetupCmd.Flags().StringVar(&setupAssistant, "assistant", "", "Target assistant (claude, agents, gemini, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
 	aiSetupCmd.Flags().BoolVar(&setupAll, "all", false, "Write guidance for every supported assistant")
 	aiSetupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Write to ~/.claude/ instead of the project")
 	aiSetupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "Print planned file changes, write nothing")
@@ -89,7 +90,7 @@ func init() {
 	aiSetupCmd.MarkFlagsMutuallyExclusive("all", "global")
 	_ = aiSetupCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 
-	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
+	aiCheckCmd.Flags().StringVar(&checkAssistant, "assistant", "claude", "Target assistant (claude, agents, gemini, antigravity, cursor, copilot, windsurf, cline, codex, opencode, codex-skills)")
 	aiCheckCmd.Flags().BoolVar(&checkGlobal, "global", false, "Check ~/.claude/ instead of the project")
 	_ = aiCheckCmd.RegisterFlagCompletionFunc("assistant", completeAssistantNames)
 }
@@ -273,12 +274,14 @@ func skillsRoot(assistant string, global bool) (string, error) {
 			return filepath.Join(home, ".config", "opencode"), nil
 		case "agents":
 			return home, nil
+		case "gemini":
+			return filepath.Join(home, ".gemini"), nil
 		default:
 			return filepath.Join(home, ".claude", "skills"), nil
 		}
 	}
 	switch assistant {
-	case "agents", "codex", "opencode":
+	case "agents", "codex", "opencode", "gemini":
 		return ".", nil
 	case "codex-skills":
 		return filepath.Join(".codex", "skills"), nil

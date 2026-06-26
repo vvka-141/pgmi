@@ -13,10 +13,10 @@ user_invocable: true
 - general-purpose (when writing SQL/PL/pgSQL)
 - change-planner (when planning SQL changes)
 
-**Depends On**: pgmi-review-philosophy, pgmi-security-review, pgmi-sql (if exists)
+**Depends On**: pgmi-security-review, pgmi-sql
 
 **Auto-Load Skills**:
-- `pgmi-sql-change-protocol` (mandatory testing workflow for SQL changes)
+- `pgmi-testing-review` (testing workflow for SQL changes)
 
 **Auto-Load With**:
 - `pgmi-sql` skill (SQL coding work)
@@ -303,7 +303,7 @@ UPDATE users SET last_seen = now();
 2. **Explain WHY** it's a problem (not just "this pattern is bad")
 3. **Show IMPACT** with real consequences
 4. **Provide FIX** with working code example
-5. **Reference PRINCIPLE** from this skill or pgmi-review-philosophy
+5. **Reference PRINCIPLE** from this skill
 
 **Example of PROPER issue report**:
 ```markdown

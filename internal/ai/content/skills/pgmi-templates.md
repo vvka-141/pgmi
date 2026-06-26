@@ -1331,5 +1331,4 @@ cd myproject
 - **Scaffolder Implementation:** `internal/scaffold/scaffold.go`
 - **CLI Commands:** `internal/cli/init.go`, `internal/cli/templates.go`
 - **pgmi-sql skill:** SQL coding standards and helper functions
-- **pgmi-deployment skill:** Execution internals and plan-based model
 
