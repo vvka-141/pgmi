@@ -177,6 +177,7 @@ BEGIN
         display_name = COALESCE(EXCLUDED.display_name, membership."user".display_name),
         email_verified = membership."user".email_verified OR EXCLUDED.email_verified,
         updated_at = now()
+    -- xmax = 0: system column is zero for freshly inserted tuples, nonzero on conflict update
     RETURNING object_id, (xmax = 0) INTO v_user_id, v_is_new_user;
 
     RAISE DEBUG 'upsert_user: User % (is_new: %)', v_user_id, v_is_new_user;
@@ -185,6 +186,7 @@ BEGIN
     VALUES (v_user_id, p_provider, p_subject_id)
     ON CONFLICT (idp_provider, idp_subject_id) DO NOTHING;
 
+    -- FOUND is false when DO NOTHING fires (identity already linked to another user)
     IF NOT FOUND THEN
         RAISE DEBUG 'upsert_user: Identity conflict, fetching existing';
         SELECT ui.user_object_id INTO v_user_id
