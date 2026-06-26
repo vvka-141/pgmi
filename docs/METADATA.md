@@ -1,5 +1,6 @@
 ---
 title: "Script metadata"
+description: "Use optional pgmi metadata blocks for stable script identity, idempotency, and execution ordering."
 weight: 90
 ---
 

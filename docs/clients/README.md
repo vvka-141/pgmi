@@ -1,5 +1,6 @@
 ---
 title: "Overview"
+description: "Generate typed API clients from an advanced-template OpenAPI contract."
 weight: 10
 ---
 
@@ -19,15 +20,15 @@ pgmi does not ship client libraries. Your deployment owns the spec; your pipelin
 
 | Language | Tool | Recipe |
 |----------|------|--------|
-| TypeScript | openapi-typescript | [typescript.md](typescript.md) |
-| Go | oapi-codegen | [go.md](go.md) |
-| Python | openapi-python-client | [python.md](python.md) |
-| C# | NSwag | [csharp.md](csharp.md) |
-| Any | openapi-generator | [generic.md](generic.md) |
+| TypeScript | openapi-typescript | [TypeScript](typescript.md) |
+| Go | oapi-codegen | [Go](go.md) |
+| Python | openapi-python-client | [Python](python.md) |
+| C# | NSwag | [C#](csharp.md) |
+| Any | openapi-generator | [Generic](generic.md) |
 
 ## HTTP Collections
 
-For ad-hoc exploration without codegen, see [http-collection.md](http-collection.md) to generate importable request files for Bruno, VS Code REST Client, or IntelliJ.
+For ad-hoc exploration without codegen, see [HTTP collections](http-collection.md) to generate importable request files for Bruno, VS Code REST Client, or IntelliJ.
 
 ## Philosophy
 

@@ -22,6 +22,9 @@ website/resources/
 .hugo_build.lock
 .hugo-cache-review/
 .hugo-public-review/
+.hugo-server/
+.tools/
+.playwright-mcp/
 
 # Local Go build/test cache (GOCACHE)
 .gocache/

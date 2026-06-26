@@ -1,5 +1,6 @@
 ---
 title: Recipes
+description: "Practical pgmi recipes for advanced deployment and integration patterns."
 weight: 190
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: "Go"
+description: "Generate Go types and clients from an advanced-template OpenAPI contract."
 weight: 30
 ---
 

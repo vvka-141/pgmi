@@ -1,5 +1,6 @@
 ---
 title: "HTTP collections"
+description: "Generate importable HTTP request collections from an advanced-template OpenAPI contract."
 weight: 70
 ---
 

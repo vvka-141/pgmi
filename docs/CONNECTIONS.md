@@ -1,5 +1,6 @@
 ---
 title: "Connections"
+description: "Understand pgmi connection resolution, cloud authentication, SSL, poolers, and the two-database deployment pattern."
 weight: 60
 ---
 
@@ -7,7 +8,7 @@ weight: 60
 
 How pgmi connects to every PostgreSQL target — from localhost to multi-cloud managed services.
 
-For CLI flag details, see [CLI.md](CLI.md#connection-flags). For CI/CD pipeline examples, see [PRODUCTION.md](PRODUCTION.md#cicd-patterns).
+For CLI flag details, see [CLI reference](CLI.md#connection-flags). For CI/CD pipeline examples, see [Production](PRODUCTION.md#cicd-patterns).
 
 ---
 
@@ -162,7 +163,7 @@ pgmi.yaml
 PostgreSQL defaults (localhost, 5432)
 ```
 
-See [CONFIGURATION.md](CONFIGURATION.md) for the full pgmi.yaml schema.
+See [Configuration](CONFIGURATION.md) for the full pgmi.yaml schema.
 
 ---
 
@@ -234,7 +235,7 @@ When you use `--overwrite`, pgmi follows a 9-step sequence:
 8. Create session tables and views
 9. Execute `deploy.sql`
 
-The maintenance database is the one in your connection string. The target database is the `-d` flag. See [CLI.md](CLI.md#the-two-database-pattern).
+The maintenance database is the one in your connection string. The target database is the `-d` flag. See [CLI reference](CLI.md#the-two-database-pattern).
 
 ---
 

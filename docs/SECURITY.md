@@ -1,5 +1,6 @@
 ---
 title: "Security"
+description: "Handle secrets, permissions, parameters, and CI/CD security boundaries in pgmi deployments."
 weight: 110
 ---
 
@@ -7,7 +8,7 @@ weight: 110
 
 pgmi handles sensitive parameters (passwords, API keys, tokens) as part of database deployments. This guide covers pgmi's security model, known threat vectors, and recommended practices for CI/CD pipelines.
 
-> **API keys**: the advanced template ships a machine-to-machine API key subsystem (`membership.api_key`, SHA-256-hashed, hash-safe compare, SECURITY DEFINER lifecycle). See [API-KEYS.md](./API-KEYS.md).
+> **API keys**: the advanced template ships a machine-to-machine API key subsystem (`membership.api_key`, SHA-256-hashed, hash-safe compare, SECURITY DEFINER lifecycle). See [API keys](./API-KEYS.md).
 
 ## Required Permissions
 

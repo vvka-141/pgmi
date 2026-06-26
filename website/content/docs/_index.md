@@ -1,5 +1,6 @@
 ---
 title: Documentation
+description: "Browse pgmi documentation for quickstarts, deployment patterns, session APIs, testing, operations, and advanced integrations."
 weight: 1
 bookFlatSection: false
 ---

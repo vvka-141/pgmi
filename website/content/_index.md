@@ -1,6 +1,5 @@
 ---
 title: pgmi
-type: docs
 description: "pgmi is a PostgreSQL-native execution fabric: it loads your project files into session-scoped temp tables and hands control to your own deploy.sql. An execution fabric, not a migration framework — you write the deployment logic in SQL."
 ---
 
@@ -22,10 +21,10 @@ configuration. Most tools decide those things for you; pgmi gets out of the way.
 Real deployments need environment-specific behavior — recreate everything in
 dev, run only changed migrations in staging, require approval for destructive
 changes in production. With most tools that means config files, framework
-conditionals, and wrapper scripts. With pgmi it is just SQL in `deploy.sql`,
-because the full power of PostgreSQL's procedural languages is already there. The
-CLI handles infrastructure only — connections, parameters, observability — and
-never deployment orchestration.
+conditionals, and wrapper scripts. With pgmi, deployment policy stays in
+`deploy.sql`, where the full power of PostgreSQL's procedural languages is
+already there. The CLI handles infrastructure only — connections, parameters,
+observability — and never deployment orchestration.
 
 ## Try in 60 seconds
 

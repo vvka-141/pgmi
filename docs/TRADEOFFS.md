@@ -1,5 +1,6 @@
 ---
 title: "Trade-offs"
+description: "Review pgmi's limits, required PL/pgSQL fluency, PostgreSQL-only scope, and when another tool fits better."
 weight: 170
 ---
 
@@ -32,7 +33,7 @@ The basic template executes files alphabetically every time. There is no built-i
 
 **Advanced template:** Includes a 450-line PL/pgSQL tracking system that records script UUIDs, checksums, and execution history. You own and maintain this code.
 
-**Roll your own:** You can implement tracking in deploy.sql with a few lines — see [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#idempotent-migrations-with-tracking). The tradeoff is that every tracking system makes assumptions (path-based? UUID-based? checksum-based?) that Flyway and Liquibase don't force you to think about.
+**Roll your own:** You can implement tracking in deploy.sql with a few lines — see [deploy.sql guide](DEPLOY-GUIDE.md#idempotent-migrations-with-tracking). The tradeoff is that every tracking system makes assumptions (path-based? UUID-based? checksum-based?) that Flyway and Liquibase don't force you to think about.
 
 ---
 
@@ -60,7 +61,7 @@ EXCEPTION WHEN OTHERS THEN
 END;
 ```
 
-See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#error-context-with-exception-blocks) for the full pattern.
+See [deploy.sql guide](DEPLOY-GUIDE.md#error-context-with-exception-blocks) for the full pattern.
 
 ---
 
@@ -85,7 +86,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_date ON orders(created_at);
 
 Note: because top-level SQL has no procedural constructs, you cannot dynamically iterate `pgmi_source_view` for concurrent indexes. Write them explicitly in deploy.sql, or use a separate pgmi deployment phase.
 
-See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#create-index-concurrently-workaround) for the complete pattern.
+See [deploy.sql guide](DEPLOY-GUIDE.md#create-index-concurrently-workaround) for the complete pattern.
 
 ---
 
@@ -99,7 +100,7 @@ NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
 
 There is no JUnit XML, TAP protocol, JSON report, pass/fail summary, or timing information. The test either succeeds (continues) or fails (`RAISE EXCEPTION` aborts the transaction).
 
-**The callback mechanism** (`CALL pgmi_test('pattern', 'my_callback')`) is extensible — you can write a PL/pgSQL function that receives test events and produces structured output. See [TESTING.md](TESTING.md#custom-test-callbacks) for the function signature.
+**The callback mechanism** (`CALL pgmi_test('pattern', 'my_callback')`) is extensible — you can write a PL/pgSQL function that receives test events and produces structured output. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
 
 ---
 
@@ -155,7 +156,7 @@ pgmi requires session-scoped temporary tables that survive for the entire deploy
 
 **Solution:** Use the direct PostgreSQL endpoint (port 5432) for pgmi deployments, not the pooled endpoint (port 6432). Your application traffic continues to use the pooler as usual.
 
-See [CONNECTIONS.md](CONNECTIONS.md#connection-pooler-compatibility) for details.
+See [Connections](CONNECTIONS.md#connection-pooler-compatibility) for details.
 
 ---
 
@@ -189,13 +190,13 @@ For teams comfortable with PL/pgSQL, this is a feature. For teams that want a to
 - Projects that need multi-database support (pgmi is PostgreSQL-only)
 - Organizations that require GUI tools, commercial support, or enterprise ecosystem integrations
 
-See [WHY-PGMI.md](WHY-PGMI.md) for when pgmi's approach makes sense.
+See [Why pgmi](WHY-PGMI.md) for when pgmi's approach makes sense.
 
 ---
 
 ## See also
 
-- [WHY-PGMI.md](WHY-PGMI.md) — Philosophy and comparison with other tools
-- [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md) — Patterns that mitigate these limitations
-- [CONNECTIONS.md](CONNECTIONS.md) — Connection pooler details
-- [TESTING.md](TESTING.md) — Test callback extensibility
+- [Why pgmi](WHY-PGMI.md) — Philosophy and comparison with other tools
+- [deploy.sql guide](DEPLOY-GUIDE.md) — Patterns that mitigate these limitations
+- [Connections](CONNECTIONS.md) — Connection pooler details
+- [Testing](TESTING.md) — Test callback extensibility

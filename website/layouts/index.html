@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="{{ site.Language.Lang | default "en" }}">
+  <head>
+    {{- $description := .Params.description | default site.Params.description -}}
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ site.Title }}</title>
+    <meta name="description" content="{{ $description }}">
+    <meta property="og:title" content="{{ site.Title }}">
+    <meta property="og:description" content="{{ $description }}">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{{ .Permalink }}">
+    <meta name="twitter:card" content="summary">
+    <link rel="canonical" href="{{ .Permalink }}">
+    <link rel="icon" href="{{ "favicon.svg" | relURL }}" type="image/svg+xml">
+    {{- $css := resources.Get "landing.css" | minify | fingerprint -}}
+    <link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="{{ site.Home.RelPermalink }}">pgmi</a>
+      <nav aria-label="Primary navigation">
+        <a href="{{ "docs/" | relURL }}">Docs</a>
+        <a href="{{ "docs/quickstart/" | relURL }}">Quickstart</a>
+        <a href="https://github.com/vvka-141/pgmi">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-visual" aria-hidden="true">
+          <div class="terminal-window">
+            <div class="terminal-bar"><span></span><span></span><span></span></div>
+            <pre><code>$ pgmi deploy . --compat 1
+NOTICE: loaded 18 source files into pg_temp
+NOTICE: deploy.sql selected 6 migration steps
+NOTICE: running tests with savepoint isolation
+NOTICE: deployment complete</code></pre>
+          </div>
+          <div class="flow-row">
+            <span>files</span>
+            <span>temp views</span>
+            <span>deploy.sql</span>
+            <span>database</span>
+          </div>
+        </div>
+
+        <div class="shell hero-copy">
+          <p class="eyebrow">PostgreSQL-native deployment</p>
+          <h1>pgmi</h1>
+          <p class="lede">An execution fabric for teams that want PostgreSQL to drive deployment logic, not a migration framework that hides it.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="{{ "docs/quickstart/" | relURL }}">Start with Quickstart</a>
+            <a class="button secondary" href="{{ "docs/why-pgmi/" | relURL }}">Why pgmi</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="shell model-section" aria-labelledby="model-title">
+        <div>
+          <p class="eyebrow">Execution model</p>
+          <h2 id="model-title">pgmi prepares the session. Your SQL decides the deployment.</h2>
+        </div>
+        <div class="model-grid">
+          <article>
+            <strong>Load</strong>
+            <p>Project files, metadata, tests, and parameters become session-scoped temporary tables and stable views.</p>
+          </article>
+          <article>
+            <strong>Hand off</strong>
+            <p><code>deploy.sql</code> queries those views and chooses ordering, filtering, transactions, idempotency, and rollback.</p>
+          </article>
+          <article>
+            <strong>Execute</strong>
+            <p>The generated plan runs in the same PostgreSQL session, with notices and errors coming directly from PostgreSQL.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="contrast-section">
+        <div class="shell split-section">
+          <div>
+            <p class="eyebrow">Where it fits</p>
+            <h2>For database work that needs real control.</h2>
+            <p>Use pgmi when deployment logic belongs close to the database: environment-aware changes, test gates, data loads, generated APIs, or application behavior expressed in SQL.</p>
+          </div>
+          <ul class="check-list">
+            <li>CLI flags stay focused on infrastructure: connections, parameters, compatibility, observability.</li>
+            <li>Deployment behavior stays in <code>deploy.sql</code>, where it can be reviewed and tested with the rest of the database code.</li>
+            <li>The advanced template can expose PostgreSQL-backed REST, RPC, and MCP APIs without changing the core model.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="shell paths-section" aria-labelledby="paths-title">
+        <div class="section-heading">
+          <p class="eyebrow">Choose a starting point</p>
+          <h2 id="paths-title">Small scaffold or full reference app.</h2>
+        </div>
+        <div class="path-grid">
+          <article>
+            <h3>Basic</h3>
+            <p>A compact migration scaffold with path-based ordering, tests, and a readable <code>deploy.sql</code>.</p>
+            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">Use the basic template</a>
+          </article>
+          <article>
+            <h3>Advanced</h3>
+            <p>A SQL-native reference app with metadata ordering, roles, audit logging, REST/RPC, and MCP support.</p>
+            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">Explore the advanced template</a>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <span>pgmi is an execution fabric, not a migration framework.</span>
+        <a href="{{ "docs/" | relURL }}">Documentation</a>
+      </div>
+    </footer>
+  </body>
+</html>

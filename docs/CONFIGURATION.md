@@ -1,5 +1,6 @@
 ---
 title: "Configuration"
+description: "Configure pgmi.yaml, environment variables, parameters, and precedence rules for deployments."
 weight: 70
 ---
 

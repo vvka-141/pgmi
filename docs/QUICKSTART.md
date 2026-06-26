@@ -1,5 +1,6 @@
 ---
 title: "Quickstart"
+description: "Install pgmi, scaffold a project, deploy to local PostgreSQL, and verify the result."
 weight: 30
 ---
 

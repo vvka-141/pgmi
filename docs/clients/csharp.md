@@ -1,5 +1,6 @@
 ---
 title: "C#"
+description: "Generate C# clients from an advanced-template OpenAPI contract."
 weight: 50
 ---
 

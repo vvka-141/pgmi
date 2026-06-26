@@ -1,5 +1,6 @@
 ---
 title: "deploy.sql guide"
+description: "Write deploy.sql patterns for file execution, environment branching, data loading, tests, and multi-phase deployments."
 weight: 80
 ---
 
@@ -7,7 +8,7 @@ weight: 80
 
 This guide covers patterns for writing `deploy.sql` — from basic file execution to data ingestion, environment branching, and multi-phase deployments. Every example is copy-paste ready.
 
-For the session API reference (views, columns, functions), see [session-api.md](session-api.md).
+For the session API reference (views, columns, functions), see [Session API](session-api.md).
 
 ---
 
@@ -35,7 +36,7 @@ END $$;
 COMMIT;
 ```
 
-Use `pgmi_plan_view` instead of `pgmi_source_view` when you want metadata-driven ordering via `<pgmi-meta>` blocks. See [session-api.md](session-api.md#which-view-should-i-use).
+Use `pgmi_plan_view` instead of `pgmi_source_view` when you want metadata-driven ordering via `<pgmi-meta>` blocks. See [Session API](session-api.md#which-view-should-i-use).
 
 ---
 
@@ -405,7 +406,7 @@ Because top-level SQL has no procedural constructs (no loops, no variables), con
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
 ```
 
-This is a PostgreSQL constraint, not a pgmi limitation — `CREATE INDEX CONCURRENTLY` behaves the same way in Flyway, Liquibase, and every other tool that uses transactions. See [TRADEOFFS.md](TRADEOFFS.md#create-index-concurrently) for more context.
+This is a PostgreSQL constraint, not a pgmi limitation — `CREATE INDEX CONCURRENTLY` behaves the same way in Flyway, Liquibase, and every other tool that uses transactions. See [Trade-offs](TRADEOFFS.md#create-index-concurrently) for more context.
 
 ---
 
@@ -434,7 +435,7 @@ CALL pgmi_test();
 COMMIT;
 ```
 
-See [TESTING.md](TESTING.md#the-gated-deployment-pattern) for details on how the test gate works.
+See [Testing](TESTING.md#the-gated-deployment-pattern) for details on how the test gate works.
 
 ---
 
@@ -483,7 +484,7 @@ END $$;
 
 The `IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = '...')` pattern lets the same `deploy.sql` work on vanilla PostgreSQL and flavored instances. pgmi handles the connection; PostgreSQL handles the flavor; your SQL handles the logic.
 
-See [CONNECTIONS.md](CONNECTIONS.md#where-pgmi-doesnt-work) for compatibility notes on non-PostgreSQL databases.
+See [Connections](CONNECTIONS.md#where-pgmi-doesnt-work) for compatibility notes on non-PostgreSQL databases.
 
 ---
 

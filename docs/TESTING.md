@@ -1,5 +1,6 @@
 ---
 title: "Testing"
+description: "Run pgmi database tests with savepoint isolation, fixtures, callbacks, and deployment gates."
 weight: 100
 ---
 

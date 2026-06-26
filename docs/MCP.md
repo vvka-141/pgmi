@@ -1,5 +1,6 @@
 ---
 title: "MCP integration"
+description: "Understand the advanced template's Model Context Protocol support and PostgreSQL-backed MCP handlers."
 weight: 140
 ---
 
@@ -615,6 +616,6 @@ SELECT * FROM api.mcp_exchange ORDER BY created_at DESC LIMIT 10;
 
 ## See Also
 
-- [session-api.md](session-api.md) — Session tables and helper functions
-- [SECURITY.md](SECURITY.md) — Secrets handling and security patterns
-- [TESTING.md](TESTING.md) — Database testing with automatic rollback
+- [Session API](session-api.md) — Session tables and helper functions
+- [Security](SECURITY.md) — Secrets handling and security patterns
+- [Testing](TESTING.md) — Database testing with automatic rollback

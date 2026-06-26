@@ -1,5 +1,6 @@
 ---
 title: "Semantic MCP curation"
+description: "Recipe for surfacing relevant MCP tools with embedding-based curation."
 weight: 10
 ---
 
@@ -182,7 +183,7 @@ CREATE OR REPLACE FUNCTION api.upsert_tool_embedding(
 Keep the model choice (provider, dimension) entirely in the warmup worker.
 Swapping providers is then a worker change plus a one-time re-embed — no SQL
 churn. Document pgvector as a managed-cloud-conditional dependency; see
-[PRODUCTION.md](../PRODUCTION.md) for which providers offer it.
+[Production](../PRODUCTION.md) for which providers offer it.
 
 ---
 

@@ -1,12 +1,13 @@
 ---
 title: "API versioning"
+description: "Design record for pgmi session API versioning and compatibility guarantees."
 weight: 10
 ---
 
 # Change Request: API Versioning for pgmi Session Interface
 
 > **Status: IMPLEMENTED**
-> This design document describes changes that have been completed. The "Current State" section reflects the pre-implementation state for historical context. The "Target State" is now the actual implementation. See [session-api.md](../session-api.md) for current API documentation.
+> This design document describes changes that have been completed. The "Current State" section reflects the pre-implementation state for historical context. The "Target State" is now the actual implementation. See [Session API](../session-api.md) for current API documentation.
 
 ## Overview
 

@@ -1,5 +1,6 @@
 ---
 title: "Production"
+description: "Plan pgmi production deployments, rollback strategies, connection requirements, observability, and CI/CD patterns."
 weight: 120
 ---
 

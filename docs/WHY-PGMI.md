@@ -1,5 +1,6 @@
 ---
 title: "Why pgmi"
+description: "Understand when pgmi's SQL-driven execution fabric fits a PostgreSQL project and when another migration tool is a better choice."
 weight: 20
 ---
 
@@ -98,12 +99,12 @@ pgmi is a good fit when:
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
 - Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the advanced template does this automatically)
-- See [DEPLOY-GUIDE.md](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
+- See [deploy.sql guide](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
 - Same `deploy.sql` works on Azure Database for PostgreSQL, Amazon RDS, Google Cloud SQL, Citus, TimescaleDB, Neon, Supabase
 - Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM) — no credential translation layer
-- See [CONNECTIONS.md](CONNECTIONS.md) for the full connection architecture
+- See [Connections](CONNECTIONS.md) for the full connection architecture
 
 **You want fast iteration with disposable databases.**
 - `pgmi deploy . --overwrite --force` drops and recreates the database, then deploys from scratch
@@ -142,7 +143,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
 
-For a deeper exploration of pgmi's costs, see [TRADEOFFS.md](TRADEOFFS.md).
+For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md).
 
 ## Design principles
 

@@ -1,5 +1,6 @@
 ---
 title: "Session API"
+description: "Reference pgmi's session-scoped views, functions, parameters, test APIs, and execution model."
 weight: 160
 ---
 

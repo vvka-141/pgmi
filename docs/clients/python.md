@@ -1,5 +1,6 @@
 ---
 title: "Python"
+description: "Generate Python clients from an advanced-template OpenAPI contract."
 weight: 40
 ---
 

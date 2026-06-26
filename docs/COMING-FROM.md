@@ -1,5 +1,6 @@
 ---
 title: "Coming from other tools"
+description: "Map Flyway, Liquibase, Sqitch, and psql workflows to pgmi's deploy.sql-driven model."
 weight: 40
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Client guides
+description: "Client-generation guides for advanced-template OpenAPI contracts."
 weight: 200
 ---
 

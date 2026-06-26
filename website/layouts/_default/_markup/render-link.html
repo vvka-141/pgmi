@@ -17,7 +17,8 @@
     {{- $dest = .RelPermalink -}}
     {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}
   {{- else -}}
-    {{- if not (strings.HasPrefix $abs "/docs") -}}
+    {{- $isDocsPath := or (eq $abs "docs") (strings.HasPrefix $abs "docs/") -}}
+    {{- if not $isDocsPath -}}
       {{- $repoRel := path.Join (path.Dir (replace $.Page.File.Path "\\" "/")) $pathPart -}}
       {{- $dest = printf "%s/blob/main/%s" (site.Params.BookRepo | default "https://github.com/vvka-141/pgmi") $repoRel -}}
       {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}

@@ -1,5 +1,6 @@
 ---
 title: "API keys"
+description: "Use the advanced template's API key subsystem for machine-to-machine authentication with hashed secrets."
 weight: 150
 ---
 

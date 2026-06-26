@@ -1,5 +1,6 @@
 ---
 title: "TypeScript"
+description: "Generate TypeScript types or clients from an advanced-template OpenAPI contract."
 weight: 20
 ---
 

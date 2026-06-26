@@ -1,5 +1,6 @@
 ---
 title: "CLI reference"
+description: "Reference pgmi commands, connection flags, parameters, compatibility options, exit codes, and common errors."
 weight: 50
 ---
 
@@ -7,7 +8,7 @@ weight: 50
 
 Complete reference for all pgmi commands. Every example is copy-paste ready.
 
-For a guided walkthrough, see [QUICKSTART.md](QUICKSTART.md).
+For a guided walkthrough, see [Quickstart](QUICKSTART.md).
 
 ---
 
@@ -102,7 +103,7 @@ Error: unsupported API version "99"; supported: [1]
 - Functions: `pgmi_test_plan()`, `pgmi_test_generate()`, `pgmi_is_sql_file()`, `pgmi_persist_test_plan()`
 - Preprocessor macro: `CALL pgmi_test()`
 
-See [session-api.md](session-api.md) for complete API documentation.
+See [Session API](session-api.md) for complete API documentation.
 
 #### Understanding `--overwrite` Safety
 

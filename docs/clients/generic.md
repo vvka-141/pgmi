@@ -1,5 +1,6 @@
 ---
 title: "Generic (any language)"
+description: "Generate clients in other languages from an advanced-template OpenAPI contract."
 weight: 60
 ---
 

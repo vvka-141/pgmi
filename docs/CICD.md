@@ -1,5 +1,6 @@
 ---
 title: "CI/CD"
+description: "Deploy pgmi projects from CI systems with pinned binaries, direct connections, secrets, and compatibility versions."
 weight: 130
 ---
 
