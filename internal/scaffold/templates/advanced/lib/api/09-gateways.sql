@@ -372,22 +372,21 @@ CREATE OR REPLACE FUNCTION api.rest_invoke(
     p_headers extensions.hstore,
     p_content jsonb
 ) RETURNS api.http_response
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_headers extensions.hstore;
-    v_content_bytes bytea;
-BEGIN
-    v_headers := COALESCE(p_headers, ''::extensions.hstore);
-
-    IF p_content IS NOT NULL THEN
-        IF NOT v_headers ? 'content-type' THEN
-            v_headers := v_headers || 'content-type=>application/json'::extensions.hstore;
-        END IF;
-        v_content_bytes := convert_to(p_content::text, 'UTF8');
-    END IF;
-
-    RETURN api.rest_invoke(p_method, p_url, v_headers, v_content_bytes);
-END;
+LANGUAGE sql AS $$
+    SELECT api.rest_invoke(
+        p_method,
+        p_url,
+        CASE
+            WHEN p_content IS NOT NULL
+                 AND NOT COALESCE(p_headers, ''::extensions.hstore) ? 'content-type'
+            THEN COALESCE(p_headers, ''::extensions.hstore)
+                 || 'content-type=>application/json'::extensions.hstore
+            ELSE COALESCE(p_headers, ''::extensions.hstore)
+        END,
+        CASE WHEN p_content IS NOT NULL
+             THEN convert_to(p_content::text, 'UTF8')
+        END
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION api.rest_invoke(
@@ -396,22 +395,21 @@ CREATE OR REPLACE FUNCTION api.rest_invoke(
     p_headers extensions.hstore,
     p_content xml
 ) RETURNS api.http_response
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_headers extensions.hstore;
-    v_content_bytes bytea;
-BEGIN
-    v_headers := COALESCE(p_headers, ''::extensions.hstore);
-
-    IF p_content IS NOT NULL THEN
-        IF NOT v_headers ? 'content-type' THEN
-            v_headers := v_headers || 'content-type=>application/xml'::extensions.hstore;
-        END IF;
-        v_content_bytes := convert_to(p_content::text, 'UTF8');
-    END IF;
-
-    RETURN api.rest_invoke(p_method, p_url, v_headers, v_content_bytes);
-END;
+LANGUAGE sql AS $$
+    SELECT api.rest_invoke(
+        p_method,
+        p_url,
+        CASE
+            WHEN p_content IS NOT NULL
+                 AND NOT COALESCE(p_headers, ''::extensions.hstore) ? 'content-type'
+            THEN COALESCE(p_headers, ''::extensions.hstore)
+                 || 'content-type=>application/xml'::extensions.hstore
+            ELSE COALESCE(p_headers, ''::extensions.hstore)
+        END,
+        CASE WHEN p_content IS NOT NULL
+             THEN convert_to(p_content::text, 'UTF8')
+        END
+    );
 $$;
 
 COMMENT ON FUNCTION api.rest_invoke(text, text, extensions.hstore, jsonb) IS

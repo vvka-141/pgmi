@@ -54,7 +54,7 @@ func PageWriter() (io.Writer, func()) {
 
 	return w, func() {
 		w.Close()
-		cmd.Wait()
+		_ = cmd.Wait()
 	}
 }
 
