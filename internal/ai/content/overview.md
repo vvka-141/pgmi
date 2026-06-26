@@ -165,6 +165,7 @@ Workflow:
   --force                Non-interactive 5s countdown (CI/CD)
   --timeout DURATION     Catastrophic failure timeout (default 3m)
   --compat VERSION       Pin session interface version
+  --json                 Emit structured JSON to stdout after deployment
 ```
 
 ### pgmi init \[path\]

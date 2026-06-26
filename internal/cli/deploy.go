@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -64,6 +65,7 @@ type deployFlagValues struct {
 	paramsFiles      []string
 	timeout          time.Duration
 	compat           string
+	jsonOutput       bool
 }
 
 var deployFlags deployFlagValues
@@ -169,6 +171,10 @@ func init() {
 	deployCmd.Flags().StringVar(&deployFlags.compat, "compat", "",
 		"Compatibility level (default: latest)\n"+
 			"Pin to a specific pgmi session interface version")
+
+	// JSON output flag
+	deployCmd.Flags().BoolVar(&deployFlags.jsonOutput, "json", false,
+		"Emit structured JSON to stdout after deployment")
 }
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
@@ -321,9 +327,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	err = deployer.Deploy(ctx, config)
 
-	// Print summary line to stderr
+	// Print summary / JSON output
 	if result := deployer.LastResult(); result != nil {
-		printDeploySummary(result, err)
+		if deployFlags.jsonOutput {
+			printDeployJSON(result, err)
+		} else {
+			printDeploySummary(result, err)
+		}
 	}
 
 	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
@@ -351,6 +361,25 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 	} else {
 		fmt.Fprintf(os.Stderr, "%s Failed after %s — see error above\n", ui.FailIcon(), d)
 	}
+}
+
+func printDeployJSON(result *services.DeployResult, deployErr error) {
+	exitCode := 0
+	out := map[string]any{
+		"status":       "success",
+		"filesLoaded":  result.FilesLoaded,
+		"testMacros":   result.TestMacros,
+		"durationMs":   result.Duration.Milliseconds(),
+		"database":     result.Database,
+		"exitCode":     exitCode,
+	}
+	if deployErr != nil {
+		out["status"] = "failed"
+		out["exitCode"] = pgmi.ExitCodeForError(deployErr)
+		out["error"] = deployErr.Error()
+	}
+	jsonBytes, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(jsonBytes))
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.
