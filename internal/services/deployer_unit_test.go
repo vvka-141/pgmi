@@ -10,6 +10,8 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+var errMockStop = errors.New("mock stop")
+
 func validDeps() (
 	func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
 	pgmi.Approver,
@@ -142,7 +144,7 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 
 func TestDeploy_OverwriteDBNotExists_Creates(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: false}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
 
 	cfg := validConfig()
@@ -150,15 +152,15 @@ func TestDeploy_OverwriteDBNotExists_Creates(t *testing.T) {
 	cfg.Force = true
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || err.Error() != "mock stop" {
-		t.Fatalf("Expected 'mock stop', got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop, got: %v", err)
 	}
 }
 
 func TestDeploy_OverwriteApproved_FullCycle(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 	approver := &mockApprover{approved: true}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, approver, sessPreparer, successfulMgmtConn())
 
 	cfg := validConfig()
@@ -166,8 +168,8 @@ func TestDeploy_OverwriteApproved_FullCycle(t *testing.T) {
 	cfg.Force = true
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || err.Error() != "mock stop" {
-		t.Fatalf("Expected 'mock stop', got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop, got: %v", err)
 	}
 }
 
@@ -244,23 +246,23 @@ func TestDeploy_OverwriteCreateFails(t *testing.T) {
 
 func TestDeploy_EnsureDBExists(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
 
 	err := svc.Deploy(context.Background(), validConfig())
-	if err == nil || err.Error() != "mock stop" {
-		t.Fatalf("Expected 'mock stop', got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop, got: %v", err)
 	}
 }
 
 func TestDeploy_EnsureDBCreates(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: false}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
 
 	err := svc.Deploy(context.Background(), validConfig())
-	if err == nil || err.Error() != "mock stop" {
-		t.Fatalf("Expected 'mock stop', got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop, got: %v", err)
 	}
 }
 
@@ -341,35 +343,35 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 func TestDeploy_SessionPrepPrecedesDeploySQLRead(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 	fileScanner := &mockFileScanner{readErr: fmt.Errorf("deploy.sql not found: %w", pgmi.ErrDeploySQLNotFound)}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	cf, _, lg, _, _, _ := validDeps()
 	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fileScanner, dbMgr)
 	svc.mgmtConnector = successfulMgmtConn()
 
 	err := svc.Deploy(context.Background(), validConfig())
 
-	if err == nil || !strings.Contains(err.Error(), "mock stop") {
-		t.Fatalf("Expected mock stop (session prep comes first), got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop (session prep comes first), got: %v", err)
 	}
 }
 
 func TestDeploy_MaintenanceDBDefault(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
 
 	cfg := validConfig()
 	cfg.MaintenanceDatabase = ""
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "mock stop") {
-		t.Fatalf("Expected mock stop, got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop, got: %v", err)
 	}
 }
 
 func TestDeploy_CustomMaintenanceDB(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 
 	var capturedDB string
 	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
@@ -390,7 +392,7 @@ func TestDeploy_CustomMaintenanceDB(t *testing.T) {
 
 func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: false}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 
 	var capturedDB string
 	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
@@ -477,7 +479,7 @@ func TestDeploy_OverwriteBlocksCustomManagementDB(t *testing.T) {
 
 func TestDeploy_OverwriteAllowsDifferentDB(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: false}
-	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
 	svc := newTestService(dbMgr, nil, sessPreparer, successfulMgmtConn())
 
 	cfg := validConfig()
@@ -487,8 +489,8 @@ func TestDeploy_OverwriteAllowsDifferentDB(t *testing.T) {
 
 	err := svc.Deploy(context.Background(), cfg)
 	// Should pass validation and proceed (mock stop from session prep)
-	if err == nil || err.Error() != "mock stop" {
-		t.Fatalf("Expected 'mock stop' (passed validation), got: %v", err)
+	if !errors.Is(err, errMockStop) {
+		t.Fatalf("Expected errMockStop (passed validation), got: %v", err)
 	}
 }
 
