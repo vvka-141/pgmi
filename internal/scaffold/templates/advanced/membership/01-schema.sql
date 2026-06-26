@@ -261,7 +261,7 @@ RETURNS TABLE (
     display_name TEXT,
     joined_at TIMESTAMPTZ
 )
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT om.object_id, om.user_id, om.role, om.status, u.email, u.display_name, om.joined_at
     FROM membership.organization_member om
@@ -281,7 +281,7 @@ RETURNS TABLE (
     status membership.invitation_status,
     is_personal BOOLEAN
 )
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT o.object_id, o.name, o.slug, om.role, om.status, o.is_personal
     FROM membership.organization_member om

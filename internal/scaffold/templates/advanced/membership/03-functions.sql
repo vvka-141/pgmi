@@ -17,7 +17,7 @@
 
 CREATE OR REPLACE FUNCTION membership.get_identity(p_provider TEXT, p_subject_id TEXT)
 RETURNS membership.user_identity
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT * FROM membership.user_identity
     WHERE idp_provider = p_provider AND idp_subject_id = p_subject_id;
@@ -28,7 +28,7 @@ COMMENT ON FUNCTION membership.get_identity(TEXT, TEXT) IS
 
 CREATE OR REPLACE FUNCTION membership.get_user_by_identity(p_provider TEXT, p_subject_id TEXT)
 RETURNS membership."user"
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT u.* FROM membership."user" u
     JOIN membership.user_identity ui ON ui.user_object_id = u.object_id
@@ -40,7 +40,7 @@ COMMENT ON FUNCTION membership.get_user_by_identity(TEXT, TEXT) IS
 
 CREATE OR REPLACE FUNCTION membership.get_user_identities(p_user_id UUID)
 RETURNS SETOF membership.user_identity
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT * FROM membership.user_identity WHERE user_object_id = p_user_id;
 $$;
@@ -50,7 +50,7 @@ COMMENT ON FUNCTION membership.get_user_identities(UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.get_user_by_email(p_email TEXT)
 RETURNS membership."user"
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT * FROM membership."user" WHERE email = lower(trim(p_email));
 $$;
@@ -64,7 +64,7 @@ COMMENT ON FUNCTION membership.get_user_by_email(TEXT) IS
 
 CREATE OR REPLACE FUNCTION membership.get_user_default_organization(p_user_id UUID)
 RETURNS membership.organization
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT o.* FROM membership.organization o
     WHERE o.owner_user_id = p_user_id AND o.is_personal = true AND o.is_active = true
@@ -76,7 +76,7 @@ COMMENT ON FUNCTION membership.get_user_default_organization(UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.count_user_owned_organizations(p_user_id UUID)
 RETURNS BIGINT
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT count(*) FROM membership.organization
     WHERE owner_user_id = p_user_id AND is_active = true;
@@ -87,7 +87,7 @@ COMMENT ON FUNCTION membership.count_user_owned_organizations(UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.can_create_organization(p_user_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT membership.count_user_owned_organizations(p_user_id) < 5;
 $$;
@@ -97,7 +97,7 @@ COMMENT ON FUNCTION membership.can_create_organization(UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.has_organization_access(p_user_id UUID, p_org_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT EXISTS (
         SELECT 1 FROM membership.organization_member
@@ -110,7 +110,7 @@ COMMENT ON FUNCTION membership.has_organization_access(UUID, UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.is_organization_owner(p_user_id UUID, p_org_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT EXISTS (
         SELECT 1 FROM membership.organization
@@ -123,7 +123,7 @@ COMMENT ON FUNCTION membership.is_organization_owner(UUID, UUID) IS
 
 CREATE OR REPLACE FUNCTION membership.get_member_role(p_user_id UUID, p_org_id UUID)
 RETURNS membership.member_role
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT role FROM membership.organization_member
     WHERE user_id = p_user_id AND organization_id = p_org_id AND status = 'active';

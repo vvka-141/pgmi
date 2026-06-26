@@ -18,7 +18,7 @@
 
 CREATE OR REPLACE FUNCTION api.current_idp_subject()
 RETURNS TEXT
-LANGUAGE sql STABLE
+LANGUAGE sql STABLE PARALLEL SAFE
 AS $$
     SELECT NULLIF(current_setting('auth.idp_subject', true), '');
 $$;
@@ -28,7 +28,7 @@ COMMENT ON FUNCTION api.current_idp_subject() IS
 
 CREATE OR REPLACE FUNCTION api.parse_idp_provider(p_subject TEXT)
 RETURNS TEXT
-LANGUAGE sql IMMUTABLE
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT split_part(p_subject, '|', 1);
 $$;
@@ -38,7 +38,7 @@ COMMENT ON FUNCTION api.parse_idp_provider(TEXT) IS
 
 CREATE OR REPLACE FUNCTION api.parse_idp_subject_id(p_subject TEXT)
 RETURNS TEXT
-LANGUAGE sql IMMUTABLE
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT split_part(p_subject, '|', 2);
 $$;
