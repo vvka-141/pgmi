@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/metadata"
@@ -227,89 +225,43 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] JSON output: %v\n", validateJSON)
 	}
 
-	// Create scanner
-	fileScanner := scanner.NewScanner(checksum.New())
-
-	// Scan directory (this performs metadata extraction and validation)
 	if !validateJSON {
 		fmt.Fprintln(os.Stderr, "Scanning and validating SQL files...")
+		fmt.Fprintln(os.Stderr, "Validating metadata graph...")
 	}
 
-	scanResult, err := fileScanner.ScanDirectory(projectPath)
+	result, err := validateProject(projectPath)
 	if err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Perform cross-file validation
-	if !validateJSON {
-		fmt.Fprintln(os.Stderr, "Validating metadata graph...")
-	}
-
-	// Check for duplicate IDs
-	idToPath := make(map[uuid.UUID]string)
-	var duplicates []string
-	for _, file := range scanResult.Files {
-		if file.Metadata == nil {
-			continue
-		}
-		if existingPath, exists := idToPath[file.Metadata.ID]; exists {
-			duplicates = append(duplicates, fmt.Sprintf("  Duplicate ID %s:\n    - %s\n    - %s", file.Metadata.ID, existingPath, file.Path))
-		} else {
-			idToPath[file.Metadata.ID] = file.Path
-		}
-	}
-
-	// Cross-file validation complete (duplicate IDs checked above)
-
-	// Collect results
-	filesWithMetadata := 0
-	filesWithoutMetadata := 0
-	for _, file := range scanResult.Files {
-		if file.Metadata != nil {
-			filesWithMetadata++
-		} else {
-			filesWithoutMetadata++
-		}
-	}
-
-	validationPassed := len(duplicates) == 0
-
-	// Output results
 	if validateJSON {
-		result := map[string]any{
-			"total_files":            len(scanResult.Files),
-			"files_with_metadata":    filesWithMetadata,
-			"files_without_metadata": filesWithoutMetadata,
-			"validation_passed":      validationPassed,
-			"duplicate_ids":          duplicates,
-		}
 		jsonBytes, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal JSON: %w", err)
 		}
 		fmt.Println(string(jsonBytes))
 	} else {
-		// Human-readable output
 		fmt.Fprintf(os.Stderr, "\nValidation Summary:\n")
-		fmt.Fprintf(os.Stderr, "  Total files: %d\n", len(scanResult.Files))
-		fmt.Fprintf(os.Stderr, "  Files with metadata: %d\n", filesWithMetadata)
-		fmt.Fprintf(os.Stderr, "  Files without metadata: %d\n", filesWithoutMetadata)
+		fmt.Fprintf(os.Stderr, "  Total files: %d\n", result.TotalFiles)
+		fmt.Fprintf(os.Stderr, "  Files with metadata: %d\n", result.FilesWithMetadata)
+		fmt.Fprintf(os.Stderr, "  Files without metadata: %d\n", result.FilesWithoutMetadata)
 		fmt.Fprintln(os.Stderr)
 
-		if len(duplicates) > 0 {
+		if len(result.DuplicateIDs) > 0 {
 			fmt.Fprintln(os.Stderr, "Error: Duplicate IDs detected:")
-			for _, dup := range duplicates {
-				fmt.Fprintln(os.Stderr, dup)
+			for _, dup := range result.DuplicateIDs {
+				fmt.Fprintln(os.Stderr, "  "+dup)
 			}
 			fmt.Fprintln(os.Stderr)
 		}
 
-		if validationPassed {
+		if result.ValidationPassed {
 			fmt.Fprintln(os.Stderr, "Metadata validation passed.")
 		}
 	}
 
-	if !validationPassed {
+	if !result.ValidationPassed {
 		return fmt.Errorf("metadata validation failed")
 	}
 
@@ -326,81 +278,18 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] JSON output: %v\n", planJSON)
 	}
 
-	// Create scanner
-	fileScanner := scanner.NewScanner(checksum.New())
-
-	// Scan directory
 	if !planJSON {
 		fmt.Fprintln(os.Stderr, "Scanning SQL files and analyzing dependencies...")
 	}
 
-	scanResult, err := fileScanner.ScanDirectory(projectPath)
+	result, err := planProject(projectPath)
 	if err != nil {
 		return fmt.Errorf("failed to scan directory: %w", err)
 	}
-
-	// Build plan showing files with their metadata
-
-	type PlanEntry struct {
-		Path        string   `json:"path"`
-		ID          string   `json:"id"`
-		Idempotent  bool     `json:"idempotent"`
-		SortKeys    []string `json:"sort_keys"`
-		Description string   `json:"description"`
-	}
-
-	var plan []PlanEntry
-	for _, file := range scanResult.Files {
-		if file.Metadata == nil {
-			// Use fallback
-			fallbackID := metadata.GenerateFallbackID(file.Path)
-			plan = append(plan, PlanEntry{
-				Path:        file.Path,
-				ID:          fallbackID.String(),
-				Idempotent:  true,
-				SortKeys:    []string{filepath.Base(file.Path)},
-				Description: "No metadata (fallback)",
-			})
-		} else {
-			plan = append(plan, PlanEntry{
-				Path:        file.Path,
-				ID:          file.Metadata.ID.String(),
-				Idempotent:  file.Metadata.Idempotent,
-				SortKeys:    file.Metadata.SortKeys,
-				Description: file.Metadata.Description,
-			})
-		}
-	}
-
-	// Order by sort key (then path) to approximate deployment execution order,
-	// matching this command's description. minSortKey returns the file's
-	// smallest sort key, which is what the plan view orders on.
-	minSortKey := func(e PlanEntry) string {
-		if len(e.SortKeys) == 0 {
-			return e.Path
-		}
-		m := e.SortKeys[0]
-		for _, k := range e.SortKeys[1:] {
-			if k < m {
-				m = k
-			}
-		}
-		return m
-	}
-	sort.SliceStable(plan, func(i, j int) bool {
-		ki, kj := minSortKey(plan[i]), minSortKey(plan[j])
-		if ki != kj {
-			return ki < kj
-		}
-		return plan[i].Path < plan[j].Path
-	})
+	plan := result.Plan
 
 	// Output plan
 	if planJSON {
-		result := map[string]any{
-			"total_files": len(plan),
-			"plan":        plan,
-		}
 		jsonBytes, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal JSON: %w", err)

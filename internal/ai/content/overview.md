@@ -212,6 +212,23 @@ template type, deploy.sql/pgmi.yaml presence, test coverage, metadata usage.
   describe <name>        Template details and structure
 ```
 
+### pgmi serve
+
+Run pgmi as an MCP (Model Context Protocol) server over stdio. MCP-capable
+assistants use pgmi's commands natively as tools instead of spawning a
+subprocess and parsing text. Tools map 1:1 to CLI commands — no new deployment
+semantics; connection and parameters are passed per call, never stored.
+
+```
+  pgmi serve             Start the MCP server (reads JSON-RPC on stdin)
+  claude mcp add pgmi -- pgmi serve     Register with Claude Code
+```
+
+Tools: `deploy`, `init`, `metadata_plan`, `metadata_validate`, `templates_list`,
+`ai_overview`, `ai_skills`, `ai_skill`, `ai_contract`. Results are structured
+JSON (the same data as each command's `--json` output). Diagnostics go to
+stderr; the server exits cleanly on EOF or SIGINT.
+
 ### Global flags
 
 ```
