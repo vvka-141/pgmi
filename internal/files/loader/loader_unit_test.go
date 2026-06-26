@@ -2,6 +2,7 @@ package loader
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,6 +143,9 @@ func TestLoadParametersIntoSession_InvalidKey(t *testing.T) {
 	err := l.LoadParametersIntoSession(context.TODO(), nil, params)
 	if err == nil {
 		t.Fatal("Expected error for invalid parameter key")
+	}
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("Expected ErrInvalidConfig in chain, got: %v", err)
 	}
 }
 

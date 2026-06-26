@@ -261,10 +261,10 @@ func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pg
 func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
 	for key, value := range params {
 		if err := validateParameterKey(key); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
 		}
 		if err := validateParameterValue(key, value); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
 		}
 	}
 
