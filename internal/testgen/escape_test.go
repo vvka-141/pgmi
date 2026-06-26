@@ -1,6 +1,7 @@
 package testgen
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -39,22 +40,8 @@ func TestValidateCallbackName(t *testing.T) {
 			t.Errorf("ValidateCallbackName(%q) should return error", tc.input)
 			continue
 		}
-		if !contains(err.Error(), tc.wantErr) {
+		if !strings.Contains(err.Error(), tc.wantErr) {
 			t.Errorf("ValidateCallbackName(%q) error = %q, want containing %q", tc.input, err.Error(), tc.wantErr)
 		}
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
