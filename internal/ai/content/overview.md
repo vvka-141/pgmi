@@ -127,23 +127,84 @@ jsonb_build_object(
 )
 ```
 
-## Commands Reference
+## CLI Reference
 
-```bash
-pgmi init <name> [--template basic|advanced]   # Create project
-pgmi deploy <path> --connection <conn>         # Deploy to database
-pgmi templates list                            # List templates
-pgmi templates describe <name>                 # Template details
-pgmi metadata scaffold <path> [--write]        # Generate/inject <pgmi-meta> blocks
-pgmi metadata validate <path> [--json]         # Validate metadata (no DB needed)
-pgmi metadata plan <path> [--json]             # Show execution order (no DB needed)
-pgmi ai skills                                 # List AI skills
-pgmi ai skill <name>                           # Get skill content
-pgmi ai client [lang]                          # API client guidance (ts, python, go, csharp, rust)
-pgmi ai setup                                  # Write guidance into .claude/skills/pgmi/
-pgmi ai setup --assistant agents               # Write AGENTS.md (Codex, opencode, etc.)
-pgmi ai setup --all                            # Write guidance for every assistant
-pgmi ai check                                  # Report whether that guidance is current
+### pgmi deploy \<path\>
+
+Run deploy.sql against a target database.
+
+```
+Connection:
+  --connection STRING    PostgreSQL connection string (URI or ADO.NET)
+  --host STRING          Server host ($PGHOST, default: localhost)
+  -p, --port INT         Server port ($PGPORT, default: 5432)
+  -U, --username STRING  PostgreSQL user ($PGUSER or OS user)
+  -d, --database STRING  Target database ($PGDATABASE)
+  --sslmode MODE         disable|allow|prefer|require|verify-ca|verify-full
+
+Cloud auth (no password needed):
+  --azure                Azure Entra ID (DefaultAzureCredential)
+  --azure-tenant-id ID   Azure AD tenant (overrides $AZURE_TENANT_ID)
+  --azure-client-id ID   Azure AD app/client ID
+  --aws                  AWS IAM database authentication
+  --aws-region REGION    AWS region for RDS ($AWS_REGION)
+  --google               Google Cloud SQL IAM authentication
+  --google-instance NAME project:region:instance (required with --google)
+
+TLS:
+  --sslcert PATH         Client certificate
+  --sslkey PATH          Client private key
+  --sslrootcert PATH     Root CA certificate
+
+Parameters:
+  --param KEY=VALUE      Pass parameter (repeatable, available as current_setting('pgmi.key'))
+  --params-file PATH     Load from .env file (repeatable, later wins)
+
+Workflow:
+  --overwrite            Drop and recreate the database
+  --force                Non-interactive 5s countdown (CI/CD)
+  --timeout DURATION     Catastrophic failure timeout (default 3m)
+  --compat VERSION       Pin session interface version
+```
+
+### pgmi init \[path\]
+
+```
+  -t, --template NAME    basic (default) or advanced
+```
+
+### pgmi metadata \<subcommand\> \<path\>
+
+```
+  scaffold [--write] [--idempotent=BOOL]  Generate <pgmi-meta> blocks
+  validate [--json]                       Check XML validity + uniqueness
+  plan [--json]                           Show execution order from sortKeys
+```
+
+### pgmi ai
+
+```
+  (no subcommand)        Overview (this document)
+  skills                 List embedded skills
+  skill <name>           Print skill content
+  client [lang]          API client guidance (typescript, python, go, csharp, rust)
+  contract               Session API contract (views, functions)
+  setup [--assistant X]  Write guidance (claude, agents, --all)
+  check                  Report if guidance is current
+```
+
+### pgmi templates
+
+```
+  list                   List available templates
+  describe <name>        Template details and structure
+```
+
+### Global flags
+
+```
+  -v, --verbose          Verbose output (sets client_min_messages = 'debug')
+  -h, --help             Help for any command
 ```
 
 ## Common Questions
