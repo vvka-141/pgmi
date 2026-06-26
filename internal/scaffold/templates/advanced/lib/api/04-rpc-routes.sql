@@ -25,8 +25,7 @@ CREATE TABLE IF NOT EXISTS api.rpc_route (
     auto_log boolean NOT NULL DEFAULT true
 );
 
-CREATE INDEX IF NOT EXISTS ix_rpc_route_method
-    ON api.rpc_route(method_name);
+-- method_name already has a unique B-tree from the UNIQUE constraint; no extra index.
 
 COMMENT ON TABLE api.rpc_route IS
     'JSON-RPC method routing. Maps a unique method name to a handler for dispatch by api.rpc_invoke.';
