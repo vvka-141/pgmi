@@ -82,7 +82,7 @@ END;
     v_content := api.content_json((v_response).content);
 
     IF v_content->>'type' != 'about:blank' OR v_content->>'title' != 'Internal Server Error' THEN
-        RAISE EXCEPTION 'TEST FAILED: REST error should return RFC 7807 problem format';
+        RAISE EXCEPTION 'TEST FAILED: REST error should return RFC 9457 problem format';
     END IF;
 
     -- Client should receive sanitized error (not exposing internal details)

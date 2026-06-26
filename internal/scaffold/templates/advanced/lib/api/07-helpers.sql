@@ -827,7 +827,7 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.uri_template_to_regex - URI template to regex conversion';
     RAISE NOTICE '  ✓ api.query_params/url_path - URL parsing with decoding';
     RAISE NOTICE '  ✓ api.json_response - JSON response builder';
-    RAISE NOTICE '  ✓ api.problem_response - RFC 7807 error response';
+    RAISE NOTICE '  ✓ api.problem_response - RFC 9457 error response';
     RAISE NOTICE '  ✓ api.jsonrpc_success/error - JSON-RPC 2.0 responses';
     RAISE NOTICE '  ✓ api.mcp_success/error - MCP JSON-RPC 2.0 base builders';
     RAISE NOTICE '  ✓ api.mcp_tool_result/error - MCP tool response builders';

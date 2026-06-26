@@ -97,7 +97,7 @@ This means:
 |--------|------|-----|-----|
 | **Routing** | URL pattern + HTTP method | Method name → UUID | Name + type (tool/resource/prompt) |
 | **Request body** | Various (JSON, form, etc.) | JSON-RPC 2.0 | MCP protocol |
-| **Response body** | Various / RFC 7807 errors | JSON-RPC 2.0 | MCP protocol |
+| **Response body** | Various / RFC 9457 errors | JSON-RPC 2.0 | MCP protocol |
 | **Returns** | `api.http_response` | `api.http_response` | `api.mcp_response` |
 | **Auth failure** | HTTP 401 | HTTP 401 + JSON-RPC -32001 | HTTP 200 + isError (MCP convention) |
 
