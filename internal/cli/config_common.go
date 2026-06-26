@@ -75,7 +75,7 @@ func resolveConnectionFromFlags(
 		SSLRootCert: flags.sslRootCert,
 	}
 
-	connConfig, maintenanceDB, err := resolveConnection(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, projectCfg, verbose)
+	connConfig, maintenanceDB, err := resolveConnection(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, projectCfg)
 	if err != nil {
 		return nil, "", err
 	}

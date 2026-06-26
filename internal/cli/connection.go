@@ -42,7 +42,6 @@ func resolveConnection(
 	googleFlags *db.GoogleFlags,
 	certFlags *db.CertFlags,
 	projectConfig *config.ProjectConfig,
-	verbose bool,
 ) (*pgmi.ConnectionConfig, string, error) {
 	connString := connStringFlag
 	if connString == "" {
