@@ -35,6 +35,10 @@ DECLARE
     v_batch_deleted int;
     v_total int := 0;
 BEGIN
+    ASSERT retention_interval > interval '0', format('retention_interval must be positive: %s', retention_interval);
+    ASSERT batch_size > 0 AND batch_size <= 100000, format('batch_size out of range: %s', batch_size);
+    ASSERT max_batches > 0, format('max_batches must be positive: %s', max_batches);
+
     LOOP
         v_batch := v_batch + 1;
         EXIT WHEN v_batch > max_batches;
