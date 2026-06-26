@@ -194,6 +194,15 @@ Workflow:
   check                  Report if guidance is current
 ```
 
+### pgmi info \[path\]
+
+```
+  --json                 Emit structured JSON to stdout
+```
+
+Read-only project introspection (no database required). Shows file counts,
+template type, deploy.sql/pgmi.yaml presence, test coverage, metadata usage.
+
 ### pgmi templates
 
 ```
