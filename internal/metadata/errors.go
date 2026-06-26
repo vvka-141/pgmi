@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -45,7 +46,8 @@ func (e *MetadataError) Error() string {
 
 // wrapXMLError converts xml package errors to MetadataError with line numbers.
 func wrapXMLError(err error, filePath string) error {
-	if syntaxErr, ok := err.(*xml.SyntaxError); ok {
+	var syntaxErr *xml.SyntaxError
+	if errors.As(err, &syntaxErr) {
 		return &MetadataError{
 			FilePath: filePath,
 			Line:     int(syntaxErr.Line),
