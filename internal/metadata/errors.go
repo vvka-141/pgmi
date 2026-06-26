@@ -76,10 +76,10 @@ func formatValidationErrors(result ValidationResult, filePath string) error {
 	}
 
 	var msg strings.Builder
-	msg.WriteString(fmt.Sprintf("invalid PGMI metadata in %s:\n", filePath))
+	fmt.Fprintf(&msg, "invalid PGMI metadata in %s:\n", filePath)
 
 	for i, err := range result.Errors {
-		msg.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err))
+		fmt.Fprintf(&msg, "  %d. %s\n", i+1, err)
 	}
 
 	msg.WriteString("\nSee metadata format documentation:\n")
