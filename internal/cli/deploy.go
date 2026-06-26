@@ -344,7 +344,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			return context.Canceled
 		}
 		if !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("%w: %v", context.Canceled, err)
+			return fmt.Errorf("%w: %w", context.Canceled, err)
 		}
 	}
 	return err
