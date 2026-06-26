@@ -2,11 +2,14 @@ package preprocessor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var errMockGenerate = errors.New("database connection lost")
 
 // mockTestGenerate returns a testGenerateFunc that maps patterns to fixed SQL.
 func mockTestGenerate(responses map[string]string) testGenerateFunc {
@@ -18,9 +21,9 @@ func mockTestGenerate(responses map[string]string) testGenerateFunc {
 	}
 }
 
-func mockTestGenerateError(errMsg string) testGenerateFunc {
+func mockTestGenerateError(err error) testGenerateFunc {
 	return func(_ context.Context, _ *pgxpool.Conn, _ string, _ string) (string, error) {
-		return "", fmt.Errorf("%s", errMsg)
+		return "", err
 	}
 }
 
@@ -180,7 +183,7 @@ func TestPipeline_Process_EmptyGenerateResult(t *testing.T) {
 }
 
 func TestPipeline_Process_GenerateError(t *testing.T) {
-	p := newTestPipeline(mockTestGenerateError("database connection lost"))
+	p := newTestPipeline(mockTestGenerateError(errMockGenerate))
 	ctx := context.Background()
 
 	sql := "CALL pgmi_test();"
@@ -188,8 +191,8 @@ func TestPipeline_Process_GenerateError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if err.Error() != "database connection lost" {
-		t.Errorf("error = %q, want %q", err.Error(), "database connection lost")
+	if !errors.Is(err, errMockGenerate) {
+		t.Errorf("error = %v, want %v", err, errMockGenerate)
 	}
 }
 
