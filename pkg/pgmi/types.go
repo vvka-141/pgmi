@@ -82,64 +82,6 @@ func (c *DeploymentConfig) Validate() error {
 	return errors.Join(errs...)
 }
 
-// TestConfig contains all parameters needed for a test execution operation.
-type TestConfig struct {
-	// SourcePath is the root directory containing SQL files and test files
-	SourcePath string
-
-	// DatabaseName is the target database name (required)
-	DatabaseName string
-
-	// ConnectionString is the PostgreSQL connection string (URI or ADO.NET format)
-	ConnectionString string
-
-	// Timeout is the global timeout for the entire test execution
-	Timeout time.Duration
-
-	// FilterPattern is a POSIX regex to filter tests (default: ".*" matches all)
-	FilterPattern string
-
-	// Parameters are key-value pairs for parameterized tests (optional)
-	Parameters map[string]string
-
-	// Compat specifies the pgmi session compatibility level.
-	// Empty string means use the latest version.
-	Compat string
-
-	// Verbose enables detailed logging
-	Verbose bool
-
-	// AuthMethod indicates the authentication mechanism to use
-	AuthMethod AuthMethod
-
-	// Azure Entra ID authentication parameters (used when AuthMethod is AuthMethodAzureEntraID)
-	AzureTenantID     string
-	AzureClientID     string
-	AzureClientSecret string
-}
-
-// Validate checks if the TestConfig has all required fields and valid values.
-// It returns a multi-error if multiple validation failures occur.
-func (c *TestConfig) Validate() error {
-	var errs []error
-
-	if c.SourcePath == "" {
-		errs = append(errs, fmt.Errorf("SourcePath is required: %w", ErrInvalidConfig))
-	}
-
-	if c.DatabaseName == "" {
-		errs = append(errs, fmt.Errorf("DatabaseName is required: %w", ErrInvalidConfig))
-	}
-
-	if c.ConnectionString == "" {
-		errs = append(errs, fmt.Errorf("ConnectionString is required: %w", ErrInvalidConfig))
-	}
-
-	// FilterPattern is left empty to match all tests (glob matcher treats empty as match-all)
-
-	return errors.Join(errs...)
-}
-
 // ConnectionConfig represents parsed connection parameters.
 type ConnectionConfig struct {
 	Host     string
