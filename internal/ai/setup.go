@@ -131,13 +131,23 @@ func skillSetupFiles(core string) ([]PlannedFile, error) {
 
 	var depthFiles []PlannedFile
 	for _, s := range skills {
-		content, readErr := contentFS.ReadFile(s.FilePath)
-		if readErr != nil {
-			continue
+		var content string
+		if s.FilePath == "" {
+			c, err := GetSkill(s.Name)
+			if err != nil {
+				continue
+			}
+			content = c
+		} else {
+			raw, readErr := contentFS.ReadFile(s.FilePath)
+			if readErr != nil {
+				continue
+			}
+			content = string(raw)
 		}
 		depthFiles = append(depthFiles, PlannedFile{
 			RelPath: SkillDirName + "/" + s.Name + ".md",
-			Content: string(content),
+			Content: content,
 		})
 		desc := s.Description
 		if desc == "" {

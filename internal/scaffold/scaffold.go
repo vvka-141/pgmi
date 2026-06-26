@@ -20,6 +20,17 @@ func GetTemplatesFS() embed.FS {
 	return templatesFS
 }
 
+// GetAdvancedLibReadme returns the advanced template's lib/README.md content.
+// Used by `pgmi ai skill advanced-template` to surface the framework API
+// without duplicating the document.
+func GetAdvancedLibReadme() (string, error) {
+	content, err := templatesFS.ReadFile("templates/advanced/lib/README.md")
+	if err != nil {
+		return "", fmt.Errorf("advanced template lib/README.md not found: %w", err)
+	}
+	return string(content), nil
+}
+
 // Scaffolder handles project initialization from templates
 type Scaffolder struct {
 	verbose bool

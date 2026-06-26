@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/vvka-141/pgmi/internal/scaffold"
 )
 
 //go:embed all:content
@@ -64,7 +66,8 @@ func ListSkills() ([]SkillInfo, error) {
 		return nil, err
 	}
 
-	// Sort by name
+	skills = append(skills, advancedTemplateSkillInfo)
+
 	sort.Slice(skills, func(i, j int) bool {
 		return skills[i].Name < skills[j].Name
 	})
@@ -74,6 +77,10 @@ func ListSkills() ([]SkillInfo, error) {
 
 // GetSkill returns the content of a specific skill
 func GetSkill(name string) (string, error) {
+	if name == "advanced-template" {
+		return getAdvancedTemplateSkill()
+	}
+
 	// Try direct path first
 	path := fmt.Sprintf("content/skills/%s.md", name)
 	content, err := contentFS.ReadFile(path)
@@ -172,4 +179,14 @@ func parseSkillFrontmatter(content, path string) SkillInfo {
 	}
 
 	return info
+}
+
+func getAdvancedTemplateSkill() (string, error) {
+	return scaffold.GetAdvancedLibReadme()
+}
+
+// advancedTemplateSkillInfo is the virtual skill entry for `pgmi ai skills` listing.
+var advancedTemplateSkillInfo = SkillInfo{
+	Name:        "advanced-template",
+	Description: "Advanced template framework API reference (lib/README.md)",
 }
