@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -98,10 +97,10 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		}
 		info.Directories[dir]++
 
-		if isSQLExtension(f.Extension) {
+		if pgmi.IsSQLExtension(f.Extension) {
 			info.SQLFiles++
 		}
-		if isTestFile(f.Path) {
+		if pgmi.IsTestPath(f.Path) {
 			info.TestFiles++
 		}
 		if f.Metadata != nil {
@@ -127,18 +126,6 @@ func detectTemplate(sourcePath string) string {
 		return "basic"
 	}
 	return "unknown"
-}
-
-var sqlExtensions = map[string]bool{
-	".sql": true, ".pgsql": true, ".plpgsql": true,
-}
-
-func isSQLExtension(ext string) bool {
-	return sqlExtensions[strings.ToLower(ext)]
-}
-
-func isTestFile(path string) bool {
-	return strings.Contains(path, "__test__") || strings.Contains(path, "__tests__")
 }
 
 func printProjectInfo(info projectInfo) {
