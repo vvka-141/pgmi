@@ -169,14 +169,14 @@ LANGUAGE sql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
     SELECT encode(
-        sha256(
+        extensions.digest(
             convert_to(
                 lower(
                     regexp_replace(
                         regexp_replace(content, '^\s+|\s+$', '', 'g'),
                         '\s+', ' ', 'g')
                 ), 'UTF8'
-            )
+            ), 'sha256'
         ), 'hex'
     );
 $$;
