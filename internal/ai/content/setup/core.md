@@ -149,6 +149,7 @@ pgmi ai skill postgresql-patterns   # EXECUTE, format(), composite types, dynami
 pgmi ai skill pgmi-templates        # template internals, basic and advanced
 pgmi ai skill pgmi-api-architecture # advanced: REST/RPC/MCP design
 pgmi ai skill pgmi-handler-patterns # advanced: writing handler bodies (four-phase doctrine)
+pgmi ai skill pgmi-endpoint-quickstart # advanced: add an entity + REST endpoint + test, end to end
 pgmi ai skill pgmi-mcp              # advanced: MCP handler implementation
 pgmi ai skills                      # full list
 ```
