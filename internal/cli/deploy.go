@@ -364,21 +364,24 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 }
 
 func printDeployJSON(result *services.DeployResult, deployErr error) {
-	exitCode := 0
 	out := map[string]any{
 		"status":       "success",
 		"filesLoaded":  result.FilesLoaded,
 		"testMacros":   result.TestMacros,
 		"durationMs":   result.Duration.Milliseconds(),
 		"database":     result.Database,
-		"exitCode":     exitCode,
+		"exitCode":     0,
 	}
 	if deployErr != nil {
 		out["status"] = "failed"
 		out["exitCode"] = pgmi.ExitCodeForError(deployErr)
 		out["error"] = deployErr.Error()
 	}
-	jsonBytes, _ := json.MarshalIndent(out, "", "  ")
+	jsonBytes, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "json marshal error: %v\n", err)
+		return
+	}
 	fmt.Println(string(jsonBytes))
 }
 
