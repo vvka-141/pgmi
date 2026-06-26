@@ -146,6 +146,17 @@ pgmi ai setup --all                            # Write guidance for every assist
 pgmi ai check                                  # Report whether that guidance is current
 ```
 
+## Common Questions
+
+**"Why no `--dry-run`?"** — deploy.sql controls transactions. Use `--param preview=true` in your SQL,
+then `RAISE EXCEPTION 'preview: rolling back'` to abort. You control what "dry run" means.
+
+**"Why no `--rollback`?"** — Rollback strategy belongs in deploy.sql. pgmi doesn't know whether you
+want a full rollback, partial undo, or compensating migrations — your SQL decides.
+
+**"Why no `pgmi test` command?"** — Tests run via `CALL pgmi_test()` inside deploy.sql.
+The CLI never decides what SQL to run; your deploy.sql orchestrates everything including tests.
+
 ## Learn More
 
 - `pgmi ai skill pgmi-sql` - Complete SQL conventions
