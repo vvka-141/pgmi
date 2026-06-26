@@ -14,37 +14,32 @@
 
 CREATE OR REPLACE FUNCTION api.openapi_path(p_address_regexp text)
 RETURNS text
-LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $openapi_path$
-DECLARE
-    v_path text := p_address_regexp;
-BEGIN
-    v_path := regexp_replace(v_path, '^\^', '');
-    v_path := regexp_replace(v_path, '\(\\\\?\?\.\*\)\?\$?$', '');
-    v_path := regexp_replace(v_path, '\$$', '');
-    v_path := replace(v_path, '\.', '.');
-    v_path := regexp_replace(v_path, '\([^)]+\)', '{param}', 'g');
-    RETURN v_path;
-END;
+    SELECT regexp_replace(
+        replace(
+            regexp_replace(
+                regexp_replace(
+                    regexp_replace(p_address_regexp, '^\^', ''),
+                    '\(\\\\?\?\.\*\)\?\$?$', ''),
+                '\$$', ''),
+            '\.', '.'),
+        '\([^)]+\)', '{param}', 'g');
 $openapi_path$;
 
 CREATE OR REPLACE FUNCTION api.openapi_methods(p_method_regexp text)
 RETURNS text[]
-LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
-AS $sql$
-DECLARE
-    v_bare text;
-BEGIN
-    IF p_method_regexp ~ E'^\\^[A-Z]+\\$$' THEN
-        v_bare := regexp_replace(regexp_replace(p_method_regexp, E'^\\^', ''), E'\\$$', '');
-        RETURN ARRAY[lower(v_bare)];
-    ELSIF p_method_regexp ~ E'^\\^\\(' THEN
-        RETURN ARRAY(SELECT lower(m[1]) FROM regexp_matches(p_method_regexp, '[A-Z]+', 'g') AS m);
-    ELSE
-        RETURN ARRAY['get','post','put','delete','patch'];
-    END IF;
-END;
-$sql$;
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS $openapi_methods$
+    SELECT CASE
+        WHEN p_method_regexp ~ E'^\\^[A-Z]+\\$$' THEN
+            ARRAY[lower(regexp_replace(regexp_replace(p_method_regexp, E'^\\^', ''), E'\\$$', ''))]
+        WHEN p_method_regexp ~ E'^\\^\\(' THEN
+            ARRAY(SELECT lower(m[1]) FROM regexp_matches(p_method_regexp, '[A-Z]+', 'g') AS m)
+        ELSE
+            ARRAY['get','post','put','delete','patch']
+    END;
+$openapi_methods$;
 
 CREATE OR REPLACE FUNCTION api.openapi_document()
 RETURNS jsonb
