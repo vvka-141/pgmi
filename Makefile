@@ -44,7 +44,6 @@ build-clean:           ## Clean Go cache and rebuild (use after template changes
 	go clean -cache
 	go build -o pgmi ./cmd/pgmi
 
-sync-ai:               ## Sync skills from .claude/skills/ to internal/ai/content/skills/
-	@echo "Syncing AI skills..."
+sync-ai:               ## Refresh local .claude/skills/ from the tracked embedded skills
+	@echo "Refreshing local AI skills from tracked source..."
 	@bash scripts/sync-ai-content.sh
-	@echo "Done. Run 'make build' to embed updated content."

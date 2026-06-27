@@ -1,58 +1,33 @@
 # sync-ai-content.ps1
-# Syncs skills from .claude/skills/ to internal/ai/content/skills/
-# Run this before building to ensure embedded content is up-to-date
+# Refreshes the local .claude/skills/ mirror FROM the tracked, embedded skills.
+# internal/ai/content/skills/ is the source of truth (it ships in the binary);
+# .claude/skills/ is gitignored, local-only tooling and must never feed back into it.
 
 $ErrorActionPreference = "Stop"
 
-# Get repo root - script is in scripts/ subdirectory
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) {
     $scriptDir = Get-Location
 }
 $repoRoot = Split-Path -Parent $scriptDir
 
-$sourceDir = Join-Path $repoRoot ".claude\skills"
-$targetDir = Join-Path $repoRoot "internal\ai\content\skills"
+$sourceDir = Join-Path $repoRoot "internal\ai\content\skills"
+$targetDir = Join-Path $repoRoot ".claude\skills"
 
-Write-Host "Syncing AI skills from .claude/skills/ to internal/ai/content/skills/"
+Write-Host "Refreshing .claude/skills/ from internal/ai/content/skills/ (tracked -> local)"
 Write-Host "Source: $sourceDir"
 Write-Host "Target: $targetDir"
 
-# Create target directory if it doesn't exist
-if (-not (Test-Path $targetDir)) {
-    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-}
-
-# List of essential skills to sync (add more as needed)
-$essentialSkills = @(
-    "pgmi-philosophy",
-    "pgmi-sql",
-    "pgmi-system-design",
-    "pgmi-templates",
-    "pgmi-testing-review",
-    "pgmi-postgres-review",
-    "pgmi-security-review",
-    "pgmi-api-architecture",
-    "pgmi-handler-patterns",
-    "pgmi-mcp",
-    "pgmi-metadata-system",
-    "pgmi-test-architecture",
-    "postgresql-patterns"
-)
-
 $synced = 0
-foreach ($skill in $essentialSkills) {
-    $sourcePath = Join-Path $sourceDir "$skill\SKILL.md"
-    $targetPath = Join-Path $targetDir "$skill.md"
-
-    if (Test-Path $sourcePath) {
-        Copy-Item $sourcePath $targetPath -Force
-        Write-Host "  Synced: $skill"
-        $synced++
-    } else {
-        Write-Host "  Skipped: $skill (not found)"
+foreach ($file in Get-ChildItem -Path $sourceDir -Filter "*.md") {
+    $skill = $file.BaseName
+    $targetSkillDir = Join-Path $targetDir $skill
+    if (-not (Test-Path $targetSkillDir)) {
+        New-Item -ItemType Directory -Path $targetSkillDir -Force | Out-Null
     }
+    Copy-Item $file.FullName (Join-Path $targetSkillDir "SKILL.md") -Force
+    Write-Host "  Synced: $skill"
+    $synced++
 }
 
-Write-Host "`nSynced $synced skills."
-Write-Host "Run 'go build ./...' to embed updated content."
+Write-Host "`nSynced $synced skills into .claude/skills/."

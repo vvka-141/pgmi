@@ -1,51 +1,28 @@
 #!/bin/bash
 # sync-ai-content.sh
-# Syncs essential skills from .claude/skills/ to internal/ai/content/skills/
-# Run this before building to ensure embedded content is up-to-date
+# Refreshes the local .claude/skills/ mirror FROM the tracked, embedded skills.
+# internal/ai/content/skills/ is the source of truth (it ships in the binary);
+# .claude/skills/ is gitignored, local-only tooling and must never feed back into it.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-SOURCE_DIR="$REPO_ROOT/.claude/skills"
-TARGET_DIR="$REPO_ROOT/internal/ai/content/skills"
+SOURCE_DIR="$REPO_ROOT/internal/ai/content/skills"
+TARGET_DIR="$REPO_ROOT/.claude/skills"
 
-echo "Syncing AI skills from .claude/skills/ to internal/ai/content/skills/"
-
-# Create target directory if needed
-mkdir -p "$TARGET_DIR"
-
-# Essential skills to sync
-SKILLS=(
-    "pgmi-philosophy"
-    "pgmi-sql"
-    "pgmi-system-design"
-    "pgmi-templates"
-    "pgmi-testing-review"
-    "pgmi-postgres-review"
-    "pgmi-security-review"
-    "pgmi-api-architecture"
-    "pgmi-handler-patterns"
-    "pgmi-mcp"
-    "pgmi-metadata-system"
-    "pgmi-test-architecture"
-    "postgresql-patterns"
-)
+echo "Refreshing .claude/skills/ from internal/ai/content/skills/ (tracked -> local)"
 
 synced=0
-for skill in "${SKILLS[@]}"; do
-    src="$SOURCE_DIR/$skill/SKILL.md"
-    tgt="$TARGET_DIR/$skill.md"
-
-    if [ -f "$src" ]; then
-        cp "$src" "$tgt"
-        echo "  Synced: $skill"
-        synced=$((synced + 1))
-    else
-        echo "  Skipped: $skill (not found)"
-    fi
+for src in "$SOURCE_DIR"/*.md; do
+    [ -f "$src" ] || continue
+    skill="$(basename "$src" .md)"
+    mkdir -p "$TARGET_DIR/$skill"
+    cp "$src" "$TARGET_DIR/$skill/SKILL.md"
+    echo "  Synced: $skill"
+    synced=$((synced + 1))
 done
 
 echo ""
-echo "Synced $synced skills."
+echo "Synced $synced skills into .claude/skills/."
