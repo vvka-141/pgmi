@@ -91,34 +91,12 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.apply_entity_standards_all()
-RETURNS void
-LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION pg_temp.entity_standard_tables()
+RETURNS SETOF regclass
+LANGUAGE sql STABLE
 SET search_path = pg_catalog, core
 AS $$
-DECLARE
-    v_tbl regclass;
-    v_missing text;
-BEGIN
-    FOR v_tbl IN
-        SELECT c.oid::regclass
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_attribute a ON a.attrelid = c.oid
-        WHERE c.relkind IN ('r', 'p')
-          AND NOT c.relispartition
-          AND a.attname = 'object_id'
-          AND a.attnum > 0
-          AND NOT a.attisdropped
-          AND a.atttypid = 'core.entity_id'::regtype
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_temp')
-          AND n.nspname NOT LIKE 'pg_toast%'
-    LOOP
-        PERFORM pg_temp.apply_entity_table_standards(v_tbl);
-    END LOOP;
-
-    SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ')
-    INTO v_missing
+    SELECT c.oid::regclass
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN pg_attribute a ON a.attrelid = c.oid
@@ -129,11 +107,28 @@ BEGIN
       AND NOT a.attisdropped
       AND a.atttypid = 'core.entity_id'::regtype
       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_temp')
-      AND n.nspname NOT LIKE 'pg_toast%'
-      AND (
-          NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.oid AND attname = 'created_at' AND attnum > 0 AND NOT attisdropped)
-          OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.oid AND attname = 'deleted_at' AND attnum > 0 AND NOT attisdropped)
-      );
+      AND n.nspname NOT LIKE 'pg_toast%';
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.apply_entity_standards_all()
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, core
+AS $$
+DECLARE
+    v_tbl regclass;
+    v_missing text;
+BEGIN
+    FOR v_tbl IN SELECT tbl FROM pg_temp.entity_standard_tables() AS t(tbl)
+    LOOP
+        PERFORM pg_temp.apply_entity_table_standards(v_tbl);
+    END LOOP;
+
+    SELECT string_agg(t.tbl::text, ', ')
+    INTO v_missing
+    FROM pg_temp.entity_standard_tables() AS t(tbl)
+    WHERE NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = t.tbl AND attname = 'created_at' AND attnum > 0 AND NOT attisdropped)
+       OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = t.tbl AND attname = 'deleted_at' AND attnum > 0 AND NOT attisdropped);
 
     IF v_missing IS NOT NULL THEN
         RAISE EXCEPTION 'Entity standards conformance failure: tables still missing created_at/deleted_at after sweep: %', v_missing
