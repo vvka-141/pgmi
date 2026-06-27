@@ -82,8 +82,8 @@ func TestForcedApprover_ContextCancellation(t *testing.T) {
 	if approved {
 		t.Fatal("Expected approval to be false on cancellation")
 	}
-	if !strings.Contains(err.Error(), "context canceled") {
-		t.Errorf("Expected context canceled error, got: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Expected context.Canceled, got: %v", err)
 	}
 }
 
@@ -301,8 +301,8 @@ func TestForcedApprover_CtxCancelRespondsPromptly(t *testing.T) {
 	if approved {
 		t.Fatal("Expected denial on ctx cancel")
 	}
-	if err == nil || !strings.Contains(err.Error(), "context canceled") {
-		t.Fatalf("Expected context canceled, got: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Expected context.Canceled, got: %v", err)
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("Ctrl-C should respond within 500ms, took %v", elapsed)

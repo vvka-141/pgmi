@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -175,7 +174,7 @@ func TestExecuteDeploySQL_ReadError_Internal(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error for missing deploy.sql")
 	}
-	if !strings.Contains(err.Error(), "failed to read deploy.sql") {
-		t.Errorf("Expected read error wrapper, got: %v", err)
+	if !errors.Is(err, pgmi.ErrDeploySQLNotFound) {
+		t.Errorf("Expected ErrDeploySQLNotFound sentinel, got: %v", err)
 	}
 }
