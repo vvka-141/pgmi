@@ -3,6 +3,7 @@ package manager_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -240,9 +241,8 @@ func TestManager_Drop_NonExistentDatabase(t *testing.T) {
 		t.Fatal("Expected error when dropping non-existent database")
 	}
 
-	// Error should contain database name
-	if !errors.Is(err, err) { // Just check it's a proper error
-		t.Errorf("Unexpected error type: %T", err)
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should contain database name, got: %s", err)
 	}
 }
 
