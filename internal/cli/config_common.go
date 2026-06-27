@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -97,33 +98,24 @@ func loadMergedParameters(
 ) (map[string]string, error) {
 	parameters := make(map[string]string)
 
-	// First: pgmi.yaml params (lowest priority)
 	if projectCfg != nil {
-		for k, v := range projectCfg.Params {
-			parameters[k] = v
-		}
+		maps.Copy(parameters, projectCfg.Params)
 	}
 
-	// Second: params files (override pgmi.yaml)
 	if len(paramsFiles) > 0 {
 		fsProvider := filesystem.NewOSFileSystem()
 		fileParams, err := loadParamsFromFiles(fsProvider, paramsFiles, verbose)
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range fileParams {
-			parameters[k] = v
-		}
+		maps.Copy(parameters, fileParams)
 	}
 
-	// Third: CLI params (highest priority)
 	cliParams, err := params.ParseKeyValuePairs(cliParamPairs)
 	if err != nil {
 		return nil, fmt.Errorf("invalid parameter format: %w", err)
 	}
-	for k, v := range cliParams {
-		parameters[k] = v
-	}
+	maps.Copy(parameters, cliParams)
 
 	if verbose && len(cliParams) > 0 {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParams))
@@ -266,9 +258,7 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 			return nil, fmt.Errorf("failed to parse params file '%s': %w\n\nTip: Verify the file format (KEY=VALUE)", paramsFile, err)
 		}
 
-		for k, v := range fileParams {
-			parameters[k] = v
-		}
+		maps.Copy(parameters, fileParams)
 
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameters from file (total: %d)\n", len(fileParams), len(parameters))
