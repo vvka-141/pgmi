@@ -70,13 +70,13 @@ func (c *GoogleCloudSQLConnector) Connect(ctx context.Context) (*pgxpool.Pool, e
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		dialer.Close()
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, wrapConnectionError(err, c.instance, c.config.Port, c.config.Database)
 	}
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		dialer.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, wrapConnectionError(err, c.instance, c.config.Port, c.config.Database)
 	}
 
 	c.dialer = dialer
