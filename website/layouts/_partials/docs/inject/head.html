@@ -1,2 +1,6 @@
 {{- /* Twitter/X summary card; Book already emits Open Graph + canonical. */ -}}
 {{ template "_internal/twitter_cards.html" . }}
+{{- if hugo.IsProduction }}
+<script data-goatcounter="https://alexeyevlampiev.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+{{- end }}

@@ -17,7 +17,7 @@ pgmi handles sensitive parameters (passwords, API keys, tokens) as part of datab
 | `pgmi deploy` (new database) | `CREATEDB` on the PostgreSQL cluster |
 | `pgmi deploy` (existing database) | `CREATE` on `pg_temp` schema (granted by default to all roles) |
 | DDL in migrations | Depends on your SQL — typically schema owner or `CREATE` on target schema |
-| Advanced template role setup | Superuser (initial setup only) |
+| Advanced template role setup | `CREATEROLE` + `CREATE EXTENSION` (initial setup only — no superuser) |
 
 pgmi itself only needs to: connect, create temp tables (automatic for any role), set session variables, and execute your deploy.sql. The actual permissions depend on what your SQL does.
 
@@ -88,7 +88,7 @@ pgmi sets session variables using `set_config($1, $2, false)`. If the PostgreSQL
 **Mitigation:** For pgmi's `set_config()` calls, `log_statement = 'ddl'` is sufficient — `set_config` is a function call, not DDL, so it won't appear in the log. If you must use `'all'`, ensure server logs are treated as sensitive and access-controlled.
 
 > **Role passwords are a sharper case.** `CREATE/ALTER ROLE … PASSWORD '…'` is **DDL**, so the cleartext password is written to the server log under `log_statement = 'ddl'` *or* `'all'` — `--params-file` does not change this (the value is in the SQL regardless of how it reached pgmi). The advanced template sets role passwords this way. For role-password deployments:
-> - Set `log_statement = 'none'` for the deployment window, or wrap the role DDL in `SET LOCAL log_statement = 'none';` (requires the superuser the advanced template already uses for role setup).
+> - Set `log_statement = 'none'` for the deployment window, or wrap the role DDL in `SET LOCAL log_statement = 'none';` (changing `log_statement` is itself superuser-gated, or needs a `GRANT SET ON PARAMETER log_statement` to the deploy role on PostgreSQL 15+).
 > - Or pass a **pre-hashed SCRAM verifier** instead of a cleartext password: `ALTER ROLE x PASSWORD 'SCRAM-SHA-256$4096:…'`. PostgreSQL stores the verifier verbatim, so cleartext never transits the wire or the log. (This is what `psql \password` produces client-side.)
 
 ### User SQL Leaking Secrets

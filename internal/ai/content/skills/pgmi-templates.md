@@ -117,7 +117,7 @@ advanced/
 │   │   └── views.sql                   # API views
 │   ├── core/
 │   │   ├── foundation.sql              # Domain schema setup
-│   │   └── entity-standards.sql        # Entity table standards (DDL event trigger)
+│   │   └── entity-standards.sql        # Entity table standards (deploy-end pg_temp sweep, no superuser)
 │   ├── common/
 │   │   ├── cast.sql                    # Safe type casting (`?>` operator, try_cast overloads)
 │   │   ├── encoding.sql                # Bytea encoding domains (utf8/latin1/win1252) and converters

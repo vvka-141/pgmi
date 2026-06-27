@@ -203,7 +203,7 @@ pgmi init myapp --template basic # Create a project
 | Template | Purpose |
 |----------|---------|
 | `basic` | A small, explicit migration scaffold — linear migrations, minimal structure. Production-capable. |
-| `advanced` | Full PostgreSQL application template: multi-schema, role hierarchy, audit logging, MCP integration, metadata-driven ordering. A working reference system to own and adapt — not a framework to adopt wholesale. Requires a superuser for initial role setup — see the [Production Guide](docs/PRODUCTION.md) for managed-cloud caveats. |
+| `advanced` | Full PostgreSQL application template: multi-schema, role hierarchy, audit logging, MCP integration, metadata-driven ordering. A working reference system to own and adapt — not a framework to adopt wholesale. Needs a role that can create roles, schemas, and extensions (no superuser) — runs on managed providers like RDS, Cloud SQL, Supabase, and Neon. See the [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql). |
 
 ## AI assistant support
 

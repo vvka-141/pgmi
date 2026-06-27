@@ -297,7 +297,7 @@ Use `pgmi templates list` to see all available templates with descriptions.
 | Template | Purpose |
 |----------|---------|
 | `basic` | Low-ceremony, production-capable for small systems. Linear `migrations/` with `deploy.sql`. Runs on any provider. |
-| `advanced` | Full reference app. 4-schema architecture, role hierarchy, metadata-driven deployment. Requires superuser (DDL event trigger). |
+| `advanced` | Full reference app. 4-schema architecture, role hierarchy, metadata-driven deployment. PostgreSQL 15+; needs a role with `CREATEROLE` + `CREATE EXTENSION` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
 
 ### Examples
 
@@ -409,6 +409,37 @@ pgmi version
 
 ---
 
+## pgmi serve
+
+Exposes pgmi's commands as MCP tools over stdio (JSON-RPC 2.0), so MCP-capable
+assistants (Claude Code, OpenCode) can drive pgmi natively instead of spawning a
+subprocess and parsing text.
+
+```bash
+pgmi serve
+```
+
+The tools map 1:1 to existing CLI commands — `serve` adds no deployment
+semantics. Connection and parameters are passed per tool call and never stored
+in server state. Tools exposed: `deploy`, `init`, `metadata_plan`,
+`metadata_validate`, `templates_list`, `ai_overview`, `ai_skills`, `ai_skill`,
+`ai_contract`.
+
+Register it with Claude Code:
+
+```bash
+claude mcp add pgmi -- pgmi serve
+```
+
+The server reads JSON-RPC from stdin, writes responses to stdout, and sends all
+diagnostics to stderr. It exits cleanly on EOF or SIGINT.
+
+> This is pgmi's **own CLI** as MCP tools. It is unrelated to the advanced
+> template's MCP gateway (which exposes your *deployed database* to agents — see
+> [docs/MCP.md](MCP.md)).
+
+---
+
 ## pgmi ai
 
 AI-digestible documentation for coding assistants. Outputs structured markdown that AI tools can parse and learn from.
@@ -472,10 +503,34 @@ pgmi ai contract
 
 Prints the machine-readable session-API contract as JSON. Agents should query this before writing SQL against pgmi views/functions to avoid hallucinating identifiers. Output includes view names and columns, test function signatures, step types, exit codes, and preprocessor macro forms.
 
+### pgmi ai client
+
+```bash
+pgmi ai client [lang]
+```
+
+Prints guidance for generating a typed API client from a deployment's live
+OpenAPI spec (the advanced template serves it at `GET /openapi.json`). Without a
+language, prints the language-agnostic doctrine (decision tree, invariants,
+anti-copy directive). With a language, adds a transport-core skeleton and the
+recommended generator:
+
+```bash
+pgmi ai client              # doctrine only
+pgmi ai client typescript   # + openapi-typescript
+pgmi ai client python       # + openapi-python-client
+pgmi ai client go           # + oapi-codegen
+pgmi ai client csharp       # + NSwag
+pgmi ai client rust         # + openapi-generator
+```
+
+This covers the **application API** (your deployed handlers). For the **session
+API** (the temp views/functions `deploy.sql` consumes), use `pgmi ai contract`.
+
 ### pgmi ai setup
 
 ```bash
-pgmi ai setup [--assistant <name>] [--global] [--dry-run] [--force]
+pgmi ai setup [--assistant <name> | --all] [--global] [--dry-run] [--force]
               [--claude-md | --no-claude-md]
 ```
 
@@ -483,17 +538,26 @@ Materializes pgmi guidance into a coding assistant's skill directory so the
 assistant learns the execution model before it edits the project. Defaults to
 the Claude skill under `.claude/skills/pgmi/` (project-local, safe to commit).
 
-| Assistant | Local target | Global target (`--global`) |
-|-----------|-------------|---------------------------|
-| `claude` (default) | `.claude/skills/pgmi/` | `~/.claude/skills/pgmi/` |
-| `agents` | `AGENTS.md` | `~/.agents/AGENTS.md` |
-| `codex` | `.codex/` | `~/.codex/` |
-| `opencode` | current dir | `~/.config/opencode/` |
-| `codex-skills` | `.codex/skills/` | `~/.codex/skills/` |
+| Assistant | Local target |
+|-----------|-------------|
+| `claude` (default) | `.claude/skills/pgmi/` |
+| `agents` (aliases: `codex`, `opencode`) | `AGENTS.md` |
+| `codex-skills` | `.codex/skills/pgmi/` |
+| `antigravity` | `.agents/skills/pgmi/` |
+| `cursor` | `.cursor/rules/pgmi.mdc` |
+| `copilot` | `.github/copilot-instructions.md` |
+| `windsurf` | `.windsurf/rules/pgmi.md` |
+| `cline` | `.clinerules/pgmi.md` |
+| `gemini` | `GEMINI.md` |
+
+`--global` writes under your home directory instead of the project (e.g.
+`~/.claude/skills/pgmi/`, `~/.codex/skills/pgmi/`, `~/.gemini/GEMINI.md`).
 
 ```bash
 pgmi ai setup                        # detect .claude/, write the Claude skill
 pgmi ai setup --assistant agents     # write AGENTS.md (Codex, opencode, etc.)
+pgmi ai setup --assistant cursor     # write .cursor/rules/pgmi.mdc
+pgmi ai setup --all                  # write one file per distinct target
 pgmi ai setup --global               # write to ~/.claude/skills/pgmi/ instead
 pgmi ai setup --dry-run              # print planned changes, write nothing
 ```
@@ -641,7 +705,7 @@ Completion covers commands, flags, template names (for `init --template`), SSL m
 |-------|-------|----------|
 | `relation "X" does not exist` | Table/view not found | Check execution order, ensure dependencies run first |
 | `function "X" does not exist` | Missing function | Run schema files before files that call functions |
-| `permission denied for schema` | Role lacks privileges | Grant permissions or run as superuser for setup |
+| `permission denied for schema` | Role lacks privileges | Grant the deploy role `CREATE`/`USAGE` on the schema (or `CREATEROLE`/`CREATE EXTENSION` for advanced-template setup) |
 | `current transaction is aborted` | Earlier error in transaction | Fix the root cause; check `RAISE EXCEPTION` in your SQL |
 | `syntax error at or near` | Invalid SQL | Check the file path in error message, fix syntax |
 

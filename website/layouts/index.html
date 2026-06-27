@@ -15,6 +15,10 @@
     <link rel="icon" href="{{ "favicon.svg" | relURL }}" type="image/svg+xml">
     {{- $css := resources.Get "landing.css" | minify | fingerprint -}}
     <link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
+    {{- if hugo.IsProduction }}
+    <script data-goatcounter="https://alexeyevlampiev.goatcounter.com/count"
+            async src="//gc.zgo.at/count.js"></script>
+    {{- end }}
   </head>
   <body>
     <header class="site-header">

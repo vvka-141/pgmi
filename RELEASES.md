@@ -1,5 +1,52 @@
 # Releases
 
+## v0.11.0 — 2026-06-27
+
+77 commits, 158 files changed, +6,552 / -1,536 lines since v0.10.1.
+
+A feature release. The advanced template becomes deployable on managed Postgres (no superuser), gains an OpenAPI 3.1 surface with schema-validated handlers, and ships a real admin analytics API. The CLI grows structured output, an MCP server mode, and a project-introspection command, and the AI-assistant surface expands to five assistants with a per-language client guide. A documentation website goes live on GitHub Pages. The session API contract is **unchanged at v1** — existing `deploy.sql` files continue to work without modification.
+
+### Highlights
+
+- **Advanced template deploys without superuser (PGMI-62).** Entity-table standards (`created_at`/`deleted_at` on tables marked `object_id core.entity_id`) were enforced by a global `ddl_command_end` event trigger, and `CREATE EVENT TRIGGER` requires true superuser — so the template hard-failed on RDS/Aurora, Cloud SQL, Azure Flexible Server, Supabase, and Neon. The event trigger and both superuser gates are gone, replaced by a `pg_temp` catalog-driven reconcile: a mandatory deploy-end sweep enforces the floor, and an optional inline `pg_temp.apply_entity_table_standards('schema.tbl')` call lets a schema file colocate a `WHERE deleted_at IS NULL` partial index. The reconcile machinery lives in `pg_temp` and vanishes at session end.
+- **OpenAPI 3.1 from the handler registry (PGMI-80, PGMI-81).** `GET /openapi.json` generates a spec directly from the registered REST/RPC handlers, and every handler now declares input/output JSON schemas (with a coverage signal flagging any that don't). Paired with the consumption-DX work, an API consumer gets a self-describing contract instead of a hand-written client.
+- **`pgmi serve` — MCP server over stdio (PGMI-88).** Exposes pgmi's read-only commands as MCP tools so an AI assistant can drive pgmi directly (`claude mcp add pgmi -- pgmi serve`).
+- **`pgmi info` — read-only project introspection (PGMI-89).** Reports what a project contains (templates, deploy entrypoint, test layout) without connecting to a database.
+- **Structured and friendlier CLI output.** `--json` for machine-readable deploy results (PGMI-84), a deploy summary line with optional verbose per-notice timing (PGMI-85, PGMI-93), color output honoring `NO_COLOR` (PGMI-87), and an auto-pager for long output (PGMI-91).
+- **Broader AI-assistant onboarding.** Five assistant setup adapters incl. `GEMINI.md` and an `--all` flag (PGMI-78, PGMI-98), `pgmi ai client [lang]` for per-language consumption guidance (PGMI-82), `pgmi ai skill advanced-template` surfacing the framework API (PGMI-95), a philosophy/anti-pattern FAQ and an agent-facing CLI reference in `pgmi ai` (PGMI-90, PGMI-92).
+- **Consumption DX (PGMI-83).** Scalar API explorer, codegen recipes, and ready-to-run HTTP collections.
+- **Documentation website.** A Hugo Book site (single-sourced from `docs/`) deploys to GitHub Pages via CI, with a custom landing page, SEO, and mobile fixes.
+
+### Advanced template
+
+- **Admin analytics REST API (PGMI-74)** replaces the demo handlers with a real, authenticated endpoint set.
+- **Exchange retention** via a batch `purge_exchanges` procedure with `ASSERT` preconditions (PGMI-76).
+- **View-layer test coverage (PGMI-75)** for the membership/API view surface.
+
+### Fixes
+
+- **PG17-only `sha256()` replaced with `extensions.digest`** in `semantic_fingerprint` — the template no longer requires PostgreSQL 17 for that path.
+- **`api_key_prefix()` volatility corrected** `IMMUTABLE` → `STABLE`; **`PARALLEL SAFE`** added to membership read-only functions.
+- **Redundant index removed** on `rpc_route.method_name`; redundant double cast removed in the JSON-schema validator.
+- **Error context throughout the CLI**: bare OS/YAML/connection errors are wrapped with operation context and `ErrInvalidConfig`; the original error is preserved when a deploy is interrupted; config decode errors now name the file.
+
+### Internal
+
+- Hardening pass: `errors.Is`/`errors.As` and sentinel errors replace string matching across deployer, preprocessor, and info paths; dead code removed (`TestConfig` anti-pattern scaffolding, unused `verbose` params, dead connection string-matching).
+- Go modernization: `slices`/`cmp` replace `sort`, `maps.Copy`/`maps.Clone` replace manual loops, `strings.Contains` replaces custom helpers.
+- Several PL/pgSQL functions converted to `LANGUAGE sql` (`delete_user`, `rest_invoke` overloads, `openapi_path`/`openapi_methods`); basic template switched from `SERIAL` to identity columns.
+- `develop` branch retired (snapshot CI trigger dropped); GitHub Pages auto-enabled on first deploy.
+
+### Verification gates
+
+| Gate | Result |
+|------|--------|
+| `go build ./cmd/pgmi` | PASS |
+| `go test -short ./...` (29 packages) | PASS |
+| `golangci-lint run` (native + `GOOS=linux`) | PASS |
+| Session API contract (`api-v1.sql`) | unchanged — compat **v1** |
+| `go test ./internal/scaffold -run TestTemplateDeployment` (advanced + basic, live Postgres) | PASS |
+
 ## v0.10.1 — 2026-06-14
 
 28 commits, 63 files changed, +1,206 / -493 lines since v0.10.0.

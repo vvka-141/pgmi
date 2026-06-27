@@ -383,8 +383,9 @@ pgmi provides two templates for `pgmi init`. Start with **basic** when you want 
 - Projects integrating with AI assistants via MCP
 
 **Advanced template requirements:**
-- PostgreSQL superuser for initial role setup (creates owner, admin, api, customer roles)
-- Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` (all available on managed clouds — RDS, Azure Flexible Server, Cloud SQL)
+- PostgreSQL 15+ (the RLS model relies on `security_invoker` views)
+- A role with `CREATEROLE` + `CREATE EXTENSION` for initial setup — **no superuser** (creates owner, admin, api, customer roles). The admin role on managed providers (`rds_superuser`, `azure_pg_admin`, `supabase_admin`, …) carries these grants.
+- Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` (all available on managed clouds — RDS, Azure Flexible Server, Cloud SQL, Supabase, Neon)
 
 **Switching templates:**
 

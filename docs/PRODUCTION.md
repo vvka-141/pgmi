@@ -32,7 +32,7 @@ The minimum PostgreSQL version depends on which layer you use:
 |-------|----------------|-----------------------|
 | pgmi core / CLI | 11+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
 | basic template | 11+ | Plain SQL migrations — no extensions, roles, or version-specific syntax. |
-| advanced template | 15+ | `WITH (security_invoker = true)` views (PostgreSQL 15) underpin the RLS model; also needs **superuser** (DDL event trigger), the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions, and role creation. |
+| advanced template | 15+ | `WITH (security_invoker = true)` views (PostgreSQL 15) underpin the RLS model. Also needs a role that can **create roles, schemas, and extensions** (`CREATEROLE` + `CREATE EXTENSION`) and the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions. **No superuser required.** |
 | API / MCP features | 15+ | Ship inside the advanced template, so they share its floor. |
 
 The 11+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **15+**: `security_invoker` views, which the membership/RLS model relies on, were introduced in PostgreSQL 15.
@@ -41,28 +41,28 @@ The 11+ figure applies to the CLI and the basic scaffold (set in the Go core —
 
 ## Managed cloud PostgreSQL
 
-The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection:
+The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
 
-1. **Superuser** — `lib/core/entity-standards.sql` installs a DDL event trigger, which requires `rolsuper`. pgmi fails fast with an actionable error if the connection role is not superuser. Basic template has no such requirement.
-2. **Extensions** — `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.
-3. **Role creation** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles during the superuser phase.
+1. **`CREATEROLE`** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles. The deploy role needs `CREATEROLE` (the admin role every managed provider grants — `rds_superuser`, `azure_pg_admin`, `supabase_admin`, Cloud SQL's `cloudsqlsuperuser` — has it).
+2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.
+3. **`CREATE SCHEMA`** — the template lays out its `core` / `api` / `membership` / `extensions` schemas.
 
-The advanced template ships with opinionated system patterns enabled. A ❌ below means the provider cannot run the template **as generated** — specifically the superuser-only DDL event trigger in `lib/core/entity-standards.sql`. Removing that one file (see the note under the table) lets the rest run on every provider listed. The marks flag intentional over-completeness, not a broken template.
+Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
 | Provider | Basic template | Advanced template | Notes |
 |----------|----------------|-------------------|-------|
 | Self-hosted / Docker / Kubernetes | ✅ | ✅ | Full control; nothing special required. |
-| AWS RDS for PostgreSQL | ✅ | ❌ | No superuser. The `rds_superuser` role can install whitelisted extensions but cannot create event triggers. Workaround: strip `lib/core/entity-standards.sql` and add `created_at`/`deleted_at` manually on every entity table. |
-| AWS Aurora PostgreSQL | ✅ | ❌ | Same superuser limitation as RDS. Same workaround applies. |
-| Azure Database for PostgreSQL — Flexible Server | ✅ | ⚠️ | `azure_pg_admin` role allows most DDL but event triggers require Microsoft support to enable on a per-server basis. If enabled, advanced template works. |
-| Azure Cosmos DB for PostgreSQL (formerly Citus) | ✅ | ⚠️ | Citus-specific semantics; advanced template not validated. Sharded-table column-inject behaviour of the DDL trigger is untested. |
-| Google Cloud SQL for PostgreSQL | ✅ | ❌ | No superuser; event triggers unavailable. Same workaround as AWS RDS. |
-| Google AlloyDB | ✅ | ❌ | Inherits Cloud SQL limitations. |
-| Supabase | ✅ | ❌ | No superuser exposed; `supabase_admin` cannot create event triggers. Workaround: strip entity-standards; bring your own `updated_at` trigger per table. |
-| Neon | ✅ | ❌ | No superuser. Same workaround. |
-| Railway / Render / Fly.io (managed instances) | ✅ | Varies | Check whether the service exposes a superuser role. If yes, advanced template works. |
+| AWS RDS for PostgreSQL | ✅ | ✅ | `rds_superuser` has `CREATEROLE` and installs the four whitelisted extensions. No event trigger needed. |
+| AWS Aurora PostgreSQL | ✅ | ✅ | Same as RDS. |
+| Azure Database for PostgreSQL — Flexible Server | ✅ | ✅ | `azure_pg_admin` covers `CREATEROLE` + extension install. |
+| Azure Cosmos DB for PostgreSQL (formerly Citus) | ✅ | ⚠️ | Citus-specific semantics; advanced template not validated against sharded tables. |
+| Google Cloud SQL for PostgreSQL | ✅ | ✅ | `cloudsqlsuperuser` grants `CREATEROLE` and the whitelisted extensions. |
+| Google AlloyDB | ✅ | ✅ | Inherits Cloud SQL's admin model. |
+| Supabase | ✅ | ✅ | `supabase_admin` covers role + extension creation. |
+| Neon | ✅ | ✅ | The project's owner role has `CREATEROLE` and can install the extensions. |
+| Railway / Render / Fly.io (managed instances) | ✅ | ✅ | The provisioned owner role can create roles, schemas, and extensions. |
 
-> **Cutting the advanced template down for managed cloud**: delete `lib/core/entity-standards.sql` and edit each entity table to declare `created_at timestamptz NOT NULL DEFAULT now()` and `deleted_at timestamptz` explicitly. Nothing else in the advanced template requires superuser after that — the rest of the framework (handler registry, MCP protocol, RLS policies, API keys) works on every managed provider tested.
+> **Verify the deploy role's grants**, not superuser status: it needs `CREATEROLE`, `CREATE SCHEMA`, and `CREATE EXTENSION` for the four listed extensions. On a managed provider, deploy with that provider's admin role (`rds_superuser`, `azure_pg_admin`, `supabase_admin`, etc.) — it carries all three. If a provider locks one of the four extensions out of its whitelist, remove that extension's `CREATE EXTENSION` line and the features depending on it.
 
 ---
 
