@@ -3,6 +3,7 @@ package pgmi
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,10 +127,7 @@ type ConnectionConfig struct {
 func (c *ConnectionConfig) DeepCopy() ConnectionConfig {
 	cp := *c
 	if c.AdditionalParams != nil {
-		cp.AdditionalParams = make(map[string]string, len(c.AdditionalParams))
-		for k, v := range c.AdditionalParams {
-			cp.AdditionalParams[k] = v
-		}
+		cp.AdditionalParams = maps.Clone(c.AdditionalParams)
 	}
 	return cp
 }
