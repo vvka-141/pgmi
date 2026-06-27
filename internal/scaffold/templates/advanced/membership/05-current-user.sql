@@ -61,6 +61,7 @@ END $$;
 -- Current User Resolution
 -- ============================================================================
 
+-- SECURITY DEFINER: reads RLS-protected membership tables as owner; primary RLS anchor for all org-scoped policies
 CREATE OR REPLACE FUNCTION api.current_user_id()
 RETURNS UUID
 LANGUAGE sql STABLE
@@ -87,6 +88,7 @@ $$;
 COMMENT ON FUNCTION api.is_authenticated() IS
     'Returns true if the session has a valid identity resolved to a user.';
 
+-- SECURITY DEFINER: reads organization_member bypassing RLS; predicate for every org-scoped policy
 CREATE OR REPLACE FUNCTION api.current_member_org_ids()
 RETURNS UUID[]
 LANGUAGE sql STABLE

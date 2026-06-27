@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS api.inbound_queue (
     enqueued_at timestamptz NOT NULL DEFAULT now(),
     handler_object_id uuid NOT NULL,
 
+    -- NO INHERIT: child tables get the columns but not this constraint, so they accept inserts normally
     CONSTRAINT is_abstract CHECK (false) NO INHERIT
 );
 
