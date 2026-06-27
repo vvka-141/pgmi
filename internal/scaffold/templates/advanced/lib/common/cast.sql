@@ -1059,6 +1059,35 @@ BEGIN
     END IF;
 END $$;
 
+-- NULL input returns the default for every try_cast variant (NULL-safety contract)
+DO $$
+BEGIN
+    IF common.try_cast(NULL::text, extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
+        RAISE EXCEPTION 'try_cast(uuid): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, true) IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'try_cast(boolean): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, 42) IS DISTINCT FROM 42 THEN
+        RAISE EXCEPTION 'try_cast(integer): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, 42::bigint) IS DISTINCT FROM 42::bigint THEN
+        RAISE EXCEPTION 'try_cast(bigint): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, 1.5::numeric) IS DISTINCT FROM 1.5::numeric THEN
+        RAISE EXCEPTION 'try_cast(numeric): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, interval '1 day') IS DISTINCT FROM interval '1 day' THEN
+        RAISE EXCEPTION 'try_cast(interval): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, timestamp '2025-01-01') IS DISTINCT FROM timestamp '2025-01-01' THEN
+        RAISE EXCEPTION 'try_cast(timestamp): NULL input must return default';
+    END IF;
+    IF common.try_cast(NULL::text, timestamptz '2025-01-01 00:00:00+00') IS DISTINCT FROM timestamptz '2025-01-01 00:00:00+00' THEN
+        RAISE EXCEPTION 'try_cast(timestamptz): NULL input must return default';
+    END IF;
+END $$;
+
 -- ============================================================================
 -- Grant Permissions
 -- ============================================================================
