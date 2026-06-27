@@ -56,9 +56,8 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 		return fmt.Errorf("cannot determine home directory")
 	}
 
-	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+		return fmt.Errorf("create .pgpass directory: %w", err)
 	}
 
 	host := escapePgpass(cfg.Host)
@@ -97,11 +96,11 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 	// 0600 is required by PostgreSQL on Unix.
 	tmpPath := path + ".pgmi-tmp"
 	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
-		return err
+		return fmt.Errorf("write .pgpass: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("update .pgpass: %w", err)
 	}
 	return nil
 }
