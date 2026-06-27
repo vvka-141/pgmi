@@ -179,7 +179,7 @@ func init() {
 
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
 func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
-	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg, verbose)
+	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}

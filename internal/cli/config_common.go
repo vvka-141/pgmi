@@ -44,7 +44,6 @@ type connectionFlags struct {
 func resolveConnectionFromFlags(
 	flags connectionFlags,
 	projectCfg *config.ProjectConfig,
-	verbose bool,
 ) (*pgmi.ConnectionConfig, string, error) {
 	granularFlags := &db.GranularConnFlags{
 		Host:     flags.host,
