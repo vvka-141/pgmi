@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/db"
@@ -158,7 +159,7 @@ func CreateTestDB(t *testing.T, connString, dbName string) func() {
 	}
 
 	// Create the database
-	createQuery := fmt.Sprintf("CREATE DATABASE %s", dbName)
+	createQuery := fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize())
 	_, err = pool.Exec(ctx, createQuery)
 	if err != nil {
 		pool.Close()
@@ -201,7 +202,7 @@ func CleanupTestDB(t *testing.T, connString, dbName string) {
 	}
 
 	// Drop the database
-	dropQuery := fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)
+	dropQuery := fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{dbName}.Sanitize())
 	_, err = pool.Exec(ctx, dropQuery)
 	if err != nil {
 		t.Logf("Warning: Failed to drop database %s: %v", dbName, err)

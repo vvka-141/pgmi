@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/params"
@@ -33,11 +34,11 @@ func createTestDB(t *testing.T, connString, dbName string) func() {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{dbName}.Sanitize())); err != nil {
 		pool.Close()
 		t.Fatalf("Failed to drop database: %v", err)
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize())); err != nil {
 		pool.Close()
 		t.Fatalf("Failed to create database: %v", err)
 	}
@@ -48,7 +49,7 @@ func createTestDB(t *testing.T, connString, dbName string) func() {
 			return
 		}
 		defer p.Close()
-		_, _ = p.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+		_, _ = p.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{dbName}.Sanitize()))
 	}
 }
 
