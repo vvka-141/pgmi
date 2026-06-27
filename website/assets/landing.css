@@ -116,7 +116,7 @@ code {
   position: absolute;
   right: clamp(-160px, -6vw, -40px);
   top: clamp(88px, 18vh, 160px);
-  width: min(720px, 70vw);
+  width: min(640px, calc(48vw - 40px));
   border: 1px solid rgba(221, 230, 214, 0.18);
   background: rgba(18, 28, 22, 0.88);
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.32);
@@ -174,6 +174,8 @@ code {
 }
 
 .hero-copy {
+  position: relative;
+  z-index: 2;
   padding-top: 86px;
   padding-bottom: 124px;
 }
@@ -201,7 +203,7 @@ p {
 h1 {
   margin: 0;
   font-size: clamp(4rem, 13vw, 10rem);
-  line-height: 0.82;
+  line-height: 1;
   letter-spacing: 0;
 }
 
@@ -220,7 +222,7 @@ h3 {
 
 .lede {
   max-width: 660px;
-  margin: 28px 0 0;
+  margin: 38px 0 0;
   font-size: clamp(1.15rem, 2.2vw, 1.48rem);
   color: rgba(247, 243, 234, 0.88);
 }
@@ -367,6 +369,12 @@ h3 {
   padding: 28px 0;
   color: var(--muted);
   font-size: 0.95rem;
+}
+
+@media (max-width: 1160px) {
+  .terminal-window {
+    width: min(520px, calc(55vw - 300px));
+  }
 }
 
 @media (max-width: 820px) {
