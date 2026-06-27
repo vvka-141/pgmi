@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,7 +59,7 @@ func Load(sourcePath string) (*ProjectConfig, error) {
 		if errors.Is(err, io.EOF) {
 			return &cfg, nil // empty file: zero-value config, not an error
 		}
-		return nil, err
+		return nil, fmt.Errorf("parse %s: %w", configPath, err)
 	}
 	return &cfg, nil
 }
