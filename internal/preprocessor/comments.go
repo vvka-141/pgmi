@@ -80,7 +80,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool) string {
 
 	// writeSpaces emits n ASCII spaces (used only in length-preserve mode).
 	writeSpaces := func(n int) {
-		for k := 0; k < n; k++ {
+		for range n {
 			result.WriteByte(' ')
 		}
 	}
