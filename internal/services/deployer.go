@@ -113,24 +113,22 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentConfig) error {
 	start := time.Now()
 	s.lastResult = &DeployResult{Database: config.DatabaseName}
+	defer func() { s.lastResult.Duration = time.Since(start) }()
 
 	// Validate and parse configuration
 	connConfig, err := s.validateAndParseConfig(config)
 	if err != nil {
-		s.lastResult.Duration = time.Since(start)
 		return err
 	}
 
 	// Handle overwrite workflow if requested (drop and recreate database)
 	if config.Overwrite {
 		if err := s.handleOverwrite(ctx, connConfig, config); err != nil {
-			s.lastResult.Duration = time.Since(start)
 			return fmt.Errorf("overwrite workflow failed: %w", err)
 		}
 	} else {
 		// If not overwriting, ensure database exists (create if missing)
 		if err := s.ensureDatabaseExists(ctx, connConfig, config); err != nil {
-			s.lastResult.Duration = time.Since(start)
 			return fmt.Errorf("failed to ensure database exists: %w", err)
 		}
 	}
@@ -142,7 +140,6 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	s.logger.Info("Preparing session: scanning files, loading parameters")
 	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
-		s.lastResult.Duration = time.Since(start)
 		return err // Error already wrapped by SessionManager
 	}
 	defer session.Close()
@@ -152,12 +149,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	s.logger.Info("Executing deploy.sql")
 	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath)
 	s.lastResult.TestMacros = macroCount
-	s.lastResult.Duration = time.Since(start)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // validateAndParseConfig validates the configuration and parses the connection string.
