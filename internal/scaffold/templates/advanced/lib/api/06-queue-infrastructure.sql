@@ -42,10 +42,6 @@ COMMENT ON COLUMN api.inbound_queue.sequence_number IS
 COMMENT ON COLUMN api.inbound_queue.object_id IS
     'Correlation ID for request tracking and logging.';
 
--- ============================================================================
--- REST Exchange
--- ============================================================================
-
 CREATE TABLE IF NOT EXISTS api.rest_exchange (
     request api.rest_request NOT NULL,
     response api.http_response,
@@ -68,10 +64,6 @@ CREATE INDEX IF NOT EXISTS ix_rest_exchange_completed
 COMMENT ON TABLE api.rest_exchange IS
     'REST protocol exchanges. Inherits queue fields from api.inbound_queue.';
 
--- ============================================================================
--- RPC Exchange
--- ============================================================================
-
 CREATE TABLE IF NOT EXISTS api.rpc_exchange (
     request api.rpc_request NOT NULL,
     response api.http_response,
@@ -93,10 +85,6 @@ CREATE INDEX IF NOT EXISTS ix_rpc_exchange_completed
 
 COMMENT ON TABLE api.rpc_exchange IS
     'RPC protocol exchanges. Inherits queue fields from api.inbound_queue.';
-
--- ============================================================================
--- MCP Exchange
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS api.mcp_exchange (
     mcp_type text NOT NULL,
@@ -121,10 +109,6 @@ CREATE INDEX IF NOT EXISTS ix_mcp_exchange_name
 
 COMMENT ON TABLE api.mcp_exchange IS
     'MCP protocol exchanges (tools, resources, prompts). Always complete - no pending state.';
-
--- ============================================================================
--- Helper View: Queue with Protocol
--- ============================================================================
 
 CREATE OR REPLACE VIEW api.inbound_queue_with_protocol AS
 SELECT
