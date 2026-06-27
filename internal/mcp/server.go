@@ -2,11 +2,12 @@ package mcp
 
 import (
 	"context"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 )
 
 // Tool is a single MCP tool: a name, a human description, a JSON Schema for its
@@ -24,7 +25,6 @@ type Tool struct {
 type Server struct {
 	info  serverInfo
 	tools map[string]Tool
-	order []string
 }
 
 // NewServer creates a server advertising the given name and version.
@@ -36,11 +36,8 @@ func NewServer(name, version string) *Server {
 }
 
 // Register adds a tool. A later registration with the same name replaces the
-// earlier one. Registration order is preserved for tools/list.
+// earlier one.
 func (s *Server) Register(t Tool) {
-	if _, exists := s.tools[t.Name]; !exists {
-		s.order = append(s.order, t.Name)
-	}
 	if t.InputSchema == nil {
 		t.InputSchema = map[string]any{"type": "object"}
 	}
@@ -126,8 +123,11 @@ func (s *Server) handleInitialize() initializeResult {
 }
 
 func (s *Server) handleToolsList() toolsListResult {
-	names := append([]string(nil), s.order...)
-	sort.Strings(names)
+	names := make([]string, 0, len(s.tools))
+	for name := range s.tools {
+		names = append(names, name)
+	}
+	slices.SortFunc(names, cmp.Compare)
 	tools := make([]toolDescriptor, 0, len(names))
 	for _, name := range names {
 		t := s.tools[name]
