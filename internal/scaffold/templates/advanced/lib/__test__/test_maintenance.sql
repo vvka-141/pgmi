@@ -10,8 +10,18 @@ DECLARE
     v_count_after int;
     v_response api.http_response;
     v_body jsonb;
+    v_admin_id uuid;
+    v_superuser uuid;
+    v_admin_headers extensions.hstore;
 BEGIN
     RAISE NOTICE '-> Testing exchange retention';
+
+    -- Provision a platform admin (system-wide superuser) — purge is admin-only
+    v_admin_id := membership.upsert_user('test', 'maint-admin', 'maint-admin@example.com', 'Maint Admin', true);
+    SELECT object_id INTO v_superuser FROM membership.role WHERE name = 'superuser';
+    INSERT INTO membership.user_role (user_object_id, role_object_id)
+    VALUES (v_admin_id, v_superuser) ON CONFLICT DO NOTHING;
+    v_admin_headers := ('x-user-id=>test|maint-admin')::extensions.hstore;
 
     -- ========================================================================
     -- Setup: insert fixture exchanges with old enqueued_at
@@ -42,8 +52,8 @@ BEGIN
     -- Test: admin purge endpoint deletes old exchanges
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/admin/maintenance/purge-exchanges?retention_days=30&batch_size=100',
-        ('x-user-id=>test|admin')::extensions.hstore, null::bytea);
+    v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=30&batch_size=100',
+        v_admin_headers, null::bytea);
 
     IF (v_response).status_code != 200 THEN
         RAISE EXCEPTION 'Purge endpoint returned %, expected 200', (v_response).status_code;
@@ -108,8 +118,8 @@ BEGIN
     -- Test: validation rejects bad params
     -- ========================================================================
 
-    v_response := api.rest_invoke('GET', '/admin/maintenance/purge-exchanges?retention_days=0',
-        ('x-user-id=>test|admin')::extensions.hstore, null::bytea);
+    v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=0',
+        v_admin_headers, null::bytea);
 
     IF (v_response).status_code != 422 THEN
         RAISE EXCEPTION 'Expected 422 for retention_days=0, got %', (v_response).status_code;

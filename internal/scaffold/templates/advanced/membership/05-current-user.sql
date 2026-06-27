@@ -88,6 +88,28 @@ $$;
 COMMENT ON FUNCTION api.is_authenticated() IS
     'Returns true if the session has a valid identity resolved to a user.';
 
+-- SECURITY DEFINER: reads the RLS-protected system-wide role tables as owner.
+-- Platform-admin gate for cross-tenant /admin/* endpoints — distinct from the
+-- per-org membership.member_role. Fail-closed: false until a user is granted the
+-- seeded 'superuser' system-wide role.
+CREATE OR REPLACE FUNCTION api.current_user_is_admin()
+RETURNS BOOLEAN
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = membership, api, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM membership.user_role ur
+        JOIN membership.role r ON r.object_id = ur.role_object_id
+        WHERE ur.user_object_id = api.current_user_id()
+          AND r.name = 'superuser'
+    );
+$$;
+
+COMMENT ON FUNCTION api.current_user_is_admin() IS
+    'Returns true when the current user holds the system-wide superuser role. Authorization gate for cross-tenant /admin/* endpoints.';
+
 -- SECURITY DEFINER: reads organization_member bypassing RLS; predicate for every org-scoped policy
 CREATE OR REPLACE FUNCTION api.current_member_org_ids()
 RETURNS UUID[]
@@ -160,6 +182,7 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.current_idp_subject() TO %I', v_customer_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.current_user_id() TO %I', v_customer_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.is_authenticated() TO %I', v_customer_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.current_user_is_admin() TO %I', v_customer_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.current_member_org_ids() TO %I', v_customer_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION api.current_owner_org_ids() TO %I', v_customer_role);
 END $$;

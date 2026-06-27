@@ -4,7 +4,9 @@
     idempotent="true">
   <description>
     Admin analytics REST API: surfaces handler, route, and exchange views
-    as JSON endpoints under the /admin/ namespace.
+    as JSON endpoints under the /admin/ namespace. Every endpoint is gated on
+    the system-wide superuser role (api.current_user_is_admin) — these surfaces
+    expose cross-tenant operational data and a destructive purge.
   </description>
   <sortKeys>
     <key>005/002</key>
@@ -42,6 +44,10 @@ DECLARE
     v_routes jsonb;
     v_exchanges jsonb;
 BEGIN
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     SELECT jsonb_build_object(
         'totalHandlers', total_handlers,
         'restHandlers', rest_handlers,
@@ -119,6 +125,10 @@ BEGIN
         RETURN v_page.o_error;
     END IF;
 
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     SELECT COUNT(*) INTO v_total FROM api.vw_handler_info;
 
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -178,6 +188,10 @@ SELECT api.create_or_replace_rest_handler(
 DECLARE
     v_items jsonb;
 BEGIN
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'handlerType', handler_type,
         'volatility', volatility,
@@ -226,6 +240,10 @@ BEGIN
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
+    END IF;
+
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     SELECT COUNT(*) INTO v_total FROM api.vw_route_info;
@@ -293,6 +311,10 @@ BEGIN
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
+    END IF;
+
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     v_protocol := v_q -> 'protocol';
@@ -390,6 +412,10 @@ SELECT api.create_or_replace_rest_handler(
 DECLARE
     v_items jsonb;
 BEGIN
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'protocol', protocol,
         'statusCode', status_code,
@@ -433,6 +459,10 @@ DECLARE
     v_exchange_id uuid;
     v_result jsonb;
 BEGIN
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_path := split_part((request).url, '?', 1);
     v_parts := string_to_array(v_path, '/');
     v_exchange_id := common.try_cast(v_parts[4], null::uuid);
@@ -473,16 +503,16 @@ END;
 );
 
 -- ============================================================================
--- GET /admin/maintenance/purge-exchanges
+-- POST /admin/maintenance/purge-exchanges
 -- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000008',
         'uri', '^/admin/maintenance/purge-exchanges(\?.*)?$',
-        'httpMethod', '^GET$',
+        'httpMethod', '^POST$',
         'name', 'admin_purge_exchanges',
-        'description', 'Single-batch exchange purge for admin UI polling',
+        'description', 'Single-batch exchange purge (admin only); POST to avoid CSRF/prefetch on a destructive operation',
         'requiresAuth', true,
         'outputSchema', jsonb_build_object(
             'type', 'object',
@@ -511,6 +541,10 @@ DECLARE
     v_mcp_deleted int;
     v_has_more boolean;
 BEGIN
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_retention_days := COALESCE(common.try_cast(v_q -> 'retention_days', null::int), 30);
     v_batch_size := COALESCE(common.try_cast(v_q -> 'batch_size', null::int), 5000);
@@ -575,5 +609,5 @@ DO $$ BEGIN
     RAISE DEBUG '  + GET /admin/exchanges - paginated exchange list';
     RAISE DEBUG '  + GET /admin/exchanges/stats - exchange statistics';
     RAISE DEBUG '  + GET /admin/exchanges/:id/replay - exchange replay SQL';
-    RAISE DEBUG '  + GET /admin/maintenance/purge-exchanges - batch exchange retention';
+    RAISE DEBUG '  + POST /admin/maintenance/purge-exchanges - batch exchange retention';
 END $$;
