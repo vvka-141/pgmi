@@ -93,13 +93,6 @@ func ExitCodeForError(err error) int {
 		return ExitUsageError
 	}
 
-	// Check for common connection error patterns
-	if strings.Contains(errStr, "failed to connect") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "no such host") {
-		return ExitConnectionError
-	}
-
 	return ExitGeneralError
 }
 

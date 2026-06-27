@@ -56,11 +56,6 @@ func TestExitCodeForError(t *testing.T) {
 		{"required flag", errors.New("required flag \"database\" not set"), pgmi.ExitUsageError},
 		{"invalid argument", errors.New("invalid argument \"abc\" for \"--port\""), pgmi.ExitUsageError},
 
-		// connection error string patterns
-		{"failed to connect", errors.New("failed to connect to host"), pgmi.ExitConnectionError},
-		{"connection refused", errors.New("dial tcp: connection refused"), pgmi.ExitConnectionError},
-		{"no such host", errors.New("lookup db.example.com: no such host"), pgmi.ExitConnectionError},
-
 		// general error
 		{"unclassified error", errors.New("something unexpected"), pgmi.ExitGeneralError},
 	}
