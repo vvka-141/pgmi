@@ -218,7 +218,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                  SELECT 1 FROM jsonb_array_elements(v->'type') e
                  WHERE jsonb_typeof(e) <> 'string'
                     OR e->>0 IS NULL
-                    OR (e::text)::text NOT IN
+                    OR e::text NOT IN
                        ('"string"','"number"','"integer"','"boolean"','"object"','"array"','"null"')
              ))
         ))
