@@ -12,7 +12,7 @@ func TestExponentialBackoffStrategy_MaxDelayConstraint_NeverExceeds1Minute(t *te
 		WithInitialDelay(100*time.Millisecond),
 		WithMultiplier(2.0),
 		WithMaxDelay(1*time.Minute), // Hard cap at 1 minute
-		WithJitter(0),                // Disable jitter for deterministic testing
+		WithJitter(0),               // Disable jitter for deterministic testing
 	)
 
 	maxDelayAllowed := 1 * time.Minute

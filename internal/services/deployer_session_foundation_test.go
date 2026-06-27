@@ -165,7 +165,6 @@ func TestSessionPreparation_EmptyProject(t *testing.T) {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
 
-
 	// Verify empty state
 	var fileCount, testCount int
 	err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_temp.pgmi_source_view").Scan(&fileCount)
@@ -233,7 +232,6 @@ func TestSessionPreparation_OnlyMigrations(t *testing.T) {
 	if _, err := contract.Apply(ctx, conn, ""); err != nil {
 		t.Fatalf("Failed to apply contract: %v", err)
 	}
-
 
 	// Verify: migrations in pgmi_source, no tests
 	var migrationCount, testCount int

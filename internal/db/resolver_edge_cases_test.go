@@ -166,9 +166,9 @@ func TestResolveConnectionParams_DatabaseURL_Precedence(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:    "connection string takes precedence over DATABASE_URL",
-			connStr: "postgresql://user:pass@primary:5432/maindb",
-			flags:   &GranularConnFlags{},
+			name:        "connection string takes precedence over DATABASE_URL",
+			connStr:     "postgresql://user:pass@primary:5432/maindb",
+			flags:       &GranularConnFlags{},
 			databaseURL: "postgresql://user:pass@secondary:5433/backupdb",
 			wantHost:    "primary", // connection string wins
 			expectError: false,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
@@ -16,7 +17,6 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
-	"github.com/stretchr/testify/require"
 )
 
 // TestSessionVariableSystem tests the complete session variable workflow

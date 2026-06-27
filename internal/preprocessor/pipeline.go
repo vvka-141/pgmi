@@ -26,17 +26,17 @@ type testGenerateFunc func(ctx context.Context, conn *pgxpool.Conn, pattern stri
 
 // Pipeline preprocesses SQL by expanding macros.
 type Pipeline struct {
-	commentStripper  CommentStripper
-	macroDetector    MacroDetector
-	testGenerateFn   testGenerateFunc
+	commentStripper CommentStripper
+	macroDetector   MacroDetector
+	testGenerateFn  testGenerateFunc
 }
 
 // NewPipeline creates a new preprocessing pipeline.
 func NewPipeline() *Pipeline {
 	return &Pipeline{
-		commentStripper:  NewCommentStripper(),
-		macroDetector:    NewMacroDetector(),
-		testGenerateFn:   callTestGenerate,
+		commentStripper: NewCommentStripper(),
+		macroDetector:   NewMacroDetector(),
+		testGenerateFn:  callTestGenerate,
 	}
 }
 

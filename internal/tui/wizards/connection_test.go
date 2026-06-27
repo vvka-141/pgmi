@@ -606,7 +606,7 @@ func TestConnectionWizard_RetryAfterFailure(t *testing.T) {
 	m = wiz
 	m, _ = update(t, m, keyMsg("enter"))   // host
 	m, _ = update(t, m, keyMsg("enter"))   // port
-	m = typeString(t, m, "testdb")          // type database name
+	m = typeString(t, m, "testdb")         // type database name
 	m, _ = update(t, m, keyMsg("enter"))   // database
 	m, _ = update(t, m, keyMsg("enter"))   // management db
 	m, _ = update(t, m, keyMsg("enter"))   // username
@@ -681,12 +681,12 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 	}
 
 	// Step 5: advance through host fields, type database name, submit
-	m, _ = update(t, m, keyMsg("enter"))   // host
-	m, _ = update(t, m, keyMsg("enter"))   // port
-	m = typeString(t, m, "testdb")          // type database name
-	m, _ = update(t, m, keyMsg("enter"))   // database
-	m, _ = update(t, m, keyMsg("enter"))   // management db
-	m, _ = update(t, m, keyMsg("enter"))   // username
+	m, _ = update(t, m, keyMsg("enter")) // host
+	m, _ = update(t, m, keyMsg("enter")) // port
+	m = typeString(t, m, "testdb")       // type database name
+	m, _ = update(t, m, keyMsg("enter")) // database
+	m, _ = update(t, m, keyMsg("enter")) // management db
+	m, _ = update(t, m, keyMsg("enter")) // username
 	m, _ = update(t, m, keyMsg("enter")) // password → submit
 	iw = asInitWizard(t, m)
 	if iw.connWizard.step != stepTestConnection {
@@ -787,9 +787,9 @@ func TestInitWizard_ConnectionCancelledViaEsc(t *testing.T) {
 func selectAWSIAMProvider(t *testing.T, w ConnectionWizard) tea.Model {
 	t.Helper()
 	// Provider list: Local(0), Azure(1), AWS(2)
-	m, _ := update(t, w, keyMsg("down"))  // → Azure
-	m, _ = update(t, m, keyMsg("down"))   // → AWS
-	m, _ = update(t, m, keyMsg("enter"))  // Select AWS → auth selection
+	m, _ := update(t, w, keyMsg("down")) // → Azure
+	m, _ = update(t, m, keyMsg("down"))  // → AWS
+	m, _ = update(t, m, keyMsg("enter")) // Select AWS → auth selection
 	wiz := asWizard(t, m)
 	if wiz.step != stepSelectAuth {
 		t.Fatalf("expected stepSelectAuth, got %d", wiz.step)
@@ -869,10 +869,10 @@ func TestConnectionWizard_AWSIAMFlow_ValidationMissingHost(t *testing.T) {
 func selectGoogleIAMProvider(t *testing.T, w ConnectionWizard) tea.Model {
 	t.Helper()
 	// Provider list: Local(0), Azure(1), AWS(2), Google(3)
-	m, _ := update(t, w, keyMsg("down"))  // → Azure
-	m, _ = update(t, m, keyMsg("down"))   // → AWS
-	m, _ = update(t, m, keyMsg("down"))   // → Google
-	m, _ = update(t, m, keyMsg("enter"))  // Select Google → auth selection
+	m, _ := update(t, w, keyMsg("down")) // → Azure
+	m, _ = update(t, m, keyMsg("down"))  // → AWS
+	m, _ = update(t, m, keyMsg("down"))  // → Google
+	m, _ = update(t, m, keyMsg("enter")) // Select Google → auth selection
 	wiz := asWizard(t, m)
 	if wiz.step != stepSelectAuth {
 		t.Fatalf("expected stepSelectAuth, got %d", wiz.step)
@@ -948,11 +948,11 @@ func TestConnectionWizard_GoogleIAMFlow_ValidationMissingInstance(t *testing.T) 
 func selectConnStringProvider(t *testing.T, w ConnectionWizard) tea.Model {
 	t.Helper()
 	// Provider list: Local(0), Azure(1), AWS(2), Google(3), Custom(4)
-	m, _ := update(t, w, keyMsg("down"))  // → Azure
-	m, _ = update(t, m, keyMsg("down"))   // → AWS
-	m, _ = update(t, m, keyMsg("down"))   // → Google
-	m, _ = update(t, m, keyMsg("down"))   // → Custom
-	m, _ = update(t, m, keyMsg("enter"))  // Select Custom → only 1 auth → skip to form
+	m, _ := update(t, w, keyMsg("down")) // → Azure
+	m, _ = update(t, m, keyMsg("down"))  // → AWS
+	m, _ = update(t, m, keyMsg("down"))  // → Google
+	m, _ = update(t, m, keyMsg("down"))  // → Custom
+	m, _ = update(t, m, keyMsg("enter")) // Select Custom → only 1 auth → skip to form
 	return m
 }
 
@@ -1165,12 +1165,12 @@ func TestConnectionWizard_InvalidPortDefaultsTo5432(t *testing.T) {
 	wiz.inputs[1].SetValue("abc")
 	m = wiz
 
-	m, _ = update(t, m, keyMsg("enter"))           // port → database
+	m, _ = update(t, m, keyMsg("enter")) // port → database
 	m = typeString(t, m, "testdb")
-	m, _ = update(t, m, keyMsg("enter"))            // database → mgmt db
-	m, _ = update(t, m, keyMsg("enter"))            // mgmt db → username
-	m, _ = update(t, m, keyMsg("enter"))            // username → password
-	m, _ = update(t, m, keyMsg("enter"))            // password → submit
+	m, _ = update(t, m, keyMsg("enter")) // database → mgmt db
+	m, _ = update(t, m, keyMsg("enter")) // mgmt db → username
+	m, _ = update(t, m, keyMsg("enter")) // username → password
+	m, _ = update(t, m, keyMsg("enter")) // password → submit
 
 	wiz = asWizard(t, m)
 	if wiz.result.Config.Port != 5432 {
@@ -1183,15 +1183,15 @@ func TestConnectionWizard_AzureValidation_MissingDatabase(t *testing.T) {
 
 	// Navigate to Azure → Entra ID
 	m, _ := update(t, w, keyMsg("down"))
-	m, _ = update(t, m, keyMsg("enter"))  // Azure → auth
-	m, _ = update(t, m, keyMsg("enter"))  // Entra ID → Azure form
+	m, _ = update(t, m, keyMsg("enter")) // Azure → auth
+	m, _ = update(t, m, keyMsg("enter")) // Entra ID → Azure form
 
 	// Type server name
 	m = typeString(t, m, "myserver.postgres.database.azure.com")
-	m, _ = update(t, m, keyMsg("enter"))  // server → database
+	m, _ = update(t, m, keyMsg("enter")) // server → database
 	// Skip database (empty)
-	m, _ = update(t, m, keyMsg("enter"))  // database → username
-	m, _ = update(t, m, keyMsg("enter"))  // username → submit
+	m, _ = update(t, m, keyMsg("enter")) // database → username
+	m, _ = update(t, m, keyMsg("enter")) // username → submit
 	wiz := asWizard(t, m)
 	if wiz.validationErr == "" {
 		t.Error("expected validation error for empty Azure database")

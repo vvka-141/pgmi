@@ -26,11 +26,11 @@ func TestDeploymentService_Deploy_BasicWorkflow(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err != nil {
@@ -67,11 +67,11 @@ func TestDeploymentService_Deploy_IdempotentRedeployment(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 	if err != nil {
 		t.Fatalf("First deployment failed: %v", err)
@@ -81,11 +81,11 @@ func TestDeploymentService_Deploy_IdempotentRedeployment(t *testing.T) {
 	err = deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        false,
-		Force:            false,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           false,
+		Force:               false,
+		Verbose:             testing.Verbose(),
 	})
 	if err != nil {
 		t.Fatalf("Idempotent redeployment failed: %v", err)
@@ -117,10 +117,10 @@ func TestDeploymentService_Deploy_WithParameters(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
 		Parameters: map[string]string{
 			"app_name":    "test_app",
 			"app_version": "1.0.0",
@@ -163,11 +163,11 @@ func TestDeploymentService_Deploy_MissingRootSQL(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err == nil {
@@ -196,11 +196,11 @@ func TestDeploymentService_Deploy_InvalidSQL(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err == nil {
@@ -225,11 +225,11 @@ func TestDeploymentService_Deploy_WithFiles(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err != nil {

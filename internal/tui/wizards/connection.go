@@ -754,7 +754,6 @@ func (w ConnectionWizard) updateTestConnection(msg tea.KeyMsg) (tea.Model, tea.C
 	return w, nil
 }
 
-
 // View implements tea.Model.
 func (w ConnectionWizard) View() string {
 	var b strings.Builder

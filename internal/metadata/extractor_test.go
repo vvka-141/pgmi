@@ -322,9 +322,9 @@ func TestExtract_BooleanParsing(t *testing.T) {
 	}{
 		{"true", true, false},
 		{"false", false, false},
-		{"1", true, false},      // Go XML accepts "1" as true
-		{"TRUE", true, false},   // Go XML accepts case insensitive
-		{"yes", false, true},    // Should fail - not valid boolean
+		{"1", true, false},    // Go XML accepts "1" as true
+		{"TRUE", true, false}, // Go XML accepts case insensitive
+		{"yes", false, true},  // Should fail - not valid boolean
 	}
 
 	for _, tc := range testCases {

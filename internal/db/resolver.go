@@ -15,9 +15,9 @@ import (
 //
 // Note: Password is NOT included as a CLI flag for security reasons.
 // Use one of these methods instead:
-//   1. $PGPASSWORD environment variable
-//   2. .pgpass file (PostgreSQL standard)
-//   3. Connection string with embedded password
+//  1. $PGPASSWORD environment variable
+//  2. .pgpass file (PostgreSQL standard)
+//  3. Connection string with embedded password
 type GranularConnFlags struct {
 	Host     string
 	Port     int
@@ -87,15 +87,15 @@ func (g *GranularConnFlags) IsEmpty() bool {
 // EnvVars represents PostgreSQL standard environment variables.
 // See: https://www.postgresql.org/docs/current/libpq-envars.html
 type EnvVars struct {
-	PGHOST           string // PostgreSQL server host
-	PGPORT           string // PostgreSQL server port
-	PGUSER           string // PostgreSQL username
-	PGPASSWORD       string // PostgreSQL password (discouraged, use .pgpass instead)
-	PGDATABASE       string // Default database name
-	PGSSLMODE        string // SSL mode
-	PGAPPNAME        string // application_name reported in pg_stat_activity
+	PGHOST            string // PostgreSQL server host
+	PGPORT            string // PostgreSQL server port
+	PGUSER            string // PostgreSQL username
+	PGPASSWORD        string // PostgreSQL password (discouraged, use .pgpass instead)
+	PGDATABASE        string // Default database name
+	PGSSLMODE         string // SSL mode
+	PGAPPNAME         string // application_name reported in pg_stat_activity
 	PGCONNECT_TIMEOUT string // Connection timeout in seconds (libpq convention)
-	DATABASE_URL     string // Full connection string (Heroku/Rails convention)
+	DATABASE_URL      string // Full connection string (Heroku/Rails convention)
 
 	// Azure Entra ID environment variables (Azure SDK standard names)
 	AZURE_TENANT_ID     string // Azure AD tenant/directory ID

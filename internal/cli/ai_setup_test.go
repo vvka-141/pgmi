@@ -300,14 +300,14 @@ func TestRunAISetup_All(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		"claude":      filepath.Join(".claude", "skills", "pgmi", "SKILL.md"),
-		"agents":      "AGENTS.md",
+		"claude":       filepath.Join(".claude", "skills", "pgmi", "SKILL.md"),
+		"agents":       "AGENTS.md",
 		"codex-skills": filepath.Join(".codex", "skills", "pgmi", "SKILL.md"),
-		"antigravity": filepath.Join(".agents", "skills", "pgmi", "SKILL.md"),
-		"cursor":      filepath.Join(".cursor", "rules", "pgmi.mdc"),
-		"copilot":     filepath.Join(".github", "copilot-instructions.md"),
-		"windsurf":    filepath.Join(".windsurf", "rules", "pgmi.md"),
-		"cline":       filepath.Join(".clinerules", "pgmi.md"),
+		"antigravity":  filepath.Join(".agents", "skills", "pgmi", "SKILL.md"),
+		"cursor":       filepath.Join(".cursor", "rules", "pgmi.mdc"),
+		"copilot":      filepath.Join(".github", "copilot-instructions.md"),
+		"windsurf":     filepath.Join(".windsurf", "rules", "pgmi.md"),
+		"cline":        filepath.Join(".clinerules", "pgmi.md"),
 	}
 	for name, path := range expected {
 		if _, err := os.Stat(path); err != nil {

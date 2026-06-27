@@ -137,4 +137,3 @@ func verifyTemplateDeployment(t *testing.T, connString, dbName, templateName str
 
 	}
 }
-

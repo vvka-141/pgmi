@@ -68,15 +68,15 @@ func TestSHA256Calculator_CalculateNormalized(t *testing.T) {
 			description: "Empty content should hash to SHA-256 of empty string",
 		},
 		{
-			name:     "Simple SQL",
-			content:  "SELECT * FROM users;",
-			expected: "",
+			name:        "Simple SQL",
+			content:     "SELECT * FROM users;",
+			expected:    "",
 			description: "Simple SQL should be normalized to lowercase",
 		},
 		{
-			name:     "SQL with uppercase",
-			content:  "SELECT * FROM USERS;",
-			expected: "",
+			name:        "SQL with uppercase",
+			content:     "SELECT * FROM USERS;",
+			expected:    "",
 			description: "Uppercase should become lowercase",
 		},
 	}

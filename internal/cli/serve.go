@@ -212,11 +212,11 @@ func buildMCPServer(serverVersion string) *mcp.Server {
 		Name:        "deploy",
 		Description: "Run a pgmi deployment against a database and return the structured result. Provide a connection string and target database; pass secrets here, never on a shared command line.",
 		InputSchema: objectSchema(map[string]any{
-			"path":       stringProp("Path to the pgmi project directory (contains deploy.sql)"),
-			"connection": stringProp("PostgreSQL connection string (URI or ADO.NET)"),
-			"database":   stringProp("Target database name"),
-			"overwrite":  boolProp("Drop and recreate the target database before deploying"),
-			"timeout":    stringProp("Catastrophic-failure timeout, e.g. \"3m\" (default 3m)"),
+			"path":                stringProp("Path to the pgmi project directory (contains deploy.sql)"),
+			"connection":          stringProp("PostgreSQL connection string (URI or ADO.NET)"),
+			"database":            stringProp("Target database name"),
+			"overwrite":           boolProp("Drop and recreate the target database before deploying"),
+			"timeout":             stringProp("Catastrophic-failure timeout, e.g. \"3m\" (default 3m)"),
 			"maintenanceDatabase": stringProp("Database used for CREATE/DROP DATABASE (default \"postgres\")"),
 			"params": map[string]any{
 				"type":                 "object",

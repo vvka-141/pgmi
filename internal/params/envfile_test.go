@@ -127,14 +127,14 @@ API_URL='https://api.example.com/v1'
 ENABLE_CACHE=true
 MAX_CONNECTIONS=100`,
 			expected: map[string]string{
-				"DB_HOST":          "localhost",
-				"DB_PORT":          "5432",
-				"DB_NAME":          "myapp_production",
-				"DB_USER":          "admin",
-				"API_KEY":          "sk-1234567890abcdef",
-				"API_URL":          "https://api.example.com/v1",
-				"ENABLE_CACHE":     "true",
-				"MAX_CONNECTIONS":  "100",
+				"DB_HOST":         "localhost",
+				"DB_PORT":         "5432",
+				"DB_NAME":         "myapp_production",
+				"DB_USER":         "admin",
+				"API_KEY":         "sk-1234567890abcdef",
+				"API_URL":         "https://api.example.com/v1",
+				"ENABLE_CACHE":    "true",
+				"MAX_CONNECTIONS": "100",
 			},
 		},
 		{

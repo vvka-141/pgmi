@@ -211,11 +211,11 @@ func TestInsertParams_SpecialValues_Internal(t *testing.T) {
 	l := NewLoader()
 
 	p := map[string]string{
-		"url":      "https://example.com/path?q=1&b=2",
-		"json":     `{"key": "value", "num": 42}`,
+		"url":       "https://example.com/path?q=1&b=2",
+		"json":      `{"key": "value", "num": 42}`,
 		"multiline": "line1\nline2\nline3",
-		"empty":    "",
-		"unicode":  "日本語テスト",
+		"empty":     "",
+		"unicode":   "日本語テスト",
 	}
 
 	if err := l.insertParams(ctx, conn, p); err != nil {
@@ -334,7 +334,7 @@ func TestInsertMetadata_BatchExecution_Internal(t *testing.T) {
 	files := []pgmi.FileMetadata{
 		{
 			Path: "./setup/001.sql", Content: "CREATE TABLE t1(id int);",
-			Checksum: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+			Checksum:    "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
 			ChecksumRaw: "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
 		},
 		{
@@ -458,7 +458,7 @@ func TestLoadFilesIntoSession_FullPath_Internal(t *testing.T) {
 	files := []pgmi.FileMetadata{
 		{
 			Path: "./a.sql", Content: "SELECT 1;",
-			Checksum: "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+			Checksum:    "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
 			ChecksumRaw: "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2",
 			Metadata: &pgmi.ScriptMetadata{
 				ID: testUUID, Idempotent: false, SortKeys: []string{"01/0001"},

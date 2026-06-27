@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
-	"github.com/stretchr/testify/require"
 )
 
 // TestTemplateStructureWithoutFilesystem validates all embedded templates

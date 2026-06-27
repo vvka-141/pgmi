@@ -3,8 +3,8 @@ package cli
 import (
 	"testing"
 
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/stretchr/testify/require"
+	"github.com/vvka-141/pgmi/internal/files/filesystem"
 )
 
 // TestLoadParamsFromFiles tests the params file loading with filesystem abstraction
@@ -45,9 +45,9 @@ DB_HOST=prod.example.com`,
 			paramsFiles: []string{"/test/base.env", "/test/prod.env"},
 			verbose:     false,
 			expected: map[string]string{
-				"ENV":     "production", // overridden by prod.env
+				"ENV":     "production",       // overridden by prod.env
 				"DB_HOST": "prod.example.com", // overridden by prod.env
-				"DB_PORT": "5432", // from base.env
+				"DB_PORT": "5432",             // from base.env
 			},
 		},
 		{
@@ -159,12 +159,12 @@ DB_SSL=require`,
 			verbose:     false,
 			expected: map[string]string{
 				"APP_NAME": "pgmi",                // from base
-				"ENV":      "production",              // overridden by prod
-				"DB_HOST":  "prod.db.example.com",     // overridden by prod
-				"DB_PORT":  "5432",                    // from base
-				"DB_USER":  "postgres",                // from base
+				"ENV":      "production",          // overridden by prod
+				"DB_HOST":  "prod.db.example.com", // overridden by prod
+				"DB_PORT":  "5432",                // from base
+				"DB_USER":  "postgres",            // from base
 				"DB_NAME":  "pgmi_prod",           // overridden by prod
-				"DB_SSL":   "require",                 // from prod
+				"DB_SSL":   "require",             // from prod
 			},
 		},
 	}

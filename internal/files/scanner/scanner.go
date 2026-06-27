@@ -191,17 +191,17 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	}
 
 	return pgmi.FileMetadata{
-		Path:            unixPath,
-		Name:            filename,
-		Directory:       directory,
-		Extension:       extension,
-		Depth:           depth,
-		Content:         string(content),
-		SizeBytes:       info.Size(),
-		Checksum:        checksumNormalized,
-		ChecksumRaw:     checksumRaw,
-		ModifiedAt:      info.ModTime(),
-		Metadata:        scriptMetadata,
+		Path:        unixPath,
+		Name:        filename,
+		Directory:   directory,
+		Extension:   extension,
+		Depth:       depth,
+		Content:     string(content),
+		SizeBytes:   info.Size(),
+		Checksum:    checksumNormalized,
+		ChecksumRaw: checksumRaw,
+		ModifiedAt:  info.ModTime(),
+		Metadata:    scriptMetadata,
 	}, nil
 }
 

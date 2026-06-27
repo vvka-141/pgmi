@@ -1,10 +1,10 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
-	"cmp"
 	"slices"
 	"strings"
 
@@ -267,4 +267,3 @@ func (sm *SessionManager) prepareSessionTables(
 
 	return nil
 }
-

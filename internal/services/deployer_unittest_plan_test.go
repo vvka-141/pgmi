@@ -30,11 +30,11 @@ func TestDeploymentService_UnittestPlanMaterialization(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err != nil {
@@ -112,11 +112,11 @@ func TestDeploymentService_UnittestTablesExist(t *testing.T) {
 	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString:    connString,
 		MaintenanceDatabase: "postgres",
-		DatabaseName:     testDB,
-		SourcePath:       projectPath,
-		Overwrite:        true,
-		Force:            true,
-		Verbose:          testing.Verbose(),
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
 	})
 
 	if err != nil {

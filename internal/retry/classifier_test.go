@@ -13,8 +13,8 @@ func TestPostgreSQLErrorClassifier_IsTransient_PostgreSQLErrors(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 
 	tests := []struct {
-		name       string
-		err        error
+		name        string
+		err         error
 		isTransient bool
 	}{
 		// Transient PostgreSQL errors

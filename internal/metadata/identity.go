@@ -55,4 +55,3 @@ func normalizePath(path string) string {
 
 	return normalized
 }
-

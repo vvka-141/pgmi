@@ -33,7 +33,7 @@ func TestExponentialBackoffStrategy_NextDelay_WithoutJitter(t *testing.T) {
 	)
 
 	tests := []struct {
-		attempt      int
+		attempt       int
 		expectedDelay time.Duration
 	}{
 		{attempt: 0, expectedDelay: 100 * time.Millisecond},  // 100 * 2^0
@@ -104,12 +104,12 @@ func TestExponentialBackoffStrategy_NextDelay_DifferentMultipliers(t *testing.T)
 		attempt       int
 		expectedDelay time.Duration
 	}{
-		{multiplier: 1.5, attempt: 0, expectedDelay: 100 * time.Millisecond},  // 100 * 1.5^0 = 100
-		{multiplier: 1.5, attempt: 1, expectedDelay: 150 * time.Millisecond},  // 100 * 1.5^1 = 150
-		{multiplier: 1.5, attempt: 2, expectedDelay: 225 * time.Millisecond},  // 100 * 1.5^2 = 225
-		{multiplier: 3.0, attempt: 0, expectedDelay: 100 * time.Millisecond},  // 100 * 3^0 = 100
-		{multiplier: 3.0, attempt: 1, expectedDelay: 300 * time.Millisecond},  // 100 * 3^1 = 300
-		{multiplier: 3.0, attempt: 2, expectedDelay: 900 * time.Millisecond},  // 100 * 3^2 = 900
+		{multiplier: 1.5, attempt: 0, expectedDelay: 100 * time.Millisecond}, // 100 * 1.5^0 = 100
+		{multiplier: 1.5, attempt: 1, expectedDelay: 150 * time.Millisecond}, // 100 * 1.5^1 = 150
+		{multiplier: 1.5, attempt: 2, expectedDelay: 225 * time.Millisecond}, // 100 * 1.5^2 = 225
+		{multiplier: 3.0, attempt: 0, expectedDelay: 100 * time.Millisecond}, // 100 * 3^0 = 100
+		{multiplier: 3.0, attempt: 1, expectedDelay: 300 * time.Millisecond}, // 100 * 3^1 = 300
+		{multiplier: 3.0, attempt: 2, expectedDelay: 900 * time.Millisecond}, // 100 * 3^2 = 900
 	}
 
 	for _, tt := range tests {

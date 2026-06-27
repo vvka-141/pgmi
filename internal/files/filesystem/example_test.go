@@ -156,9 +156,9 @@ func Example_embedFileSystem_pathNormalization() {
 
 	// All these path formats work correctly
 	paths := []string{
-		"subdir/nested.sql",    // Unix-style (forward slashes)
-		"subdir\\nested.sql",   // Windows-style (backslashes)
-		"./subdir/nested.sql",  // Relative with ./ prefix
+		"subdir/nested.sql",   // Unix-style (forward slashes)
+		"subdir\\nested.sql",  // Windows-style (backslashes)
+		"./subdir/nested.sql", // Relative with ./ prefix
 	}
 
 	for _, p := range paths {

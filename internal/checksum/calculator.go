@@ -82,7 +82,7 @@ const (
 )
 
 // removeComments removes SQL comments while preserving string literals.
-// Handles single-quoted strings (''), dollar-quoted strings ($$...$$, $tag$...$tag$),
+// Handles single-quoted strings (doubled-apostrophe escapes), dollar-quoted strings ($$...$$, $tag$...$tag$),
 // and nested block comments (/* /* */ */).
 func (c SHA256) removeComments(content string) string {
 	var b strings.Builder

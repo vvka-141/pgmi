@@ -111,7 +111,6 @@ func NewOSFileSystem() *OSFileSystem {
 	return &OSFileSystem{}
 }
 
-
 func (p *OSFileSystem) Open(path string) (Directory, error) {
 	// Verify path exists and is a directory
 	info, err := os.Stat(path)

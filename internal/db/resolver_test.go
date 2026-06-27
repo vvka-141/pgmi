@@ -657,10 +657,10 @@ func TestApplyCertParams(t *testing.T) {
 			wantSSLPassword: "env-pass",
 		},
 		{
-			name:  "nil flags and pc",
-			flags: nil,
-			env:   &EnvVars{PGSSLCERT: "env.crt"},
-			pc:    nil,
+			name:        "nil flags and pc",
+			flags:       nil,
+			env:         &EnvVars{PGSSLCERT: "env.crt"},
+			pc:          nil,
 			wantSSLCert: "env.crt",
 		},
 		{
@@ -864,13 +864,13 @@ func TestApplyGoogleAuth(t *testing.T) {
 
 func TestApplyAzureAuth_YamlFallback(t *testing.T) {
 	tests := []struct {
-		name             string
-		flags            *AzureFlags
-		env              *EnvVars
-		pc               *config.ProjectConfig
-		wantAuthMethod   pgmi.AuthMethod
-		wantTenantID     string
-		wantClientID     string
+		name           string
+		flags          *AzureFlags
+		env            *EnvVars
+		pc             *config.ProjectConfig
+		wantAuthMethod pgmi.AuthMethod
+		wantTenantID   string
+		wantClientID   string
 	}{
 		{
 			name:  "pgmi.yaml activates Azure",

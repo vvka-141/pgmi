@@ -197,8 +197,9 @@ type FileMetadata struct {
 //   - Description: Human-readable purpose of the script
 //
 // Multi-Phase Execution:
-//   Files can specify multiple sort keys to execute at different deployment stages.
-//   Each key results in a separate execution entry in the plan.
+//
+//	Files can specify multiple sort keys to execute at different deployment stages.
+//	Each key results in a separate execution entry in the plan.
 //
 // Example usage:
 //

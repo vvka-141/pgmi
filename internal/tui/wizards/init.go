@@ -28,7 +28,6 @@ func DefaultTemplates() []TemplateInfo {
 	}
 }
 
-
 // InitResult holds the result of the init wizard.
 type InitResult struct {
 	Cancelled   bool

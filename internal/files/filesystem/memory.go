@@ -25,7 +25,7 @@ func (f *memoryFileInfo) Size() int64        { return f.size }
 func (f *memoryFileInfo) Mode() fs.FileMode  { return f.mode }
 func (f *memoryFileInfo) ModTime() time.Time { return f.modTime }
 func (f *memoryFileInfo) IsDir() bool        { return f.isDir }
-func (f *memoryFileInfo) Sys() any            { return nil }
+func (f *memoryFileInfo) Sys() any           { return nil }
 
 // memoryFile implements File interface for in-memory files
 type memoryFile struct {
@@ -74,7 +74,7 @@ func (d *memoryDirectory) Walk(fn func(File, error) error) error {
 // MemoryFileSystem implements FileSystemProvider for in-memory testing
 type MemoryFileSystem struct {
 	files map[string]*memoryFile // map of absolute path -> file
-	root  string                  // root directory path
+	root  string                 // root directory path
 }
 
 // NewMemoryFileSystem creates a new in-memory filesystem.

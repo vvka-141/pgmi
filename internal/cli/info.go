@@ -38,15 +38,15 @@ func init() {
 }
 
 type projectInfo struct {
-	Path         string            `json:"path"`
-	Template     string            `json:"template"`
-	DeploySQL    bool              `json:"deploySql"`
-	ConfigFile   string            `json:"configFile"`
-	TotalFiles   int               `json:"totalFiles"`
-	SQLFiles     int               `json:"sqlFiles"`
-	TestFiles    int               `json:"testFiles"`
-	MetadataWith int               `json:"metadataWith"`
-	Directories  map[string]int    `json:"directories"`
+	Path         string         `json:"path"`
+	Template     string         `json:"template"`
+	DeploySQL    bool           `json:"deploySql"`
+	ConfigFile   string         `json:"configFile"`
+	TotalFiles   int            `json:"totalFiles"`
+	SQLFiles     int            `json:"sqlFiles"`
+	TestFiles    int            `json:"testFiles"`
+	MetadataWith int            `json:"metadataWith"`
+	Directories  map[string]int `json:"directories"`
 }
 
 func runInfo(cmd *cobra.Command, args []string) error {

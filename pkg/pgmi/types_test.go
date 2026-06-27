@@ -187,4 +187,3 @@ func TestAuthMethod_String(t *testing.T) {
 		})
 	}
 }
-

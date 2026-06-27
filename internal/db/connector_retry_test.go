@@ -96,14 +96,14 @@ func TestBackoffStrategy_Integration(t *testing.T) {
 	strategy := retry.NewExponentialBackoff(3,
 		retry.WithInitialDelay(100*time.Millisecond),
 		retry.WithMaxDelay(1*time.Minute), // Max delay capped at 1 minute per requirement
-		retry.WithJitter(0),                // Disable jitter for deterministic testing
+		retry.WithJitter(0),               // Disable jitter for deterministic testing
 	)
 
 	// Verify backoff progression
 	expectedDelays := []time.Duration{
-		100 * time.Millisecond,  // Attempt 0
-		200 * time.Millisecond,  // Attempt 1
-		400 * time.Millisecond,  // Attempt 2
+		100 * time.Millisecond, // Attempt 0
+		200 * time.Millisecond, // Attempt 1
+		400 * time.Millisecond, // Attempt 2
 	}
 
 	for i, expected := range expectedDelays {

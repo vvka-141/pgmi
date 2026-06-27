@@ -48,18 +48,18 @@ func TestBuildDeploymentConfig(t *testing.T) {
 	sourcePath := tempDir
 
 	tests := []struct {
-		name               string
-		setupFlags         func()
-		sourcePath         string
-		verbose            bool
-		wantDatabaseName   string
-		wantMaintenanceDB  string
-		wantOverwrite      bool
-		wantForce          bool
-		wantParamCount     int
-		wantTimeout        time.Duration
-		wantErr            bool
-		wantErrContains    string
+		name              string
+		setupFlags        func()
+		sourcePath        string
+		verbose           bool
+		wantDatabaseName  string
+		wantMaintenanceDB string
+		wantOverwrite     bool
+		wantForce         bool
+		wantParamCount    int
+		wantTimeout       time.Duration
+		wantErr           bool
+		wantErrContains   string
 	}{
 		{
 			name: "basic deployment with database flag",
@@ -350,10 +350,10 @@ api_key=file_secret
 
 	// Verify parameter precedence
 	expectedParams := map[string]string{
-		"env":     "production", // CLI overrides file
-		"region":  "eu-west",    // From file
+		"env":     "production",  // CLI overrides file
+		"region":  "eu-west",     // From file
 		"api_key": "file_secret", // From file
-		"version": "1.2.3",      // CLI only
+		"version": "1.2.3",       // CLI only
 	}
 
 	if len(config.Parameters) != len(expectedParams) {

@@ -150,7 +150,7 @@ type connError struct {
 	err error
 }
 
-func (e *connError) Error() string  { return e.msg }
+func (e *connError) Error() string   { return e.msg }
 func (e *connError) Unwrap() []error { return []error{e.err, pgmi.ErrConnectionFailed} }
 
 func newConnError(err error, format string, args ...any) error {

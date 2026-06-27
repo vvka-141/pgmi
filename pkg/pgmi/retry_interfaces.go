@@ -17,4 +17,3 @@ type BackoffStrategy interface {
 	// MaxAttempts returns the maximum number of retry attempts (0 = no retries, -1 = unlimited)
 	MaxAttempts() int
 }
-

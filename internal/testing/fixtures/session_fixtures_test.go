@@ -14,18 +14,18 @@ func TestSessionFixtureBuilder_StandardMultiLevel(t *testing.T) {
 	// Expected files and their count
 	expectedFiles := map[string]bool{
 		// Regular files
-		"deploy.sql":              true,
+		"deploy.sql":                true,
 		"migrations/001_schema.sql": true,
 		"migrations/002_data.sql":   true,
 		"setup/functions.sql":       true,
 
 		// Test files (should be under __test__/)
-		"__test__/_setup.sql":                true,
-		"__test__/test_basic.sql":            true,
-		"__test__/auth/_setup.sql":           true,
-		"__test__/auth/test_login.sql":       true,
+		"__test__/_setup.sql":                 true,
+		"__test__/test_basic.sql":             true,
+		"__test__/auth/_setup.sql":            true,
+		"__test__/auth/test_login.sql":        true,
 		"__test__/auth/oauth/test_google.sql": true,
-		"__test__/billing/test_stripe.sql":   true,
+		"__test__/billing/test_stripe.sql":    true,
 	}
 
 	// Verify all expected files exist

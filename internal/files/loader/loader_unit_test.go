@@ -255,12 +255,12 @@ func TestCountTestDirectoryDepth(t *testing.T) {
 		path     string
 		expected int
 	}{
-		{"./__test__/", 0},                    // Root test directory
-		{"./__test__/auth/", 1},               // One level deep
-		{"./__test__/auth/oauth/", 2},         // Two levels deep
-		{"./__test__/auth/oauth/google/", 3},  // Three levels deep
-		{"./regular/path/", 0},                // No test dirs
-		{"./src/__test__/unit/", 1},           // Test dir under src
+		{"./__test__/", 0},                   // Root test directory
+		{"./__test__/auth/", 1},              // One level deep
+		{"./__test__/auth/oauth/", 2},        // Two levels deep
+		{"./__test__/auth/oauth/google/", 3}, // Three levels deep
+		{"./regular/path/", 0},               // No test dirs
+		{"./src/__test__/unit/", 1},          // Test dir under src
 	}
 
 	for _, tt := range tests {
@@ -458,8 +458,8 @@ func TestIsFixtureFile_EdgeCases(t *testing.T) {
 
 func TestFindParentTestDirectory_OrphanChild(t *testing.T) {
 	dirSet := map[string]bool{
-		"./__test__/":             true,
-		"./__test__/a/b/c/":      true,
+		"./__test__/":       true,
+		"./__test__/a/b/c/": true,
 		// Missing intermediate "./__test__/a/" and "./__test__/a/b/"
 	}
 

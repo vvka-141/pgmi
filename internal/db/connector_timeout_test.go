@@ -70,4 +70,3 @@ func TestStandardConnector_MaxDelayConstraint(t *testing.T) {
 
 	t.Log("StandardConnector is configured with max delay of 1 minute")
 }
-

@@ -8,10 +8,10 @@ import (
 
 func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 	tests := []struct {
-		name     string
-		connStr  string
-		want     *pgmi.ConnectionConfig
-		wantErr  bool
+		name    string
+		connStr string
+		want    *pgmi.ConnectionConfig
+		wantErr bool
 	}{
 		{
 			name:    "Full URI with all components",
@@ -119,10 +119,10 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 
 func TestParseConnectionString_ADONET(t *testing.T) {
 	tests := []struct {
-		name     string
-		connStr  string
-		want     *pgmi.ConnectionConfig
-		wantErr  bool
+		name    string
+		connStr string
+		want    *pgmi.ConnectionConfig
+		wantErr bool
 	}{
 		{
 			name:    "Full ADO.NET connection string",

@@ -132,13 +132,13 @@ func TestNewConnector_AzureEntraID(t *testing.T) {
 
 func TestApplyAzureAuth(t *testing.T) {
 	tests := []struct {
-		name               string
-		flags              *AzureFlags
-		env                *EnvVars
-		wantAuthMethod     pgmi.AuthMethod
-		wantTenantID       string
-		wantClientID       string
-		wantClientSecret   string
+		name             string
+		flags            *AzureFlags
+		env              *EnvVars
+		wantAuthMethod   pgmi.AuthMethod
+		wantTenantID     string
+		wantClientID     string
+		wantClientSecret string
 	}{
 		{
 			name:           "no Azure config - standard auth",

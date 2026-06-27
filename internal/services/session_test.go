@@ -80,4 +80,3 @@ func TestNewSession_PanicsOnNilConn(t *testing.T) {
 	// This should panic
 	pgmi.NewSession(&pgxpool.Pool{}, nil, nil)
 }
-

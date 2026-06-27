@@ -365,12 +365,12 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 
 func printDeployJSON(result *services.DeployResult, deployErr error) {
 	out := map[string]any{
-		"status":       "success",
-		"filesLoaded":  result.FilesLoaded,
-		"testMacros":   result.TestMacros,
-		"durationMs":   result.Duration.Milliseconds(),
-		"database":     result.Database,
-		"exitCode":     0,
+		"status":      "success",
+		"filesLoaded": result.FilesLoaded,
+		"testMacros":  result.TestMacros,
+		"durationMs":  result.Duration.Milliseconds(),
+		"database":    result.Database,
+		"exitCode":    0,
 	}
 	if deployErr != nil {
 		out["status"] = "failed"
@@ -440,7 +440,6 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 	return &connResult.Config, nil
 }
 
-
 // applyWizardConfig applies wizard results to deploy flags.
 func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
 	if cfg == nil {
@@ -490,4 +489,3 @@ func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
 		}
 	}
 }
-

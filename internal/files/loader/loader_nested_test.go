@@ -48,9 +48,9 @@ func TestCountTestDirectoryDepth_NestedPaths(t *testing.T) {
 
 func TestFindParentTestDirectory(t *testing.T) {
 	dirSet := map[string]bool{
-		"./__test__/":                   true,
-		"./__test__/child/":             true,
-		"./__test__/child/grandchild/":  true,
+		"./__test__/":                  true,
+		"./__test__/child/":            true,
+		"./__test__/child/grandchild/": true,
 	}
 
 	testCases := []struct {

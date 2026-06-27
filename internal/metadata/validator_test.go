@@ -144,11 +144,10 @@ func TestValidate_WhitespaceOnlyDescription(t *testing.T) {
 	}
 }
 
-
 // TestValidate_MultipleErrors tests that all errors are collected
 func TestValidate_MultipleErrors(t *testing.T) {
 	meta := &Metadata{
-		ID:          uuid.Nil,                            // Error 1: nil ID
+		ID:          uuid.Nil, // Error 1: nil ID
 		Idempotent:  boolPtr(true),
 		SortKeys:    SortKeysElement{Keys: []string{""}}, // Error 2: empty sortKey
 		Description: "   ",                               // Error 3: whitespace description

@@ -11,10 +11,10 @@ import (
 
 // mockOperation tracks invocation count and simulates transient failures
 type mockOperation struct {
-	invocations   int
-	failUntil     int // Fail for invocations < failUntil
-	transientErr  error
-	fatalErr      error
+	invocations  int
+	failUntil    int // Fail for invocations < failUntil
+	transientErr error
+	fatalErr     error
 }
 
 func (m *mockOperation) execute(ctx context.Context) error {
@@ -37,7 +37,6 @@ func (m *mockOperation) execute(ctx context.Context) error {
 func TestExecutor_Execute_SuccessOnFirstAttempt(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 	strategy := NewExponentialBackoff(3, WithJitter(0))
-
 
 	executor := NewExecutor(classifier, strategy)
 
@@ -132,7 +131,6 @@ func TestExecutor_Execute_ContextCancellation(t *testing.T) {
 	strategy := NewExponentialBackoff(10,
 		WithInitialDelay(1*time.Second), // Long delay
 	)
-
 
 	executor := NewExecutor(classifier, strategy)
 
@@ -254,7 +252,6 @@ func TestExecutor_Execute_OnRetryCallback(t *testing.T) {
 func TestExecutor_Execute_NoRetriesStrategy(t *testing.T) {
 	classifier := NewPostgreSQLErrorClassifier()
 	strategy := NewExponentialBackoff(0) // MaxAttempts = 0 (no retries)
-
 
 	executor := NewExecutor(classifier, strategy)
 

@@ -8,9 +8,9 @@ import (
 
 func TestNeedsConnectionWizard(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(t *testing.T, dir string)
-		want    bool
+		name  string
+		setup func(t *testing.T, dir string)
+		want  bool
 	}{
 		{
 			name:  "no config at all triggers wizard",

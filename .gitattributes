@@ -1,0 +1,5 @@
+# LF in the repository for all text; Linux CI (gofmt, golangci-lint) requires it.
+* text=auto eol=lf
+
+*.png binary
+*.svg text

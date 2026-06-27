@@ -140,7 +140,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-
 // managedCloudCaveat returns a post-scaffold heads-up for templates that need a
 // superuser on managed clouds, or "" when the template carries no such caveat.
 func managedCloudCaveat(template string) string {
@@ -176,4 +175,3 @@ func isInitBlocked(targetPath string) (bool, string) {
 	absPath, _ := filepath.Abs(targetPath)
 	return true, fmt.Sprintf("directory %q is not empty (blocking: %v)\nremove the files or scaffold elsewhere: pgmi init ./new-project", absPath, blocking)
 }
-

@@ -61,7 +61,7 @@ func TestGenerateFallbackID_PathNormalization(t *testing.T) {
 	// These should generate the same ID due to path normalization
 	paths := []string{
 		"./migrations/001_users.sql",
-		"migrations/001_users.sql",   // Without leading ./
+		"migrations/001_users.sql",    // Without leading ./
 		"./migrations\\001_users.sql", // Windows-style separator (if normalized)
 	}
 

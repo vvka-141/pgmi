@@ -498,7 +498,7 @@ func TestValidateOverwriteTarget(t *testing.T) {
 	tests := []struct {
 		name      string
 		target    string
-		mgmtDB   string
+		mgmtDB    string
 		wantErr   bool
 		errSubstr string
 	}{
@@ -521,5 +521,3 @@ func TestValidateOverwriteTarget(t *testing.T) {
 		})
 	}
 }
-
-

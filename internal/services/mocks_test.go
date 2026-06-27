@@ -54,8 +54,8 @@ func (m *mockDBConnection) Acquire(_ context.Context) (pgmi.PooledConnection, er
 }
 
 type mockFileScanner struct {
-	scanResult pgmi.FileScanResult
-	scanErr    error
+	scanResult  pgmi.FileScanResult
+	scanErr     error
 	validateErr error
 	readContent string
 	readErr     error

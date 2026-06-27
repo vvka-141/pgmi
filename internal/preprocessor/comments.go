@@ -46,7 +46,7 @@ const (
 // Handles:
 // - Single-line comments: -- to end of line
 // - Block comments: /* */ with PostgreSQL nesting support
-// - Single-quoted strings: '...' with '' escape
+// - Single-quoted strings: '...' with doubled-apostrophe escape
 // - Dollar-quoted strings: $$...$$ and $tag$...$tag$
 func (c *commentStripper) Strip(sql string) string {
 	return c.scan(sql, false)
@@ -66,7 +66,7 @@ func (c *commentStripper) RedactForMacros(sql string) string {
 // spaces byte-for-byte so positions in the output align with positions in
 // the input.
 //
-// All comparisons are ASCII ('$', '\'', '/', '*', '-', '\n', '\r'); multi-byte
+// All comparisons are ASCII ('$', the escaped single quote, '/', '*', '-', '\n', '\r'); multi-byte
 // UTF-8 continuation bytes flow through the default branches unchanged, which
 // is what we want (they are all inside either a string, a comment, or an
 // identifier — they never affect state transitions).

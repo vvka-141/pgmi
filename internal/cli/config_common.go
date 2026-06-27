@@ -239,7 +239,6 @@ func authMethodToString(m pgmi.AuthMethod) string {
 	}
 }
 
-
 // loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.
 // Later files override earlier ones. Returns merged parameters map.
 func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles []string, verbose bool) (map[string]string, error) {

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	queryDatabaseExists      = "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
+	queryDatabaseExists       = "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
 	queryTerminateConnections = `
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity

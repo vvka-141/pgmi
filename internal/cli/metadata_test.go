@@ -60,8 +60,8 @@ func createTestProject(t *testing.T, files map[string]string) string {
 func TestMetadataScaffold_DryRunDefault(t *testing.T) {
 	resetMetadataFlags()
 	projectPath := createTestProject(t, map[string]string{
-		"deploy.sql":          "SELECT 1;",
-		"migrations/001.sql":  "CREATE TABLE t1(id int);",
+		"deploy.sql":         "SELECT 1;",
+		"migrations/001.sql": "CREATE TABLE t1(id int);",
 	})
 
 	err := runMetadataScaffold(metadataScaffoldCmd, []string{projectPath})
