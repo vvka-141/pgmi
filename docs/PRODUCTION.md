@@ -521,7 +521,7 @@ pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 deploy:
   runs-on: ubuntu-latest
   env:
-    PGMI_VERSION: v0.10.0         # pin to a specific release tag
+    PGMI_VERSION: v0.11.0         # pin to a specific release tag
   steps:
     - uses: actions/checkout@v4
 
@@ -551,7 +551,7 @@ deploy:
   stage: deploy
   image: ubuntu:latest
   variables:
-    PGMI_VERSION: v0.10.0
+    PGMI_VERSION: v0.11.0
     PGMI_CONNECTION_STRING: $DATABASE_URL
   before_script:
     - |
@@ -631,7 +631,7 @@ deploy:
 
     - name: Install pgmi
       env:
-        PGMI_VERSION: v0.10.0
+        PGMI_VERSION: v0.11.0
       run: |
         file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
         base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
@@ -672,7 +672,7 @@ deploy:
 
     - name: Install pgmi
       env:
-        PGMI_VERSION: v0.10.0
+        PGMI_VERSION: v0.11.0
       run: |
         file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
         base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
