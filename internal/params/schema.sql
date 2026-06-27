@@ -402,15 +402,14 @@ DECLARE
     v_path TEXT;
     v_parts TEXT[];
 BEGIN
-    -- 1. Normalize the path
+    -- Normalize to POSIX: forward slashes, ./ prefix, no duplicate separators
     v_path := trim(both ' ' from in_path);
-    v_path := replace(v_path, E'\\', '/');                              -- convert backslashes
+    v_path := replace(v_path, E'\\', '/');
     IF v_path !~ '^\./' THEN
-        v_path := './' || regexp_replace(v_path, '^(\./|/)*', '');      -- ensure leading ./
+        v_path := './' || regexp_replace(v_path, '^(\./|/)*', '');
     END IF;
-    v_path := regexp_replace(v_path, '/{2,}', '/', 'g');                -- collapse duplicate slashes
+    v_path := regexp_replace(v_path, '/{2,}', '/', 'g');
 
-    -- 2. Compute components
     v_parts := string_to_array(v_path, '/');
 
     v_row.path               := v_path;
@@ -439,7 +438,6 @@ BEGIN
              ELSE NULL
         END;
 
-    -- 3. Insert & return the row
     INSERT INTO pg_temp._pgmi_source VALUES (
         v_row.path, v_row.name, v_row.directory, v_row.extension,
         v_row.depth, v_row.content, v_row.size_bytes,
