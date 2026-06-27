@@ -1,10 +1,11 @@
 package preprocessor
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/testgen"
@@ -63,8 +64,8 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 
 	sortedMacros := make([]MacroCall, len(macros))
 	copy(sortedMacros, macros)
-	sort.Slice(sortedMacros, func(i, j int) bool {
-		return sortedMacros[i].StartPos > sortedMacros[j].StartPos
+	slices.SortFunc(sortedMacros, func(a, b MacroCall) int {
+		return cmp.Compare(b.StartPos, a.StartPos)
 	})
 
 	expandedSQL := sql

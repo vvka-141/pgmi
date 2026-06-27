@@ -1,12 +1,13 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -160,7 +161,7 @@ func printProjectInfo(info projectInfo) {
 		for d := range info.Directories {
 			dirs = append(dirs, d)
 		}
-		sort.Strings(dirs)
+		slices.SortFunc(dirs, cmp.Compare)
 		for _, d := range dirs {
 			fmt.Fprintf(w, "  %-30s %d files\n", d, info.Directories[d])
 		}

@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -185,13 +186,13 @@ func validateNoDuplicateScriptIDs(files []pgmi.FileMetadata) error {
 	var conflicts []string
 	for id, paths := range pathsByID {
 		if len(paths) > 1 {
-			sort.Strings(paths)
+			slices.SortFunc(paths, cmp.Compare)
 			conflicts = append(conflicts, fmt.Sprintf("  %s: %s", id, strings.Join(paths, ", ")))
 		}
 	}
 
 	if len(conflicts) > 0 {
-		sort.Strings(conflicts)
+		slices.SortFunc(conflicts, cmp.Compare)
 		return fmt.Errorf("duplicate <pgmi-meta id> across files; each script must have a unique id:\n%s: %w",
 			strings.Join(conflicts, "\n"), pgmi.ErrInvalidConfig)
 	}

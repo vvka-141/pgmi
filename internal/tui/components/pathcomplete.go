@@ -1,9 +1,10 @@
 package components
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -102,7 +103,7 @@ func (c *PathCompleter) findMatches(parent, prefix string) []string {
 		}
 	}
 
-	sort.Strings(matches)
+	slices.SortFunc(matches, cmp.Compare)
 	return matches
 }
 

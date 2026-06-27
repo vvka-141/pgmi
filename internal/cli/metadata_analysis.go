@@ -1,8 +1,9 @@
 package cli
 
 import (
+	"cmp"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -63,12 +64,12 @@ func planProject(projectPath string) (MetadataPlanResult, error) {
 		})
 	}
 
-	sort.SliceStable(plan, func(i, j int) bool {
-		ki, kj := minSortKey(plan[i]), minSortKey(plan[j])
-		if ki != kj {
-			return ki < kj
+	slices.SortStableFunc(plan, func(a, b MetadataPlanEntry) int {
+		ka, kb := minSortKey(a), minSortKey(b)
+		if n := cmp.Compare(ka, kb); n != 0 {
+			return n
 		}
-		return plan[i].Path < plan[j].Path
+		return cmp.Compare(a.Path, b.Path)
 	})
 
 	return MetadataPlanResult{TotalFiles: len(plan), Plan: plan}, nil

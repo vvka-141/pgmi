@@ -4,12 +4,13 @@
 package ai
 
 import (
+	"cmp"
 	"embed"
 	"fmt"
 	"io/fs"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/vvka-141/pgmi/internal/scaffold"
@@ -68,8 +69,8 @@ func ListSkills() ([]SkillInfo, error) {
 
 	skills = append(skills, advancedTemplateSkillInfo)
 
-	sort.Slice(skills, func(i, j int) bool {
-		return skills[i].Name < skills[j].Name
+	slices.SortFunc(skills, func(a, b SkillInfo) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 
 	return skills, nil

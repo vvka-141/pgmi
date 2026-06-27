@@ -1,11 +1,12 @@
 package loader
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -133,7 +134,7 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 	for dir := range dirSet {
 		dirs = append(dirs, dir)
 	}
-	sort.Strings(dirs)
+	slices.SortFunc(dirs, cmp.Compare)
 
 	type dirInfo struct {
 		path       string
@@ -152,9 +153,8 @@ func (l *Loader) insertTestDirectories(ctx context.Context, conn *pgxpool.Conn, 
 		})
 	}
 
-	// Sort by depth to ensure parents are inserted first (FK constraint)
-	sort.Slice(dirInfos, func(i, j int) bool {
-		return dirInfos[i].depth < dirInfos[j].depth
+	slices.SortFunc(dirInfos, func(a, b dirInfo) int {
+		return cmp.Compare(a.depth, b.depth)
 	})
 
 	insertSQL := `INSERT INTO pg_temp._pgmi_test_directory (path, parent_path, depth) VALUES ($1, $2, $3)`

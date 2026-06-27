@@ -1,11 +1,12 @@
 package filesystem
 
 import (
+	"cmp"
 	"fmt"
 	"io/fs"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,8 +58,8 @@ func (d *memoryDirectory) Walk(fn func(File, error) error) error {
 	entries := d.fs.getEntriesUnder(d.absPath)
 
 	// Sort by path for deterministic order
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].absPath < entries[j].absPath
+	slices.SortFunc(entries, func(a, b *memoryFile) int {
+		return cmp.Compare(a.absPath, b.absPath)
 	})
 
 	for _, entry := range entries {
