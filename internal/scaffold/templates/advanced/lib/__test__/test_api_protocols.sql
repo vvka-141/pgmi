@@ -157,6 +157,62 @@ END;
 
     RAISE NOTICE '  ✓ GET /nonexistent-route-xyz returns 404';
 
+    -- ========================================================================
+    -- Test: Response Header Finalization
+    -- ========================================================================
+    -- Guards internal.finalize_response_headers: the content-type default
+    -- fires only when a handler returns headers WITHOUT content-type (the
+    -- api.json_response builder always sets one, so this needs a handler
+    -- that constructs api.http_response bare), registered responseHeaders
+    -- merge lowercased, and the x-include-schema directive never reaches
+    -- the wire.
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-1004-4000-8000-000000000001',
+            'uri', '^/test-bare-headers$',
+            'httpMethod', '^GET$',
+            'name', 'test_bare_headers',
+            'description', 'Returns a response with no headers at all',
+            'requiresAuth', false,
+            'responseHeaders', jsonb_build_object(
+                'X-Custom-Header', 'custom-value',
+                'x-include-schema', 'false'
+            )
+        ),
+        $body$
+BEGIN
+    RETURN (200, NULL, convert_to('{"ok":true}', 'UTF8'))::api.http_response;
+END;
+        $body$
+    );
+
+    v_response := api.rest_invoke('GET', '/test-bare-headers', ''::extensions.hstore, NULL::bytea);
+
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: /test-bare-headers expected 200, got %', (v_response).status_code;
+    END IF;
+    IF (v_response).headers->'content-type' IS DISTINCT FROM 'application/json; charset=utf-8' THEN
+        RAISE EXCEPTION 'TEST FAILED: bare response should get JSON content-type default, got %',
+            (v_response).headers->'content-type';
+    END IF;
+    IF (v_response).headers->'x-custom-header' IS DISTINCT FROM 'custom-value' THEN
+        RAISE EXCEPTION 'TEST FAILED: registered responseHeaders should merge lowercased, got %',
+            (v_response).headers->'x-custom-header';
+    END IF;
+    IF (v_response).headers ? 'x-include-schema' THEN
+        RAISE EXCEPTION 'TEST FAILED: x-include-schema directive must not appear on the wire';
+    END IF;
+    IF (v_response).headers->'content-length' IS DISTINCT FROM octet_length((v_response).content)::text THEN
+        RAISE EXCEPTION 'TEST FAILED: content-length should match body size, got %',
+            (v_response).headers->'content-length';
+    END IF;
+    IF NOT (v_response).headers ? 'x-route-id' THEN
+        RAISE EXCEPTION 'TEST FAILED: x-route-id should be stamped on REST responses';
+    END IF;
+
+    RAISE NOTICE '  ✓ Response header finalization: content-type default, lowercased merge, x-include-schema stripped';
+
     RAISE NOTICE '✓ REST Protocol tests passed';
 END $$;
 
