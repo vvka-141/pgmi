@@ -192,6 +192,7 @@ END;
 | `name` | — | `api.<name>`; `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` (≤49 chars). |
 | `outputSchema` | — | **Required on every REST handler** — the OpenAPI test fails the deploy (`REST handlers without output schema: …`) if any handler omits it. |
 | `inputSchema` | — | JSON Schema for the request body (declare it on write endpoints). Validated at registration; empty `{}` is rejected. |
+| `requiredTransactionIsolation` | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The caller must open the transaction at ≥ this level or the gateway returns 428 (`pgmi.transaction_isolation_too_weak`). |
 
 ---
 

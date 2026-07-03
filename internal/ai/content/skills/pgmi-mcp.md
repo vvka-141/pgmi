@@ -273,6 +273,18 @@ END;
 );
 ```
 
+### Transaction Isolation Floor
+
+Any handler (tool, resource, or prompt) may declare a minimum transaction
+isolation level with the metadata key `requiredTransactionIsolation`
+(`read committed` | `repeatable read` | `serializable`; case- and
+separator-insensitive; unsupported values are rejected at registration). The
+gateway cannot raise the level itself — the caller opens the transaction at
+the required level (the bundled HTTP gateway honors the
+`X-PGMI-Transaction-Isolation` request header), and the database gateway
+rejects a too-weak transaction with a `-32600` error carrying
+`data.code = 'pgmi.transaction_isolation_too_weak'`.
+
 ---
 
 ## Gateway Functions
