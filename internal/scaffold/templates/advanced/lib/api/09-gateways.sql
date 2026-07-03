@@ -656,7 +656,7 @@ COMMENT ON FUNCTION api.rpc_invoke(uuid, extensions.hstore, bytea) IS
     'RPC gateway. Invokes a handler by UUID, enforces auth, maps constraint violations to JSON-RPC error codes. SECURITY DEFINER.';
 
 -- ============================================================================
--- MCP Tool Invocation
+-- MCP Gateway (tools/call, resources/read, prompts/get)
 -- ============================================================================
 -- Exception handling follows MCP spec: tool execution failures return
 -- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
@@ -669,6 +669,114 @@ COMMENT ON FUNCTION api.rpc_invoke(uuid, extensions.hstore, bytea) IS
 -- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
 -- methods (the dispatcher ELSE branch). Auth failures keep -32001.
 
+-- Shared invocation path for the three MCP entry points. Route lookup and
+-- request shape differ per type; everything security-relevant — auth context,
+-- auth gate, isolation floor, exchange logging, error sanitization — lives
+-- here exactly once. Runs SECURITY INVOKER inside the SECURITY DEFINER
+-- wrappers below, inheriting their search_path and owner privileges.
+CREATE OR REPLACE FUNCTION internal.mcp_dispatch(
+    p_mcp_type text,
+    p_name_or_uri text,
+    p_arguments jsonb,
+    p_context jsonb,
+    p_request_id jsonb
+) RETURNS api.mcp_response
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_request api.mcp_request;
+    v_response api.mcp_response;
+    v_handler record;
+    v_iso_shortfall text;
+BEGIN
+    RAISE DEBUG 'mcp_dispatch: % %', p_mcp_type, p_name_or_uri;
+
+    IF p_mcp_type = 'resource' THEN
+        -- Deterministic precedence when more than one template matches: most
+        -- specific (longest template) first, mcp_name as a stable tiebreak.
+        -- Without this, the chosen handler (and its requires_auth) would be
+        -- nondeterministic.
+        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
+        INTO v_handler
+        FROM api.handler h
+        JOIN api.mcp_route r ON r.handler_object_id = h.object_id
+        WHERE r.mcp_type = 'resource'
+          AND p_name_or_uri ~ api.uri_template_to_regex(r.uri_template)
+        ORDER BY length(r.uri_template) DESC, r.mcp_name
+        LIMIT 1;
+    ELSE
+        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
+        INTO v_handler
+        FROM api.handler h
+        JOIN api.mcp_route r ON r.handler_object_id = h.object_id
+        WHERE r.mcp_name = p_name_or_uri AND r.mcp_type = p_mcp_type;
+    END IF;
+
+    IF v_handler.handler_exec_sql IS NULL THEN
+        RAISE DEBUG 'mcp_dispatch: % not found', p_mcp_type;
+        RETURN api.mcp_error(-32602, initcap(p_mcp_type) || ' not found: ' || p_name_or_uri, p_request_id);
+    END IF;
+
+    RAISE DEBUG 'mcp_dispatch: Matched %', v_handler.mcp_name;
+
+    PERFORM internal.apply_mcp_auth_context(p_context);
+
+    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
+        RAISE DEBUG 'mcp_dispatch: Auth required but missing';
+        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
+    END IF;
+
+    -- Enforce the route's transaction isolation floor (see rest_invoke).
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RETURN api.mcp_error(
+            -32600,
+            format('Route requires %s isolation but current transaction uses %s.',
+                   v_handler.required_transaction_isolation, v_iso_shortfall),
+            p_request_id,
+            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
+        );
+    END IF;
+
+    v_request := CASE WHEN p_mcp_type = 'resource'
+        THEN (NULL, p_name_or_uri, p_context, p_request_id)::api.mcp_request
+        ELSE (p_arguments, NULL, p_context, p_request_id)::api.mcp_request
+    END;
+
+    BEGIN
+        RAISE DEBUG 'mcp_dispatch: Invoking handler %', v_handler.object_id;
+        EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
+
+        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
+        VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
+
+        RETURN v_response;
+
+    EXCEPTION WHEN OTHERS THEN
+        RAISE DEBUG 'mcp_dispatch: Handler exception: %', SQLERRM;
+
+        -- MCP spec: tool *execution* failures use result.isError=true, NOT a
+        -- JSON-RPC error envelope (reserved for protocol-level errors);
+        -- resource/prompt failures stay protocol errors (-32603). Logged copy
+        -- keeps SQLSTATE + truncated SQLERRM (see rest_invoke for the
+        -- truncation rationale); the client gets a sanitized message.
+        v_response := CASE WHEN p_mcp_type = 'tool'
+            THEN api.mcp_tool_error('sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id)
+            ELSE api.mcp_error(-32603, 'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id)
+        END;
+        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
+        VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
+
+        RETURN CASE WHEN p_mcp_type = 'tool'
+            THEN api.mcp_tool_error('Tool execution failed', p_request_id)
+            ELSE api.mcp_error(-32603, 'Internal error', p_request_id)
+        END;
+    END;
+END;
+$$;
+
+COMMENT ON FUNCTION internal.mcp_dispatch(text, text, jsonb, jsonb, jsonb) IS
+    'Shared MCP invocation path: route lookup, auth context, auth gate, isolation floor, handler EXECUTE, exchange logging, sanitized errors. Called only by the api.mcp_* SECURITY DEFINER wrappers.';
+
 DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
 CREATE OR REPLACE FUNCTION api.mcp_call_tool(
@@ -677,89 +785,15 @@ CREATE OR REPLACE FUNCTION api.mcp_call_tool(
     p_context jsonb DEFAULT NULL,
     p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
-LANGUAGE plpgsql
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = api, internal, extensions, pg_temp
 AS $$
-DECLARE
-    v_request api.mcp_request;
-    v_response api.mcp_response;
-    v_handler record;
-    v_iso_shortfall text;
-BEGIN
-    RAISE DEBUG 'mcp_call_tool: %', p_name;
-
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
-    INTO v_handler
-    FROM api.handler h
-    JOIN api.mcp_route r ON r.handler_object_id = h.object_id
-    WHERE r.mcp_name = p_name AND r.mcp_type = 'tool';
-
-    IF v_handler.handler_exec_sql IS NULL THEN
-        RAISE DEBUG 'mcp_call_tool: Tool not found';
-        RETURN api.mcp_error(-32602, 'Tool not found: ' || p_name, p_request_id);
-    END IF;
-
-    RAISE DEBUG 'mcp_call_tool: Matched tool %', v_handler.mcp_name;
-
-    PERFORM internal.apply_mcp_auth_context(p_context);
-
-    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
-        RAISE DEBUG 'mcp_call_tool: Auth required but missing';
-        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
-    END IF;
-
-    -- Enforce the route's transaction isolation floor (see rest_invoke).
-    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
-    IF v_iso_shortfall IS NOT NULL THEN
-        RETURN api.mcp_error(
-            -32600,
-            format('Route requires %s isolation but current transaction uses %s.',
-                   v_handler.required_transaction_isolation, v_iso_shortfall),
-            p_request_id,
-            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
-        );
-    END IF;
-
-    v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
-
-    BEGIN
-        RAISE DEBUG 'mcp_call_tool: Invoking handler %', v_handler.object_id;
-        EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
-
-        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-        VALUES (v_handler.object_id, 'tool', v_handler.mcp_name, v_request, v_response);
-
-        RETURN v_response;
-
-    EXCEPTION WHEN OTHERS THEN
-        RAISE DEBUG 'mcp_call_tool: Handler exception: %', SQLERRM;
-
-        -- C1 fix: MCP spec requires tool *execution* failures to use
-        -- result.isError=true (via mcp_tool_error), NOT a JSON-RPC error
-        -- envelope (which is reserved for protocol-level errors).
-        -- C3 fix: persist SQLSTATE + truncated SQLERRM (limits exposure if
-        -- exchange-table grants are loosened).
-        v_response := api.mcp_tool_error(
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200),
-            p_request_id);
-        IF v_handler.object_id IS NOT NULL THEN
-            INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, 'tool', v_handler.mcp_name, v_request, v_response);
-        END IF;
-
-        -- Return sanitized isError result to client (MCP spec-compliant)
-        RETURN api.mcp_tool_error('Tool execution failed', p_request_id);
-    END;
-END;
+    SELECT internal.mcp_dispatch('tool', p_name, p_arguments, p_context, p_request_id);
 $$;
 
 COMMENT ON FUNCTION api.mcp_call_tool(text, jsonb, jsonb, jsonb) IS
     'MCP tools/call. Resolves tool by name, applies auth context, invokes handler. Execution failures use result.isError=true per MCP spec.';
-
--- ============================================================================
--- MCP Resource Read
--- ============================================================================
 
 DROP FUNCTION IF EXISTS api.mcp_read_resource(text, jsonb, text);
 
@@ -768,90 +802,15 @@ CREATE OR REPLACE FUNCTION api.mcp_read_resource(
     p_context jsonb DEFAULT NULL,
     p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
-LANGUAGE plpgsql
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = api, internal, extensions, pg_temp
 AS $$
-DECLARE
-    v_request api.mcp_request;
-    v_response api.mcp_response;
-    v_handler record;
-    v_iso_shortfall text;
-BEGIN
-    RAISE DEBUG 'mcp_read_resource: %', p_uri;
-
-    -- Deterministic precedence when more than one template matches: most
-    -- specific (longest template) first, mcp_name as a stable tiebreak. Without
-    -- this, the chosen handler (and its requires_auth) would be nondeterministic.
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
-    INTO v_handler
-    FROM api.handler h
-    JOIN api.mcp_route r ON r.handler_object_id = h.object_id
-    WHERE r.mcp_type = 'resource'
-      AND p_uri ~ api.uri_template_to_regex(r.uri_template)
-    ORDER BY length(r.uri_template) DESC, r.mcp_name
-    LIMIT 1;
-
-    IF v_handler.handler_exec_sql IS NULL THEN
-        RAISE DEBUG 'mcp_read_resource: Resource not found';
-        RETURN api.mcp_error(-32602, 'Resource not found: ' || p_uri, p_request_id);
-    END IF;
-
-    RAISE DEBUG 'mcp_read_resource: Matched resource %', v_handler.mcp_name;
-
-    PERFORM internal.apply_mcp_auth_context(p_context);
-
-    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
-        RAISE DEBUG 'mcp_read_resource: Auth required but missing';
-        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
-    END IF;
-
-    -- Enforce the route's transaction isolation floor (see rest_invoke).
-    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
-    IF v_iso_shortfall IS NOT NULL THEN
-        RETURN api.mcp_error(
-            -32600,
-            format('Route requires %s isolation but current transaction uses %s.',
-                   v_handler.required_transaction_isolation, v_iso_shortfall),
-            p_request_id,
-            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
-        );
-    END IF;
-
-    v_request := (NULL, p_uri, p_context, p_request_id)::api.mcp_request;
-
-    BEGIN
-        RAISE DEBUG 'mcp_read_resource: Invoking handler %', v_handler.object_id;
-        EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
-
-        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-        VALUES (v_handler.object_id, 'resource', v_handler.mcp_name, v_request, v_response);
-
-        RETURN v_response;
-
-    EXCEPTION WHEN OTHERS THEN
-        RAISE DEBUG 'mcp_read_resource: Handler exception: %', SQLERRM;
-
-        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
-        v_response := api.mcp_error(-32603,
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id);
-        IF v_handler.object_id IS NOT NULL THEN
-            INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, 'resource', v_handler.mcp_name, v_request, v_response);
-        END IF;
-
-        -- Return sanitized error to client (hide internal details)
-        RETURN api.mcp_error(-32603, 'Internal error', p_request_id);
-    END;
-END;
+    SELECT internal.mcp_dispatch('resource', p_uri, NULL, p_context, p_request_id);
 $$;
 
 COMMENT ON FUNCTION api.mcp_read_resource(text, jsonb, jsonb) IS
     'MCP resources/read. Matches URI against registered templates with longest-match precedence.';
-
--- ============================================================================
--- MCP Prompt Expansion
--- ============================================================================
 
 DROP FUNCTION IF EXISTS api.mcp_get_prompt(text, jsonb, jsonb, text);
 
@@ -861,76 +820,11 @@ CREATE OR REPLACE FUNCTION api.mcp_get_prompt(
     p_context jsonb DEFAULT NULL,
     p_request_id jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
-LANGUAGE plpgsql
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = api, internal, extensions, pg_temp
 AS $$
-DECLARE
-    v_request api.mcp_request;
-    v_response api.mcp_response;
-    v_handler record;
-    v_iso_shortfall text;
-BEGIN
-    RAISE DEBUG 'mcp_get_prompt: %', p_name;
-
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
-    INTO v_handler
-    FROM api.handler h
-    JOIN api.mcp_route r ON r.handler_object_id = h.object_id
-    WHERE r.mcp_name = p_name AND r.mcp_type = 'prompt';
-
-    IF v_handler.handler_exec_sql IS NULL THEN
-        RAISE DEBUG 'mcp_get_prompt: Prompt not found';
-        RETURN api.mcp_error(-32602, 'Prompt not found: ' || p_name, p_request_id);
-    END IF;
-
-    RAISE DEBUG 'mcp_get_prompt: Matched prompt %', v_handler.mcp_name;
-
-    PERFORM internal.apply_mcp_auth_context(p_context);
-
-    IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
-        RAISE DEBUG 'mcp_get_prompt: Auth required but missing';
-        RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
-    END IF;
-
-    -- Enforce the route's transaction isolation floor (see rest_invoke).
-    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
-    IF v_iso_shortfall IS NOT NULL THEN
-        RETURN api.mcp_error(
-            -32600,
-            format('Route requires %s isolation but current transaction uses %s.',
-                   v_handler.required_transaction_isolation, v_iso_shortfall),
-            p_request_id,
-            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
-        );
-    END IF;
-
-    v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
-
-    BEGIN
-        RAISE DEBUG 'mcp_get_prompt: Invoking handler %', v_handler.object_id;
-        EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
-
-        INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-        VALUES (v_handler.object_id, 'prompt', v_handler.mcp_name, v_request, v_response);
-
-        RETURN v_response;
-
-    EXCEPTION WHEN OTHERS THEN
-        RAISE DEBUG 'mcp_get_prompt: Handler exception: %', SQLERRM;
-
-        -- Log SQLSTATE + truncated SQLERRM (see rest_invoke for rationale).
-        v_response := api.mcp_error(-32603,
-            'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id);
-        IF v_handler.object_id IS NOT NULL THEN
-            INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, 'prompt', v_handler.mcp_name, v_request, v_response);
-        END IF;
-
-        -- Return sanitized error to client (hide internal details)
-        RETURN api.mcp_error(-32603, 'Internal error', p_request_id);
-    END;
-END;
+    SELECT internal.mcp_dispatch('prompt', p_name, p_arguments, p_context, p_request_id);
 $$;
 
 COMMENT ON FUNCTION api.mcp_get_prompt(text, jsonb, jsonb, jsonb) IS
