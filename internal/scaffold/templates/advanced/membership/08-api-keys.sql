@@ -89,8 +89,8 @@ COMMENT ON TYPE membership.api_key_status IS
 -- ============================================================================
 -- API Key Table
 -- ============================================================================
--- object_id core.entity_id opts this table into the DDL-trigger entity
--- standards: created_at and deleted_at are injected automatically.
+-- object_id core.entity_id opts this table into the entity-standards
+-- deploy-end sweep: created_at and deleted_at are injected automatically.
 
 CREATE TABLE IF NOT EXISTS membership.api_key (
     object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),

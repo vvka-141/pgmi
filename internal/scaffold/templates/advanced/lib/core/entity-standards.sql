@@ -26,7 +26,6 @@ DECLARE
     v_rel       text;
     v_relkind   "char";
     v_is_part   boolean;
-    v_has_col   boolean;
 BEGIN
     SELECT n.nspname, c.relname, c.relkind, c.relispartition
     INTO v_nsp, v_rel, v_relkind, v_is_part
@@ -53,13 +52,11 @@ BEGIN
         RETURN;
     END IF;
 
-    SELECT EXISTS (
+    IF NOT EXISTS (
         SELECT 1 FROM pg_attribute a
         WHERE a.attrelid = v_oid AND a.attname = 'created_at'
           AND a.attnum > 0 AND NOT a.attisdropped
-    ) INTO v_has_col;
-
-    IF NOT v_has_col THEN
+    ) THEN
         EXECUTE format(
             'ALTER TABLE %s ADD COLUMN created_at timestamptz NOT NULL DEFAULT now()',
             p_table
@@ -70,13 +67,11 @@ BEGIN
         );
     END IF;
 
-    SELECT EXISTS (
+    IF NOT EXISTS (
         SELECT 1 FROM pg_attribute a
         WHERE a.attrelid = v_oid AND a.attname = 'deleted_at'
           AND a.attnum > 0 AND NOT a.attisdropped
-    ) INTO v_has_col;
-
-    IF NOT v_has_col THEN
+    ) THEN
         EXECUTE format(
             'ALTER TABLE %s ADD COLUMN deleted_at timestamptz',
             p_table
