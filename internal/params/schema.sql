@@ -79,33 +79,23 @@ CREATE TEMP TABLE _pgmi_source
     CONSTRAINT chk_path_format CHECK (path ~ '^\./'),
     CONSTRAINT chk_path_no_backslash CHECK (path !~ '\\'),
     CONSTRAINT chk_path_no_double_slash CHECK (path !~ '//'),
-    CONSTRAINT chk_path_not_empty CHECK (length(trim(path)) > 0),
     -- Name constraints
     CONSTRAINT chk_name_format CHECK (name ~ '^[^/]+$'),
-    CONSTRAINT chk_name_not_empty CHECK (name != ''),
     CONSTRAINT chk_name_no_whitespace_only CHECK (trim(name) != ''),
-    -- Directory constraints
+    -- Directory constraints (anchored format also rules out '' segments and non-slash endings)
     CONSTRAINT chk_directory_format CHECK (directory ~ '^\./(?:[^/]+/)*$'),
-    CONSTRAINT chk_directory_ends_slash CHECK (directory ~ '/$'),
     CONSTRAINT chk_directory_no_backslash CHECK (directory !~ '\\'),
-    CONSTRAINT chk_directory_no_double_slash CHECK (directory !~ '//'),
     -- Extension constraints
-    CONSTRAINT chk_extension_format CHECK (extension ~ '^(\.[a-zA-Z0-9]+)?$' OR extension = ''),
-    CONSTRAINT chk_extension_no_slash CHECK (extension !~ '/'),
+    CONSTRAINT chk_extension_format CHECK (extension ~ '^(\.[a-zA-Z0-9]+)?$'),
     -- Depth constraints
     CONSTRAINT chk_depth CHECK (depth >= 0),
     CONSTRAINT chk_depth_reasonable CHECK (depth <= 100),
     -- Size constraints
     CONSTRAINT chk_size_bytes CHECK (size_bytes >= 0),
-    CONSTRAINT chk_content_not_null CHECK (content IS NOT NULL),
     CONSTRAINT chk_content_size_match CHECK (octet_length(content) = size_bytes),
     -- Checksum constraints
     CONSTRAINT chk_checksum_format CHECK (checksum ~ '^[a-fA-F0-9]{32,64}$'),
-    CONSTRAINT chk_checksum_not_empty CHECK (length(trim(checksum)) > 0),
     CONSTRAINT chk_pgmi_checksum_format CHECK (pgmi_checksum ~ '^[a-fA-F0-9]{32,64}$'),
-    CONSTRAINT chk_pgmi_checksum_not_empty CHECK (length(trim(pgmi_checksum)) > 0),
-    -- Checksums should differ for non-empty content, but this is advisory not enforced
-    -- CONSTRAINT chk_checksums_not_equal CHECK (checksum != pgmi_checksum OR content = ''),
     -- Path parts constraints
     CONSTRAINT chk_path_parts_not_empty CHECK (array_length(path_parts, 1) > 0),
     CONSTRAINT chk_depth_path_parts CHECK (array_length(path_parts, 1) = depth + 2),
