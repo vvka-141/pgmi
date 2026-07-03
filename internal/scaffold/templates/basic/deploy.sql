@@ -47,11 +47,12 @@ BEGIN
 
     -- Environment-aware seeding: only in non-production
     IF v_env IS DISTINCT FROM 'production' THEN
-        EXECUTE format(
-            'SELECT * FROM upsert_user(%L, %L)',
+        -- Static call works even though the migration loop above just created
+        -- upsert_user: PL/pgSQL resolves each statement at first execution.
+        SELECT * INTO v_user FROM upsert_user(
             COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com'),
             'Administrator'
-        ) INTO v_user;
+        );
         RAISE NOTICE 'Dev seed: admin user ready (% id=%)', v_user.email, v_user.id;
     END IF;
 END $$;
