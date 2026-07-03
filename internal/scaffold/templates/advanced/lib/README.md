@@ -22,6 +22,7 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 
 | File | Purpose |
 |------|---------|
+| `00-transaction-isolation.sql` | Transaction isolation contract: normalizer, ordering, gateway validation primitive |
 | `01-types.sql` | Request/response types + `api.json_schema` / `api.xml_schema` domains |
 | `02-handler-registry.sql` | `api.handler` table for handler metadata (central registry) |
 | `03-rest-routes.sql` | REST handler creation and resolution |
@@ -53,6 +54,12 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 - Metadata JSONB may include `inputSchema` / `outputSchema` (validated by `api.json_schema` domain), `responseHeaders` (merged into wire headers; `x-include-schema` is a directive, not a header), `tags` (MCP only, surfaces as `_meta.tags`).
 - Setting `responseHeaders.x-include-schema = 'true'` merges `outputSchema` into REST responses (as `$schema` at body root) or RPC responses (inside `result.$schema`, preserving JSON-RPC 2.0 envelope).
 - Handler names are capped at 49 chars; longer names are rejected at registration to prevent PostgreSQL 63-byte identifier truncation collisions.
+
+**Transaction isolation contract (`00-transaction-isolation.sql`):**
+- A handler may declare a minimum transaction isolation floor with the metadata key `requiredTransactionIsolation` (`read committed` | `repeatable read` | `serializable`, case- and separator-insensitive; `read uncommitted` folds onto `read committed`). It is stored on `api.handler.required_transaction_isolation`; unsupported values are rejected at registration. Absent ⇒ no requirement (behaves as `read committed`).
+- Levels are ordered `read committed < repeatable read < serializable`. A call satisfies a route iff the current transaction's actual level ranks ≥ the floor.
+- **The caller sets the level; the gateway only validates it.** `SET TRANSACTION ISOLATION LEVEL` is transaction control and is illegal inside functions, so the gateway reads `current_setting('transaction_isolation')` and, when it is too weak, rejects before dispatching — REST returns `428 Precondition Required`, RPC returns HTTP 428 with a JSON-RPC error, MCP returns a `-32600` envelope. All three carry the machine token `pgmi.transaction_isolation_too_weak`.
+- Callers request a level over the wire with the `X-PGMI-Transaction-Isolation` header. The bundled MCP client (`tools/mcp-gateway.py`) honors it by opening the transaction at that level. For REST/RPC (served by an operator-supplied reverse proxy), the proxy must `BEGIN TRANSACTION ISOLATION LEVEL <x>` before calling `api.rest_invoke` / `api.rpc_invoke` — see the header docs in `tools/mcp-gateway.py`.
 
 ### `core/` - Entity Hierarchy
 
