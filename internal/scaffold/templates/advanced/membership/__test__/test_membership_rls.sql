@@ -81,3 +81,46 @@ BEGIN
             v_alice_visible, v_bob_visible;
     END;
 END $$;
+
+-- ============================================================================
+-- Structural conformance. Runs post-deploy, so it sees membership tables from
+-- every file regardless of sort order — a deploy-time guard in 06-rls.sql
+-- could not see later-sorted files like 08-api-keys.sql:
+--   1. every membership table the customer role can SELECT has RLS enabled;
+--   2. every membership vw_* view is security_invoker so RLS applies through it.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+    v_offender TEXT;
+BEGIN
+    SELECT string_agg(c.relname, ', ')
+    INTO v_offender
+    FROM pg_class c
+    WHERE c.relnamespace = 'membership'::regnamespace
+      AND c.relkind = 'r'
+      AND has_table_privilege(v_customer_role, c.oid, 'SELECT')
+      AND NOT c.relrowsecurity;
+
+    IF v_offender IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: membership table(s) granted to % without RLS: %',
+            v_customer_role, v_offender;
+    END IF;
+
+    SELECT string_agg(v.table_name, ', ')
+    INTO v_offender
+    FROM information_schema.views v
+    JOIN pg_class c ON c.relnamespace = 'membership'::regnamespace
+                   AND c.relname = v.table_name
+    WHERE v.table_schema = 'membership'
+      AND v.table_name LIKE 'vw\_%' ESCAPE '\'
+      AND (c.reloptions IS NULL OR NOT ('security_invoker=true' = ANY(c.reloptions)));
+
+    IF v_offender IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: membership view(s) must have security_invoker=true for RLS: %',
+            v_offender;
+    END IF;
+
+    RAISE DEBUG '✓ membership structural conformance: RLS on all granted tables, security_invoker views';
+END $$;
