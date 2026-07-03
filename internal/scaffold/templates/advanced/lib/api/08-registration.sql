@@ -200,10 +200,7 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := p_metadata->>'requiredTransactionIsolation';
-    IF v_required_isolation IS NOT NULL THEN
-        v_required_isolation := internal.normalize_transaction_isolation(v_required_isolation, true);
-    END IF;
+    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
     v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
 
@@ -378,10 +375,7 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := p_metadata->>'requiredTransactionIsolation';
-    IF v_required_isolation IS NOT NULL THEN
-        v_required_isolation := internal.normalize_transaction_isolation(v_required_isolation, true);
-    END IF;
+    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
 
     RAISE DEBUG 'register RPC: id=%, method=%', v_id, v_method_name;
 
@@ -545,10 +539,7 @@ BEGIN
     v_mime_type := COALESCE(p_metadata->>'mimeType', 'application/json');
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := p_metadata->>'requiredTransactionIsolation';
-    IF v_required_isolation IS NOT NULL THEN
-        v_required_isolation := internal.normalize_transaction_isolation(v_required_isolation, true);
-    END IF;
+    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
     v_tags := CASE
         WHEN p_metadata->'tags' IS NOT NULL
         THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'tags'))

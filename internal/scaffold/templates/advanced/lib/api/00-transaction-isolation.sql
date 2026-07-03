@@ -34,7 +34,8 @@
 -- 'READ COMMITTED', 'read-committed', and 'Read_Committed' all map to
 -- 'read committed'. PostgreSQL collapses 'read uncommitted' onto 'read committed'
 -- (it implements no dirty-read level), so the normalizer does the same rather
--- than rejecting it — matching server behavior. Anything else RAISEs.
+-- than rejecting it — matching server behavior. NULL passes through (absent
+-- floor); anything else RAISEs.
 
 DO $$ BEGIN RAISE NOTICE '→ Installing transaction isolation contract'; END $$;
 
@@ -44,6 +45,9 @@ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
     v_result text;
 BEGIN
+    IF p_value IS NULL THEN
+        RETURN NULL;  -- NULL floor means 'no requirement': pass through, never raise
+    END IF;
     v_result := CASE regexp_replace(lower(btrim(p_value)), '[\s_-]+', ' ', 'g')
         WHEN 'read committed'   THEN 'read committed'
         WHEN 'read uncommitted' THEN 'read committed'
@@ -52,7 +56,7 @@ BEGIN
         ELSE NULL
     END;
     IF v_result IS NULL AND p_raise THEN
-        RAISE EXCEPTION 'unsupported transaction isolation level: %', COALESCE(p_value, '<null>')
+        RAISE EXCEPTION 'unsupported transaction isolation level: %', p_value
             USING HINT = 'Supported: read committed, repeatable read, serializable (case/separator-insensitive; read uncommitted maps to read committed).';
     END IF;
     RETURN v_result;
@@ -60,7 +64,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION internal.normalize_transaction_isolation(text, boolean) IS
-    'Normalizes an isolation level to canonical PostgreSQL form (read committed | repeatable read | serializable). Tolerates case and hyphen/underscore/space separators; folds read uncommitted onto read committed. p_raise=true RAISEs on unsupported input; p_raise=false returns NULL.';
+    'Normalizes an isolation level to canonical PostgreSQL form (read committed | repeatable read | serializable). Tolerates case and hyphen/underscore/space separators; folds read uncommitted onto read committed. NULL passes through (absent floor). p_raise=true RAISEs on unsupported input; p_raise=false returns NULL.';
 
 CREATE OR REPLACE FUNCTION internal.transaction_isolation_rank(p_value text)
 RETURNS integer
@@ -73,7 +77,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION internal.transaction_isolation_rank(text) IS
-    'Ordinal rank of an isolation level (read committed=1 < repeatable read=2 < serializable=3). RAISEs on unsupported input. Compare two ranks to decide whether an actual level satisfies a required floor.';
+    'Ordinal rank of an isolation level (read committed=1 < repeatable read=2 < serializable=3). RAISEs on unsupported input; NULL yields NULL. Compare two ranks to decide whether an actual level satisfies a required floor.';
 
 -- Gateway validation primitive (PGMI-110): returns the current transaction's
 -- isolation level when it is WEAKER than the required floor (i.e. the call must
@@ -149,6 +153,11 @@ BEGIN
         RAISE EXCEPTION 'normalize: non-raising path should return NULL for unsupported';
     END IF;
 
+    -- NULL passes through even with p_raise=true (absent floor is not an error)
+    IF internal.normalize_transaction_isolation(NULL, true) IS NOT NULL THEN
+        RAISE EXCEPTION 'normalize: NULL input should return NULL, not raise';
+    END IF;
+
     -- shortfall semantics, independent of whatever level this deploy runs under:
     --   NULL floor is always satisfied; a floor equal to the current level is
     --   satisfied; shortfall is non-NULL exactly when the current level is too
@@ -190,4 +199,5 @@ END $$;
 DO $$ BEGIN
     RAISE NOTICE '  ✓ internal.normalize_transaction_isolation(text, boolean) - canonical level normalizer';
     RAISE NOTICE '  ✓ internal.transaction_isolation_rank(text) - level ordering (rc<rr<s)';
+    RAISE NOTICE '  ✓ internal.transaction_isolation_shortfall(text) - gateway floor validation';
 END $$;
