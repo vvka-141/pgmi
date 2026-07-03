@@ -199,27 +199,28 @@ SELECT api.create_or_replace_rest_handler(
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
-                'user_id', jsonb_build_object('type', 'string'),
+                'userId', jsonb_build_object('type', 'string'),
                 'email', jsonb_build_object('type', 'string', 'format', 'email'),
-                'display_name', jsonb_build_object('type', 'string'),
-                'email_verified', jsonb_build_object('type', 'boolean'),
-                'member_org_ids', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid')),
-                'owner_org_ids', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid'))
+                'displayName', jsonb_build_object('type', 'string'),
+                'emailVerified', jsonb_build_object('type', 'boolean'),
+                'memberOrgIds', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid')),
+                'ownerOrgIds', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid'))
             ),
-            'required', jsonb_build_array('user_id', 'email')
+            'required', jsonb_build_array('userId', 'email')
         )
     ),
     $body$
 DECLARE
     v_user jsonb;
 BEGIN
+    -- camelCase keys: pgmi JSON convention (columns stay snake_case)
     SELECT jsonb_build_object(
-        'user_id', user_id,
+        'userId', user_id,
         'email', email,
-        'display_name', display_name,
-        'email_verified', email_verified,
-        'member_org_ids', member_org_ids,
-        'owner_org_ids', owner_org_ids
+        'displayName', display_name,
+        'emailVerified', email_verified,
+        'memberOrgIds', member_org_ids,
+        'ownerOrgIds', owner_org_ids
     ) INTO v_user
     FROM api.vw_current_user;
 
@@ -255,7 +256,7 @@ SELECT api.create_or_replace_rest_handler(
                             'id', jsonb_build_object('type', 'string', 'format', 'uuid'),
                             'name', jsonb_build_object('type', 'string'),
                             'slug', jsonb_build_object('type', 'string'),
-                            'is_personal', jsonb_build_object('type', 'boolean')
+                            'isPersonal', jsonb_build_object('type', 'boolean')
                         )
                     )
                 )
@@ -271,7 +272,7 @@ BEGIN
         'id', o.object_id,
         'name', o.name,
         'slug', o.slug,
-        'is_personal', o.is_personal
+        'isPersonal', o.is_personal
     )), '[]'::jsonb) INTO v_orgs
     FROM membership.vw_active_organizations o
     WHERE o.object_id = ANY(api.current_member_org_ids());
