@@ -608,15 +608,17 @@ END $$;
 --   SELECT common.try_cast('1.12:30:45', '0'::interval);      -- TimeSpan
 --   SELECT common.try_cast('2 days 3 hours', '0'::interval);  -- Natural
 --   SELECT common.try_cast('invalid', '0'::interval);         -- Returns default
+--
+-- STABLE (not IMMUTABLE): the native-parser fallback depends on the session
+-- DateStyle/IntervalStyle settings (PostgreSQL marks interval_in stable).
 
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value interval)
 RETURNS interval
 LANGUAGE plpgsql
-IMMUTABLE PARALLEL SAFE
+STABLE PARALLEL SAFE
 AS $$
 DECLARE
     v_input TEXT;
-    v_result interval;
     v_match TEXT[];
 BEGIN
     IF $1 IS NULL THEN
@@ -809,11 +811,14 @@ END $$;
 --   SELECT common.try_cast('1705327800', CURRENT_TIMESTAMP);            -- Unix epoch seconds
 --   SELECT common.try_cast('1705327800000', CURRENT_TIMESTAMP);         -- Unix epoch milliseconds
 --   SELECT common.try_cast('invalid', CURRENT_TIMESTAMP);               -- Returns default
+--
+-- STABLE (not IMMUTABLE): text parsing depends on the session DateStyle, and
+-- the epoch path goes through timestamptz so the result depends on TimeZone.
 
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value timestamp)
 RETURNS timestamp
 LANGUAGE plpgsql
-IMMUTABLE PARALLEL SAFE
+STABLE PARALLEL SAFE
 AS $$
 DECLARE
     v_input TEXT;
@@ -857,7 +862,6 @@ BEGIN
 
     -- Fallback: try PostgreSQL native timestamp parser
     -- Handles: ISO-8601, common date formats, etc.
-    -- Note: Does NOT support 'now', 'today' keywords (function is IMMUTABLE)
     BEGIN
         RETURN v_input::timestamp;
     EXCEPTION
