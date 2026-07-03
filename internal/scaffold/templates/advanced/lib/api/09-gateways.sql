@@ -148,6 +148,43 @@ $$;
 -- REST Gateway
 -- ============================================================================
 
+-- Response-header finalization shared by the REST and RPC gateways: merges
+-- handler-registered headers (keys lowercased for HTTP case-insensitive
+-- semantics; the x-include-schema directive controls $schema injection and
+-- MUST NOT appear on the wire), then stamps content-length, timing, and the
+-- protocol-specific extras, defaulting content-type to JSON when the handler
+-- set none. Later concatenations win, so stamps override registered headers.
+CREATE OR REPLACE FUNCTION internal.finalize_response_headers(
+    p_response api.http_response,
+    p_registered jsonb,
+    p_execution_ms numeric,
+    p_extra extensions.hstore
+) RETURNS extensions.hstore
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    WITH merged AS (
+        SELECT COALESCE((p_response).headers, ''::extensions.hstore)
+            || COALESCE((
+                SELECT extensions.hstore(array_agg(lower(key)), array_agg(value))
+                FROM jsonb_each_text(p_registered)
+                WHERE lower(key) <> 'x-include-schema'
+            ), ''::extensions.hstore)
+            || extensions.hstore(ARRAY[
+                'content-length', COALESCE(octet_length((p_response).content), 0)::text,
+                'x-execution-time-ms', p_execution_ms::text
+            ])
+            || COALESCE(p_extra, ''::extensions.hstore) AS h
+    )
+    -- hstore(k, v) constructor, not a '=>' literal: the value's embedded
+    -- space is a syntax error under hstore's unquoted-literal parsing.
+    SELECT CASE WHEN h ? 'content-type' THEN h
+                ELSE h || extensions.hstore('content-type', 'application/json; charset=utf-8')
+           END
+    FROM merged;
+$$;
+
+COMMENT ON FUNCTION internal.finalize_response_headers(api.http_response, jsonb, numeric, extensions.hstore) IS
+    'Merges handler-registered response headers (lowercased, x-include-schema stripped) and stamps content-length, x-execution-time-ms, protocol extras, and a JSON content-type default. Shared by rest_invoke and rpc_invoke.';
+
 CREATE OR REPLACE FUNCTION api.rest_invoke(
     p_method text,
     p_url text,
@@ -302,30 +339,9 @@ BEGIN
             END;
         END IF;
 
-        -- Merge registered response_headers (except the x-include-schema
-        -- directive, which controls $schema injection above and MUST NOT
-        -- appear on the wire). Keys are lowercased for case-insensitive
-        -- semantics expected by HTTP clients.
-        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore);
-        IF v_route.response_headers IS NOT NULL AND v_route.response_headers <> '{}'::jsonb THEN
-            v_response.headers := v_response.headers || COALESCE((
-                SELECT extensions.hstore(
-                    array_agg(lower(key)),
-                    array_agg(value)
-                )
-                FROM jsonb_each_text(v_route.response_headers)
-                WHERE lower(key) <> 'x-include-schema'
-            ), ''::extensions.hstore);
-        END IF;
-
-        v_response.headers := v_response.headers || extensions.hstore(ARRAY[
-            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text,
-            'x-route-id', v_route.object_id::text
-        ]);
-        IF NOT v_response.headers ? 'content-type' THEN
-            v_response.headers := v_response.headers || 'content-type=>application/json; charset=utf-8'::extensions.hstore;
-        END IF;
+        v_response.headers := internal.finalize_response_headers(
+            v_response, v_route.response_headers, v_execution_ms,
+            extensions.hstore('x-route-id', v_route.object_id::text));
 
         IF v_route.auto_log THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
@@ -367,10 +383,8 @@ BEGIN
             'x-execution-time-ms', v_execution_ms::text,
             'x-error-sqlstate', v_sqlstate
         ]);
-        IF v_route.object_id IS NOT NULL THEN
-            INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_route.object_id, v_request, v_response, now());
-        END IF;
+        INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
+        VALUES (v_route.object_id, v_request, v_response, now());
 
         -- Return sanitized error to client (hide internal details)
         RETURN api.problem_response(v_status, v_title, v_client_detail);
@@ -570,28 +584,9 @@ BEGIN
             END;
         END IF;
 
-        -- Merge registered response_headers (except x-include-schema directive).
-        -- Keys lowercased for HTTP case-insensitive semantics.
-        v_response.headers := COALESCE(v_response.headers, ''::extensions.hstore);
-        IF v_handler.response_headers IS NOT NULL AND v_handler.response_headers <> '{}'::jsonb THEN
-            v_response.headers := v_response.headers || COALESCE((
-                SELECT extensions.hstore(
-                    array_agg(lower(key)),
-                    array_agg(value)
-                )
-                FROM jsonb_each_text(v_handler.response_headers)
-                WHERE lower(key) <> 'x-include-schema'
-            ), ''::extensions.hstore);
-        END IF;
-
-        v_response.headers := v_response.headers || extensions.hstore(ARRAY[
-            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text,
-            'x-rpc-method', v_handler.method_name
-        ]);
-        IF NOT v_response.headers ? 'content-type' THEN
-            v_response.headers := v_response.headers || 'content-type=>application/json; charset=utf-8'::extensions.hstore;
-        END IF;
+        v_response.headers := internal.finalize_response_headers(
+            v_response, v_handler.response_headers, v_execution_ms,
+            extensions.hstore('x-rpc-method', v_handler.method_name));
 
         IF v_handler.auto_log THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
@@ -636,10 +631,8 @@ BEGIN
             'x-execution-time-ms', v_execution_ms::text,
             'x-error-sqlstate', v_sqlstate
         ]);
-        IF v_handler.object_id IS NOT NULL THEN
-            INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_handler.object_id, v_request, v_response, now());
-        END IF;
+        INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
+        VALUES (v_handler.object_id, v_request, v_response, now());
 
         -- Return sanitized error to client (hide internal details)
         RETURN api.json_response(v_status, jsonb_build_object(
