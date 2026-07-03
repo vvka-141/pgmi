@@ -316,8 +316,9 @@ BEGIN
         RETURN api.mcp_error(-32600, 'Invalid Request: missing method', v_id);
     END IF;
 
-    -- JSON-RPC 2.0: notifications (no id) MUST NOT receive a response.
-    -- Dispatch the method body for its side-effects but return NULL envelope.
+    -- JSON-RPC 2.0: notifications (no id) MUST NOT receive a response. No
+    -- method dispatch either — pgmi handles no notification with side effects
+    -- (notifications/initialized is a no-op), so short-circuit to NULL envelope.
     IF v_is_notification OR v_method LIKE 'notifications/%' THEN
         RETURN ROW(NULL::jsonb)::api.mcp_response;
     END IF;
