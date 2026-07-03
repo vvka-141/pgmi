@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS api.handler (
     response_headers jsonb NOT NULL DEFAULT '{}',
     requires_auth boolean NOT NULL DEFAULT true,
 
+    required_transaction_isolation text
+        CONSTRAINT handler_required_transaction_isolation_check
+        CHECK (required_transaction_isolation IS NULL
+               OR required_transaction_isolation IN ('read committed', 'repeatable read', 'serializable')),
+
     handler_exec_sql text NOT NULL,
     handler_sql_submitted text NOT NULL,
     handler_sql_canonical text NOT NULL,
@@ -61,6 +66,12 @@ ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_sch
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
 ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
+
+-- Additive isolation floor (PGMI-108); NULL on existing rows keeps them working.
+ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS required_transaction_isolation text
+    CONSTRAINT handler_required_transaction_isolation_check
+    CHECK (required_transaction_isolation IS NULL
+           OR required_transaction_isolation IN ('read committed', 'repeatable read', 'serializable'));
 
 DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('api.handler'); END $$;
 
@@ -93,6 +104,9 @@ COMMENT ON COLUMN api.handler.response_headers IS
 
 COMMENT ON COLUMN api.handler.requires_auth IS
     'Whether authentication is required before invocation.';
+
+COMMENT ON COLUMN api.handler.required_transaction_isolation IS
+    'Minimum transaction isolation floor (read committed | repeatable read | serializable) the gateway enforces before dispatching. NULL means no requirement (treated as read committed). Set from the requiredTransactionIsolation handler-metadata key; see lib/api/00-transaction-isolation.sql.';
 
 COMMENT ON COLUMN api.handler.handler_exec_sql IS
     'Executable SQL statement generated for handler invocation at runtime.';
