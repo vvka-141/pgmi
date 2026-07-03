@@ -165,6 +165,7 @@ DECLARE
     v_version text;
     v_path text;
     v_content_type text;
+    v_iso_shortfall text;
     v_start_time timestamptz;
     v_execution_ms numeric;
 BEGIN
@@ -194,7 +195,7 @@ BEGIN
     v_path := api.url_path(p_url);
 
     SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.accepts, h.produces, h.requires_auth,
-           h.output_json_schema,
+           h.output_json_schema, h.required_transaction_isolation,
            r.route_name, r.auto_log
     INTO v_route
     FROM api.rest_route r
@@ -219,6 +220,21 @@ BEGIN
     IF v_route.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rest_invoke: Auth required but missing';
         RETURN api.problem_response(401, 'Unauthorized', 'Authentication required');
+    END IF;
+
+    -- Enforce the route's transaction isolation floor. The gateway can only READ
+    -- the level; the caller must open the transaction at the required level
+    -- before the first statement (see lib/api/00-transaction-isolation.sql).
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_route.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RAISE DEBUG 'rest_invoke: isolation too weak (need %, have %)',
+            v_route.required_transaction_isolation, v_iso_shortfall;
+        RETURN api.problem_response(
+            428, 'Precondition Required',
+            format('Route requires %s isolation but current transaction uses %s.',
+                   v_route.required_transaction_isolation, v_iso_shortfall),
+            code => 'pgmi.transaction_isolation_too_weak'
+        );
     END IF;
 
     -- Enforce the handler's declared accepts against the request Content-Type.
@@ -455,6 +471,7 @@ DECLARE
     v_start_time timestamptz;
     v_execution_ms numeric;
     v_json_id jsonb;
+    v_iso_shortfall text;
 BEGIN
     v_start_time := clock_timestamp();
     p_headers := COALESCE(p_headers, ''::extensions.hstore);
@@ -467,7 +484,7 @@ BEGIN
     END;
 
     SELECT h.handler_exec_sql, h.object_id, h.requires_auth,
-           h.response_headers, h.output_json_schema,
+           h.response_headers, h.output_json_schema, h.required_transaction_isolation,
            r.method_name, r.auto_log
     INTO v_handler
     FROM api.handler h
@@ -488,6 +505,25 @@ BEGIN
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'rpc_invoke: Auth required but missing';
         RETURN api.jsonrpc_error(-32001, 'Authentication required', v_json_id);
+    END IF;
+
+    -- Enforce the route's transaction isolation floor (see rest_invoke). The
+    -- precise HTTP status (428) rides on the response while the JSON-RPC error
+    -- stays in its correct class; the machine token is carried in error.data.code.
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RAISE DEBUG 'rpc_invoke: isolation too weak (need %, have %)',
+            v_handler.required_transaction_isolation, v_iso_shortfall;
+        RETURN api.json_response(428, jsonb_build_object(
+            'jsonrpc', '2.0',
+            'error', jsonb_build_object(
+                'code', -32600,
+                'message', format('Route requires %s isolation but current transaction uses %s.',
+                                  v_handler.required_transaction_isolation, v_iso_shortfall),
+                'data', jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
+            ),
+            'id', v_json_id
+        ));
     END IF;
 
     v_request := (p_route_id, p_headers, p_content)::api.rpc_request;
@@ -649,10 +685,11 @@ DECLARE
     v_request api.mcp_request;
     v_response api.mcp_response;
     v_handler record;
+    v_iso_shortfall text;
 BEGIN
     RAISE DEBUG 'mcp_call_tool: %', p_name;
 
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
+    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
     INTO v_handler
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
@@ -670,6 +707,18 @@ BEGIN
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_call_tool: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
+    END IF;
+
+    -- Enforce the route's transaction isolation floor (see rest_invoke).
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RETURN api.mcp_error(
+            -32600,
+            format('Route requires %s isolation but current transaction uses %s.',
+                   v_handler.required_transaction_isolation, v_iso_shortfall),
+            p_request_id,
+            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
+        );
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;
@@ -727,13 +776,14 @@ DECLARE
     v_request api.mcp_request;
     v_response api.mcp_response;
     v_handler record;
+    v_iso_shortfall text;
 BEGIN
     RAISE DEBUG 'mcp_read_resource: %', p_uri;
 
     -- Deterministic precedence when more than one template matches: most
     -- specific (longest template) first, mcp_name as a stable tiebreak. Without
     -- this, the chosen handler (and its requires_auth) would be nondeterministic.
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
+    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
     INTO v_handler
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
@@ -754,6 +804,18 @@ BEGIN
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_read_resource: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
+    END IF;
+
+    -- Enforce the route's transaction isolation floor (see rest_invoke).
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RETURN api.mcp_error(
+            -32600,
+            format('Route requires %s isolation but current transaction uses %s.',
+                   v_handler.required_transaction_isolation, v_iso_shortfall),
+            p_request_id,
+            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
+        );
     END IF;
 
     v_request := (NULL, p_uri, p_context, p_request_id)::api.mcp_request;
@@ -807,10 +869,11 @@ DECLARE
     v_request api.mcp_request;
     v_response api.mcp_response;
     v_handler record;
+    v_iso_shortfall text;
 BEGIN
     RAISE DEBUG 'mcp_get_prompt: %', p_name;
 
-    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name
+    SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.required_transaction_isolation
     INTO v_handler
     FROM api.handler h
     JOIN api.mcp_route r ON r.handler_object_id = h.object_id
@@ -828,6 +891,18 @@ BEGIN
     IF v_handler.requires_auth AND NULLIF(current_setting('auth.user_id', true), '') IS NULL THEN
         RAISE DEBUG 'mcp_get_prompt: Auth required but missing';
         RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
+    END IF;
+
+    -- Enforce the route's transaction isolation floor (see rest_invoke).
+    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.required_transaction_isolation);
+    IF v_iso_shortfall IS NOT NULL THEN
+        RETURN api.mcp_error(
+            -32600,
+            format('Route requires %s isolation but current transaction uses %s.',
+                   v_handler.required_transaction_isolation, v_iso_shortfall),
+            p_request_id,
+            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak')
+        );
     END IF;
 
     v_request := (p_arguments, NULL, p_context, p_request_id)::api.mcp_request;

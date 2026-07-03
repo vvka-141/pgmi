@@ -69,6 +69,27 @@ Example Usage:
         -H "X-User-Id: auth0|12345" \\
         -d '{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"database_info","arguments":{}}}'
 
+Transaction Isolation (X-PGMI-Transaction-Isolation):
+    A caller can require a stronger isolation level for a request by sending
+    X-PGMI-Transaction-Isolation: read-committed | repeatable-read | serializable
+    (case- and separator-insensitive). This gateway opens the transaction at that
+    level BEFORE the first statement. The database-side gateway validates the
+    level against each route's declared floor and rejects a too-weak transaction
+    with the machine code pgmi.transaction_isolation_too_weak — it cannot raise
+    the level itself, so setting it is the client's job.
+
+    REST/RPC have no pgmi-shipped client: api.rest_invoke / api.rpc_invoke are
+    called by an external reverse proxy you supply. To honor a route's isolation
+    floor there, that proxy must open the transaction at the requested level
+    before calling the gateway, e.g.:
+
+        BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+        SELECT api.rest_invoke('GET', '/report', ...);
+        COMMIT;
+
+    Without that, api.rest_invoke runs at the connection default (read committed)
+    and a route with a stronger floor returns 428 Precondition Required.
+
 Security Notes:
     - Binds to 127.0.0.1 by default; validates the Origin header against an
       allowlist (DNS-rebinding protection) and returns sanitized errors.
@@ -86,6 +107,7 @@ For production deployments, consider:
 """
 
 import os
+import re
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import psycopg
@@ -117,6 +139,29 @@ SUPPORTED_PROTOCOL_VERSIONS = (
 )
 # Assumed when a client omits the header (Streamable HTTP backwards compat).
 DEFAULT_PROTOCOL_VERSION = "2025-03-26"
+
+# X-PGMI-Transaction-Isolation contract (see lib/api/00-transaction-isolation.sql).
+# The CLIENT opens the transaction at the requested level BEFORE the first
+# statement; the database gateway only validates it (it cannot raise the level —
+# transaction control is forbidden inside functions). PostgreSQL folds
+# "read uncommitted" onto "read committed", so this mapping does the same.
+_ISOLATION_LEVELS = {
+    "read committed": psycopg.IsolationLevel.READ_COMMITTED,
+    "read uncommitted": psycopg.IsolationLevel.READ_COMMITTED,
+    "repeatable read": psycopg.IsolationLevel.REPEATABLE_READ,
+    "serializable": psycopg.IsolationLevel.SERIALIZABLE,
+}
+
+
+def _normalize_isolation(value):
+    """Map an X-PGMI-Transaction-Isolation value to a psycopg IsolationLevel.
+
+    Tolerates case and hyphen/underscore/space separators, mirroring
+    internal.normalize_transaction_isolation in SQL. Returns None if the value
+    is not a supported level.
+    """
+    canonical = re.sub(r"[\s_-]+", " ", value.strip().lower())
+    return _ISOLATION_LEVELS.get(canonical)
 
 
 def _accepts_json(accept_header):
@@ -187,9 +232,35 @@ class MCPHandler(BaseHTTPRequestHandler):
         if self.headers.get("X-Tenant-Id"):
             context["tenant_id"] = self.headers.get("X-Tenant-Id")
 
+        # Transaction isolation: honor X-PGMI-Transaction-Isolation by opening
+        # the transaction at the requested level before the first statement.
+        # Absent → PostgreSQL default (read committed). Unsupported → 400 (the
+        # client rejects before hitting the database).
+        isolation = None
+        iso_header = self.headers.get("X-PGMI-Transaction-Isolation")
+        if iso_header:
+            isolation = _normalize_isolation(iso_header)
+            if isolation is None:
+                self.send_json_response(400, {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "error": {
+                        "code": -32600,
+                        "message": f"Unsupported X-PGMI-Transaction-Isolation: {iso_header}",
+                        "data": {"code": "pgmi.transaction_isolation_unsupported"},
+                    },
+                })
+                return
+
         # Call PostgreSQL MCP dispatcher
         try:
             with psycopg.connect(DATABASE_URL) as conn:
+                # Set BEFORE the first statement so it applies to this
+                # transaction. A fresh connection is opened per request, so there
+                # is no cross-request state to reset; if a pool is introduced,
+                # reset conn.isolation_level on return to avoid leaking it.
+                if isolation is not None:
+                    conn.isolation_level = isolation
                 result = conn.execute(
                     "SELECT (api.mcp_handle_request(%s, %s)).envelope",
                     [json.dumps(request), json.dumps(context) if context else None]
