@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"slices"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // Tool is a single MCP tool: a name, a human description, a JSON Schema for its
@@ -176,9 +178,12 @@ func successResult(result any) callToolResult {
 }
 
 // errorResult reports a tool failure to the client as an MCP error result.
+// The text carries the DETAIL/HINT/WHERE diagnostics psql would show; the
+// structured form lets the client branch on sqlstate/exitCode without parsing.
 func errorResult(err error) callToolResult {
 	return callToolResult{
-		Content: []contentBlock{{Type: "text", Text: err.Error()}},
-		IsError: true,
+		Content:           []contentBlock{{Type: "text", Text: pgmi.FormatError(err)}},
+		StructuredContent: pgmi.NewErrorDetail(err),
+		IsError:           true,
 	}
 }

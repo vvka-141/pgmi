@@ -136,3 +136,58 @@ func TestFormatError_PgErrorEmptyFieldsOmitted(t *testing.T) {
 		t.Errorf("FormatError added empty diagnostic fields, got: %s", got)
 	}
 }
+
+func TestNewErrorDetail(t *testing.T) {
+	t.Run("nil error returns nil", func(t *testing.T) {
+		if d := pgmi.NewErrorDetail(nil); d != nil {
+			t.Fatalf("expected nil, got %+v", d)
+		}
+	})
+
+	t.Run("plain error carries message and exit code", func(t *testing.T) {
+		d := pgmi.NewErrorDetail(fmt.Errorf("boom: %w", pgmi.ErrConnectionFailed))
+		if d.Message != "boom: connection failed" {
+			t.Errorf("Message = %q", d.Message)
+		}
+		if d.ExitCode != pgmi.ExitConnectionError {
+			t.Errorf("ExitCode = %d, want %d", d.ExitCode, pgmi.ExitConnectionError)
+		}
+		if d.SQLState != "" {
+			t.Errorf("SQLState = %q, want empty", d.SQLState)
+		}
+	})
+
+	t.Run("pg error surfaces diagnostics and failed file", func(t *testing.T) {
+		pgErr := &pgconn.PgError{
+			Code:    "P0001",
+			Message: "Failed in ./migrations/003_broken.sql: syntax error",
+			Detail:  "some detail",
+			Hint:    "some hint",
+			Where:   "PL/pgSQL function inline_code_block line 12 at RAISE",
+		}
+		d := pgmi.NewErrorDetail(fmt.Errorf("execution failed: %w", pgErr))
+		if d.SQLState != "P0001" {
+			t.Errorf("SQLState = %q", d.SQLState)
+		}
+		if d.Detail != "some detail" || d.Hint != "some hint" {
+			t.Errorf("Detail/Hint = %q/%q", d.Detail, d.Hint)
+		}
+		if !strings.Contains(d.Where, "line 12") {
+			t.Errorf("Where = %q", d.Where)
+		}
+		if d.FailedFile != "./migrations/003_broken.sql" {
+			t.Errorf("FailedFile = %q", d.FailedFile)
+		}
+	})
+
+	t.Run("passwords are redacted in all fields", func(t *testing.T) {
+		pgErr := &pgconn.PgError{
+			Code:   "28P01",
+			Detail: "tried postgresql://admin:hunter2@db/prod",
+		}
+		d := pgmi.NewErrorDetail(fmt.Errorf("connect password=hunter2 failed: %w", pgErr))
+		if strings.Contains(d.Message, "hunter2") || strings.Contains(d.Detail, "hunter2") {
+			t.Errorf("password leaked: Message=%q Detail=%q", d.Message, d.Detail)
+		}
+	})
+}

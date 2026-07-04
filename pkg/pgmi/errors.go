@@ -129,6 +129,46 @@ func FormatError(err error) string {
 	return redactPasswords(b.String())
 }
 
+// ErrorDetail is the machine-readable form of a failed operation, carrying the
+// PostgreSQL diagnostic fields that err.Error() omits. All fields are
+// password-redacted and safe to emit on --json output or MCP structuredContent.
+type ErrorDetail struct {
+	Message    string `json:"message"`
+	SQLState   string `json:"sqlstate,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	Hint       string `json:"hint,omitempty"`
+	Where      string `json:"where,omitempty"`
+	FailedFile string `json:"failedFile,omitempty"`
+	ExitCode   int    `json:"exitCode"`
+}
+
+// failedFilePattern extracts the file path from the scaffolded templates'
+// per-file failure attribution: RAISE EXCEPTION 'Failed in %: %', path, err.
+var failedFilePattern = regexp.MustCompile(`Failed in (\S+\.sql)`)
+
+// NewErrorDetail extracts structured diagnostics from an error chain.
+// Returns nil for a nil error.
+func NewErrorDetail(err error) *ErrorDetail {
+	if err == nil {
+		return nil
+	}
+	d := &ErrorDetail{
+		Message:  redactPasswords(err.Error()),
+		ExitCode: ExitCodeForError(err),
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		d.SQLState = pgErr.Code
+		d.Detail = redactPasswords(pgErr.Detail)
+		d.Hint = redactPasswords(pgErr.Hint)
+		d.Where = redactPasswords(pgErr.Where)
+		if m := failedFilePattern.FindStringSubmatch(pgErr.Message); m != nil {
+			d.FailedFile = m[1]
+		}
+	}
+	return d
+}
+
 // passwordKVPattern matches libpq-style `password=<value>` and key=value
 // connection string fragments. Terminates at whitespace, ampersand, or end.
 var passwordKVPattern = regexp.MustCompile(`(?i)password=[^\s&'"]*`)

@@ -224,9 +224,18 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *co
 	}, nil
 }
 
-func runDeploy(cmd *cobra.Command, args []string) error {
+func runDeploy(cmd *cobra.Command, args []string) (err error) {
 	sourcePath := args[0]
 	verbose := getVerboseFlag(cmd)
+
+	// --json is a contract: emit the failure envelope even when the error
+	// occurs before Deploy() runs (bad connection string, bad params file)
+	jsonEmitted := false
+	defer func() {
+		if err != nil && deployFlags.jsonOutput && !jsonEmitted {
+			printDeployJSON(nil, err)
+		}
+	}()
 
 	projectCfg, err := loadProjectConfig(sourcePath, verbose)
 	if err != nil {
@@ -331,6 +340,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if result := deployer.LastResult(); result != nil {
 		if deployFlags.jsonOutput {
 			printDeployJSON(result, err)
+			jsonEmitted = true
 		} else {
 			printDeploySummary(result, err)
 		}
@@ -365,17 +375,30 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 
 func printDeployJSON(result *services.DeployResult, deployErr error) {
 	out := map[string]any{
-		"status":      "success",
-		"filesLoaded": result.FilesLoaded,
-		"testMacros":  result.TestMacros,
-		"durationMs":  result.Duration.Milliseconds(),
-		"database":    result.Database,
-		"exitCode":    0,
+		"status":   "success",
+		"exitCode": 0,
 	}
-	if deployErr != nil {
+	if result != nil {
+		out["filesLoaded"] = result.FilesLoaded
+		out["testMacros"] = result.TestMacros
+		out["durationMs"] = result.Duration.Milliseconds()
+		out["database"] = result.Database
+	}
+	if d := pgmi.NewErrorDetail(deployErr); d != nil {
 		out["status"] = "failed"
-		out["exitCode"] = pgmi.ExitCodeForError(deployErr)
-		out["error"] = deployErr.Error()
+		out["exitCode"] = d.ExitCode
+		out["error"] = d.Message
+		for k, v := range map[string]string{
+			"sqlstate":   d.SQLState,
+			"detail":     d.Detail,
+			"hint":       d.Hint,
+			"where":      d.Where,
+			"failedFile": d.FailedFile,
+		} {
+			if v != "" {
+				out[k] = v
+			}
+		}
 	}
 	jsonBytes, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
