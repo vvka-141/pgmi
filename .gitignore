@@ -11,10 +11,11 @@
 # Windows NUL device artifact
 nul
 
-# Build output
+# Build output (root-anchored: a bare "pgmi" would also hide pkg/pgmi/)
 bin/
 dist/
-pgmi
+/pgmi
+/pgmi.exe
 
 # Hugo website build artifacts
 website/public/
