@@ -121,6 +121,12 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 		return err
 	}
 
+	// Validate the project before touching the server: a typo'd path must not
+	// leave a freshly created database behind
+	if err := s.fileScanner.ValidateDeploySQL(config.SourcePath); err != nil {
+		return err
+	}
+
 	// Handle overwrite workflow if requested (drop and recreate database)
 	if config.Overwrite {
 		if err := s.handleOverwrite(ctx, connConfig, config); err != nil {
