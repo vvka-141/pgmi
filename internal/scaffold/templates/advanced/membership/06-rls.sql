@@ -28,7 +28,7 @@ BEGIN
         CREATE POLICY org_member_access ON membership.organization
             FOR SELECT
             TO %I
-            USING (object_id = ANY(api.current_member_org_ids()))
+            USING (object_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 
@@ -49,7 +49,7 @@ BEGIN
         CREATE POLICY org_member_see_own_org ON membership.organization_member
             FOR SELECT
             TO %I
-            USING (organization_id = ANY(api.current_member_org_ids()))
+            USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 
@@ -70,7 +70,7 @@ BEGIN
         CREATE POLICY identity_own_only ON membership.user_identity
             FOR SELECT
             TO %I
-            USING (user_object_id = api.current_user_id())
+            USING (user_object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 
@@ -91,7 +91,7 @@ BEGIN
         CREATE POLICY user_see_self ON membership."user"
             FOR SELECT
             TO %I
-            USING (object_id = api.current_user_id())
+            USING (object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 
@@ -113,7 +113,7 @@ BEGIN
         CREATE POLICY user_role_own_only ON membership.user_role
             FOR SELECT
             TO %I
-            USING (user_object_id = api.current_user_id())
+            USING (user_object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 

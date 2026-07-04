@@ -45,10 +45,11 @@ END $$;
 --
 -- Requirements: the table has an `organization_id uuid` column (and, when
 -- p_has_created_by, a `created_by_user_id uuid` column). The org predicate
--- matches the membership-table policies exactly: ANY over the STABLE
--- api.current_member_org_ids() array (the array form, not a subquery — ANY of a
--- (SELECT array) would compare uuid against the array as a whole). The scalar
--- created_by check is wrapped as (SELECT ...) so the planner caches it.
+-- matches the membership-table policies exactly: IN (SELECT unnest(...))
+-- rather than ANY(api.current_member_org_ids()) — PostgreSQL only builds a
+-- one-time InitPlan for the subquery form, so the STABLE function runs once
+-- per query instead of once per candidate row. The scalar created_by check
+-- is wrapped as (SELECT ...) for the same reason.
 
 CREATE OR REPLACE FUNCTION core.apply_org_rls(
     p_table          regclass,
@@ -58,7 +59,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_rel          text;
-    v_scope        text := 'organization_id = ANY (api.current_member_org_ids())';
+    v_scope        text := 'organization_id IN (SELECT unnest(api.current_member_org_ids()))';
     v_insert_check text;
 BEGIN
     SELECT relname INTO v_rel FROM pg_class WHERE oid = p_table;

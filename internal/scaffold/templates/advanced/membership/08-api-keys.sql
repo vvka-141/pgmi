@@ -162,7 +162,7 @@ BEGIN
     EXECUTE format($policy$
         CREATE POLICY api_key_customer_select ON membership.api_key
             FOR SELECT TO %I
-            USING (organization_id = ANY(api.current_member_org_ids()))
+            USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 
