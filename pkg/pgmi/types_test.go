@@ -65,7 +65,7 @@ func TestDeploymentConfig_Validate(t *testing.T) {
 			errorType: pgmi.ErrInvalidConfig,
 		},
 		{
-			name: "force without overwrite",
+			name: "force without overwrite is valid",
 			config: pgmi.DeploymentConfig{
 				SourcePath:       "./migrations",
 				DatabaseName:     "mydb",
@@ -73,8 +73,7 @@ func TestDeploymentConfig_Validate(t *testing.T) {
 				Force:            true,
 				Overwrite:        false,
 			},
-			wantError: true,
-			errorType: pgmi.ErrInvalidConfig,
+			wantError: false,
 		},
 		{
 			name: "negative timeout",

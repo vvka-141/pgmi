@@ -156,7 +156,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig) (*pgmi.ConnectionConfig, error) {
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, err
 	}
 
 	s.logger.Verbose("Deploying to database %q", config.DatabaseName)

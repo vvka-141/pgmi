@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -62,23 +61,6 @@ func TestDeployCmd_MissingConnectionInfo(t *testing.T) {
 	err := runDeploy(deployCmd, []string{tempDir})
 	if err == nil {
 		t.Fatal("Expected error for missing connection info")
-	}
-}
-
-func TestDeployCmd_ForceWithoutOverwrite(t *testing.T) {
-	resetDeployFlags()
-	tempDir := t.TempDir()
-	deployFlags.connection = "postgresql://localhost/postgres"
-	deployFlags.database = "testdb"
-	deployFlags.force = true
-	deployFlags.overwrite = false
-
-	err := runDeploy(deployCmd, []string{tempDir})
-	if err == nil {
-		t.Fatal("Expected error for force without overwrite")
-	}
-	if !strings.Contains(err.Error(), "force") || !strings.Contains(err.Error(), "overwrite") {
-		t.Errorf("Expected error about force/overwrite, got: %v", err)
 	}
 }
 

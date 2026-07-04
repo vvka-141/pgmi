@@ -147,9 +147,9 @@ func init() {
 		"Drop and recreate the database\n"+
 			"Requires interactive confirmation unless --force is used")
 	deployCmd.Flags().BoolVar(&deployFlags.force, "force", false,
-		"Replace the interactive approval prompt with a 5-second countdown (Ctrl-C aborts)\n"+
-			"Only affects the confirmation dialog, not deployment behavior\n"+
-			"Use with --overwrite for CI/CD pipelines")
+		"Never block on an interactive prompt (for CI/CD; no-op when nothing would prompt)\n"+
+			"With --overwrite: replaces the approval prompt with a 5-second countdown (Ctrl-C aborts)\n"+
+			"Only affects confirmation dialogs, not deployment behavior")
 
 	// Parameter flags
 	deployCmd.Flags().StringArrayVar(&deployFlags.params, "param", nil,
