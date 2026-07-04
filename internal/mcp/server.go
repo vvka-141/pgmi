@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -177,13 +178,40 @@ func successResult(result any) callToolResult {
 	}
 }
 
+// FieldsError lets a tool attach extra structured fields (e.g. the notice
+// stream of a failed deploy) to its MCP error result.
+type FieldsError struct {
+	Err    error
+	Fields map[string]any
+}
+
+func (e *FieldsError) Error() string { return e.Err.Error() }
+func (e *FieldsError) Unwrap() error { return e.Err }
+
 // errorResult reports a tool failure to the client as an MCP error result.
 // The text carries the DETAIL/HINT/WHERE diagnostics psql would show; the
 // structured form lets the client branch on sqlstate/exitCode without parsing.
 func errorResult(err error) callToolResult {
+	var sc any = pgmi.NewErrorDetail(err)
+	var fe *FieldsError
+	if errors.As(err, &fe) && len(fe.Fields) > 0 {
+		m := structToMap(sc)
+		maps.Copy(m, fe.Fields)
+		sc = m
+	}
 	return callToolResult{
 		Content:           []contentBlock{{Type: "text", Text: pgmi.FormatError(err)}},
-		StructuredContent: pgmi.NewErrorDetail(err),
+		StructuredContent: sc,
 		IsError:           true,
 	}
+}
+
+func structToMap(v any) map[string]any {
+	m := map[string]any{}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal(b, &m)
+	return m
 }

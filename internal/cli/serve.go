@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -230,6 +233,41 @@ func buildMCPServer(serverVersion string) *mcp.Server {
 	return s
 }
 
+// noticeBuffer captures the RAISE NOTICE stream of a deploy for the MCP tool
+// result while still forwarding to stderr for the human operator. Bounded:
+// keeps the last max lines and counts the rest as truncated.
+type noticeBuffer struct {
+	mu    sync.Mutex
+	max   int
+	lines []string
+	total int
+}
+
+func (b *noticeBuffer) add(message, detail, hint string) {
+	b.mu.Lock()
+	b.total++
+	b.lines = append(b.lines, message)
+	if len(b.lines) > b.max {
+		b.lines = b.lines[1:]
+	}
+	b.mu.Unlock()
+	db.DefaultNoticeHandler(message, detail, hint)
+}
+
+func (b *noticeBuffer) fields() map[string]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lines := slices.Clone(b.lines)
+	if lines == nil {
+		lines = []string{}
+	}
+	f := map[string]any{"notices": lines}
+	if truncated := b.total - len(b.lines); truncated > 0 {
+		f["noticesTruncated"] = truncated
+	}
+	return f
+}
+
 func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 	a, err := decodeArgs[struct {
 		Path                string            `json:"path"`
@@ -271,17 +309,26 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 
+	// Capture the notice stream for the tool result; the stdio loop is
+	// sequential, so swapping the package-level handler is race-free
+	notices := &noticeBuffer{max: 200}
+	origHandler := db.NoticeHandler
+	db.NoticeHandler = notices.add
+	defer func() { db.NoticeHandler = origHandler }()
+
 	result, err := runMCPDeploy(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, &mcp.FieldsError{Err: err, Fields: notices.fields()}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"status":      "success",
 		"filesLoaded": result.FilesLoaded,
 		"testMacros":  result.TestMacros,
 		"durationMs":  result.Duration.Milliseconds(),
 		"database":    result.Database,
-	}, nil
+	}
+	maps.Copy(out, notices.fields())
+	return out, nil
 }
 
 // runMCPDeploy wires a one-shot deployment service with a non-interactive
