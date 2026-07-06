@@ -68,6 +68,7 @@ BEGIN
             h.accepts,
             h.produces,
             h.requires_auth,
+            h.required_transaction_isolation,
             h.input_json_schema,
             h.output_json_schema
         FROM api.rest_route r
@@ -127,6 +128,11 @@ BEGIN
             IF v_route.requires_auth THEN
                 v_security := jsonb_build_array(jsonb_build_object('bearerAuth', '[]'::jsonb));
                 v_operation := v_operation || jsonb_build_object('security', v_security);
+            END IF;
+
+            IF v_route.required_transaction_isolation IS NOT NULL THEN
+                v_operation := v_operation || jsonb_build_object(
+                    'x-pgmi-transaction-isolation', v_route.required_transaction_isolation);
             END IF;
 
             v_path_item := v_path_item || jsonb_build_object(v_method, v_operation);
