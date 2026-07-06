@@ -165,7 +165,9 @@ BEGIN
         SET display_name = COALESCE(p_display_name, display_name),
             email_verified = email_verified OR p_email_verified,
             updated_at = now()
-        WHERE object_id = v_user_id;
+        WHERE object_id = v_user_id
+          AND (display_name IS DISTINCT FROM COALESCE(p_display_name, display_name)
+               OR (p_email_verified AND NOT email_verified));
         RETURN v_user_id;
     END IF;
 

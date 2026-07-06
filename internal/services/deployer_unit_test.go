@@ -140,6 +140,34 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 	}
 }
 
+func TestDeploy_MissingDeploySQL_FailsBeforeConnecting(t *testing.T) {
+	for _, overwrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {
+			cf, ap, lg, sm, _, dm := validDeps()
+			fs := &mockFileScanner{validateErr: fmt.Errorf("%w in /src", pgmi.ErrDeploySQLNotFound)}
+			svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
+
+			connected := false
+			svc.mgmtConnector = func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+				connected = true
+				return &mockDBConnection{}, noop, nil
+			}
+
+			cfg := validConfig()
+			cfg.Overwrite = overwrite
+			cfg.Force = overwrite
+
+			err := svc.Deploy(context.Background(), cfg)
+			if !errors.Is(err, pgmi.ErrDeploySQLNotFound) {
+				t.Fatalf("Expected ErrDeploySQLNotFound, got: %v", err)
+			}
+			if connected {
+				t.Error("Deploy connected to the server before validating the source path")
+			}
+		})
+	}
+}
+
 // --- Overwrite workflow tests ---
 
 func TestDeploy_OverwriteDBNotExists_Creates(t *testing.T) {

@@ -28,7 +28,7 @@ type DeploymentConfig struct {
 	// Overwrite enables the destructive drop/recreate workflow
 	Overwrite bool
 
-	// Force bypasses interactive approval when used with Overwrite
+	// Force bypasses interactive approval prompts; a no-op when no prompt would occur
 	Force bool
 
 	// Parameters are key-value pairs passed to pgmi_params table
@@ -68,11 +68,6 @@ func (c *DeploymentConfig) Validate() error {
 
 	if c.ConnectionString == "" {
 		errs = append(errs, fmt.Errorf("ConnectionString is required: %w", ErrInvalidConfig))
-	}
-
-	// Force requires Overwrite to be set
-	if c.Force && !c.Overwrite {
-		errs = append(errs, fmt.Errorf("force flag requires overwrite to be enabled: %w", ErrInvalidConfig))
 	}
 
 	// Validate timeout if set

@@ -363,6 +363,7 @@ object's keys are **camelCase**. The ones that bite if you get them wrong:
 | `requiresAuth` | no | **`true`** | Omitting it makes the endpoint **authenticated** — 401 without resolved identity. Set `false` for a public endpoint. |
 | `autoLog` | no | **`true`** | Request logging. |
 | `inputSchema` / `outputSchema` | no | — | JSON Schema, validated **at registration time**; an empty `{}` is rejected (needs a real keyword like `type`/`properties`/`required`). |
+| `requiredTransactionIsolation` | no | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The gateway only validates — the caller must open the transaction at ≥ this level or gets 428 (REST) / `-32600` (RPC/MCP) with `pgmi.transaction_isolation_too_weak`. |
 
 The body is the *inside* of a function — `DECLARE … BEGIN … END;` only,
 dollar-quoted with `$body$`, never the `CREATE FUNCTION` header or a trailing

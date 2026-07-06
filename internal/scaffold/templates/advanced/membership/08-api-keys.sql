@@ -89,8 +89,8 @@ COMMENT ON TYPE membership.api_key_status IS
 -- ============================================================================
 -- API Key Table
 -- ============================================================================
--- object_id core.entity_id opts this table into the DDL-trigger entity
--- standards: created_at and deleted_at are injected automatically.
+-- object_id core.entity_id opts this table into the entity-standards
+-- deploy-end sweep: created_at and deleted_at are injected automatically.
 
 CREATE TABLE IF NOT EXISTS membership.api_key (
     object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,7 +162,7 @@ BEGIN
     EXECUTE format($policy$
         CREATE POLICY api_key_customer_select ON membership.api_key
             FOR SELECT TO %I
-            USING (organization_id = ANY(api.current_member_org_ids()))
+            USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 

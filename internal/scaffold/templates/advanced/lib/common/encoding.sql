@@ -28,6 +28,14 @@
 --   - Domains don't work (PostgreSQL ignores casts TO domains)
 --
 -- The encoding type wraps decoded text, enabling cast chaining.
+--
+-- Volatility: the convert_from-based functions are deliberately IMMUTABLE even
+-- though pg_proc marks convert_from STABLE (its result depends on the database
+-- encoding). The server encoding is fixed for a database's lifetime, so within
+-- any one database these are deterministic — and IMMUTABLE keeps expressions
+-- like to_jsonb(payload) index-eligible. XML parsing uses explicit
+-- xmlparse(DOCUMENT ...), not the xmloption-dependent text::xml cast, so it is
+-- deterministic as well.
 -- ============================================================================
 
 DO $$

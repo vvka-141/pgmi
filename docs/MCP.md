@@ -546,6 +546,23 @@ The gateway extracts authentication from HTTP headers:
 | `X-User-Id` | `context.user_id` |
 | `X-Tenant-Id` | `context.tenant_id` |
 
+### Transaction Isolation
+
+A handler may declare a minimum transaction isolation level with the
+`requiredTransactionIsolation` metadata key (`read committed` |
+`repeatable read` | `serializable`; case- and separator-insensitive). The
+database gateway can only *validate* the level — `SET TRANSACTION` is illegal
+inside functions — so the caller must open the transaction at least that
+strong.
+
+Clients request a level with the `X-PGMI-Transaction-Isolation` header. The
+bundled HTTP gateway honors it by opening the transaction at that level before
+the first statement; an unsupported value is rejected client-side with HTTP 400
+(`pgmi.transaction_isolation_unsupported`). When the transaction is weaker
+than a route's floor, the database gateway rejects the call with a `-32600`
+error carrying `data.code = 'pgmi.transaction_isolation_too_weak'`. See
+`lib/api/00-transaction-isolation.sql` for the full contract.
+
 ### Production Deployment
 
 The shipped gateway is a single-process `http.server` reference implementation.

@@ -205,3 +205,33 @@ func mustRemarshal(t *testing.T, from any, to any) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 }
+
+func TestToolsCallErrorStructuredContent(t *testing.T) {
+	s := NewServer("pgmi", "v")
+	s.Register(Tool{
+		Name: "boom",
+		Handler: func(context.Context, json.RawMessage) (any, error) {
+			return nil, &FieldsError{
+				Err:    errors.New("kaboom"),
+				Fields: map[string]any{"notices": []string{"[pgmi] Test: ./__test__/x.sql"}},
+			}
+		},
+	})
+	resp := runSession(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"boom","arguments":{}}}`)
+	var res callToolResult
+	mustRemarshal(t, resp[0].Result, &res)
+	if !res.IsError {
+		t.Fatalf("expected isError, got %+v", res)
+	}
+	sc, _ := res.StructuredContent.(map[string]any)
+	if sc["message"] != "kaboom" {
+		t.Errorf("structuredContent message = %v", sc["message"])
+	}
+	if _, ok := sc["exitCode"]; !ok {
+		t.Errorf("structuredContent missing exitCode: %+v", sc)
+	}
+	notices, _ := sc["notices"].([]any)
+	if len(notices) != 1 || notices[0] != "[pgmi] Test: ./__test__/x.sql" {
+		t.Errorf("notices = %+v", sc["notices"])
+	}
+}

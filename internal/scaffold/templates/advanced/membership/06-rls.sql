@@ -28,7 +28,7 @@ BEGIN
         CREATE POLICY org_member_access ON membership.organization
             FOR SELECT
             TO %I
-            USING (object_id = ANY(api.current_member_org_ids()))
+            USING (object_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 
@@ -49,7 +49,7 @@ BEGIN
         CREATE POLICY org_member_see_own_org ON membership.organization_member
             FOR SELECT
             TO %I
-            USING (organization_id = ANY(api.current_member_org_ids()))
+            USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))
     $policy$, v_customer_role);
 END $$;
 
@@ -70,7 +70,7 @@ BEGIN
         CREATE POLICY identity_own_only ON membership.user_identity
             FOR SELECT
             TO %I
-            USING (user_object_id = api.current_user_id())
+            USING (user_object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 
@@ -91,7 +91,7 @@ BEGIN
         CREATE POLICY user_see_self ON membership."user"
             FOR SELECT
             TO %I
-            USING (object_id = api.current_user_id())
+            USING (object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 
@@ -113,7 +113,7 @@ BEGIN
         CREATE POLICY user_role_own_only ON membership.user_role
             FOR SELECT
             TO %I
-            USING (user_object_id = api.current_user_id())
+            USING (user_object_id = (SELECT api.current_user_id()))
     $policy$, v_customer_role);
 END $$;
 
@@ -159,42 +159,10 @@ BEGIN
     EXECUTE format('GRANT SELECT ON membership.role TO %I', v_customer_role);
 END $$;
 
--- Regression guard: every membership table the customer role can SELECT must
--- have RLS enabled, so a future table added to the blanket grant cannot leak.
-DO $$
-DECLARE
-    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
-    v_unprotected TEXT;
-BEGIN
-    SELECT string_agg(c.relname, ', ')
-    INTO v_unprotected
-    FROM pg_class c
-    WHERE c.relnamespace = 'membership'::regnamespace
-      AND c.relkind = 'r'
-      AND has_table_privilege(v_customer_role, c.oid, 'SELECT')
-      AND NOT c.relrowsecurity;
-
-    IF v_unprotected IS NOT NULL THEN
-        RAISE EXCEPTION 'membership table(s) granted to % without RLS: %', v_customer_role, v_unprotected;
-    END IF;
-END $$;
-
-DO $$
-DECLARE
-    v_unprotected text;
-BEGIN
-    SELECT string_agg(v.table_name, ', ')
-    INTO v_unprotected
-    FROM information_schema.views v
-    JOIN pg_class c ON c.relnamespace = 'membership'::regnamespace
-                   AND c.relname = v.table_name
-    WHERE v.table_schema = 'membership'
-      AND v.table_name LIKE 'vw\_%' ESCAPE '\'
-      AND (c.reloptions IS NULL OR NOT ('security_invoker=true' = ANY(c.reloptions)));
-
-    IF v_unprotected IS NOT NULL THEN
-        RAISE EXCEPTION 'membership view(s) must have security_invoker=true for RLS: %', v_unprotected;
-    END IF;
-END $$;
+-- Structural conformance (every granted table has RLS; every vw_* view is
+-- security_invoker) is asserted post-deploy in
+-- __test__/test_membership_rls.sql — a guard here would run at this file's
+-- sort position and miss membership tables created by later files
+-- (e.g. 08-api-keys.sql).
 
 DO $$ BEGIN RAISE NOTICE '  ✓ membership RLS policies installed'; END $$;

@@ -11,10 +11,11 @@
 # Windows NUL device artifact
 nul
 
-# Build output
+# Build output (root-anchored: a bare "pgmi" would also hide pkg/pgmi/)
 bin/
 dist/
-pgmi
+/pgmi
+/pgmi.exe
 
 # Hugo website build artifacts
 website/public/
@@ -63,8 +64,10 @@ go.work.sum
 .codex/
 
 # Coding-assistant instructions (proprietary - keep locally only)
-CLAUDE.md
-AGENTS.md
+# Root-anchored: unanchored names would also silently hide any CLAUDE.md/
+# AGENTS.md added under templates or embedded content
+/CLAUDE.md
+/AGENTS.md
 
 # Private assets (code reviews, design docs, change requests)
 .private/
