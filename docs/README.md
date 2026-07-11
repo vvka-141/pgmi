@@ -8,6 +8,8 @@ weight: 10
 
 pgmi is a PostgreSQL-native deployment tool that loads your project files into session temp tables and lets your `deploy.sql` drive everything — transactions, execution order, and logic. These docs cover the session API, CLI, deployment patterns, testing, security, and operational guides.
 
+![The pgmi model: pgmi prepares one PostgreSQL session and hands control to your deploy.sql](diagrams/d01-the-pgmi-model.drawio.svg)
+
 ## Recommended Reading Order
 
 **New to pgmi?** Start here:
@@ -47,7 +49,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 | Which view should I use? | `pgmi_plan_view` for deployment, `pgmi_source_view` for introspection — see [Session API](session-api.md#which-view-should-i-use) |
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [Session API](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [Testing](TESTING.md) |
-| What's the difference between templates? | Basic = small migration scaffold, Advanced = richer reference app — both production-capable; see [Quickstart](QUICKSTART.md#choosing-a-template) |
+| What's the difference between templates? | Basic = small migration scaffold, Advanced = richer reference app — either can be adapted for production; see [Quickstart](QUICKSTART.md#choosing-a-template) |
 | How do I filter which files run? | `WHERE` clause on `pg_temp.pgmi_plan_view` — see [Session API](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI reference](CLI.md#exit-codes) |
 

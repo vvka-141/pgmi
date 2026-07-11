@@ -24,6 +24,8 @@ Your files → PostgreSQL temp tables → YOUR deploy.sql decides everything →
 
 The difference: **you write the deployment logic in SQL, not configuration.**
 
+![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
+
 ## A concrete example
 
 Suppose you need environment-specific deployment behavior:
@@ -92,9 +94,9 @@ pgmi is a good fit when:
 - If your team avoids SQL, pgmi's advantage disappears
 
 **You're building automation that needs predictability.**
-- Same inputs = same outputs, always
+- pgmi itself adds no hidden state: the session is built only from your files and parameters (what your SQL then reads — clocks, catalogs, live data — is your choice)
 - The deployment plan is queryable data, not opaque framework state
-- Clear success/failure signals via PostgreSQL exceptions
+- Clear success/failure signals via PostgreSQL exceptions and documented exit codes
 
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
@@ -185,7 +187,10 @@ For detailed migration guides, see [Coming from Other Tools](COMING-FROM.md).
 | Flyway | Numbered files, framework runs in order | You query `pg_temp.pgmi_source_view`, sort as needed |
 | Liquibase | Changelog XML/YAML, framework interprets | Your `deploy.sql` interprets |
 | Raw psql scripts | Manual execution order | `deploy.sql` automates the ordering |
-| Sqitch | Dependency graph in plan file | You implement dependencies in `deploy.sql` |
+| Sqitch | Changes, dependencies, verify, and revert are first-class tool concepts (native SQL scripts, no DSL) | The whole orchestration program is your SQL; those concepts exist only if you write them |
+| Atlas | Declarative schema-as-code: the tool diffs desired vs actual state and plans migrations | Imperative and explicit: your `deploy.sql` states what runs; nothing is inferred |
+
+Sqitch deserves a precise comparison because it shares pgmi's "plain SQL, no DSL" stance: Sqitch provides a mature change-management *model* (deploy/verify/revert scripts, dependency resolution, history). pgmi provides a smaller *mechanism* — your project as session data — with no prescribed semantics on top. If you want the tool to manage change state, Sqitch does that well; if you want to program the deployment yourself, that's pgmi. See [Coming from Sqitch](COMING-FROM.md#coming-from-sqitch).
 
 ## Next steps
 

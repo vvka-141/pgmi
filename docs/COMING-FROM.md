@@ -10,6 +10,8 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 
 > **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
+![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
+
 ## Quick concept mapping
 
 | Concept | Flyway | Liquibase | pgmi |
@@ -294,6 +296,29 @@ pgmi deploy . --database mydb
 - **Parameterization**: Pass environment-specific values via `--param`
 - **Testing**: Add `__test__/` or `__tests__/` directories with automatic rollback
 - **Reproducibility**: Same deploy.sql, same behavior
+
+## Coming from Sqitch
+
+Sqitch is the closest tool to pgmi in spirit — native SQL scripts, no DSL, no framework opinions about your schema. The difference is where the deployment semantics live.
+
+| Concept | Sqitch | pgmi |
+|---------|--------|------|
+| Change scripts | `deploy/`, `revert/`, `verify/` triplets | Any `.sql` files; roles you define |
+| Dependencies | Declared in `sqitch.plan`, resolved by the tool | Expressed in `deploy.sql` ordering (or `<pgmi-meta>` sortKeys) |
+| Verification | `sqitch verify` runs verify scripts | `CALL pgmi_test()` runs `__test__/` inside the deploy transaction |
+| Reverting | `sqitch revert` runs revert scripts | A failed transaction rolls back by itself; going *back* from a committed state is a script you write |
+| History | `sqitch.db` registry tables, managed by the tool | Yours to implement if you want it ([tracking options](#tracking-migration-state)) |
+
+Be clear-eyed about the trade: Sqitch gives you a mature change-management **model** — deploy/verify/revert, dependency resolution, and history are first-class tool concepts you configure. pgmi gives you a smaller **mechanism** — your project files as queryable session data — and delegates the entire orchestration program to your SQL.
+
+Choose Sqitch if you want the tool to own change state and reversion. Choose pgmi when you want test gates, environment branching, and data loading expressed inside one SQL-controlled deployment program — the deployment transaction and its verification gate as a single control flow you write yourself.
+
+### Migration path
+
+1. Your `deploy/` scripts become ordinary project files; drop the triplet naming.
+2. Plan-file dependencies become `ORDER BY` logic in `deploy.sql` (path prefixes work; `<pgmi-meta>` sortKeys when it gets complex).
+3. `verify/` scripts become `__test__/` tests — with a real upgrade: they run *inside* the deployment transaction, so a failed verification means the deployment never happened.
+4. If you relied on the registry, implement a tracking table (see [below](#tracking-migration-state)) — the advanced template ships one.
 
 ## Tracking migration state
 

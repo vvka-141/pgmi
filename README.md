@@ -5,53 +5,110 @@
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
-pgmi is a PostgreSQL-native deployment tool that loads your project files into a database session, then runs the `deploy.sql` **you** write. Test inside the transaction, branch on environment, audit changes, and commit atomically.
-Unlike migration frameworks that decide when to commit and what to run, pgmi hands control to your SQL: **you** own the transactions, order, and logic.
+**Programmable PostgreSQL deployments, controlled entirely by SQL.**
 
-**Why it feels different:**
+pgmi loads your project files into one PostgreSQL session as queryable data, then runs the `deploy.sql` **you** write. Your deployment selects migrations, loads reference data, tests the changed database — and commits only if everything passes. A failing test rolls the whole deployment back.
 
-- **Your SQL owns the deploy** — transactions, execution order, idempotency, and retries live in `deploy.sql`, not in the tool.
-- **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
-- **AI- and MCP-native** — the binary ships embedded skills (`pgmi ai`), and the advanced template includes a Model Context Protocol backend.
+Migration frameworks provide their own ordering, history, and transaction model. pgmi gives those decisions to your deploy.sql. (Architecturally it's an *execution fabric*, not a migration framework — [Why pgmi?](docs/WHY-PGMI.md) explains the distinction.)
 
-![pgmi deployment flow](pgmi-deploy.png)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
+## See it work
 
-## Quick example
+Nothing running? Start a disposable PostgreSQL in Docker (already have one? point `PGMI_CONNECTION_STRING` at it and skip the first line):
+
+```bash
+docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+
+pgmi init demo --template basic
+pgmi deploy demo -d demo_db
+```
+
+```text
+Preparing session: scanning files, loading parameters
+Loaded 7 files
+Executing deploy.sql
+[development] Deploying demo v1.0.0 (5 file(s) in project)
+[pgmi] Test suite started
+[pgmi] Fixture: ./__test__/_setup.sql
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test suite completed (3 steps)
+✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
+```
+
+Now the failure case: add a migration creating an `audit_log` table, and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
+
+<details>
+<summary>The two files behind the failure demo</summary>
+
+```sql
+-- migrations/003_audit_log.sql
+CREATE TABLE audit_log (
+    event text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+```sql
+-- __test__/test_audit_log.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM audit_log WHERE event = 'deploy') THEN
+        RAISE EXCEPTION 'audit_log must contain a deploy event';
+    END IF;
+END $$;
+```
+
+</details>
+
+```text
+[pgmi] Test suite started
+[pgmi] Test: ./__test__/test_audit_log.sql
+✗ Failed after 0.72s — see error above
+pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
+```
+
+pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from the new migration **does not exist** — the database is exactly as it was before the deploy. Tests run inside the deployment transaction (each isolated in its own savepoint, so test data never persists), and only a fully verified deployment commits.
+
+A complete, CI-verified version of this pattern lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) — both paths run on every push.
+
+> **Requirements:** PostgreSQL 11+ (advanced template 15+ — [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) over a **direct** connection or session-mode pooler. Transaction-mode poolers (PgBouncer txn mode, RDS Proxy) reassign connections between statements and destroy the session temp tables pgmi depends on — [details](docs/PRODUCTION.md#connection-requirements).
+
+## The entire model in one file
+
+`deploy.sql` is plain PostgreSQL. Your files are rows in a session view; you query them and decide what to execute:
 
 ```sql
 -- deploy.sql
--- pg_temp is PostgreSQL's session-scoped schema; your files exist only
--- for this session and are automatically dropped when it ends.
 BEGIN;
 
 DO $$
-DECLARE
-    v_file RECORD;
+DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
         SELECT path, content FROM pg_temp.pgmi_source_view
         WHERE is_sql_file
         ORDER BY path
-    )
-    LOOP
+    ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
     END LOOP;
 END $$;
 
+CALL pgmi_test();
+
 COMMIT;
 ```
 
-```bash
-pgmi deploy ./myapp --database mydb
-```
+Filter by directory, branch on a `--param`, skip files whose checksum already ran, load JSON/XML/CSV reference data with PostgreSQL's built-in functions — it's your SQL. See the [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for patterns and the [Session API](docs/session-api.md) for the views (`pgmi_source_view` for raw path-ordered access, `pgmi_plan_view` for metadata-driven ordering).
 
-Your files are in a temp table. You query them with SQL. You decide what to execute. That's the entire model.
+**Why it feels different:**
 
-The quick example above shows the core pattern: query files, execute with `EXECUTE`. The **basic** scaffold template uses `pgmi_source_view` (raw access, path-ordered); the **advanced** template uses `pgmi_plan_view` (metadata-driven ordering). See [Session API](docs/session-api.md) for when to use each.
-
-pgmi loads **all** project files — not just SQL. Your `deploy.sql` can read JSON configuration, XML reference data, and CSV seeds from the same session views, processing them with PostgreSQL's built-in JSON, XML, and string functions. See [deploy.sql Guide](docs/DEPLOY-GUIDE.md) for data ingestion patterns.
+- **Your SQL owns the deploy** — transactions, execution order, idempotency, and retries live in `deploy.sql`, not in the tool.
+- **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
+- **Built for coding agents** — the binary embeds machine-readable guidance (`pgmi ai`, llms.txt style) and can expose pgmi commands to agents over MCP (`pgmi serve`).
 
 ## Install
 
@@ -85,76 +142,33 @@ sudo apt update && sudo apt install pgmi
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
 ```
 
-## Get started
-
-The fastest path to your first deployment:
-
-```bash
-pgmi init myapp --template basic
-cd myapp
-pgmi deploy . --database mydb --overwrite --force
-```
-
-This creates a project with `deploy.sql`, runs it against a fresh database, and executes the SQL files in `migrations/`.
-
-> **Requirement:** the pgmi CLI and the basic template need **PostgreSQL 11+** (the advanced template needs **15+** — see the [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) and a **direct** connection (or a session-mode pooler). Transaction-mode poolers — PgBouncer in transaction mode, AWS RDS Proxy — reassign connections between statements and destroy the session temp tables pgmi depends on. See [Connection Requirements](docs/PRODUCTION.md#connection-requirements).
-
-See the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
+Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 
 ## Choose your path
 
-- **Just deploying SQL?** → the **basic** template: a small, explicit migration scaffold (`pgmi init myapp --template basic`).
-- **Building an app, API, or MCP backend?** → the **advanced** template: a large, editable reference system (roles, RLS, audit logging, REST/RPC/MCP) you own and trim.
+- **Just deploying SQL?** → the **basic** template: a small, explicit migration scaffold. `pgmi init myapp --template basic`
+- **Building a PostgreSQL-backed application?** → the **advanced** template: an editable reference system with role separation, audit logging, and REST/RPC/MCP patterns — yours to own and trim, not a framework to adopt wholesale. Privilege requirements and managed-provider notes: [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql).
 - **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) and the honest [Tradeoffs](docs/TRADEOFFS.md).
 
-Not sure which template? The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table — both templates are production-capable; advanced is _more complete_, not _more production_. Check the [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) for version requirements (CLI + basic: PostgreSQL 11+; advanced: 15+).
+Either template can be adapted for production; advanced provides *more infrastructure*, not a higher safety tier. The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table; `pgmi templates list` shows what's available.
 
-## When pgmi makes sense
+## When pgmi makes sense — and when it doesn't
 
-pgmi is a good fit when you need:
+A good fit when you need:
 
 - **Conditional deployment logic** — different behavior per environment, feature flags, custom phases
+- **Test-gated deployments** — database tests inside the deployment transaction, rollback on failure ([Testing Guide](docs/TESTING.md))
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
-- **Full PostgreSQL power** — use PL/pgSQL, query system catalogs, take advisory locks via `pg_advisory_lock`
-- **Data files alongside schema** — load JSON config, XML reference data, CSV seeds in the same transaction as migrations
-- **Multi-cloud PostgreSQL targets** — same `deploy.sql` works on Azure, AWS, GCP with native auth (Entra ID, IAM)
+- **Data files alongside schema** — JSON config, XML reference data, CSV seeds in the same transaction as migrations
+- **Multi-cloud PostgreSQL targets** — the same `deploy.sql` works on Azure, AWS, GCP with native auth
 
-pgmi handles simple linear migrations out of the box — the basic template does exactly this. Its additional power is there when you need it.
+A poor fit when:
 
-See [Why pgmi?](docs/WHY-PGMI.md) for a detailed comparison with other tools.
+- **Your team avoids SQL/PL/pgSQL** — pgmi's power is writing deployment logic in PostgreSQL's language; without that fluency the advantage disappears
+- **You want tool-managed migration history** — pgmi ships no version table; tracking state is a pattern you implement (or take from the advanced template), not a built-in
+- **Your connection path is a transaction-mode pooler** — session temp tables can't survive it
 
-## Test-gated deployments
-
-Tests live in `__test__/` or `__tests__/` directories. The `CALL pgmi_test()` macro runs them inside your deployment transaction with automatic savepoint isolation — so a failing test aborts the whole deploy and your database stays untouched:
-
-```sql
--- deploy.sql
-BEGIN;
-
--- ... your migrations ...
-
--- Each test runs in its own savepoint and rolls back automatically;
--- a RAISE EXCEPTION fails the test and aborts the transaction.
-CALL pgmi_test();
-
-COMMIT;
-```
-
-The macro wraps each test in a savepoint, executes it, and rolls back—so **test data never persists** while your migrations do. If any test fails, the entire transaction aborts and your database remains unchanged.
-
-Tests are pure PostgreSQL—use `RAISE EXCEPTION` to fail:
-
-```sql
--- __test__/test_users.sql
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'test@example.com') THEN
-        RAISE EXCEPTION 'Expected user not found';
-    END IF;
-END $$;
-```
-
-See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the gated deployment pattern.
+[Tradeoffs](docs/TRADEOFFS.md) is the full honest list.
 
 ## Documentation
 
@@ -174,14 +188,14 @@ See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the g
 |-------|-------------|
 | [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
 | [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
-| [Coming from Flyway/Liquibase](docs/COMING-FROM.md) | Migration guides |
+| [Coming from Flyway/Liquibase/Sqitch](docs/COMING-FROM.md) | Migration guides |
 
 **Reference**
 
 | Guide | Description |
 |-------|-------------|
 | [CLI Reference](docs/CLI.md) | All commands, flags, exit codes |
-| [Configuration](docs/CONFIGURATION.md) | pgmi.yaml reference |
+| [Configuration](docs/CONFIGURATION.md) | pgmi.yaml reference and zero-flag deployments |
 | [Session API](docs/session-api.md) | Temp tables and helper functions |
 | [Connections](docs/CONNECTIONS.md) | Connection architecture: cloud auth, SSL, poolers, IaC |
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
@@ -190,24 +204,9 @@ See [Testing Guide](docs/TESTING.md) for fixtures, hierarchical setup, and the g
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
 | [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
 
-## Templates
-
-pgmi ships with ready-to-use project templates:
-
-```bash
-pgmi templates list              # See available templates
-pgmi templates describe basic    # See what a template includes
-pgmi init myapp --template basic # Create a project
-```
-
-| Template | Purpose |
-|----------|---------|
-| `basic` | A small, explicit migration scaffold — linear migrations, minimal structure. Production-capable. |
-| `advanced` | Full PostgreSQL application template: multi-schema, role hierarchy, audit logging, MCP integration, metadata-driven ordering. A working reference system to own and adapt — not a framework to adopt wholesale. Needs a role that can create roles, schemas, and extensions (no superuser) — runs on managed providers like RDS, Cloud SQL, Supabase, and Neon. See the [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql). |
-
 ## AI assistant support
 
-pgmi embeds AI-digestible documentation directly in the binary. AI coding assistants (Claude Code, GitHub Copilot, Gemini CLI) can discover and learn pgmi patterns:
+pgmi embeds machine-readable documentation directly in the binary, so coding agents can learn pgmi's conventions on demand:
 
 ```bash
 pgmi ai                    # Overview for AI assistants (llms.txt style)
@@ -218,60 +217,13 @@ pgmi ai setup              # Materialize a discoverable skill into the project
 pgmi ai check              # Report whether that skill exists and is current
 ```
 
-When you tell an AI assistant "use pgmi for this project", it can query these commands to understand pgmi's philosophy, conventions, and best practices.
+`pgmi serve` additionally exposes pgmi commands as MCP tools over stdio — see [MCP Integration](docs/MCP.md).
 
-## Zero-flag deployments
+## Configuration and authentication
 
-Store connection defaults in `pgmi.yaml`:
+Store connection defaults and parameters in `pgmi.yaml` next to `deploy.sql` for zero-flag deployments (`pgmi deploy .`) — see [Configuration](docs/CONFIGURATION.md).
 
-```yaml
-connection:
-  host: localhost
-  database: myapp
-
-params:
-  env: development
-```
-
-Then deploy with no flags:
-
-```bash
-pgmi deploy .
-```
-
-Override per-environment:
-
-```bash
-pgmi deploy . -d staging_db --param env=staging
-```
-
-## Authentication
-
-pgmi supports:
-
-- **Standard PostgreSQL** — connection strings, `PGPASSWORD`, `.pgpass`
-- **Azure Entra ID** — passwordless auth to Azure Database for PostgreSQL
-- **AWS IAM** — token-based auth to Amazon RDS
-- **Google Cloud SQL IAM** — passwordless auth via Cloud SQL Go Connector
-
-```bash
-# Standard
-export PGMI_CONNECTION_STRING="postgresql://user:pass@localhost/postgres"
-pgmi deploy . -d mydb
-
-# Azure Entra ID — Managed Identity (no credentials needed)
-pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslmode require
-
-# Azure Entra ID — Service Principal
-export AZURE_TENANT_ID="..." AZURE_CLIENT_ID="..." AZURE_CLIENT_SECRET="..."
-pgmi deploy . --host myserver.postgres.database.azure.com -d mydb --azure --sslmode require
-
-# AWS IAM — uses default credential chain (env vars, ~/.aws/credentials, IAM role)
-pgmi deploy . --host mydb.abc123.us-west-2.rds.amazonaws.com -d mydb -U myuser --aws --aws-region us-west-2 --sslmode require
-
-# Google Cloud SQL — uses Application Default Credentials (gcloud auth, service account)
-pgmi deploy . -d mydb -U myuser@myproject.iam --google --google-instance myproject:us-central1:myinstance
-```
+Beyond standard PostgreSQL auth (connection strings, `PGPASSWORD`, `.pgpass`), pgmi authenticates natively to **Azure Database for PostgreSQL** (Entra ID), **Amazon RDS** (IAM), and **Google Cloud SQL** (IAM) — passwordless, using each cloud's credential chain. Commands and setup: [Connections](docs/CONNECTIONS.md).
 
 ## Contributing
 

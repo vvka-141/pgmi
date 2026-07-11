@@ -8,6 +8,8 @@ weight: 160
 
 > **Core model:** pgmi doesn't interpret your SQL — it loads your files into PostgreSQL session tables and hands control to `deploy.sql`, which decides what to do with them.
 
+![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
+
 ## How pgmi Actually Works
 
 When you run `pgmi deploy ./myproject`, here's what happens:

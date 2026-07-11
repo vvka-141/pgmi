@@ -23,6 +23,41 @@ No Go toolchain required — the quickstart installs a prebuilt binary. (Install
 
 ---
 
+## Fastest path: five minutes with Docker
+
+Have Docker but no PostgreSQL at hand? This detour needs nothing else — no passwords to remember, no server setup, disposable afterwards. Install pgmi (Step 1 below), then:
+
+```bash
+docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+
+export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+pgmi init demo --template basic
+pgmi deploy demo -d pgmi_demo
+```
+
+pgmi creates the `pgmi_demo` database, loads the project into a session, and your generated `deploy.sql` runs the migrations and the test suite inside one transaction:
+
+```text
+[pgmi] Test suite started
+[pgmi] Fixture: ./__test__/_setup.sql
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test suite completed (3 steps)
+✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
+```
+
+Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/__test__/test_user_crud.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
+
+```bash
+pgmi deploy demo -d pgmi_demo
+```
+
+pgmi exits with code `13` and the database is untouched — everything the deployment did before the failing test rolled back with it. That test gate, inside your own deployment transaction, is the core of the pgmi model.
+
+Clean up with `docker rm -f pgmi-demo`. For a real setup against your own PostgreSQL server, continue below.
+
+---
+
 ## Step 1: Install pgmi
 
 Install the prebuilt binary — no Go toolchain needed.

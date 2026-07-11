@@ -135,6 +135,52 @@ END $$;
 
 DO $$
 DECLARE
+    v_doc jsonb;
+    v_op jsonb;
+BEGIN
+    RAISE NOTICE '-> Testing OpenAPI transaction-isolation extension';
+
+    -- A route that declares an isolation floor must advertise it in the spec so
+    -- a preloading client can open the transaction at the right level on the
+    -- FIRST call, instead of learning it reactively from a 428.
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0b11-4000-8000-000000000001',
+            'uri', '^/iso-openapi-test$',
+            'httpMethod', '^GET$',
+            'name', 'iso_openapi_test',
+            'requiresAuth', false,
+            'autoLog', false,
+            'requiredTransactionIsolation', 'serializable'
+        ),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+    );
+
+    v_doc := api.openapi_document();
+    v_op := v_doc->'paths'->'/iso-openapi-test'->'get';
+
+    IF v_op IS NULL THEN
+        RAISE EXCEPTION 'iso-openapi-test route missing from spec';
+    END IF;
+
+    IF v_op->>'x-pgmi-transaction-isolation' IS DISTINCT FROM 'serializable' THEN
+        RAISE EXCEPTION 'operation should advertise x-pgmi-transaction-isolation=serializable, got %',
+            v_op->>'x-pgmi-transaction-isolation';
+    END IF;
+
+    RAISE NOTICE '  + Route with a floor advertises x-pgmi-transaction-isolation';
+
+    -- A route with no floor must NOT carry the key (absent, not null).
+    IF (v_doc->'paths'->'/openapi.json'->'get') ? 'x-pgmi-transaction-isolation' THEN
+        RAISE EXCEPTION 'floorless route should omit x-pgmi-transaction-isolation';
+    END IF;
+
+    RAISE NOTICE '  + Floorless route omits the extension';
+    RAISE NOTICE '✓ OpenAPI transaction-isolation extension tests passed';
+END $$;
+
+DO $$
+DECLARE
     v_response api.http_response;
     v_html text;
 BEGIN

@@ -18,6 +18,8 @@ Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXI
 
 pgmi takes a different approach: **your tests never leave permanent changes in the database.**
 
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](diagrams/d00-test-gated-deploy.drawio.svg)
+
 **Video walkthrough:** [Transactional Testing with pgmi](https://youtu.be/mSqHOQIJ_uk)
 
 ---

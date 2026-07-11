@@ -10,6 +10,8 @@ This guide covers patterns for writing `deploy.sql` — from basic file executio
 
 For the session API reference (views, columns, functions), see [Session API](session-api.md).
 
+![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
+
 ---
 
 ## The basic pattern
