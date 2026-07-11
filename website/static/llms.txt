@@ -22,7 +22,9 @@ Key facts:
 - [Connections](https://vvka-141.github.io/pgmi/docs/connections/): cloud auth (Azure Entra ID, AWS IAM, Google Cloud SQL IAM), SSL, poolers
 - [Security](https://vvka-141.github.io/pgmi/docs/security/): secrets handling and CI/CD patterns
 - [Production guide](https://vvka-141.github.io/pgmi/docs/production/): compatibility matrix, rollback, monitoring
-- [MCP integration](https://vvka-141.github.io/pgmi/docs/mcp/): AI-assistant integration surfaces
+- [pgmi serve](https://vvka-141.github.io/pgmi/docs/cli/#pgmi-serve): core CLI MCP server over stdio; exposes pgmi project-inspection commands to coding agents
+- [Advanced-template MCP gateway](https://vvka-141.github.io/pgmi/docs/mcp/): optional scaffolded application subsystem; exposes your deployed PostgreSQL application's tools, resources, and prompts over HTTP
+- [Advanced-template API keys](https://vvka-141.github.io/pgmi/docs/api-keys/): authentication for callers of generated REST/RPC/MCP APIs; unrelated to pgmi CLI or PostgreSQL connection authentication
 
 ## Optional
 

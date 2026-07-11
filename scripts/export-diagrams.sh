@@ -39,4 +39,8 @@ for src in "${sources[@]}"; do
     out="${src%.drawio}.drawio.svg"
     echo "export: $src -> $out"
     "$DRAWIO" -x -f svg -e -b 10 -o "$out" "$src"
+    if [ -f "${src%.drawio}.drawio.png" ]; then
+        echo "export: $src -> ${src%.drawio}.drawio.png"
+        "$DRAWIO" -x -f png -b 10 -s 2 -o "${src%.drawio}.drawio.png" "$src"
+    fi
 done

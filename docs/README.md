@@ -86,7 +86,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 These pages document application code scaffolded by `pgmi init --template advanced`. They are not pgmi core features — the generated SQL and gateways become code you own.
 
 - **[MCP gateway](MCP.md)** — Expose your deployed application's tools, resources, and prompts to AI assistants over HTTP
-- **[API keys](API-KEYS.md)** — API key authentication for callers of your generated REST/RPC APIs
+- **[API keys](API-KEYS.md)** — API key authentication for callers of your generated REST/RPC/MCP APIs
 - **[Client guides](clients/README.md)** — Generate typed clients from your deployment's OpenAPI contract
 - **[Semantic MCP curation](recipes/semantic-mcp-tool-curation.md)** — Optional extension to the MCP gateway: surface the relevant tool subset by embedding similarity (for tool-overload scale)
 
