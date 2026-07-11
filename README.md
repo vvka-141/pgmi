@@ -72,7 +72,7 @@ pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQL
 
 pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from the new migration **does not exist** — the database is exactly as it was before the deploy. Tests run inside the deployment transaction (each isolated in its own savepoint, so test data never persists), and only a fully verified deployment commits.
 
-This exact demonstration lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) and runs in CI on every push — both paths.
+A complete, CI-verified version of this pattern lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) — both paths run on every push.
 
 > **Requirements:** PostgreSQL 11+ (advanced template 15+ — [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) over a **direct** connection or session-mode pooler. Transaction-mode poolers (PgBouncer txn mode, RDS Proxy) reassign connections between statements and destroy the session temp tables pgmi depends on — [details](docs/PRODUCTION.md#connection-requirements).
 
@@ -150,7 +150,7 @@ Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkt
 - **Building a PostgreSQL-backed application?** → the **advanced** template: an editable reference system with role separation, audit logging, and REST/RPC/MCP patterns — yours to own and trim, not a framework to adopt wholesale. Privilege requirements and managed-provider notes: [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql).
 - **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) and the honest [Tradeoffs](docs/TRADEOFFS.md).
 
-Both templates are production-capable; advanced is *more complete*, not *more production*. The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table; `pgmi templates list` shows what's available.
+Either template can be adapted for production; advanced provides *more infrastructure*, not a higher safety tier. The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table; `pgmi templates list` shows what's available.
 
 ## When pgmi makes sense — and when it doesn't
 
