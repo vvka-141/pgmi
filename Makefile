@@ -1,4 +1,4 @@
-.PHONY: test test-short test-integration test-connection test-azure test-all lint build release-ready doctor build-clean sync-ai
+.PHONY: test test-short test-integration test-connection test-azure test-all lint build release-ready doctor build-clean sync-ai diagrams
 
 test:                  ## Run unit tests only (no database, short mode)
 	go test -short ./...
@@ -47,3 +47,6 @@ build-clean:           ## Clean Go cache and rebuild (use after template changes
 sync-ai:               ## Refresh local .claude/skills/ from the tracked embedded skills
 	@echo "Refreshing local AI skills from tracked source..."
 	@bash scripts/sync-ai-content.sh
+
+diagrams:              ## Re-export docs/diagrams/*.drawio to .drawio.svg (requires draw.io Desktop)
+	@bash scripts/export-diagrams.sh

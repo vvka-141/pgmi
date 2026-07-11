@@ -1,0 +1,12 @@
+{{- /*
+  Resolve GitHub-flavored relative image paths at build time so docs/*.md stay
+  valid on GitHub while rendering correct site URLs here (mirror of
+  render-link.html for images). Relative srcs are joined to the page's source
+  directory; absolute URLs and site-rooted paths pass through untouched.
+*/ -}}
+{{- $dest := .Destination -}}
+{{- if and (not (strings.Contains $dest "://")) (not (strings.HasPrefix $dest "/")) -}}
+  {{- $abs := path.Join (path.Dir (replace .Page.File.Path "\\" "/")) $dest -}}
+  {{- $dest = relURL $abs -}}
+{{- end -}}
+<img src="{{ $dest }}" alt="{{ .Text }}"{{ with .Title }} title="{{ . }}"{{ end }} loading="lazy" />

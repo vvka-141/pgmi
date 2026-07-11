@@ -30,9 +30,11 @@ disableKinds = ["taxonomy", "term"]
     source = "content"
     target = "content"
   # Single-source: repo-root docs/ is surfaced under /docs/ at build time.
+  # STYLE.md is contributor documentation for diagram authors, not site content.
   [[module.mounts]]
     source = "../docs"
     target = "content/docs"
+    excludeFiles = ["diagrams/STYLE.md"]
   [[module.mounts]]
     source = "static"
     target = "static"
