@@ -17,6 +17,9 @@ as native to the docs site.
 - Published asset: `<nn>-<slug>.drawio.svg` (exported with embedded XML, committed)
 - `_`-prefixed sources (e.g. `_social-card.drawio`) are skipped by `make diagrams`
   and exported manually to their own target format
+- `d00-test-gated-deploy` additionally ships a `.drawio.png` for feed
+  syndication (feed readers sanitize SVG) — re-export it manually when
+  d00 changes
 - Regenerate all SVGs: `make diagrams` (requires draw.io Desktop)
 - Never hand-edit an exported `.svg`; edit the `.drawio` and re-export
 

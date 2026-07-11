@@ -10,31 +10,34 @@ weight: 10
 
 *By Alexey Evlampiev*
 
-A schema migration usually meets its first real test after it has already
-changed the database. The pipeline applies the files, the tool records a new
-version, and then — in the best case — an integration suite somewhere
-downstream discovers that the backfill missed a partition or the new
-constraint doesn't hold. By then the migration is committed. Whatever happens
-next is cleanup.
+Most migration pipelines test before deployment or after commit. PostgreSQL
+allows a third checkpoint: **after applying the change, but before committing
+it**. Lint and rehearsal catch what they can in advance; integration suites
+catch what they can afterwards. The checkpoint in between is the only one
+where the real target database — with whatever drift it has accumulated — is
+in its migrated state while rollback is still one statement away.
 
-PostgreSQL supports a stricter arrangement, and it needs no framework at all:
-run the migration **and** the checks that prove it worked inside one
-transaction, and let `COMMIT` depend on the checks. If an assertion fails, the
-deployment doesn't fail *partially* — it never happened.
+PostgreSQL supports this with no framework at all: run the migration **and**
+the checks that prove it worked inside one transaction, and let `COMMIT`
+depend on the checks. If an assertion fails, the deployment doesn't fail
+*partially* — it never happened.
 
-This article walks through the pattern in plain SQL and psql, shows where its
-limits are, and only at the end mentions the tool I built around it. The
-technique is useful whether or not you ever touch that tool.
+The pattern needs no framework: first we'll build it with plain SQL and psql,
+then look at where its limits are and how to automate it across a project.
 
 ## The foundation: DDL you can roll back
 
-In PostgreSQL, `CREATE TABLE`, `ALTER TABLE`, `CREATE FUNCTION`, index
-creation, and most other DDL are transactional — they obey `BEGIN` and
-`ROLLBACK` like ordinary writes. The [PostgreSQL wiki's competitive
+PostgreSQL's documentation defines transactions as
+[all-or-nothing operations](https://www.postgresql.org/docs/current/tutorial-transactions.html)
+and documents savepoints for selectively discarding part of a transaction.
+What makes the deployment story unusual is that PostgreSQL's transactional
+treatment extends to most DDL: `CREATE TABLE`, `ALTER TABLE`,
+`CREATE FUNCTION`, and index creation obey `BEGIN` and `ROLLBACK` like
+ordinary writes. The [PostgreSQL wiki's competitive
 analysis](https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis)
-is the canonical reference; the short version is that a failed migration on
+compares this across engines; the short version is that a failed migration on
 MySQL can leave you half-migrated (DDL there commits implicitly), while
-PostgreSQL rolls the whole thing back to the exact pre-deploy state.
+PostgreSQL rolls the transaction's schema and data changes back together.
 
 Most migration tools use this property defensively: if a statement errors,
 the migration rolls back. That's good, but it only protects you from
@@ -48,10 +51,13 @@ you make **your own checks** part of the transaction.
 
 ## The pattern in plain psql
 
-Suppose a deployment adds a `region` column, backfills it, and makes it
-mandatory. The interesting question isn't "did the statements run" — it's
-"is every row backfilled, and does the application-facing function still
-behave?" Ask that question *before* committing:
+Suppose a deployment adds a `region` column, backfills it from a mapping
+table, and makes it mandatory. The interesting question isn't "did the
+statements run" — the DDL itself will complain if it can't. The question is
+one no constraint can express: **did every customer get the region its
+country implies?** A backfill can write a wrong-but-non-null value — an
+ambiguous mapping, a join that silently matched the wrong rows — and every
+statement still succeeds. Ask the real question *before* committing:
 
 ```sql
 -- deploy.sql
@@ -64,21 +70,41 @@ SET    region = m.region
 FROM   region_mapping m
 WHERE  m.country = c.country;
 
-ALTER TABLE customer ALTER COLUMN region SET NOT NULL;
-
 -- The gate: verify the migrated state inside the same transaction.
 DO $$
 DECLARE
-    v_missing bigint;
+    v_unmapped   bigint;
+    v_mismatched bigint;
 BEGIN
-    SELECT count(*) INTO v_missing FROM customer WHERE region IS NULL;
-    IF v_missing > 0 THEN
-        RAISE EXCEPTION 'backfill incomplete: % customers without region', v_missing;
+    SELECT count(*) INTO v_unmapped
+    FROM customer
+    WHERE region IS NULL;
+
+    SELECT count(*) INTO v_mismatched
+    FROM customer c
+    JOIN region_mapping m ON m.country = c.country
+    WHERE c.region IS DISTINCT FROM m.region;
+
+    IF v_unmapped > 0 OR v_mismatched > 0 THEN
+        RAISE EXCEPTION
+            'region backfill invalid: % unmapped, % mismatched',
+            v_unmapped, v_mismatched;
     END IF;
 END $$;
 
+ALTER TABLE customer ALTER COLUMN region SET NOT NULL;
+
 COMMIT;
 ```
+
+The two checks earn their place differently. The unmapped count fires before
+`SET NOT NULL` would, turning a generic constraint error into a diagnostic
+with numbers in it. The mismatch count is the real gate: it catches a
+backfill that wrote the *wrong* non-null region — a duplicate country in the
+mapping table, a join condition edited badly in review — which no constraint
+in the migration can detect. And because assertions state invariants rather
+than re-checking statements, they keep protecting the deployment when
+someone rewrites the backfill next quarter.
 
 Run it with psql configured to stop on the first error:
 
@@ -87,9 +113,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy.sql
 ```
 
 If the `RAISE EXCEPTION` fires, psql exits non-zero, the open transaction
-aborts, and the connection closes — PostgreSQL rolls back the `ALTER TABLE`,
-the backfill, everything. The database has the exact schema it had before
-the deploy started. Your pipeline sees a non-zero exit code and stops.
+aborts, and the connection closes — PostgreSQL rolls back the transaction's
+schema and data changes: the `ALTER TABLE`, the backfill, all of it. Your
+pipeline sees a non-zero exit code and stops. (Non-transactional effects are
+the subject of the limitations section below.)
 
 Notice what did the work here: not a testing framework, not a migration tool
 — one `DO` block and PostgreSQL's transaction semantics. `RAISE EXCEPTION` is
@@ -192,10 +219,11 @@ in CI — catches problems earlier and at leisure, and static analyzers like
 [squawk](https://squawkhq.com/docs/safe_migrations) or
 [strong_migrations](https://github.com/ankane/strong_migrations) catch unsafe
 patterns before anything runs at all. Those practices test the migration
-*before the deploy, against a copy*. The in-transaction gate tests it
-*during the deploy, against the real database* — the only place drift
-between staging and production is visible. Three legs: lint, rehearse,
-gate. They compose; none replaces another.
+*before the deploy, against a copy*. The in-transaction gate tests the real
+target state after applying the migration but before commit — the point
+where production drift is visible while transactional rollback is still
+available. Three legs: lint, rehearse, gate. They compose; none replaces
+another.
 
 ## Where existing tools stand
 
@@ -209,9 +237,11 @@ file does abort that script's transaction. The verification is just another
 statement in a versioned script, and with default settings a failure rolls
 back the current script, not the already-committed ones before it.
 [Liquibase](https://docs.liquibase.com/concepts/changelogs/attributes/run-in-transaction.html)
-runs each changeset in its own transaction; its preconditions are pre-flight
-checks that decide whether a changeset runs — the docs offer no equivalent
-post-change assertion mechanism.
+runs each changeset in its own transaction; its preconditions are primarily
+pre-flight decisions about whether a changeset runs. A PostgreSQL-specific
+SQL changeset can still embed a raising assertion after its DDL — but that's
+ordinary SQL inside the changeset, not a dedicated post-change verification
+model.
 [Sqitch](https://sqitch.org/docs/manual/sqitch-deploy/) took verification
 more seriously than anyone: every change can carry a dedicated verify
 script. But a verify failure is handled by running the change's *revert*
@@ -243,7 +273,7 @@ deployment tool I built. It loads your project files into session-scoped
 temporary tables and executes the `deploy.sql` *you* write, which queries
 those files and orchestrates everything — including the test gate:
 
-![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.svg)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.png)
 
 Tests live in `__test__/` directories next to migrations. A
 `CALL pgmi_test()` macro in deploy.sql expands — before the SQL reaches
