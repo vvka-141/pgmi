@@ -13,6 +13,11 @@ disableKinds = ["taxonomy", "term"]
   BookEditPath = "edit/main"
   BookFavicon = "favicon.svg"
   description = "pgmi is a PostgreSQL-native execution fabric: it loads your project files into session-scoped temp tables and lets your own deploy.sql drive deployment. An execution fabric, not a migration framework."
+  # Default social image for pages without their own (picked up by the
+  # internal Open Graph / Twitter card templates).
+  images = ["social-card.png"]
+  [params.author]
+    name = "Alexey Evlampiev"
 
 [markup.goldmark.renderer]
   unsafe = true
