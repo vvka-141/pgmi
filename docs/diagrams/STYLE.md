@@ -61,9 +61,20 @@ Common to all: small uppercase muted section labels (`fontSize=11`,
 
 ## Icons
 
-`icons/` holds small stroke-based SVGs in palette colors. Use icons only for
-external actors (database, terminal, CI, HTTP client, AI agent) — never inside
+Two tiers, one rule: icons mark **external actors only** — never inside
 pgmi-owned boxes. Boxes, arrows, and typography carry the diagram.
+
+- **Official brand marks** (`icons/logos/`, see ATTRIBUTION.md): use when the
+  external product's identity is the point — PostgreSQL, Azure/AWS/GCP in
+  connection diagrams, Docker/GitHub in CI contexts. At most a few per
+  diagram; a diagram that needs many logos is a slide, not documentation.
+- **House stroke icons** (`icons/`): palette-colored generic actors
+  (database, terminal, CI, HTTP client, AI agent) for everything else.
+
+Reusable library: `pgmi-icon-library.xml` — in draw.io use *File → Open
+Library*; when authoring XML directly, copy the `data:image/svg+xml;base64,…`
+payload into an `image=` style (drop the `;base64` marker inside style
+strings). All icons embed as data URIs, so diagrams stay self-contained.
 
 ## Content rules
 
