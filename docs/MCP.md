@@ -1,27 +1,28 @@
 ---
-title: "MCP integration"
+title: "Advanced template: MCP gateway"
 description: "Understand the advanced template's Model Context Protocol support and PostgreSQL-backed MCP handlers."
 weight: 140
 ---
 
-# Model Context Protocol (MCP) Integration
+# Advanced Template: MCP Gateway
 
-pgmi's advanced template includes a complete MCP server implementation, enabling AI assistants (Claude Desktop, VS Code Copilot, etc.) to interact with your PostgreSQL database through tools, resources, and prompts.
+> **Scope: advanced template only.** This subsystem is scaffolded by
+> `pgmi init --template advanced`. It is not part of pgmi core and is not
+> included in the basic template. The generated SQL and gateway become
+> application code that you own.
+
+pgmi has **two unrelated MCP surfaces** — be sure you're reading about the right one:
+
+- **`pgmi serve`** (part of the CLI, every install): exposes pgmi's project-inspection commands as an MCP server over stdio, so a coding agent can drive pgmi itself. See the [CLI reference](CLI.md).
+- **The advanced-template MCP gateway** (this page): exposes *your deployed PostgreSQL application* — its tools, resources, and prompts — to AI assistants over HTTP.
+
+The advanced template's MCP server enables AI assistants (Claude Desktop, VS Code Copilot, etc.) to interact with your PostgreSQL database through tools, resources, and prompts.
 
 ## Overview
 
-The Model Context Protocol (MCP) is an open standard that allows AI applications to connect to external systems. pgmi implements MCP entirely in PostgreSQL, with a thin HTTP gateway for transport.
+The Model Context Protocol (MCP) is an open standard that allows AI applications to connect to external systems. The advanced template implements MCP entirely in PostgreSQL, with a thin HTTP gateway for transport.
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────────────────────┐
-│   AI Client     │────▶│  HTTP Gateway   │────▶│         PostgreSQL              │
-│ (Claude, etc.)  │     │ (Python/Go)     │     │                                 │
-│                 │◀────│                 │◀────│  api.mcp_handle_request()       │
-└─────────────────┘     └─────────────────┘     │  ├── tools (execute actions)    │
-                                                │  ├── resources (read data)      │
-                                                │  └── prompts (message templates)│
-                                                └─────────────────────────────────┘
-```
+![The advanced-template MCP gateway: MCP client, your scaffolded HTTP transport, and your SQL handlers inside PostgreSQL](diagrams/d15-template-mcp-gateway.drawio.svg)
 
 ## Quick Start
 
@@ -195,7 +196,7 @@ CREATE TYPE api.mcp_request AS (
     arguments jsonb,      -- Tool/prompt arguments
     uri text,             -- Resource URI
     context jsonb,        -- Auth: {"user_id": "...", "tenant_id": "..."}
-    request_id text       -- Must echo in response
+    request_id jsonb      -- JSON-RPC id (string, integer, or null); must echo in response
 );
 
 -- Response type (JSON-RPC 2.0 envelope)
@@ -333,28 +334,28 @@ END;
 
 ```sql
 -- Tool result (content array)
-api.mcp_tool_result(content jsonb, request_id text) RETURNS api.mcp_response
+api.mcp_tool_result(content jsonb, request_id jsonb) RETURNS api.mcp_response
 
 -- Resource result (contents array)
-api.mcp_resource_result(contents jsonb, request_id text) RETURNS api.mcp_response
+api.mcp_resource_result(contents jsonb, request_id jsonb) RETURNS api.mcp_response
 
 -- Prompt result (messages array)
-api.mcp_prompt_result(messages jsonb, request_id text) RETURNS api.mcp_response
+api.mcp_prompt_result(messages jsonb, request_id jsonb) RETURNS api.mcp_response
 
 -- Generic success
-api.mcp_success(result jsonb, request_id text) RETURNS api.mcp_response
+api.mcp_success(result jsonb, request_id jsonb) RETURNS api.mcp_response
 ```
 
 ### Error Responses
 
 ```sql
 -- Generic JSON-RPC error
-api.mcp_error(code integer, message text, request_id text) RETURNS api.mcp_response
+api.mcp_error(code integer, message text, request_id jsonb) RETURNS api.mcp_response
 
 -- Convenience wrappers (use -32603 Internal Error)
-api.mcp_tool_error(message text, request_id text) RETURNS api.mcp_response
-api.mcp_resource_error(message text, request_id text) RETURNS api.mcp_response
-api.mcp_prompt_error(message text, request_id text) RETURNS api.mcp_response
+api.mcp_tool_error(message text, request_id jsonb) RETURNS api.mcp_response
+api.mcp_resource_error(message text, request_id jsonb) RETURNS api.mcp_response
+api.mcp_prompt_error(message text, request_id jsonb) RETURNS api.mcp_response
 ```
 
 ### Content Helpers

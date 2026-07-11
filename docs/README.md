@@ -38,7 +38,8 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 
 **Using the advanced template?**
 1. [Script metadata](METADATA.md) — Script tracking with `<pgmi-meta>`
-2. [MCP integration](MCP.md) — AI assistant integration
+2. [MCP gateway](MCP.md) — Expose your deployed application to AI assistants
+3. [API keys](API-KEYS.md) — Authenticate callers of your generated APIs
 
 ---
 
@@ -76,14 +77,18 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 - **[Testing](TESTING.md)** — Database testing with automatic rollback
 - **[Script metadata](METADATA.md)** — Script tracking with UUIDs, idempotency, sort keys
 - **[Security](SECURITY.md)** — Secrets handling and CI/CD patterns
-- **[MCP integration](MCP.md)** — Model Context Protocol for AI assistants
 
 ### Operations
 - **[CI/CD](CICD.md)** — Deploy from GitHub Actions and other pipelines
 - **[Production](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 
-### Recipes (advanced, opt-in)
-- **[Semantic MCP curation](recipes/semantic-mcp-tool-curation.md)** — Surface the relevant subset of agent tools by embedding similarity (provider-abstracted; for tool-overload scale)
+### Advanced template subsystems
+These pages document application code scaffolded by `pgmi init --template advanced`. They are not pgmi core features — the generated SQL and gateways become code you own.
+
+- **[MCP gateway](MCP.md)** — Expose your deployed application's tools, resources, and prompts to AI assistants over HTTP
+- **[API keys](API-KEYS.md)** — API key authentication for callers of your generated REST/RPC APIs
+- **[Client guides](clients/README.md)** — Generate typed clients from your deployment's OpenAPI contract
+- **[Semantic MCP curation](recipes/semantic-mcp-tool-curation.md)** — Optional extension to the MCP gateway: surface the relevant tool subset by embedding similarity (for tool-overload scale)
 
 ### AI Integration
 ```bash

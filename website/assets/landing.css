@@ -180,6 +180,13 @@ code {
   padding-bottom: 124px;
 }
 
+.hero-pg {
+  display: block;
+  width: 46px;
+  height: auto;
+  margin-bottom: 14px;
+}
+
 .eyebrow {
   margin: 0 0 12px;
   color: var(--teal);

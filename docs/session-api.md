@@ -12,41 +12,13 @@ weight: 160
 
 ## How pgmi Actually Works
 
-When you run `pgmi deploy ./myproject`, here's what happens:
+When you run `pgmi deploy ./myproject`, pgmi connects, prepares the session objects shown in the diagram above (with `--verbose` it also runs `SET client_min_messages = 'debug'`, enabling `RAISE DEBUG` output), and then executes your `deploy.sql` — which queries the views and runs files directly:
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  1. CONNECT                                                              │
-│     pgmi connects to PostgreSQL                                         │
-└────────────────────────────────────────────┬────────────────────────────┘
-                                             │
-                                             ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  2. PREPARE SESSION                                                      │
-│     pgmi creates temporary tables and views (two-tier API):              │
-│                                                                          │
-│     Internal tables: _pgmi_source, _pgmi_parameter, _pgmi_source_metadata│
-│                      _pgmi_test_source, _pgmi_test_directory             │
-│     Public views:    pgmi_source_view, pgmi_parameter_view, pgmi_plan_view│
-│                      pgmi_source_metadata_view                           │
-│                      pgmi_test_source_view, pgmi_test_directory_view     │
-│                                                                          │
-│     If --verbose: SET client_min_messages = 'debug' (enables RAISE DEBUG)│
-│     Functions: pgmi_test_plan(), pgmi_test_generate()                    │
-└────────────────────────────────────────────┬────────────────────────────┘
-                                             │
-                                             ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  3. EXECUTE deploy.sql                                                   │
-│     YOUR deploy.sql runs and directly executes files using:              │
-│                                                                          │
-│     FOR v_file IN (SELECT * FROM pgmi_plan_view ORDER BY execution_order)│
-│     LOOP                                                                 │
-│         EXECUTE v_file.content;                                          │
-│     END LOOP;                                                            │
-│                                                                          │
-│     Transaction boundaries, error handling, execution order—all yours.   │
-└─────────────────────────────────────────────────────────────────────────┘
+```sql
+FOR v_file IN (SELECT * FROM pgmi_plan_view ORDER BY execution_order)
+LOOP
+    EXECUTE v_file.content;
+END LOOP;
 ```
 
 **The key insight:** deploy.sql is the deployment script. It queries `pgmi_plan_view` and uses `EXECUTE` to run files directly. You control the deployment logic — transactions, ordering, conditionals, error handling.
@@ -549,21 +521,7 @@ This is useful for CI/CD pipelines that need to inspect the test plan before run
 
 ## The Direct Execution Model (Critical Concept)
 
-**This is the most important thing to understand about pgmi.**
-
-```
-pgmi prepares session    deploy.sql runs
-      │                         │
-      ▼                         ▼
-┌─────────────┐           ┌─────────────┐
-│   SETUP     │           │  EXECUTION  │
-│             │           │             │
-│ Create temp │           │ Query files │
-│ tables with │──────────▶│ from views  │
-│ your files  │           │ EXECUTE     │
-│             │           │ directly    │
-└─────────────┘           └─────────────┘
-```
+**This is the most important thing to understand about pgmi:** pgmi's setup phase creates the temp tables holding your files; the execution phase is entirely your deploy.sql querying those views and running files with `EXECUTE`.
 
 **Your deploy.sql has full control.** You query `pgmi_plan_view`, loop through files, and use `EXECUTE` to run them. Transaction boundaries, error handling, execution order—all in your hands.
 
