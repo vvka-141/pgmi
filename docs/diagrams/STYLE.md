@@ -1,3 +1,10 @@
+---
+title: "Diagram Style Guide"
+build:
+  render: never
+  list: never
+---
+
 # Diagram Style Guide
 
 Conventions for all diagrams in this directory. The palette derives from the
@@ -21,7 +28,7 @@ as native to the docs site.
 | pgmi-owned components | `#eaf1e7` | forest `#143d2b` |
 | PostgreSQL / session elements | `#d9f4e8` | teal `#0f766e` |
 | Control handover / "your SQL" accent | amber `#b45309` fill with white text, or amber stroke | `#b45309` |
-| External / not-owned systems | `#f5f5f5` | `#d9ded5`, dashed |
+| External / not-owned systems | `#f5f5f5` | muted `#5d665d`, dashed |
 | Dividers, band borders | — | line `#d9ded5` |
 
 Amber is reserved for the single most important element per diagram — the
