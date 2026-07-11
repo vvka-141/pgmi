@@ -258,8 +258,9 @@ deployment transaction.
 statement aborts everything — the same trick this article teaches) and adds
 static lint; [golang-migrate](https://github.com/golang-migrate/migrate)
 generally leaves transaction handling to migration authors and records a
-*dirty* version after a failed migration — precisely the
-partially-applied-state problem transactional deployment avoids. [pgroll](https://github.com/xataio/pgroll) is solving a
+*dirty* version after a failed migration, stopping further migrations
+because the resulting database state may be partially applied or otherwise
+uncertain — exactly the uncertainty transactional deployment avoids. [pgroll](https://github.com/xataio/pgroll) is solving a
 different axis entirely — zero-downtime expand/contract over long-lived,
 deliberately non-atomic migrations — and complements rather than competes
 with a commit gate.
