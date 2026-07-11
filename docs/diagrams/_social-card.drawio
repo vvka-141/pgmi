@@ -15,6 +15,7 @@
     <mxCell id="fe2" style="html=1;endArrow=classic;strokeColor=#b45309;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="f2" target="f3"><mxGeometry relative="1" as="geometry" /></mxCell>
     <mxCell id="fe3" style="html=1;endArrow=classic;strokeColor=#0f766e;strokeWidth=2;exitX=1;exitY=0.3;entryX=0;entryY=0.5" edge="1" parent="1" source="f3" target="fc"><mxGeometry relative="1" as="geometry" /></mxCell>
     <mxCell id="fe4" style="html=1;endArrow=classic;strokeColor=#5d665d;strokeWidth=2;exitX=1;exitY=0.7;entryX=0;entryY=0.5" edge="1" parent="1" source="f3" target="fr"><mxGeometry relative="1" as="geometry" /></mxCell>
-    <mxCell id="url" value="vvka-141.github.io/pgmi" style="text;html=1;align=right;fontSize=20;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="800" y="570" width="340" height="30" as="geometry" /></mxCell>
+    <mxCell id="gatelbl" value="tests pass?" style="text;html=1;align=center;fontStyle=1;fontSize=18;fontColor=#b45309;" vertex="1" parent="1"><mxGeometry x="1000" y="360" width="160" height="24" as="geometry" /></mxCell>
+    <mxCell id="url" value="vvka-141.github.io/pgmi" style="text;html=1;align=right;fontSize=20;fontColor=#9aa39a;" vertex="1" parent="1"><mxGeometry x="800" y="580" width="340" height="30" as="geometry" /></mxCell>
   </root>
 </mxGraphModel>

@@ -31,6 +31,7 @@ Have Docker but no PostgreSQL at hand? This detour needs nothing else — no pas
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
 
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 pgmi init demo --template basic
 pgmi deploy demo -d pgmi_demo
 ```

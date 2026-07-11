@@ -9,7 +9,7 @@
 
 pgmi loads your project files into one PostgreSQL session as queryable data, then runs the `deploy.sql` **you** write. Your deployment selects migrations, loads reference data, tests the changed database — and commits only if everything passes. A failing test rolls the whole deployment back.
 
-Migration frameworks decide what runs and when to commit. pgmi hands those decisions to your SQL. (Architecturally it's an *execution fabric*, not a migration framework — [Why pgmi?](docs/WHY-PGMI.md) explains the distinction.)
+Migration frameworks provide their own ordering, history, and transaction model. pgmi gives those decisions to your deploy.sql. (Architecturally it's an *execution fabric*, not a migration framework — [Why pgmi?](docs/WHY-PGMI.md) explains the distinction.)
 
 ![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
@@ -20,6 +20,7 @@ Nothing running? Start a disposable PostgreSQL in Docker (already have one? poin
 ```bash
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 
 pgmi init demo --template basic
 pgmi deploy demo -d demo_db
@@ -37,7 +38,10 @@ Executing deploy.sql
 ✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
 ```
 
-Now the failure case. Add a migration and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
+Now the failure case: add a migration creating an `audit_log` table, and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
+
+<details>
+<summary>The two files behind the failure demo</summary>
 
 ```sql
 -- migrations/003_audit_log.sql
@@ -56,6 +60,8 @@ BEGIN
     END IF;
 END $$;
 ```
+
+</details>
 
 ```text
 [pgmi] Test suite started
@@ -141,7 +147,7 @@ Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkt
 ## Choose your path
 
 - **Just deploying SQL?** → the **basic** template: a small, explicit migration scaffold. `pgmi init myapp --template basic`
-- **Building a PostgreSQL-backed app, API, or MCP backend?** → the **advanced** template: a working reference application (multi-schema layout, role hierarchy, RLS, audit logging, REST/RPC/MCP endpoints, OpenAPI) that you own and trim — not a framework you adopt wholesale. Needs a role that can create roles, schemas, and extensions (no superuser); runs on managed providers like RDS, Cloud SQL, Supabase, and Neon — [details](docs/PRODUCTION.md#managed-cloud-postgresql).
+- **Building a PostgreSQL-backed application?** → the **advanced** template: an editable reference system with role separation, audit logging, and REST/RPC/MCP patterns — yours to own and trim, not a framework to adopt wholesale. Privilege requirements and managed-provider notes: [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql).
 - **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) and the honest [Tradeoffs](docs/TRADEOFFS.md).
 
 Both templates are production-capable; advanced is *more complete*, not *more production*. The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table; `pgmi templates list` shows what's available.

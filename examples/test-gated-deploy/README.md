@@ -16,6 +16,7 @@ Any reachable PostgreSQL works; a disposable Docker container is the fastest:
 ```bash
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 
 pgmi deploy . -d pgmi_example
 ```
