@@ -35,6 +35,7 @@ if [ ${#sources[@]} -eq 0 ]; then
 fi
 
 for src in "${sources[@]}"; do
+    case "$(basename "$src")" in _*) continue ;; esac
     out="${src%.drawio}.drawio.svg"
     echo "export: $src -> $out"
     "$DRAWIO" -x -f svg -e -b 10 -o "$out" "$src"
