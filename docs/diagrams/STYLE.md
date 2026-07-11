@@ -39,9 +39,20 @@ it is two diagrams.
 
 ## Layout
 
-- Layered horizontal bands, top-to-bottom flow; small uppercase muted labels
-  (`fontSize=11`, `fontStyle=1`, color `#5d665d`) above each band
-- Rounded rectangles (`rounded=1`), `fontSize=12` body text
+Pick the layout by diagram purpose; do not force one layout onto every diagram:
+
+- **Process / pipeline** (e.g. d01): left-to-right flow on a single shared
+  center-line — boxes in one logical row must never jog between heights
+- **Decision flow** (e.g. d00): top-to-bottom with a rhombus gate and
+  symmetric yes/no branches
+- **Comparison** (e.g. d02): side-by-side columns of equal width, mirrored
+  structure, divider line at the page center
+- **Interface mapping** (e.g. d03): two columns across a dashed boundary,
+  one-to-one rows horizontally aligned; group derived items explicitly
+
+Common to all: small uppercase muted section labels (`fontSize=11`,
+`fontStyle=1`, color `#5d665d`), rounded rectangles (`rounded=1`),
+`fontSize=12` body text
 - Dashed borders mean "external, not owned by pgmi"
 - Edges: solid, `endArrow=classic`; color follows the semantic of the flow
   (forest for pgmi actions, amber for the handover, muted for external)

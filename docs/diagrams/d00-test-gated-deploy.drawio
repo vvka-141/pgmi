@@ -1,0 +1,21 @@
+<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="720" pageHeight="560">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="lbl" value="ONE POSTGRESQL TRANSACTION" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="40" y="24" width="280" height="20" as="geometry" /></mxCell>
+    <mxCell id="begin" value="BEGIN" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#143d2b;fontStyle=1;fontSize=12" vertex="1" parent="1"><mxGeometry x="310" y="56" width="100" height="36" as="geometry" /></mxCell>
+    <mxCell id="a1" value="apply the files your deploy.sql selected&#10;migrations · reference data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="225" y="132" width="270" height="52" as="geometry" /></mxCell>
+    <mxCell id="a2" value="test the changed database&#10;CALL pgmi_test()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="225" y="224" width="270" height="52" as="geometry" /></mxCell>
+    <mxCell id="gate" value="tests&#10;pass?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#b45309;strokeColor=#b45309;fontColor=#ffffff;fontStyle=1;fontSize=12" vertex="1" parent="1"><mxGeometry x="295" y="316" width="130" height="80" as="geometry" /></mxCell>
+    <mxCell id="commit" value="COMMIT" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#0f766e;fontStyle=1;fontSize=12" vertex="1" parent="1"><mxGeometry x="510" y="440" width="120" height="40" as="geometry" /></mxCell>
+    <mxCell id="rollback" value="ROLLBACK" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;fontColor=#5d665d;fontStyle=1;fontSize=12" vertex="1" parent="1"><mxGeometry x="90" y="440" width="120" height="40" as="geometry" /></mxCell>
+    <mxCell id="capC" value="changes are live" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#0f766e;" vertex="1" parent="1"><mxGeometry x="490" y="488" width="160" height="20" as="geometry" /></mxCell>
+    <mxCell id="capR" value="database unchanged · exit 13" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="60" y="488" width="180" height="20" as="geometry" /></mxCell>
+    <mxCell id="e1" style="html=1;endArrow=classic;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="begin" target="a1"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e2" style="html=1;endArrow=classic;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="a1" target="a2"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e3" style="html=1;endArrow=classic;strokeColor=#b45309;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="a2" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e4" value="yes" style="html=1;endArrow=classic;strokeColor=#0f766e;fontColor=#0f766e;fontStyle=1;fontSize=11;labelBackgroundColor=#fbfaf7;edgeStyle=orthogonalEdgeStyle;rounded=1;exitX=1;exitY=0.5;entryX=0.5;entryY=0" edge="1" parent="1" source="gate" target="commit"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="570" y="356" /></Array></mxGeometry></mxCell>
+    <mxCell id="e5" value="no" style="html=1;endArrow=classic;strokeColor=#5d665d;fontColor=#5d665d;fontStyle=1;fontSize=11;labelBackgroundColor=#fbfaf7;edgeStyle=orthogonalEdgeStyle;rounded=1;exitX=0;exitY=0.5;entryX=0.5;entryY=0" edge="1" parent="1" source="gate" target="rollback"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="150" y="356" /></Array></mxGeometry></mxCell>
+    <mxCell id="cap" value="migrations, data loads, and tests are one transaction — a failing test means the deployment never happened" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="0" y="528" width="720" height="20" as="geometry" /></mxCell>
+  </root>
+</mxGraphModel>

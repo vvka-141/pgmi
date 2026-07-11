@@ -1,0 +1,5 @@
+# Connection comes from PGMI_CONNECTION_STRING or CLI flags — see README.md.
+params:
+  env: development
+
+timeout: 3m

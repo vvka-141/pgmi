@@ -11,11 +11,16 @@ pgmi loads your project files into one PostgreSQL session as queryable data, the
 
 Migration frameworks decide what runs and when to commit. pgmi hands those decisions to your SQL. (Architecturally it's an *execution fabric*, not a migration framework — [Why pgmi?](docs/WHY-PGMI.md) explains the distinction.)
 
-![The pgmi model: pgmi prepares one PostgreSQL session and hands control to your deploy.sql](docs/diagrams/d01-the-pgmi-model.drawio.svg)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
 ## See it work
 
+Nothing running? Start a disposable PostgreSQL in Docker (already have one? point `PGMI_CONNECTION_STRING` at it and skip the first line):
+
 ```bash
+docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
+
 pgmi init demo --template basic
 pgmi deploy demo -d demo_db
 ```
@@ -32,7 +37,15 @@ Executing deploy.sql
 ✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
 ```
 
-Now the failure case. Add `migrations/003_audit_log.sql` creating an `audit_log` table, and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
+Now the failure case. Add a migration and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
+
+```sql
+-- migrations/003_audit_log.sql
+CREATE TABLE audit_log (
+    event text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+```
 
 ```sql
 -- __test__/test_audit_log.sql
@@ -52,6 +65,8 @@ pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQL
 ```
 
 pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from the new migration **does not exist** — the database is exactly as it was before the deploy. Tests run inside the deployment transaction (each isolated in its own savepoint, so test data never persists), and only a fully verified deployment commits.
+
+This exact demonstration lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) and runs in CI on every push — both paths.
 
 > **Requirements:** PostgreSQL 11+ (advanced template 15+ — [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) over a **direct** connection or session-mode pooler. Transaction-mode poolers (PgBouncer txn mode, RDS Proxy) reassign connections between statements and destroy the session temp tables pgmi depends on — [details](docs/PRODUCTION.md#connection-requirements).
 

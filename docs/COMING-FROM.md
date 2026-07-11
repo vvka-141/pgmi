@@ -311,7 +311,7 @@ Sqitch is the closest tool to pgmi in spirit — native SQL scripts, no DSL, no 
 
 Be clear-eyed about the trade: Sqitch gives you a mature change-management **model** — deploy/verify/revert, dependency resolution, and history are first-class tool concepts you configure. pgmi gives you a smaller **mechanism** — your project files as queryable session data — and delegates the entire orchestration program to your SQL.
 
-Choose Sqitch if you want the tool to own change state and reversion. Choose pgmi if your deployments need logic Sqitch's model doesn't express — test-gated commits, environment branching, data loading in the same transaction — and you're willing to write that logic yourself.
+Choose Sqitch if you want the tool to own change state and reversion. Choose pgmi when you want test gates, environment branching, and data loading expressed inside one SQL-controlled deployment program — the deployment transaction and its verification gate as a single control flow you write yourself.
 
 ### Migration path
 

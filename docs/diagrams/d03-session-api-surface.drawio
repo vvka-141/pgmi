@@ -1,10 +1,11 @@
-<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="980" pageHeight="500">
+<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="980" pageHeight="520">
   <root>
     <mxCell id="0" />
     <mxCell id="1" parent="0" />
     <mxCell id="lblL" value="PGMI GO CORE — WRITES (internal)" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="40" y="28" width="300" height="20" as="geometry" /></mxCell>
     <mxCell id="lblR" value="YOUR DEPLOY.SQL — READS (stable public API)" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#143d2b;" vertex="1" parent="1"><mxGeometry x="560" y="28" width="360" height="20" as="geometry" /></mxCell>
-    <mxCell id="bnd" style="html=1;endArrow=none;dashed=1;strokeColor=#5d665d;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="480" y="52" as="sourcePoint" /><mxPoint x="480" y="464" as="targetPoint" /></mxGeometry></mxCell>
+    <mxCell id="bnd" style="html=1;endArrow=none;dashed=1;strokeColor=#5d665d;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="480" y="52" as="sourcePoint" /><mxPoint x="480" y="480" as="targetPoint" /></mxGeometry></mxCell>
+    <mxCell id="grp" value="DERIVED API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0f766e;dashed=1;verticalAlign=top;align=left;fontStyle=1;fontSize=10;fontColor=#0f766e;spacingLeft=10;spacingTop=2" vertex="1" parent="1"><mxGeometry x="540" y="318" width="340" height="158" as="geometry" /></mxCell>
     <mxCell id="t1" value="_pgmi_source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="60" width="230" height="40" as="geometry" /></mxCell>
     <mxCell id="t2" value="_pgmi_source_metadata" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="114" width="230" height="40" as="geometry" /></mxCell>
     <mxCell id="t3" value="_pgmi_parameter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="168" width="230" height="40" as="geometry" /></mxCell>
@@ -24,6 +25,6 @@
     <mxCell id="ev5" style="html=1;endArrow=classic;strokeColor=#0f766e;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="t5" target="v5"><mxGeometry relative="1" as="geometry" /></mxCell>
     <mxCell id="ep1" style="html=1;endArrow=classic;strokeColor=#0f766e;edgeStyle=orthogonalEdgeStyle;rounded=1;exitX=1;exitY=0.85;entryX=0;entryY=0.35" edge="1" parent="1" source="t1" target="vp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="380" y="94" /><mxPoint x="380" y="358" /></Array></mxGeometry></mxCell>
     <mxCell id="ep2" style="html=1;endArrow=classic;strokeColor=#0f766e;edgeStyle=orthogonalEdgeStyle;rounded=1;exitX=1;exitY=0.85;entryX=0;entryY=0.65" edge="1" parent="1" source="t2" target="vp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="410" y="148" /><mxPoint x="410" y="373" /></Array></mxGeometry></mxCell>
-    <mxCell id="cap" value="deploy.sql never touches _pgmi_* internals —&#10;the views and functions are the stable contract (api-v1)" style="text;html=1;align=left;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="40" y="404" width="380" height="40" as="geometry" /></mxCell>
+    <mxCell id="cap" value="deploy.sql never touches _pgmi_* internals — the views and functions are the stable contract (api-v1)" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="0" y="494" width="980" height="20" as="geometry" /></mxCell>
   </root>
 </mxGraphModel>
