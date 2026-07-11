@@ -10,6 +10,8 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 
 > **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
+![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
+
 ## Quick concept mapping
 
 | Concept | Flyway | Liquibase | pgmi |

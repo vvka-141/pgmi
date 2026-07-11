@@ -1,0 +1,18 @@
+<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="980" pageHeight="430">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="lblProj" value="YOUR PROJECT" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="30" y="112" width="200" height="20" as="geometry" /></mxCell>
+    <mxCell id="proj" value="project files&#10;migrations/ · functions/&#10;__test__/ · deploy.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#5d665d;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="30" y="150" width="180" height="100" as="geometry" /></mxCell>
+    <mxCell id="cli" value="pgmi deploy&#10;connect · load · hand off" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="260" y="150" width="150" height="100" as="geometry" /></mxCell>
+    <mxCell id="sess" value="ONE POSTGRESQL SESSION" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;verticalAlign=top;align=left;fontStyle=1;fontSize=11;fontColor=#0f766e;spacingLeft=12;spacingTop=4" vertex="1" parent="1"><mxGeometry x="460" y="46" width="490" height="330" as="geometry" /></mxCell>
+    <mxCell id="views" value="session state (pg_temp)&#10;pgmi_source_view&#10;pgmi_parameter_view&#10;pgmi_plan_view" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="480" y="116" width="170" height="100" as="geometry" /></mxCell>
+    <mxCell id="dep" value="deploy.sql takes control&#10;ordering · transactions · tests" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b45309;strokeColor=#b45309;fontColor=#ffffff;fontStyle=1;fontSize=12" vertex="1" parent="1"><mxGeometry x="770" y="116" width="170" height="100" as="geometry" /></mxCell>
+    <mxCell id="db" value="your database" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#ffffff;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="775" y="256" width="160" height="80" as="geometry" /></mxCell>
+    <mxCell id="e1" style="html=1;endArrow=classic;strokeColor=#143d2b;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="proj" target="cli"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e2" value="loads files + parameters" style="html=1;endArrow=classic;strokeColor=#143d2b;fontColor=#5d665d;fontSize=11;labelBackgroundColor=#fbfaf7;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="cli" target="views"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e3" value="hands control" style="html=1;endArrow=classic;strokeColor=#b45309;strokeWidth=2;fontColor=#b45309;fontStyle=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="views" target="dep"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e4" value="executes your plan" style="html=1;endArrow=classic;strokeColor=#143d2b;fontColor=#5d665d;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="dep" target="db"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="cap" value="pgmi prepares the session. Your SQL decides the deployment." style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="460" y="390" width="490" height="20" as="geometry" /></mxCell>
+  </root>
+</mxGraphModel>

@@ -14,7 +14,7 @@ Unlike migration frameworks that decide when to commit and what to run, pgmi han
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
 - **AI- and MCP-native** — the binary ships embedded skills (`pgmi ai`), and the advanced template includes a Model Context Protocol backend.
 
-![pgmi deployment flow](pgmi-deploy.png)
+![The pgmi model: pgmi prepares one PostgreSQL session and hands control to your deploy.sql](docs/diagrams/d01-the-pgmi-model.drawio.svg)
 
 
 ## Quick example

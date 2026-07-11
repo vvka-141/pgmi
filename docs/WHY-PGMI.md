@@ -24,6 +24,8 @@ Your files → PostgreSQL temp tables → YOUR deploy.sql decides everything →
 
 The difference: **you write the deployment logic in SQL, not configuration.**
 
+![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
+
 ## A concrete example
 
 Suppose you need environment-specific deployment behavior:

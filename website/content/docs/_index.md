@@ -10,3 +10,5 @@ bookFlatSection: false
 Reference documentation for pgmi — the PostgreSQL-native execution fabric.
 Browse the sidebar, or start with [Why pgmi]({{< relref "why-pgmi" >}}) and the
 [Quickstart]({{< relref "quickstart" >}}).
+
+![The pgmi model: pgmi prepares one PostgreSQL session and hands control to your deploy.sql](diagrams/d01-the-pgmi-model.drawio.svg)
