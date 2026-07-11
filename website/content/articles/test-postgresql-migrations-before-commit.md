@@ -20,7 +20,7 @@ in its migrated state while rollback is still one statement away.
 PostgreSQL supports this with no framework at all: run the migration **and**
 the checks that prove it worked inside one transaction, and let `COMMIT`
 depend on the checks. If an assertion fails, the deployment doesn't fail
-*partially* — it never happened.
+*partially* — within PostgreSQL's transactional scope, it never happened.
 
 The pattern needs no framework: first we'll build it with plain SQL and psql,
 then look at where its limits are and how to automate it across a project.
@@ -54,10 +54,11 @@ you make **your own checks** part of the transaction.
 Suppose a deployment adds a `region` column, backfills it from a mapping
 table, and makes it mandatory. The interesting question isn't "did the
 statements run" — the DDL itself will complain if it can't. The question is
-one no constraint can express: **did every customer get the region its
-country implies?** A backfill can write a wrong-but-non-null value — an
-ambiguous mapping, a join that silently matched the wrong rows — and every
-statement still succeeds. Ask the real question *before* committing:
+one the new `NOT NULL` constraint cannot answer: **did every customer get
+the region its country implies?** A backfill can write a wrong-but-non-null
+value — an ambiguous mapping, a join that silently matched the wrong rows —
+and every statement still succeeds. Ask the real question *before*
+committing:
 
 ```sql
 -- deploy.sql
@@ -100,11 +101,16 @@ COMMIT;
 The two checks earn their place differently. The unmapped count fires before
 `SET NOT NULL` would, turning a generic constraint error into a diagnostic
 with numbers in it. The mismatch count is the real gate: it catches a
-backfill that wrote the *wrong* non-null region — a duplicate country in the
-mapping table, a join condition edited badly in review — which no constraint
-in the migration can detect. And because assertions state invariants rather
-than re-checking statements, they keep protecting the deployment when
-someone rewrites the backfill next quarter.
+wrong-but-non-null backfill that `NOT NULL` happily accepts. A persistent
+relational constraint — a composite foreign key onto the mapping table —
+could enforce this relationship continuously, and where that fits your
+model it is the stronger tool; the deployment gate earns its keep when such
+a constraint is absent, impractical, or when you want a diagnostic count
+*before* introducing it. And because the assertion describes the intended
+state rather than the backfill implementation, it remains valid if the
+backfill is rewritten before deployment or reused in a later migration —
+though unlike a constraint, it protects only deployments in which it
+actually runs.
 
 Run it with psql configured to stop on the first error:
 
@@ -250,10 +256,10 @@ deployment transaction.
 [Atlas](https://atlasgo.io/versioned/apply) applies files transactionally
 (`--tx-mode all` puts the whole batch in one transaction, where a raising
 statement aborts everything — the same trick this article teaches) and adds
-static lint; [golang-migrate](https://github.com/golang-migrate/migrate/issues/196)
-doesn't manage transactions for you and marks the schema *dirty* on failure,
-which is precisely the partially-applied-state problem transactional
-deployment avoids. [pgroll](https://github.com/xataio/pgroll) is solving a
+static lint; [golang-migrate](https://github.com/golang-migrate/migrate)
+generally leaves transaction handling to migration authors and records a
+*dirty* version after a failed migration — precisely the
+partially-applied-state problem transactional deployment avoids. [pgroll](https://github.com/xataio/pgroll) is solving a
 different axis entirely — zero-downtime expand/contract over long-lived,
 deliberately non-atomic migrations — and complements rather than competes
 with a commit gate.
