@@ -1,0 +1,18 @@
+<mxGraphModel adaptiveColors="none" background="#111711" grid="0" page="1" pageWidth="1200" pageHeight="630">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="bg" style="rounded=0;fillColor=#111711;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="0" y="0" width="1200" height="630" as="geometry" /></mxCell>
+    <mxCell id="eyebrow" value="PROGRAMMABLE POSTGRESQL DEPLOYMENTS" style="text;html=1;align=left;fontStyle=1;fontSize=22;fontColor=#8be3cf;spacing=0;" vertex="1" parent="1"><mxGeometry x="80" y="80" width="800" height="30" as="geometry" /></mxCell>
+    <mxCell id="brand" value="pgmi" style="text;html=1;align=left;fontStyle=1;fontSize=120;fontColor=#f7f3ea;" vertex="1" parent="1"><mxGeometry x="72" y="120" width="500" height="150" as="geometry" /></mxCell>
+    <mxCell id="tag" value="Test the deployed database before you commit it." style="text;html=1;align=left;fontSize=34;fontColor=#f7f3ea;" vertex="1" parent="1"><mxGeometry x="80" y="300" width="1040" height="50" as="geometry" /></mxCell>
+    <mxCell id="f1" value="your files" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#5d665d;strokeWidth=2;fontColor=#f7f3ea;fontSize=24" vertex="1" parent="1"><mxGeometry x="80" y="430" width="220" height="80" as="geometry" /></mxCell>
+    <mxCell id="f2" value="one PostgreSQL session" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0f766e;strokeWidth=2;fontColor=#8be3cf;fontSize=24" vertex="1" parent="1"><mxGeometry x="360" y="430" width="280" height="80" as="geometry" /></mxCell>
+    <mxCell id="f3" value="deploy.sql decides" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b45309;strokeColor=#b45309;fontColor=#ffffff;fontStyle=1;fontSize=24" vertex="1" parent="1"><mxGeometry x="700" y="430" width="260" height="80" as="geometry" /></mxCell>
+    <mxCell id="f4" value="database" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=14;fillColor=none;strokeColor=#0f766e;strokeWidth=2;fontColor=#f7f3ea;fontSize=24" vertex="1" parent="1"><mxGeometry x="1020" y="425" width="120" height="90" as="geometry" /></mxCell>
+    <mxCell id="fe1" style="html=1;endArrow=classic;strokeColor=#5d665d;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="f1" target="f2"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="fe2" style="html=1;endArrow=classic;strokeColor=#b45309;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="f2" target="f3"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="fe3" style="html=1;endArrow=classic;strokeColor=#0f766e;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="f3" target="f4"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="url" value="vvka-141.github.io/pgmi" style="text;html=1;align=right;fontSize=20;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="800" y="570" width="340" height="30" as="geometry" /></mxCell>
+  </root>
+</mxGraphModel>

@@ -1,0 +1,32 @@
+# pgmi
+
+> pgmi is a PostgreSQL-native deployment tool ("execution fabric"). It loads a project's files into one PostgreSQL session as queryable temp-table data, then executes the project's own deploy.sql, which selects files, controls transactions, runs database tests inside the deployment transaction, and decides whether to commit. The CLI handles infrastructure only (connections, parameters, auth); all deployment behavior lives in the user's SQL.
+
+Key facts:
+- Install: https://github.com/vvka-141/pgmi (binary installers, Homebrew, APT, or `go install github.com/vvka-141/pgmi/cmd/pgmi@latest`)
+- The session API is a set of temp views the deploy.sql queries: pgmi_source_view (files), pgmi_parameter_view (CLI params), pgmi_plan_view (metadata-driven ordering), plus pgmi_test_plan()/pgmi_test_generate() for tests
+- `CALL pgmi_test()` runs `__test__/` tests inside the deployment transaction with savepoint isolation; a failing test aborts the whole deploy (exit code 13)
+- Requires a direct connection or session-mode pooler; transaction-mode poolers (PgBouncer txn mode, RDS Proxy) are incompatible
+- The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai`, `pgmi ai skills`, `pgmi ai contract`; `pgmi serve` exposes pgmi commands over MCP (stdio)
+
+## Docs
+
+- [Overview](https://vvka-141.github.io/pgmi/docs/readme/): documentation map by reader intent
+- [Quickstart](https://vvka-141.github.io/pgmi/docs/quickstart/): first deployment, including a five-minute Docker path
+- [Why pgmi](https://vvka-141.github.io/pgmi/docs/why-pgmi/): when the approach fits, comparison with Flyway/Liquibase/Sqitch/Atlas
+- [deploy.sql guide](https://vvka-141.github.io/pgmi/docs/deploy-guide/): authoring patterns — ordering, environment branching, data ingestion, multi-phase
+- [Session API](https://vvka-141.github.io/pgmi/docs/session-api/): views, columns, functions reference
+- [Testing](https://vvka-141.github.io/pgmi/docs/testing/): test directories, fixtures, savepoint isolation, gated deployments
+- [CLI reference](https://vvka-141.github.io/pgmi/docs/cli/): commands, flags, exit codes
+- [Configuration](https://vvka-141.github.io/pgmi/docs/configuration/): pgmi.yaml and zero-flag deployments
+- [Connections](https://vvka-141.github.io/pgmi/docs/connections/): cloud auth (Azure Entra ID, AWS IAM, Google Cloud SQL IAM), SSL, poolers
+- [Security](https://vvka-141.github.io/pgmi/docs/security/): secrets handling and CI/CD patterns
+- [Production guide](https://vvka-141.github.io/pgmi/docs/production/): compatibility matrix, rollback, monitoring
+- [MCP integration](https://vvka-141.github.io/pgmi/docs/mcp/): AI-assistant integration surfaces
+
+## Optional
+
+- [Coming from other tools](https://vvka-141.github.io/pgmi/docs/coming-from/): Flyway, Liquibase, Sqitch, raw psql migration guides
+- [Tradeoffs](https://vvka-141.github.io/pgmi/docs/tradeoffs/): honest limitations and who should not use pgmi
+- [Metadata](https://vvka-141.github.io/pgmi/docs/metadata/): optional pgmi-meta blocks for ordering and idempotency tracking
+- [CI/CD](https://vvka-141.github.io/pgmi/docs/cicd/): pipeline deployment examples

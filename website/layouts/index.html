@@ -4,13 +4,31 @@
     {{- $description := .Params.description | default site.Params.description -}}
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ site.Title }}</title>
+    <title>pgmi — Programmable PostgreSQL deployments</title>
     <meta name="description" content="{{ $description }}">
-    <meta property="og:title" content="{{ site.Title }}">
+    <meta property="og:title" content="pgmi — Programmable PostgreSQL deployments">
     <meta property="og:description" content="{{ $description }}">
     <meta property="og:type" content="website">
     <meta property="og:url" content="{{ .Permalink }}">
-    <meta name="twitter:card" content="summary">
+    <meta property="og:image" content="{{ "social-card.png" | absURL }}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="{{ "social-card.png" | absURL }}">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "pgmi",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows, macOS, Linux",
+      "description": {{ $description | jsonify }},
+      "url": {{ .Permalink | jsonify }},
+      "license": "https://opensource.org/licenses/MPL-2.0",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "softwareHelp": {{ "docs/" | absURL | jsonify }},
+      "downloadUrl": "https://github.com/vvka-141/pgmi/releases",
+      "sameAs": ["https://github.com/vvka-141/pgmi"]
+    }
+    </script>
     <link rel="canonical" href="{{ .Permalink }}">
     <link rel="icon" href="{{ "favicon.svg" | relURL }}" type="image/svg+xml">
     {{- $css := resources.Get "landing.css" | minify | fingerprint -}}
@@ -35,11 +53,13 @@
         <div class="hero-visual" aria-hidden="true">
           <div class="terminal-window">
             <div class="terminal-bar"><span></span><span></span><span></span></div>
-            <pre><code>$ pgmi deploy . --compat 1
-NOTICE: loaded 18 source files into pg_temp
-NOTICE: deploy.sql selected 6 migration steps
-NOTICE: running tests with savepoint isolation
-NOTICE: deployment complete</code></pre>
+            <pre><code>$ pgmi deploy . -d demo_db
+Loaded 7 files
+Executing deploy.sql
+[pgmi] Test suite started
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test suite completed (3 steps)
+✓ deployed in 0.91s</code></pre>
           </div>
           <div class="flow-row">
             <span>files</span>
@@ -50,12 +70,12 @@ NOTICE: deployment complete</code></pre>
         </div>
 
         <div class="shell hero-copy">
-          <p class="eyebrow">PostgreSQL-native deployment</p>
+          <p class="eyebrow">Programmable PostgreSQL deployments</p>
           <h1>pgmi</h1>
-          <p class="lede">An execution fabric for teams that want PostgreSQL to drive deployment logic, not a migration framework that hides it.</p>
+          <p class="lede">Test the deployed database before you commit it. pgmi loads your project into one PostgreSQL session — your deploy.sql selects files, controls transactions, runs database tests, and decides whether to commit.</p>
           <div class="hero-actions">
-            <a class="button primary" href="{{ "docs/quickstart/" | relURL }}">Start with Quickstart</a>
-            <a class="button secondary" href="{{ "docs/why-pgmi/" | relURL }}">Why pgmi</a>
+            <a class="button primary" href="{{ "docs/quickstart/" | relURL }}">See a complete deployment</a>
+            <a class="button secondary" href="{{ "docs/coming-from/" | relURL }}">Coming from Flyway or Sqitch?</a>
           </div>
         </div>
       </section>
