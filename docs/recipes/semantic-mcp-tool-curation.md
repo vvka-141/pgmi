@@ -6,6 +6,11 @@ weight: 10
 
 # Recipe: Semantic Agent-Tool Curation
 
+> **Scope: optional extension to the advanced-template MCP gateway.**
+> Prerequisites: a project scaffolded from the advanced template, its handler
+> registry, a vector extension/provider decision, and enough MCP tools that
+> curation is worth the machinery.
+
 > **Use this only at tool-overload scale.** When an agent has *dozens* of tools,
 > exposing all of them at once dilutes the model's attention and inflates token
 > cost. This recipe surfaces the relevant subset for a given query. If your

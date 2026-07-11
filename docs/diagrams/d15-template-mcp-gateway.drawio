@@ -1,0 +1,19 @@
+<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="980" pageHeight="400">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="lblA" value="MCP CLIENT" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="40" y="110" width="160" height="20" as="geometry" /></mxCell>
+    <mxCell id="cli" value="AI assistant&#10;Claude · IDE agents" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;dashed=1;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="150" width="170" height="90" as="geometry" /></mxCell>
+    <mxCell id="lblB" value="YOUR TRANSPORT — SCAFFOLDED" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="300" y="110" width="240" height="20" as="geometry" /></mxCell>
+    <mxCell id="gw" value="tools/mcp-gateway.py&#10;reference HTTP transport&#10;(stdlib http.server)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#5d665d;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="300" y="150" width="200" height="90" as="geometry" /></mxCell>
+    <mxCell id="pg" value="POSTGRESQL — YOUR DEPLOYED APPLICATION" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;verticalAlign=top;align=left;fontStyle=1;fontSize=11;fontColor=#0f766e;spacingLeft=12;spacingTop=4" vertex="1" parent="1"><mxGeometry x="580" y="46" width="360" height="300" as="geometry" /></mxCell>
+    <mxCell id="hr" value="api.mcp_handle_request(request, context)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="610" y="100" width="300" height="50" as="geometry" /></mxCell>
+    <mxCell id="reg" value="handler registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="610" y="180" width="300" height="44" as="geometry" /></mxCell>
+    <mxCell id="trp" value="tools · resources · prompts&#10;(your SQL handlers)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="610" y="254" width="300" height="60" as="geometry" /></mxCell>
+    <mxCell id="e1" value="HTTP&#10;JSON-RPC 2.0" style="html=1;endArrow=classic;startArrow=classic;strokeColor=#143d2b;fontColor=#5d665d;fontSize=11;labelBackgroundColor=#fbfaf7;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="cli" target="gw"><mxGeometry relative="1" as="geometry"><mxPoint as="offset" x="0" y="-12" /></mxGeometry></mxCell>
+    <mxCell id="e2" value="SQL" style="html=1;endArrow=classic;startArrow=classic;strokeColor=#0f766e;fontColor=#5d665d;fontSize=11;labelBackgroundColor=#fbfaf7;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="gw" target="hr"><mxGeometry relative="1" as="geometry"><mxPoint as="offset" x="0" y="-12" /></mxGeometry></mxCell>
+    <mxCell id="e3" value="dispatches by method" style="html=1;endArrow=classic;strokeColor=#0f766e;fontColor=#5d665d;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="hr" target="reg"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e4" style="html=1;endArrow=classic;strokeColor=#0f766e;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="reg" target="trp"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="cap" value="the advanced-template HTTP gateway — separate from the core CLI's pgmi serve stdio server" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="0" y="368" width="980" height="20" as="geometry" /></mxCell>
+  </root>
+</mxGraphModel>

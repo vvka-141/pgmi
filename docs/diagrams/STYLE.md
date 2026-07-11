@@ -76,6 +76,19 @@ Library*; when authoring XML directly, copy the `data:image/svg+xml;base64,…`
 payload into an `image=` style (drop the `;base64` marker inside style
 strings). All icons embed as data URIs, so diagrams stay self-contained.
 
+## When to draw (and when not to)
+
+Use a draw.io diagram when the visual explains ownership, flow, lifecycle,
+trust boundaries, or relationships among three or more components. Keep
+monospace text for directory trees, commands, terminal output, exact
+execution sequences (e.g. SAVEPOINT sequences that map to generated SQL),
+and small one-dimensional mappings — text stays copyable, greppable, and
+synchronized with filenames.
+
+Never present the same concept as both a draw.io diagram and a large ASCII
+diagram on the same page. Keep a concise text explanation for accessibility
+and search — not a second visual representation.
+
 ## Content rules
 
 - One diagram, one stable concept; no CLI flag lists or volatile file names

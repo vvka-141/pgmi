@@ -202,7 +202,7 @@ A poor fit when:
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [CI/CD](docs/CICD.md) | Deploy from GitHub Actions and other pipelines |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
-| [MCP Integration](docs/MCP.md) | Model Context Protocol for AI assistants |
+| [Advanced-template MCP gateway](docs/MCP.md) | Expose your deployed application to AI assistants |
 
 ## AI assistant support
 
@@ -217,7 +217,7 @@ pgmi ai setup              # Materialize a discoverable skill into the project
 pgmi ai check              # Report whether that skill exists and is current
 ```
 
-`pgmi serve` additionally exposes pgmi commands as MCP tools over stdio — see [MCP Integration](docs/MCP.md).
+`pgmi serve` additionally exposes pgmi commands as MCP tools over stdio — see the [CLI reference](docs/CLI.md#pgmi-serve). (The advanced template's [MCP gateway](docs/MCP.md) is a separate surface: it exposes your *deployed application* to AI assistants.)
 
 ## Configuration and authentication
 

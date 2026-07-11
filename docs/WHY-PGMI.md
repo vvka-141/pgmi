@@ -10,17 +10,7 @@ pgmi takes a different approach to database deployments. This document explains 
 
 ## The core idea
 
-Most deployment tools work like this:
-
-```
-Your files → Tool decides order → Tool decides transactions → Database
-```
-
-pgmi works like this:
-
-```
-Your files → PostgreSQL temp tables → YOUR deploy.sql decides everything → Database
-```
+Most deployment tools take your files, decide the order and the transaction boundaries themselves, and apply the result. pgmi loads your files into PostgreSQL temp tables and lets **your deploy.sql** decide everything on the way to the database.
 
 The difference: **you write the deployment logic in SQL, not configuration.**
 
