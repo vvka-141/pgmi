@@ -28,11 +28,24 @@
 --   §pgmi_persist_test_plan - Export test plan to permanent schema
 -- ============================================================================
 
--- Clean up (allows re-running during development)
-DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+-- Clean up (allows re-running during development).
+--
+-- Guarded on pg_my_temp_schema(): on a fresh session no temp schema exists yet,
+-- and each DROP ... IF EXISTS pg_temp.* would raise
+--   NOTICE: schema "pg_temp" does not exist, skipping
+-- These are the first four lines a user sees on every deploy, and they are pgmi
+-- talking to itself. Nothing to drop then anyway, so skip the block entirely.
+-- (pg_my_temp_schema() returns 0 until the session materializes pg_temp; note
+-- to_regnamespace('pg_temp') does NOT work here — it never resolves the alias.)
+DO $$
+BEGIN
+    IF pg_my_temp_schema() <> 0 THEN
+        DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+    END IF;
+END $$;
 
 
 -- §_pgmi_parameter ───────────────────────────────────────────────────────────

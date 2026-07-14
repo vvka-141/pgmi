@@ -295,11 +295,11 @@ What this does:
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-NOTICE: Dev seed: admin user ready (admin@example.com id=1)
-NOTICE: [pgmi] Test suite started
-NOTICE: [pgmi] Fixture: ./__test__/_setup.sql
-NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
-NOTICE: [pgmi] Test suite completed (...)
+Dev seed: admin user ready (admin@example.com id=1)
+[pgmi] Test suite started
+[pgmi] Fixture: ./__test__/_setup.sql
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test suite completed (3 steps)
 
   ___   ___  _  _ ___
  |   \ / _ \| \| | __|

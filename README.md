@@ -27,14 +27,23 @@ pgmi deploy demo -d demo_db
 ```
 
 ```text
+Database "demo_db" does not exist; creating
 Preparing session: scanning files, loading parameters
 Loaded 7 files
+Loaded 1 parameters
 Executing deploy.sql
 [development] Deploying demo v1.0.0 (5 file(s) in project)
+Dev seed: admin user ready (admin@example.com id=1)
 [pgmi] Test suite started
 [pgmi] Fixture: ./__test__/_setup.sql
 [pgmi] Test: ./__test__/test_user_crud.sql
 [pgmi] Test suite completed (3 steps)
+
+  ___   ___  _  _ ___
+ |   \ / _ \| \| | __|
+ | |) | (_) | .` | _|
+ |___/ \___/|_|\_|___|
+
 ✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
 ```
 

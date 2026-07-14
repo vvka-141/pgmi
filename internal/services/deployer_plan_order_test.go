@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	testhelpers "github.com/vvka-141/pgmi/internal/testing"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -224,6 +226,59 @@ func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
 
 	if out := pgmi.FormatError(err); !strings.Contains(out, "LINE ") {
 		t.Errorf("FormatError should point at the offending line, got:\n%s", out)
+	}
+}
+
+// TestDeploy_SessionPreparationIsSilent guards the first thing a new user sees.
+// Session preparation is pgmi's own plumbing; its notices are noise the user did
+// not ask for, and the README/Quickstart transcripts should not have to abridge
+// them away. Notices raised BY deploy.sql remain the user's console and are
+// untouched — this asserts only that pgmi itself says nothing.
+func TestDeploy_SessionPreparationIsSilent(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(projectPath, "deploy.sql"),
+		[]byte("SELECT 1;\n"), 0644,
+	); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	var mu sync.Mutex
+	var notices []string
+
+	orig := db.NoticeHandler
+	db.NoticeHandler = func(message, _, _ string) {
+		mu.Lock()
+		notices = append(notices, message)
+		mu.Unlock()
+	}
+	defer func() { db.NoticeHandler = orig }()
+
+	testDB := "pgmi_silent_prep"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notices) > 0 {
+		t.Errorf("session preparation must not emit notices; a deploy.sql of `SELECT 1;` produced %d:\n  %s",
+			len(notices), strings.Join(notices, "\n  "))
 	}
 }
 
