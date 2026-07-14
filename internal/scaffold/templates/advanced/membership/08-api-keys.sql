@@ -20,8 +20,13 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API key authentication'; END $$;
 -- API Key Prefix Helper
 -- ============================================================================
 -- Centralized prefix used in the full key format: {prefix}_{key_id}_{secret}.
--- Override by editing this function — validate_api_key and generate_api_key_material
--- both read from it, so changing it here changes both sides atomically.
+-- Override by editing this function, or by setting the pgmi.api_key_prefix GUC —
+-- validate_api_key and generate_api_key_material both read from it, so changing
+-- it here changes both sides atomically.
+--
+-- The prefix may contain underscores ('acme_prod'). validate_api_key parses from
+-- the right, anchoring on the fixed-width key_id and secret, so the prefix is
+-- simply whatever precedes them.
 
 CREATE OR REPLACE FUNCTION membership.api_key_prefix()
 RETURNS text
@@ -324,14 +329,25 @@ DECLARE
     v_computed_hash text;
     v_key membership.api_key%ROWTYPE;
 BEGIN
-    IF p_raw_key IS NULL OR position('_' IN p_raw_key) = 0
-       OR split_part(p_raw_key, '_', 1) != v_prefix THEN
+    -- Parse from the RIGHT, not by splitting on '_'. The prefix is operator-chosen
+    -- and a natural one contains an underscore ('acme_prod'), which the old
+    -- split-into-exactly-3-parts parse rejected as malformed — so create_api_key
+    -- issued keys that validate_api_key would never accept, silently and
+    -- permanently breaking auth for every key under that prefix.
+    --
+    -- The two trailing segments are fixed width by construction
+    -- (generate_api_key_material: 6 random bytes -> 12 hex, 32 -> 64 hex), so
+    -- anchoring on them makes the prefix whatever precedes the last two, however
+    -- many underscores it contains. Greedy .* takes the longest prefix, so the
+    -- final 12-hex/64-hex pair is always the one used.
+    IF p_raw_key IS NULL THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
         RETURN;
     END IF;
 
-    v_parts := string_to_array(p_raw_key, '_');
-    IF array_length(v_parts, 1) != 3 THEN
+    v_parts := regexp_match(p_raw_key, '^(.*)_([0-9a-f]{12})_([0-9a-f]{64})$');
+
+    IF v_parts IS NULL OR v_parts[1] IS DISTINCT FROM v_prefix THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
         RETURN;
     END IF;

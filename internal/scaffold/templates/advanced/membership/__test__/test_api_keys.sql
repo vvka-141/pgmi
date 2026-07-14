@@ -219,20 +219,41 @@ BEGIN
         RAISE EXCEPTION 'Wrong prefix should report malformed, got: %', v_validation.reason;
     END IF;
 
+    -- Structurally valid (12-hex key_id, 64-hex secret) but no such key: that is
+    -- "unknown", not "malformed". A key whose segments are the wrong width never
+    -- came from generate_api_key_material and is malformed — asserted below.
     SELECT * INTO v_validation FROM membership.validate_api_key(
-        membership.api_key_prefix() || '_aaaaaaaa_notarealsecret'
+        membership.api_key_prefix() || '_aaaaaaaaaaaa_' || repeat('b', 64)
     );
     IF v_validation.is_valid OR v_validation.reason != 'unknown key' THEN
         RAISE EXCEPTION 'Unknown key_id should report unknown key, got: %', v_validation.reason;
     END IF;
 
-    -- Wrong secret: generate a real key, then append garbage to its secret
+    SELECT * INTO v_validation FROM membership.validate_api_key(
+        membership.api_key_prefix() || '_aaaaaaaa_notarealsecret'
+    );
+    IF v_validation.is_valid OR v_validation.reason != 'malformed key' THEN
+        RAISE EXCEPTION 'Wrong-width segments should report malformed, got: %', v_validation.reason;
+    END IF;
+
+    -- Wrong secret, RIGHT shape: flip the last hex digit. This is the case that
+    -- must reach the hash comparison — it is what an attacker guessing a secret
+    -- actually sends. (Appending a character instead would change the secret's
+    -- width, so the key would be rejected as malformed before any hash compare,
+    -- and this test would silently stop exercising the security-critical path.)
     SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'Edge case key');
-    v_tampered := v_created.out_api_key || 'X';
+    v_tampered := left(v_created.out_api_key, length(v_created.out_api_key) - 1)
+        || CASE WHEN right(v_created.out_api_key, 1) = 'a' THEN 'b' ELSE 'a' END;
 
     SELECT * INTO v_validation FROM membership.validate_api_key(v_tampered);
     IF v_validation.is_valid OR v_validation.reason != 'invalid secret' THEN
         RAISE EXCEPTION 'Tampered secret should report invalid secret, got: %', v_validation.reason;
+    END IF;
+
+    -- A key with the wrong secret WIDTH never came from generate_api_key_material.
+    SELECT * INTO v_validation FROM membership.validate_api_key(v_created.out_api_key || 'X');
+    IF v_validation.is_valid OR v_validation.reason != 'malformed key' THEN
+        RAISE EXCEPTION 'Over-long secret should report malformed, got: %', v_validation.reason;
     END IF;
 
     RAISE DEBUG '  ✓ validate rejects NULL/malformed/unknown/tampered keys';
@@ -336,6 +357,80 @@ BEGIN
     RAISE DEBUG '  ✓ inactive user → key rejected';
 
     RAISE DEBUG '✓ API key inactive-principal tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: a custom prefix — including one containing an underscore — round-trips
+-- The prefix is operator-chosen and a natural one is 'acme_prod'. Splitting the
+-- key on '_' made create_api_key issue keys that validate_api_key rejected as
+-- malformed: auth silently and permanently broken for every key under it.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_alice_id uuid := current_setting('test.alice_id')::uuid;
+    v_org_id uuid;
+    v_created record;
+    v_validation record;
+    v_prefix text;
+BEGIN
+    RAISE DEBUG '→ Testing API key custom prefixes';
+
+    SELECT object_id INTO STRICT v_org_id
+    FROM membership.organization
+    WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+
+    FOREACH v_prefix IN ARRAY ARRAY['pgmi', 'acme_prod', 'a_b_c_d', 'x'] LOOP
+        PERFORM set_config('pgmi.api_key_prefix', v_prefix, true);
+
+        IF membership.api_key_prefix() != v_prefix THEN
+            RAISE EXCEPTION 'api_key_prefix() should read the GUC, got %', membership.api_key_prefix();
+        END IF;
+
+        SELECT * INTO v_created
+        FROM membership.create_api_key(v_alice_id, v_org_id, 'prefix test ' || v_prefix);
+
+        IF v_created.out_api_key NOT LIKE v_prefix || '\_%' ESCAPE '\' THEN
+            RAISE EXCEPTION 'key should carry the configured prefix %, got %',
+                v_prefix, substring(v_created.out_api_key, 1, 24);
+        END IF;
+
+        -- The whole point: a key that was issued must validate.
+        SELECT * INTO v_validation FROM membership.validate_api_key(v_created.out_api_key);
+        IF NOT v_validation.is_valid THEN
+            RAISE EXCEPTION 'a key issued under prefix "%" must validate; got reason: %',
+                v_prefix, v_validation.reason;
+        END IF;
+        IF v_validation.key_id != v_created.out_key_id THEN
+            RAISE EXCEPTION 'prefix "%": validation resolved the wrong key_id', v_prefix;
+        END IF;
+
+        PERFORM membership.revoke_api_key(v_created.out_key_id);
+    END LOOP;
+
+    RAISE DEBUG '  ✓ keys round-trip under prefixes with and without underscores';
+
+    -- The stricter parse must still reject genuine garbage.
+    PERFORM set_config('pgmi.api_key_prefix', 'acme_prod', true);
+
+    SELECT * INTO v_validation FROM membership.validate_api_key('acme_prod_tooshort_abc');
+    IF v_validation.is_valid OR v_validation.reason != 'malformed key' THEN
+        RAISE EXCEPTION 'short segments should be malformed, got %', v_validation.reason;
+    END IF;
+
+    -- A key issued under a DIFFERENT prefix must not validate under this one.
+    SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'other prefix');
+    PERFORM set_config('pgmi.api_key_prefix', 'other', true);
+    SELECT * INTO v_validation FROM membership.validate_api_key(v_created.out_api_key);
+    IF v_validation.is_valid OR v_validation.reason != 'malformed key' THEN
+        RAISE EXCEPTION 'a key from another prefix must not validate, got %', v_validation.reason;
+    END IF;
+
+    PERFORM set_config('pgmi.api_key_prefix', '', true);
+    RAISE DEBUG '  ✓ malformed keys and foreign prefixes still rejected';
+    RAISE DEBUG '✓ API key custom-prefix tests passed';
 END $$;
 
 -- ============================================================================
