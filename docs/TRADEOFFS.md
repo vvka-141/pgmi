@@ -25,15 +25,17 @@ This is an intentional constraint, not an oversight. pgmi's flexibility comes fr
 
 ---
 
-## No migration tracking out of the box
+## Migration tracking is a choice you make, not a default you inherit
 
-The basic template executes files alphabetically every time. There is no built-in `schema_version` table or migration history.
+There is no built-in `schema_version` table. pgmi does not track migrations, because pgmi does not decide what runs — your `deploy.sql` does.
 
-**Basic template:** Every deployment re-runs all files. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`).
+**Basic template, default:** every deployment re-runs every file. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Nothing to drift.
 
-**Advanced template:** Includes a 450-line PL/pgSQL tracking system that records script UUIDs, checksums, and execution history. You own and maintain this code.
+**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and you have Flyway's semantics. The template README compares both models side by side.
 
-**Roll your own:** You can implement tracking in deploy.sql with a few lines — see [deploy.sql guide](DEPLOY-GUIDE.md#idempotent-migrations-with-tracking). The tradeoff is that every tracking system makes assumptions (path-based? UUID-based? checksum-based?) that Flyway and Liquibase don't force you to think about.
+**Advanced template:** a fuller PL/pgSQL tracking system recording script UUIDs, checksums, and execution history. More capable, and more code you own.
+
+The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in three lines you can read.
 
 ---
 

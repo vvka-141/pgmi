@@ -29,17 +29,39 @@ BEGIN
         v_config ->> 'version',
         (SELECT count(*) FROM pg_temp.pgmi_source_view);
 
-    -- Execute migration files in path order
+    -- ── Execution model ──────────────────────────────────────────────────
+    -- By DEFAULT every migration re-runs on every deploy. That is safe only
+    -- because these files are idempotent (CREATE TABLE IF NOT EXISTS, CREATE
+    -- OR REPLACE FUNCTION). It is the simplest thing that works, and it means
+    -- there is no ledger to get out of sync with reality.
+    --
+    -- If you would rather have apply-once semantics — a file runs once, ever,
+    -- like Flyway or Sqitch — uncomment the three lines marked (A), (B), (C).
+    -- That is the whole feature. It is 3 lines of your SQL, not a framework:
+    -- you own it, you can read it, and you can delete it.
+    --
+    -- Trade-off: with tracking on, editing an already-applied migration does
+    -- nothing (it is skipped). The stored checksum tells you it changed —
+    -- decide there whether you want to warn, fail, or ignore.
+
+    -- (A) CREATE TABLE IF NOT EXISTS _migration (
+    -- (A)     path       text PRIMARY KEY,
+    -- (A)     checksum   text NOT NULL,
+    -- (A)     applied_at timestamptz NOT NULL DEFAULT now()
+    -- (A) );
+
     FOR v_file IN (
-        SELECT path, content
+        SELECT path, content, pgmi_checksum
         FROM pg_temp.pgmi_source_view
         WHERE directory = './migrations/' AND is_sql_file
+        -- (B) AND NOT EXISTS (SELECT 1 FROM _migration m WHERE m.path = pgmi_source_view.path)
         ORDER BY path
     )
     LOOP
         RAISE DEBUG 'Executing: %', v_file.path;
         BEGIN
             EXECUTE v_file.content;
+            -- (C) INSERT INTO _migration (path, checksum) VALUES (v_file.path, v_file.pgmi_checksum);
         EXCEPTION WHEN OTHERS THEN
             RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM;
         END;
