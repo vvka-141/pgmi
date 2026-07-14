@@ -75,7 +75,7 @@ END $$;
 ```text
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ Failed after 0.72s — see error above
+✗ Failed after 0.72s
 pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 

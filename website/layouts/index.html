@@ -119,19 +119,19 @@ Executing deploy.sql
 
       <section class="shell paths-section" aria-labelledby="paths-title">
         <div class="section-heading">
-          <p class="eyebrow">Choose a starting point</p>
-          <h2 id="paths-title">Small scaffold or full reference app.</h2>
+          <p class="eyebrow">Start here</p>
+          <h2 id="paths-title">One small scaffold. Then whatever you build on it.</h2>
         </div>
         <div class="path-grid">
           <article>
-            <h3>Basic</h3>
-            <p>A compact migration scaffold with path-based ordering, tests, and a readable <code>deploy.sql</code>.</p>
-            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">Use the basic template</a>
+            <h3>The basic template</h3>
+            <p>A compact migration scaffold: path-based ordering, tests inside the deployment transaction, and a <code>deploy.sql</code> you can read in one sitting. This is the recommended starting point.</p>
+            <a href="{{ "docs/quickstart/" | relURL }}">Deploy it in 60 seconds</a>
           </article>
           <article>
-            <h3>Advanced</h3>
-            <p>A SQL-native reference app with metadata ordering, roles, audit logging, REST/RPC, and MCP support.</p>
-            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">Explore the advanced template</a>
+            <h3>Reference app <span class="path-note">— not a starting point</span></h3>
+            <p>A full SQL-native application built on pgmi: REST, RPC and MCP endpoints, multi-tenant row-level security, audit logging. It exists to show what the model enables — read it, take the parts you need. Either template is production-capable; this one is simply more infrastructure.</p>
+            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">See what pgmi enables</a>
           </article>
         </div>
       </section>

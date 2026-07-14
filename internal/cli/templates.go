@@ -1,12 +1,27 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 )
+
+// templateRank orders templates by what we recommend, not by name. basic is the
+// starting point; advanced is a reference app to read, not the default choice.
+func templateRank(name string) int {
+	switch name {
+	case "basic":
+		return 0
+	case "advanced":
+		return 1
+	default:
+		return 2
+	}
+}
 
 var templatesCmd = &cobra.Command{
 	Use:   "templates",
@@ -48,6 +63,12 @@ func runTemplatesList(cmd *cobra.Command, args []string) error {
 	}
 
 	descriptions := getTemplateDescriptions()
+
+	// Recommended order, not alphabetical: listing "advanced" first would make the
+	// showcase look like the default choice, which is the opposite of the advice.
+	slices.SortStableFunc(templates, func(a, b string) int {
+		return cmp.Compare(templateRank(a), templateRank(b))
+	})
 
 	for _, t := range templates {
 		desc, ok := descriptions[t]
@@ -139,11 +160,11 @@ func getTemplateDescriptions() map[string]templateDescription {
 				"Non-SQL project data loading (project.json via pgmi_source_view)",
 				"Test scaffolding via __test__/ (CALL pgmi_test())",
 			},
-			BestFor: "Small-to-medium projects, explicit control, any managed provider",
+			BestFor: "Start here. Deploying SQL — small, explicit, any managed provider",
 		},
 		"advanced": {
-			Short: "Metadata-driven deployment, REST/RPC/MCP handler registry",
-			Long:  "A larger project with <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), API-key and identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions.",
+			Short: "Reference app: SQL-native REST/RPC/MCP, multi-tenant RLS, audit",
+			Long:  "A full SQL-native application built on pgmi, for you to read, trim, and own — not a framework to adopt wholesale. <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), API-key and identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions. Not the recommended starting point: begin with basic and take what you need from here.",
 			Structure: []string{
 				"├── deploy.sql",
 				"├── pgmi.yaml",
@@ -167,7 +188,7 @@ func getTemplateDescriptions() map[string]templateDescription {
 				"Row-level security policies on membership tables",
 				"Targets stock PostgreSQL — superuser required for DDL event trigger (see docs/PRODUCTION.md for managed-cloud workaround)",
 			},
-			BestFor: "Production deployments, multi-tenant apps, AI-integrated apps",
+			BestFor: "Seeing what pgmi enables. Not a starting point — read it, take what you need",
 		},
 	}
 }

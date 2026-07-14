@@ -400,7 +400,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** when you want 
 | **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
 | **Execution view** | `pg_temp.pgmi_source_view` | `pg_temp.pgmi_plan_view` (with multi-phase support) |
 | **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
-| **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
+| **Script tracking** | None by default; a 3-line opt-in `_migration` ledger ships commented in `deploy.sql` | UUID-based tracking in `internal.deployment_script_execution_log` |
 | **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
 | **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, utils, api), `membership/`, `tools/` |
 | **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |

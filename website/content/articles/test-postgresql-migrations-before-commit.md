@@ -306,7 +306,7 @@ nothing creates — and deploy to a fresh database:
 
 ```text
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ Failed after 1.99s — see error above
+✗ Failed after 1.99s
 pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 

@@ -282,6 +282,14 @@ h3 {
   padding: clamp(20px, 3vw, 30px);
 }
 
+/* The reference app is a showcase, not a second front door: keep it visibly
+   secondary to the basic template rather than a co-equal choice. */
+.path-note {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .model-grid strong {
   display: block;
   margin-bottom: 10px;
