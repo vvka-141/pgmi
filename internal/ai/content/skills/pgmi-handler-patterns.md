@@ -637,6 +637,28 @@ The handler probe still gives a clean 409 in the common case; the guard predicat
 
 ---
 
+## Retryable routes: your handler must be safe to run twice
+
+Declaring `requiredTransactionIsolation` as `repeatable read` or `serializable` buys a stronger guarantee at a price PostgreSQL states plainly: conflicting transactions are **aborted** with SQLSTATE `40001` (`serialization_failure`), and the only remedy is to **retry the entire transaction from a fresh snapshot**. `40P01` (`deadlock_detected`) behaves the same way at any isolation level.
+
+The gateway deliberately lets `40001` and `40P01` propagate with their SQLSTATE intact instead of sanitizing them into a 500 — that SQLSTATE is the one bit of information a client needs to know it should retry rather than give up. Every other SQLSTATE is still sanitized (no `SQLERRM`/`DETAIL` reaches a client).
+
+**The requirement this places on you:** a retry re-executes your **entire handler** from the top. Anything the handler does that the transaction does not cover happens **again**:
+
+- an outbound HTTP call
+- a queue publish outside the transaction
+- any non-idempotent external write
+
+If your handler does one of those on a route that can hit `40001`, the retry will double it. Keep side effects inside the transaction (e.g. write to an outbox table the transaction commits), or do not declare an isolation level that can abort.
+
+**Never write a retry loop in PL/pgSQL.** It looks like it should work — `BEGIN … EXCEPTION WHEN serialization_failure THEN …` gives you an implicit savepoint — and it cannot converge. Under repeatable read and serializable the snapshot is taken once at transaction start and frozen; a savepoint rolls back your *writes* but does not give you a *new snapshot*. The retry re-reads identical data, reaches an identical conclusion, and conflicts identically, forever. Only `ROLLBACK` + a fresh `BEGIN` gets a fresh snapshot, and transaction control belongs to whoever issued the `BEGIN` — the client gateway, never a SQL function.
+
+(Under `read committed` each statement takes a new snapshot, so an in-function retry *does* appear to make progress — which is exactly why this trap is easy to fall into. It passes a read-committed test and then never converges in the serializable case it was written for.)
+
+Catching `40001` in the handler is worse than useless: the failed statement rolls back to the exception block's savepoint, but the transaction stays alive and **commits** — so the write silently vanishes while the caller is told everything is fine. Let it propagate.
+
+---
+
 ## Handler Test Patterns
 
 Handler tests exercise the HTTP compliance surface — status codes, required-field validation, probe behavior, and **no internal leakage**:

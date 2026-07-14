@@ -350,7 +350,22 @@ BEGIN
 
         RETURN v_response;
 
-    EXCEPTION WHEN OTHERS THEN
+    EXCEPTION
+    -- 40001 / 40P01 are transient: the caller's remedy is to abort and retry the
+    -- whole transaction from a fresh snapshot. Two reasons they must NOT be
+    -- caught here:
+    --   1. Flattened into a 500, the client cannot tell "your transaction lost a
+    --      race" from "this handler is broken", so it cannot know to retry.
+    --   2. Catching them is unsafe. The failed statement is rolled back to this
+    --      block's implicit savepoint, but the transaction stays alive and COMMITS
+    --      — the handler's write silently vanishes while the client is told
+    --      "internal error". Verified live: a caught 40001 commits, losing the write.
+    -- A savepoint cannot refresh the snapshot, so no in-SQL retry can converge
+    -- under repeatable read / serializable. Retry belongs to whoever owns BEGIN.
+    WHEN serialization_failure OR deadlock_detected THEN
+        RAISE;
+
+    WHEN OTHERS THEN
     DECLARE
         v_sqlstate text := SQLSTATE;
         v_status int;
@@ -595,7 +610,13 @@ BEGIN
 
         RETURN v_response;
 
-    EXCEPTION WHEN OTHERS THEN
+    EXCEPTION
+    -- Propagate the retryable class untouched — see rest_invoke for why catching
+    -- it both hides the retry signal and can commit a lost write.
+    WHEN serialization_failure OR deadlock_detected THEN
+        RAISE;
+
+    WHEN OTHERS THEN
     DECLARE
         v_sqlstate text := SQLSTATE;
         v_status int;
@@ -744,7 +765,15 @@ BEGIN
 
         RETURN v_response;
 
-    EXCEPTION WHEN OTHERS THEN
+    EXCEPTION
+    -- Propagate the retryable class untouched — see rest_invoke for why catching
+    -- it both hides the retry signal and can commit a lost write. An isError=true
+    -- tool result would look like a handler bug to the client, not a transient
+    -- conflict it should retry.
+    WHEN serialization_failure OR deadlock_detected THEN
+        RAISE;
+
+    WHEN OTHERS THEN
         RAISE DEBUG 'mcp_dispatch: Handler exception: %', SQLERRM;
 
         -- MCP spec: tool *execution* failures use result.isError=true, NOT a

@@ -90,6 +90,43 @@ Transaction Isolation (X-PGMI-Transaction-Isolation):
     Without that, api.rest_invoke runs at the connection default (read committed)
     and a route with a stronger floor returns 428 Precondition Required.
 
+Serialization-Failure Retry (40001 / 40P01):
+    Declaring a stronger isolation level buys you a stronger guarantee at the
+    price of transient aborts: PostgreSQL cancels conflicting transactions with
+    40001 (serialization failure) or 40P01 (deadlock), and the ONLY remedy is to
+    retry the whole transaction from a fresh snapshot.
+
+    The database gateway therefore lets these two SQLSTATEs propagate untouched
+    instead of sanitizing them into a 500 — a 500 tells the client nothing, and
+    the client cannot distinguish "your transaction lost a race, try again" from
+    "this handler is broken". Every other SQLSTATE is still sanitized.
+
+    This gateway retries such a request up to MCP_MAX_RETRY_ATTEMPTS times
+    (default 3) with exponential backoff plus jitter, opening a NEW transaction
+    per attempt. When the attempts are exhausted it answers 409 with a
+    Retry-After header and the machine code pgmi.transaction_retryable.
+
+    The retry MUST be a new transaction. A savepoint rolls back writes but does
+    not refresh the snapshot, so under repeatable read / serializable an
+    in-transaction retry re-reads identical data and conflicts forever. Do not
+    write a retry loop in PL/pgSQL: it cannot converge.
+
+    Your own REST/RPC proxy owns BEGIN, so it owns the retry:
+
+        for attempt in range(3):
+            try:
+                with connect() as conn:                  # fresh BEGIN each time
+                    conn.isolation_level = resolved_level
+                    return conn.execute("SELECT api.rest_invoke(...)")
+            except (SerializationFailure, DeadlockDetected):
+                sleep(backoff * 2**attempt + jitter)
+        return http_409_with_retry_after()
+
+    HANDLER REQUIREMENT: a handler on a route that can hit 40001 must be safe to
+    execute twice. A retry re-runs the entire handler, so any side effect not
+    covered by the transaction — an outbound HTTP call, a queue publish outside
+    the transaction, a non-idempotent external write — happens again.
+
 Security Notes:
     - Binds to 127.0.0.1 by default; validates the Origin header against an
       allowlist (DNS-rebinding protection) and returns sanitized errors.
@@ -109,6 +146,8 @@ For production deployments, consider:
 import os
 import re
 import json
+import random
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import psycopg
 
@@ -117,6 +156,40 @@ import psycopg
 DATABASE_URL = os.environ.get("DATABASE_URL")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8080"))
+
+# Serialization-failure retry contract (see lib/api/09-gateways.sql).
+#
+# Under repeatable read / serializable, PostgreSQL aborts conflicting
+# transactions with 40001 (or 40P01 on deadlock) and the ONLY remedy is to retry
+# the whole transaction from a fresh snapshot. The database deliberately
+# propagates these with SQLSTATE intact instead of flattening them into a 500,
+# because that is the one bit of information the client needs to know it should
+# retry rather than give up.
+#
+# Each attempt below opens a NEW connection, therefore a new transaction,
+# therefore a new snapshot. This is not incidental: a savepoint rolls back
+# writes but cannot refresh the snapshot, so an in-transaction retry re-reads
+# identical data, reaches an identical conclusion, and conflicts forever. Only
+# ROLLBACK + a fresh BEGIN converges.
+#
+# CONSEQUENCE FOR HANDLERS: a handler on a route that can hit 40001 must be safe
+# to run twice. The retry re-executes the entire handler, so any side effect that
+# is not covered by the transaction — an outbound HTTP call, a queue publish
+# outside the transaction, a non-idempotent external write — will happen again.
+MAX_RETRY_ATTEMPTS = int(os.environ.get("MCP_MAX_RETRY_ATTEMPTS", "3"))
+RETRY_BASE_DELAY = float(os.environ.get("MCP_RETRY_BASE_DELAY", "0.05"))
+RETRY_MAX_DELAY = float(os.environ.get("MCP_RETRY_MAX_DELAY", "1.0"))
+RETRY_AFTER_SECONDS = os.environ.get("MCP_RETRY_AFTER", "1")
+
+
+def _retry_backoff(attempt):
+    """Exponential backoff with full jitter, in seconds, for a 0-based attempt.
+
+    Jitter matters under contention: unjittered backoff makes the losers of a
+    race retry in lockstep and collide again.
+    """
+    ceiling = min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** attempt))
+    return random.uniform(0, ceiling)
 
 
 def _allowed_origins():
@@ -252,30 +325,61 @@ class MCPHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-        # Call PostgreSQL MCP dispatcher
-        try:
-            with psycopg.connect(DATABASE_URL) as conn:
-                # Set BEFORE the first statement so it applies to this
-                # transaction. A fresh connection is opened per request, so there
-                # is no cross-request state to reset; if a pool is introduced,
-                # reset conn.isolation_level on return to avoid leaking it.
-                if isolation is not None:
-                    conn.isolation_level = isolation
-                result = conn.execute(
-                    "SELECT (api.mcp_handle_request(%s, %s)).envelope",
-                    [json.dumps(request), json.dumps(context) if context else None]
-                ).fetchone()
-                envelope = result[0] if result else None
-        except Exception as e:
-            # Log the detail server-side; return a sanitized message so raw
-            # exception text / tracebacks are not exposed to the client.
-            self.log_message("dispatch error: " + str(e))
-            self.send_json_response(500, {
-                "jsonrpc": "2.0",
-                "id": request.get("id"),
-                "error": {"code": -32603, "message": "Internal error"}
-            })
-            return
+        # Call PostgreSQL MCP dispatcher, retrying the whole transaction on a
+        # serialization failure or deadlock. Each attempt is a fresh connection
+        # and therefore a fresh snapshot — see the retry contract at the top of
+        # this file for why nothing less can converge.
+        envelope = None
+        for attempt in range(MAX_RETRY_ATTEMPTS):
+            try:
+                with psycopg.connect(DATABASE_URL) as conn:
+                    # Set BEFORE the first statement so it applies to this
+                    # transaction. A fresh connection is opened per attempt, so
+                    # there is no cross-request state to reset; if a pool is
+                    # introduced, reset conn.isolation_level on return to avoid
+                    # leaking it.
+                    if isolation is not None:
+                        conn.isolation_level = isolation
+                    result = conn.execute(
+                        "SELECT (api.mcp_handle_request(%s, %s)).envelope",
+                        [json.dumps(request), json.dumps(context) if context else None]
+                    ).fetchone()
+                    envelope = result[0] if result else None
+                break
+            except (psycopg.errors.SerializationFailure,
+                    psycopg.errors.DeadlockDetected) as e:
+                # The transaction is gone. Nothing in it survived, so there is
+                # nothing to undo — just run it again from a clean start.
+                if attempt == MAX_RETRY_ATTEMPTS - 1:
+                    self.log_message(
+                        "serialization failure, retries exhausted (%d attempts): %s"
+                        % (MAX_RETRY_ATTEMPTS, e.sqlstate)
+                    )
+                    self.send_json_response(409, {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "error": {
+                            "code": -32603,
+                            "message": "Transaction conflict; retry the request",
+                            "data": {
+                                "code": "pgmi.transaction_retryable",
+                                "sqlstate": e.sqlstate,
+                                "attempts": MAX_RETRY_ATTEMPTS,
+                            },
+                        },
+                    }, extra_headers={"Retry-After": RETRY_AFTER_SECONDS})
+                    return
+                time.sleep(_retry_backoff(attempt))
+            except Exception as e:
+                # Log the detail server-side; return a sanitized message so raw
+                # exception text / tracebacks are not exposed to the client.
+                self.log_message("dispatch error: " + str(e))
+                self.send_json_response(500, {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "error": {"code": -32603, "message": "Internal error"}
+                })
+                return
 
         # A NULL envelope means a JSON-RPC notification (no response). Per MCP
         # Streamable HTTP, accepted notifications return 202 with no body.
@@ -303,7 +407,7 @@ class MCPHandler(BaseHTTPRequestHandler):
             return
         self.send_error(404, "Not Found")
 
-    def send_json_response(self, status, data):
+    def send_json_response(self, status, data, extra_headers=None):
         """Send a JSON response with proper headers."""
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
@@ -311,6 +415,8 @@ class MCPHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if getattr(self, "protocol_version", None):
             self.send_header("MCP-Protocol-Version", self.protocol_version)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
