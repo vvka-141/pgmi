@@ -73,7 +73,7 @@ GRANT SELECT ON pg_temp.pgmi_source_metadata_view TO PUBLIC;
 -- Joins: _pgmi_source LEFT JOIN _pgmi_source_metadata
 -- Purpose: Provides execution order for deploy.sql to iterate
 -- Key behavior: UNNEST(sort_keys) means files with N sort keys appear N times
--- Order: sort_key ASC, path ASC (deterministic)
+-- Order: sort_key ASC, path ASC under COLLATE "C" (deterministic, locale-independent)
 CREATE OR REPLACE TEMP VIEW pgmi_plan_view AS
 SELECT
     -- File identity
@@ -92,8 +92,13 @@ SELECT
     -- UNNEST sort keys: each key becomes a separate execution entry
     unnested.sort_key,
 
-    -- Assign sequential execution order (deterministic tie-breaking with path)
-    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
+    -- Assign sequential execution order (deterministic tie-breaking with path).
+    -- COLLATE "C": sort_key mixes user sortKeys ('001/000') with path fallbacks
+    -- ('./migrations/x.sql'). Under a linguistic collation '.' sorts after digits,
+    -- so the deployment order would depend on the server's locale, not the project.
+    ROW_NUMBER() OVER (
+        ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"
+    ) AS execution_order
 
 FROM pg_temp._pgmi_source s
 LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
@@ -112,8 +117,9 @@ CROSS JOIN LATERAL UNNEST(
 COMMENT ON VIEW pg_temp.pgmi_plan_view IS
     'Execution plan with multi-phase support via UNNEST(sort_keys).
      Files with multiple sort keys execute multiple times at different stages.
-     Order: sort_key ASC, path ASC (deterministic).
-     Files without metadata use path as sort key (lexicographic order).';
+     Order: sort_key ASC, path ASC under COLLATE "C" — byte order, so the plan is
+     identical on every server regardless of database collation.
+     Files without metadata use path as sort key (lexicographic byte order).';
 
 GRANT SELECT ON pg_temp.pgmi_plan_view TO PUBLIC;
 

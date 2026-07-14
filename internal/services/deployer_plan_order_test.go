@@ -95,6 +95,118 @@ func TestPlanOrder_NestedDirectories(t *testing.T) {
 	t.Log("Note: Full DFS ordering verified in TestPlanDebug_QueryPlanDirectly")
 }
 
+// TestPlanOrder_MixedSortKeysAndPathFallback pins pgmi_plan_view.execution_order to
+// C byte order. sort_key mixes two domains — user sortKeys ("001/000") and path
+// fallbacks ("./migrations/...") — and under a linguistic collation like en_US.utf8
+// '.' sorts after digits, silently inverting the two groups. The deployment order
+// must not depend on the server's locale.
+func TestPlanOrder_MixedSortKeysAndPathFallback(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	createMixedSortKeyProject(t, projectPath)
+
+	testDB := "pgmi_plan_collation"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+
+	rows, err := pool.Query(ctx, `SELECT path FROM plan_order_capture ORDER BY execution_order`)
+	if err != nil {
+		t.Fatalf("Failed to query plan_order_capture: %v", err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			t.Fatalf("Failed to scan: %v", err)
+		}
+		got = append(got, path)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Row iteration failed: %v", err)
+	}
+
+	// C byte order: '.' (0x2E) < '0' (0x30), so both path fallbacks precede
+	// every numeric sort key. A locale-sensitive collation reverses this.
+	want := []string{
+		"./migrations/002_data.sql",
+		"./setup/functions.sql",
+		"./first.sql",
+		"./last.sql",
+	}
+	if !sliceEqual(got, want) {
+		t.Errorf("execution_order is not C byte order\nGot:      %v\nExpected: %v", got, want)
+	}
+}
+
+func createMixedSortKeyProject(t *testing.T, projectPath string) {
+	t.Helper()
+
+	for _, dir := range []string{"migrations", "setup"} {
+		if err := os.MkdirAll(filepath.Join(projectPath, dir), 0755); err != nil {
+			t.Fatalf("Failed to create %s: %v", dir, err)
+		}
+	}
+
+	files := map[string]string{
+		filepath.Join("migrations", "002_data.sql"): "SELECT 'no metadata: sorts by path';\n",
+		filepath.Join("setup", "functions.sql"):     "SELECT 'no metadata: sorts by path';\n",
+		"first.sql": `/*
+<pgmi-meta id="c0000001-0001-4000-8000-000000000001" idempotent="true">
+  <sortKeys><key>001/000</key></sortKeys>
+</pgmi-meta>
+*/
+SELECT 'sortKey 001/000';
+`,
+		"last.sql": `/*
+<pgmi-meta id="c0000001-0001-4000-8000-000000000002" idempotent="true">
+  <sortKeys><key>999/000</key></sortKeys>
+</pgmi-meta>
+*/
+SELECT 'sortKey 999/000';
+`,
+	}
+
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(projectPath, name), []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create %s: %v", name, err)
+		}
+	}
+
+	deploySQL := `
+CREATE TABLE plan_order_capture (
+    execution_order BIGINT PRIMARY KEY,
+    sort_key TEXT NOT NULL,
+    path TEXT NOT NULL
+);
+
+INSERT INTO plan_order_capture (execution_order, sort_key, path)
+SELECT execution_order, sort_key, path FROM pg_temp.pgmi_plan_view;
+`
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+}
+
 func createDiagnosticNestedProject(t *testing.T, projectPath string) {
 	t.Helper()
 

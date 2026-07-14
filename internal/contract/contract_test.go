@@ -164,6 +164,16 @@ func TestAPISQL_CallbackNameValidated(t *testing.T) {
 	}
 }
 
+func TestAPISQL_PlanOrderIsByteOrdered(t *testing.T) {
+	sql, _, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !strings.Contains(sql, `ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"`) {
+		t.Error(`pgmi_plan_view execution_order must sort with COLLATE "C": sort_key mixes user sortKeys with path fallbacks, so a linguistic collation makes deployment order locale-dependent`)
+	}
+}
+
 func TestAPIContainsExpectedObjects(t *testing.T) {
 	sql, _, err := Load("")
 	if err != nil {

@@ -280,21 +280,29 @@ SELECT
     COALESCE(m.idempotent, true) AS idempotent,
     COALESCE(m.description, '') AS description,
     unnested.sort_key,
-    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
+    ROW_NUMBER() OVER (
+        ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"
+    ) AS execution_order
 FROM pg_temp._pgmi_source s
 LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
 CROSS JOIN LATERAL UNNEST(
     COALESCE(NULLIF(m.sort_keys, '{}'), ARRAY[s.path])
 ) AS unnested(sort_key)
-ORDER BY unnested.sort_key, s.path;
+;
 ```
 
 **Key Columns**:
 - `id`: User-provided UUID from metadata (nullable)
 - `generic_id`: Deterministic fallback UUID (md5 of path)
 - `sort_key`: Expanded from sort_keys array (one row per key)
-- `execution_order`: Sequential order based on sort_key + path
+- `execution_order`: Sequential order based on sort_key + path, compared as bytes
 - `idempotent`: Controls one-time vs always-rerun behavior
+
+**Why `COLLATE "C"`**: `sort_key` mixes two domains — your sortKeys (`001/000`) and
+the path fallback for files without metadata (`./migrations/002_data.sql`). Under a
+linguistic collation such as `en_US.utf8`, `.` sorts *after* digits, so the two groups
+invert and the same project deploys in a different order on a different server. Byte
+order makes the plan a property of the project, not of the server's locale.
 
 **How UNNEST Works**:
 ```sql
