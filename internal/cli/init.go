@@ -134,10 +134,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 		dbName = connResult.Config.Database
 	}
 
-	fmt.Fprintln(os.Stderr, "\nNext:")
-	fmt.Fprintf(os.Stderr, "  pgmi deploy %s -d %s\n", targetPath, dbName)
+	fmt.Fprint(os.Stderr, nextSteps(targetPath, dbName))
 
 	return nil
+}
+
+// nextSteps is what the user reads after a scaffold. `pgmi ai setup` belongs
+// here because it is the only push-discovery surface: without it a fresh project
+// carries no artifact telling an assistant that pgmi exists, and the assistant
+// learns the conventions only by guessing from deploy.sql.
+func nextSteps(targetPath, dbName string) string {
+	return fmt.Sprintf(`
+Next:
+  pgmi deploy %s -d %s
+  cd %s && pgmi ai setup
+
+pgmi ai setup writes .claude/skills/pgmi/ — commit it so an AI assistant reads
+pgmi's conventions before it edits your SQL (--assistant for cursor, copilot,
+windsurf, cline). Run "pgmi ai" to read the same docs yourself.
+`, targetPath, dbName, targetPath)
 }
 
 // managedCloudCaveat returns a post-scaffold heads-up for templates that need a

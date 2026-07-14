@@ -52,6 +52,19 @@ don't need to repeat them on every command.
 
 Override via CLI: `--param env=production --param admin_email=ops@mycompany.com`
 
+## Working with an AI assistant
+
+```bash
+pgmi ai setup          # writes .claude/skills/pgmi/ — commit it
+```
+
+The skill teaches an assistant pgmi's conventions (deploy.sql owns the
+transaction, tests run in the same session, `pgmi_source_view` and friends)
+before it edits your SQL. `--assistant cursor|copilot|windsurf|cline` targets
+other tools; `pgmi ai check` reports whether it is current.
+
+To read the same docs yourself, run `pgmi ai`.
+
 ## Learn More
 
 - [pgmi Documentation](https://github.com/vvka-141/pgmi)

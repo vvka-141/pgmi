@@ -415,6 +415,22 @@ myproject/
 
 Your files execute after framework files (use sortKeys `005/xxx` or higher).
 
+## Working with an AI assistant
+
+This template has real conventions an assistant will not guess — the four-phase
+handler body, kernel-before-handler sort keys, `<pgmi-meta>` blocks, mandatory
+`outputSchema`, RLS through `api.current_member_org_ids()`. Give it the rules
+before it writes any SQL:
+
+```bash
+pgmi ai setup          # writes .claude/skills/pgmi/ — commit it
+pgmi ai check          # is that guidance current for this binary?
+```
+
+`--assistant cursor|copilot|windsurf|cline` targets other tools. To read the
+same material yourself: `pgmi ai`, `pgmi ai skills`, `pgmi ai skill
+pgmi-endpoint-quickstart`.
+
 ## Testing
 
 Tests run as part of deployment via the `pgmi_test()` macro in deploy.sql. Each test runs in a savepoint that rolls back, so test data never persists while your migrations commit.
