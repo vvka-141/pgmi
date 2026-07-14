@@ -134,6 +134,41 @@ COMMENT ON FUNCTION api.uri_template_to_regex(text) IS
     'Converts a URI template (e.g. /users/{id}) to an anchored POSIX regex where each {param} matches one path segment.';
 
 -- ============================================================================
+-- MCP Resource URI Regex — derived once, not per request
+-- ============================================================================
+-- URI templates are static after registration, so converting them on every
+-- resources/read was pure repeated work: three regexp_replace passes per
+-- candidate route per request. api.mcp_route.uri_regexp holds the conversion and
+-- dispatch matches against it.
+--
+-- A trigger, not a write in the registration function: admin_role holds INSERT/
+-- UPDATE/DELETE on api.mcp_route, so direct DML is a granted path. A derived
+-- column that only the registration function maintained would go stale silently
+-- under that DML — and a stale regex mis-routes resource requests, which is a
+-- worse bug than the one being fixed. The trigger makes desync impossible.
+
+CREATE OR REPLACE FUNCTION internal.sync_mcp_uri_regexp()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.uri_regexp := api.uri_template_to_regex(NEW.uri_template);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tr_mcp_route_uri_regexp ON api.mcp_route;
+CREATE TRIGGER tr_mcp_route_uri_regexp
+    BEFORE INSERT OR UPDATE OF uri_template ON api.mcp_route
+    FOR EACH ROW EXECUTE FUNCTION internal.sync_mcp_uri_regexp();
+
+-- Backfill, and self-heal if api.uri_template_to_regex itself ever changes: the
+-- trigger only fires on write, so a redeploy that redefines the conversion would
+-- otherwise leave every stored regex stale.
+UPDATE api.mcp_route
+SET uri_regexp = api.uri_template_to_regex(uri_template)
+WHERE uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template);
+
+-- ============================================================================
 -- Route Path Tokens
 -- ============================================================================
 -- Splits a stored route regex into literal runs and capture groups. The OpenAPI

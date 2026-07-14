@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
 
     input_schema jsonb,
     uri_template text,
+    uri_regexp text,
     mime_type text DEFAULT 'application/json',
     arguments jsonb,
     tags text[] NOT NULL DEFAULT '{}',
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
 );
 
 ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS uri_regexp text;
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
 -- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.
@@ -60,6 +62,8 @@ COMMENT ON COLUMN api.mcp_route.input_schema IS
     'JSON Schema describing expected arguments for tools. Sent to clients in tools/list for input validation.';
 COMMENT ON COLUMN api.mcp_route.uri_template IS
     'RFC 6570 Level 1 URI template for resources. Used by api.mcp_read_resource to match incoming URIs.';
+COMMENT ON COLUMN api.mcp_route.uri_regexp IS
+    'Derived from uri_template by api.uri_template_to_regex, kept in sync by a trigger (see lib/api/07-helpers.sql). Resource dispatch matches against this so the conversion runs once at registration, not on every resources/read.';
 COMMENT ON COLUMN api.mcp_route.mime_type IS
     'MIME type for resource responses. Defaults to application/json.';
 COMMENT ON COLUMN api.mcp_route.arguments IS

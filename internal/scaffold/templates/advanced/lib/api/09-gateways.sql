@@ -714,7 +714,7 @@ BEGIN
         FROM api.handler h
         JOIN api.mcp_route r ON r.handler_object_id = h.object_id
         WHERE r.mcp_type = 'resource'
-          AND p_name_or_uri ~ api.uri_template_to_regex(r.uri_template)
+          AND p_name_or_uri ~ r.uri_regexp
         ORDER BY length(r.uri_template) DESC, r.mcp_name
         LIMIT 1;
     ELSE

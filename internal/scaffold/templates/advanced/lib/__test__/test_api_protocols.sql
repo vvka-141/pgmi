@@ -493,6 +493,42 @@ END;
     RAISE NOTICE '  ✓ MCP resource read returns JSON-RPC 2.0 success response';
 
     -- ========================================================================
+    -- Test: resource dispatch matches a stored regex, never rebuilds one
+    -- ========================================================================
+
+    -- The acceptance criterion, asserted against the deployed function body:
+    -- uri_template_to_regex must not appear in the dispatch path at all.
+    IF pg_get_functiondef('internal.mcp_dispatch(text,text,jsonb,jsonb,jsonb)'::regprocedure)
+       ~ 'uri_template_to_regex' THEN
+        RAISE EXCEPTION 'TEST FAILED: mcp_dispatch still converts uri_template per request';
+    END IF;
+
+    -- Every resource route carries the derived regex, and it is the one the
+    -- converter produces — a stale value would mis-route, not merely slow down.
+    IF EXISTS (
+        SELECT 1 FROM api.mcp_route
+        WHERE mcp_type = 'resource'
+          AND uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template)
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: a resource route has a stale or missing uri_regexp';
+    END IF;
+
+    -- The trigger, not the registration function, is what guarantees that: prove
+    -- it holds for direct DML too (admin_role is granted UPDATE on this table).
+    UPDATE api.mcp_route SET uri_template = 'test:///{id}/extra'
+    WHERE mcp_name = 'test_resource';
+
+    IF (SELECT uri_regexp FROM api.mcp_route WHERE mcp_name = 'test_resource')
+       IS DISTINCT FROM api.uri_template_to_regex('test:///{id}/extra') THEN
+        RAISE EXCEPTION 'TEST FAILED: direct UPDATE of uri_template left uri_regexp stale';
+    END IF;
+
+    UPDATE api.mcp_route SET uri_template = 'test:///{id}'
+    WHERE mcp_name = 'test_resource';
+
+    RAISE NOTICE '  ✓ MCP resource dispatch reads a stored regex; trigger keeps it in sync';
+
+    -- ========================================================================
     -- Test: MCP Prompt (JSON-RPC 2.0 Compliance)
     -- ========================================================================
 
