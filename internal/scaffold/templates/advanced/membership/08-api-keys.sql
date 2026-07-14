@@ -150,9 +150,11 @@ COMMENT ON COLUMN membership.api_key.last_used_at IS
 ALTER TABLE membership.api_key ENABLE ROW LEVEL SECURITY;
 
 -- Table owner bypasses RLS, so SECURITY DEFINER functions (create_api_key,
--- revoke_api_key, etc.) work without explicit owner policies. Customer-role
--- callers only need SELECT on keys within their visible orgs — mutations go
--- through the SECURITY DEFINER functions, not direct DML.
+-- revoke_api_key, etc.) work without explicit owner policies. This policy scopes
+-- direct SELECT only; it does NOT constrain the SECURITY DEFINER bodies below,
+-- which must carry their own tenant guard (membership.can_manage_api_key).
+-- Customer-role callers only need SELECT on keys within their visible orgs —
+-- mutations go through the SECURITY DEFINER functions, not direct DML.
 DO $$
 DECLARE
     v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
@@ -405,13 +407,44 @@ COMMENT ON FUNCTION membership.validate_api_key IS
 -- ============================================================================
 -- Lifecycle: disable, enable, revoke
 -- ============================================================================
+-- The lifecycle functions are SECURITY DEFINER and run as the table owner, so
+-- RLS never constrains them. Without this guard any authenticated session could
+-- mutate any key in the cluster by key_id alone. Fail-closed: a session with no
+-- resolvable identity manages nothing. Platform superusers cross tenants; every
+-- other caller is confined to the orgs it is an active member of.
+
+CREATE OR REPLACE FUNCTION membership.can_manage_api_key(p_key_id text)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = membership, api, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM membership.api_key c_api_key
+        WHERE c_api_key.key_id = p_key_id
+          AND c_api_key.deleted_at IS NULL
+          AND (
+              api.current_user_is_admin()
+              OR c_api_key.organization_id = ANY (api.current_member_org_ids())
+          )
+    );
+$$;
+
+COMMENT ON FUNCTION membership.can_manage_api_key(text) IS
+    'True when the current identity may manage the key: platform superuser, or active member of the key''s organization. Tenant guard for the lifecycle functions.';
 
 CREATE OR REPLACE FUNCTION membership.disable_api_key(p_key_id text)
 RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
-SET search_path = membership, pg_temp
+SET search_path = membership, api, pg_temp
 AS $$
 BEGIN
+    -- Same 'not found' for "no such key" and "not yours" — a distinct error
+    -- would turn this into a cross-tenant key-existence oracle.
+    IF NOT membership.can_manage_api_key(p_key_id) THEN
+        RAISE EXCEPTION 'API key not found: %', p_key_id USING ERRCODE = 'P0404';
+    END IF;
+
     UPDATE membership.api_key c_api_key
     SET status = 'disabled'
     WHERE c_api_key.key_id = p_key_id
@@ -437,14 +470,18 @@ END;
 $$;
 
 COMMENT ON FUNCTION membership.disable_api_key IS
-    'Temporarily disable an API key (reversible). Raises if key is revoked.';
+    'Temporarily disable an API key (reversible). Tenant-guarded: raises P0404 unless the caller is a platform superuser or an active member of the key''s organization. Raises P0409 if the key is revoked.';
 
 CREATE OR REPLACE FUNCTION membership.enable_api_key(p_key_id text)
 RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
-SET search_path = membership, pg_temp
+SET search_path = membership, api, pg_temp
 AS $$
 BEGIN
+    IF NOT membership.can_manage_api_key(p_key_id) THEN
+        RAISE EXCEPTION 'API key not found: %', p_key_id USING ERRCODE = 'P0404';
+    END IF;
+
     UPDATE membership.api_key c_api_key
     SET status = 'active'
     WHERE c_api_key.key_id = p_key_id
@@ -470,14 +507,18 @@ END;
 $$;
 
 COMMENT ON FUNCTION membership.enable_api_key IS
-    'Re-enable a disabled API key. Raises if key is revoked.';
+    'Re-enable a disabled API key. Tenant-guarded: raises P0404 unless the caller is a platform superuser or an active member of the key''s organization. Raises P0409 if the key is revoked.';
 
 CREATE OR REPLACE FUNCTION membership.revoke_api_key(p_key_id text)
 RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
-SET search_path = membership, pg_temp
+SET search_path = membership, api, pg_temp
 AS $$
 BEGIN
+    IF NOT membership.can_manage_api_key(p_key_id) THEN
+        RAISE EXCEPTION 'API key not found: %', p_key_id USING ERRCODE = 'P0404';
+    END IF;
+
     UPDATE membership.api_key c_api_key
     SET status = 'revoked'
     WHERE c_api_key.key_id = p_key_id
@@ -502,15 +543,16 @@ END;
 $$;
 
 COMMENT ON FUNCTION membership.revoke_api_key IS
-    'Permanently revoke an API key and remove its matching user_identity row. Irreversible.';
+    'Permanently revoke an API key and remove its matching user_identity row. Irreversible. Tenant-guarded: raises P0404 unless the caller is a platform superuser or an active member of the key''s organization.';
 
 -- ============================================================================
 -- Grants
 -- ============================================================================
--- upsert-style lifecycle functions are SECURITY DEFINER and execute as the
--- owner regardless of the caller. Grant EXECUTE to the API role so the
--- customer-facing REST/RPC handlers can issue and revoke keys on behalf of
--- their users; the RLS policies above scope visibility to the caller's orgs.
+-- The lifecycle functions are SECURITY DEFINER and execute as the owner
+-- regardless of the caller. Grant EXECUTE to the API role so the customer-facing
+-- REST/RPC handlers can issue, disable, and revoke keys on behalf of their users;
+-- membership.can_manage_api_key — not RLS — is what confines each caller to its
+-- own organizations.
 
 DO $$
 DECLARE
@@ -534,7 +576,7 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION membership.validate_api_key(text) TO %I, %I', v_admin_role, v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION membership.disable_api_key(text) TO %I, %I', v_admin_role, v_api_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION membership.enable_api_key(text) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.revoke_api_key(text) TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION membership.revoke_api_key(text) TO %I, %I', v_admin_role, v_api_role);
 END $$;
 
 DO $$ BEGIN
@@ -543,5 +585,6 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ membership.generate_api_key_material() - key generation';
     RAISE NOTICE '  ✓ membership.create_api_key() - issue key + user_identity';
     RAISE NOTICE '  ✓ membership.validate_api_key() - validate for auth';
+    RAISE NOTICE '  ✓ membership.can_manage_api_key() - tenant guard for the lifecycle functions';
     RAISE NOTICE '  ✓ membership.disable_api_key() / enable_api_key() / revoke_api_key()';
 END $$;

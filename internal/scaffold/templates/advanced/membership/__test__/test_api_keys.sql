@@ -131,7 +131,9 @@ BEGIN
         RAISE DEBUG '  ✓ vw_current_user resolves alice via apikey identity';
     END;
 
-    PERFORM set_config('auth.idp_subject', '', true);
+    -- The lifecycle functions are tenant-guarded, so they need a resolvable
+    -- identity: act as Alice, an active member of the key's organization.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
 
     -- ========================================================================
     -- Disable → validate fails → enable → validate succeeds
@@ -294,6 +296,9 @@ BEGIN
     FROM membership.organization
     WHERE owner_user_id = v_alice_id AND is_personal = true;
 
+    -- revoke_api_key is tenant-guarded: act as Alice, who owns these keys.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+
     -- Inactive organization → key rejected with 'organization is inactive'
     SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'inactive-org-key');
 
@@ -331,4 +336,79 @@ BEGIN
     RAISE DEBUG '  ✓ inactive user → key rejected';
 
     RAISE DEBUG '✓ API key inactive-principal tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: lifecycle functions are tenant-scoped
+-- They are SECURITY DEFINER, so RLS cannot confine them. Bob — an authenticated
+-- customer session with no membership in Alice's org — must not be able to
+-- disable, enable, or revoke Alice's key, and must not learn that it exists.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+    v_alice_id uuid := current_setting('test.alice_id')::uuid;
+    v_org_id uuid;
+    v_created record;
+    v_fn text;
+    v_status membership.api_key_status;
+BEGIN
+    RAISE DEBUG '→ Testing API key lifecycle tenant isolation';
+
+    SELECT object_id INTO STRICT v_org_id
+    FROM membership.organization
+    WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+    SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_org_id, 'Tenant guard key');
+
+    -- Act as Bob through the customer role: every lifecycle call must 404.
+    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+
+    FOREACH v_fn IN ARRAY ARRAY['disable_api_key', 'enable_api_key', 'revoke_api_key'] LOOP
+        BEGIN
+            EXECUTE format('SELECT membership.%I($1)', v_fn) USING v_created.out_key_id;
+            RESET ROLE;
+            RAISE EXCEPTION 'TEST FAILED: membership.% mutated a key outside the caller''s organizations', v_fn;
+        EXCEPTION WHEN SQLSTATE 'P0404' THEN
+            NULL;
+        END;
+    END LOOP;
+
+    RESET ROLE;
+
+    SELECT status INTO STRICT v_status
+    FROM membership.api_key WHERE key_id = v_created.out_key_id;
+
+    IF v_status != 'active' THEN
+        RAISE EXCEPTION 'TEST FAILED: cross-tenant call changed key status to %', v_status;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM membership.user_identity
+        WHERE idp_provider = 'apikey' AND idp_subject_id = v_created.out_key_id
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: cross-tenant revoke deleted the key identity';
+    END IF;
+
+    RAISE DEBUG '  ✓ non-member customer session cannot disable/enable/revoke another org''s key';
+
+    -- Positive control: Alice, an active member, can manage her own key.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    PERFORM membership.disable_api_key(v_created.out_key_id);
+    RESET ROLE;
+
+    SELECT status INTO STRICT v_status
+    FROM membership.api_key WHERE key_id = v_created.out_key_id;
+
+    IF v_status != 'disabled' THEN
+        RAISE EXCEPTION 'TEST FAILED: org member should be able to disable own key, status is %', v_status;
+    END IF;
+
+    RAISE DEBUG '  ✓ member customer session manages its own org''s key';
+
+    RAISE DEBUG '✓ API key tenant-isolation tests passed';
 END $$;

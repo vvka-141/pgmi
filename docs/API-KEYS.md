@@ -39,6 +39,19 @@ All mutations flow through SECURITY DEFINER functions so the membership and acti
 | `membership.disable_api_key(key_id)` / `enable_api_key(key_id)` | Temporarily block / restore. Reversible. |
 | `membership.revoke_api_key(key_id)` | Permanent. Deletes the matching `user_identity` row so the key cannot be re-enabled into a working identity. |
 
+### Tenant scoping of the lifecycle functions
+
+`disable_api_key`, `enable_api_key`, and `revoke_api_key` are `SECURITY DEFINER`, so they run as the table owner and row-level security does **not** constrain them. Tenant isolation comes from `membership.can_manage_api_key(key_id)`, which every one of them calls first: the current identity must be a platform superuser, or an active member of the key's organization. Anything else raises `P0404` — the same "not found" a nonexistent key raises, so the functions cannot be used as a cross-tenant key-existence oracle.
+
+The guard fails closed: a session with no resolvable identity (no `auth.idp_subject`) manages no keys. Operator scripts that run as the database owner should either adopt an identity first —
+
+```sql
+SELECT set_config('auth.idp_subject', 'google|alice-001', true);
+SELECT membership.revoke_api_key('a1b2c3d4e5f6');
+```
+
+— or update `membership.api_key` directly, which the owner may do regardless of grants.
+
 ## Rejection reasons returned by `validate_api_key`
 
 | `reason` | Meaning |
