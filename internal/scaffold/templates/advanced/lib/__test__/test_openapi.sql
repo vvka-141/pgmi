@@ -95,6 +95,17 @@ BEGIN
         RAISE EXCEPTION 'openapi_path failed: got %', api.openapi_path('^/hello(\?.*)?$');
     END IF;
 
+    IF api.openapi_path('^/orgs/([^/]+)/users/(\d+)$') != '/orgs/{p1}/users/{p2}' THEN
+        RAISE EXCEPTION 'undeclared path params must be named positionally, got %',
+            api.openapi_path('^/orgs/([^/]+)/users/(\d+)$');
+    END IF;
+
+    IF api.openapi_path('^/orgs/([^/]+)/users/(\d+)$', ARRAY['orgId', 'userId'])
+       != '/orgs/{orgId}/users/{userId}' THEN
+        RAISE EXCEPTION 'declared path params must name the template variables, got %',
+            api.openapi_path('^/orgs/([^/]+)/users/(\d+)$', ARRAY['orgId', 'userId']);
+    END IF;
+
     IF api.openapi_methods('^GET$') != ARRAY['get'] THEN
         RAISE EXCEPTION 'openapi_methods failed for ^GET$';
     END IF;
@@ -177,6 +188,146 @@ BEGIN
 
     RAISE NOTICE '  + Floorless route omits the extension';
     RAISE NOTICE '✓ OpenAPI transaction-isolation extension tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: multi-parameter routes emit valid OpenAPI
+-- A path may not repeat a template variable name. Every capture group must get
+-- a distinct {name}, and each must be declared in the operation's parameters.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_doc jsonb;
+    v_op jsonb;
+    v_params jsonb;
+    v_path text;
+    v_names text[];
+    v_declared boolean;
+BEGIN
+    RAISE NOTICE '-> Testing OpenAPI multi-parameter path templating';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0b11-4000-8000-000000000002',
+            'uri', '^/orgs/([^/]+)/users/(\d+)$',
+            'httpMethod', '^GET$',
+            'name', 'multi_param_openapi_test',
+            'requiresAuth', false,
+            'autoLog', false,
+            'pathParams', jsonb_build_array('orgId', 'userId')
+        ),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+    );
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0b11-4000-8000-000000000003',
+            'uri', '^/things/([^/]+)/parts/([^/]+)$',
+            'httpMethod', '^GET$',
+            'name', 'positional_param_openapi_test',
+            'requiresAuth', false,
+            'autoLog', false
+        ),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+    );
+
+    v_doc := api.openapi_document();
+
+    -- Declared names appear in the template, in order.
+    IF v_doc->'paths'->'/orgs/{orgId}/users/{userId}' IS NULL THEN
+        RAISE EXCEPTION 'declared multi-param route missing; paths: %',
+            (SELECT string_agg(k, ', ') FROM jsonb_object_keys(v_doc->'paths') k);
+    END IF;
+
+    -- Undeclared groups fall back to positional names — still distinct.
+    IF v_doc->'paths'->'/things/{p1}/parts/{p2}' IS NULL THEN
+        RAISE EXCEPTION 'positional fallback route missing; paths: %',
+            (SELECT string_agg(k, ', ') FROM jsonb_object_keys(v_doc->'paths') k);
+    END IF;
+
+    RAISE NOTICE '  + Each capture group gets a distinct template variable';
+
+    -- No path may repeat a template variable name (the actual defect).
+    FOR v_path IN SELECT jsonb_object_keys(v_doc->'paths')
+    LOOP
+        SELECT ARRAY(SELECT m[1] FROM regexp_matches(v_path, '\{([^}]+)\}', 'g') AS m)
+        INTO v_names;
+
+        IF cardinality(v_names) != cardinality(ARRAY(SELECT DISTINCT unnest(v_names))) THEN
+            RAISE EXCEPTION 'path % repeats a template variable: %', v_path, v_names;
+        END IF;
+    END LOOP;
+
+    RAISE NOTICE '  + No path in the document repeats a template variable';
+
+    -- Every {var} in a path is backed by a matching parameters entry.
+    FOR v_path IN SELECT jsonb_object_keys(v_doc->'paths')
+    LOOP
+        SELECT ARRAY(SELECT m[1] FROM regexp_matches(v_path, '\{([^}]+)\}', 'g') AS m)
+        INTO v_names;
+
+        CONTINUE WHEN cardinality(v_names) = 0;
+
+        FOR v_op IN SELECT value FROM jsonb_each(v_doc->'paths'->v_path)
+        LOOP
+            v_params := COALESCE(v_op->'parameters', '[]'::jsonb);
+
+            SELECT bool_and(
+                EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(v_params) p
+                    WHERE p->>'name' = n
+                      AND p->>'in' = 'path'
+                      AND (p->'required')::boolean
+                )
+            )
+            INTO v_declared
+            FROM unnest(v_names) AS n;
+
+            IF NOT v_declared THEN
+                RAISE EXCEPTION 'operation on % does not declare every path variable %; parameters: %',
+                    v_path, v_names, v_params;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    RAISE NOTICE '  + Every path variable has a required in:path parameters entry';
+    RAISE NOTICE '✓ OpenAPI multi-parameter tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: pathParams miscount is rejected at registration, not at request time
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_raised boolean := false;
+BEGIN
+    RAISE NOTICE '-> Testing pathParams registration guard';
+
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object(
+                'id', 'ffffffff-0b11-4000-8000-000000000004',
+                'uri', '^/orgs/([^/]+)/users/([^/]+)$',
+                'httpMethod', '^GET$',
+                'name', 'bad_path_params_test',
+                'requiresAuth', false,
+                'autoLog', false,
+                'pathParams', jsonb_build_array('orgId')
+            ),
+            $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+        );
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+
+    IF NOT v_raised THEN
+        RAISE EXCEPTION 'registering 1 pathParam for a 2-group route should have been rejected';
+    END IF;
+
+    RAISE NOTICE '  + pathParams/capture-group miscount rejected at registration';
+    RAISE NOTICE '✓ pathParams guard tests passed';
 END $$;
 
 DO $$

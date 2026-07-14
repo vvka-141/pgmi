@@ -133,6 +133,74 @@ $$;
 COMMENT ON FUNCTION api.uri_template_to_regex(text) IS
     'Converts a URI template (e.g. /users/{id}) to an anchored POSIX regex where each {param} matches one path segment.';
 
+-- ============================================================================
+-- Route Path Tokens
+-- ============================================================================
+-- Splits a stored route regex into literal runs and capture groups. The OpenAPI
+-- generator and the registration guard both read path parameters from here, so
+-- there is exactly one definition of "what counts as a path parameter" — two
+-- would drift. group_index is NULL for literal runs and 1..N, left to right,
+-- for capture groups.
+--
+-- The three nested strips remove the anchors and the optional query-string
+-- suffix routes conventionally carry ('(\?.*)?$'), which is not a parameter.
+
+-- Dollar-quoted with a named tag: the strip patterns below contain '$$', which
+-- would close an anonymous $$ body mid-string.
+CREATE OR REPLACE FUNCTION api.route_path_tokens(p_address_regexp text)
+RETURNS TABLE (ord bigint, token text, group_index bigint)
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $route_path_tokens$
+    WITH c_pattern AS (
+        SELECT regexp_replace(
+                   regexp_replace(
+                       regexp_replace(p_address_regexp, '^\^', ''),
+                       '\(\\\\?\?\.\*\)\?\$?$', ''),
+                   '\$$', '') AS pattern
+    ),
+    c_token AS (
+        SELECT t.ord, t.m[1] AS token
+        FROM c_pattern
+        CROSS JOIN LATERAL regexp_matches(c_pattern.pattern, '\([^)]*\)|[^(]+', 'g')
+            WITH ORDINALITY AS t(m, ord)
+    )
+    SELECT
+        c_token.ord,
+        c_token.token,
+        CASE
+            WHEN c_token.token LIKE '(%'
+            THEN row_number() OVER (PARTITION BY c_token.token LIKE '(%' ORDER BY c_token.ord)
+        END
+    FROM c_token;
+$route_path_tokens$;
+
+COMMENT ON FUNCTION api.route_path_tokens(text) IS
+    'Splits a route regex into literal runs and capture groups (group_index 1..N left to right). Single source of truth for path parameters, shared by the OpenAPI generator and the registration guard.';
+
+CREATE OR REPLACE FUNCTION api.route_path_param_name(p_param_names text[], p_index bigint)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT COALESCE(NULLIF(p_param_names[p_index::int], ''), 'p' || p_index);
+$$;
+
+COMMENT ON FUNCTION api.route_path_param_name(text[], bigint) IS
+    'Resolves the name of the Nth path parameter: the handler-declared name when present, otherwise positional (p1, p2, ...).';
+
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM api.route_path_tokens('^/orgs/([^/]+)/users/(\d+)$') WHERE group_index IS NOT NULL) != 2 THEN
+        RAISE EXCEPTION 'route_path_tokens must find both capture groups in a two-parameter route';
+    END IF;
+
+    IF (SELECT count(*) FROM api.route_path_tokens('^/hello(\?.*)?$') WHERE group_index IS NOT NULL) != 0 THEN
+        RAISE EXCEPTION 'route_path_tokens must not treat the query-string suffix as a path parameter';
+    END IF;
+
+    IF api.route_path_param_name(ARRAY['orgId'], 1) != 'orgId'
+       OR api.route_path_param_name('{}'::text[], 2) != 'p2' THEN
+        RAISE EXCEPTION 'route_path_param_name must prefer the declared name and fall back to positional';
+    END IF;
+END $$;
+
 -- HTTP Accept content negotiation. Returns true when the client accepts at
 -- least one of the server's produced media types. Parses the Accept header
 -- into media ranges (split on ',', drop ';q='/parameters) and matches each

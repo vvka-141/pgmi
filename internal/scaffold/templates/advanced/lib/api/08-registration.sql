@@ -182,6 +182,9 @@ DECLARE
 
     v_input_schema api.json_schema;
     v_output_schema api.json_schema;
+
+    v_path_params text[];
+    v_group_count bigint;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -191,6 +194,38 @@ BEGIN
     v_uri := p_metadata->>'uri';
     IF v_uri IS NULL THEN
         RAISE EXCEPTION 'REST handler metadata requires "uri" (regex pattern)';
+    END IF;
+
+    -- pathParams names the uri's capture groups for the OpenAPI document. Reject
+    -- a miscount at deploy time: a silently wrong name would surface only as a
+    -- mis-bound client, long after the deploy that caused it.
+    v_path_params := CASE
+        WHEN p_metadata->'pathParams' IS NOT NULL
+        THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'pathParams'))
+        ELSE '{}'::text[]
+    END;
+
+    IF cardinality(v_path_params) > 0 THEN
+        SELECT count(*) INTO v_group_count
+        FROM api.route_path_tokens(v_uri)
+        WHERE group_index IS NOT NULL;
+
+        IF cardinality(v_path_params) != v_group_count THEN
+            RAISE EXCEPTION
+                'Route % declares % pathParams but its uri has % capture group(s): %',
+                COALESCE(p_metadata->>'name', v_id::text),
+                cardinality(v_path_params), v_group_count, v_uri
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM unnest(v_path_params) AS n
+            WHERE n !~ '^[A-Za-z_][A-Za-z0-9_-]*$'
+        ) THEN
+            RAISE EXCEPTION 'pathParams must be OpenAPI parameter names matching ^[A-Za-z_][A-Za-z0-9_-]*$, got %',
+                v_path_params
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
     END IF;
 
     v_http_method := COALESCE(p_metadata->>'httpMethod', '^(GET|POST|PUT|DELETE|PATCH)$');
@@ -295,14 +330,15 @@ $%s$ LANGUAGE plpgsql$sql$,
         input_json_schema = EXCLUDED.input_json_schema,
         output_json_schema = EXCLUDED.output_json_schema;
 
-    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log)
-    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log)
+    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log, path_param_names)
+    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log, v_path_params)
     ON CONFLICT (handler_object_id) DO UPDATE SET
         address_regexp = EXCLUDED.address_regexp,
         method_regexp = EXCLUDED.method_regexp,
         version_regexp = EXCLUDED.version_regexp,
         route_name = EXCLUDED.route_name,
-        auto_log = EXCLUDED.auto_log;
+        auto_log = EXCLUDED.auto_log,
+        path_param_names = EXCLUDED.path_param_names;
 
     RAISE DEBUG 'register REST: Registered route %', v_name;
 END;

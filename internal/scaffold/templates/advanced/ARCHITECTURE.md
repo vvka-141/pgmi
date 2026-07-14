@@ -178,7 +178,8 @@ SELECT api.create_or_replace_rest_handler(
         'uri', '^/orders/([0-9a-f-]+)/confirm$',
         'httpMethod', '^POST$',
         'name', 'confirm_order',
-        'requiresAuth', true
+        'requiresAuth', true,
+        'pathParams', jsonb_build_array('orderId')
     ),
     $body$
 DECLARE

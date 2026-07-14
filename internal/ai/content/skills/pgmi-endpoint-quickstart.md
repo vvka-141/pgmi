@@ -193,6 +193,7 @@ END;
 | `outputSchema` | — | **Required on every REST handler** — the OpenAPI test fails the deploy (`REST handlers without output schema: …`) if any handler omits it. |
 | `inputSchema` | — | JSON Schema for the request body (declare it on write endpoints). Validated at registration; empty `{}` is rejected. |
 | `requiredTransactionIsolation` | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The caller must open the transaction at ≥ this level or the gateway returns 428 (`pgmi.transaction_isolation_too_weak`). |
+| `pathParams` | — (positional) | Names for the `uri`'s capture groups, in order: `'pathParams', jsonb_build_array('orgId', 'userId')` turns `^/orgs/([^/]+)/users/(\d+)$` into `/orgs/{orgId}/users/{userId}` in the OpenAPI document, with a required `in: path` parameter for each. Omit it and they are named `{p1}`, `{p2}`, …. Declaring the wrong number of names is rejected at registration. |
 
 ---
 

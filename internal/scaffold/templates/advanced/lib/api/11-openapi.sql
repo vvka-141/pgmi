@@ -12,20 +12,57 @@
 </pgmi-meta>
 */
 
-CREATE OR REPLACE FUNCTION api.openapi_path(p_address_regexp text)
+-- Every capture group becomes a distinctly named template variable. Naming them
+-- all '{param}' produced a path like /orgs/{param}/users/{param}, which is not
+-- valid OpenAPI: two template variables in one path may not share a name, and
+-- generators either reject it or bind both segments to one parameter.
+DROP FUNCTION IF EXISTS api.openapi_path(text);
+
+CREATE OR REPLACE FUNCTION api.openapi_path(p_address_regexp text, p_param_names text[] DEFAULT '{}')
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $openapi_path$
-    SELECT regexp_replace(
+    SELECT COALESCE(
         replace(
-            regexp_replace(
-                regexp_replace(
-                    regexp_replace(p_address_regexp, '^\^', ''),
-                    '\(\\\\?\?\.\*\)\?\$?$', ''),
-                '\$$', ''),
-            '\.', '.'),
-        '\([^)]+\)', '{param}', 'g');
+            string_agg(
+                CASE
+                    WHEN t.group_index IS NULL THEN t.token
+                    ELSE '{' || api.route_path_param_name(p_param_names, t.group_index) || '}'
+                END,
+                '' ORDER BY t.ord
+            ),
+            '\.', '.'
+        ),
+        ''
+    )
+    FROM api.route_path_tokens(p_address_regexp) t;
 $openapi_path$;
+
+COMMENT ON FUNCTION api.openapi_path(text, text[]) IS
+    'Converts a route regex to an OpenAPI path template. Each capture group becomes a distinct variable: the handler-declared pathParams name, else positional (p1, p2, ...).';
+
+CREATE OR REPLACE FUNCTION api.openapi_path_parameters(p_address_regexp text, p_param_names text[] DEFAULT '{}')
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'name', api.route_path_param_name(p_param_names, t.group_index),
+                'in', 'path',
+                'required', true,
+                'schema', jsonb_build_object('type', 'string')
+            )
+            ORDER BY t.group_index
+        ),
+        '[]'::jsonb
+    )
+    FROM api.route_path_tokens(p_address_regexp) t
+    WHERE t.group_index IS NOT NULL;
+$$;
+
+COMMENT ON FUNCTION api.openapi_path_parameters(text, text[]) IS
+    'OpenAPI parameters array for a route''s path variables (in: path, required: true), named to match api.openapi_path.';
 
 CREATE OR REPLACE FUNCTION api.openapi_methods(p_method_regexp text)
 RETURNS text[]
@@ -56,12 +93,14 @@ DECLARE
     v_request_body jsonb;
     v_security jsonb;
     v_path_item jsonb;
+    v_parameters jsonb;
 BEGIN
     FOR v_route IN
         SELECT
             r.address_regexp,
             r.method_regexp,
             r.route_name,
+            r.path_param_names,
             h.handler_function_name,
             h.title,
             h.description,
@@ -76,7 +115,8 @@ BEGIN
         WHERE h.deleted_at IS NULL
         ORDER BY r.sequence_number
     LOOP
-        v_path := api.openapi_path(v_route.address_regexp);
+        v_path := api.openapi_path(v_route.address_regexp, v_route.path_param_names);
+        v_parameters := api.openapi_path_parameters(v_route.address_regexp, v_route.path_param_names);
         v_methods := api.openapi_methods(v_route.method_regexp);
         v_path_item := COALESCE(v_paths->v_path, '{}'::jsonb);
 
@@ -101,6 +141,10 @@ BEGIN
                 'operationId', v_route.handler_function_name,
                 'responses', v_responses
             );
+
+            IF jsonb_array_length(v_parameters) > 0 THEN
+                v_operation := v_operation || jsonb_build_object('parameters', v_parameters);
+            END IF;
 
             IF v_route.title IS NOT NULL THEN
                 v_operation := v_operation || jsonb_build_object('summary', v_route.title);

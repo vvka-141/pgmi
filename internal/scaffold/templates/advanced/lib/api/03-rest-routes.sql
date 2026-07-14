@@ -27,8 +27,12 @@ CREATE TABLE IF NOT EXISTS api.rest_route (
     version_regexp text NOT NULL DEFAULT '.*',
 
     route_name text,
-    auto_log boolean NOT NULL DEFAULT true
+    auto_log boolean NOT NULL DEFAULT true,
+    path_param_names text[] NOT NULL DEFAULT '{}'
 );
+
+ALTER TABLE api.rest_route
+    ADD COLUMN IF NOT EXISTS path_param_names text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS ix_rest_route_lookup
     ON api.rest_route(sequence_number DESC);
@@ -38,6 +42,9 @@ COMMENT ON TABLE api.rest_route IS
 
 COMMENT ON COLUMN api.rest_route.sequence_number IS
     'Auto-incrementing priority. Higher values (later registration) match first.';
+
+COMMENT ON COLUMN api.rest_route.path_param_names IS
+    'Names for the address_regexp capture groups, in order, as declared by the handler''s pathParams metadata. Empty means the OpenAPI document names them positionally (p1, p2, ...).';
 
 -- ============================================================================
 -- Grant Permissions

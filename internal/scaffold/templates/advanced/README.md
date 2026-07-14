@@ -285,7 +285,8 @@ SELECT api.create_or_replace_rest_handler(
         'uri', '^/users/([0-9]+)$',
         'httpMethod', '^GET$',
         'name', 'get_user',
-        'description', 'Get user by ID'
+        'description', 'Get user by ID',
+        'pathParams', jsonb_build_array('userId')
     ),
     $body$
 DECLARE

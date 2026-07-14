@@ -442,6 +442,7 @@ SELECT api.create_or_replace_rest_handler(
         'name', 'admin_exchange_replay',
         'description', 'Get replay SQL for a specific exchange by ID',
         'requiresAuth', true,
+        'pathParams', jsonb_build_array('exchangeId'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
