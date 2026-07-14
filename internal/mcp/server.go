@@ -21,7 +21,12 @@ type Tool struct {
 	Name        string
 	Description string
 	InputSchema map[string]any
-	Handler     func(ctx context.Context, args json.RawMessage) (any, error)
+	// OutputSchema describes the tool's structuredContent. Declare it only on
+	// tools that return a structured value: the spec requires a tool advertising
+	// an output schema to produce conforming structuredContent, and a tool
+	// returning plain text (a skill, a markdown overview) produces none.
+	OutputSchema map[string]any
+	Handler      func(ctx context.Context, args json.RawMessage) (any, error)
 }
 
 // Server dispatches JSON-RPC 2.0 / MCP messages to registered tools.
@@ -100,7 +105,7 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (rpcResponse, boo
 
 	switch req.Method {
 	case "initialize":
-		return rpcResponse{Result: s.handleInitialize()}, false
+		return rpcResponse{Result: s.handleInitialize(req.Params)}, false
 	case "notifications/initialized", "notifications/cancelled":
 		return rpcResponse{}, true
 	case "ping":
@@ -117,9 +122,16 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (rpcResponse, boo
 	}
 }
 
-func (s *Server) handleInitialize() initializeResult {
+// handleInitialize negotiates the protocol version. Malformed or absent params
+// are not fatal: the client simply gets our latest version and decides whether
+// it can live with it.
+func (s *Server) handleInitialize(params json.RawMessage) initializeResult {
+	var p initializeParams
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &p)
+	}
 	return initializeResult{
-		ProtocolVersion: ProtocolVersion,
+		ProtocolVersion: negotiateVersion(p.ProtocolVersion),
 		Capabilities:    map[string]any{"tools": map[string]any{}},
 		ServerInfo:      s.info,
 	}
@@ -135,9 +147,10 @@ func (s *Server) handleToolsList() toolsListResult {
 	for _, name := range names {
 		t := s.tools[name]
 		tools = append(tools, toolDescriptor{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
+			Name:         t.Name,
+			Description:  t.Description,
+			InputSchema:  t.InputSchema,
+			OutputSchema: t.OutputSchema,
 		})
 	}
 	return toolsListResult{Tools: tools}

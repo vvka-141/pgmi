@@ -62,6 +62,67 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 }
 
+// Spec: "If the server supports the requested protocol version, it MUST respond
+// with the same version. Otherwise, the server MUST respond with another protocol
+// version it supports." An unsupported version is not an error response.
+func TestInitializeNegotiatesProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested string
+		want      string
+	}{
+		{"supported version is echoed back", "2025-06-18", "2025-06-18"},
+		{"older supported version is echoed back", "2024-11-05", "2024-11-05"},
+		{"unknown version falls back to our latest", "1.0.0", ProtocolVersion},
+		{"absent version falls back to our latest", "", ProtocolVersion},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer("pgmi", "v")
+			req := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + tt.requested + `"}}`
+			resp := runSession(t, s, req)
+
+			if resp[0].Error != nil {
+				t.Fatalf("an unsupported version must not be a protocol error, got: %+v", resp[0].Error)
+			}
+			var res initializeResult
+			mustRemarshal(t, resp[0].Result, &res)
+			if res.ProtocolVersion != tt.want {
+				t.Errorf("protocolVersion = %q, want %q", res.ProtocolVersion, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolsListDeclaresOutputSchemaOnlyWhenSet(t *testing.T) {
+	s := NewServer("pgmi", "v")
+	s.Register(Tool{Name: "text_tool", Description: "returns markdown"})
+	s.Register(Tool{
+		Name:         "structured_tool",
+		Description:  "returns an object",
+		OutputSchema: map[string]any{"type": "object"},
+	})
+
+	resp := runSession(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	var res toolsListResult
+	mustRemarshal(t, resp[0].Result, &res)
+
+	byName := map[string]toolDescriptor{}
+	for _, d := range res.Tools {
+		byName[d.Name] = d
+	}
+
+	if byName["structured_tool"].OutputSchema == nil {
+		t.Error("a tool with an output schema must advertise it")
+	}
+	// A tool returning plain text produces no structuredContent, so advertising a
+	// schema for it would promise output the tool never sends.
+	if byName["text_tool"].OutputSchema != nil {
+		t.Error("a tool without an output schema must omit the field entirely")
+	}
+}
+
 func TestToolsListSortedAndRegistered(t *testing.T) {
 	s := NewServer("pgmi", "v")
 	s.Register(Tool{Name: "zebra", Description: "z"})

@@ -434,6 +434,31 @@ claude mcp add pgmi -- pgmi serve
 The server reads JSON-RPC from stdin, writes responses to stdout, and sends all
 diagnostics to stderr. It exits cleanly on EOF or SIGINT.
 
+**Protocol version.** `initialize` negotiates: the server echoes the client's
+requested version when it speaks it (`2025-06-18`, `2025-03-26`, `2024-11-05`),
+otherwise answers with its newest. An unsupported request is not an error — the
+client decides whether the answer is acceptable.
+
+**Structured output.** Tools returning a structured value (`deploy`, `init`,
+`metadata_plan`, `metadata_validate`, `templates_list`, `ai_skills`) declare an
+`outputSchema` in `tools/list` and emit matching `structuredContent`, so a client
+can validate results without parsing text. The three tools that return
+documents — `ai_overview`, `ai_skill`, `ai_contract` — declare no output schema
+because they return text, not typed output.
+
+**Destructive deploys need an echo-back.** `deploy` with `overwrite: true` drops
+the target database, and this path auto-approves (there is no TTY to prompt). It
+therefore also requires `confirmDatabaseName` to equal `database` exactly:
+
+```json
+{"name": "deploy", "arguments": {
+  "path": "./myproject", "connection": "postgresql://...",
+  "database": "myapp", "overwrite": true, "confirmDatabaseName": "myapp"}}
+```
+
+A missing or mismatched name is refused before anything connects, so an agent
+that hallucinated a database name cannot drop it.
+
 > This is pgmi's **own CLI** as MCP tools. It is unrelated to the advanced
 > template's MCP gateway (which exposes your *deployed database* to agents — see
 > [docs/MCP.md](MCP.md)).
