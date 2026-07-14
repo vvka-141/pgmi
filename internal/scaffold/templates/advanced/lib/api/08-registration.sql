@@ -185,6 +185,7 @@ DECLARE
 
     v_path_params text[];
     v_group_count bigint;
+    v_existing_handler uuid;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -259,6 +260,24 @@ BEGIN
     ELSE
         v_function_name := 'rest_handler_' || replace(v_id::text, '-', '_');
     END IF;
+
+    -- Two handlers sharing a name would both CREATE OR REPLACE the same
+    -- api.<name>(api.rest_request), so the second silently replaces the first's
+    -- body. Today that is caught only incidentally — api.handler.handler_func is
+    -- UNIQUE and the identical signature yields the identical OID — which fails
+    -- the deploy with a raw unique_violation and a 40-line INSERT dump, naming
+    -- neither handler. RPC has had this pre-check since it was written; REST
+    -- never got it. Say which name, and which handler already owns it.
+    SELECT handler_object_id INTO v_existing_handler
+    FROM api.rest_route
+    WHERE route_name = v_name AND handler_object_id <> v_id;
+
+    IF v_existing_handler IS NOT NULL THEN
+        RAISE EXCEPTION 'REST route name "%" is already registered to handler %', v_name, v_existing_handler
+            USING ERRCODE = 'unique_violation',
+                  HINT = 'Handler names become function names (api.<name>): two handlers cannot share one. Rename this handler, or reuse the existing handler''s id to replace it.';
+    END IF;
+
     v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
@@ -551,6 +570,7 @@ DECLARE
 
     v_output_schema api.json_schema;
     v_tags text[];
+    v_existing_handler uuid;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -565,6 +585,19 @@ BEGIN
     v_name := p_metadata->>'name';
     IF v_name IS NULL THEN
         RAISE EXCEPTION 'MCP handler metadata requires "name"';
+    END IF;
+
+    -- api.mcp_route.mcp_name is UNIQUE, so a collision already fails the deploy —
+    -- but as a raw unique_violation naming neither handler. Catch it here and say
+    -- which name and which owner, like REST and RPC do.
+    SELECT handler_object_id INTO v_existing_handler
+    FROM api.mcp_route
+    WHERE mcp_name = v_name AND handler_object_id <> v_id;
+
+    IF v_existing_handler IS NOT NULL THEN
+        RAISE EXCEPTION 'MCP name "%" is already registered to handler %', v_name, v_existing_handler
+            USING ERRCODE = 'unique_violation',
+                  HINT = 'MCP names are unique across tools, resources and prompts, and become function names. Rename this handler, or reuse the existing handler''s id to replace it.';
     END IF;
 
     v_title := p_metadata->>'title';

@@ -403,3 +403,103 @@ BEGIN
     RAISE NOTICE '+ ALL HANDLER LIFECYCLE AND CONTENT NEGOTIATION TESTS PASSED';
     RAISE NOTICE '===============================================================';
 END $$;
+
+-- ============================================================================
+-- Test: a handler name cannot be claimed by two handlers
+-- Names become function names (api.<name>), so a second CREATE OR REPLACE would
+-- overwrite the first handler's body. Registration must refuse and say who owns
+-- the name — not fail with a raw constraint violation that names neither.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_first  uuid := 'ffffffff-0186-4000-8000-000000000001';
+    v_second uuid := 'ffffffff-0186-4000-8000-000000000002';
+    v_message text;
+    v_body text;
+BEGIN
+    RAISE NOTICE '-> Testing REST handler name-collision guard';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first')); END; $body$
+    );
+
+    -- Same name, different handler: a realistic copy-paste of the metadata block.
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object('id', v_second, 'uri', '^/collide-second$', 'httpMethod', '^GET$',
+                'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+            $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'second')); END; $body$
+        );
+        RAISE EXCEPTION 'TEST FAILED: two REST handlers must not both claim the name "collision_probe"';
+    EXCEPTION WHEN unique_violation THEN
+        GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    END;
+
+    -- The message must be actionable: it names the collision and its current owner.
+    IF v_message NOT LIKE '%collision_probe%' OR v_message NOT LIKE '%' || v_first::text || '%' THEN
+        RAISE EXCEPTION 'TEST FAILED: the error must name the route and the handler that owns it, got: %', v_message;
+    END IF;
+
+    RAISE NOTICE '  + A colliding REST name is refused, naming the handler that owns it';
+
+    -- And the incumbent still runs its OWN body — the whole point of the guard.
+    v_body := convert_from((api.rest_invoke('GET', '/collide-first')).content, 'UTF8');
+    IF v_body NOT LIKE '%first%' THEN
+        RAISE EXCEPTION 'TEST FAILED: the incumbent handler''s body was overwritten, got: %', v_body;
+    END IF;
+
+    RAISE NOTICE '  + The incumbent handler still executes its own body';
+
+    -- Re-registering under the SAME id must still work: that is a replacement,
+    -- not a collision. A guard that blocked this would break every redeploy.
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first-v2')); END; $body$
+    );
+
+    v_body := convert_from((api.rest_invoke('GET', '/collide-first')).content, 'UTF8');
+    IF v_body NOT LIKE '%first-v2%' THEN
+        RAISE EXCEPTION 'TEST FAILED: re-registering the same id must replace the body, got: %', v_body;
+    END IF;
+
+    RAISE NOTICE '  + Re-registering the same id still replaces the handler (not a collision)';
+    RAISE NOTICE '✓ REST name-collision tests passed';
+END $$;
+
+DO $$
+DECLARE
+    v_first  uuid := 'ffffffff-0186-4000-8000-000000000003';
+    v_second uuid := 'ffffffff-0186-4000-8000-000000000004';
+    v_message text;
+BEGIN
+    RAISE NOTICE '-> Testing MCP handler name-collision guard';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', v_first, 'type', 'tool', 'name', 'mcp_collision_probe',
+            'description', 'first', 'requiresAuth', false),
+        $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('first'::text), (request).request_id); END; $body$
+    );
+
+    BEGIN
+        PERFORM api.create_or_replace_mcp_handler(
+            jsonb_build_object('id', v_second, 'type', 'tool', 'name', 'mcp_collision_probe',
+                'description', 'second', 'requiresAuth', false),
+            $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('second'::text), (request).request_id); END; $body$
+        );
+        RAISE EXCEPTION 'TEST FAILED: two MCP handlers must not both claim one name';
+    EXCEPTION WHEN unique_violation THEN
+        GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    END;
+
+    -- A raw "duplicate key value violates unique constraint" names neither handler.
+    IF v_message NOT LIKE '%mcp_collision_probe%' OR v_message NOT LIKE '%' || v_first::text || '%' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP collision must report a clean, attributable error, got: %', v_message;
+    END IF;
+
+    RAISE NOTICE '  + A colliding MCP name is refused with an attributable error';
+    RAISE NOTICE '✓ MCP name-collision tests passed';
+END $$;
