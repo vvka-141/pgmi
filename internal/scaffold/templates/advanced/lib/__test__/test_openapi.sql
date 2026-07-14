@@ -162,7 +162,7 @@ BEGIN
             'name', 'iso_openapi_test',
             'requiresAuth', false,
             'autoLog', false,
-            'requiredTransactionIsolation', 'serializable'
+            'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
     );
@@ -174,16 +174,16 @@ BEGIN
         RAISE EXCEPTION 'iso-openapi-test route missing from spec';
     END IF;
 
-    IF v_op->>'x-pgmi-transaction-isolation' IS DISTINCT FROM 'serializable' THEN
-        RAISE EXCEPTION 'operation should advertise x-pgmi-transaction-isolation=serializable, got %',
-            v_op->>'x-pgmi-transaction-isolation';
+    IF v_op->>'x-pgmi-min-transaction-isolation' IS DISTINCT FROM 'serializable' THEN
+        RAISE EXCEPTION 'operation should advertise x-pgmi-min-transaction-isolation=serializable, got %',
+            v_op->>'x-pgmi-min-transaction-isolation';
     END IF;
 
-    RAISE NOTICE '  + Route with a floor advertises x-pgmi-transaction-isolation';
+    RAISE NOTICE '  + Route with a floor advertises x-pgmi-min-transaction-isolation';
 
     -- A route with no floor must NOT carry the key (absent, not null).
-    IF (v_doc->'paths'->'/openapi.json'->'get') ? 'x-pgmi-transaction-isolation' THEN
-        RAISE EXCEPTION 'floorless route should omit x-pgmi-transaction-isolation';
+    IF (v_doc->'paths'->'/openapi.json'->'get') ? 'x-pgmi-min-transaction-isolation' THEN
+        RAISE EXCEPTION 'floorless route should omit x-pgmi-min-transaction-isolation';
     END IF;
 
     RAISE NOTICE '  + Floorless route omits the extension';

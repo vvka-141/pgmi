@@ -33,7 +33,7 @@ BEGIN
             'httpMethod', '^GET$',
             'name', 'iso_rr',
             'requiresAuth', false,
-            'requiredTransactionIsolation', 'REPEATABLE-READ'
+            'minTransactionIsolation', 'REPEATABLE-READ'
         ),
         $body$
 BEGIN
@@ -42,14 +42,14 @@ END;
         $body$
     );
 
-    SELECT required_transaction_isolation INTO v_stored
+    SELECT min_transaction_isolation INTO v_stored
     FROM api.handler WHERE object_id = 'ffffffff-7001-4000-8000-000000000001';
 
     IF v_stored <> 'repeatable read' THEN
         RAISE EXCEPTION 'TEST FAILED: floor should normalize to "repeatable read", got "%"', v_stored;
     END IF;
 
-    RAISE NOTICE '  ✓ requiredTransactionIsolation normalized and stored (REPEATABLE-READ -> repeatable read)';
+    RAISE NOTICE '  ✓ minTransactionIsolation normalized and stored (REPEATABLE-READ -> repeatable read)';
 
     -- Unsupported floor is rejected at registration.
     BEGIN
@@ -60,7 +60,7 @@ END;
                 'httpMethod', '^GET$',
                 'name', 'iso_bad',
                 'requiresAuth', false,
-                'requiredTransactionIsolation', 'snapshot'
+                'minTransactionIsolation', 'snapshot'
             ),
             $body$
 BEGIN
@@ -99,7 +99,7 @@ BEGIN
             'id', 'ffffffff-7102-4000-8000-000000000001',
             'uri', '^/iso-rc$', 'httpMethod', '^GET$',
             'name', 'iso_rc', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'read committed'
+            'minTransactionIsolation', 'read committed'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -109,7 +109,7 @@ BEGIN
             'id', 'ffffffff-7103-4000-8000-000000000001',
             'uri', '^/iso-rr-rest$', 'httpMethod', '^GET$',
             'name', 'iso_rr_rest', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'repeatable read'
+            'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -118,7 +118,7 @@ BEGIN
             'id', 'ffffffff-7104-4000-8000-000000000001',
             'uri', '^/iso-ser-rest$', 'httpMethod', '^GET$',
             'name', 'iso_ser_rest', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable'
+            'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -176,7 +176,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-7202-4000-8000-000000000001',
             'methodName', 'iso.serializable', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable'
+            'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
     );
@@ -223,7 +223,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-7302-4000-8000-000000000001',
             'type', 'tool', 'name', 'iso_tool_ser', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable',
+            'minTransactionIsolation', 'serializable',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$

@@ -42,7 +42,7 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --                        Set 'requiresAuth', false explicitly for public endpoints.
 --        - autoLog:      If true, request/response logged to api.rest_exchange (default true)
 --        - outputSchema: REQUIRED on every REST handler (the OpenAPI test enforces it).
---        - requiredTransactionIsolation: Minimum isolation floor the gateway enforces
+--        - minTransactionIsolation: Minimum isolation floor the gateway enforces
 --                        (read committed | repeatable read | serializable). Omit for none.
 --                        The caller must open the transaction at >= this level or the
 --                        gateway returns 428; see lib/api/00-transaction-isolation.sql.

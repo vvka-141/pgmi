@@ -363,7 +363,7 @@ object's keys are **camelCase**. The ones that bite if you get them wrong:
 | `requiresAuth` | no | **`true`** | Omitting it makes the endpoint **authenticated** — 401 without resolved identity. Set `false` for a public endpoint. |
 | `autoLog` | no | **`true`** | Request logging. |
 | `inputSchema` / `outputSchema` | no | — | JSON Schema, validated **at registration time**; an empty `{}` is rejected (needs a real keyword like `type`/`properties`/`required`). |
-| `requiredTransactionIsolation` | no | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The gateway only validates — the caller must open the transaction at ≥ this level or gets 428 (REST) / `-32600` (RPC/MCP) with `pgmi.transaction_isolation_too_weak`. |
+| `minTransactionIsolation` | no | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The gateway only validates — the caller must open the transaction at ≥ this level or gets 428 (REST) / `-32600` (RPC/MCP) with `pgmi.transaction_isolation_too_weak`. |
 
 The body is the *inside* of a function — `DECLARE … BEGIN … END;` only,
 dollar-quoted with `$body$`, never the `CREATE FUNCTION` header or a trailing
@@ -639,7 +639,7 @@ The handler probe still gives a clean 409 in the common case; the guard predicat
 
 ## Retryable routes: your handler must be safe to run twice
 
-Declaring `requiredTransactionIsolation` as `repeatable read` or `serializable` buys a stronger guarantee at a price PostgreSQL states plainly: conflicting transactions are **aborted** with SQLSTATE `40001` (`serialization_failure`), and the only remedy is to **retry the entire transaction from a fresh snapshot**. `40P01` (`deadlock_detected`) behaves the same way at any isolation level.
+Declaring `minTransactionIsolation` as `repeatable read` or `serializable` buys a stronger guarantee at a price PostgreSQL states plainly: conflicting transactions are **aborted** with SQLSTATE `40001` (`serialization_failure`), and the only remedy is to **retry the entire transaction from a fresh snapshot**. `40P01` (`deadlock_detected`) behaves the same way at any isolation level.
 
 The gateway deliberately lets `40001` and `40P01` propagate with their SQLSTATE intact instead of sanitizing them into a 500 — that SQLSTATE is the one bit of information a client needs to know it should retry rather than give up. Every other SQLSTATE is still sanitized (no `SQLERRM`/`DETAIL` reaches a client).
 

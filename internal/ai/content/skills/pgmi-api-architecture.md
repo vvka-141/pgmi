@@ -192,7 +192,7 @@ SQL (RLS, handlers) reads. The snippets above are protocol-illustrative; in the
 - `requiresAuth` (handler metadata) **defaults to `true`** — if omitted or set, the
   gateway returns 401 when no user resolves. Set `'requiresAuth', false` for a
   public endpoint.
-- `requiredTransactionIsolation` (handler metadata) declares an isolation floor
+- `minTransactionIsolation` (handler metadata) declares an isolation floor
   (`read committed` / `repeatable read` / `serializable`). Gateways only
   *validate* the current level — the caller opens the transaction at ≥ the
   floor or the call is rejected with `pgmi.transaction_isolation_too_weak`

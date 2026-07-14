@@ -550,7 +550,7 @@ The gateway extracts authentication from HTTP headers:
 ### Transaction Isolation
 
 A handler may declare a minimum transaction isolation level with the
-`requiredTransactionIsolation` metadata key (`read committed` |
+`minTransactionIsolation` metadata key (`read committed` |
 `repeatable read` | `serializable`; case- and separator-insensitive). The
 database gateway can only *validate* the level — `SET TRANSACTION` is illegal
 inside functions — so the caller must open the transaction at least that

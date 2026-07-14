@@ -168,7 +168,7 @@ DECLARE
     v_response_headers jsonb;
     v_auto_log boolean;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -235,7 +235,7 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
     v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
 
@@ -292,13 +292,13 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rest', v_handler_oid::regprocedure, v_function_name,
-        v_accepts, v_produces, v_response_headers, v_requires_auth, v_required_isolation,
+        v_accepts, v_produces, v_response_headers, v_requires_auth, v_min_isolation,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
@@ -312,7 +312,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         produces = EXCLUDED.produces,
         response_headers = EXCLUDED.response_headers,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -369,7 +369,7 @@ DECLARE
     v_response_headers jsonb;
     v_auto_log boolean;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -411,7 +411,7 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
 
     RAISE DEBUG 'register RPC: id=%, method=%', v_id, v_method_name;
 
@@ -462,13 +462,13 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rpc', v_handler_oid::regprocedure, v_function_name,
-        v_accepts, v_produces, v_response_headers, v_requires_auth, v_required_isolation,
+        v_accepts, v_produces, v_response_headers, v_requires_auth, v_min_isolation,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
@@ -482,7 +482,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         produces = EXCLUDED.produces,
         response_headers = EXCLUDED.response_headers,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -537,7 +537,7 @@ DECLARE
     v_arguments jsonb;
     v_handler_type api.handler_type;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -575,7 +575,7 @@ BEGIN
     v_mime_type := COALESCE(p_metadata->>'mimeType', 'application/json');
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
     v_tags := CASE
         WHEN p_metadata->'tags' IS NOT NULL
         THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'tags'))
@@ -621,13 +621,13 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, v_handler_type, v_handler_oid::regprocedure, v_function_name,
-        ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth, v_required_isolation,
+        ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth, v_min_isolation,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
@@ -639,7 +639,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         handler_func = EXCLUDED.handler_func,
         handler_function_name = EXCLUDED.handler_function_name,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -713,7 +713,7 @@ AS $catalog_version$
             h.title,
             h.description,
             h.requires_auth::text,
-            h.required_transaction_isolation,
+            h.min_transaction_isolation,
             h.accepts::text,
             h.produces::text,
             h.input_json_schema::text,

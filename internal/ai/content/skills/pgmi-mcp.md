@@ -276,7 +276,7 @@ END;
 ### Transaction Isolation Floor
 
 Any handler (tool, resource, or prompt) may declare a minimum transaction
-isolation level with the metadata key `requiredTransactionIsolation`
+isolation level with the metadata key `minTransactionIsolation`
 (`read committed` | `repeatable read` | `serializable`; case- and
 separator-insensitive; unsupported values are rejected at registration). The
 gateway cannot raise the level itself — the caller opens the transaction at
