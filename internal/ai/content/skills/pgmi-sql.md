@@ -40,7 +40,7 @@ In PostgreSQL, every table automatically creates a composite type with the same 
 
 ```sql
 -- ❌ BAD: Plural table name
-CREATE TABLE users (...);
+CREATE TABLE "user" (...);
 CREATE FUNCTION get_user() RETURNS users;  -- Awkward: "returns users"
 
 -- ✅ GOOD: Singular table name
@@ -154,7 +154,7 @@ DECLARE
     v_sql TEXT;
 BEGIN
     v_sql := $migration$
-        CREATE TABLE users (
+        CREATE TABLE "user" (
             id SERIAL PRIMARY KEY,
             email TEXT NOT NULL,
             created_at TIMESTAMPTZ DEFAULT now()
@@ -381,7 +381,7 @@ END $$;
 -- Using the ASSERT statement (PostgreSQL 9.5+)
 DO $$
 BEGIN
-    ASSERT (SELECT COUNT(*) FROM users) = 5, 'Expected 5 users after migration';
+    ASSERT (SELECT COUNT(*) FROM "user") = 5, 'Expected 5 users after migration';
 END $$;
 
 -- Complex validation
@@ -906,563 +906,43 @@ END $$;
 
 ---
 
-## Error Context Capture with GET STACKED DIAGNOSTICS
+## Errors in deploy.sql
 
-PostgreSQL's `GET STACKED DIAGNOSTICS` statement captures comprehensive error context in `EXCEPTION` blocks, essential for debugging and structured error tracking.
+Generic PostgreSQL error handling (`GET STACKED DIAGNOSTICS`, SQLSTATE classes,
+`EXCEPTION` blocks) is assumed knowledge — consult
+https://www.postgresql.org/docs/current/errcodes-appendix.html when you need a code.
 
-### Available Diagnostic Variables
-
-| Variable | Description | Example Value |
-|----------|-------------|---------------|
-| `RETURNED_SQLSTATE` | PostgreSQL error code | `'23505'` (unique_violation) |
-| `MESSAGE_TEXT` | Primary error message | `'duplicate key value violates unique constraint "users_email_key"'` |
-| `PG_EXCEPTION_DETAIL` | Additional details | `'Key (email)=(user@example.com) already exists.'` |
-| `PG_EXCEPTION_HINT` | Suggested resolution | `'Use ON CONFLICT clause to handle duplicates.'` |
-| `PG_EXCEPTION_CONTEXT` | Stack trace | `'PL/pgSQL function api.create_user(jsonb) line 15 at SQL statement'` |
-
-**All variables return `text` and are only available within `EXCEPTION` handlers.**
-
-### Pattern: Structured Error Capture
-
-Create a reusable function to capture full error context:
+What is pgmi-specific is **attribution**: pgmi executes your files, so a bare
+error tells the operator nothing about *which* file failed. Wrap execution and
+name the file:
 
 ```sql
-CREATE OR REPLACE FUNCTION api.build_error_context()
-RETURNS jsonb AS $$
-DECLARE
-    v_sqlstate text;
-    v_message text;
-    v_detail text;
-    v_hint text;
-    v_context text;
-BEGIN
-    GET STACKED DIAGNOSTICS
-        v_sqlstate = RETURNED_SQLSTATE,
-        v_message = MESSAGE_TEXT,
-        v_detail = PG_EXCEPTION_DETAIL,
-        v_hint = PG_EXCEPTION_HINT,
-        v_context = PG_EXCEPTION_CONTEXT;
-
-    RETURN jsonb_build_object(
-        'sqlstate', v_sqlstate,
-        'message', v_message,
-        'detail', v_detail,
-        'hint', v_hint,
-        'context', v_context,
-        'timestamp', now()
-    );
-END;
-$$ LANGUAGE plpgsql;
-```
-
-**Usage in exception handler:**
-
-```sql
-DO $$
-BEGIN
-    -- Risky operation
-    INSERT INTO users (email) VALUES ('duplicate@example.com');
-
-EXCEPTION
-    WHEN OTHERS THEN
-        DECLARE
-            v_error_context jsonb;
-        BEGIN
-            v_error_context := api.build_error_context();
-
-            -- Log structured error
-            INSERT INTO error_log (error_data, occurred_at)
-            VALUES (v_error_context, now());
-
-            -- Or raise warning with full context
-            RAISE WARNING 'Operation failed: %', v_error_context;
-
-            -- Or examine specific fields
-            RAISE NOTICE 'Error: % (SQLSTATE: %)',
-                v_error_context->>'message',
-                v_error_context->>'sqlstate';
-        END;
-END $$;
-```
-
-**Example Output:**
-```json
-{
-  "sqlstate": "23505",
-  "message": "duplicate key value violates unique constraint \"users_email_key\"",
-  "detail": "Key (email)=(duplicate@example.com) already exists.",
-  "hint": null,
-  "context": "SQL statement \"INSERT INTO users (email) VALUES ('duplicate@example.com')\"\nPL/pgSQL function inline_code_block line 3 at SQL statement",
-  "timestamp": "2025-01-15T10:30:45.123Z"
-}
-```
-
-### Pattern: SQLSTATE-Based Error Classification
-
-Different SQLSTATE codes require different handling strategies. Classify errors to enable appropriate responses:
-
-```sql
--- Classify errors into actionable categories
-CREATE OR REPLACE FUNCTION classify_error(p_sqlstate text)
-RETURNS text AS $$
-    SELECT CASE
-        -- Transient errors (safe to retry)
-        WHEN $1 LIKE '08%' THEN 'connection_failure'       -- Connection exception
-        WHEN $1 IN ('40001', '40P01') THEN 'serialization_conflict'  -- Deadlock, serialization
-        WHEN $1 = '55P03' THEN 'lock_timeout'              -- Lock timeout
-        WHEN $1 IN ('57014', '57P01') THEN 'query_timeout' -- Query canceled, terminating
-
-        -- Client errors (fix request and retry)
-        WHEN $1 = '23505' THEN 'unique_violation'          -- Duplicate key
-        WHEN $1 = '23503' THEN 'foreign_key_violation'     -- FK constraint
-        WHEN $1 = '23514' THEN 'check_violation'           -- CHECK constraint
-        WHEN $1 = '23502' THEN 'not_null_violation'        -- NOT NULL violation
-        WHEN $1 LIKE '22%' THEN 'data_exception'           -- Invalid data format
-
-        -- Server errors (investigate)
-        ELSE 'internal_error'
-    END;
-$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
-```
-
-**Usage with classification:**
-
-```sql
-DO $$
-DECLARE
-    v_retry_count INT := 0;
-    v_max_retries INT := 3;
-    v_success BOOLEAN := false;
-BEGIN
-    WHILE v_retry_count < v_max_retries AND NOT v_success LOOP
-        BEGIN
-            v_retry_count := v_retry_count + 1;
-
-            -- Risky operation prone to deadlocks
-            UPDATE accounts SET balance = balance - 100 WHERE account_id = 'A';
-            UPDATE accounts SET balance = balance + 100 WHERE account_id = 'B';
-
-            v_success := true;
-
-        EXCEPTION
-            WHEN OTHERS THEN
-                DECLARE
-                    v_sqlstate text;
-                    v_error_class text;
-                    v_error_context jsonb;
-                BEGIN
-                    GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE;
-                    v_error_class := classify_error(v_sqlstate);
-                    v_error_context := api.build_error_context();
-
-                    -- Handle based on classification
-                    CASE v_error_class
-                        WHEN 'serialization_conflict' THEN
-                            IF v_retry_count >= v_max_retries THEN
-                                RAISE EXCEPTION 'Transient error after % attempts: %',
-                                    v_max_retries, v_error_context;
-                            END IF;
-                            RAISE NOTICE 'Attempt % failed (transient), retrying...', v_retry_count;
-                            PERFORM pg_sleep(0.1 * v_retry_count); -- Exponential backoff
-
-                        WHEN 'unique_violation' THEN
-                            RAISE EXCEPTION 'Client error (non-retryable): %', v_error_context;
-
-                        WHEN 'connection_failure' THEN
-                            IF v_retry_count >= v_max_retries THEN
-                                RAISE EXCEPTION 'Connection failed after % attempts: %',
-                                    v_max_retries, v_error_context;
-                            END IF;
-                            RAISE NOTICE 'Connection lost, retrying...';
-                            PERFORM pg_sleep(1); -- Longer backoff for connection issues
-
-                        ELSE
-                            RAISE EXCEPTION 'Server error (investigate): %', v_error_context;
-                    END CASE;
-                END;
-        END;
-    END LOOP;
-
-    IF v_success THEN
-        RAISE NOTICE 'Operation succeeded after % attempts', v_retry_count;
-    END IF;
-END $$;
-```
-
-**Classification Benefits:**
-- **Transient errors** (connection_failure, serialization_conflict, lock_timeout, query_timeout) → Retry with backoff
-- **Client errors** (unique_violation, foreign_key_violation, check_violation, not_null_violation, data_exception) → Fail fast, user must fix request
-- **Server errors** (internal_error) → Fail fast, investigate and fix server-side issue
-
-### Pattern: Structured Error History (jsonb Array)
-
-Track errors across retry attempts using jsonb arrays. Essential for debugging intermittent issues:
-
-```sql
--- Create error tracking table
-CREATE TABLE IF NOT EXISTS task_queue (
-    task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    task_data jsonb NOT NULL,
-    processing_attempts INT DEFAULT 0,
-    error_history jsonb,  -- Array of error objects
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
-**Accumulate errors on each retry:**
-
-```sql
-DO $$
-DECLARE
-    v_task RECORD;
-    v_error_context jsonb;
-BEGIN
-    -- Lock next task for processing
-    SELECT * INTO v_task
-    FROM task_queue
-    WHERE completed_at IS NULL
-      AND processing_attempts < 5
-    ORDER BY created_at
-    LIMIT 1
-    FOR UPDATE SKIP LOCKED;
-
-    IF NOT FOUND THEN
-        RETURN;
-    END IF;
-
+FOR v_file IN SELECT path, content FROM pg_temp.pgmi_plan_view ORDER BY execution_order
+LOOP
     BEGIN
-        -- Update attempt counter
-        UPDATE task_queue
-        SET processing_attempts = processing_attempts + 1
-        WHERE task_id = v_task.task_id;
-
-        -- Process task
-        PERFORM process_task(v_task.task_data);
-
-        -- Mark complete on success
-        UPDATE task_queue
-        SET completed_at = now()
-        WHERE task_id = v_task.task_id;
-
-    EXCEPTION
-        WHEN OTHERS THEN
-            -- Capture error context
-            v_error_context := api.build_error_context();
-
-            -- Accumulate error history (don't overwrite)
-            UPDATE task_queue
-            SET error_history = COALESCE(error_history, '[]'::jsonb)
-                             || jsonb_build_array(
-                                 v_error_context || jsonb_build_object(
-                                     'attempt', processing_attempts + 1,
-                                     'timestamp', now()
-                                 )
-                             )
-            WHERE task_id = v_task.task_id;
-
-            RAISE WARNING 'Task % failed (attempt %): [%] %',
-                v_task.task_id,
-                v_task.processing_attempts + 1,
-                v_error_context->>'sqlstate',
-                v_error_context->>'message';
+        EXECUTE v_file.content;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM
+            USING ERRCODE = SQLSTATE,          -- keep the class; do not flatten it
+                  DETAIL   = COALESCE(PG_EXCEPTION_DETAIL, '');
     END;
-END $$;
+END LOOP;
 ```
 
-**Query error history:**
+Preserve `ERRCODE`: pgmi maps SQLSTATE to an exit code, and a caller (or a retry
+loop) cannot classify a failure you have rewritten into a generic error.
 
-```sql
--- Find tasks with repeated errors
-SELECT
-    task_id,
-    processing_attempts,
-    jsonb_array_length(error_history) as error_count,
-    error_history->-1->>'message' as last_error_message,
-    error_history->-1->>'sqlstate' as last_sqlstate,
-    error_history->-1->>'timestamp' as last_error_time
-FROM task_queue
-WHERE error_history IS NOT NULL
-ORDER BY processing_attempts DESC;
+For diagnosing a failed deploy from its exit code, load the `pgmi-debug-deploy`
+skill.
 
--- Analyze error progression for specific task
-SELECT
-    task_id,
-    jsonb_array_elements(error_history) as error_attempt
-FROM task_queue
-WHERE task_id = '<task-uuid>';
-
--- Find tasks failing with specific error class
-SELECT
-    task_id,
-    processing_attempts,
-    error_history->-1->>'sqlstate' as error_code,
-    error_history->-1->>'message' as error_message
-FROM task_queue
-WHERE error_history IS NOT NULL
-  AND error_history->-1->>'sqlstate' LIKE '40%'  -- Serialization conflicts
-ORDER BY created_at DESC;
-
--- Compute error statistics
-SELECT
-    error_history->-1->>'sqlstate' as sqlstate,
-    COUNT(*) as occurrences,
-    AVG(processing_attempts) as avg_attempts,
-    MAX(processing_attempts) as max_attempts
-FROM task_queue
-WHERE error_history IS NOT NULL
-GROUP BY error_history->-1->>'sqlstate'
-ORDER BY occurrences DESC;
-```
-
-### Pattern: HTTP Status Code Mapping (Gateway-Level Only)
-
-> **⚠ SCOPE WARNING.** This SQLSTATE→HTTP mapping is the **gateway-level catch-all** that wraps handler invocation and sanitizes *unhandled* exceptions into a 500 (or a transient 503). It is **not** a pattern to use inside handler bodies. Inside a handler, do not let a constraint violation surface as an exception and then map it — probe for the condition first and `RETURN api.problem_response(409|422|404, ...)` explicitly. Mapping `23503`→400 inside a handler gives the wrong status and a leaky message where a probed 422 with a human-readable reference name is correct. See `pgmi-handler-patterns`.
-
-When building HTTP APIs backed by PostgreSQL, the gateway maps SQLSTATE to appropriate HTTP status codes for unhandled exceptions:
-
-```sql
-CREATE OR REPLACE FUNCTION sqlstate_to_http_status(p_sqlstate text)
-RETURNS integer AS $$
-    SELECT CASE classify_error($1)
-        -- Transient errors → 5xx (server should retry)
-        WHEN 'connection_failure' THEN 503        -- Service Unavailable
-        WHEN 'serialization_conflict' THEN 503    -- Service Unavailable (retry)
-        WHEN 'lock_timeout' THEN 503              -- Service Unavailable (retry)
-        WHEN 'query_timeout' THEN 504             -- Gateway Timeout
-
-        -- Client errors → 4xx (client must fix)
-        WHEN 'unique_violation' THEN 409          -- Conflict
-        WHEN 'foreign_key_violation' THEN 400     -- Bad Request
-        WHEN 'check_violation' THEN 400           -- Bad Request
-        WHEN 'not_null_violation' THEN 400        -- Bad Request
-        WHEN 'data_exception' THEN 400            -- Bad Request
-
-        -- Server errors → 500
-        ELSE 500                                  -- Internal Server Error
-    END;
-$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
-```
-
-**Usage in HTTP handler:**
-
-```sql
-CREATE OR REPLACE FUNCTION api.create_user(p_request jsonb)
-RETURNS jsonb AS $$
-DECLARE
-    v_email text;
-    v_user_id uuid;
-BEGIN
-    v_email := p_request->>'email';
-
-    -- Insert user
-    INSERT INTO users (email) VALUES (v_email)
-    RETURNING id INTO v_user_id;
-
-    -- Success response
-    RETURN jsonb_build_object(
-        'status', 200,
-        'body', jsonb_build_object('user_id', v_user_id)
-    );
-
-EXCEPTION
-    WHEN OTHERS THEN
-        DECLARE
-            v_error_context jsonb;
-            v_http_status integer;
-        BEGIN
-            v_error_context := api.build_error_context();
-            v_http_status := sqlstate_to_http_status(v_error_context->>'sqlstate');
-
-            RETURN jsonb_build_object(
-                'status', v_http_status,
-                'headers', jsonb_build_object(
-                    'X-Error-Class', classify_error(v_error_context->>'sqlstate'),
-                    'X-SQLSTATE', v_error_context->>'sqlstate'
-                ),
-                'body', jsonb_build_object(
-                    'error', v_error_context->>'message',
-                    'detail', v_error_context->>'detail'
-                )
-            );
-        END;
-END;
-$$ LANGUAGE plpgsql;
-```
-
-**Example Responses:**
-
-```json
-// Unique violation (409 Conflict)
-{
-  "status": 409,
-  "headers": {"X-Error-Class": "unique_violation", "X-SQLSTATE": "23505"},
-  "body": {
-    "error": "duplicate key value violates unique constraint \"users_email_key\"",
-    "detail": "Key (email)=(user@example.com) already exists."
-  }
-}
-
-// Serialization conflict (503 Service Unavailable)
-{
-  "status": 503,
-  "headers": {"X-Error-Class": "serialization_conflict", "X-SQLSTATE": "40P01"},
-  "body": {
-    "error": "deadlock detected",
-    "detail": "Process 12345 waits for ShareLock on transaction 67890; blocked by process 23456."
-  }
-}
-```
-
-### Best Practices
-
-**1. Always capture full context**
-```sql
--- ❌ BAD: Using only SQLERRM (incomplete)
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE WARNING 'Error: %', SQLERRM;
-
--- ✅ GOOD: Capture all diagnostics
-EXCEPTION
-    WHEN OTHERS THEN
-        DECLARE
-            v_error_context jsonb;
-        BEGIN
-            v_error_context := api.build_error_context();
-            RAISE WARNING 'Error: %', v_error_context;
-        END;
-```
-
-**2. Classify by SQLSTATE, not message**
-```sql
--- ❌ BAD: String matching on error message (fragile)
-EXCEPTION
-    WHEN OTHERS THEN
-        IF SQLERRM LIKE '%duplicate key%' THEN
-            -- Handle uniqueness violation
-        END IF;
-
--- ✅ GOOD: Use SQLSTATE (stable across PostgreSQL versions)
-EXCEPTION
-    WHEN OTHERS THEN
-        DECLARE
-            v_sqlstate text;
-        BEGIN
-            GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE;
-            IF v_sqlstate = '23505' THEN  -- unique_violation
-                -- Handle uniqueness violation
-            END IF;
-        END;
-```
-
-**3. Structure your errors (use jsonb)**
-```sql
--- ❌ BAD: Plain text error storage (hard to query)
-UPDATE task_queue
-SET last_error = SQLERRM
-WHERE task_id = v_task_id;
-
--- ✅ GOOD: Structured jsonb (queryable, extensible)
-UPDATE task_queue
-SET error_history = COALESCE(error_history, '[]'::jsonb)
-                 || jsonb_build_array(api.build_error_context())
-WHERE task_id = v_task_id;
-```
-
-**4. Include timestamps**
-```sql
--- ✅ GOOD: Always timestamp errors
-RETURN jsonb_build_object(
-    'sqlstate', v_sqlstate,
-    'message', v_message,
-    'detail', v_detail,
-    'hint', v_hint,
-    'context', v_context,
-    'timestamp', now(),  -- Essential for debugging race conditions
-    'attempt', v_attempt_number
-);
-```
-
-**5. Preserve error history (don't overwrite)**
-```sql
--- ❌ BAD: Overwrites previous errors
-UPDATE task_queue
-SET error_data = v_new_error
-WHERE task_id = v_task_id;
-
--- ✅ GOOD: Accumulates error history
-UPDATE task_queue
-SET error_history = COALESCE(error_history, '[]'::jsonb)
-                 || jsonb_build_array(v_new_error)
-WHERE task_id = v_task_id;
-```
-
-**6. Use indexes for error queries**
-```sql
--- Enable efficient JSON queries
-CREATE INDEX idx_task_queue_errors
-    ON task_queue USING gin(error_history)
-    WHERE error_history IS NOT NULL;
-
--- Fast queries on error history
-SELECT * FROM task_queue
-WHERE error_history @> '[{"sqlstate": "23505"}]';
-```
-
-### Common SQLSTATE Codes Reference
-
-| Code | Class | Description | Handling |
-|------|-------|-------------|----------|
-| `08xxx` | Connection Exception | Connection failure, connection does not exist | Retry with backoff |
-| `23502` | Integrity Constraint Violation | NOT NULL violation | Client fix (400) |
-| `23503` | Integrity Constraint Violation | Foreign key violation | Client fix (400) |
-| `23505` | Integrity Constraint Violation | Unique violation | Client fix (409) |
-| `23514` | Integrity Constraint Violation | CHECK violation | Client fix (400) |
-| `22xxx` | Data Exception | Invalid data format (date, number, etc.) | Client fix (400) |
-| `40001` | Transaction Rollback | Serialization failure | Retry (503) |
-| `40P01` | Transaction Rollback | Deadlock detected | Retry (503) |
-| `55P03` | Object Not In Prerequisite State | Lock not available (timeout) | Retry with backoff (503) |
-| `57014` | Query Canceled | Statement timeout, cancel request | Retry or optimize (504) |
-| `57P01` | Admin Shutdown | Server shutting down | Retry (503) |
-
-**Full reference:** https://www.postgresql.org/docs/current/errcodes-appendix.html
+---
 
 ---
 
 ## Best Practices
 
-### 1. Use Explicit Types
-```sql
--- ❌ AVOID: Implicit casting
-CREATE FUNCTION foo(p_id TEXT) ...
 
--- ✅ GOOD: Explicit types matching usage
-CREATE FUNCTION foo(p_id UUID) ...
-CREATE FUNCTION bar(p_count INT) ...
-CREATE FUNCTION baz(p_data jsonb) ...
-```
-
-### 2. Null Handling
-```sql
--- ❌ AVOID: Forgetting NULL cases
-SELECT user_name FROM users; -- What if NULL?
-
--- ✅ GOOD: Explicit NULL handling
-SELECT COALESCE(user_name, 'Anonymous') AS user_name FROM users;
-
--- ✅ GOOD: NULL checks in functions
-CREATE FUNCTION process_name(p_name TEXT) RETURNS TEXT AS $$
-BEGIN
-    IF p_name IS NULL THEN
-        RAISE EXCEPTION 'Name cannot be NULL';
-    END IF;
-    RETURN upper(p_name);
-END;
-$$ LANGUAGE plpgsql;
-```
-
-### 3. Use STRICT/RETURNS NULL ON NULL INPUT
+### 1. Use STRICT/RETURNS NULL ON NULL INPUT
 ```sql
 -- Function returns NULL if any argument is NULL (no execution)
 CREATE FUNCTION add_numbers(a INT, b INT)
@@ -1481,13 +961,13 @@ END;
 $$ LANGUAGE plpgsql RETURNS NULL ON NULL INPUT;
 ```
 
-### 4. Security: SECURITY DEFINER vs INVOKER
+### 2. Security: SECURITY DEFINER vs INVOKER
 ```sql
 -- ❌ RISK: SECURITY DEFINER without validation
 CREATE FUNCTION delete_user(p_user_id UUID)
 RETURNS VOID AS $$
 BEGIN
-    DELETE FROM users WHERE id = p_user_id;
+    DELETE FROM "user" WHERE id = p_user_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER; -- Runs as owner!
 
@@ -1500,7 +980,7 @@ BEGIN
         RAISE EXCEPTION 'Permission denied';
     END IF;
 
-    DELETE FROM users WHERE id = p_user_id;
+    DELETE FROM "user" WHERE id = p_user_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -1508,12 +988,12 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE FUNCTION get_user_info(p_user_id UUID)
 RETURNS TABLE(name TEXT, email TEXT) AS $$
 BEGIN
-    RETURN QUERY SELECT name, email FROM users WHERE id = p_user_id;
+    RETURN QUERY SELECT name, email FROM "user" WHERE id = p_user_id;
 END;
 $$ LANGUAGE plpgsql SECURITY INVOKER;
 ```
 
-### 5. Immutability Annotations
+### 3. Immutability Annotations
 ```sql
 -- IMMUTABLE: Same input always returns same output, no DB access
 CREATE FUNCTION slugify(input_text TEXT)
@@ -1527,7 +1007,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE FUNCTION get_current_user_email()
 RETURNS TEXT AS $$
 BEGIN
-    RETURN (SELECT email FROM users WHERE id = current_setting('app.user_id')::UUID);
+    RETURN (SELECT email FROM "user" WHERE id = current_setting('app.user_id')::UUID);
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -1540,7 +1020,7 @@ END;
 $$ LANGUAGE plpgsql VOLATILE;
 ```
 
-### 6. Performance: Use Set-Returning Functions Wisely
+### 4. Performance: Use Set-Returning Functions Wisely
 ```sql
 -- ❌ SLOW: Row-by-row processing
 CREATE FUNCTION get_active_users()
@@ -1548,7 +1028,7 @@ RETURNS TABLE(id UUID, name TEXT) AS $$
 DECLARE
     v_user RECORD;
 BEGIN
-    FOR v_user IN SELECT * FROM users LOOP
+    FOR v_user IN SELECT * FROM "user" LOOP
         IF v_user.deleted_at IS NULL THEN
             id := v_user.id;
             name := v_user.name;
@@ -1564,14 +1044,14 @@ RETURNS TABLE(id UUID, name TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT u.id, u.name
-    FROM users u
+    FROM "user" u
     WHERE u.deleted_at IS NULL;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 -- ✅ BETTER: Pure SQL (no PL/pgSQL overhead)
 CREATE VIEW active_users AS
-SELECT id, name FROM users WHERE deleted_at IS NULL;
+SELECT id, name FROM "user" WHERE deleted_at IS NULL;
 ```
 
 ---
@@ -1640,7 +1120,7 @@ ERROR:  column "v_count" does not exist
 -- ❌ BAD
 DO $$
 BEGIN
-    SELECT COUNT(*) INTO v_count FROM users; -- v_count not declared!
+    SELECT COUNT(*) INTO v_count FROM "user"; -- v_count not declared!
 END $$;
 
 -- ✅ GOOD
@@ -1648,7 +1128,7 @@ DO $$
 DECLARE
     v_count INT;
 BEGIN
-    SELECT COUNT(*) INTO v_count FROM users;
+    SELECT COUNT(*) INTO v_count FROM "user";
     RAISE NOTICE 'Count: %', v_count;
 END $$;
 ```

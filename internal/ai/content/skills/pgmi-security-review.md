@@ -234,7 +234,7 @@ CREATE FUNCTION unsafe_query(p_table_name TEXT, p_user_input TEXT)
 RETURNS SETOF RECORD AS $$
 BEGIN
     RETURN QUERY EXECUTE 'SELECT * FROM ' || p_table_name || ' WHERE name = ''' || p_user_input || '''';
-    -- Attacker input: "'; DROP TABLE users; --"
+    -- Attacker input: "'; DROP TABLE "user"; --"
 END;
 $$ LANGUAGE plpgsql;
 
@@ -264,7 +264,7 @@ $$ LANGUAGE plpgsql;
 ```go
 // ❌ CRITICAL: SQL injection vulnerability
 func getUserByName(ctx context.Context, db *pgx.Conn, name string) (*User, error) {
-    query := fmt.Sprintf("SELECT id, name, email FROM users WHERE name = '%s'", name)
+    query := fmt.Sprintf(`SELECT id, name, email FROM "user" WHERE name = '%s'`, name)
     // Attacker input: "admin' OR '1'='1"
     row := db.QueryRow(ctx, query)
     // ...
@@ -272,7 +272,7 @@ func getUserByName(ctx context.Context, db *pgx.Conn, name string) (*User, error
 
 // ✅ SAFE: Parameterized query
 func getUserByName(ctx context.Context, db *pgx.Conn, name string) (*User, error) {
-    query := "SELECT id, name, email FROM users WHERE name = $1"
+    query := `SELECT id, name, email FROM "user" WHERE name = $1`
     row := db.QueryRow(ctx, query, name)
     // PostgreSQL driver safely escapes parameters
     // ...
@@ -422,14 +422,14 @@ BEGIN
 
     -- Authorize: Only admins or self can delete
     IF NOT (
-        EXISTS (SELECT 1 FROM users WHERE id = v_caller_id AND role = 'admin')
+        EXISTS (SELECT 1 FROM "user" WHERE id = v_caller_id AND role = 'admin')
         OR v_caller_id = p_user_id
     ) THEN
         RETURN json_build_object('status', 403, 'body', json_build_object('error', 'Forbidden'));
     END IF;
 
     -- Delete user
-    DELETE FROM users WHERE id = p_user_id;
+    DELETE FROM "user" WHERE id = p_user_id;
     RETURN json_build_object('status', 204);
 END;
 $$ LANGUAGE plpgsql;
@@ -438,7 +438,7 @@ $$ LANGUAGE plpgsql;
 **Pattern 2: Row-Level Security (RLS)**
 ```sql
 -- Enable RLS
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;
 
 -- Policy: Users can only update their own row
 CREATE POLICY user_update_own ON users
@@ -509,7 +509,7 @@ BEGIN
     END IF;
 
     -- Business logic
-    INSERT INTO users (email, name) VALUES (p_email, p_name);
+    INSERT INTO "user" (email, name) VALUES (p_email, p_name);
     RETURN json_build_object('status', 201, 'body', json_build_object('success', true));
 END;
 $$ LANGUAGE plpgsql;
@@ -553,7 +553,7 @@ BEGIN
         RETURN json_build_object('status', 400, 'body', json_build_object('error', 'Age must be between 0 and 150'));
     END IF;
 
-    UPDATE users SET age = p_age WHERE id = p_user_id;
+    UPDATE "user" SET age = p_age WHERE id = p_user_id;
     RETURN json_build_object('status', 200);
 END;
 $$ LANGUAGE plpgsql;
@@ -659,7 +659,7 @@ hostssl all all 0.0.0.0/0 cert clientcert=verify-full
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ✅ Encrypt sensitive data before storage
-INSERT INTO users (id, email, encrypted_ssn)
+INSERT INTO "user" (id, email, encrypted_ssn)
 VALUES (
     gen_random_uuid(),
     'alice@example.com',
@@ -671,7 +671,7 @@ SELECT
     id,
     email,
     pgp_sym_decrypt(encrypted_ssn, current_setting('app.encryption_key')) AS ssn
-FROM users
+FROM "user"
 WHERE id = $1;
 ```
 
@@ -699,7 +699,7 @@ initdb -D /var/lib/postgresql/data --data-checksums --wal-init-zero --encryption
 ### ❌ Storing Passwords in Plaintext
 ```sql
 -- ❌ CRITICAL: Plaintext password
-CREATE TABLE users (
+CREATE TABLE "user" (
     id UUID PRIMARY KEY,
     email TEXT NOT NULL,
     password TEXT NOT NULL -- Plaintext!
@@ -708,14 +708,14 @@ CREATE TABLE users (
 -- ✅ GOOD: Hashed password (bcrypt, argon2)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE users (
+CREATE TABLE "user" (
     id UUID PRIMARY KEY,
     email TEXT NOT NULL,
     password_hash TEXT NOT NULL
 );
 
 -- Hash password on insert
-INSERT INTO users (id, email, password_hash)
+INSERT INTO "user" (id, email, password_hash)
 VALUES (
     gen_random_uuid(),
     'alice@example.com',
@@ -723,7 +723,7 @@ VALUES (
 );
 
 -- Verify password
-SELECT id FROM users
+SELECT id FROM "user"
 WHERE email = 'alice@example.com'
   AND password_hash = crypt('user_password', password_hash);
 ```
@@ -767,7 +767,7 @@ type UpdateUserRequest struct {
 }
 
 func updateUser(ctx context.Context, db *pgx.Conn, userID uuid.UUID, req *UpdateUserRequest) error {
-    _, err := db.Exec(ctx, "UPDATE users SET email = $1 WHERE id = $2", req.Email, userID)
+    _, err := db.Exec(ctx, `UPDATE "user" SET email = $1 WHERE id = $2`, req.Email, userID)
     return err
 }
 ```

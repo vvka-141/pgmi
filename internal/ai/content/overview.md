@@ -14,12 +14,14 @@ pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tab
 # Initialize a project
 pgmi init myproject --template basic
 
-# Deploy to database
+# Deploy to database. Tests are not a separate command: deploy.sql calls
+# CALL pgmi_test(), so they run inside the same transaction and a failing
+# test rolls the whole deployment back.
 pgmi deploy ./myproject --connection "postgresql://user:pass@host/db"
-
-# Run tests
-pgmi deploy ./myproject --connection "..." --param run_tests=true
 ```
+
+There is no `--test`, `--skip-tests`, or `--dry-run` flag, and no parameter pgmi
+interprets to control any of them. What runs is whatever `deploy.sql` executes.
 
 ## Core Concepts
 
@@ -57,13 +59,18 @@ END $$;
 
 ### Parameters
 
+Parameters are passed with `--param key=value` and read back with
+`current_setting('pgmi.key', true)`. pgmi does not interpret them — they mean
+whatever your `deploy.sql` decides they mean.
+
 ```sql
 -- Access parameters with defaults
 v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
--- Conditional logic based on parameters
-IF COALESCE(current_setting('pgmi.run_tests', true), 'false') = 'true' THEN
-    CALL pgmi_test();
+-- Conditional logic based on parameters (this branch exists because deploy.sql
+-- wrote it, not because pgmi knows what "env" is)
+IF v_env <> 'production' THEN
+    PERFORM seed_dev_data();
 END IF;
 ```
 
@@ -74,6 +81,7 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 | Skill | Use When |
 |-------|----------|
 | `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
+| `pgmi-debug-deploy` | A deploy failed — map the exit code to a diagnosis |
 | `pgmi-philosophy` | Understanding architectural decisions |
 | `pgmi-system-design` | Designing features the pgmi way (physical/logical/API layering) |
 | `pgmi-templates` | Creating or modifying scaffold templates |

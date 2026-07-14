@@ -185,9 +185,9 @@ migrations/2025-01-16/001
 
 -- Safe to run multiple times
 CREATE OR REPLACE FUNCTION api.get_users()
-RETURNS SETOF users
+RETURNS SETOF "user"
 AS $$
-    SELECT * FROM users WHERE deleted_at IS NULL;
+    SELECT * FROM "user" WHERE deleted_at IS NULL;
 $$ LANGUAGE sql;
 ```
 
@@ -208,7 +208,7 @@ $$ LANGUAGE sql;
 */
 
 -- Should only run once
-ALTER TABLE users ADD COLUMN email TEXT;
+ALTER TABLE "user" ADD COLUMN email TEXT;
 ```
 
 ### Tracking Behavior
@@ -690,7 +690,7 @@ $$;
 </pgmi-meta>
 */
 
-ALTER TABLE users ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE "user" ADD COLUMN deleted_at TIMESTAMPTZ;
 CREATE INDEX idx_users_deleted_at ON users(deleted_at) WHERE deleted_at IS NOT NULL;
 ```
 

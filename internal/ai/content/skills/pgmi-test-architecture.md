@@ -269,11 +269,11 @@ END $$;
 DO $$
 BEGIN
     -- Setup: Insert first user
-    INSERT INTO users (email) VALUES ('test@example.com');
+    INSERT INTO "user" (email) VALUES ('test@example.com');
 
     -- Act: Try to insert duplicate email
     BEGIN
-        INSERT INTO users (email) VALUES ('test@example.com');
+        INSERT INTO "user" (email) VALUES ('test@example.com');
         RAISE EXCEPTION 'TEST FAILED: Duplicate email was allowed (issue #123)';
     EXCEPTION WHEN unique_violation THEN
         -- Expected behavior - unique constraint working
@@ -297,7 +297,7 @@ BEGIN
     PERFORM send_welcome_email(v_user_id);
 
     -- Assert: All components created
-    IF NOT EXISTS (SELECT 1 FROM users WHERE id = v_user_id) THEN
+    IF NOT EXISTS (SELECT 1 FROM "user" WHERE id = v_user_id) THEN
         RAISE EXCEPTION 'TEST FAILED: User not created';
     END IF;
 
@@ -635,7 +635,7 @@ users/
 **_setup.sql**:
 ```sql
 -- Create test fixtures
-INSERT INTO users (id, email, name) VALUES
+INSERT INTO "user" (id, email, name) VALUES
     (9990, 'test1@example.com', 'Test User 1'),
     (9991, 'test2@example.com', 'Test User 2');
 ```
@@ -646,7 +646,7 @@ DO $$
 BEGIN
     -- Should reject duplicate email
     BEGIN
-        INSERT INTO users (email, name) VALUES ('test1@example.com', 'Duplicate');
+        INSERT INTO "user" (email, name) VALUES ('test1@example.com', 'Duplicate');
         RAISE EXCEPTION 'TEST FAILED: Duplicate email accepted';
     EXCEPTION WHEN unique_violation THEN
         RAISE NOTICE '✓ Duplicate email correctly rejected';

@@ -167,7 +167,7 @@ END $$;
 -- Test setup
 BEGIN;
     -- Create test data
-    INSERT INTO users (id, name, email)
+    INSERT INTO "user" (id, name, email)
     VALUES (gen_random_uuid(), 'Test User', 'test@example.com');
 
     -- Test logic
@@ -175,7 +175,7 @@ BEGIN;
     DECLARE
         v_user_count INT;
     BEGIN
-        SELECT COUNT(*) INTO v_user_count FROM users WHERE name = 'Test User';
+        SELECT COUNT(*) INTO v_user_count FROM "user" WHERE name = 'Test User';
 
         IF v_user_count != 1 THEN
             RAISE EXCEPTION 'TEST FAILED: Expected 1 test user, found %', v_user_count;

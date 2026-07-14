@@ -253,15 +253,15 @@ format('SELECT ($1::api.rest_request)')
 
 **❌ REJECT** (slow for large datasets):
 ```sql
-FOR v_record IN SELECT * FROM users LOOP
-    UPDATE users SET last_seen = now() WHERE id = v_record.id;
+FOR v_record IN SELECT * FROM "user" LOOP
+    UPDATE "user" SET last_seen = now() WHERE id = v_record.id;
 END LOOP;
 -- N separate UPDATE statements
 ```
 
 **✅ REQUIRE** (set-based):
 ```sql
-UPDATE users SET last_seen = now();
+UPDATE "user" SET last_seen = now();
 -- Single UPDATE statement
 ```
 
@@ -356,7 +356,7 @@ SELECT
     id,
     UPPER(name) AS normalized_name,
     created_at::DATE AS created_date
-FROM users;
+FROM "user";
 ```
 
 **✅ Aggregations and Window Functions**
@@ -684,9 +684,9 @@ $$ LANGUAGE plpgsql;
 
 -- ✅ SAFE: format() with %L for literals
 CREATE FUNCTION safe_where(p_value TEXT)
-RETURNS SETOF users AS $$
+RETURNS SETOF "user" AS $$
 BEGIN
-    RETURN QUERY EXECUTE format('SELECT * FROM users WHERE name = %L', p_value);
+    RETURN QUERY EXECUTE format('SELECT * FROM "user" WHERE name = %L', p_value);
 END;
 $$ LANGUAGE plpgsql;
 ```
@@ -750,10 +750,10 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Reversible with explicit rollback guidance
 -- Migration: 002_add_email_column.sql
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE "user" ADD COLUMN IF NOT EXISTS email TEXT;
 
 -- Rollback: Documented in migration or separate file
--- ALTER TABLE users DROP COLUMN IF EXISTS email;
+-- ALTER TABLE "user" DROP COLUMN IF EXISTS email;
 ```
 
 **Review Checklist**:
@@ -780,7 +780,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
 ```sql
 BEGIN;
     -- Migration DDL
-    ALTER TABLE users ADD COLUMN new_field TEXT;
+    ALTER TABLE "user" ADD COLUMN new_field TEXT;
 
     -- Validation
     DO $$
@@ -814,7 +814,7 @@ DELETE FROM archive.old_users;
 ```sql
 -- ❌ BAD: Cursor for simple iteration
 DECLARE
-    cur CURSOR FOR SELECT * FROM users;
+    cur CURSOR FOR SELECT * FROM "user";
     rec RECORD;
 BEGIN
     OPEN cur;
@@ -830,7 +830,7 @@ END;
 DECLARE
     rec RECORD;
 BEGIN
-    FOR rec IN SELECT * FROM users LOOP
+    FOR rec IN SELECT * FROM "user" LOOP
         -- Process rec
     END LOOP;
 END;
@@ -838,31 +838,31 @@ END;
 -- ✅ BETTER: Set operation (no loop at all)
 INSERT INTO processed_users
 SELECT id, UPPER(name)
-FROM users;
+FROM "user";
 ```
 
 ### ❌ Unnecessary Dynamic SQL
 ```sql
 -- ❌ BAD: Dynamic SQL for static query
-EXECUTE 'SELECT * FROM users WHERE id = ' || user_id;
+EXECUTE 'SELECT * FROM "user" WHERE id = ' || user_id;
 
 -- ✅ GOOD: Static SQL (better performance, safer)
-SELECT * FROM users WHERE id = user_id;
+SELECT * FROM "user" WHERE id = user_id;
 ```
 
 ### ❌ Transaction Anti-Patterns
 ```sql
 -- ❌ BAD: Transaction per row (high overhead)
-FOR rec IN SELECT * FROM users LOOP
+FOR rec IN SELECT * FROM "user" LOOP
     BEGIN
-        UPDATE users SET processed = true WHERE id = rec.id;
+        UPDATE "user" SET processed = true WHERE id = rec.id;
         COMMIT; -- Can't COMMIT in function!
     END;
 END LOOP;
 
 -- ✅ GOOD: Single transaction for batch
-UPDATE users SET processed = true
-WHERE id IN (SELECT id FROM users WHERE NOT processed);
+UPDATE "user" SET processed = true
+WHERE id IN (SELECT id FROM "user" WHERE NOT processed);
 COMMIT;
 ```
 
