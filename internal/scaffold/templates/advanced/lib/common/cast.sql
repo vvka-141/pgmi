@@ -637,14 +637,22 @@ BEGIN
             'i'
         );
         IF v_match IS NOT NULL THEN
-            RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
-                years  => COALESCE(v_match[2]::int, 0),
-                months => COALESCE(v_match[3]::int, 0),
-                days   => COALESCE(v_match[5]::int, 0) + 7*COALESCE(v_match[4]::int, 0),
-                hours  => COALESCE(v_match[6]::int, 0),
-                mins   => COALESCE(v_match[7]::int, 0),
-                secs   => COALESCE(v_match[8]::double precision, 0)
-            );
+            -- The captures are unbounded \d+ and make_interval's params are int4,
+            -- so an oversized component raises 22003 — and 7*weeks can overflow
+            -- even when weeks alone fits. A "try" cast must never throw.
+            BEGIN
+                RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
+                    years  => COALESCE(v_match[2]::int, 0),
+                    months => COALESCE(v_match[3]::int, 0),
+                    days   => COALESCE(v_match[5]::int, 0) + 7*COALESCE(v_match[4]::int, 0),
+                    hours  => COALESCE(v_match[6]::int, 0),
+                    mins   => COALESCE(v_match[7]::int, 0),
+                    secs   => COALESCE(v_match[8]::double precision, 0)
+                );
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN $2;
+            END;
         END IF;
     END IF;
 
@@ -656,13 +664,20 @@ BEGIN
             'i'
         );
         IF v_match IS NOT NULL THEN
-            RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
-                days  => COALESCE(v_match[2]::int, 0),
-                hours => COALESCE(v_match[3]::int, 0),
-                mins  => COALESCE(v_match[4]::int, 0),
-                secs  => COALESCE(v_match[5]::int, 0)
-                        + COALESCE(('0.'||v_match[6])::double precision, 0)
-            );
+            -- Same overflow exposure as the ISO branch: the day prefix is an
+            -- unbounded \d+ cast to int4.
+            BEGIN
+                RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
+                    days  => COALESCE(v_match[2]::int, 0),
+                    hours => COALESCE(v_match[3]::int, 0),
+                    mins  => COALESCE(v_match[4]::int, 0),
+                    secs  => COALESCE(v_match[5]::int, 0)
+                            + COALESCE(('0.'||v_match[6])::double precision, 0)
+                );
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN $2;
+            END;
         END IF;
     END IF;
 
@@ -793,6 +808,30 @@ BEGIN
     v_result := 'invalid' ?> v_default;
     IF v_result != v_default THEN
         RAISE EXCEPTION 'operator ?>(interval) failed: invalid input should return default';
+    END IF;
+
+    -- Oversized components must return the default, not raise. try_cast is the
+    -- documented way to parse untrusted query/body params, so a throw here is a
+    -- 500 on input any caller can send.
+    v_result := common.try_cast('P99999999999Y', v_default);
+    IF v_result != v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: oversized ISO-8601 year should return default, got %', v_result;
+    END IF;
+
+    v_result := common.try_cast('99999999999999.12:30:45', v_default);
+    IF v_result != v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: oversized TimeSpan day prefix should return default, got %', v_result;
+    END IF;
+
+    -- Weeks fits int4 on its own; the 7 * weeks multiplication is what overflows.
+    v_result := common.try_cast('P500000000W', v_default);
+    IF v_result != v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: 7*weeks overflow should return default, got %', v_result;
+    END IF;
+
+    v_result := 'P99999999999Y' ?> v_default;
+    IF v_result != v_default THEN
+        RAISE EXCEPTION 'operator ?>(interval) failed: oversized input should return default, got %', v_result;
     END IF;
 END $$;
 
