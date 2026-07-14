@@ -214,10 +214,13 @@ func (s *DeploymentService) executeDeploySQL(
 		s.logger.Verbose("Expanded %d test macro(s) in deploy.sql", result.MacroCount)
 	}
 
-	// Execute preprocessed deploy.sql as a single script
+	// Execute preprocessed deploy.sql as a single script. Attach the exact text
+	// sent: PostgreSQL reports error positions as offsets into it, and nothing
+	// downstream can resolve them to a line without it.
 	_, err = conn.Exec(ctx, result.ExpandedSQL)
 	if err != nil {
-		return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+		scriptErr := pgmi.NewScriptError(err, "deploy.sql", result.ExpandedSQL, result.MacroCount > 0)
+		return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
 	}
 
 	return result.MacroCount, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	testhelpers "github.com/vvka-141/pgmi/internal/testing"
@@ -155,6 +156,74 @@ func TestPlanOrder_MixedSortKeysAndPathFallback(t *testing.T) {
 	}
 	if !sliceEqual(got, want) {
 		t.Errorf("execution_order is not C byte order\nGot:      %v\nExpected: %v", got, want)
+	}
+}
+
+// TestDeployError_ReportsLineAfterMacroExpansion proves the reported line is the
+// line of the script pgmi actually sent, not of the file on disk. CALL pgmi_test()
+// expands into many lines before the syntax error, so a naive line count against
+// deploy.sql would point at the wrong statement.
+func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+
+	testDir := filepath.Join(projectPath, "__test__")
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create __test__: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "test_noop.sql"), []byte(`SELECT 1;`), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// The macro expands to many statements, so "SELEC 1;" sits on line 4 of
+	// deploy.sql but much further down in the script PostgreSQL parses.
+	deploySQL := "BEGIN;\nCALL pgmi_test();\nCOMMIT;\nSELEC 1;\n"
+	const rawLine = 4
+
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	testDB := "pgmi_error_position"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err == nil {
+		t.Fatal("expected the syntax error to fail the deploy")
+	}
+
+	loc := pgmi.LocateError(err)
+	if loc == nil {
+		t.Fatalf("expected a resolved error location, got none from: %v", err)
+	}
+
+	// The mapping is correct if and only if the reported line holds the bad SQL.
+	if loc.SourceLine != "SELEC 1;" {
+		t.Errorf("reported line %d does not hold the offending statement: got %q, want %q",
+			loc.Line, loc.SourceLine, "SELEC 1;")
+	}
+	if !loc.Expanded {
+		t.Error("expected the location to be flagged as expanded — deploy.sql contained a pgmi_test() macro")
+	}
+	if loc.Line <= rawLine {
+		t.Errorf("expected macro expansion to push the error past line %d of the file on disk, got line %d",
+			rawLine, loc.Line)
+	}
+
+	if out := pgmi.FormatError(err); !strings.Contains(out, "LINE ") {
+		t.Errorf("FormatError should point at the offending line, got:\n%s", out)
 	}
 }
 

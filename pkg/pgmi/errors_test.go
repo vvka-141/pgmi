@@ -137,6 +137,144 @@ func TestFormatError_PgErrorEmptyFieldsOmitted(t *testing.T) {
 	}
 }
 
+func TestLocateError(t *testing.T) {
+	const script = "SELECT 1;\nSELECT 2;\nSELEC 3;\n"
+
+	// "SELEC" starts at line 3; the script is 20 characters before it.
+	pgErr := &pgconn.PgError{
+		Code:     "42601",
+		Message:  `syntax error at or near "SELEC"`,
+		Position: 21,
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want *pgmi.SQLLocation
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: nil,
+		},
+		{
+			name: "pg error without a script attached cannot be located",
+			err:  fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, pgErr),
+			want: nil,
+		},
+		{
+			name: "script attached but no position (most runtime errors)",
+			err: pgmi.NewScriptError(
+				&pgconn.PgError{Code: "23505", Message: "duplicate key"},
+				"deploy.sql", script, false,
+			),
+			want: nil,
+		},
+		{
+			name: "position resolves to line, column, and the offending line",
+			err:  pgmi.NewScriptError(pgErr, "deploy.sql", script, false),
+			want: &pgmi.SQLLocation{
+				Script: "deploy.sql", Line: 3, Column: 1, SourceLine: "SELEC 3;", Expanded: false,
+			},
+		},
+		{
+			name: "expanded script is flagged so the line is not mistaken for the file on disk",
+			err: fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed,
+				pgmi.NewScriptError(pgErr, "deploy.sql", script, true)),
+			want: &pgmi.SQLLocation{
+				Script: "deploy.sql", Line: 3, Column: 1, SourceLine: "SELEC 3;", Expanded: true,
+			},
+		},
+		{
+			name: "position past the end of the script is rejected, not guessed",
+			err: pgmi.NewScriptError(
+				&pgconn.PgError{Code: "42601", Position: 9999}, "deploy.sql", script, false,
+			),
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pgmi.LocateError(tt.err)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("expected no location, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected location %+v, got nil", tt.want)
+			}
+			if *got != *tt.want {
+				t.Errorf("location mismatch\ngot:  %+v\nwant: %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// PostgreSQL reports Position in characters, not bytes. A byte-indexed walk
+// would drift past every multi-byte character earlier in the script.
+func TestLocateError_MultibyteCharactersDoNotSkewTheLine(t *testing.T) {
+	script := "SELECT 'héllo wörld — ünicode';\nSELEC 2;\n"
+
+	// Line 1 is 31 characters plus the newline, so line 2 begins at character 33.
+	// Counted in bytes it would be 39 — the drift this test exists to catch.
+	err := pgmi.NewScriptError(
+		&pgconn.PgError{Code: "42601", Position: 33}, "deploy.sql", script, false,
+	)
+
+	loc := pgmi.LocateError(err)
+	if loc == nil {
+		t.Fatal("expected a location")
+	}
+	if loc.Line != 2 || loc.Column != 1 {
+		t.Errorf("expected line 2, column 1; got line %d, column %d", loc.Line, loc.Column)
+	}
+	if loc.SourceLine != "SELEC 2;" {
+		t.Errorf("expected source line %q, got %q", "SELEC 2;", loc.SourceLine)
+	}
+}
+
+func TestFormatError_IncludesLocationAndPointsAtTheOffendingLine(t *testing.T) {
+	err := pgmi.NewScriptError(
+		&pgconn.PgError{
+			Code:     "42601",
+			Message:  `syntax error at or near "SELEC"`,
+			Position: 11,
+		},
+		"deploy.sql", "SELECT 1;\nSELEC 2;\n", true,
+	)
+
+	out := pgmi.FormatError(err)
+
+	for _, want := range []string{
+		"LOCATION: deploy.sql line 2, column 1",
+		"pgmi_test() macros shift line numbers",
+		"LINE 2: SELEC 2;",
+		"^",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FormatError output missing %q\ngot:\n%s", want, out)
+		}
+	}
+}
+
+func TestNewErrorDetail_CarriesLocationForJSON(t *testing.T) {
+	err := pgmi.NewScriptError(
+		&pgconn.PgError{Code: "42601", Message: "syntax error", Position: 11},
+		"deploy.sql", "SELECT 1;\nSELEC 2;\n", true,
+	)
+
+	d := pgmi.NewErrorDetail(err)
+	if d.Line != 2 || d.Column != 1 {
+		t.Errorf("expected line 2 column 1, got line %d column %d", d.Line, d.Column)
+	}
+	if d.Script != "deploy.sql" || d.SourceLine != "SELEC 2;" || !d.ScriptExpanded {
+		t.Errorf("unexpected detail: %+v", d)
+	}
+}
+
 func TestNewErrorDetail(t *testing.T) {
 	t.Run("nil error returns nil", func(t *testing.T) {
 		if d := pgmi.NewErrorDetail(nil); d != nil {

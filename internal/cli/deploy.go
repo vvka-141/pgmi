@@ -369,7 +369,7 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 		}
 		fmt.Fprintf(os.Stderr, "%s %s in %s\n", ui.SuccessIcon(), parts, d)
 	} else {
-		fmt.Fprintf(os.Stderr, "%s Failed after %s — see error above\n", ui.FailIcon(), d)
+		fmt.Fprintf(os.Stderr, "%s Failed after %s\n", ui.FailIcon(), d)
 	}
 }
 
@@ -394,10 +394,17 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 			"hint":       d.Hint,
 			"where":      d.Where,
 			"failedFile": d.FailedFile,
+			"script":     d.Script,
+			"sourceLine": d.SourceLine,
 		} {
 			if v != "" {
 				out[k] = v
 			}
+		}
+		if d.Line > 0 {
+			out["line"] = d.Line
+			out["column"] = d.Column
+			out["scriptExpanded"] = d.ScriptExpanded
 		}
 	}
 	jsonBytes, err := json.MarshalIndent(out, "", "  ")
