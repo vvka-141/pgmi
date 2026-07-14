@@ -1,10 +1,15 @@
 # Releases
 
+> **Writing a release?** Add the section here *before* tagging — CI lifts it to the
+> top of the GitHub release page and fails the build if it is missing. The shape and
+> the rules are in [`.github/RELEASE_NOTES_TEMPLATE.md`](.github/RELEASE_NOTES_TEMPLATE.md).
+> Write for a stranger who arrived from a search result.
+
 ## v0.11.0 — 2026-06-27
 
-77 commits, 158 files changed, +6,552 / -1,536 lines since v0.10.1.
+**You can now run the advanced template on managed PostgreSQL** — RDS, Aurora, Cloud SQL, Azure Flexible Server, Supabase, Neon — where you do not get a superuser. It previously hard-failed on all of them. The template also publishes an OpenAPI 3.1 contract from its own handler registry, so an API consumer gets a self-describing spec instead of a hand-written client, and `pgmi serve` lets an AI assistant drive pgmi directly over MCP.
 
-A feature release. The advanced template becomes deployable on managed Postgres (no superuser), gains an OpenAPI 3.1 surface with schema-validated handlers, and ships a real admin analytics API. The CLI grows structured output, an MCP server mode, and a project-introspection command, and the AI-assistant surface expands to five assistants with a per-language client guide. A documentation website goes live on GitHub Pages. The session API contract is **unchanged at v1** — existing `deploy.sql` files continue to work without modification.
+The session API contract is **unchanged at v1** — existing `deploy.sql` files continue to work without modification.
 
 ### Highlights
 

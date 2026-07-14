@@ -40,6 +40,11 @@ jobs:
           version: "~> v2"
           args: check
 
+      # The release page leads with this narrative. Fail here, before anything is
+      # published, rather than ship a page that reads as a commit log.
+      - name: Release notes exist for this tag
+        run: ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > /dev/null
+
   release:
     name: Release
     needs: [verify]
@@ -55,6 +60,17 @@ jobs:
 
       - name: Install Cloudsmith CLI
         run: pip install cloudsmith-cli
+
+      # RELEASE_SUMMARY is rendered at the top of the release body by
+      # .goreleaser.yaml. Single-sourced from RELEASES.md so the narrative that
+      # ships to strangers is the same one that lives in the repo.
+      - name: Load release notes from RELEASES.md
+        run: |
+          {
+            echo 'RELEASE_SUMMARY<<PGMI_RELEASE_NOTES_EOF'
+            ./scripts/release-notes.sh "${GITHUB_REF_NAME}"
+            echo 'PGMI_RELEASE_NOTES_EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
