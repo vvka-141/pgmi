@@ -3,4 +3,20 @@
 {{- if hugo.IsProduction }}
 <script data-goatcounter="https://alexeyevlampiev.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('a[href^="https://github.com/vvka-141/pgmi"]').forEach(function (a) {
+        if (a.hasAttribute('data-goatcounter-click')) return;
+        var href = a.getAttribute('href');
+        var name = 'ext-github-repo';
+        if (href.indexOf('/releases') !== -1) name = 'ext-github-releases';
+        else if (href.indexOf('test-gated-deploy') !== -1) name = 'ext-github-example-test-gated-deploy';
+        else if (href.indexOf('/examples/') !== -1 || href.indexOf('/tree/main/examples') !== -1) name = 'ext-github-examples';
+        a.setAttribute('data-goatcounter-click', name);
+    });
+    // count.js binds data-goatcounter-click on its own load; when it loaded
+    // before this ran, the attributes above were added too late — rebind.
+    if (window.goatcounter && window.goatcounter.bind_events) window.goatcounter.bind_events();
+});
+</script>
 {{- end }}
