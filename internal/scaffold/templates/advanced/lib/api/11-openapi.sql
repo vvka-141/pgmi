@@ -217,8 +217,43 @@ SELECT api.create_or_replace_rest_handler(
         'produces', jsonb_build_array('application/json')
     ),
     $body$
+DECLARE
+    v_etag text := '"' || api.catalog_version() || '"';
+    v_inm  text := api.header((request).headers, 'If-None-Match');
+    v_resp api.http_response;
 BEGIN
-    RETURN api.json_response(200, api.openapi_document());
+    -- Conditional GET. Cache-Control: no-cache means "cache it, but revalidate
+    -- every time" — exactly right for a contract: a client may hold it forever
+    -- and pay one cheap 304 to prove it is still current, but can never serve a
+    -- stale route table (a false 404 for a route a later deploy added).
+    --
+    -- If-None-Match may be a comma-separated list, or '*'. Match on membership,
+    -- not equality, or a well-behaved client sending two tags gets a 200.
+    IF v_inm IS NOT NULL AND (
+           btrim(v_inm) = '*'
+           OR EXISTS (
+               SELECT 1
+               FROM unnest(string_to_array(v_inm, ',')) AS tag
+               WHERE btrim(tag) = v_etag
+                  OR btrim(tag) = 'W/' || v_etag
+           )
+       )
+    THEN
+        v_resp.status_code := 304;
+        v_resp.headers := extensions.hstore(ARRAY[
+            'etag', v_etag,
+            'cache-control', 'no-cache'
+        ]);
+        v_resp.content := NULL;   -- 304 carries no body
+        RETURN v_resp;
+    END IF;
+
+    v_resp := api.json_response(200, api.openapi_document());
+    v_resp.headers := (v_resp).headers || extensions.hstore(ARRAY[
+        'etag', v_etag,
+        'cache-control', 'no-cache'
+    ]);
+    RETURN v_resp;
 END;
     $body$
 );

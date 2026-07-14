@@ -330,6 +330,130 @@ BEGIN
     RAISE NOTICE '✓ pathParams guard tests passed';
 END $$;
 
+-- ============================================================================
+-- Test: the contract is cacheable (ETag / 304) and every response stamps the
+-- catalog version. Caching an API contract is only safe if the client can tell
+-- cheaply when it went stale — otherwise a cached route table serves a false 404
+-- for a route a later deploy added.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_etag text;
+    v_etag_after text;
+    v_version text;
+BEGIN
+    RAISE NOTICE '-> Testing OpenAPI cacheability (ETag / 304 / catalog version)';
+
+    -- 200 carries a strong ETag and a revalidate directive.
+    v_response := api.rest_invoke('GET', '/openapi.json');
+    v_etag := api.header((v_response).headers, 'ETag');
+
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: GET /openapi.json returned %', (v_response).status_code;
+    END IF;
+    IF v_etag IS NULL OR v_etag !~ '^"[0-9a-f]{64}"$' THEN
+        RAISE EXCEPTION 'TEST FAILED: /openapi.json must return a strong quoted ETag, got %', v_etag;
+    END IF;
+    IF api.header((v_response).headers, 'Cache-Control') IS DISTINCT FROM 'no-cache' THEN
+        RAISE EXCEPTION 'TEST FAILED: contract must be revalidated, got cache-control=%',
+            api.header((v_response).headers, 'Cache-Control');
+    END IF;
+
+    RAISE NOTICE '  + GET /openapi.json returns a strong ETag and cache-control: no-cache';
+
+    -- If-None-Match with that ETag → 304, empty body.
+    v_response := api.rest_invoke('GET', '/openapi.json',
+        extensions.hstore('if-none-match', v_etag));
+
+    IF (v_response).status_code != 304 THEN
+        RAISE EXCEPTION 'TEST FAILED: matching If-None-Match must return 304, got %',
+            (v_response).status_code;
+    END IF;
+    IF COALESCE(octet_length((v_response).content), 0) != 0 THEN
+        RAISE EXCEPTION 'TEST FAILED: a 304 must carry no body, got % bytes',
+            octet_length((v_response).content);
+    END IF;
+
+    RAISE NOTICE '  + If-None-Match with the current ETag returns 304 with an empty body';
+
+    -- A stale tag must NOT short-circuit: the client gets the new document.
+    v_response := api.rest_invoke('GET', '/openapi.json',
+        extensions.hstore('if-none-match', '"0000000000000000000000000000000000000000000000000000000000000000"'));
+
+    IF (v_response).status_code != 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: a stale If-None-Match must return 200, got %',
+            (v_response).status_code;
+    END IF;
+
+    RAISE NOTICE '  + A stale If-None-Match returns the full document';
+
+    -- Every response carries the catalog version, and it matches the ETag.
+    v_response := api.rest_invoke('GET', '/openapi.json');
+    v_version := api.header((v_response).headers, 'x-pgmi-catalog-version');
+    IF v_version IS NULL OR '"' || v_version || '"' IS DISTINCT FROM v_etag THEN
+        RAISE EXCEPTION 'TEST FAILED: x-pgmi-catalog-version (%) must match the ETag (%)',
+            v_version, v_etag;
+    END IF;
+
+    -- ...including on an ordinary route the client was calling anyway. That is the
+    -- point: staleness is learned passively, without polling the spec.
+    v_response := api.rest_invoke('GET', '/health');
+    IF api.header((v_response).headers, 'x-pgmi-catalog-version') IS DISTINCT FROM v_version THEN
+        RAISE EXCEPTION 'TEST FAILED: an ordinary REST response must stamp the same catalog version';
+    END IF;
+
+    RAISE NOTICE '  + Every response stamps x-pgmi-catalog-version, matching the ETag';
+
+    -- The ETag must change when the registry changes — and only then. A digest
+    -- over handler def_hash would MISS this: the body is identical, only the uri
+    -- changed.
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0b11-4000-8000-000000000005',
+            'uri', '^/etag-probe$', 'httpMethod', '^GET$',
+            'name', 'etag_probe', 'requiresAuth', false, 'autoLog', false
+        ),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+    );
+
+    v_etag_after := api.header((api.rest_invoke('GET', '/openapi.json')).headers, 'ETag');
+    IF v_etag_after = v_etag THEN
+        RAISE EXCEPTION 'TEST FAILED: adding a route must change the ETag';
+    END IF;
+
+    RAISE NOTICE '  + Registering a route changes the ETag';
+
+    -- Same handler body, different uri: the published contract changed, so the
+    -- ETag must change too.
+    v_etag := v_etag_after;
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0b11-4000-8000-000000000005',
+            'uri', '^/etag-probe-renamed$', 'httpMethod', '^GET$',
+            'name', 'etag_probe', 'requiresAuth', false, 'autoLog', false
+        ),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
+    );
+
+    v_etag_after := api.header((api.rest_invoke('GET', '/openapi.json')).headers, 'ETag');
+    IF v_etag_after = v_etag THEN
+        RAISE EXCEPTION 'TEST FAILED: changing a route uri must change the ETag (an unchanged '
+            'handler body must not be mistaken for an unchanged contract)';
+    END IF;
+
+    RAISE NOTICE '  + Changing only a route uri still changes the ETag';
+
+    -- And it is stable when nothing changed: two reads, same tag.
+    IF api.header((api.rest_invoke('GET', '/openapi.json')).headers, 'ETag') IS DISTINCT FROM v_etag_after THEN
+        RAISE EXCEPTION 'TEST FAILED: the ETag must be stable across reads when the registry is unchanged';
+    END IF;
+
+    RAISE NOTICE '  + The ETag is stable while the registry is unchanged';
+    RAISE NOTICE '✓ OpenAPI cacheability tests passed';
+END $$;
+
 DO $$
 DECLARE
     v_response api.http_response;

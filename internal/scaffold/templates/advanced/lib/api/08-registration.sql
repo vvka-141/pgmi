@@ -675,8 +675,75 @@ $func$;
 COMMENT ON FUNCTION api.create_or_replace_mcp_handler(jsonb, text) IS
     'Registers an MCP handler (tool/resource/prompt): creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.mcp_route. SECURITY DEFINER.';
 
+-- ============================================================================
+-- Catalog Version — the cache-invalidation signal
+-- ============================================================================
+-- A digest of exactly the registry columns the OpenAPI document is built from,
+-- so it changes when — and only when — the published contract changes. Served as
+-- the /openapi.json ETag and stamped on every response as x-pgmi-catalog-version.
+--
+-- NOT api.handler.def_hash: that hashes the handler's function BODY, so it would
+-- miss a route whose uri, method, auth requirement, isolation floor, or schemas
+-- changed without the body changing. The ETag would then claim "unchanged" about
+-- a document that changed — worse than shipping no ETag at all.
+--
+-- NOT a digest of the rendered document: this is stamped on every response, and
+-- rebuilding the whole spec per request is precisely the cost this exists to
+-- avoid. Digesting the source rows is cheap and exactly as sensitive.
+--
+-- Lives here, not in 11-openapi.sql, because internal.finalize_response_headers
+-- (004/009) calls it and PostgreSQL validates SQL function bodies at creation.
+
+CREATE OR REPLACE FUNCTION api.catalog_version()
+RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE
+SET search_path = api, extensions, pg_temp
+AS $catalog_version$
+    SELECT COALESCE(
+        encode(
+            extensions.digest(
+                string_agg(c.row_fingerprint, E'\n' ORDER BY c.row_fingerprint),
+                'sha256'),
+            'hex'),
+        'empty')
+    FROM (
+        SELECT concat_ws('|',
+            h.object_id::text,
+            h.handler_function_name,
+            h.title,
+            h.description,
+            h.requires_auth::text,
+            h.required_transaction_isolation,
+            h.accepts::text,
+            h.produces::text,
+            h.input_json_schema::text,
+            h.output_json_schema::text,
+            r.address_regexp,
+            r.method_regexp,
+            r.path_param_names::text
+        ) AS row_fingerprint
+        FROM api.rest_route r
+        JOIN api.handler h ON h.object_id = r.handler_object_id
+        WHERE h.deleted_at IS NULL
+    ) c;
+$catalog_version$;
+
+COMMENT ON FUNCTION api.catalog_version() IS
+    'Digest of the registry columns the OpenAPI document is built from. Changes iff the published contract changes. Served as the /openapi.json ETag and stamped on every response as x-pgmi-catalog-version, so a client learns its cached contract went stale without polling the spec.';
+
+DO $$
+DECLARE
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+BEGIN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.catalog_version() TO %I, %I, %I',
+        v_admin_role, v_api_role, v_customer_role);
+END $$;
+
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.create_or_replace_rest_handler() - REST handler registration';
     RAISE NOTICE '  ✓ api.create_or_replace_rpc_handler() - RPC handler registration';
     RAISE NOTICE '  ✓ api.create_or_replace_mcp_handler() - MCP handler registration';
+    RAISE NOTICE '  ✓ api.catalog_version() - contract fingerprint (ETag / x-pgmi-catalog-version)';
 END $$;

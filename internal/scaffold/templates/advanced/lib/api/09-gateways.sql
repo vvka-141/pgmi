@@ -151,16 +151,23 @@ $$;
 -- Response-header finalization shared by the REST and RPC gateways: merges
 -- handler-registered headers (keys lowercased for HTTP case-insensitive
 -- semantics; the x-include-schema directive controls $schema injection and
--- MUST NOT appear on the wire), then stamps content-length, timing, and the
--- protocol-specific extras, defaulting content-type to JSON when the handler
--- set none. Later concatenations win, so stamps override registered headers.
+-- MUST NOT appear on the wire), then stamps content-length, timing, the catalog
+-- version, and the protocol-specific extras, defaulting content-type to JSON
+-- when the handler set none. Later concatenations win, so stamps override
+-- registered headers.
+--
+-- x-pgmi-catalog-version is the whole point of stamping it HERE rather than only
+-- on /openapi.json: a client learns its cached contract went stale from any
+-- response it was already making, instead of polling the spec to find out.
+--
+-- STABLE, not IMMUTABLE: api.catalog_version() reads the handler registry.
 CREATE OR REPLACE FUNCTION internal.finalize_response_headers(
     p_response api.http_response,
     p_registered jsonb,
     p_execution_ms numeric,
     p_extra extensions.hstore
 ) RETURNS extensions.hstore
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     WITH merged AS (
         SELECT COALESCE((p_response).headers, ''::extensions.hstore)
             || COALESCE((
@@ -170,7 +177,8 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
             ), ''::extensions.hstore)
             || extensions.hstore(ARRAY[
                 'content-length', COALESCE(octet_length((p_response).content), 0)::text,
-                'x-execution-time-ms', p_execution_ms::text
+                'x-execution-time-ms', p_execution_ms::text,
+                'x-pgmi-catalog-version', api.catalog_version()
             ])
             || COALESCE(p_extra, ''::extensions.hstore) AS h
     )
@@ -396,6 +404,7 @@ BEGIN
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
+            'x-pgmi-catalog-version', api.catalog_version(),
             'x-error-sqlstate', v_sqlstate
         ]);
         INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
@@ -650,6 +659,7 @@ BEGIN
             'content-type', 'application/json; charset=utf-8',
             'content-length', COALESCE(octet_length((v_response).content), 0)::text,
             'x-execution-time-ms', v_execution_ms::text,
+            'x-pgmi-catalog-version', api.catalog_version(),
             'x-error-sqlstate', v_sqlstate
         ]);
         INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
