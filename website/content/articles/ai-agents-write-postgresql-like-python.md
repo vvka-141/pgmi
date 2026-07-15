@@ -180,6 +180,8 @@ A handler — the function that receives transport input and returns a response 
 3. **Probe.** Confirm the things that determine the status code: the target exists (else 404), the referenced entity exists (else 422 — the caller pointed *to* something missing, rather than acting *on* something missing), no conflict (else 409).
 4. **Execute.** Call the kernel function that owns the atomic mutation, and format its return value. The kernel receives only typed, validated input, and returns the affected row — or `NULL`, which the handler maps to the appropriate conflict or not-found response.
 
+![The four-phase handler: a request flows through materialize, validate, probe, and execute; every failure leaves as a structured RETURN; the kernel owns the guarded atomic mutation; serialization failures bypass everything, uncaught](/pgmi/docs/diagrams/a01-four-phase-handler.drawio.svg)
+
 ```sql
 CREATE FUNCTION api.patch_alert_seen(p_path jsonb)
 RETURNS jsonb

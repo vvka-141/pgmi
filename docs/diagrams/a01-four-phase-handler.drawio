@@ -1,0 +1,84 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="a01-four-phase-handler" name="four-phase-handler">
+    <mxGraphModel dx="1000" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#fbfaf7" adaptiveColors="none">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="req" value="HTTP request&#10;path params &#183; query &#183; body &#8212; all raw text" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;dashed=1;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="74" y="24" width="260" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="txn" value="inside PostgreSQL &#8212; one transaction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d9ded5;verticalAlign=top;align=left;spacingLeft=12;spacingTop=4;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="30" y="112" width="660" height="546" as="geometry" />
+        </mxCell>
+        <mxCell id="handler" value="handler &#8212; one function, every exit is a RETURN&#160;&#160;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;verticalAlign=top;align=right;spacingRight=10;spacingTop=6;fontColor=#143d2b;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="54" y="140" width="612" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" value="1 &#183; materialize&#10;safe-cast every input: text &#8594; typed, garbage &#8594; NULL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="74" y="176" width="260" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" value="2 &#183; validate&#10;required fields present, optional well-formed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="74" y="248" width="260" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" value="3 &#183; probe&#10;target exists &#183; reference exists &#183; no conflict" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="74" y="320" width="260" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" value="4 &#183; execute&#10;call the kernel, map row / NULL to the response" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="74" y="392" width="260" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="rail" value="structured error RETURNs&#10;application/problem+json (RFC 9457)&#10;machine-readable code &#183; no schema leakage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="426" y="200" width="216" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="ok" value="RETURN 200&#10;row as JSON" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="426" y="398" width="216" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel" value="kernel &#8212; owns the atomic mutation&#10;row lock and/or guard predicate &#183; returns row or NULL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="74" y="560" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="40001 &#183; 40P01 propagate uncaught, SQLSTATE intact &#8594;&#10;the client that owns BEGIN retries the whole transaction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf3e7;strokeColor=#b45309;dashed=1;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="134" y="700" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="e0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="req" target="p1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p1" target="p2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p2" target="p3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p3" target="p4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ecall" value="call" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=0.25;exitY=1;entryX=0.25;entryY=0;" edge="1" parent="1" source="p4" target="kernel">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eret" value="row or NULL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0f766e;fontColor=#5d665d;fontSize=10;exitX=0.75;exitY=0;entryX=0.75;entryY=1;" edge="1" parent="1" source="kernel" target="p4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="er1" value="400 &#183; 422" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.1;" edge="1" parent="1" source="p1" target="rail">
+          <mxGeometry x="-0.4" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="er2" value="400 &#183; 422" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="p2" target="rail">
+          <mxGeometry x="-0.4" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="er3" value="404 &#183; 422 &#183; 409" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.9;verticalAlign=bottom;" edge="1" parent="1" source="p3" target="rail">
+          <mxGeometry x="-0.2" y="-6" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="er4" value="NULL &#8594; 404 &#183; 409" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=0.85;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="p4" target="rail">
+          <mxGeometry x="-0.45" relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="295" y="380" />
+              <mxPoint x="534" y="380" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eok" value="row &#8594; 200" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="p4" target="ok">
+          <mxGeometry x="-0.4" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ebypass" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#b45309;strokeWidth=1.5;dashed=1;exitX=0.4;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="kernel" target="cli">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
