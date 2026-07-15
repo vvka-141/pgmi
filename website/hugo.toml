@@ -6,6 +6,9 @@ disableKinds = ["taxonomy", "term"]
 
 # Book theme: keep menu derived from the page tree, enable search.
 [params]
+  # Include every content section in the sidebar menu (default is docs/ only,
+  # which left /articles/ unreachable from the navigation).
+  BookSection = "*"
   BookTheme = "auto"
   BookToC = true
   BookSearch = true
