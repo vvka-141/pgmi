@@ -209,7 +209,38 @@ COMMENT ON FUNCTION membership.generate_api_key_material IS
 -- Create API Key
 -- ============================================================================
 -- SECURITY DEFINER so the caller does not need direct writes on api_key or
--- user_identity. Validates membership (owner or active member) before issuing.
+-- user_identity. RLS cannot confine the body (it runs as the table owner), so
+-- membership.can_create_api_key guards the CALLER first; the argument checks
+-- inside create_api_key then validate the TARGET user and organization.
+
+-- A caller may mint a key: for itself in an org it actively belongs to; for any
+-- member of an org it owns or admins; or, as a platform superuser, anywhere. A
+-- plain reader/contributor cannot mint a peer's key — that would hand over a
+-- working credential and impersonate the peer. Fail-closed for identity-less
+-- sessions. Unauthorized callers get the same P0404 as a missing org, so this is
+-- not a cross-tenant existence oracle.
+CREATE OR REPLACE FUNCTION membership.can_create_api_key(p_user_id uuid, p_organization_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = membership, api, pg_temp
+AS $$
+    -- COALESCE to false: get_member_role and current_user_id return NULL for a
+    -- non-member/identity-less caller, so the bare OR-chain would yield NULL and
+    -- IF NOT NULL would silently skip the guard. Fail closed.
+    SELECT COALESCE(
+        api.current_user_is_admin()
+        OR (
+            p_user_id = api.current_user_id()
+            AND p_organization_id = ANY (api.current_member_org_ids())
+        )
+        OR membership.is_organization_owner(api.current_user_id(), p_organization_id)
+        OR membership.get_member_role(api.current_user_id(), p_organization_id) = 'admin',
+        false
+    );
+$$;
+
+COMMENT ON FUNCTION membership.can_create_api_key(uuid, uuid) IS
+    'True when the current identity may issue a key for p_user_id in p_organization_id: platform superuser, self-service for an org it belongs to, or an admin/owner of the org provisioning for a member. Caller guard for create_api_key.';
 
 CREATE OR REPLACE FUNCTION membership.create_api_key(
     p_user_id uuid,
@@ -233,6 +264,11 @@ DECLARE
     v_object_id uuid;
     v_retry int;
 BEGIN
+    IF NOT membership.can_create_api_key(p_user_id, p_organization_id) THEN
+        RAISE EXCEPTION 'Organization not found: %', p_organization_id
+            USING ERRCODE = 'P0404';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1 FROM membership."user" c_user
         WHERE c_user.object_id = p_user_id AND c_user.is_active
@@ -599,6 +635,7 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ membership.api_key - key table with hashed secrets';
     RAISE NOTICE '  ✓ membership.api_key_prefix() - centralized prefix helper';
     RAISE NOTICE '  ✓ membership.generate_api_key_material() - key generation';
+    RAISE NOTICE '  ✓ membership.can_create_api_key() - caller guard for key issuance';
     RAISE NOTICE '  ✓ membership.create_api_key() - issue key + user_identity';
     RAISE NOTICE '  ✓ membership.validate_api_key() - validate for auth';
     RAISE NOTICE '  ✓ membership.can_manage_api_key() - tenant guard for the lifecycle functions';

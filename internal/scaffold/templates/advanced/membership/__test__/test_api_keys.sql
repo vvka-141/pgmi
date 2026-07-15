@@ -16,6 +16,9 @@ BEGIN
     FROM membership.organization
     WHERE owner_user_id = v_alice_id AND is_personal = true;
 
+    -- create_api_key is caller-guarded: act as Alice, who owns this org.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+
     -- ========================================================================
     -- create_api_key returns valid material + creates user_identity
     -- ========================================================================
@@ -209,6 +212,9 @@ BEGIN
     FROM membership.organization
     WHERE owner_user_id = v_alice_id AND is_personal = true;
 
+    -- create_api_key is caller-guarded: act as Alice, who owns this org.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+
     SELECT * INTO v_validation FROM membership.validate_api_key(NULL);
     IF v_validation.is_valid OR v_validation.reason != 'malformed key' THEN
         RAISE EXCEPTION 'NULL key should report malformed, got: %', v_validation.reason;
@@ -278,6 +284,9 @@ BEGIN
     SELECT object_id INTO STRICT v_org_id
     FROM membership.organization
     WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    -- create_api_key is caller-guarded: act as Alice, who owns this org.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
 
     SELECT * INTO v_created_expired
     FROM membership.create_api_key(v_alice_id, v_org_id, 'Already expired', now() - interval '1 minute');
@@ -506,4 +515,106 @@ BEGIN
     RAISE DEBUG '  ✓ member customer session manages its own org''s key';
 
     RAISE DEBUG '✓ API key tenant-isolation tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: create_api_key is caller-authorized
+-- create_api_key is SECURITY DEFINER, so RLS cannot confine it. Issuing a key
+-- returns a working credential for the target user, so the caller — not just
+-- the target — must be authorized: self-service, or an admin/owner of the org
+-- provisioning for a member, or a platform superuser. A plain member must not
+-- mint a peer's key, and a non-member must not mint anywhere.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+    v_alice_id uuid := current_setting('test.alice_id')::uuid;
+    v_bob_id uuid := current_setting('test.bob_id')::uuid;
+    v_alice_personal uuid;
+    v_team_org uuid;
+    v_created record;
+BEGIN
+    RAISE DEBUG '→ Testing create_api_key caller authorization';
+
+    SELECT object_id INTO STRICT v_alice_personal
+    FROM membership.organization WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    -- A shared org Alice owns; Bob joins as a plain contributor (not admin).
+    INSERT INTO membership.organization (name, slug, owner_user_id, is_personal)
+    VALUES ('Guard Team', 'guard-team-' || substr(gen_random_uuid()::text, 1, 8), v_alice_id, false)
+    RETURNING object_id INTO v_team_org;
+
+    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
+    VALUES (v_team_org, v_bob_id, 'contributor', 'active', now());
+
+    -- (1) Non-member: Bob does not belong to Alice's personal org. As the
+    -- customer role he cannot mint a key there — neither for Alice nor for
+    -- himself. Both raise P0404, indistinguishable from a missing org.
+    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    BEGIN
+        PERFORM membership.create_api_key(v_alice_id, v_alice_personal, 'impersonate-alice');
+        RESET ROLE;
+        RAISE EXCEPTION 'TEST FAILED: non-member minted a key for Alice in her org';
+    EXCEPTION WHEN SQLSTATE 'P0404' THEN NULL;
+    END;
+    BEGIN
+        PERFORM membership.create_api_key(v_bob_id, v_alice_personal, 'foothold');
+        RESET ROLE;
+        RAISE EXCEPTION 'TEST FAILED: non-member minted a key for himself in a foreign org';
+    EXCEPTION WHEN SQLSTATE 'P0404' THEN NULL;
+    END;
+    RESET ROLE;
+    RAISE DEBUG '  ✓ non-member cannot mint keys in an org it does not belong to';
+
+    -- (2) Plain member cannot mint a PEER's key: Bob is a contributor of the
+    -- team org, but a key for Alice would impersonate her.
+    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    BEGIN
+        PERFORM membership.create_api_key(v_alice_id, v_team_org, 'peer-impersonation');
+        RESET ROLE;
+        RAISE EXCEPTION 'TEST FAILED: contributor minted a peer''s key';
+    EXCEPTION WHEN SQLSTATE 'P0404' THEN NULL;
+    END;
+    RESET ROLE;
+    RAISE DEBUG '  ✓ plain member cannot mint a peer''s key';
+
+    -- (3) Self-service: Bob may mint his OWN key in an org he belongs to.
+    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    SELECT * INTO v_created FROM membership.create_api_key(v_bob_id, v_team_org, 'bob self-service');
+    RESET ROLE;
+    IF v_created.out_key_id IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: self-service create returned no key';
+    END IF;
+    RAISE DEBUG '  ✓ member can mint its own key (self-service)';
+
+    -- (4) Owner provisioning: Alice owns the team org and may mint a key for
+    -- Bob, a member of it.
+    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    SELECT * INTO v_created FROM membership.create_api_key(v_bob_id, v_team_org, 'alice provisions bob');
+    RESET ROLE;
+    IF v_created.out_key_id IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: org owner could not provision a member''s key';
+    END IF;
+    RAISE DEBUG '  ✓ org owner can provision a member''s key';
+
+    -- (5) Admin-role provisioning: promote Bob to admin; he may now mint a key
+    -- for Alice, who is a member (owner) of the team org.
+    UPDATE membership.organization_member SET role = 'admin'
+    WHERE organization_id = v_team_org AND user_id = v_bob_id;
+
+    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
+    EXECUTE format('SET ROLE %I', v_customer_role);
+    SELECT * INTO v_created FROM membership.create_api_key(v_alice_id, v_team_org, 'admin bob provisions alice');
+    RESET ROLE;
+    IF v_created.out_key_id IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: org admin could not provision a member''s key';
+    END IF;
+    RAISE DEBUG '  ✓ org admin can provision a member''s key';
+
+    RAISE DEBUG '✓ create_api_key caller-authorization tests passed';
 END $$;

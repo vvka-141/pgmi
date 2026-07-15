@@ -39,6 +39,10 @@ All mutations flow through SECURITY DEFINER functions so the membership and acti
 | `membership.disable_api_key(key_id)` / `enable_api_key(key_id)` | Temporarily block / restore. Reversible. |
 | `membership.revoke_api_key(key_id)` | Permanent. Deletes the matching `user_identity` row so the key cannot be re-enabled into a working identity. |
 
+### Caller authorization for issuing keys
+
+`create_api_key` is `SECURITY DEFINER` and returns a working credential for the target user, so the **caller** — not only the target — must be authorized. `membership.can_create_api_key(user_id, organization_id)` gates it first: the current identity must be a platform superuser, minting for **itself** in an org it actively belongs to, or an **admin or owner** of the organization provisioning a key for one of its members. A plain reader/contributor member cannot mint another member's key (that would hand over an impersonation credential), and a non-member cannot mint anywhere. Unauthorized callers get the same `P0404` "Organization not found" as a missing org, so the function is not a cross-tenant existence oracle. Like the lifecycle guard, it fails closed for identity-less sessions.
+
 ### Tenant scoping of the lifecycle functions
 
 `disable_api_key`, `enable_api_key`, and `revoke_api_key` are `SECURITY DEFINER`, so they run as the table owner and row-level security does **not** constrain them. Tenant isolation comes from `membership.can_manage_api_key(key_id)`, which every one of them calls first: the current identity must be a platform superuser, or an active member of the key's organization. Anything else raises `P0404` — the same "not found" a nonexistent key raises, so the functions cannot be used as a cross-tenant key-existence oracle.
