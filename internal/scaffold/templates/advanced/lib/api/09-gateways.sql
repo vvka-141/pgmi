@@ -169,7 +169,17 @@ CREATE OR REPLACE FUNCTION internal.finalize_response_headers(
 ) RETURNS extensions.hstore
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
     WITH merged AS (
-        SELECT COALESCE((p_response).headers, ''::extensions.hstore)
+        -- Lowercase the handler's OWN headers too, not just the registered ones.
+        -- HTTP header names are case-insensitive, but hstore keys are not, and the
+        -- content-type guard below is a case-sensitive `?`. A handler returning
+        -- 'Content-Type' would slip past that guard and the JSON default would be
+        -- appended alongside it — the response then carrying two conflicting
+        -- content-types. Normalising every key here makes right-wins dedup work
+        -- regardless of how a hand-built response cased its keys.
+        SELECT COALESCE((
+                SELECT extensions.hstore(array_agg(lower(key)), array_agg(value))
+                FROM extensions.each(COALESCE((p_response).headers, ''::extensions.hstore))
+            ), ''::extensions.hstore)
             || COALESCE((
                 SELECT extensions.hstore(array_agg(lower(key)), array_agg(value))
                 FROM jsonb_each_text(p_registered)

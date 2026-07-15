@@ -492,5 +492,48 @@ END;
 
     RAISE NOTICE '  + registered response_headers propagate (case-insensitive) and x-include-schema is stripped';
 
+    -- A handler that hand-builds its response and sets 'Content-Type' (mixed
+    -- case, as an author naturally would) must not end up with TWO content-types:
+    -- its own, plus the JSON default wrongly appended because a case-sensitive
+    -- guard missed the mixed-case key.
+    DECLARE
+        v_ct_count int;
+        v_ct_value text;
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object(
+                'id', 'dddddddd-0188-4000-8000-0000000000ab',
+                'uri', '^/mixedcase-ct$', 'httpMethod', '^GET$',
+                'name', 'mixedcase_ct_probe', 'requiresAuth', false, 'autoLog', false
+            ),
+            $body$
+DECLARE v api.http_response;
+BEGIN
+    v.status_code := 200;
+    v.headers := extensions.hstore(ARRAY['Content-Type', 'text/csv']);
+    v.content := convert_to('a,b,c', 'UTF8');
+    RETURN v;
+END;
+            $body$
+        );
+
+        v_response := api.rest_invoke('GET', '/mixedcase-ct');
+
+        SELECT count(*), max(value)
+        INTO v_ct_count, v_ct_value
+        FROM extensions.each((v_response).headers)
+        WHERE lower(key) = 'content-type';
+
+        IF v_ct_count <> 1 THEN
+            RAISE EXCEPTION 'a mixed-case Content-Type must yield exactly one content-type on the wire, got %: %',
+                v_ct_count, (v_response).headers;
+        END IF;
+        IF v_ct_value <> 'text/csv' THEN
+            RAISE EXCEPTION 'the handler''s own content-type must win, got %', v_ct_value;
+        END IF;
+
+        RAISE NOTICE '  + a mixed-case handler Content-Type does not produce a duplicate';
+    END;
+
     RAISE NOTICE '✓ response_headers propagation tests passed';
 END $$;
