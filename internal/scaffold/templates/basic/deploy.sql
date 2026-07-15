@@ -63,7 +63,19 @@ BEGIN
             EXECUTE v_file.content;
             -- (C) INSERT INTO _migration (path, checksum) VALUES (v_file.path, v_file.pgmi_checksum);
         EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM;
+            -- Keep the original SQLSTATE and DETAIL: a bare RAISE EXCEPTION rewrites
+            -- them to P0001 and an empty detail, so a caller cannot classify the
+            -- failure (e.g. a retryable 40001 vs a permanent constraint violation).
+            DECLARE
+                v_sqlstate text;
+                v_detail   text;
+            BEGIN
+                GET STACKED DIAGNOSTICS
+                    v_sqlstate = RETURNED_SQLSTATE,
+                    v_detail   = PG_EXCEPTION_DETAIL;
+                RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM
+                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
+            END;
         END;
     END LOOP;
 

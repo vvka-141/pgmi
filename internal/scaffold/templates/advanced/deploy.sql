@@ -408,7 +408,20 @@ BEGIN
         BEGIN
             EXECUTE v_script.content;
         EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM;
+            -- Preserve the original SQLSTATE and DETAIL. A bare RAISE EXCEPTION
+            -- re-raises as P0001 and drops both, so an upstream classifier can no
+            -- longer tell a retryable 40001/40P01 from a permanent failure — the
+            -- exact signal PGMI-179's retry contract depends on.
+            DECLARE
+                v_sqlstate text;
+                v_detail   text;
+            BEGIN
+                GET STACKED DIAGNOSTICS
+                    v_sqlstate = RETURNED_SQLSTATE,
+                    v_detail   = PG_EXCEPTION_DETAIL;
+                RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM
+                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
+            END;
         END;
 
         INSERT INTO internal.deployment_script_execution_log(
