@@ -40,10 +40,16 @@
 DO $$
 BEGIN
     IF pg_my_temp_schema() <> 0 THEN
+        -- _pgmi_source_metadata references _pgmi_source: DROP _pgmi_source CASCADE
+        -- drops only that FK constraint, not the referencing table, so re-running
+        -- schema.sql in one session hit "relation _pgmi_source_metadata already
+        -- exists". Drop it (and pgmi_test_event, likewise not covered) explicitly.
+        DROP TABLE IF EXISTS pg_temp._pgmi_source_metadata CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+        DROP TYPE IF EXISTS pg_temp.pgmi_test_event CASCADE;
     END IF;
 END $$;
 
@@ -424,11 +430,18 @@ BEGIN
              THEN array_to_string(v_parts[1:v_row.depth + 1], '/') || '/'
              ELSE './'
         END;
-    v_row.extension          :=
-        CASE WHEN v_row.name ~ '\.'
-             THEN substring(v_row.name from '(\.[^.]+)$')
-             ELSE ''
-        END;
+    -- Extract only an extension the table's chk_extension_format accepts
+    -- (^(\.[a-zA-Z0-9]+)?$). The old pattern '(\.[^.]+)$' took ANY non-dot tail,
+    -- so an editor backup ('notes.txt~') or a punctuation tail extracted a value
+    -- the CHECK then rejected, aborting the whole registration; a trailing dot
+    -- ('notes.') matched '\.' but captured nothing, yielding NULL against a
+    -- NOT NULL column. Both are reachable — the Go scanner does no name filtering.
+    -- No match (no extension, punctuation tail, trailing dot) means '' — no
+    -- extension — which is what those filenames have.
+    v_row.extension          := COALESCE(
+        substring(v_row.name from '(\.[a-zA-Z0-9]+)$'),
+        ''
+    );
     v_row.content            := in_content;
     v_row.size_bytes         := octet_length(in_content);
     v_row.checksum           := in_checksum;
