@@ -2,6 +2,7 @@ package pgmi
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -47,6 +48,16 @@ func (s *Session) Conn() *pgxpool.Conn {
 // Close releases all session resources. Idempotent.
 func (s *Session) Close() error {
 	if s.conn != nil {
+		// Release the deploy advisory lock synchronously before returning the
+		// connection. pool.Close() below tears the connection down client-side,
+		// but the server drops a session-scoped advisory lock only once it has
+		// processed the disconnect — which a fast redeploy against the same
+		// database can outrace, spuriously hitting ErrConcurrentDeploy. The
+		// explicit unlock is a round-trip that completes before the next acquire.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = s.conn.Exec(ctx, "SELECT pg_advisory_unlock_all()")
+		cancel()
+
 		s.conn.Release()
 		s.conn = nil
 	}
