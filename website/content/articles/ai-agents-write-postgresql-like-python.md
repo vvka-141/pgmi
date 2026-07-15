@@ -59,7 +59,7 @@ In Python, this is idiomatic. In PL/pgSQL, it is not a stylistic choice — it c
 
 To be precise about the mechanics, because precision matters here: the subtransaction consumes a subtransaction XID only when the block performs DML — a read-only exception block is assigned none and is comparatively benign. And a single shallow exception block on a request path is cheap in absolute terms. The damage is a concurrency-and-scale effect, not a per-block tax.
 
-PostgreSQL caches 64 subtransaction XIDs per backend; workloads that exceed that under load force snapshot visibility checks through the `pg_subtrans` SLRU, where they contend. GitLab's engineering team published the canonical incident: under a specific combination of a long-running transaction and subtransaction-heavy traffic, replica throughput collapsed from roughly 360,000 to 50,000 transactions per second, with unrelated queries timing out cluster-wide, until they eliminated subtransactions from hot paths. Your workload is not GitLab's; the point is not the number but the failure class. An agent that stamps an exception block into every handler and kernel — once per request, on every request path — is quietly signing you up for that class.
+PostgreSQL caches 64 subtransaction XIDs per backend; workloads that exceed that under load force snapshot visibility checks through the `pg_subtrans` SLRU, where they contend. GitLab's engineering team published the canonical incident: under a specific combination of a long-running transaction and subtransaction-heavy traffic, replica throughput collapsed from roughly 360,000 to 50,000 transactions per second, with unrelated queries timing out cluster-wide, until they eliminated subtransactions from hot paths — a workload-specific incident, cited here for the failure class rather than the numbers. An agent that stamps an exception block into every handler and kernel — once per request, on every request path — is quietly signing you up for that class.
 
 The deeper problem is architectural, though, and it would remain even if subtransactions were free: the exception channel is being used as a *data* channel. The kernel knows a perfectly ordinary fact ("no unseen alert with that id") and encodes it as an error, which the handler must then decode by SQLSTATE. Two functions now share a contract that lives in neither's signature.
 
@@ -133,7 +133,7 @@ Either way, the handler-side contract is the same: every piece of user input cro
 
 The third pattern is subtler than the first two and did the most expensive damage in the field: agents put *checks* where they were convenient rather than where they were sound.
 
-Two directions, same root cause. Downward, handlers duplicated state probes the kernel had to redo — "check the record is pending, then call the kernel," where the kernel checked again, or worse, didn't. Upward, kernels did read-check-write with no locking discipline at all. The reviews confirmed a handful of lost-update races of identical shape in the payment path — two concurrent reviewers both passing validation and both advancing the same record; concurrent batch runs creating duplicate downstream rows — every one of them missing the same idioms:
+Two directions, same root cause. Downward, handlers duplicated state probes the kernel had to redo — "check the record is pending, then call the kernel," where the kernel checked again, or worse, didn't. Upward, kernels did read-check-write with no locking discipline at all. The reviews confirmed a handful of lost-update races of identical shape in the payment path — two concurrent writers both passing validation and both advancing the same record; concurrent batch runs creating duplicate downstream rows — every one of them missing the same idioms:
 
 ```sql
 -- Agent-written: read, check, write. Two sessions interleave freely.
@@ -152,20 +152,20 @@ SELECT * INTO v_row
   FROM core.task WHERE id = p_id FOR UPDATE;
 IF v_row.status <> 'pending' THEN RETURN NULL; END IF;
 UPDATE core.task
-   SET step_no = v_row.step_no + 1
+   SET step_no = v_row.step_no + 1, status = 'in_review'
  WHERE id = p_id
 RETURNING * INTO v_row;
 RETURN v_row;
 
 -- Optimistic: make the write itself state-conditional. No lock needed.
 UPDATE core.task
-   SET step_no = step_no + 1
+   SET step_no = step_no + 1, status = 'in_review'
  WHERE id = p_id AND status = 'pending'
 RETURNING * INTO v_row;
 RETURN v_row;                      -- NULL if someone raced us → 409
 ```
 
-The lock serializes writers, so the re-check holds for the rest of the transaction (under read committed, the locked read sees the latest committed version of the row; under repeatable read or serializable, a conflicting concurrent update surfaces as `40001` instead — which, as we'll see, must be left to propagate). The guard predicate makes the write itself state-conditional, so the returned row count tells the truth with no lock at all. Combining them is defense-in-depth: the guard is redundant while the lock is present, and load-bearing the day a refactor removes it.
+The lock serializes writers, so the re-check holds for the rest of the transaction (under read committed, the locked read sees the latest committed version of the row; under repeatable read or serializable, a conflicting concurrent update surfaces as `40001` instead — which, as we'll see, must be left to propagate). The guard predicate makes the write itself state-conditional: because the mutation flips the very column the predicate tests, the race's loser matches zero rows, gets `NULL`, and maps to a clean 409 — no lock at all. (A mutation that leaves the guarded column untouched — a pure counter increment, say — relies instead on the `UPDATE`'s own atomicity to avoid the lost update.) Combining lock and guard is defense-in-depth: the guard is redundant while the lock is present, and load-bearing the day a refactor removes it.
 
 Worth stating plainly, because it indicts process rather than model: the project's hundred-plus SQL test files contained zero concurrency tests. Test-driven development — human or agent — cannot see these races, because nobody writes a red test for an interleaving they haven't imagined. The discipline has to be structural: *state-dependent mutations live in the kernel, and the write itself is guarded — by a row lock, a state predicate, or both.* Handlers probe only for things that produce different HTTP status codes, and treat even those probes as advisory — the kernel's guarded return value is the authority.
 
@@ -251,7 +251,7 @@ The traditional cost of relying on the law was error ergonomics: a raw constrain
 
 **What it does not fix.** Concurrency. The four phases make handlers honest, but the race fixes in failure mode 3 — `FOR UPDATE`, guard predicates, `ON CONFLICT` — are a separate discipline, and no test suite the agents wrote would have caught their absence. If agents write your money-moving code, someone who thinks in interleavings must read it.
 
-**What this evidence is.** Two thorough reviews of one production codebase, plus corroborating patterns in a second smaller one. That is field data, not a benchmark; the per-pattern counts above are exact for this codebase and indicative of nothing beyond agents-writing-PL/pgSQL generally except that the failure modes are systematic, not random. The strongest evidence for the discipline is internal: in a couple dozen handler files built by the same agents under the same instructions, the defects clustered precisely in the deviations from it.
+**What this evidence is.** Two thorough reviews of one production codebase, plus corroborating patterns in a second smaller one. That is field data, not a benchmark; the per-pattern counts above are real observations from this codebase, not extrapolations, and indicative of nothing beyond agents-writing-PL/pgSQL generally except that the failure modes are systematic, not random. The strongest evidence for the discipline is internal: in a couple dozen handler files built by the same agents under the same instructions, the defects clustered precisely in the deviations from it.
 
 ## Where pgmi comes in
 
