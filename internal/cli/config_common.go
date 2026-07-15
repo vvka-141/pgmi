@@ -251,7 +251,7 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 
 		fileContent, err := fsProvider.ReadFile(paramsFile)
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy ./migrations --database mydb --param key=value", pgmi.ErrInvalidConfig, paramsFile, err)
+			return nil, fmt.Errorf("%w: failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value", pgmi.ErrInvalidConfig, paramsFile, err)
 		}
 
 		fileParams, err := params.ParseEnvFile(fileContent)

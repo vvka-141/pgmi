@@ -37,10 +37,10 @@ pgmi connects, loads project files into pg_temp tables, loads CLI parameters,
 then executes deploy.sql. Transactions, ordering, and idempotency are decided
 by deploy.sql, not by pgmi.
 
-  pgmi deploy ./migrations -d mydb
-  pgmi deploy ./migrations -d mydb --overwrite --force
-  pgmi deploy ./migrations -d mydb --params-file prod.env
-  pgmi deploy ./migrations -d mydb --param env=prod --param version=1.2.3
+  pgmi deploy . -d mydb
+  pgmi deploy . -d mydb --overwrite --force
+  pgmi deploy . -d mydb --params-file prod.env
+  pgmi deploy . -d mydb --param env=prod --param version=1.2.3
 
 Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
 string. Cloud auth: --azure, --aws, --google (no password needed).

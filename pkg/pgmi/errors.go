@@ -94,6 +94,14 @@ func ExitCodeForError(err error) int {
 		return ExitUsageError
 	}
 
+	// pgmi's own usage errors: a bad template name or a non-empty init target
+	// are invalid invocations, not runtime failures — exit 2 like cobra usage
+	// errors, per the exit-code table.
+	if strings.Contains(errStr, "unknown template") ||
+		strings.Contains(errStr, "is not empty") {
+		return ExitUsageError
+	}
+
 	return ExitGeneralError
 }
 

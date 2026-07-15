@@ -20,7 +20,7 @@ func TestRequireArgValidators(t *testing.T) {
 			name:       "RequireProjectPath",
 			fn:         RequireProjectPath,
 			cmdUse:     "deploy <project_path>",
-			validArg:   "./migrations",
+			validArg:   ".",
 			missingMsg: "missing required argument: <project_path>",
 			helpMsg:    "Example:",
 		},

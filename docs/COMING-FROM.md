@@ -10,6 +10,19 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 
 > **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
+> **⚠️ Read this first: pgmi re-executes every migration on every deploy.** The
+> basic template keeps no ledger — each file runs again every time you
+> `pgmi deploy`. That is safe *only* when your SQL is idempotent
+> (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`,
+> `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). If you arrive with Flyway's,
+> Liquibase's, or Sqitch's "each migration runs exactly once" mental model, a
+> non-idempotent statement like a bare `ALTER TABLE ... ADD COLUMN` **succeeds on
+> the first deploy and fails on the second.** Two ways out: make every migration
+> idempotent, or turn on apply-once tracking — the basic template's `deploy.sql`
+> ships a commented-out opt-in block for exactly this, and
+> [Tracking migration state](#tracking-migration-state) below lays out the
+> options.
+
 ![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
 
 ## Quick concept mapping

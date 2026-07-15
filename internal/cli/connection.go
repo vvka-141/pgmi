@@ -104,7 +104,7 @@ func resolveTargetDatabase(
 	if requireDatabase && targetDB == "" {
 		return "", fmt.Errorf("database name is required\n"+
 			"Provide via:\n"+
-			"  1. --database/-d flag: pgmi %s ./migrations -d mydb\n"+
+			"  1. --database/-d flag: pgmi %s . -d mydb\n"+
 			"  2. Connection string: pgmi %s --connection \"postgresql://user@host/mydb\"\n"+
 			"  3. Environment variable: export PGDATABASE=mydb",
 			commandName, commandName)

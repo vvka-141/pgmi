@@ -56,6 +56,10 @@ func TestExitCodeForError(t *testing.T) {
 		{"required flag", errors.New("required flag \"database\" not set"), pgmi.ExitUsageError},
 		{"invalid argument", errors.New("invalid argument \"abc\" for \"--port\""), pgmi.ExitUsageError},
 
+		// pgmi's own usage errors (string patterns) — real init/scaffold messages
+		{"unknown template", errors.New("unknown template \"foo\" (available: [basic advanced])"), pgmi.ExitUsageError},
+		{"non-empty init dir", errors.New("target directory 'x' is not empty\n\npgmi init requires an empty directory"), pgmi.ExitUsageError},
+
 		// general error
 		{"unclassified error", errors.New("something unexpected"), pgmi.ExitGeneralError},
 	}

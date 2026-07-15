@@ -15,7 +15,7 @@ func RequireProjectPath(cmd *cobra.Command, args []string) error {
 Usage: %s <project_path>
 
 Example:
-  %s ./migrations -d mydb`, cmd.UseLine(), cmd.CommandPath())
+  %s . -d mydb`, cmd.UseLine(), cmd.CommandPath())
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("accepts 1 arg(s), received %d", len(args))
