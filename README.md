@@ -117,7 +117,7 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 
 - **Your SQL owns the deploy** — transactions, execution order, idempotency, and retries live in `deploy.sql`, not in the tool.
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
-- **Built for coding agents** — the binary embeds machine-readable guidance (`pgmi ai`, llms.txt style) and can expose pgmi commands to agents over MCP (`pgmi serve`).
+- **Built for coding agents** — the binary embeds machine-readable guidance (`pgmi ai`, llms.txt style) and can expose pgmi commands to agents over MCP (`pgmi serve`). The docs site also publishes an [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt) map for agents browsing the web.
 
 ## Install
 
