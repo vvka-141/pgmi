@@ -87,7 +87,14 @@ END $$;
 -- every file regardless of sort order — a deploy-time guard in 06-rls.sql
 -- could not see later-sorted files like 08-api-keys.sql:
 --   1. every membership table the customer role can SELECT has RLS enabled;
---   2. every membership vw_* view is security_invoker so RLS applies through it.
+--   2. every membership vw_* view is security_invoker so RLS applies through it;
+--   3. api.vw_current_user is security_invoker. It is the one api view exposing
+--      per-session identity through membership tables, and it drifted from the
+--      invariant once (its own current_user_id() predicate kept it safe, but the
+--      membership-scoped checks above never saw it because it lives in api).
+--      The api.vw_* admin analytics views are deliberately NOT checked: they are
+--      admin-only introspection over system metadata (handlers/routes/exchanges),
+--      not RLS-gated tenant data.
 -- ============================================================================
 
 DO $$
@@ -122,5 +129,16 @@ BEGIN
             v_offender;
     END IF;
 
-    RAISE DEBUG '✓ membership structural conformance: RLS on all granted tables, security_invoker views';
+    -- api.vw_current_user specifically (see note 3 above).
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_class c
+        WHERE c.relnamespace = 'api'::regnamespace
+          AND c.relname = 'vw_current_user'
+          AND c.reloptions IS NOT NULL
+          AND 'security_invoker=true' = ANY(c.reloptions)
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: api.vw_current_user must have security_invoker=true';
+    END IF;
+
+    RAISE DEBUG '✓ structural conformance: RLS on granted membership tables, security_invoker on membership vw_* and api.vw_current_user';
 END $$;

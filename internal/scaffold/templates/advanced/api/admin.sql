@@ -119,14 +119,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     SELECT COUNT(*) INTO v_total FROM api.vw_handler_info;
@@ -236,14 +238,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     SELECT COUNT(*) INTO v_total FROM api.vw_route_info;
@@ -307,14 +311,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     v_protocol := v_q -> 'protocol';

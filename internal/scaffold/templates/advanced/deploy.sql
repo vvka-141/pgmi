@@ -318,7 +318,7 @@ COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_obj
 COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_content_checksum IS 'References the specific content version executed. Enables content diffing across deployments.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.xact_id IS 'PostgreSQL transaction ID (xid8). Correlates with pg_stat_activity and WAL for debugging.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.file_path IS 'Original file path at execution time. May change if files are renamed.';
-COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script is re-runnable. Non-idempotent scripts execute only once per object_id.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script was re-runnable at execution time. A non-idempotent script runs once after being marked non-idempotent (deploy.sql skips it only when a prior execution logged idempotent = false), so flipping an already-run idempotent script to non-idempotent still runs it once under the new contract.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.sort_key IS 'Execution ordering key from <pgmi-meta sortKeys="...">. NULL for path-ordered scripts.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.executed_at IS 'Timestamp when execution completed.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.executed_by IS 'Database role that executed the script (usually the owner role).';
@@ -390,9 +390,16 @@ BEGIN
     LOOP
         v_object_id := COALESCE(v_script.id, v_script.generic_id);
 
+        -- Skip a non-idempotent script only once it has run UNDER the
+        -- non-idempotent contract (a log row with idempotent = false). Matching
+        -- on object_id alone was wrong: a file that ran as idempotent (say,
+        -- CREATE TABLE IF NOT EXISTS), then was edited into a one-time backfill
+        -- and flipped to idempotent="false", would see its own earlier idempotent
+        -- log rows and skip forever — the backfill would silently never run.
         IF NOT v_script.idempotent AND EXISTS (
             SELECT 1 FROM internal.deployment_script_execution_log
             WHERE deployment_script_object_id = v_object_id
+              AND NOT idempotent
         ) THEN
             v_skipped := v_skipped + 1;
             CONTINUE;

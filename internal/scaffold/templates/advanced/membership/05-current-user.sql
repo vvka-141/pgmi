@@ -143,7 +143,8 @@ COMMENT ON FUNCTION api.current_owner_org_ids() IS
 -- Current User View
 -- ============================================================================
 
-CREATE OR REPLACE VIEW api.vw_current_user AS
+CREATE OR REPLACE VIEW api.vw_current_user
+WITH (security_invoker = true) AS
 SELECT
     u.object_id AS user_id,
     u.email,

@@ -54,3 +54,47 @@ BEGIN
 
     RAISE DEBUG 'Deployment tracking test passed';
 END $$;
+
+-- ============================================================================
+-- Test: a script flipped idempotent -> non-idempotent runs once under the new
+-- contract, rather than being skipped forever because of its earlier idempotent
+-- log rows. This exercises deploy.sql's skip predicate directly (the __test__
+-- harness is one deploy, so a real two-deploy flip can't be staged here).
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_obj uuid := 'ffffffff-0192-4000-8000-000000000001';
+    v_would_skip boolean;
+BEGIN
+    RAISE DEBUG '-> Testing idempotent->non-idempotent flip semantics';
+
+    -- Model the execution log's (object_id, idempotent) rows without the real
+    -- table's FK chain — the flip decision is purely this predicate.
+    CREATE TEMP TABLE _flip_log (object_id uuid, idempotent boolean) ON COMMIT DROP;
+
+    -- 1. The script ran several times AS idempotent. No non-idempotent run yet.
+    INSERT INTO _flip_log VALUES (v_obj, true), (v_obj, true);
+
+    v_would_skip := EXISTS (
+        SELECT 1 FROM _flip_log WHERE object_id = v_obj AND NOT idempotent
+    );
+    IF v_would_skip THEN
+        RAISE EXCEPTION 'TEST FAILED: a script that only ever ran as idempotent must NOT be skipped after being flipped to non-idempotent';
+    END IF;
+    RAISE DEBUG '  ✓ flipped script runs once (prior idempotent rows do not skip it)';
+
+    -- 2. Now it has run once under the non-idempotent contract.
+    INSERT INTO _flip_log VALUES (v_obj, false);
+
+    v_would_skip := EXISTS (
+        SELECT 1 FROM _flip_log WHERE object_id = v_obj AND NOT idempotent
+    );
+    IF NOT v_would_skip THEN
+        RAISE EXCEPTION 'TEST FAILED: after running once as non-idempotent, the script must be skipped on the next deploy';
+    END IF;
+    RAISE DEBUG '  ✓ after one non-idempotent run, it is skipped';
+
+    DROP TABLE _flip_log;
+    RAISE DEBUG 'Idempotent-flip test passed';
+END $$;
