@@ -280,7 +280,7 @@ deployment tool I built. It loads your project files into session-scoped
 temporary tables and executes the `deploy.sql` *you* write, which queries
 those files and orchestrates everything — including the test gate:
 
-![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.png)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
 Tests live in `__test__/` directories next to migrations. A
 `CALL pgmi_test()` macro in deploy.sql expands — before the SQL reaches
