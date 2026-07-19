@@ -1,0 +1,24 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="title" value="Cross-domain decisions become possible where knowledge and reality can be computed together" style="text;html=1;fontSize=20;fontStyle=1;fontColor=#1f3a4d;align=center;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="60" y="18" width="1080" height="34" as="geometry"/>
+    </mxCell>
+    <mxCell id="refBox" value="&lt;font style=&quot;font-size:17px&quot;&gt;&lt;b&gt;REFERENCE KNOWLEDGE&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;other domains&amp;#39; published state&lt;br&gt;shared facts &amp;amp; master data&lt;br&gt;classifications &amp;amp; features&lt;br&gt;historical aggregates&lt;br&gt;policies &amp;amp; semantics&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f2ec;strokeColor=#3f7e6e;strokeWidth=2;fontColor=#2c5c50;arcSize=8;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="60" y="150" width="310" height="280" as="geometry"/>
+    </mxCell>
+    <mxCell id="opBox" value="&lt;font style=&quot;font-size:17px&quot;&gt;&lt;b&gt;OPERATIONAL REALITY&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;transactions &amp;amp; decisions&lt;br&gt;user actions &amp;amp; events&lt;br&gt;measurements &amp;amp; telemetry&lt;br&gt;current workflow state&lt;br&gt;locally computed observations&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf1dc;strokeColor=#c79433;strokeWidth=2;fontColor=#7a5a14;arcSize=8;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="830" y="150" width="310" height="280" as="geometry"/>
+    </mxCell>
+    <mxCell id="centerBox" value="&lt;font style=&quot;font-size:19px&quot;&gt;&lt;b&gt;THE LOCAL INTERSECTION&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot; color=&quot;#5b7282&quot;&gt;&lt;i&gt;the consumer&amp;#39;s reasoning capacity&lt;/i&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;joins &amp;#183; aggregation &amp;#183; inference&lt;br&gt;screening &amp;#183; optimization &amp;#183; prediction&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px&quot; color=&quot;#1f3a4d&quot;&gt;&lt;b&gt;where cross-domain decisions&lt;br&gt;become locally computable&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot; color=&quot;#5b7282&quot;&gt;&lt;i&gt;one computational boundary&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1f3a4d;strokeWidth=3;fontColor=#1f3a4d;arcSize=6;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="430" y="110" width="340" height="360" as="geometry"/>
+    </mxCell>
+    <mxCell id="refArrow" value="" style="endArrow=block;html=1;strokeColor=#3f7e6e;strokeWidth=3;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="refBox" target="centerBox">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="opArrow" value="" style="endArrow=block;html=1;strokeColor=#c79433;strokeWidth=3;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="opBox" target="centerBox">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>

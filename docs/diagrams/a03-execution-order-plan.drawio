@@ -1,0 +1,79 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="a03-execution-order-plan" name="execution-order-plan">
+    <mxGraphModel dx="1000" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#fbfaf7" adaptiveColors="none">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t1" value="project files" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="200" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" value="pgmi_plan_view &#8212; one row per sort key" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="560" y="20" width="320" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" value="./schema/010_catalog.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="270" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="fs" value="./checks/smoke.sql&#10;sortKeys: 150/000 &#183; 400/000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf3e7;strokeColor=#b45309;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="116" width="270" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" value="./load/010_products.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="186" width="270" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" value="./load/020_prices.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="242" width="270" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" value="./post/010_indexes.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="298" width="270" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" value="#1 &#183; 100/010 &#183; ./schema/010_catalog.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="56" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" value="#2 &#183; 150/000 &#183; ./checks/smoke.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="108" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" value="#3 &#183; 200/010 &#183; ./load/010_products.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="160" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" value="#4 &#183; 200/020 &#183; ./load/020_prices.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="212" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="p5" value="#5 &#183; 300/010 &#183; ./post/010_indexes.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="264" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="p6" value="#6 &#183; 400/000 &#183; ./checks/smoke.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="316" width="360" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=none;html=1;strokeColor=#5d665d;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="f1" target="p1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="es2" style="edgeStyle=none;html=1;strokeColor=#b45309;strokeWidth=1.5;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" parent="1" source="fs" target="p2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="es6" style="edgeStyle=none;html=1;strokeColor=#b45309;strokeWidth=1.5;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="fs" target="p6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=none;html=1;strokeColor=#5d665d;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="f3" target="p3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=none;html=1;strokeColor=#5d665d;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="f4" target="p4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=none;html=1;strokeColor=#5d665d;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="f5" target="p5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="order" style="edgeStyle=none;html=1;strokeColor=#5d665d;endArrow=classic;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="960" y="60" as="sourcePoint" />
+            <mxPoint x="960" y="354" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="orderlabel" value="execution order" style="text;html=1;horizontal=0;align=center;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="964" y="150" width="20" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="caption" value="Five files, six plan rows &#8212; ./checks/smoke.sql carries two sort keys, so UNNEST(sort_keys) gives it two positions." style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="384" width="880" height="24" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

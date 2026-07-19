@@ -1,0 +1,9 @@
+# Alexey Evlampiev
+- [About](https://alexeyevlampiev.github.io/about/)
+- [Writing](https://alexeyevlampiev.github.io/writing/)
+
+## Posts
+- [Freshness Isn't the Only Axis: APIs, Projections, and Federated Queries](https://alexeyevlampiev.github.io/posts/freshness-isnt-the-only-axis/)
+- [Your Operational Data Is Someone Else's Reference Data](https://alexeyevlampiev.github.io/posts/your-operational-data-is-someone-elses-reference-data/)
+- [Decoupling Compute and Storage in Postgres: The Architectural Implications of Databricks Lakebase](https://alexeyevlampiev.github.io/posts/decoupling-compute-storage-postgres-lakebase/)
+- [Why We Are Still Getting Database Deployments Wrong in 2026: The Limits of External State Management](https://alexeyevlampiev.github.io/posts/database-deployments-wrong-2026/)
