@@ -1,0 +1,2 @@
+# Connection comes from PGMI_CONNECTION_STRING or CLI flags — see README.md.
+timeout: 3m

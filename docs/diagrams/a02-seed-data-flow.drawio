@@ -5,55 +5,58 @@
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="repo" value="repository &#8212; the project pgmi deploys" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d9ded5;verticalAlign=top;align=left;spacingLeft=12;spacingTop=4;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="30" y="80" width="250" height="290" as="geometry" />
+          <mxGeometry x="30" y="90" width="250" height="290" as="geometry" />
         </mxCell>
         <mxCell id="f1" value="seeds/roles.json&#10;the catalog as data &#8212; natural keys, no order" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="116" width="210" height="52" as="geometry" />
+          <mxGeometry x="50" y="126" width="210" height="52" as="geometry" />
         </mxCell>
         <mxCell id="f2" value="migrations/001_catalog.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="182" width="210" height="44" as="geometry" />
+          <mxGeometry x="50" y="192" width="210" height="44" as="geometry" />
         </mxCell>
         <mxCell id="f3" value="__test__/test_catalog_invariants.sql" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="240" width="210" height="44" as="geometry" />
+          <mxGeometry x="50" y="250" width="210" height="44" as="geometry" />
         </mxCell>
         <mxCell id="f4" value="deploy.sql&#10;your orchestration, in SQL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="298" width="210" height="52" as="geometry" />
+          <mxGeometry x="50" y="308" width="210" height="52" as="geometry" />
         </mxCell>
         <mxCell id="params" value="params file &#8212; CI-generated, layered per environment (--params-file)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;dashed=1;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="30" y="440" width="250" height="52" as="geometry" />
+          <mxGeometry x="30" y="470" width="250" height="52" as="geometry" />
         </mxCell>
         <mxCell id="txn" value="inside PostgreSQL &#8212; one session &#183; one transaction" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d9ded5;verticalAlign=top;align=left;spacingLeft=12;spacingTop=4;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="360" y="40" width="700" height="560" as="geometry" />
+          <mxGeometry x="360" y="40" width="700" height="620" as="geometry" />
         </mxCell>
         <mxCell id="views" value="session views&#10;pgmi_source_view&#10;pgmi_parameter_view&#10;every repo file &#8212; SQL or not &#8212; as a row" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="390" y="150" width="190" height="100" as="geometry" />
+          <mxGeometry x="390" y="170" width="190" height="100" as="geometry" />
         </mxCell>
         <mxCell id="steps" value="deploy.sql &#8212; every step is a query&#160;&#160;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;verticalAlign=top;align=right;spacingRight=10;spacingTop=6;fontColor=#143d2b;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="630" y="70" width="270" height="430" as="geometry" />
+          <mxGeometry x="630" y="70" width="290" height="490" as="geometry" />
         </mxCell>
         <mxCell id="s1" value="1 &#183; validate the seed file&#10;undeclared grants &#183; duplicate keys &#8594; RAISE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="650" y="106" width="230" height="48" as="geometry" />
+          <mxGeometry x="650" y="104" width="250" height="46" as="geometry" />
         </mxCell>
         <mxCell id="s2" value="2 &#183; apply migrations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="650" y="166" width="230" height="48" as="geometry" />
+          <mxGeometry x="650" y="162" width="250" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="s3" value="3 &#183; load the graph &#8212; one statement&#10;jsonb_to_recordset + RETURNING chain" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="650" y="226" width="230" height="48" as="geometry" />
+        <mxCell id="s3" value="3 &#183; pre-apply diff&#10;what this deploy will change &#8212; before any mutation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f7f0;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="650" y="220" width="250" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="s4" value="4 &#183; reconcile + drift report&#10;soft-deprecate removed rows" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="650" y="286" width="230" height="48" as="geometry" />
+        <mxCell id="s4" value="4 &#183; load&#10;upsert nodes &#183; insert declared edges (RETURNING chain)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="650" y="278" width="250" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="s5" value="5 &#183; CALL pgmi_test()&#10;catalog invariants" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="650" y="346" width="230" height="48" as="geometry" />
+        <mxCell id="s5" value="5 &#183; converge&#10;delete surplus grants &#183; deprecate departed nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="650" y="336" width="250" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="s6" value="6 &#183; CALL pgmi_test()&#10;catalog invariants &#8212; gate the commit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="650" y="394" width="250" height="46" as="geometry" />
         </mxCell>
         <mxCell id="catalog" value="catalog&#10;role&#10;permission&#10;role_permission" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="930" y="196" width="110" height="108" as="geometry" />
+          <mxGeometry x="960" y="300" width="90" height="108" as="geometry" />
         </mxCell>
         <mxCell id="commit" value="COMMIT &#8212; schema and seed land together" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#143d2b;fontColor=#172018;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="680" y="530" width="230" height="48" as="geometry" />
+          <mxGeometry x="680" y="590" width="230" height="48" as="geometry" />
         </mxCell>
         <mxCell id="rail" value="any failure &#8594; whole transaction rolls back&#10;exit 13 &#183; nothing committed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf3e7;strokeColor=#b45309;dashed=1;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="390" y="530" width="250" height="48" as="geometry" />
+          <mxGeometry x="390" y="590" width="250" height="48" as="geometry" />
         </mxCell>
         <mxCell id="e_files" value="loads every file" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.35;entryX=0;entryY=0.4;" edge="1" parent="1" source="repo" target="views">
           <mxGeometry y="22" relative="1" as="geometry" />
@@ -76,7 +79,10 @@
         <mxCell id="e45" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="s4" target="s5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e_load" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="s3" target="catalog">
+        <mxCell id="e56" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="s5" target="s6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_load" value="writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;verticalAlign=bottom;labelBackgroundColor=#fbfaf7;" edge="1" parent="1" source="s5" target="catalog">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e_commit" value="tests pass" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;fontColor=#5d665d;fontSize=10;exitX=0.6;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="steps" target="commit">
