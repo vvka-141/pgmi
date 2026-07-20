@@ -1,0 +1,16 @@
+{
+  "permissions": [
+    {"key": "invoice.read",    "description": "View invoices"},
+    {"key": "invoice.approve", "description": "Approve invoices for payment"},
+    {"key": "report.run",      "description": "Run financial reports"},
+    {"key": "catalog.edit",    "description": "Maintain product catalog entries"}
+  ],
+  "roles": [
+    {"key": "auditor",    "description": "Read-only access for audits",
+     "grants": ["invoice.read", "report.run"]},
+    {"key": "controller", "description": "Approves spending",
+     "grants": ["invoice.read", "invoice.approve", "report.run"]},
+    {"key": "catalog_manager", "description": "Owns the product catalog",
+     "grants": ["catalog.edit"]}
+  ]
+}

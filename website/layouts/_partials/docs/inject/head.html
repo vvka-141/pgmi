@@ -20,3 +20,22 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 {{- end }}
+{{- if eq .Section "articles" }}
+<style>
+  /* Justify long-form article prose; hyphenate to avoid rivers. Docs stay left. */
+  .markdown p,
+  .markdown li {
+    text-align: justify;
+    -webkit-hyphens: auto;
+    hyphens: auto;
+  }
+  .markdown pre,
+  .markdown table,
+  .markdown blockquote,
+  .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
+    text-align: left;
+    -webkit-hyphens: manual;
+    hyphens: manual;
+  }
+</style>
+{{- end }}
