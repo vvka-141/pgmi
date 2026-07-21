@@ -1,6 +1,6 @@
 ---
 title: "From Seed Scripts to Desired-State Reference Data in PostgreSQL"
-date: 2026-07-17
+date: 2026-07-21
 author: "Alexey Evlampiev"
 description: "Why row-oriented seed scripts become brittle when they mix desired data with construction procedure, and how PostgreSQL can validate, diff, load, and reconcile a natural-key catalog inside one transaction."
 weight: 5
