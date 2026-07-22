@@ -8,6 +8,8 @@ weight: 20
 
 # Test PostgreSQL migrations before COMMIT
 
+*Test a migration after it applies but before it commits — and let `COMMIT` depend on the checks.*
+
 *By Alexey Evlampiev*
 
 Most migration pipelines test before deployment or after commit. PostgreSQL

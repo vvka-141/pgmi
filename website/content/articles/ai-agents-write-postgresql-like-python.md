@@ -8,6 +8,8 @@ weight: 10
 
 # AI agents write PostgreSQL like Python
 
+*The Python habits agents carry into PL/pgSQL — exceptions as control flow, casts as trust, validation scattered everywhere — and the handler discipline that contains them.*
+
 *By Alexey Evlampiev*
 
 Give a coding agent a PostgreSQL-first backend to build and it will write you working SQL. It will also, with remarkable consistency, write you *Python* — Python's exception-driven control flow, Python's trust in casts, Python's habit of validating wherever the code happens to be — transliterated into PL/pgSQL, where those idioms carry costs the agent never sees.
