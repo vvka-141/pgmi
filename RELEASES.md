@@ -8,8 +8,7 @@
 > [`.github/RELEASE_NOTES_TEMPLATE.md`](.github/RELEASE_NOTES_TEMPLATE.md).
 > Write for a stranger who arrived from a search result.
 
-<!-- DRAFT — set the real date when tagging. -->
-## v0.12.0 — TBD
+## v0.12.0 — 2026-07-30
 
 **Your deployment script can now run `CREATE INDEX CONCURRENTLY`, and your API routes can declare their own transaction policy** — an isolation floor and a read-only flag that the gateway resolves and opens automatically, with a real retry contract for serialization failures. PostgREST can pin an isolation level per function; we know of nothing that lets a route *declare* read-only + `DEFERRABLE`, enforce the floor server-side even when the proxy misbehaves, publish the policy in OpenAPI, and apply it uniformly across REST, RPC, and MCP — with a documented retry contract for the serialization failures a strong level invites.
 
