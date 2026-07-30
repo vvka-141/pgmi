@@ -219,10 +219,8 @@ including an honest `x-pgmi-replica-safe` hint.
   appended, and libpq stops at the first line whose host, port, database and
   user match — so a common `*:*:*:user:oldpw` kept answering. pgmi printed
   "Saved" and the next connection authenticated with the stale password.
-- **First-hour polish**: failing SQL reports the file line it came from;
-  pgmi's own usage errors exit 2; noisy session-preparation notices are gone;
-  `pgmi init` surfaces `pgmi ai setup` so coding agents discover pgmi's
-  embedded guidance.
+- **Failing SQL reports the file and line it came from**, instead of a
+  position in a script you never wrote.
 
 #### How pgmi itself is built and shipped
 
@@ -246,10 +244,10 @@ including an honest `x-pgmi-replica-safe` hint.
   of four, and described an unsupported version as an error when it is
   negotiated. Agents read this before writing handlers, so stale guidance here
   becomes wrong code.
-- **The docs grew a visual layer**: a capability tour for the advanced
-  template, a five-page MCP section, twelve architecture diagrams, and design
-  records for the decisions people ask about (why session-centric, why no
-  `--dry-run`, why an execution fabric).
+- **The docs grew a visual layer**: a capability tour, a five-page MCP
+  section, twelve architecture diagrams, and design records for the questions
+  people ask (why session-centric, why no `--dry-run`, why an execution
+  fabric).
 
 ### Verification gates
 
