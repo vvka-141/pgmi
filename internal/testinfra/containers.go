@@ -13,7 +13,10 @@ import (
 )
 
 const (
-	PostgresImage    = "alexeye/postgres-azure-flex:17"
+	// Official image only. The whole integration gate resolves through this
+	// name, so a personal namespace being renamed or rate-limited would turn
+	// every DB test into a skip. Nothing here needs more than contrib.
+	PostgresImage    = "postgres:17"
 	PostgresUser     = "postgres"
 	PostgresPassword = "postgres"
 	PostgresDB       = "postgres"

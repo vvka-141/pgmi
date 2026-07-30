@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,7 +13,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/params"
+	"github.com/vvka-141/pgmi/internal/testinfra"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+)
+
+var (
+	loaderContainerOnce sync.Once
+	loaderContainerConn string
+	loaderContainerErr  error
 )
 
 func requireTestDB(t *testing.T) string {
@@ -20,11 +28,32 @@ func requireTestDB(t *testing.T) string {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	conn := os.Getenv("PGMI_TEST_CONN")
-	if conn == "" {
-		t.Skip("PGMI_TEST_CONN not set")
+	if conn := os.Getenv("PGMI_TEST_CONN"); conn != "" {
+		return conn
 	}
-	return conn
+	loaderContainerOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				loaderContainerErr = fmt.Errorf("testcontainer startup panicked: %v", r)
+			}
+		}()
+		container, err := testinfra.StartSimplePostgres(context.Background())
+		if err != nil {
+			loaderContainerErr = err
+			return
+		}
+		loaderContainerConn = container.ConnString
+	})
+	if loaderContainerErr == nil {
+		return loaderContainerConn
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PGMI_REQUIRE_DB"))) {
+	case "", "0", "false", "no":
+		t.Skipf("PGMI_TEST_CONN not set and Docker unavailable: %v", loaderContainerErr)
+	default:
+		t.Fatalf("PGMI_REQUIRE_DB is set but no test database is available: %v", loaderContainerErr)
+	}
+	return ""
 }
 
 func createTestDB(t *testing.T, connString, dbName string) func() {
@@ -589,5 +618,139 @@ func TestInsertFiles_ContentPreservation_Internal(t *testing.T) {
 	}
 	if stored != largeContent {
 		t.Errorf("Content mismatch: expected %d bytes, got %d bytes", len(largeContent), len(stored))
+	}
+}
+
+// sortKeys is optional in <pgmi-meta>. Absent, it parses to a nil slice, and
+// pgx sends a nil slice as SQL NULL — which _pgmi_source_metadata.sort_keys
+// rejects, failing the whole deploy with a raw 23502 before any SQL ran:
+//
+//	failed to insert metadata for file ./m/f.sql: ERROR: null value in column
+//	"sort_keys" ... violates not-null constraint (SQLSTATE 23502)
+//
+// The column defaults to '{}' precisely for this, and pgmi_plan_view's
+// NULLIF(m.sort_keys, '{}') fallback is written for it: a file with metadata
+// but no sort keys orders by its own path. NULL defeated both.
+//
+// Reproduced against PG 17.10 with a minimal id-only metadata block — the
+// documented way to give a script a stable identity without pinning its order.
+func TestInsertMetadata_AbsentSortKeysStoresEmptyArray(t *testing.T) {
+	connString := requireTestDB(t)
+	testDB := "pgmi_itest_ldr_nosortkeys"
+	cleanup := createTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := connectToTestDB(t, connString, testDB)
+	defer pool.Close()
+
+	conn := acquireWithSchema(t, pool)
+	defer conn.Release()
+
+	ctx := context.Background()
+	l := NewLoader()
+
+	for _, tc := range []struct {
+		name     string
+		sortKeys []string
+	}{
+		{"no sortKeys element at all", nil},
+		{"empty sortKeys element", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "./m/" + strings.ReplaceAll(tc.name, " ", "_") + ".sql"
+			files := []pgmi.FileMetadata{{
+				Path: path, Content: "SELECT 1;",
+				Checksum:    "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+				ChecksumRaw: "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+				Metadata: &pgmi.ScriptMetadata{
+					ID: uuid.New(), Idempotent: true,
+					SortKeys:    tc.sortKeys,
+					Description: "identity only",
+				},
+			}}
+
+			if err := l.insertFiles(ctx, conn, files); err != nil {
+				t.Fatalf("insertFiles: %v", err)
+			}
+			if err := l.insertMetadata(ctx, conn, files); err != nil {
+				t.Fatalf("insertMetadata rejected metadata without sort keys: %v", err)
+			}
+
+			var stored []string
+			if err := conn.QueryRow(ctx,
+				`SELECT sort_keys FROM pg_temp._pgmi_source_metadata WHERE path = $1`,
+				path).Scan(&stored); err != nil {
+				t.Fatalf("read back sort_keys: %v", err)
+			}
+			if stored == nil {
+				t.Error("sort_keys stored as NULL; the plan view's NULLIF fallback needs '{}'")
+			}
+			if len(stored) != 0 {
+				t.Errorf("sort_keys = %v, want empty", stored)
+			}
+		})
+	}
+}
+
+// Autovacuum never sees a temp table, so unless loading analyzes them the
+// planner builds every deploy.sql query on default estimates. Measured on a
+// 20-directory project: pgmi_test_plan took 546ms per call without statistics
+// and 1.8ms with them, on every deploy.
+func TestLoadFilesIntoSession_AnalyzesSessionTables_Internal(t *testing.T) {
+	connString := requireTestDB(t)
+	testDB := "pgmi_itest_ldr_analyze"
+	cleanup := createTestDB(t, connString, testDB)
+	defer cleanup()
+
+	pool := connectToTestDB(t, connString, testDB)
+	defer pool.Close()
+
+	conn := acquireWithSchema(t, pool)
+	defer conn.Release()
+
+	ctx := context.Background()
+	l := NewLoader()
+
+	files := []pgmi.FileMetadata{
+		{
+			Path: "./a.sql", Content: "SELECT 1;", Extension: ".sql",
+			Checksum:    "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+			ChecksumRaw: "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+		},
+		{
+			Path: "./__test__/test_a.sql", Content: "SELECT 1;", Extension: ".sql",
+			Checksum:    "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+			ChecksumRaw: "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+		},
+	}
+
+	if err := l.LoadFilesIntoSession(ctx, conn, files); err != nil {
+		t.Fatalf("LoadFilesIntoSession failed: %v", err)
+	}
+
+	// pg_stats holds a row per analyzed column, and nothing at all for a table
+	// the planner has no statistics for.
+	for _, table := range []string{"_pgmi_source", "_pgmi_test_source", "_pgmi_test_directory"} {
+		var cols int
+		err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stats
+			WHERE tablename = $1
+			  AND schemaname = (SELECT nspname FROM pg_namespace
+			                    WHERE oid = pg_my_temp_schema())`, table).Scan(&cols)
+		if err != nil {
+			t.Fatalf("querying pg_stats for %s: %v", table, err)
+		}
+		// ANALYZE produces no pg_stats rows for an empty table, so an
+		// incomplete fixture would make the check above pass vacuously.
+		var rows int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_temp."+table).Scan(&rows); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		if rows == 0 {
+			t.Fatalf("%s is empty, so this test proves nothing about it", table)
+		}
+		if cols == 0 {
+			t.Errorf("%s has %d rows but no planner statistics after loading", table, rows)
+		}
 	}
 }

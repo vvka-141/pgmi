@@ -15,7 +15,7 @@ import (
 )
 
 // Scanner discovers and processes files from a directory tree.
-// All file types are loaded into pg_temp.pgmi_source; use is_sql_file column
+// All file types are loaded into pg_temp._pgmi_source; use is_sql_file column
 // to filter SQL files in deploy.sql if needed.
 // Scanner is safe for concurrent use by multiple goroutines as long as
 // the provided calculator and fsProvider are also thread-safe.
@@ -66,7 +66,11 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 	// Open the directory using the filesystem provider
 	dir, err := s.fsProvider.Open(sourcePath)
 	if err != nil {
-		return pgmi.FileScanResult{}, fmt.Errorf("failed to open directory: %w", err)
+		// A project path that does not exist, or is a file, is invalid
+		// configuration — exit 10. The deploy path already reported it that way
+		// through ValidateDeploySQL, but `pgmi metadata plan|validate|scaffold`
+		// call this directly, so the same mistake exited 1 there.
+		return pgmi.FileScanResult{}, fmt.Errorf("failed to open directory: %w: %w", err, pgmi.ErrInvalidConfig)
 	}
 
 	var files []pgmi.FileMetadata
@@ -84,15 +88,18 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 
 		relPath := file.RelativePath()
 
+		if isExcludedPath(relPath) {
+			return nil
+		}
+
 		// Exclude only the root deploy.sql (not nested ones like examples/deploy.sql)
 		if strings.ToLower(relPath) == "deploy.sql" {
 			return nil
 		}
 
-		// Process the file
 		fileMetadata, err := s.processFile(file)
 		if err != nil {
-			return fmt.Errorf("failed to process file %s: %w", relPath, err)
+			return err
 		}
 
 		files = append(files, fileMetadata)
@@ -108,23 +115,59 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 	}, nil
 }
 
-// processFile reads a file and generates its metadata.
-// For SQL files, it also extracts and validates PGMI metadata from <pgmi:meta> XML blocks.
-func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
-	// Read file content
-	content, err := file.ReadContent()
-	if err != nil {
-		return pgmi.FileMetadata{}, fmt.Errorf("failed to read file: %w", err)
-	}
+// excludedDirs are directories whose contents are tooling artifacts rather than
+// project files. They are matched by exact name, unlike dot-directories which
+// are matched by prefix.
+var excludedDirs = map[string]bool{
+	"node_modules": true,
+	"__pycache__":  true,
+}
 
+// isExcludedPath reports whether a file lies under a directory pgmi does not
+// load: any dot-directory (.git, .venv, .idea, .claude) or a known tooling
+// cache. Discovery decides what enters the session, never what SQL runs, so
+// this stays on the infrastructure side of the execution-fabric line.
+//
+// pgmi's own dunder directories (__test__, __tests__) are deliberately not
+// excluded — only the exact names above are.
+func isExcludedPath(relPath string) bool {
+	for segment := range strings.SplitSeq(filepath.ToSlash(relPath), "/") {
+		if segment == "" || segment == "." {
+			continue
+		}
+		if strings.HasPrefix(segment, ".") || excludedDirs[segment] {
+			return true
+		}
+	}
+	return false
+}
+
+// processFile reads a file and generates its metadata.
+// For SQL files, it also extracts and validates PGMI metadata from <pgmi-meta> XML blocks.
+// Every error returned here names the offending file in ./ form, so callers
+// must not wrap with a path of their own — three layers each restating the
+// same file, one of them in OS separators, is what this replaced.
+func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	info := file.Info()
-	relativePath := file.RelativePath()
 
 	// Convert path to Unix-style (forward slashes) and ensure ./ prefix
-	unixPath := filepath.ToSlash(relativePath)
+	unixPath := filepath.ToSlash(file.RelativePath())
 	if !strings.HasPrefix(unixPath, "./") {
 		unixPath = "./" + unixPath
 	}
+
+	content, err := file.ReadContent()
+	if err != nil {
+		return pgmi.FileMetadata{}, fmt.Errorf("failed to read %s: %w", unixPath, err)
+	}
+
+	// A BOM is valid UTF-8, so it survives the checks below and reaches
+	// PostgreSQL glued to the first keyword: EXECUTE on such a file reports a
+	// syntax error naming a keyword that looks correct, because the BOM before
+	// it is invisible. Windows editors write one by default. Stripping it here
+	// — before the checksums and the metadata parse — also keeps a script's
+	// identity from changing just because someone opened it in another editor.
+	content = bytes.TrimPrefix(content, utf8BOM)
 
 	// Extract directory from normalized path
 	// Don't use path.Dir as it removes ./ prefix; instead split on last /
@@ -138,10 +181,7 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 
 	// Calculate depth (number of directory segments after ./)
 	// e.g., "./" = 0, "./migrations/" = 1, "./__test__/auth/" = 2
-	depth := strings.Count(directory, "/") - 1
-	if depth < 0 {
-		depth = 0
-	}
+	depth := max(strings.Count(directory, "/")-1, 0)
 
 	// Extract filename and extension
 	filename := info.Name()
@@ -160,7 +200,7 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	// time. Fail early with the offending path — pgmi projects are text/source
 	// trees.
 	if bytes.IndexByte(content, 0) >= 0 {
-		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text and does not support binary files", unixPath)
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text, so move this file outside the project path or into a hidden directory", unixPath)
 	}
 	if !utf8.Valid(content) {
 		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text", unixPath)
@@ -175,8 +215,8 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		if err != nil {
 			// Check if this is a "no metadata" error (not fatal)
 			if !errors.Is(err, metadata.ErrNoMetadata) {
-				// Invalid metadata found - fail fast with precise error
-				return pgmi.FileMetadata{}, fmt.Errorf("metadata error in %s: %w", unixPath, err)
+				// ExtractAndValidate was handed unixPath and names it itself.
+				return pgmi.FileMetadata{}, err
 			}
 			// No metadata found - this is OK, file will use fallback identity
 		} else {
@@ -207,6 +247,16 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 
 // ValidateDeploySQL checks if deploy.sql exists in the source directory.
 func (s *Scanner) ValidateDeploySQL(sourcePath string) error {
+	pathInfo, pathErr := s.fsProvider.Stat(sourcePath)
+	if pathErr != nil {
+		// "%s" not %q: %q escapes the separators in a Windows path, and a path
+		// the user cannot paste back into a shell is not a remediation.
+		return fmt.Errorf("project path \"%s\" does not exist: %w", sourcePath, pgmi.ErrInvalidConfig)
+	}
+	if !pathInfo.IsDir() {
+		return fmt.Errorf("\"%s\" is a file; pass the project directory: %w", sourcePath, pgmi.ErrInvalidConfig)
+	}
+
 	deploySQLPath := filepath.Join(sourcePath, "deploy.sql")
 	info, err := s.fsProvider.Stat(deploySQLPath)
 	if err != nil {
@@ -229,7 +279,27 @@ func (s *Scanner) ReadDeploySQL(sourcePath string) (string, error) {
 		return "", fmt.Errorf("failed to read deploy.sql: %w", err)
 	}
 
+	content = bytes.TrimPrefix(content, utf8BOM)
+
+	if !utf8.Valid(content) {
+		offset := findInvalidUTF8(content)
+		return "", fmt.Errorf("deploy.sql is not valid UTF-8 (first invalid byte at offset %d); re-save the file as UTF-8 without BOM", offset)
+	}
+
 	return string(content), nil
+}
+
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+func findInvalidUTF8(b []byte) int {
+	for i := 0; i < len(b); {
+		r, size := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && size <= 1 {
+			return i
+		}
+		i += size
+	}
+	return len(b)
 }
 
 // Verify Scanner implements the interface at compile time

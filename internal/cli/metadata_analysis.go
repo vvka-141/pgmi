@@ -2,13 +2,13 @@ package cli
 
 import (
 	"cmp"
-	"path/filepath"
 	"slices"
 
 	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/metadata"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // MetadataPlanEntry is one file in execution-order plan output.
@@ -45,12 +45,20 @@ func planProject(projectPath string) (MetadataPlanResult, error) {
 
 	plan := make([]MetadataPlanEntry, 0, len(scanResult.Files))
 	for _, file := range scanResult.Files {
+		if !pgmi.IsSQLExtension(file.Extension) || pgmi.IsTestPath(file.Path) {
+			continue
+		}
 		if file.Metadata == nil {
 			plan = append(plan, MetadataPlanEntry{
-				Path:        file.Path,
-				ID:          metadata.GenerateFallbackID(file.Path).String(),
+				Path: file.Path,
+				ID:   metadata.GenerateFallbackID(file.Path).String(),
+				// The full path, not the base name: pgmi_plan_view falls back
+				// to ARRAY[s.path]. With the base name this command reported
+				// the opposite order from the deploy whenever unmetadata'd
+				// files sat in different directories — ./a/002.sql before
+				// ./b/001.sql at runtime, after it here.
 				Idempotent:  true,
-				SortKeys:    []string{filepath.Base(file.Path)},
+				SortKeys:    []string{file.Path},
 				Description: "No metadata (fallback)",
 			})
 			continue

@@ -226,6 +226,29 @@ func TestCreateProject_RefusesNonEmptyDirectory(t *testing.T) {
 	if !strings.Contains(errMsg, "not empty") {
 		t.Errorf("Error message should mention 'not empty', got: %s", errMsg)
 	}
+
+	// Refusing is the signal; leaving the directory alone is the point. A
+	// scaffolder that wrote the template first and noticed the directory was
+	// occupied afterwards satisfies both checks above while overwriting
+	// whatever was already there — deploy.sql included, since that is the one
+	// filename the template is guaranteed to write.
+	if got, err := os.ReadFile(existingFile); err != nil {
+		t.Errorf("the existing file is gone after a refused scaffold: %v", err)
+	} else if string(got) != "existing content" {
+		t.Errorf("the existing file was rewritten: %q", string(got))
+	}
+
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		t.Fatalf("reading the target directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "existing.txt" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the refused scaffold left files behind: %v", names)
+	}
 }
 
 // TestCreateProject_AcceptsEmptyDirectory tests that CreateProject works with empty directories

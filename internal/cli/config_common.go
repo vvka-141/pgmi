@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -112,7 +113,7 @@ func loadMergedParameters(
 
 	cliParams, err := params.ParseKeyValuePairs(cliParamPairs)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameter format: %w", err)
+		return nil, fmt.Errorf("%w: invalid parameter format: %w", pgmi.ErrInvalidConfig, err)
 	}
 	maps.Copy(parameters, cliParams)
 
@@ -132,7 +133,10 @@ func resolveEffectiveTimeout(
 	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
 		parsed, err := time.ParseDuration(projectCfg.Timeout)
 		if err != nil {
-			return 0, fmt.Errorf("invalid timeout in pgmi.yaml: %w", err)
+			// ErrInvalidConfig so a bad value in pgmi.yaml exits 10, like every
+			// other fault in that file — an unknown field, a port that is not a
+			// number, a connection block that is a scalar. This one exited 1.
+			return 0, fmt.Errorf("invalid timeout in pgmi.yaml: %w: %w", err, pgmi.ErrInvalidConfig)
 		}
 		return parsed, nil
 	}
@@ -143,13 +147,30 @@ func resolveEffectiveTimeout(
 // .env is project-scoped (sourcePath/.env), never the process CWD, so the
 // resolved target and credentials match the project being deployed.
 // Returns nil config if pgmi.yaml does not exist (not an error).
-func loadProjectConfig(sourcePath string, verbose bool) (*config.ProjectConfig, error) {
+func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
 	envPath := filepath.Join(sourcePath, ".env")
-	if err := godotenv.Load(envPath); err != nil && verbose {
-		// A missing .env is normal and stays silent; surface only a real parse
-		// error (file present but unreadable/malformed) so it isn't lost.
+	if err := godotenv.Load(envPath); err != nil {
+		// A missing .env is normal and stays silent. A .env that exists but
+		// does not parse is not: godotenv is all-or-nothing, so one stray line
+		// discards the whole file and the PGPASSWORD or PGDATABASE someone put
+		// there is simply absent. The deploy then fails with an unrelated
+		// complaint — "database name is required" — and sends them looking for
+		// a missing -d.
+		//
+		// This used to print only under --verbose, which is exactly when
+		// nobody is looking: you reach for --verbose after the confusing
+		// error, not before it.
+		//
+		// The underlying error is deliberately NOT included. godotenv reports
+		// the text surrounding the parse failure ("... near \"<file
+		// content>\""), and a .env is where PGPASSWORD lives — printing it
+		// would put the credential on stderr and into CI logs. The path plus
+		// the format rule is enough to act on.
 		if _, statErr := os.Stat(envPath); statErr == nil {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] failed to load %s: %v\n", envPath, err)
+			fmt.Fprintf(os.Stderr,
+				"WARNING: %s could not be parsed, so none of its values were applied.\n"+
+					"Every line must be KEY=VALUE, a # comment, or blank.\n",
+				envPath)
 		}
 	}
 
@@ -158,7 +179,7 @@ func loadProjectConfig(sourcePath string, verbose bool) (*config.ProjectConfig, 
 		if errors.Is(err, config.ErrConfigNotFound) {
 			return nil, nil // Config file not found is not an error
 		}
-		return nil, fmt.Errorf("failed to load pgmi.yaml: %w", err)
+		return nil, fmt.Errorf("%w: failed to load pgmi.yaml: %w", pgmi.ErrInvalidConfig, err)
 	}
 	return projectCfg, nil
 }
@@ -196,20 +217,20 @@ func saveConnectionToConfig(sourcePath string, connConfig *pgmi.ConnectionConfig
 	}
 
 	cfg.Connection = config.ConnectionConfig{
-		Host:               connConfig.Host,
-		Port:               connConfig.Port,
-		Username:           connConfig.Username,
-		Database:           connConfig.Database,
-		ManagementDatabase: managementDB,
-		SSLMode:            connConfig.SSLMode,
-		SSLCert:            connConfig.SSLCert,
-		SSLKey:             connConfig.SSLKey,
-		SSLRootCert:        connConfig.SSLRootCert,
-		AuthMethod:         authMethodToString(connConfig.AuthMethod),
-		AzureTenantID:      connConfig.AzureTenantID,
-		AzureClientID:      connConfig.AzureClientID,
-		AWSRegion:          connConfig.AWSRegion,
-		GoogleInstance:     connConfig.GoogleInstance,
+		Host:                connConfig.Host,
+		Port:                connConfig.Port,
+		Username:            connConfig.Username,
+		Database:            connConfig.Database,
+		MaintenanceDatabase: managementDB,
+		SSLMode:             connConfig.SSLMode,
+		SSLCert:             connConfig.SSLCert,
+		SSLKey:              connConfig.SSLKey,
+		SSLRootCert:         connConfig.SSLRootCert,
+		AuthMethod:          authMethodToString(connConfig.AuthMethod),
+		AzureTenantID:       connConfig.AzureTenantID,
+		AzureClientID:       connConfig.AzureClientID,
+		AWSRegion:           connConfig.AWSRegion,
+		GoogleInstance:      connConfig.GoogleInstance,
 	}
 
 	data, err := yaml.Marshal(cfg)
@@ -251,7 +272,7 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 
 		fileContent, err := fsProvider.ReadFile(paramsFile)
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy ./migrations --database mydb --param key=value", pgmi.ErrInvalidConfig, paramsFile, err)
+			return nil, fmt.Errorf("%w: failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value", pgmi.ErrInvalidConfig, paramsFile, err)
 		}
 
 		fileParams, err := params.ParseEnvFile(fileContent)
@@ -267,4 +288,16 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 	}
 
 	return parameters, nil
+}
+
+func validateSSLMode(mode string) error {
+	if mode == "" {
+		return nil
+	}
+	if !slices.Contains(sslModes, mode) {
+		return fmt.Errorf("invalid --sslmode %q (valid: %s): %w",
+			mode, "disable, allow, prefer, require, verify-ca, verify-full",
+			pgmi.ErrInvalidConfig)
+	}
+	return nil
 }

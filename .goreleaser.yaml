@@ -69,7 +69,17 @@ release:
   draft: false
   prerelease: auto
   name_template: "pgmi {{.Tag}}"
+  # A release page is a public surface strangers reach from search and release
+  # feeds. Lead with what they can now do (RELEASE_SUMMARY, lifted from
+  # RELEASES.md by scripts/release-notes.sh), then how to install it. The
+  # auto-generated commit log goes last, collapsed — the <details> opens at the
+  # end of this header and closes at the start of the footer, wrapping the
+  # changelog GoReleaser injects between them.
   header: |
+    {{ if index .Env "RELEASE_SUMMARY" }}{{ .Env.RELEASE_SUMMARY }}
+
+    ---
+    {{ end }}
     ## Quick Install
 
     **macOS / Linux:**
@@ -98,7 +108,8 @@ release:
     go install github.com/vvka-141/pgmi/cmd/pgmi@latest
     ```
 
-    **Manual download:** grab the archive for your platform from the assets below.
+    <details>
+    <summary><b>Manual download</b> — archives for every platform</summary>
 
     | Platform | amd64 | arm64 |
     |----------|-------|-------|
@@ -106,12 +117,18 @@ release:
     | macOS | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_amd64.tar.gz) | [tar.gz](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_darwin_arm64.tar.gz) |
     | Windows | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_amd64.zip) | [zip](https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_windows_arm64.zip) |
 
+    Verify the download: `sha256sum -c checksums.txt`
+
+    </details>
+
+    <details>
+    <summary><b>All changes</b> — commit log with ticket references</summary>
+
   footer: |
+
+    </details>
+
     ---
-    **Verify download integrity:**
-    ```
-    sha256sum -c checksums.txt
-    ```
 
     **Full changelog**: https://github.com/vvka-141/pgmi/compare/{{ .PreviousTag }}...{{ .Tag }}
 

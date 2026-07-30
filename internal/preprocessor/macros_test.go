@@ -41,6 +41,14 @@ func TestMacroDetector_IgnoresLiteralsAndComments(t *testing.T) {
 			name:  "inside block comment",
 			input: `/* reminder: CALL pgmi_test(); */ SELECT 1;`,
 		},
+		{
+			name:  "inside an E-string past a backslash-escaped quote",
+			input: `EXECUTE E'x\'; CALL pgmi_test();';`,
+		},
+		{
+			name:  "inside a quoted identifier",
+			input: `SELECT 1 AS "CALL pgmi_test();";`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -551,6 +559,43 @@ func TestMacroDetector_Detect_OrderPreserved(t *testing.T) {
 			t.Errorf("Macros not in ascending order: macros[%d].StartPos=%d <= macros[%d].StartPos=%d",
 				i, macros[i].StartPos, i-1, macros[i-1].StartPos)
 		}
+	}
+}
+
+func TestMacroDetector_MultiByteWordBoundary(t *testing.T) {
+	stripper := NewCommentStripper()
+	detector := NewMacroDetector()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "non-breaking space boundary",
+			input: " CALL pgmi_test();",
+		},
+		{
+			name:  "em-dash boundary",
+			input: "—CALL pgmi_test();",
+		},
+		{
+			name:  "CJK character boundary",
+			input: "一CALL pgmi_test();",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mask := stripper.RedactForMacros(tt.input)
+			macros := detector.Detect(tt.input, mask)
+			if len(macros) != 1 {
+				t.Fatalf("expected 1 macro, got %d", len(macros))
+			}
+			got := tt.input[macros[0].StartPos:macros[0].EndPos]
+			if !strings.HasPrefix(got, "CALL") {
+				t.Errorf("sliced text should start with CALL, got %q", got)
+			}
+		})
 	}
 }
 

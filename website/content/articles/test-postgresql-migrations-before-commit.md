@@ -282,7 +282,7 @@ deployment tool I built. It loads your project files into session-scoped
 temporary tables and executes the `deploy.sql` *you* write, which queries
 those files and orchestrates everything — including the test gate:
 
-![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.png)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback](https://vvka-141.github.io/pgmi/docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
 Tests live in `__test__/` directories next to migrations. A
 `CALL pgmi_test()` macro in deploy.sql expands — before the SQL reaches
@@ -308,7 +308,7 @@ nothing creates — and deploy to a fresh database:
 
 ```text
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ Failed after 1.99s — see error above
+✗ Failed after 1.99s
 pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 

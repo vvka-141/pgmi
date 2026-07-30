@@ -37,10 +37,10 @@ pgmi connects, loads project files into pg_temp tables, loads CLI parameters,
 then executes deploy.sql. Transactions, ordering, and idempotency are decided
 by deploy.sql, not by pgmi.
 
-  pgmi deploy ./migrations -d mydb
-  pgmi deploy ./migrations -d mydb --overwrite --force
-  pgmi deploy ./migrations -d mydb --params-file prod.env
-  pgmi deploy ./migrations -d mydb --param env=prod --param version=1.2.3
+  pgmi deploy . -d mydb
+  pgmi deploy . -d mydb --overwrite --force
+  pgmi deploy . -d mydb --params-file prod.env
+  pgmi deploy . -d mydb --param env=prod --param version=1.2.3
 
 Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
 string. Cloud auth: --azure, --aws, --google (no password needed).
@@ -70,6 +70,14 @@ type deployFlagValues struct {
 
 var deployFlags deployFlagValues
 
+// Seams for the connection-wizard branch. tui.IsInteractive() is hard-false
+// under `go test`, so without these the branch — and the exit-12 a cancelled
+// wizard produces — cannot be reached from a test at all.
+var (
+	isInteractive       = tui.IsInteractive
+	runConnectionWizard = runDeployWizard
+)
+
 func init() {
 	rootCmd.AddCommand(deployCmd)
 
@@ -79,17 +87,16 @@ func init() {
 	// Connection string flag (mutually exclusive with granular flags)
 	deployCmd.Flags().StringVar(&deployFlags.connection, "connection", "",
 		"PostgreSQL connection string (URI or ADO.NET format).\n"+
-			"The database in the connection string is used for CREATE DATABASE operations.\n"+
+			"Its database is the maintenance database for CREATE DATABASE, and also the\n"+
+			"deploy target unless -d says otherwise. It outranks pgmi.yaml's\n"+
+			"connection.database, so a string ending in /postgres deploys into postgres.\n"+
 			"Mutually exclusive with granular flags (--host, --port, --username).\n"+
 			"Alternative: Use PGMI_CONNECTION_STRING or DATABASE_URL environment variable.\n"+
 			"Example: postgresql://user:pass@localhost:5432/postgres")
 
 	// Granular connection flags (PostgreSQL standard)
 	// Precedence: flag > environment variable > default
-	// --host has no short form: cobra reserves -h for --help, which users
-	// expect universally (kubectl, gh, git, docker). --host is typed once
-	// per run, not per-invocation like in psql — the GNU help convention wins.
-	deployCmd.Flags().StringVar(&deployFlags.host, "host", "",
+	deployCmd.Flags().StringVarP(&deployFlags.host, "host", "h", "",
 		"PostgreSQL server host\n"+
 			"Precedence: --host > $PGHOST > localhost")
 	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
@@ -145,7 +152,8 @@ func init() {
 	// Deployment workflow flags
 	deployCmd.Flags().BoolVar(&deployFlags.overwrite, "overwrite", false,
 		"Drop and recreate the database\n"+
-			"Requires interactive confirmation unless --force is used")
+			"Requires interactive confirmation unless --force is used\n"+
+			"Without a terminal and without --force, pgmi refuses (exit 12) rather than prompting")
 	deployCmd.Flags().BoolVar(&deployFlags.force, "force", false,
 		"Never block on an interactive prompt (for CI/CD; no-op when nothing would prompt)\n"+
 			"With --overwrite: replaces the approval prompt with a 5-second countdown (Ctrl-C aborts)\n"+
@@ -164,8 +172,9 @@ func init() {
 	deployCmd.Flags().DurationVar(&deployFlags.timeout, "timeout", 3*time.Minute,
 		"Catastrophic failure protection timeout (default 3m)\n"+
 			"Prevents indefinite hangs from network issues or deadlocks\n"+
+			"Use 0 to disable the limit\n"+
 			"For query-level timeouts, use SET statement_timeout in SQL\n"+
-			"Examples: 30s, 5m, 1h30m")
+			"Examples: 30s, 5m, 1h30m, 0")
 
 	// Compatibility level flag
 	deployCmd.Flags().StringVar(&deployFlags.compat, "compat", "",
@@ -177,14 +186,25 @@ func init() {
 		"Emit structured JSON to stdout after deployment")
 }
 
+func deadlineContext(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d == 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, d)
+}
+
 // buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
 func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
+	if err := validateSSLMode(deployFlags.sslMode); err != nil {
+		return pgmi.DeploymentConfig{}, err
+	}
+
 	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
 
-	targetDB, err := resolveTargetDatabase(deployFlags.database, connConfig.Database, true, "deploy", verbose)
+	targetDB, err := resolveTargetDatabase(deployFlags.database, connConfig.Database, verbose)
 	if err != nil {
 		return pgmi.DeploymentConfig{}, err
 	}
@@ -237,20 +257,21 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		}
 	}()
 
-	projectCfg, err := loadProjectConfig(sourcePath, verbose)
+	projectCfg, err := loadProjectConfig(sourcePath)
 	if err != nil {
 		return err
 	}
 
 	// Check if we need to run the connection wizard
-	if needsConnectionWizard(projectCfg) && tui.IsInteractive() && !deployFlags.force {
-		wizardConfig, err := runDeployWizard(sourcePath)
+	if needsConnectionWizard(projectCfg) && isInteractive() && !deployFlags.force {
+		wizardConfig, err := runConnectionWizard(sourcePath)
 		if err != nil {
 			return err
 		}
 		if wizardConfig == nil {
-			// User cancelled
-			return nil
+			// A cancelled wizard deployed nothing; exiting 0 would report
+			// success to a caller that got no deployment.
+			return fmt.Errorf("%w: connection setup cancelled", pgmi.ErrApprovalDenied)
 		}
 		// Merge wizard results into flags for buildDeploymentConfig
 		applyWizardConfig(wizardConfig)
@@ -261,14 +282,8 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	// Create dependencies
-	// Select approver implementation based on --force flag
-	var approver pgmi.Approver
-	if deployFlags.force {
-		approver = ui.NewForcedApprover(verbose)
-	} else {
-		approver = ui.NewInteractiveApprover(verbose)
-	}
+	approver := selectApprover(deployFlags.force, isInteractive(), verbose)
+
 	logger := logging.NewConsoleLogger(verbose)
 	fileScanner := scanner.NewScanner(checksum.New())
 	fileLoader := loader.NewLoader()
@@ -292,8 +307,7 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		dbManager,
 	)
 
-	// Setup context with timeout and signal handling for graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	ctx, cancel := deadlineContext(context.Background(), config.Timeout)
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
@@ -335,41 +349,65 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	err = deployer.Deploy(ctx, config)
+	err, jsonEmitted = finishDeploy(deployer.LastResult(), err,
+		interrupted.Load(), deployFlags.jsonOutput)
+	return err
+}
 
-	// Print summary / JSON output
-	if result := deployer.LastResult(); result != nil {
-		if deployFlags.jsonOutput {
+// finishDeploy resolves the error the process will exit on, then reports the
+// run. The order is the point: printDeployJSON derives "status" and "exitCode"
+// from the error it is handed, so reporting before the interrupt is folded in
+// publishes {"status":"success","exitCode":0} for a run that exits 130.
+//
+// On SIGINT it surfaces context.Canceled so ExitCodeForError maps to 130. The
+// deployer may return nil or an unrelated wrap; either way a user Ctrl-C must
+// not exit 0.
+func finishDeploy(result *services.DeployResult, deployErr error, interrupted, jsonOutput bool) (err error, jsonEmitted bool) {
+	err = deployErr
+	if interrupted {
+		switch {
+		case err == nil:
+			err = context.Canceled
+		case !errors.Is(err, context.Canceled):
+			err = fmt.Errorf("%w: %w", context.Canceled, err)
+		}
+	}
+
+	if result != nil {
+		if jsonOutput {
 			printDeployJSON(result, err)
 			jsonEmitted = true
 		} else {
 			printDeploySummary(result, err)
 		}
 	}
-
-	// If we cancelled due to SIGINT, surface context.Canceled so ExitCodeForError
-	// maps to 130 (ExitInterrupted). Deployer may return nil or an unrelated wrap;
-	// either way, a user Ctrl-C must not exit 0.
-	if interrupted.Load() {
-		if err == nil {
-			return context.Canceled
-		}
-		if !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("%w: %w", context.Canceled, err)
-		}
-	}
-	return err
+	return err, jsonEmitted
 }
 
+// printDeploySummary names the target database on every run, not only when it
+// had to be created. "Database %q does not exist; creating" used to be the only
+// line mentioning a database, so a deploy that landed somewhere the user did not
+// intend — a connection string ending in /postgres outranking pgmi.yaml — said
+// nothing to contradict the wrong mental model.
 func printDeploySummary(result *services.DeployResult, deployErr error) {
 	d := fmt.Sprintf("%.2fs", result.Duration.Seconds())
+	target := result.Database
+	if target == "" {
+		target = "?"
+	}
 	if deployErr == nil {
 		parts := fmt.Sprintf("%d files loaded", result.FilesLoaded)
 		if result.TestMacros > 0 {
 			parts += fmt.Sprintf(", %d test macro(s) expanded", result.TestMacros)
 		}
-		fmt.Fprintf(os.Stderr, "%s %s in %s\n", ui.SuccessIcon(), parts, d)
+		fmt.Fprintf(os.Stderr, "%s %s: %s in %s\n", ui.SuccessIcon(), target, parts, d)
 	} else {
-		fmt.Fprintf(os.Stderr, "%s Failed after %s — see error above\n", ui.FailIcon(), d)
+		msg := fmt.Sprintf("failed after %s", d)
+		if result.ExecutionMode == "psql" {
+			msg += fmt.Sprintf(" (unit %d of %d failed; %d earlier unit(s) already committed)",
+				result.UnitsCommitted+1, result.ExecutionUnits, result.UnitsCommitted)
+		}
+		fmt.Fprintf(os.Stderr, "%s %s: %s\n", ui.FailIcon(), target, msg)
 	}
 }
 
@@ -383,6 +421,13 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 		out["testMacros"] = result.TestMacros
 		out["durationMs"] = result.Duration.Milliseconds()
 		out["database"] = result.Database
+		if result.ExecutionUnits > 0 {
+			out["executionUnits"] = result.ExecutionUnits
+			out["unitsCommitted"] = result.UnitsCommitted
+		}
+		if result.ExecutionMode != "" {
+			out["executionMode"] = result.ExecutionMode
+		}
 	}
 	if d := pgmi.NewErrorDetail(deployErr); d != nil {
 		out["status"] = "failed"
@@ -394,10 +439,17 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 			"hint":       d.Hint,
 			"where":      d.Where,
 			"failedFile": d.FailedFile,
+			"script":     d.Script,
+			"sourceLine": d.SourceLine,
 		} {
 			if v != "" {
 				out[k] = v
 			}
+		}
+		if d.Line > 0 {
+			out["line"] = d.Line
+			out["column"] = d.Column
+			out["scriptExpanded"] = d.ScriptExpanded
 		}
 	}
 	jsonBytes, err := json.MarshalIndent(out, "", "  ")
@@ -428,6 +480,22 @@ func needsConnectionWizard(projectCfg *config.ProjectConfig) bool {
 	return true
 }
 
+// selectApprover picks the gate that stands between --overwrite and DROP
+// DATABASE. --force bypasses confirmation. Without a terminal there is nobody
+// to confirm, so refusing beats prompting into a pipe that never answers —
+// that hung for the whole of --timeout and then reported exit 16, "operation
+// exceeded --timeout", for what was a missing --force.
+func selectApprover(force, interactive, verbose bool) pgmi.Approver {
+	switch {
+	case force:
+		return ui.NewForcedApprover(verbose)
+	case !interactive:
+		return ui.NewNonInteractiveApprover()
+	default:
+		return ui.NewInteractiveApprover(verbose)
+	}
+}
+
 // runDeployWizard runs the interactive connection wizard for deploy.
 // Returns the config to use, or nil if user cancelled.
 func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
@@ -451,7 +519,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 	if saveChoice && tui.IsInteractive() {
 		fmt.Fprintln(os.Stderr, "")
 		if tui.PromptContinue("Save this connection to pgmi.yaml for future use?") {
-			if err := saveConnectionToConfig(sourcePath, &connResult.Config, connResult.ManagementDatabase); err != nil {
+			if err := saveConnectionToConfig(sourcePath, &connResult.Config, connResult.MaintenanceDatabase); err != nil {
 				fmt.Fprintf(os.Stderr, "WARNING: failed to save config: %v\n", err)
 			} else {
 				fmt.Fprintf(os.Stderr, "Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))

@@ -1,10 +1,262 @@
 # Releases
 
+> **Writing a release?** Add the section here *before* tagging — CI lifts it to the
+> top of the GitHub release page. The tag build fails if the section is missing or
+> empty, if the heading carries no `YYYY-MM-DD` date, or if a `<!-- DRAFT -->`
+> marker still sits above it, so finish the notes and date the heading as the last
+> step before you tag. The shape and the rules are in
+> [`.github/RELEASE_NOTES_TEMPLATE.md`](.github/RELEASE_NOTES_TEMPLATE.md).
+> Write for a stranger who arrived from a search result.
+
+<!-- DRAFT — set the real date when tagging. -->
+## v0.12.0 — TBD
+
+**Your deployment script can now run `CREATE INDEX CONCURRENTLY`, and your API routes can declare their own transaction policy** — an isolation floor and a read-only flag that the gateway resolves and opens automatically, with a real retry contract for serialization failures. PostgREST can pin an isolation level per function; we know of nothing that lets a route *declare* read-only + `DEFERRABLE`, enforce the floor server-side even when the proxy misbehaves, publish the policy in OpenAPI, and apply it uniformly across REST, RPC, and MCP — with a documented retry contract for the serialization failures a strong level invites.
+
+Two ideas carry this release. First, deploy.sql gains a one-sentence execution contract: *before your first top-level `COMMIT`, pgmi's atomic mode; after it, psql mode* — so zero-downtime phased deployments (schema change → concurrent index → transactional backfill → another index) read top to bottom and actually work. Second, the advanced template's routes become self-governing: declare `minTransactionIsolation` and `readOnly` in handler metadata, and callers just work — no header knowledge required, no way to run below the floor.
+
+### What you can do now
+
+A lock-safe, zero-downtime deployment as one readable file:
+
+```sql
+BEGIN;                                   -- atomic head: schema change + gated tests
+ALTER TABLE orders ADD COLUMN status text NOT NULL DEFAULT 'pending';
+CALL pgmi_test();
+COMMIT;
+
+CREATE INDEX CONCURRENTLY idx_orders_status ON orders (status);   -- psql mode
+
+BEGIN;                                   -- an atomic backfill says so explicitly
+UPDATE orders SET status = 'archived' WHERE created_at < now() - interval '10 years';
+COMMIT;
+```
+
+Runnable end to end in `examples/lock-safe-deploy/`, asserted in CI.
+
+And a route that governs its own transaction:
+
+```sql
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'uri', '^/report$', 'httpMethod', '^GET$', 'name', 'report',
+        'minTransactionIsolation', 'serializable',
+        'readOnly', true, ...),
+    $body$ ... $body$);
+```
+
+The shipped MCP gateway implements this end to end: it resolves the policy
+before `BEGIN` and opens `SERIALIZABLE READ ONLY DEFERRABLE` — which can
+never abort with a serialization failure, so the route needs no retry logic
+at all. Routes that *can* hit `40001` propagate it with the SQLSTATE intact,
+and the gateway retries a fresh transaction with backoff. For REST/RPC, the
+template publishes `api.rest_route_policy` / `api.rpc_route_policy` for the
+reverse proxy you supply to call — and the database refuses dispatch below
+the declared policy either way. OpenAPI advertises every route's policy,
+including an honest `x-pgmi-replica-safe` hint.
+
+### Upgrading
+
+- **The session API contract is unchanged at v1** — existing `deploy.sql`
+  files keep working. Plan ordering is now locale-proof (`COLLATE "C"`), which
+  can reorder plans that previously depended on the server's locale; projects
+  using explicit sortKeys are unaffected.
+- **Execution contract**: statements after your first top-level `COMMIT` now
+  run per-statement (psql mode) instead of inside one implicit block. Scripts
+  with no mid-file top-level `COMMIT` are byte-for-byte unaffected. The
+  scaffolded templates _do_ have one — their DONE banner runs in the tail,
+  which is a no-op; anything you append below that `COMMIT` autocommits. If a
+  later phase must be atomic, write its own `BEGIN ... COMMIT`.
+- **Advanced template vocabulary**: `requiredTransactionIsolation` is now
+  `minTransactionIsolation` (the semantics were always a floor; the name now
+  says so), and the OpenAPI extension is `x-pgmi-min-transaction-isolation`.
+  Databases deployed from earlier templates migrate automatically on the next
+  deploy.
+- **`-h` is now `--host`, not `--help`**, matching psql and the rest of pgmi's
+  connection flags (`-p`, `-U`, `-d`). Use `--help` for help. This closes a
+  trap where `pgmi deploy . -h 127.0.0.1 -d app` printed help and exited 0
+  having deployed nothing.
+- **Hidden files and directories are no longer loaded** into the session,
+  along with `node_modules/` and `__pycache__/`. If your project deliberately
+  kept SQL or data under a dot-directory, move it; everything else is
+  unaffected. `__test__`/`__tests__` are untouched.
+- **The advanced template's customer role no longer inherits the api role.**
+  Redeploying revokes that membership and restricts handler registration to
+  the admin role. If your application logged in as the customer role and
+  called `api.rest_invoke` directly, point it at the api role instead — that
+  path was a privilege escalation to database owner.
+- **A wrong HTTP method on an existing route now returns 405, not 404**, with
+  the mandatory `Allow` header. `HEAD` is served wherever `GET` is. If you
+  asserted 404 for a method mismatch, update the expectation.
+- **Deactivation now takes effect immediately.** A deactivated user, a
+  deactivated organization, and a disabled or expired API key all stop
+  resolving an identity on the next request. An API key also reaches only the
+  organization it was issued for. If anything relied on a key spanning a
+  user's organizations, issue one key per organization.
+- **`api.rest_route_policy`'s `p_version` must match the request.** Prefer the
+  new `api.rest_route_policy_for(method, url, headers)`, which takes the same
+  headers you pass to `rest_invoke` and therefore cannot resolve a different
+  route than dispatch picks.
+- **Route precedence is refreshed on every registration.** Previously
+  `sequence_number` was assigned once and never updated, so a fresh database
+  and an existing one could route differently from identical sources.
+- **`pgmi serve`'s `ai_skills` tool now returns `name` / `description` /
+  `filePath`**, the field names it has always advertised in its output schema;
+  it was emitting `Name` and `Description`. Anything reading those keys from
+  the MCP result needs the lowercase spelling.
+- **`pgmi serve` requires a `protocolVersion` in the handshake.** It used to
+  accept `initialize` with no params at all, while the advanced template's
+  `api.mcp_initialize` rejected the same request — one product, two answers.
+  Both now return `-32602`. A JSON-RPC `id` that is not a string or number,
+  `null` included, returns `-32600` instead of being silently swallowed.
+  Conforming clients send both and are unaffected.
+
+### Also in this release
+
+- **A `BEGIN ATOMIC` function body no longer breaks the atomicity contract.**
+  A SQL-standard function body is not dollar-quoted, so its `END` read as a
+  `COMMIT`: a deploy.sql defining one and no explicit `COMMIT` — the shape the
+  guide calls entirely atomic — silently committed everything up to that
+  function, and a later failure left it applied. After a real `COMMIT` the same
+  body was cut into invalid fragments instead. Such a body is now stepped over
+  whole.
+- **HTTP semantics in the advanced template**: malformed client input returned
+  500 (so 5xx alerting fired on user typos and retry middleware treated a
+  permanently-bad request as retryable) — the whole `22xxx` data-exception
+  class now maps to 400/422. 401s carry the `WWW-Authenticate` challenge RFC
+  9110 makes mandatory, error responses no longer lose `Vary` and the catalog
+  version, 304s stop contradicting the 200 they revalidate, and `Accept`
+  honours `q=0` as the refusal it is.
+- **`autoLog: false` is honored when the handler fails.** It was applied on
+  success and dropped on the error path, where the logged request carries
+  headers and body — so a `POST /login` marked `autoLog: false` persisted
+  plaintext credentials on any constraint violation.
+- **Soft-deleted handlers stop serving traffic.** They were already absent
+  from the OpenAPI document while all eleven gateway and discovery lookups
+  still dispatched them: invisible in the contract, live in production.
+- **Redeploying no longer destroys user objects.** `lib/common/encoding.sql`
+  is idempotent and ran `DROP TYPE ... CASCADE` on every deploy; CASCADE
+  cannot tell the template's own casts from a column, view or function you
+  typed `common.utf8`. The casts are now dropped by name.
+- **Every shipped example route was a prefix catch-all.** A doubled backslash
+  collapsed the query-string group to `.*`, so `/healthz` was served by the
+  `/health` handler and `/hello/admin` by `/hello`. Registration now rejects
+  an unanchored pattern.
+- **The deploy lock is released even when a tail transaction fails.** The
+  unlock ran in an aborted transaction, where it silently did nothing, so the
+  lock lived until the server processed the disconnect — and an immediate
+  re-run could fail with exit 15.
+- **A deploy to an existing database no longer touches a maintenance
+  database**, so a CI role granted `CONNECT` on only its own database works.
+- **The documented exit-code table now holds.** Configuration errors that
+  landed on exit 1 or 13 return 10, an unknown command returns 2, and
+  `--compat` is validated before `--overwrite` drops anything.
+- **The publishing pipeline installs a pinned CLI.** `cloudsmith-cli` was
+  installed unpinned and then executed with the publication credential in its
+  environment. It is pinned now, and the release token defaults to read-only
+  with write granted solely to the job that publishes.
+- **The MCP guidance shipped in the binary matches the code again.**
+  `pgmi ai skill pgmi-mcp` documented `p_request_id` as `text` for five
+  functions that take `jsonb`, listed two supported protocol versions instead
+  of four, and described an unsupported version as an error when it is
+  negotiated. Agents read this before writing handlers, so stale guidance here
+  becomes wrong code.
+
+- **A security-hardening pass over the advanced template**: the customer role
+  could execute arbitrary SQL as the database owner — it inherited the gateway
+  role, and PostgreSQL's default `PUBLIC` execute grant exposed the
+  SECURITY DEFINER entrypoints and the handler-registration functions. The
+  role graph is now converged on every deploy and registration is admin-only.
+  API-key lifecycle and creation are also caller-authorized and tenant-scoped
+  (previously a customer session could manage or mint keys across
+  organizations); handler registration rejects name collisions instead of
+  silently overwriting; error wrappers preserve the original SQLSTATE and
+  DETAIL.
+- **`pgmi deploy .` works inside a git repository.** File discovery walked
+  `.git/`, and `.git/index` is binary, so the most-documented invocation
+  failed in essentially every real project — and created the target database
+  before failing. Projects are now scanned before any database is created, so
+  a project that cannot be scanned leaves nothing behind.
+- **The MCP surface actually works over HTTP**: the scaffolded gateway wrote
+  an MCP protocol version where the HTTP version belongs, so every response
+  was unparseable by any client. The MCP dispatcher also swallowed `40001`,
+  which committed lost writes while telling the caller "internal error" — the
+  retry contract now holds on MCP as it does on REST and RPC, with test
+  coverage on both paths.
+- **The OpenAPI contract is cacheable and correct**: strong ETag with 304
+  revalidation, a catalog version stamped on every response so cached route
+  tables learn they are stale, and a fix for multi-parameter routes that
+  produced invalid OpenAPI.
+- **First-hour polish**: failing SQL now reports the file line it came from;
+  pgmi's own usage errors exit 2; noisy session-preparation notices are gone;
+  `pgmi init` surfaces `pgmi ai setup` so coding agents discover pgmi's
+  embedded guidance.
+- **The docs grew a visual layer**: a capability tour for the advanced
+  template, a five-page MCP section, twelve architecture diagrams, and design
+  records for the decisions people ask about (why session-centric, why no
+  `--dry-run`, why an execution fabric).
+- **Deploy lock release is now synchronous on session close**, so back-to-back
+  deployments no longer race the previous session's advisory lock — and also
+  when session preparation itself fails, which previously left the lock to the
+  disconnect and could greet an immediate retry with "another deployment is
+  already running".
+- **`pgmi serve` tool results conform to the schemas they advertise.** Six
+  tools declared an output schema describing only success, while every failure
+  returned a differently-shaped error object — which the MCP spec forbids and a
+  validating client may reject rather than display. Each schema now admits both
+  shapes, so the failure envelope (SQLSTATE, exit code, notice stream) survives
+  intact.
+- **The scaffolded Python MCP gateway honours `Accept: …;q=0`** as the refusal
+  it is, matching the SQL gateway. The two shipped surfaces answered the same
+  header differently.
+- **The release itself is better gated.** Tagging now runs the three end-to-end
+  example projects, refuses a tag that is not on `main`, refuses release notes
+  still marked draft or undated, scans dependencies for known vulnerabilities,
+  and builds every archive, package and checksum before it publishes any of
+  them. `make release-ready` runs the full suite rather than `-short`, and
+  prints what it does not cover.
+- **A vulnerability reachable from pgmi's own code is fixed.** Adding that scan
+  immediately found one: `golang.org/x/text` before v0.39.0 could loop forever
+  on invalid input, reached through `pgx.Connect` from the connection wizard
+  (GO-2026-5970). Binaries from this release carry the fixed version.
+
+### Verification gates
+
+| Gate | Result |
+|------|--------|
+| `go build ./cmd/pgmi` | PASS |
+| `go test -short ./...` | PASS |
+| `golangci-lint run` (native + `GOOS=linux`) | PASS |
+| Session API contract (`api-v1.sql`) | unchanged — compat **v1** |
+| `go test ./internal/scaffold` (advanced + basic, live PostgreSQL 17) | PASS |
+| CI example projects (`test-gated-deploy`, `execution-order-policy`, `lock-safe-deploy`) | PASS |
+| `govulncheck ./...` (v1.6.0) | PASS — 0 reachable; 2 unreachable, see below |
+
+Two advisories are reported at the module level and do not affect pgmi:
+
+- **GO-2026-5932**: `golang.org/x/crypto/openpgp` is unmaintained. It arrives
+  as an indirect module requirement and has no fixed version; pgmi imports no
+  package from it, so no code path reaches it.
+- **GO-2026-5841**: `github.com/klauspost/compress/s2` OOB read, fixed in
+  v1.18.7. pgmi requires v1.18.5 as a transitive dependency but imports no
+  package from it, so no code path reaches it.
+
+Both are listed here rather than suppressed, so the next release can tell
+"still not reachable" from "nobody looked".
+
+**macOS binaries are not CI-tested.** The `test-platforms` matrix includes
+`macos-latest` but marks it `continue-on-error`, and the `release.yml` tag
+workflow does not run platform tests at all — so no darwin binary has ever been
+gated on a passing macOS run. The unit tests (`go test -short`) are the same
+code as on Linux and Windows; what is untested is platform-specific behaviour
+(signal handling, `.pgpass` location, path separators). If you hit a
+macOS-only issue, please report it.
+
 ## v0.11.0 — 2026-06-27
 
-77 commits, 158 files changed, +6,552 / -1,536 lines since v0.10.1.
+**You can now run the advanced template on managed PostgreSQL** — RDS, Aurora, Cloud SQL, Azure Flexible Server, Supabase, Neon — where you do not get a superuser. It previously hard-failed on all of them. The template also publishes an OpenAPI 3.1 contract from its own handler registry, so an API consumer gets a self-describing spec instead of a hand-written client, and `pgmi serve` lets an AI assistant drive pgmi directly over MCP.
 
-A feature release. The advanced template becomes deployable on managed Postgres (no superuser), gains an OpenAPI 3.1 surface with schema-validated handlers, and ships a real admin analytics API. The CLI grows structured output, an MCP server mode, and a project-introspection command, and the AI-assistant surface expands to five assistants with a per-language client guide. A documentation website goes live on GitHub Pages. The session API contract is **unchanged at v1** — existing `deploy.sql` files continue to work without modification.
+The session API contract is **unchanged at v1** — existing `deploy.sql` files continue to work without modification.
 
 ### Highlights
 

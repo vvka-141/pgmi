@@ -148,7 +148,12 @@ func TestRetryExecutor_ContextCancellation(t *testing.T) {
 
 	executor := retry.NewExecutor(classifier, strategy)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// start is taken before WithTimeout, not before Execute: the deadline
+	// starts ticking here, so measuring from any later point can legitimately
+	// come out under it and the lower bound below would flake.
+	const timeout = 100 * time.Millisecond
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Simulate an operation that always fails
@@ -159,7 +164,6 @@ func TestRetryExecutor_ContextCancellation(t *testing.T) {
 		return errors.New("connection refused")
 	}
 
-	start := time.Now()
 	err := executor.Execute(ctx, operation)
 	elapsed := time.Since(start)
 
@@ -167,18 +171,24 @@ func TestRetryExecutor_ContextCancellation(t *testing.T) {
 		t.Fatal("Expected context deadline exceeded, got nil")
 	}
 
-	if err != context.DeadlineExceeded {
-		t.Logf("Expected context.DeadlineExceeded, got: %v", err)
+	// Asserted, not logged: that the deadline is what stopped the retries is
+	// the whole claim of this test.
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Expected an error carrying context.DeadlineExceeded, got: %v", err)
 	}
 
-	// Should have stopped due to context cancellation
-	// Attempts should be limited (not all 10 retries should execute)
+	// The strategy allows 10 attempts; a 100ms deadline over 50ms delays must
+	// cut it short well before that.
 	if attempts > 3 {
 		t.Errorf("Expected <= 3 attempts due to context cancellation, got %d", attempts)
 	}
 
-	if elapsed > 150*time.Millisecond {
-		t.Errorf("Expected execution to stop around 100ms, took %v", elapsed)
+	// Lower bound only. An upper bound here is a latency measurement the
+	// scheduler decides — at 150ms it failed under a loaded full-suite run
+	// while passing standalone. Returning *before* the deadline is the real
+	// defect: it would mean something other than the context ended the retries.
+	if elapsed < timeout {
+		t.Errorf("Execute returned after %v, before its %v deadline", elapsed, timeout)
 	}
 
 	t.Logf("Context cancellation correctly stopped retries after %d attempts in %v", attempts, elapsed)

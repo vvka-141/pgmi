@@ -29,9 +29,14 @@ func (m *mockApprover) RequestApproval(_ context.Context, _ string) (bool, error
 type mockSessionPreparer struct {
 	session *pgmi.Session
 	err     error
+	scanErr error
 }
 
-func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ string, _ map[string]string, _ string, _ bool) (*pgmi.Session, error) {
+func (m *mockSessionPreparer) ScanProject(_ string) (pgmi.FileScanResult, error) {
+	return pgmi.FileScanResult{}, m.scanErr
+}
+
+func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ pgmi.FileScanResult, _ map[string]string, _ string, _ bool) (*pgmi.Session, error) {
 	return m.session, m.err
 }
 
@@ -92,17 +97,33 @@ type mockDatabaseManager struct {
 	createErr    error
 	dropErr      error
 	terminateErr error
+
+	// Recorded so a test can assert the destructive call did NOT happen.
+	// Returning the right error is not the same as not dropping the database.
+	dropped []string
+
+	// What Settings reports, and what Create was actually handed — an
+	// --overwrite must recreate the database the way it found it.
+	settings    *pgmi.DatabaseSettings
+	settingsErr error
+	createdWith *pgmi.DatabaseSettings
 }
 
 func (m *mockDatabaseManager) Exists(_ context.Context, _ pgmi.DBConnection, _ string) (bool, error) {
 	return m.existsResult, m.existsErr
 }
 
-func (m *mockDatabaseManager) Create(_ context.Context, _ pgmi.DBConnection, _ string) error {
+func (m *mockDatabaseManager) Settings(_ context.Context, _ pgmi.DBConnection, _ string) (*pgmi.DatabaseSettings, error) {
+	return m.settings, m.settingsErr
+}
+
+func (m *mockDatabaseManager) Create(_ context.Context, _ pgmi.DBConnection, _ string, settings *pgmi.DatabaseSettings) error {
+	m.createdWith = settings
 	return m.createErr
 }
 
-func (m *mockDatabaseManager) Drop(_ context.Context, _ pgmi.DBConnection, _ string) error {
+func (m *mockDatabaseManager) Drop(_ context.Context, _ pgmi.DBConnection, name string) error {
+	m.dropped = append(m.dropped, name)
 	return m.dropErr
 }
 

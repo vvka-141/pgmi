@@ -24,13 +24,19 @@ BEGIN
     FROM api.vw_handler_info
     WHERE handler_function_name = 'hello_world';
 
-    IF NOT v_info.function_exists THEN
+    -- SELECT ... INTO is not STRICT: no row leaves every field NULL, and each
+    -- assertion below would then compare against NULL and skip.
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'vw_handler_info has no row for hello_world';
+    END IF;
+
+    IF v_info.function_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'hello_world function_exists should be true';
     END IF;
-    IF v_info.definition_drifted THEN
+    IF v_info.definition_drifted IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'hello_world definition_drifted should be false (freshly deployed)';
     END IF;
-    IF NOT v_info.has_rest_route THEN
+    IF v_info.has_rest_route IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'hello_world should have a REST route';
     END IF;
 
@@ -44,7 +50,10 @@ BEGIN
     FROM api.vw_handler_info
     WHERE handler_function_name = 'hello_world';
 
-    IF NOT v_info.has_output_schema THEN
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'vw_handler_info has no row for hello_world';
+    END IF;
+    IF v_info.has_output_schema IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'hello_world should have output schema';
     END IF;
 
@@ -59,6 +68,9 @@ BEGIN
     BEGIN
         SELECT total_handlers, rest_handlers INTO v_summary FROM api.vw_handler_summary;
 
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'vw_handler_summary returned no row';
+        END IF;
         IF v_summary.total_handlers < 1 THEN
             RAISE EXCEPTION 'vw_handler_summary total_handlers should be >= 1';
         END IF;
@@ -95,6 +107,9 @@ BEGIN
         v_rsummary record;
     BEGIN
         SELECT total_routes, rest_routes INTO v_rsummary FROM api.vw_route_summary;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'vw_route_summary returned no row';
+        END IF;
         IF v_rsummary.total_routes < 1 THEN
             RAISE EXCEPTION 'vw_route_summary total_routes should be >= 1';
         END IF;
@@ -114,12 +129,16 @@ BEGIN
     RAISE NOTICE '-> Testing exchange analytics views';
 
     -- ========================================================================
-    -- Generate a REST exchange by invoking hello_world (with auth)
+    -- Generate a REST exchange by invoking hello_world (with auth).
+    -- requiresAuth resolves an active membership.user, so the identity has to
+    -- exist — a well-formed header alone is not an authenticated caller.
     -- ========================================================================
+
+    PERFORM membership.upsert_user('test', 'admin', 'analytics-admin@example.com');
 
     v_response := api.rest_invoke('GET', '/hello?name=ViewTest',
         ('x-user-id=>test|admin')::extensions.hstore, null::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'hello_world invocation failed: %', (v_response).status_code;
     END IF;
 
@@ -137,7 +156,7 @@ BEGIN
     WHERE request_url LIKE '%/hello%'
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF v_replay IS NULL OR v_replay NOT LIKE '%rest_invoke%' THEN
+    IF coalesce(v_replay, '') NOT LIKE '%rest_invoke%' THEN
         RAISE EXCEPTION 'vw_rest_exchange_info replay_sql should contain rest_invoke, got: %', v_replay;
     END IF;
 
@@ -150,6 +169,9 @@ BEGIN
     SELECT total_exchanges, rest_exchanges, error_count
     INTO v_summary FROM api.vw_exchange_summary;
 
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'vw_exchange_summary returned no row';
+    END IF;
     IF v_summary.total_exchanges < 1 THEN
         RAISE EXCEPTION 'vw_exchange_summary total_exchanges should be >= 1';
     END IF;

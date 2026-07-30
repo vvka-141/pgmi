@@ -19,7 +19,7 @@ These flags work with every command:
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Enable verbose output (also shows PostgreSQL `RAISE DEBUG` messages) |
-| `-h, --help` | Show help for any command |
+| `--help` | Show help for any command (`-h` is `--host` on `deploy`, as in psql) |
 
 ---
 
@@ -52,9 +52,53 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 | Flag | Description |
 |------|-------------|
 | `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
-| `--force` | Replace interactive confirmation with 5-second countdown. Still shows warning, still cancellable with Ctrl+C. |
+| `--force` | Replace interactive confirmation with a 5-second countdown, cancellable with Ctrl+C. Without a terminal the countdown is skipped and one line is logged instead. |
 | `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
 | `--compat` | API compatibility version (default: latest). Pin to a specific version for stable CI/CD pipelines. |
+| `--json` | Emit structured JSON to stdout after deployment, on success **and** on failure. |
+
+#### `--json` envelope
+
+JSON goes to stdout; the human-readable summary stays on stderr, so
+`pgmi deploy . --json 2>/dev/null` yields clean JSON. Diagnostic keys are
+omitted rather than emitted empty, and all values are password-redacted.
+
+`exitCode` is always the code the process exits with — including Ctrl-C, which
+reports `"status": "failed"` and `130` even if the deployment itself had already
+returned cleanly.
+
+| Field | Notes |
+|-------|-------|
+| `status` | `success` or `failed` |
+| `exitCode` | See [Exit Codes](#exit-codes) |
+| `filesLoaded`, `testMacros`, `durationMs`, `database` | Run summary |
+| `executionUnits`, `unitsCommitted` | Present once deploy.sql execution begins. `executionUnits` is the total count; `unitsCommitted` is how many completed before the failure (equals `executionUnits` on success) |
+| `executionMode` | `"atomic"` (head failure — nothing applied, rolled back) or `"psql"` (tail failure — earlier units already committed). Present only on failure. Derived from the unit ordinal at failure time, not from whether the script contains a COMMIT |
+| `error` | Failure message. Note the key is `error`, not `message` |
+| `sqlstate` | PostgreSQL error code |
+| `detail`, `hint`, `where` | PostgreSQL diagnostics, when the server supplied them |
+| `failedFile` | Project file that raised the error |
+| `script`, `sourceLine` | The script pgmi executed, and the offending line from it |
+| `line`, `column`, `scriptExpanded` | Present only when PostgreSQL reported a position (syntax errors always do). `scriptExpanded: true` means `line` refers to the macro-expanded script, not the file on disk |
+
+```json
+{
+  "status": "failed",
+  "exitCode": 13,
+  "database": "postgres",
+  "durationMs": 1165,
+  "filesLoaded": 0,
+  "testMacros": 0,
+  "error": "execution failed: ERROR: function this_function_does_not_exist() does not exist (SQLSTATE 42883)",
+  "sqlstate": "42883",
+  "hint": "No function matches the given name and argument types. You might need to add explicit type casts.",
+  "script": "deploy.sql",
+  "sourceLine": "SELECT this_function_does_not_exist();",
+  "line": 1,
+  "column": 8,
+  "scriptExpanded": false
+}
+```
 
 #### Understanding `--compat` (API Versioning)
 
@@ -87,10 +131,13 @@ pgmi deploy . -d myapp
 
 **Error handling:**
 
+An unsupported version is rejected as configuration — exit 10, before pgmi
+connects to anything:
+
 ```bash
-# Invalid version returns clear error with supported versions
-$ pgmi deploy . --compat=99
-Error: unsupported API version "99"; supported: [1]
+$ pgmi deploy . -d myapp --compat=99
+FAILED myapp: failed after 0.00s
+pgmi: error: invalid configuration: unsupported API version "99"; supported: [1]
 ```
 
 **Best practice:** Pin `--compat` in CI/CD pipelines for stability. When upgrading pgmi, test with the new default version before updating your pinned version.
@@ -111,27 +158,53 @@ The `--overwrite` flag triggers a **destructive operation**: the target database
 
 **Without `--force` (interactive mode):**
 ```
-⚠️  WARNING: You are about to DROP and RECREATE the database 'myapp'
-This will permanently delete all data in this database!
 
-To confirm, type the database name 'myapp' and press Enter: _
+WARNING: about to DROP and RECREATE database "myapp". This deletes all data.
+Type the database name to confirm:
 ```
 You must type the exact database name. Typos cancel the operation.
 
 **With `--force` (countdown mode):**
 ```
 ╔═══════════════════════════════════════════════════════════════════════╗
+║                                                                       ║
       ______
    .-'      '-.
-  /            \           ⚠️  DANGER: DESTRUCTIVE OPERATION ⚠️
- |,  .-.  .-.  ,|       Database 'myapp' will be PERMANENTLY DELETED
- | )(_o/  \o_)( |                ALL DATA WILL BE LOST
+  /            \
+ |              |
+ |,  .-.  .-.  ,|       ⚠️  DANGER: DESTRUCTIVE OPERATION ⚠️
+ | )(_o/  \o_)( |  Database 'myapp' will be PERMANENTLY DELETED
+ |/     /\     \|               ALL DATA WILL BE LOST
+ (_     ^^     _)
   \__|IIIIII|__/
+   | \IIIIII/ |
+   \          /
+    `--------`
+║                                                                       ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-Dropping in: 5 seconds... (Press Ctrl+C to cancel)
+--force: DROP DATABASE "myapp" in 5s. Ctrl-C aborts.
 ```
-A 5-second countdown gives you time to cancel with Ctrl+C.
+The countdown line rewrites in place each second.
+
+**Without a terminal**, both go away. The banner needs a TTY and `PGMI_NO_BANNER`
+unset; the countdown needs a human who could press Ctrl-C. In CI and piped logs
+`--force` prints one line and proceeds:
+
+```
+--force: dropping and recreating "myapp"
+```
+
+`--overwrite` **without** `--force` does not prompt there either — it refuses:
+
+```
+pgmi: error: approval denied: --overwrite must be confirmed at a terminal, and
+this is not one; pass --force to drop and recreate "myapp" from a script or CI job
+```
+
+Exit code 12, immediately. It used to block on the prompt until `--timeout`
+expired and then report exit 16, which reads as a slow database rather than a
+missing flag.
 
 **When to use `--overwrite`:**
 - Local development with disposable databases
@@ -142,7 +215,7 @@ A 5-second countdown gives you time to cancel with Ctrl+C.
 
 | Flag | Description |
 |------|-------------|
-| `--param key=value` | Set a parameter (repeatable). Accessible in SQL via `current_setting('pgmi.key')` |
+| `--param key=value` | Set a parameter (repeatable). Accessible in SQL via `current_setting('pgmi.key')`. Keys are lower-cased: `--param apiVersion=2` becomes `pgmi.apiversion`, and `pgmi_parameter_view.key` is `apiversion` |
 | `--params-file path` | Load parameters from `.env` file (repeatable, later files override earlier ones) |
 
 ### Azure Entra ID Flags
@@ -308,7 +381,7 @@ pgmi init .
 # Create a named project with the basic template
 pgmi init myapp
 
-# Production-ready project
+# Full reference application (more infrastructure, not a higher safety tier)
 pgmi init myapp --template advanced
 
 # See available templates
@@ -425,6 +498,8 @@ in server state. Tools exposed: `deploy`, `init`, `metadata_plan`,
 `metadata_validate`, `templates_list`, `ai_overview`, `ai_skills`, `ai_skill`,
 `ai_contract`.
 
+![pgmi serve: an MCP client speaks JSON-RPC 2.0 over stdio to the nine CLI tools, which read project files and deploy to PostgreSQL](diagrams/d09-mcp-serve.drawio.svg)
+
 Register it with Claude Code:
 
 ```bash
@@ -434,9 +509,41 @@ claude mcp add pgmi -- pgmi serve
 The server reads JSON-RPC from stdin, writes responses to stdout, and sends all
 diagnostics to stderr. It exits cleanly on EOF or SIGINT.
 
+**Failure handling.** A tool that fails — including one that panics — answers
+with `isError: true` and the session continues; a panic also carries its stack in
+`structuredContent`. A *malformed* message is different: the server replies with
+a `-32700` parse error and `"id": null`, then ends the session, because the
+JSON stream cannot be resynchronised after a syntax error. A client that sends a
+truncated frame must restart the server.
+
+**Protocol version.** `initialize` negotiates: the server echoes the client's
+requested version when it speaks it (`2025-06-18`, `2025-03-26`, `2024-11-05`),
+otherwise answers with its newest. An unsupported request is not an error — the
+client decides whether the answer is acceptable.
+
+**Structured output.** Tools returning a structured value (`deploy`, `init`,
+`metadata_plan`, `metadata_validate`, `templates_list`, `ai_skills`) declare an
+`outputSchema` in `tools/list` and emit matching `structuredContent`, so a client
+can validate results without parsing text. The three tools that return
+documents — `ai_overview`, `ai_skill`, `ai_contract` — declare no output schema
+because they return text, not typed output.
+
+**Destructive deploys need an echo-back.** `deploy` with `overwrite: true` drops
+the target database, and this path auto-approves (there is no TTY to prompt). It
+therefore also requires `confirmDatabaseName` to equal `database` exactly:
+
+```json
+{"name": "deploy", "arguments": {
+  "path": "./myproject", "connection": "postgresql://...",
+  "database": "myapp", "overwrite": true, "confirmDatabaseName": "myapp"}}
+```
+
+A missing or mismatched name is refused before anything connects, so an agent
+that hallucinated a database name cannot drop it.
+
 > This is pgmi's **own CLI** as MCP tools. It is unrelated to the advanced
 > template's MCP gateway (which exposes your *deployed database* to agents — see
-> [docs/MCP.md](MCP.md)).
+> [docs/advanced/MCP.md](advanced/MCP.md)).
 
 ---
 
@@ -463,17 +570,24 @@ Outputs an overview document similar to llms.txt format, explaining:
 pgmi ai skills
 ```
 
-Lists all embedded skills with descriptions:
+Lists all embedded skills with their scope and description. `scope` tells an
+agent whether a skill applies to any pgmi project (`core`), only to the
+scaffolded advanced template (`advanced-template`), or only to work on pgmi
+itself (`contributor`):
 
 ```
 # Available pgmi Skills
 
-| Skill | Description |
-|-------|-------------|
-| `pgmi-sql` | Use when writing SQL/PL/pgSQL or deploy.sql |
-| `pgmi-philosophy` | Architectural decisions, execution fabric vs migration framework |
-| `pgmi-cli` | Use when adding CLI commands or flags |
+Use `pgmi ai skill <name>` to get full skill content.
+
+| Skill | Scope | Description |
+|-------|-------|-------------|
+| `advanced-template` | advanced-template | Advanced template framework API reference (lib/README.md) |
+| `pgmi-api-architecture` | advanced-template | Advanced template: REST/RPC/MCP protocol design and HTTP architecture |
+| `pgmi-debug-deploy` | core | Use when a pgmi deploy fails — map the exit code to what to inspect and how to fix it |
 ...
+
+Total: 16 skills
 ```
 
 ### pgmi ai skill
@@ -488,8 +602,8 @@ Outputs the full content of a specific skill. Use this to load detailed conventi
 # Load SQL conventions
 pgmi ai skill pgmi-sql
 
-# Load CLI design patterns
-pgmi ai skill pgmi-cli
+# Load architectural rationale
+pgmi ai skill pgmi-philosophy
 
 # Load testing patterns
 pgmi ai skill pgmi-testing-review
@@ -630,6 +744,9 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGMI_NON_INTERACTIVE` | any | Set to `1` to disable TUI wizards |
 | `CI` | any | Any non-empty value disables TUI wizards |
 | `NO_COLOR` | any | Disables ANSI colors (wizards still run; accessibility signal per https://no-color.org) |
+| `PGMI_NO_BANNER` | any | Any non-empty value suppresses the identity splash and the `--force` danger banner |
+| `PGMI_PAGER` | any | Pager for long output; checked before `PAGER` |
+| `PAGER` | any | Fallback pager when `PGMI_PAGER` is unset. Paging applies on a TTY only |
 | `AZURE_TENANT_ID` | `deploy` | Azure AD tenant ID |
 | `AZURE_CLIENT_ID` | `deploy` | Azure AD client ID |
 | `AZURE_CLIENT_SECRET` | `deploy` | Azure AD client secret |
@@ -654,7 +771,7 @@ CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 | `1` | General error |
 | `2` | CLI usage error (invalid arguments or flags) |
 | `3` | Panic or unexpected system error |
-| `10` | Invalid configuration or parameters |
+| `10` | Invalid pgmi configuration — rejected before connecting; nothing was deployed |
 | `11` | Database connection failed |
 | `12` | User denied overwrite approval |
 | `13` | SQL execution failed |
@@ -708,15 +825,32 @@ Completion covers commands, flags, template names (for `init --template`), SSL m
 | `permission denied for schema` | Role lacks privileges | Grant the deploy role `CREATE`/`USAGE` on the schema (or `CREATEROLE`/`CREATE EXTENSION` for advanced-template setup) |
 | `current transaction is aborted` | Earlier error in transaction | Fix the root cause; check `RAISE EXCEPTION` in your SQL |
 | `syntax error at or near` | Invalid SQL | Check the file path in error message, fix syntax |
+| `missing required parameter` (SQLSTATE `P0001`) | Your `deploy.sql` requires a parameter you did not pass | Add `--param key=value`; this is your SQL raising, not a pgmi config error |
+| `unknown parameter` (SQLSTATE `P0001`) | Parameter not declared in the template's `session.xml` | Declare it there or drop it from the command line |
+| `invalid regex pattern` | Bad pattern passed to `pgmi_test()` | Fix the POSIX regex |
 
 ### Configuration Errors (Exit Code 10)
 
+Exit 10 means **pgmi rejected the invocation before running any of your SQL**.
+Every one of these is decided offline, so nothing was deployed and no database
+was created, dropped, or modified.
+
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `missing required parameter` | CLI param not provided | Add `--param key=value` |
-| `unknown parameter` | Param not declared in session.xml | Declare in session.xml or remove from CLI |
-| `invalid regex pattern` | Bad pattern in `pgmi_test()` | Fix POSIX regex syntax |
+| `database name is required` | No `-d`, no database in the connection string, no `PGDATABASE` | Add `-d mydb` |
+| `invalid parameter format` | `--param` without `=` | Use `--param key=value` |
+| `failed to load pgmi.yaml` | Unparseable `pgmi.yaml` | Fix the YAML syntax |
 | `unsupported API version` | Invalid `--compat` value | Use `--compat=1` (currently only v1 supported) |
+| `failed to read/parse params file` | `--params-file` missing or malformed | Check the path and the `KEY=VALUE` format |
+| `cannot use multiple cloud authentication methods` | More than one of `--azure`/`--aws`/`--google` | Choose one |
+
+> **Parameter errors raised by your SQL are exit 13, not exit 10.** A
+> `missing required parameter` or `unknown parameter` message from the advanced
+> template is a `RAISE EXCEPTION` inside `deploy.sql` — it reaches you as a SQL
+> execution failure with SQLSTATE `P0001`, because by then pgmi has connected
+> and handed control to your SQL. The same applies to an `invalid regex pattern`
+> from `pgmi_test()`. Diagnose those with the exit-13 table above; the fix is
+> usually still to add the missing `--param`.
 
 ### File Errors (Exit Code 14)
 
@@ -810,6 +944,17 @@ pgmi deploy ./myproject -d myapp --sslmode verify-full
 #   sslkey: /path/to/client.key
 #   sslrootcert: /path/to/ca.crt
 ```
+
+Precedence for `sslcert`, `sslkey`, `sslrootcert` and `sslpassword`:
+
+```
+--sslcert etc. → sslcert= in the connection string → PGSSLCERT → pgmi.yaml
+```
+
+The connection string beats the environment, as in libpq: `PGSSLROOTCERT` is a
+*default* for `sslrootcert`, not an override. `sslpassword` has no flag and no
+`pgmi.yaml` field — a private-key passphrase belongs in neither argv nor a
+committed file — so it comes from the connection string or `PGSSLPASSWORD`.
 
 ### Azure Entra ID (Passwordless)
 

@@ -1,0 +1,9 @@
+# Parameter files hold secrets — pass them with --params-file, never commit them
+*.params
+*.params.*
+.env
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp

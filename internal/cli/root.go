@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/vvka-141/pgmi/internal/tui"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var rootCmd = &cobra.Command{
@@ -57,13 +59,29 @@ func showBanner() bool {
 	return tui.IsInteractive()
 }
 
-// Execute runs the root command
+// Execute runs the root command and wraps Cobra routing errors (e.g.
+// "unknown command") that have no interception hook with ErrUsage.
 func Execute() error {
-	return rootCmd.Execute()
+	err := rootCmd.Execute()
+	if err != nil && strings.HasPrefix(err.Error(), "unknown command") {
+		return fmt.Errorf("%w: %w", pgmi.ErrUsage, err)
+	}
+	return err
 }
 
 func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output for all commands")
+
+	// Registering help ourselves keeps cobra from claiming -h for it. pgmi's
+	// connection flags follow libpq (-p, -U, -d), where -h is the host
+	// everywhere in the PostgreSQL toolchain; leaving -h as help made
+	// `pgmi deploy . -h 127.0.0.1 -d app` print help and exit 0 having
+	// deployed nothing.
+	rootCmd.PersistentFlags().Bool("help", false, "Show help for this command")
+
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return fmt.Errorf("%w: %w", pgmi.ErrUsage, err)
+	})
 }
 
 // getVerboseFlag safely retrieves the verbose flag value

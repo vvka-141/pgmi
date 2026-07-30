@@ -305,9 +305,80 @@ BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA membership TO %I', v_api_role);
     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA membership TO %I', v_customer_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_customer_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_customer_role);
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '  ✓ membership schema tables, views, and permissions installed'; END $$;
+
+-- ============================================================================
+-- API Key Status Enum
+-- ============================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'api_key_status' AND typnamespace = 'membership'::regnamespace) THEN
+        CREATE TYPE membership.api_key_status AS ENUM ('active', 'disabled', 'revoked');
+    END IF;
+END $$;
+
+COMMENT ON TYPE membership.api_key_status IS
+    'API key lifecycle: active (usable), disabled (temporarily blocked, reversible), revoked (permanent, irreversible).';
+
+-- ============================================================================
+-- API Key Table
+-- ============================================================================
+-- object_id core.entity_id opts this table into the entity-standards
+-- deploy-end sweep: created_at and deleted_at are injected automatically.
+
+CREATE TABLE IF NOT EXISTS membership.api_key (
+    object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id uuid NOT NULL REFERENCES membership.organization(object_id),
+    user_id uuid NOT NULL REFERENCES membership."user"(object_id),
+
+    key_id text NOT NULL,
+    key_hash text NOT NULL,
+    display_name text NOT NULL,
+    status membership.api_key_status NOT NULL DEFAULT 'active',
+    activated_at timestamptz,
+    expires_at timestamptz,
+    last_used_at timestamptz,
+
+    CONSTRAINT uq_api_key_key_id UNIQUE (key_id),
+    CONSTRAINT ck_api_key_display_name_not_empty CHECK (length(trim(display_name)) > 0),
+    CONSTRAINT ck_api_key_key_id_not_empty CHECK (length(key_id) >= 6),
+    CONSTRAINT ck_api_key_key_hash_not_empty CHECK (length(key_hash) = 64)
+);
+
+DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('membership.api_key'); END $$;
+
+CREATE INDEX IF NOT EXISTS ix_api_key_org
+    ON membership.api_key(organization_id)
+    WHERE deleted_at IS NULL AND status != 'revoked';
+
+CREATE INDEX IF NOT EXISTS ix_api_key_user
+    ON membership.api_key(user_id)
+    WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE membership.api_key IS
+    'API keys for machine-to-machine authentication. The full key is shown only at creation; only its SHA-256 hash is persisted.';
+
+COMMENT ON COLUMN membership.api_key.key_id IS
+    'Short identifier (12 hex chars) stored unhashed for O(1) lookup. Part of the full key: {prefix}_{key_id}_{secret}.';
+
+COMMENT ON COLUMN membership.api_key.key_hash IS
+    'SHA-256 hex of the full API key.';
+
+COMMENT ON COLUMN membership.api_key.status IS
+    'Key lifecycle: active (usable), disabled (temporarily blocked, reversible), revoked (permanent).';
+
+COMMENT ON COLUMN membership.api_key.activated_at IS
+    'When the key becomes valid. NULL = immediately active upon creation.';
+
+COMMENT ON COLUMN membership.api_key.expires_at IS
+    'When the key expires. NULL = no expiry.';
+
+COMMENT ON COLUMN membership.api_key.last_used_at IS
+    'Last successful validation timestamp. Updated on each use.';

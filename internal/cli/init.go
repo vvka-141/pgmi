@@ -10,6 +10,7 @@ import (
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/internal/tui/wizards"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var initCmd = &cobra.Command{
@@ -27,7 +28,7 @@ Templates:
 
 Target directory must be empty (pgmi.yaml and .env are tolerated).
 Run ` + "`pgmi templates list`" + ` for full template descriptions.`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              usageArgs(cobra.MaximumNArgs(1)),
 	ValidArgsFunction: completeDirectories,
 	RunE:              runInit,
 }
@@ -81,7 +82,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 		// Fail fast if directory is not empty
 		if blocked, reason := isInitBlocked(targetPath); blocked {
-			return fmt.Errorf("%s", reason)
+			return fmt.Errorf("%w: %s", pgmi.ErrUsage, reason)
 		}
 	}
 
@@ -98,7 +99,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	if !scaffold.IsValidTemplate(selectedTemplate) {
 		templates, _ := scaffold.ListTemplates()
-		return fmt.Errorf("unknown template %q (available: %v)\nrun `pgmi templates list` for descriptions", selectedTemplate, templates)
+		return fmt.Errorf("%w: unknown template %q (available: %v)\nrun `pgmi templates list` for descriptions", pgmi.ErrUsage, selectedTemplate, templates)
 	}
 
 	// Create scaffolder
@@ -121,7 +122,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if setupConnection && !connResult.Cancelled {
-		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.ManagementDatabase); err != nil {
+		if err := saveConnectionToConfig(targetPath, &connResult.Config, connResult.MaintenanceDatabase); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: could not save connection: %v\n", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(targetPath, "pgmi.yaml"))
@@ -134,21 +135,34 @@ func runInit(cmd *cobra.Command, args []string) error {
 		dbName = connResult.Config.Database
 	}
 
-	fmt.Fprintln(os.Stderr, "\nNext:")
-	fmt.Fprintf(os.Stderr, "  pgmi deploy %s -d %s\n", targetPath, dbName)
+	fmt.Fprint(os.Stderr, nextSteps(targetPath, dbName))
 
 	return nil
 }
 
-// managedCloudCaveat returns a post-scaffold heads-up for templates that need a
-// superuser on managed clouds, or "" when the template carries no such caveat.
+// nextSteps is what the user reads after a scaffold. `pgmi ai setup` belongs
+// here because it is the only push-discovery surface: without it a fresh project
+// carries no artifact telling an assistant that pgmi exists, and the assistant
+// learns the conventions only by guessing from deploy.sql.
+func nextSteps(targetPath, dbName string) string {
+	return fmt.Sprintf(`
+Next:
+  pgmi deploy %s -d %s
+  cd %s && pgmi ai setup --assistant claude
+
+pgmi ai setup writes .claude/skills/pgmi/ — commit it so an AI assistant reads
+pgmi's conventions before it edits your SQL (swap --assistant for cursor,
+copilot, windsurf, cline). Run "pgmi ai" to read the same docs yourself.
+`, targetPath, dbName, targetPath)
+}
+
 func managedCloudCaveat(template string) string {
 	if template != "advanced" {
 		return ""
 	}
-	return "Heads-up (advanced template on managed cloud): the superuser-only DDL\n" +
-		"event trigger in lib/core/entity-standards.sql fails on providers without a\n" +
-		"superuser role (AWS RDS, Cloud SQL, Supabase, Neon). Adaptation steps:\n" +
+	return "Managed-cloud note: the advanced template needs CREATEROLE and\n" +
+		"CREATE EXTENSION (uuid-ossp, pgcrypto, pg_trgm, hstore). No superuser\n" +
+		"required — every major provider's admin role covers this. Details:\n" +
 		"https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql"
 }
 
@@ -173,5 +187,5 @@ func isInitBlocked(targetPath string) (bool, string) {
 	}
 
 	absPath, _ := filepath.Abs(targetPath)
-	return true, fmt.Sprintf("directory %q is not empty (blocking: %v)\nremove the files or scaffold elsewhere: pgmi init ./new-project", absPath, blocking)
+	return true, fmt.Sprintf("directory \"%s\" is not empty (blocking: %v)\nremove the files or scaffold elsewhere: pgmi init ./new-project", absPath, blocking)
 }

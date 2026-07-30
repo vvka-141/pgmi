@@ -14,7 +14,7 @@ BEGIN
     FROM membership.organization
     WHERE owner_user_id = v_alice_id AND is_personal = true;
 
-    IF v_personal_count != 1 THEN
+    IF v_personal_count IS DISTINCT FROM 1 THEN
         RAISE EXCEPTION 'TEST FAILED: expected exactly 1 personal org, got %', v_personal_count;
     END IF;
     RAISE DEBUG '  ✓ Exactly one personal organization';
@@ -23,7 +23,7 @@ BEGIN
     IF v_default_org.object_id IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: get_user_default_organization returned null';
     END IF;
-    IF NOT v_default_org.is_personal THEN
+    IF v_default_org.is_personal IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'TEST FAILED: default org should be personal';
     END IF;
     RAISE DEBUG '  ✓ get_user_default_organization returns personal org';

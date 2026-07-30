@@ -42,108 +42,119 @@ You don't manage any of this. You write SQL in `__test__/` directories and call 
 
 ## Your first test
 
-Starting from a project created with `pgmi init myapp --template basic`, let's say your `migrations/001_initial.sql` creates a `users` table:
-
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT
-);
-```
-
-### Step 1: Create a test directory
-
-Create a `__test__` folder inside `migrations/`:
+Start from a project created with `pgmi init myapp --template basic`. It already
+ships everything the test machinery needs:
 
 ```
 myapp/
-├── deploy.sql
+├── deploy.sql              ← already calls CALL pgmi_test()
 ├── pgmi.yaml
-└── migrations/
-    ├── 001_initial.sql
-    └── __test__/
-        └── test_users_table.sql
+├── migrations/
+│   ├── 001_users.sql       ← creates the "user" table
+│   └── 002_user_crud.sql
+└── __test__/               ← already here, at the project root
+    ├── _setup.sql          ← seeds alice/bob/charlie
+    └── test_user_crud.sql
 ```
 
-The name `__test__` (or `__tests__`) is special. pgmi automatically finds these directories and treats everything inside them as test code. Test files are **physically separated** from deployment files — they cannot accidentally run during a real deployment.
+`001_users.sql` creates the table you will write against. Note the name: it is
+**`"user"`, singular and quoted** — `user` is a reserved word in PostgreSQL, so
+every reference to it needs the quotes.
+
+```sql
+CREATE TABLE IF NOT EXISTS "user" (
+    id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Step 1: Add a test file
+
+There is no directory to create — `__test__/` is already there. The name
+`__test__` (or `__tests__`) is special: pgmi loads those files into a separate
+view, so a deployment loop cannot execute one by accident.
 
 ### Step 2: Write the test
 
-Create `migrations/__test__/test_users_table.sql`:
+Create `__test__/test_user_table.sql`:
 
 ```sql
 DO $$
+DECLARE
+    v_email TEXT := 'dana@example.com';
 BEGIN
-    -- Insert a test user
-    INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com');
+    -- _setup.sql already seeded three users; add a fourth.
+    INSERT INTO "user" (email, name) VALUES (v_email, 'Dana');
 
-    -- Verify the user exists
-    IF NOT EXISTS (SELECT 1 FROM users WHERE name = 'Alice') THEN
-        RAISE EXCEPTION 'TEST FAILED: User was not inserted';
+    IF NOT EXISTS (SELECT 1 FROM "user" WHERE email = v_email) THEN
+        RAISE EXCEPTION 'TEST FAILED: user was not inserted';
     END IF;
 
-    -- Verify the email column works
-    IF (SELECT email FROM users WHERE name = 'Alice') != 'alice@example.com' THEN
-        RAISE EXCEPTION 'TEST FAILED: Email does not match';
+    IF (SELECT name FROM "user" WHERE email = v_email) IS DISTINCT FROM 'Dana' THEN
+        RAISE EXCEPTION 'TEST FAILED: name did not round-trip';
     END IF;
 
-    RAISE NOTICE 'PASS: users table works correctly';
+    RAISE NOTICE 'PASS: "user" accepts an insert and reads it back';
 END $$;
 ```
 
-Tests are plain SQL. If something is wrong, `RAISE EXCEPTION` stops execution immediately with a clear message. If everything is fine, the test completes silently (or with a `RAISE NOTICE` for your own visibility).
+Tests are plain SQL. `RAISE EXCEPTION` stops execution immediately with a clear
+message; a passing test finishes silently, or with a `RAISE NOTICE` for your own
+visibility.
 
-### Step 3: Add CALL pgmi_test() to deploy.sql
+`IS DISTINCT FROM` rather than `!=` is deliberate. `SELECT ... INTO` is not
+`STRICT` and a missing row yields NULL, and `NULL != 'Dana'` is NULL — not true —
+so an `IF` built on `!=` takes no branch and the assertion silently disappears.
+See [Assertions must be able to fail](#assertions-must-be-able-to-fail).
 
-Update your `deploy.sql` to include the test macro:
+### Step 3: Deploy
+
+Your `deploy.sql` already runs the suite — this is the block the scaffold ships:
 
 ```sql
--- deploy.sql
-BEGIN;
-
-DO $$
-DECLARE v_file RECORD;
-BEGIN
-    FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_source_view WHERE is_sql_file ORDER BY path)
-    LOOP
-        EXECUTE v_file.content;
-    END LOOP;
-END $$;
-
--- Run tests with savepoint isolation
+-- Run tests (savepoint ensures test side effects roll back)
+SAVEPOINT _tests;
 CALL pgmi_test();
+ROLLBACK TO SAVEPOINT _tests;
 
 COMMIT;
 ```
 
-Then deploy:
+So there is nothing to edit. Just deploy:
 
 ```bash
 pgmi deploy . --overwrite --force
 ```
 
-You should see:
-
 ```
-PASS: users table works correctly
+Dev seed: admin user ready (admin@example.com id=1)
+[pgmi] Test suite started
+[pgmi] Fixture: ./__test__/_setup.sql
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test: ./__test__/test_user_table.sql
+PASS: "user" accepts an insert and reads it back
+[pgmi] Test suite completed (4 steps)
+✓ myapp: 8 files loaded, 1 test macro(s) expanded in 6.07s
 ```
 
 ### Step 4: Check your database
 
-Open pgAdmin or run:
-
 ```bash
-psql -h localhost -U postgres -d myapp -c "SELECT * FROM users;"
+psql -h localhost -U postgres -d myapp -c 'SELECT * FROM "user";'
 ```
 
 ```
- id | name | email
-----+------+-------
-(0 rows)
+ id |       email       |     name      |          created_at
+----+-------------------+---------------+-------------------------------
+  1 | admin@example.com | Administrator | 2026-07-27 18:47:36.515231+00
+(1 row)
 ```
 
-**Zero rows.** The test inserted a user, verified it, and pgmi rolled everything back. Your database is untouched.
+**One row — the dev seed, and nothing else.** Alice, Bob and Charlie from the
+fixture are gone, and so is Dana from the test. Everything the suite touched was
+rolled back; only the deployment itself committed.
 
 ---
 
@@ -227,6 +238,8 @@ Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.
 ---
 
 ## Execution model
+
+![Test execution: the CALL pgmi_test() macro expands to inline SQL that runs fixtures, savepoint-isolated tests, and teardown inside the deployment transaction](diagrams/d05-test-execution-model.drawio.svg)
 
 Here's the structure pgmi generates for the example above. Understanding this is optional, but it explains why the guarantee works.
 
@@ -359,6 +372,8 @@ COMMIT;                                     ← Migrations persist, test data go
 
 Each subdirectory gets its parent's fixture plus its own. Tests in `orders/` see users and orders but no admin role. Tests in `admin/` see users and the admin role but no orders. The fixtures compose, and each level is fully isolated.
 
+A level in between may hold no files of its own. `__test__/api/v2/test_x.sql` with an empty `__test__/api/` composes against the `__test__/` fixture; the empty level contributes nothing and needs no `_setup.sql`.
+
 ---
 
 ## Filtering tests
@@ -380,6 +395,8 @@ CALL pgmi_test();
 
 When you filter, pgmi automatically includes all ancestor fixtures. If you run `pgmi_test('.*/orders/.*')`, pgmi still runs the root `_setup.sql` (because `orders/_setup.sql` depends on it) — you don't need to think about this.
 
+A pattern that matches nothing **fails the deploy** (`no_data_found`) rather than passing quietly. So does `CALL pgmi_test()` in a project with no test files at all. A gate that gated on nothing is not a gate, and the most common cause is a typo in the pattern or a misplaced `__test__/` directory — neither should look like a green deploy.
+
 ---
 
 ## Writing effective tests
@@ -396,6 +413,45 @@ BEGIN
     -- 3. RAISE EXCEPTION if wrong, RAISE NOTICE if right
 END $$;
 ```
+
+### Assertions must be able to fail
+
+An `IF` whose condition evaluates to NULL takes **no branch**. So an assertion
+built from a NULL-yielding operator does not fail when the code is wrong — it
+disappears, and the deploy still prints its checkmark.
+
+The NULL usually comes from missing data, which is exactly the state a test
+exists to catch: `SELECT ... INTO` is not `STRICT`, `jsonb ->>` and `hstore ->`
+return NULL for an absent key, `array_length('{}', 1)` is NULL rather than 0, and
+`=`, `<>`, `<` and `LIKE` all propagate that NULL outward.
+
+```sql
+-- Passes when the row, the key or the header is missing
+IF v_user.name != 'Dana' THEN
+IF NOT v_info.is_active THEN
+IF v_body->>'status' != 'ok' THEN
+IF array_length(v_ids, 1) < 1 THEN
+
+-- Fires on a wrong value AND on a missing one
+IF v_user.name IS DISTINCT FROM 'Dana' THEN
+IF v_info.is_active IS DISTINCT FROM true THEN
+IF v_body->>'status' IS DISTINCT FROM 'ok' THEN
+IF coalesce(array_length(v_ids, 1), 0) < 1 THEN
+```
+
+Where several assertions read one record, guard the source once instead:
+
+```sql
+SELECT * INTO v_user FROM "user" WHERE email = v_email;
+IF NOT FOUND THEN
+    RAISE EXCEPTION 'TEST FAILED: no user row for %', v_email;
+END IF;
+```
+
+`EXISTS` is total by construction and needs no guard. And do not assert on what
+the code under test *reports*: a function returning `{"deleted": 10}` while
+deleting nothing satisfies every check made against its return value — re-query
+the table.
 
 ### Testing a function
 
@@ -469,7 +525,7 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 
 ## The gated deployment pattern
 
-The `CALL pgmi_test()` macro runs tests **as a gate before committing** — if any test fails, the entire deployment rolls back and your database is unchanged.
+The `CALL pgmi_test()` macro runs tests **as a gate before committing** — if any test fails, the entire deployment rolls back and your database is unchanged. An empty test plan (no `__test__/` files, or a pattern that matches nothing) also fails the deploy with `no_data_found` — a gate that gated on nothing is not a gate.
 
 ### How it works
 
@@ -486,9 +542,11 @@ DECLARE
 BEGIN
     -- Execute each migration file directly
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -570,8 +628,13 @@ The `CALL pgmi_test()` macro:
 The default test callback emits NOTICE messages (`[pgmi] Test: ...`). You can replace it with a custom PL/pgSQL function to produce structured output, log results to a table, or integrate with external reporting.
 
 ```sql
-CALL pgmi_test('.*/orders/.*', 'my_test_callback');
+CALL pgmi_test('.*/orders/.*', 'pg_temp.my_test_callback');
 ```
+
+**Schema-qualify the name.** pgmi interpolates it verbatim into
+`SELECT <name>(ROW(...))`, and PostgreSQL never searches `pg_temp` for *function*
+names however the `search_path` is set. An unqualified name fails with
+`ERROR: function my_test_callback(pgmi_test_event) does not exist (SQLSTATE 42883)`.
 
 Your callback function must accept a single `pg_temp.pgmi_test_event` composite type parameter and return void:
 
@@ -587,11 +650,29 @@ BEGIN
         WHEN 'teardown_start' THEN
             RAISE NOTICE '[TEARDOWN] %', e.directory;
         ELSE
-            RAISE NOTICE '[%] % %', e.event, COALESCE(e.path, e.directory);
+            RAISE NOTICE '[%] %', e.event, COALESCE(e.path, e.directory);
     END CASE;
 END;
 $$ LANGUAGE plpgsql;
 ```
+
+Against the scaffolded basic template that produces:
+
+```
+[suite_start]
+[FIXTURE] ./__test__/_setup.sql
+[fixture_end] ./__test__/_setup.sql
+[TEST] ./__test__/test_user_crud.sql
+[test_end] ./__test__/test_user_crud.sql
+[rollback] ./__test__/test_user_crud.sql
+[TEARDOWN] ./__test__/
+[teardown_end] ./__test__/
+[suite_end]
+```
+
+`suite_start` is the first event dispatched and falls to the `ELSE` branch, so a
+mistake there — one `%` too many, say — kills the suite on step one before any
+test runs.
 
 **The `pgmi_test_event` composite type:**
 
@@ -642,6 +723,49 @@ CALL pgmi_test(NULL, 'pg_temp.logging_callback');
 SELECT * FROM pg_temp.test_log ORDER BY ordinal;
 ```
 
+**Example: TAP 14 reporter** ([full example](../examples/tap-reporter/))
+
+```sql
+CREATE SEQUENCE pg_temp._pgmi_tap_seq;
+
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_tap_callback(e pg_temp.pgmi_test_event)
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_test_count int;
+BEGIN
+    CASE e.event
+        WHEN 'suite_start' THEN
+            RAISE NOTICE 'TAP version 14';
+            SELECT count(*) INTO v_test_count
+            FROM pg_temp.pgmi_test_plan()
+            WHERE step_type = 'test';
+            RAISE NOTICE '1..%', v_test_count;
+        WHEN 'test_end' THEN
+            RAISE NOTICE 'ok % - %', nextval('pg_temp._pgmi_tap_seq'), e.path;
+        ELSE
+            NULL;
+    END CASE;
+END;
+$$;
+
+CALL pgmi_test(NULL, 'pg_temp.pgmi_tap_callback');
+```
+
+Produces:
+
+```
+TAP version 14
+1..2
+ok 1 - ./__test__/test_insert.sql
+ok 2 - ./__test__/test_update.sql
+```
+
+The plan line (`1..2`) is emitted first from `pgmi_test_plan()`, so a TAP consumer
+that sees fewer `ok` lines than planned knows the suite aborted mid-run. The
+sequence is non-transactional — `nextval()` advances survive savepoint rollback,
+keeping test numbers monotonic.
+
 ---
 
 ## Teardown
@@ -668,17 +792,23 @@ This means:
 
 ## Comparison with alternatives
 
-| Approach | Isolation | Speed | Requires Docker | Real PostgreSQL |
-|----------|-----------|-------|-----------------|-----------------|
-| **pgmi (savepoints)** | Per-test rollback | Fast (no I/O) | No | Yes |
-| **Testcontainers** | Fresh database per test | Slow (container startup) | Yes | Yes |
-| **pgTAP** | None (manual cleanup) | Fast | No | Yes |
-| **ORM rollback** | Transaction per test | Fast | No | ORM subset only |
-| **Neon branching** | Copy-on-write branch | Fast (API call) | No | Yes (managed) |
+| Approach | Isolation | Speed | Requires Docker | Real PostgreSQL | Gate location |
+|----------|-----------|-------|-----------------|-----------------|---------------|
+| **pgmi (savepoints)** | Per-test rollback | Fast (no I/O) | No | Yes | Inside the deploy transaction, against the target |
+| **Atlas ([`migrate test`](https://atlasgo.io/testing/migrate))** | Dev-database container | Fast | Yes (`docker://`) | Yes (dev copy) | Before the apply, against a dev database |
+| **Testcontainers** | Fresh database per test | Slow (container startup) | Yes | Yes | Separate CI step |
+| **pgTAP** | None (manual cleanup) | Fast | No | Yes | Separate `pg_prove` run |
+| **ORM rollback** | Transaction per test | Fast | No | ORM subset only | Application test suite |
+| **Neon branching** | Copy-on-write branch | Fast (API call) | No | Yes (managed) | Separate step against the branch |
 
-**pgmi's advantage:** Tests run against the actual deployment (real schema, real data, real transactions) with zero infrastructure. No Docker, no API calls, no separate test database.
+**pgmi's advantage:** Tests run against the actual deployment (real schema, real data, real transactions) with zero infrastructure. No Docker, no API calls, no separate test database. The test gate is the deploy transaction itself — a failing test means the commit never happened and the target database is unchanged. Other tools test before the apply or against a copy; pgmi tests *the apply*.
 
-**pgmi's limitation:** No structured output (JUnit XML, TAP). If you need CI dashboards with test result parsing, you'll need a custom [callback](#custom-test-callbacks).
+**No report format ships built in.** pgmi emits a typed *event stream* rather than
+a fixed report: `suite_start`, `fixture_start`, `test_start`, `test_end`, `rollback`,
+`teardown_end`, each carrying path, directory, depth and ordinal. The default
+[callback](#custom-test-callbacks) turns that into NOTICEs; substituting your own is
+how you get TAP, JUnit XML, or a row per test in a results table — from the same run,
+without a second execution mode. → [Working TAP 14 reporter](../examples/tap-reporter/)
 
 ---
 
@@ -691,7 +821,7 @@ The [gated deployment pattern](#the-gated-deployment-pattern) provides auditable
 3. If any test fails → `RAISE EXCEPTION` → transaction aborts → database unchanged
 4. If all tests pass → `COMMIT` → changes persist
 
-**For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Tests passing is a precondition for the commit — there is no way to commit with failing tests.
+**For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Tests passing is a precondition for the commit — there is no way to commit with failing tests, and no way to commit with an empty test plan (the macro refuses to pass when it discovers nothing to run).
 
 ```sql
 -- After deployment, query the audit trail

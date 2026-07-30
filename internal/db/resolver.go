@@ -335,8 +335,18 @@ func applyGoogleAuth(cfg *pgmi.ConnectionConfig, flags *GoogleFlags, pc *config.
 }
 
 // applyCertParams sets TLS client certificate parameters on the config.
-// Precedence: flag > env var > pgmi.yaml > existing (from connection string).
-// SSLPassword is only available from env var (no flag, no yaml — security).
+// Precedence: CLI flag > connection string > env var > pgmi.yaml.
+//
+// The connection string outranks the environment because libpq says so: its
+// environment variables select "default connection parameter values ... if no
+// value is directly specified by the calling code", and PGSSLCERT, PGSSLKEY,
+// PGSSLROOTCERT and PGSSLPASSWORD each behave the same as their connection
+// parameter. Reversed, a stale PGSSLROOTCERT swaps the trust anchor out from
+// under a verify-full connection string, and PGSSLCERT swaps the mTLS client
+// identity — both silently.
+//
+// cfg carries the connection-string values on entry. The granular-flag path
+// leaves these four fields empty, so a non-empty value here came from the string.
 func applyCertParams(cfg *pgmi.ConnectionConfig, flags *CertFlags, env *EnvVars, pc *config.ProjectConfig) {
 	var yamlCert, yamlKey, yamlRootCert string
 	if pc != nil {
@@ -345,33 +355,33 @@ func applyCertParams(cfg *pgmi.ConnectionConfig, flags *CertFlags, env *EnvVars,
 		yamlRootCert = pc.Connection.SSLRootCert
 	}
 
-	if flags != nil && flags.SSLCert != "" {
-		cfg.SSLCert = flags.SSLCert
-	} else if env != nil && env.PGSSLCERT != "" {
-		cfg.SSLCert = env.PGSSLCERT
-	} else if yamlCert != "" {
-		cfg.SSLCert = yamlCert
+	var flagCert, flagKey, flagRootCert string
+	if flags != nil {
+		flagCert, flagKey, flagRootCert = flags.SSLCert, flags.SSLKey, flags.SSLRootCert
 	}
 
-	if flags != nil && flags.SSLKey != "" {
-		cfg.SSLKey = flags.SSLKey
-	} else if env != nil && env.PGSSLKEY != "" {
-		cfg.SSLKey = env.PGSSLKEY
-	} else if yamlKey != "" {
-		cfg.SSLKey = yamlKey
+	var envCert, envKey, envRootCert, envPassword string
+	if env != nil {
+		envCert, envKey = env.PGSSLCERT, env.PGSSLKEY
+		envRootCert, envPassword = env.PGSSLROOTCERT, env.PGSSLPASSWORD
 	}
 
-	if flags != nil && flags.SSLRootCert != "" {
-		cfg.SSLRootCert = flags.SSLRootCert
-	} else if env != nil && env.PGSSLROOTCERT != "" {
-		cfg.SSLRootCert = env.PGSSLROOTCERT
-	} else if yamlRootCert != "" {
-		cfg.SSLRootCert = yamlRootCert
-	}
+	cfg.SSLCert = firstNonEmpty(flagCert, cfg.SSLCert, envCert, yamlCert)
+	cfg.SSLKey = firstNonEmpty(flagKey, cfg.SSLKey, envKey, yamlKey)
+	cfg.SSLRootCert = firstNonEmpty(flagRootCert, cfg.SSLRootCert, envRootCert, yamlRootCert)
 
-	if env != nil && env.PGSSLPASSWORD != "" {
-		cfg.SSLPassword = env.PGSSLPASSWORD
+	// The private-key passphrase has no flag and no pgmi.yaml field by design:
+	// it belongs in neither argv nor a committed file.
+	cfg.SSLPassword = firstNonEmpty(cfg.SSLPassword, envPassword)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
 	}
+	return ""
 }
 
 // resolveFromConnectionString parses a connection string and derives the maintenance database.
@@ -405,7 +415,7 @@ func resolveFromConnectionString(connStr string, envVars *EnvVars) (*pgmi.Connec
 	// This is used for server-level operations (CREATE DATABASE, DROP DATABASE)
 	maintenanceDB := config.Database
 	if maintenanceDB == "" {
-		maintenanceDB = pgmi.DefaultManagementDB // "postgres"
+		maintenanceDB = pgmi.DefaultMaintenanceDB // "postgres"
 	}
 
 	return config, maintenanceDB, nil
@@ -522,10 +532,10 @@ func resolveFromGranularParams(
 		cfg.ConnectTimeout = time.Duration(seconds) * time.Second
 	}
 
-	// Management database: pgmi.yaml > default ("postgres")
-	maintenanceDB := pc.ManagementDatabase
+	// Maintenance database: pgmi.yaml > default ("postgres")
+	maintenanceDB := pc.MaintenanceDatabase
 	if maintenanceDB == "" {
-		maintenanceDB = pgmi.DefaultManagementDB
+		maintenanceDB = pgmi.DefaultMaintenanceDB
 	}
 
 	return cfg, maintenanceDB, nil

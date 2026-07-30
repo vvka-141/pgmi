@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/config"
@@ -62,7 +64,7 @@ func TestLoadProjectConfig_EnvIsProjectScoped(t *testing.T) {
 			unsetEnv(t, keyTarget)
 			unsetEnv(t, keyCwd)
 
-			if _, err := loadProjectConfig(projectDir, false); err != nil {
+			if _, err := loadProjectConfig(projectDir); err != nil {
 				t.Fatalf("loadProjectConfig() error = %v", err)
 			}
 
@@ -274,5 +276,87 @@ func TestSaveConnectionToConfig_StandardAuth_OmitsCloudFields(t *testing.T) {
 	}
 	if cfg.Connection.AzureTenantID != "" {
 		t.Errorf("AzureTenantID should be empty, got %q", cfg.Connection.AzureTenantID)
+	}
+}
+
+func TestVerboseOutputNeverContainsSecrets(t *testing.T) {
+	sentinels := []string{"SENTINEL_PASSWORD", "SENTINEL_CLIENT_SECRET"}
+
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	logConnectionVerbose(&pgmi.ConnectionConfig{
+		Host:              "testhost",
+		Port:              5432,
+		Username:          "testuser",
+		Database:          "testdb",
+		Password:          sentinels[0],
+		SSLMode:           "require",
+		AuthMethod:        pgmi.AuthMethodAzureEntraID,
+		AzureClientSecret: sentinels[1],
+	}, "postgres", true)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf [8192]byte
+	n, _ := r.Read(buf[:])
+	r.Close()
+	output := string(buf[:n])
+
+	if !strings.Contains(output, "testhost") {
+		t.Fatal("verbose output should contain the host")
+	}
+	for _, s := range sentinels {
+		if strings.Contains(output, s) {
+			t.Errorf("verbose output must not contain secret %q, got:\n%s", s, output)
+		}
+	}
+}
+
+func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "params.env")
+	if err := os.WriteFile(envFile, []byte("api_key=SENTINEL_APIKEY\nother=SENTINEL_OTHER\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	_, err := loadMergedParameters(nil, []string{envFile}, nil, true)
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf [8192]byte
+	n, _ := r.Read(buf[:])
+	r.Close()
+	output := string(buf[:n])
+
+	if err != nil {
+		t.Fatalf("loadMergedParameters() error: %v", err)
+	}
+	for _, s := range []string{"SENTINEL_APIKEY", "SENTINEL_OTHER"} {
+		if strings.Contains(output, s) {
+			t.Errorf("verbose param output must not contain value %q, got:\n%s", s, output)
+		}
+	}
+}
+
+func TestValidateSSLMode(t *testing.T) {
+	for _, mode := range []string{"", "disable", "allow", "prefer", "require", "verify-ca", "verify-full"} {
+		if err := validateSSLMode(mode); err != nil {
+			t.Errorf("validateSSLMode(%q) = %v, want nil", mode, err)
+		}
+	}
+
+	err := validateSSLMode("bogus")
+	if err == nil {
+		t.Fatal("validateSSLMode(\"bogus\") = nil, want error")
+	}
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("error should wrap ErrInvalidConfig, got %v", err)
 	}
 }

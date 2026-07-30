@@ -1,5 +1,5 @@
 -- ============================================================================
--- Test: Transaction Isolation Enforcement (PGMI-111)
+-- Test: Transaction Isolation Enforcement
 -- ============================================================================
 -- Covers the isolation contract end to end within the SQL harness:
 --   * registration stores the normalized floor on api.handler (A2)
@@ -33,7 +33,7 @@ BEGIN
             'httpMethod', '^GET$',
             'name', 'iso_rr',
             'requiresAuth', false,
-            'requiredTransactionIsolation', 'REPEATABLE-READ'
+            'minTransactionIsolation', 'REPEATABLE-READ'
         ),
         $body$
 BEGIN
@@ -42,14 +42,14 @@ END;
         $body$
     );
 
-    SELECT required_transaction_isolation INTO v_stored
+    SELECT min_transaction_isolation INTO v_stored
     FROM api.handler WHERE object_id = 'ffffffff-7001-4000-8000-000000000001';
 
-    IF v_stored <> 'repeatable read' THEN
+    IF v_stored IS DISTINCT FROM 'repeatable read' THEN
         RAISE EXCEPTION 'TEST FAILED: floor should normalize to "repeatable read", got "%"', v_stored;
     END IF;
 
-    RAISE NOTICE '  ✓ requiredTransactionIsolation normalized and stored (REPEATABLE-READ -> repeatable read)';
+    RAISE NOTICE '  ✓ minTransactionIsolation normalized and stored (REPEATABLE-READ -> repeatable read)';
 
     -- Unsupported floor is rejected at registration.
     BEGIN
@@ -60,7 +60,7 @@ END;
                 'httpMethod', '^GET$',
                 'name', 'iso_bad',
                 'requiresAuth', false,
-                'requiredTransactionIsolation', 'snapshot'
+                'minTransactionIsolation', 'snapshot'
             ),
             $body$
 BEGIN
@@ -99,7 +99,7 @@ BEGIN
             'id', 'ffffffff-7102-4000-8000-000000000001',
             'uri', '^/iso-rc$', 'httpMethod', '^GET$',
             'name', 'iso_rc', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'read committed'
+            'minTransactionIsolation', 'read committed'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -109,7 +109,7 @@ BEGIN
             'id', 'ffffffff-7103-4000-8000-000000000001',
             'uri', '^/iso-rr-rest$', 'httpMethod', '^GET$',
             'name', 'iso_rr_rest', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'repeatable read'
+            'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -118,40 +118,40 @@ BEGIN
             'id', 'ffffffff-7104-4000-8000-000000000001',
             'uri', '^/iso-ser-rest$', 'httpMethod', '^GET$',
             'name', 'iso_ser_rest', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable'
+            'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
 
     v_response := api.rest_invoke('GET', '/iso-none', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code <> 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: no floor should return 200, got %', (v_response).status_code;
     END IF;
 
     v_response := api.rest_invoke('GET', '/iso-rc', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code <> 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: read committed floor should return 200 at read committed, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ satisfied floors dispatch the handler (200)';
 
     v_response := api.rest_invoke('GET', '/iso-rr-rest', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code <> 428 THEN
+    IF (v_response).status_code IS DISTINCT FROM 428 THEN
         RAISE EXCEPTION 'TEST FAILED: repeatable read floor should return 428 at read committed, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->>'code' <> 'pgmi.transaction_isolation_too_weak' THEN
+    IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
         RAISE EXCEPTION 'TEST FAILED: REST rejection missing machine code, got %', v_content->>'code';
     END IF;
 
     v_response := api.rest_invoke('GET', '/iso-ser-rest', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code <> 428 THEN
+    IF (v_response).status_code IS DISTINCT FROM 428 THEN
         RAISE EXCEPTION 'TEST FAILED: serializable floor should return 428 at read committed, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ too-weak floors are rejected 428 with pgmi.transaction_isolation_too_weak';
 
     -- A rejected call leaves the session usable: the next call still works.
     v_response := api.rest_invoke('GET', '/iso-none', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code <> 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: session broken after a rejected call, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ rejected call leaves no broken transaction (subsequent call ok)';
@@ -176,7 +176,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-7202-4000-8000-000000000001',
             'methodName', 'iso.serializable', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable'
+            'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
     );
@@ -184,21 +184,21 @@ BEGIN
     v_route_id := api.rpc_resolve('iso.ok');
     v_response := api.rpc_invoke(v_route_id, ''::extensions.hstore,
         convert_to('{"jsonrpc":"2.0","method":"iso.ok","id":"1"}', 'UTF8'));
-    IF (v_response).status_code <> 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC no floor should return 200, got %', (v_response).status_code;
     END IF;
 
     v_route_id := api.rpc_resolve('iso.serializable');
     v_response := api.rpc_invoke(v_route_id, ''::extensions.hstore,
         convert_to('{"jsonrpc":"2.0","method":"iso.serializable","id":"2"}', 'UTF8'));
-    IF (v_response).status_code <> 428 THEN
+    IF (v_response).status_code IS DISTINCT FROM 428 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC serializable floor should return 428, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->'error'->'data'->>'code' <> 'pgmi.transaction_isolation_too_weak' THEN
+    IF v_content->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC rejection missing machine code, got %', v_content->'error'->'data'->>'code';
     END IF;
-    IF v_content->>'id' <> '2' THEN
+    IF v_content->>'id' IS DISTINCT FROM '2' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC rejection must echo the request id, got %', v_content->>'id';
     END IF;
     RAISE NOTICE '  ✓ RPC too-weak floor rejected 428 with machine code and echoed id';
@@ -223,7 +223,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-7302-4000-8000-000000000001',
             'type', 'tool', 'name', 'iso_tool_ser', 'requiresAuth', false,
-            'requiredTransactionIsolation', 'serializable',
+            'minTransactionIsolation', 'serializable',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$
@@ -240,13 +240,13 @@ BEGIN
     IF v_envelope->'error' IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: MCP serializable floor should reject with an error envelope';
     END IF;
-    IF (v_envelope->'error'->>'code')::int <> -32600 THEN
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32600 THEN
         RAISE EXCEPTION 'TEST FAILED: MCP rejection should use code -32600, got %', v_envelope->'error'->>'code';
     END IF;
-    IF v_envelope->'error'->'data'->>'code' <> 'pgmi.transaction_isolation_too_weak' THEN
+    IF v_envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP rejection missing machine code, got %', v_envelope->'error'->'data'->>'code';
     END IF;
-    IF v_envelope->>'id' <> 'req-2' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-2' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP rejection must echo the request id, got %', v_envelope->>'id';
     END IF;
     RAISE NOTICE '  ✓ MCP too-weak floor rejected (-32600) with machine code and echoed id';

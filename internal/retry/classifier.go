@@ -14,7 +14,8 @@ import (
 //
 // Classes 08 (Connection Exception), 53 (Insufficient Resources), and
 // 57 (Operator Intervention) are matched by prefix in isTransientPgError.
-// Only codes from other classes need individual constants.
+// Constants are needed for codes outside those classes, and for the two
+// class-57 members the prefix has to exclude.
 const (
 	// Class 40 - Transaction Rollback
 	pgCodeSerializationFailure = "40001"
@@ -22,6 +23,11 @@ const (
 
 	// Class 55 - Object Not In Prerequisite State
 	pgCodeLockNotAvailable = "55P03"
+
+	// Class 57 members that are decisions, not weather. Both sit inside the
+	// prefix-matched class and have to be named to be excluded from it.
+	pgCodeQueryCanceled   = "57014"
+	pgCodeDatabaseDropped = "57P04"
 )
 
 // PostgreSQLErrorClassifier implements ErrorClassifier for PostgreSQL-specific errors.
@@ -72,9 +78,19 @@ func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bo
 		return true
 	}
 
-	// Class 57 - Operator Intervention (admin shutdown, crash shutdown, etc.)
+	// Class 57 - Operator Intervention. Most of the class is the server going
+	// away underneath us (admin shutdown, crash shutdown, still starting up),
+	// which is worth another attempt. Two members are not:
+	//
+	//   57014 query_canceled  — someone asked for this: statement_timeout,
+	//                           pg_cancel_backend, or the client itself.
+	//   57P04 database_dropped — the database is gone; no attempt brings it back.
+	//
+	// Retrying either spends the whole backoff budget to arrive at the same
+	// answer, and in the 57014 case does it against an explicit instruction to
+	// stop.
 	if strings.HasPrefix(code, "57") {
-		return true
+		return code != pgCodeQueryCanceled && code != pgCodeDatabaseDropped
 	}
 
 	// Individual codes from classes not covered by prefix

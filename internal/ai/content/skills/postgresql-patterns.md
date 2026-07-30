@@ -1,6 +1,7 @@
 ---
 name: postgresql-patterns
 description: "Use when working with EXECUTE, format(), composite types, or dynamic SQL in PostgreSQL"
+scope: core
 user_invocable: true
 ---
 
@@ -212,7 +213,7 @@ END $$;
 ```sql
 BEGIN
     -- Attempt operation
-    INSERT INTO users VALUES (...);
+    INSERT INTO "user" VALUES (...);
 EXCEPTION
     WHEN unique_violation THEN
         -- Handle specific error
@@ -234,21 +235,21 @@ END;
 
 **❌ Anti-Pattern**: Backslash escaping:
 ```sql
-EXECUTE 'SELECT * FROM users WHERE name = ''John''';
+EXECUTE 'SELECT * FROM "user" WHERE name = ''John''';
 -- Hard to read, error-prone
 ```
 
 **✅ Solution**: Dollar quoting with unique tags:
 ```sql
 EXECUTE $$
-    SELECT * FROM users WHERE name = 'John'
+    SELECT * FROM "user" WHERE name = 'John'
 $$;
 
 -- For nested dollar quotes, use unique tags
 v_function_body := $outer$
     BEGIN
         EXECUTE $inner$
-            SELECT * FROM users WHERE name = 'John'
+            SELECT * FROM "user" WHERE name = 'John'
         $inner$;
     END
 $outer$;
@@ -376,25 +377,25 @@ RAISE DEBUG 'Variable state: %', v_debug_info;
 
 **❌ Anti-Pattern**: Loop over rows:
 ```sql
-FOR v_record IN SELECT * FROM users LOOP
-    UPDATE users SET last_seen = now() WHERE id = v_record.id;
+FOR v_record IN SELECT * FROM "user" LOOP
+    UPDATE "user" SET last_seen = now() WHERE id = v_record.id;
 END LOOP;
 -- Slow: N queries
 ```
 
 **✅ Solution**: Set-based operation:
 ```sql
-UPDATE users SET last_seen = now();
+UPDATE "user" SET last_seen = now();
 -- Fast: 1 query
 ```
 
 **When Loops Are Necessary**: Use bulk operations:
 ```sql
 -- Collect IDs first
-SELECT array_agg(id) INTO v_ids FROM users WHERE active;
+SELECT array_agg(id) INTO v_ids FROM "user" WHERE active;
 
 -- Bulk operation
-UPDATE users SET last_seen = now() WHERE id = ANY(v_ids);
+UPDATE "user" SET last_seen = now() WHERE id = ANY(v_ids);
 ```
 
 ---
@@ -414,7 +415,7 @@ Quick reference for error interpretation:
 | `42804` | Datatype mismatch | Incompatible types |
 | `P0001` | RAISE EXCEPTION | User-defined exception |
 
-**In pgmi**: Use `api.classify_sqlstate()` to get error classification.
+**In the advanced template**: Use `api.error_response(sqlstate, message)` or `api.problem_response(status, title, detail)` for structured error handling (see `lib/api/07-helpers.sql`).
 
 ---
 
@@ -462,11 +463,11 @@ Always use explicit JOIN keywords — never bare `JOIN`.
 
 ```sql
 -- ❌ BAD: Implicit join type
-SELECT * FROM users u
+SELECT * FROM "user" u
 JOIN orders o ON o.user_id = u.id;
 
 -- ✅ GOOD: Explicit
-SELECT * FROM users u
+SELECT * FROM "user" u
 INNER JOIN orders o ON o.user_id = u.id;
 ```
 

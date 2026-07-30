@@ -54,7 +54,7 @@ func TestTemplateTransactionIsolation(t *testing.T) {
 	register := func(id, uri, name, floor string) {
 		t.Helper()
 		meta := `{"id":"` + id + `","uri":"^` + uri + `$","httpMethod":"^GET$","name":"` + name +
-			`","requiresAuth":false,"requiredTransactionIsolation":"` + floor + `"}`
+			`","requiresAuth":false,"minTransactionIsolation":"` + floor + `"}`
 		if _, err := pool.Exec(ctx, "SELECT api.create_or_replace_rest_handler($1::jsonb, $2)", meta, body); err != nil {
 			t.Fatalf("register handler %s: %v", name, err)
 		}

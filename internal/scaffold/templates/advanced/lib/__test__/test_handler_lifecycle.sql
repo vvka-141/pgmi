@@ -23,7 +23,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/test-lifecycle(\?.*)?$',
+            'uri', '^/test-lifecycle$',
             'httpMethod', '^GET$',
             'name', 'test_lifecycle',
             'description', 'Lifecycle test handler',
@@ -42,7 +42,7 @@ END;
     -- Invoke handler
     v_response := api.rest_invoke('GET', '/test-lifecycle', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Handler invocation failed: %', (v_response).status_code;
     END IF;
 
@@ -53,7 +53,7 @@ END;
     FROM api.inbound_queue
     WHERE handler_object_id = v_handler_id;
 
-    IF v_queue_count != 1 THEN
+    IF v_queue_count IS DISTINCT FROM 1 THEN
         RAISE EXCEPTION 'Expected 1 queue entry, got %', v_queue_count;
     END IF;
 
@@ -80,7 +80,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/test-content-nego(\?.*)?$',
+            'uri', '^/test-content-nego$',
             'httpMethod', '^GET$',
             'name', 'test_content_nego',
             'description', 'Content negotiation test handler',
@@ -103,7 +103,7 @@ END;
         'accept=>application/json'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Accept: application/json should return 200, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: application/json -> 200';
@@ -117,7 +117,7 @@ END;
         'accept=>*/*'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Accept: */* should return 200, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: */* -> 200';
@@ -131,7 +131,7 @@ END;
         'accept=>application/xml'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 406 THEN
+    IF (v_response).status_code IS DISTINCT FROM 406 THEN
         RAISE EXCEPTION 'Accept: application/xml should return 406, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: application/xml -> 406 Not Acceptable';
@@ -163,7 +163,7 @@ END;
         extensions.hstore('content-type', 'application/json; charset=utf-8'),
         convert_to('{}', 'UTF8')
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Content-Type application/json should be accepted (200), got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Content-Type: application/json -> 200 (declared accepts)';
@@ -173,7 +173,7 @@ END;
         extensions.hstore('content-type', 'application/xml'),
         convert_to('<x/>', 'UTF8')
     );
-    IF (v_response).status_code != 415 THEN
+    IF (v_response).status_code IS DISTINCT FROM 415 THEN
         RAISE EXCEPTION 'Content-Type application/xml should return 415, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Content-Type: application/xml -> 415 Unsupported Media Type';
@@ -183,7 +183,7 @@ END;
     -- ========================================================================
 
     v_response := api.rest_invoke('GET', '/test-content-nego', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'No Accept header should return 200, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + No Accept header -> 200';
@@ -197,13 +197,13 @@ END;
         '"accept"=>"text/html, application/json, text/plain"'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Accept with json in list should return 200, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: text/html, application/json, text/plain -> 200';
 
     -- ========================================================================
-    -- PGMI-31: media-range Accept must not false-406, and a superstring
+    -- Media-range Accept must not false-406, and a superstring
     -- subtype must not false-accept.
     -- ========================================================================
 
@@ -213,7 +213,7 @@ END;
         'accept=>application/*'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Accept: application/* should match application/json (200), got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: application/* -> 200 (media range, no false 406)';
@@ -224,7 +224,7 @@ END;
         'accept=>application/json-patch+json'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 406 THEN
+    IF (v_response).status_code IS DISTINCT FROM 406 THEN
         RAISE EXCEPTION 'Accept: application/json-patch+json must NOT match application/json (expected 406), got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  + Accept: application/json-patch+json -> 406 (no false accept)';
@@ -260,12 +260,12 @@ END;
     );
 
     v_response := api.rest_invoke('GET', '/qs-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'route should match bare path: %', (v_response).status_code;
     END IF;
 
     v_response := api.rest_invoke('GET', '/qs-probe?foo=bar&baz=quux', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'route should match path with query string (gateway strips it): %', (v_response).status_code;
     END IF;
 
@@ -302,7 +302,7 @@ BEGIN
         END IF;
     END;
 
-    IF NOT v_caught THEN
+    IF v_caught IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'expected handler-name validation error for 60-char name';
     END IF;
 
@@ -327,7 +327,7 @@ BEGIN
         END IF;
     END;
 
-    IF NOT v_caught THEN
+    IF v_caught IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'expected validation error for empty handler name';
     END IF;
 
@@ -357,7 +357,7 @@ BEGIN
         WHERE pronamespace = 'api'::regnamespace AND proname = 'rename_alpha'
           AND proargtypes[0] = 'api.rest_request'::regtype
     ) INTO v_alpha_exists;
-    IF NOT v_alpha_exists THEN
+    IF v_alpha_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'rename test setup: api.rename_alpha should exist after first registration';
     END IF;
 
@@ -381,15 +381,15 @@ BEGIN
           AND proargtypes[0] = 'api.rest_request'::regtype
     ) INTO v_beta_exists;
 
-    IF v_alpha_exists THEN
+    IF v_alpha_exists IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'orphaned function api.rename_alpha was not dropped on rename';
     END IF;
-    IF NOT v_beta_exists THEN
+    IF v_beta_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'replacement function api.rename_beta should exist after rename';
     END IF;
 
     SELECT handler_function_name INTO v_registered FROM api.handler WHERE object_id = v_id;
-    IF v_registered <> 'rename_beta' THEN
+    IF v_registered IS DISTINCT FROM 'rename_beta' THEN
         RAISE EXCEPTION 'registry should point at rename_beta, got %', v_registered;
     END IF;
 
@@ -402,4 +402,104 @@ BEGIN
     RAISE NOTICE '===============================================================';
     RAISE NOTICE '+ ALL HANDLER LIFECYCLE AND CONTENT NEGOTIATION TESTS PASSED';
     RAISE NOTICE '===============================================================';
+END $$;
+
+-- ============================================================================
+-- Test: a handler name cannot be claimed by two handlers
+-- Names become function names (api.<name>), so a second CREATE OR REPLACE would
+-- overwrite the first handler's body. Registration must refuse and say who owns
+-- the name — not fail with a raw constraint violation that names neither.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_first  uuid := 'ffffffff-0186-4000-8000-000000000001';
+    v_second uuid := 'ffffffff-0186-4000-8000-000000000002';
+    v_message text;
+    v_body text;
+BEGIN
+    RAISE NOTICE '-> Testing REST handler name-collision guard';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first')); END; $body$
+    );
+
+    -- Same name, different handler: a realistic copy-paste of the metadata block.
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object('id', v_second, 'uri', '^/collide-second$', 'httpMethod', '^GET$',
+                'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+            $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'second')); END; $body$
+        );
+        RAISE EXCEPTION 'TEST FAILED: two REST handlers must not both claim the name "collision_probe"';
+    EXCEPTION WHEN unique_violation THEN
+        GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    END;
+
+    -- The message must be actionable: it names the collision and its current owner.
+    IF coalesce(v_message, '') NOT LIKE '%collision_probe%' OR coalesce(v_message, '') NOT LIKE '%' || v_first::text || '%' THEN
+        RAISE EXCEPTION 'TEST FAILED: the error must name the route and the handler that owns it, got: %', v_message;
+    END IF;
+
+    RAISE NOTICE '  + A colliding REST name is refused, naming the handler that owns it';
+
+    -- And the incumbent still runs its OWN body — the whole point of the guard.
+    v_body := convert_from((api.rest_invoke('GET', '/collide-first')).content, 'UTF8');
+    IF coalesce(v_body, '') NOT LIKE '%first%' THEN
+        RAISE EXCEPTION 'TEST FAILED: the incumbent handler''s body was overwritten, got: %', v_body;
+    END IF;
+
+    RAISE NOTICE '  + The incumbent handler still executes its own body';
+
+    -- Re-registering under the SAME id must still work: that is a replacement,
+    -- not a collision. A guard that blocked this would break every redeploy.
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first-v2')); END; $body$
+    );
+
+    v_body := convert_from((api.rest_invoke('GET', '/collide-first')).content, 'UTF8');
+    IF coalesce(v_body, '') NOT LIKE '%first-v2%' THEN
+        RAISE EXCEPTION 'TEST FAILED: re-registering the same id must replace the body, got: %', v_body;
+    END IF;
+
+    RAISE NOTICE '  + Re-registering the same id still replaces the handler (not a collision)';
+    RAISE NOTICE '✓ REST name-collision tests passed';
+END $$;
+
+DO $$
+DECLARE
+    v_first  uuid := 'ffffffff-0186-4000-8000-000000000003';
+    v_second uuid := 'ffffffff-0186-4000-8000-000000000004';
+    v_message text;
+BEGIN
+    RAISE NOTICE '-> Testing MCP handler name-collision guard';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', v_first, 'type', 'tool', 'name', 'mcp_collision_probe',
+            'description', 'first', 'requiresAuth', false),
+        $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('first'::text), (request).request_id); END; $body$
+    );
+
+    BEGIN
+        PERFORM api.create_or_replace_mcp_handler(
+            jsonb_build_object('id', v_second, 'type', 'tool', 'name', 'mcp_collision_probe',
+                'description', 'second', 'requiresAuth', false),
+            $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('second'::text), (request).request_id); END; $body$
+        );
+        RAISE EXCEPTION 'TEST FAILED: two MCP handlers must not both claim one name';
+    EXCEPTION WHEN unique_violation THEN
+        GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    END;
+
+    -- A raw "duplicate key value violates unique constraint" names neither handler.
+    IF coalesce(v_message, '') NOT LIKE '%mcp_collision_probe%' OR coalesce(v_message, '') NOT LIKE '%' || v_first::text || '%' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP collision must report a clean, attributable error, got: %', v_message;
+    END IF;
+
+    RAISE NOTICE '  + A colliding MCP name is refused with an attributable error';
+    RAISE NOTICE '✓ MCP name-collision tests passed';
 END $$;

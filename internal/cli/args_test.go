@@ -20,7 +20,7 @@ func TestRequireArgValidators(t *testing.T) {
 			name:       "RequireProjectPath",
 			fn:         RequireProjectPath,
 			cmdUse:     "deploy <project_path>",
-			validArg:   "./migrations",
+			validArg:   ".",
 			missingMsg: "missing required argument: <project_path>",
 			helpMsg:    "Example:",
 		},
@@ -56,6 +56,25 @@ func TestRequireArgValidators(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), tt.helpMsg) {
 					t.Errorf("expected %q, got: %s", tt.helpMsg, err.Error())
+				}
+			})
+
+			// UseLine() already ends with the placeholder; appending it again
+			// renders as two required arguments.
+			t.Run("usage line matches UseLine", func(t *testing.T) {
+				err := tt.fn(cmd, []string{})
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				want := "Usage: " + cmd.UseLine()
+				var got string
+				for line := range strings.SplitSeq(err.Error(), "\n") {
+					if strings.HasPrefix(line, "Usage: ") {
+						got = line
+					}
+				}
+				if got != want {
+					t.Errorf("usage line\n  got:  %q\n  want: %q", got, want)
 				}
 			})
 

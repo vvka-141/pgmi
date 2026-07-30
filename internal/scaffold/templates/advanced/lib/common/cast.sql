@@ -89,13 +89,13 @@ BEGIN
     IF common.try_cast('550e8400e29b41d4a716446655440000', extensions.uuid_nil()) = extensions.uuid_nil() THEN
         RAISE EXCEPTION 'try_cast(uuid) failed: compact format should parse';
     END IF;
-    IF common.try_cast('invalid', extensions.uuid_nil()) != extensions.uuid_nil() THEN
+    IF common.try_cast('invalid', extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
         RAISE EXCEPTION 'try_cast(uuid) failed: invalid input should return default';
     END IF;
     IF ('550e8400-e29b-41d4-a716-446655440000' ?> extensions.uuid_nil()) = extensions.uuid_nil() THEN
         RAISE EXCEPTION 'operator ?>(uuid) failed: valid UUID should parse';
     END IF;
-    IF ('invalid' ?> extensions.uuid_nil()) != extensions.uuid_nil() THEN
+    IF ('invalid' ?> extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
         RAISE EXCEPTION 'operator ?>(uuid) failed: invalid input should return default';
     END IF;
 END $$;
@@ -188,79 +188,79 @@ COMMENT ON OPERATOR api.?> (text, boolean) IS
 DO $$
 BEGIN
     -- Test true values
-    IF common.try_cast('true', false) != true THEN
+    IF common.try_cast('true', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "true" should parse as true';
     END IF;
-    IF common.try_cast('TRUE', false) != true THEN
+    IF common.try_cast('TRUE', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "TRUE" should parse as true (case insensitive)';
     END IF;
-    IF common.try_cast('t', false) != true THEN
+    IF common.try_cast('t', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "t" should parse as true';
     END IF;
-    IF common.try_cast('yes', false) != true THEN
+    IF common.try_cast('yes', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "yes" should parse as true';
     END IF;
-    IF common.try_cast('Y', false) != true THEN
+    IF common.try_cast('Y', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "Y" should parse as true';
     END IF;
-    IF common.try_cast('on', false) != true THEN
+    IF common.try_cast('on', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "on" should parse as true';
     END IF;
-    IF common.try_cast('1', false) != true THEN
+    IF common.try_cast('1', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "1" should parse as true';
     END IF;
-    IF common.try_cast('  1  ', false) != true THEN
+    IF common.try_cast('  1  ', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "  1  " with whitespace should parse as true';
     END IF;
 
     -- Test false values
-    IF common.try_cast('false', true) != false THEN
+    IF common.try_cast('false', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "false" should parse as false';
     END IF;
-    IF common.try_cast('FALSE', true) != false THEN
+    IF common.try_cast('FALSE', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "FALSE" should parse as false (case insensitive)';
     END IF;
-    IF common.try_cast('f', true) != false THEN
+    IF common.try_cast('f', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "f" should parse as false';
     END IF;
-    IF common.try_cast('no', true) != false THEN
+    IF common.try_cast('no', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "no" should parse as false';
     END IF;
-    IF common.try_cast('N', true) != false THEN
+    IF common.try_cast('N', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "N" should parse as false';
     END IF;
-    IF common.try_cast('off', true) != false THEN
+    IF common.try_cast('off', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "off" should parse as false';
     END IF;
-    IF common.try_cast('0', true) != false THEN
+    IF common.try_cast('0', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "0" should parse as false';
     END IF;
-    IF common.try_cast('  0  ', true) != false THEN
+    IF common.try_cast('  0  ', true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "  0  " with whitespace should parse as false';
     END IF;
 
     -- Test invalid input returns default
-    IF common.try_cast('invalid', false) != false THEN
+    IF common.try_cast('invalid', false) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: invalid input should return default (false)';
     END IF;
-    IF common.try_cast('invalid', true) != true THEN
+    IF common.try_cast('invalid', true) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: invalid input should return default (true)';
     END IF;
-    IF common.try_cast('2', false) != false THEN
+    IF common.try_cast('2', false) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: "2" should return default';
     END IF;
-    IF common.try_cast('', false) != false THEN
+    IF common.try_cast('', false) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'try_cast(boolean) failed: empty string should return default';
     END IF;
 
     -- Test operator syntax
-    IF ('yes' ?> false) != true THEN
+    IF ('yes' ?> false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'operator ?>(boolean) failed: "yes" should parse as true';
     END IF;
-    IF ('no' ?> true) != false THEN
+    IF ('no' ?> true) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'operator ?>(boolean) failed: "no" should parse as false';
     END IF;
-    IF ('invalid' ?> false) != false THEN
+    IF ('invalid' ?> false) IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'operator ?>(boolean) failed: invalid input should return default';
     END IF;
 END $$;
@@ -287,7 +287,7 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN btrim($1) ~ '^[+-]?\d+$' THEN
+        WHEN length(btrim($1)) <= 39 AND btrim($1) ~ '^[+-]?\d+$' THEN
             CASE
                 WHEN btrim($1)::numeric BETWEEN -2147483648 AND 2147483647
                 THEN btrim($1)::integer
@@ -313,66 +313,69 @@ COMMENT ON OPERATOR api.?> (text, integer) IS
 DO $$
 BEGIN
     -- Test valid integers
-    IF common.try_cast('42', 0) != 42 THEN
+    IF common.try_cast('42', 0) IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "42" should parse';
     END IF;
-    IF common.try_cast('-123', 0) != -123 THEN
+    IF common.try_cast('-123', 0) IS DISTINCT FROM -123 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "-123" should parse';
     END IF;
-    IF common.try_cast('+99', 0) != 99 THEN
+    IF common.try_cast('+99', 0) IS DISTINCT FROM 99 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "+99" should parse';
     END IF;
-    IF common.try_cast('0', -1) != 0 THEN
+    IF common.try_cast('0', -1) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "0" should parse';
     END IF;
-    IF common.try_cast('007', 0) != 7 THEN
+    IF common.try_cast('007', 0) IS DISTINCT FROM 7 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "007" with leading zeros should parse as 7';
     END IF;
-    IF common.try_cast('  42  ', 0) != 42 THEN
+    IF common.try_cast('  42  ', 0) IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: "  42  " with whitespace should parse';
     END IF;
 
     -- Test range boundaries
-    IF common.try_cast('2147483647', 0) != 2147483647 THEN
+    IF common.try_cast('2147483647', 0) IS DISTINCT FROM 2147483647 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: max int32 should parse';
     END IF;
-    IF common.try_cast('-2147483648', 0) != -2147483648 THEN
+    IF common.try_cast('-2147483648', 0) IS DISTINCT FROM -2147483648 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: min int32 should parse';
     END IF;
 
     -- Test overflow returns default
-    IF common.try_cast('2147483648', 0) != 0 THEN
+    IF common.try_cast('2147483648', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: overflow should return default';
     END IF;
-    IF common.try_cast('-2147483649', 0) != 0 THEN
+    IF common.try_cast('-2147483649', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: underflow should return default';
     END IF;
-    IF common.try_cast('9999999999', 0) != 0 THEN
+    IF common.try_cast('9999999999', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: large overflow should return default';
+    END IF;
+    IF common.try_cast(repeat('9', 131073), 0) IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'try_cast(integer) failed: 131k-digit string should return default, not throw 22003';
     END IF;
 
     -- Test invalid input returns default
-    IF common.try_cast('12.5', 0) != 0 THEN
+    IF common.try_cast('12.5', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: decimal should return default';
     END IF;
-    IF common.try_cast('1e5', 0) != 0 THEN
+    IF common.try_cast('1e5', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: scientific notation should return default';
     END IF;
-    IF common.try_cast('invalid', 0) != 0 THEN
+    IF common.try_cast('invalid', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: non-numeric should return default';
     END IF;
-    IF common.try_cast('', 0) != 0 THEN
+    IF common.try_cast('', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: empty string should return default';
     END IF;
-    IF common.try_cast('12abc', 0) != 0 THEN
+    IF common.try_cast('12abc', 0) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(integer) failed: mixed alphanumeric should return default';
     END IF;
 
     -- Test operator syntax
-    IF ('42' ?> 0) != 42 THEN
+    IF ('42' ?> 0) IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'operator ?>(integer) failed: "42" should parse';
     END IF;
-    IF ('invalid' ?> -1) != -1 THEN
+    IF ('invalid' ?> -1) IS DISTINCT FROM -1 THEN
         RAISE EXCEPTION 'operator ?>(integer) failed: invalid input should return default';
     END IF;
 END $$;
@@ -396,7 +399,7 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN btrim($1) ~ '^[+-]?\d+$' THEN
+        WHEN length(btrim($1)) <= 39 AND btrim($1) ~ '^[+-]?\d+$' THEN
             CASE
                 WHEN btrim($1)::numeric BETWEEN -9223372036854775808 AND 9223372036854775807
                 THEN btrim($1)::bigint
@@ -422,54 +425,57 @@ COMMENT ON OPERATOR api.?> (text, bigint) IS
 DO $$
 BEGIN
     -- Test valid bigints
-    IF common.try_cast('42', 0::bigint) != 42 THEN
+    IF common.try_cast('42', 0::bigint) IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: "42" should parse';
     END IF;
-    IF common.try_cast('-123', 0::bigint) != -123 THEN
+    IF common.try_cast('-123', 0::bigint) IS DISTINCT FROM -123 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: "-123" should parse';
     END IF;
-    IF common.try_cast('1705327800000', 0::bigint) != 1705327800000 THEN
+    IF common.try_cast('1705327800000', 0::bigint) IS DISTINCT FROM 1705327800000 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: large value (Unix ms) should parse';
     END IF;
-    IF common.try_cast('  999999999999  ', 0::bigint) != 999999999999 THEN
+    IF common.try_cast('  999999999999  ', 0::bigint) IS DISTINCT FROM 999999999999 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: value with whitespace should parse';
     END IF;
 
     -- Test range boundaries
-    IF common.try_cast('9223372036854775807', 0::bigint) != 9223372036854775807 THEN
+    IF common.try_cast('9223372036854775807', 0::bigint) IS DISTINCT FROM 9223372036854775807 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: max int64 should parse';
     END IF;
-    IF common.try_cast('-9223372036854775808', 0::bigint) != -9223372036854775808 THEN
+    IF common.try_cast('-9223372036854775808', 0::bigint) IS DISTINCT FROM -9223372036854775808 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: min int64 should parse';
     END IF;
 
     -- Test overflow returns default
-    IF common.try_cast('9223372036854775808', 0::bigint) != 0 THEN
+    IF common.try_cast('9223372036854775808', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: overflow should return default';
     END IF;
-    IF common.try_cast('-9223372036854775809', 0::bigint) != 0 THEN
+    IF common.try_cast('-9223372036854775809', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: underflow should return default';
     END IF;
-    IF common.try_cast('99999999999999999999', 0::bigint) != 0 THEN
+    IF common.try_cast('99999999999999999999', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: large overflow should return default';
+    END IF;
+    IF common.try_cast(repeat('9', 131073), 0::bigint) IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'try_cast(bigint) failed: 131k-digit string should return default, not throw 22003';
     END IF;
 
     -- Test invalid input returns default
-    IF common.try_cast('12.5', 0::bigint) != 0 THEN
+    IF common.try_cast('12.5', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: decimal should return default';
     END IF;
-    IF common.try_cast('1e10', 0::bigint) != 0 THEN
+    IF common.try_cast('1e10', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: scientific notation should return default';
     END IF;
-    IF common.try_cast('invalid', 0::bigint) != 0 THEN
+    IF common.try_cast('invalid', 0::bigint) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(bigint) failed: non-numeric should return default';
     END IF;
 
     -- Test operator syntax
-    IF ('1705327800000' ?> 0::bigint) != 1705327800000 THEN
+    IF ('1705327800000' ?> 0::bigint) IS DISTINCT FROM 1705327800000 THEN
         RAISE EXCEPTION 'operator ?>(bigint) failed: large value should parse';
     END IF;
-    IF ('invalid' ?> -1::bigint) != -1 THEN
+    IF ('invalid' ?> -1::bigint) IS DISTINCT FROM -1 THEN
         RAISE EXCEPTION 'operator ?>(bigint) failed: invalid input should return default';
     END IF;
 END $$;
@@ -521,74 +527,74 @@ COMMENT ON OPERATOR api.?> (text, numeric) IS
 DO $$
 BEGIN
     -- Test integers
-    IF common.try_cast('42', 0::numeric) != 42 THEN
+    IF common.try_cast('42', 0::numeric) IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: integer "42" should parse';
     END IF;
-    IF common.try_cast('-123', 0::numeric) != -123 THEN
+    IF common.try_cast('-123', 0::numeric) IS DISTINCT FROM -123 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: negative integer should parse';
     END IF;
-    IF common.try_cast('+99', 0::numeric) != 99 THEN
+    IF common.try_cast('+99', 0::numeric) IS DISTINCT FROM 99 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: positive sign should parse';
     END IF;
 
     -- Test decimals
-    IF common.try_cast('19.99', 0::numeric) != 19.99 THEN
+    IF common.try_cast('19.99', 0::numeric) IS DISTINCT FROM 19.99 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: decimal "19.99" should parse';
     END IF;
-    IF common.try_cast('0.0001', 0::numeric) != 0.0001 THEN
+    IF common.try_cast('0.0001', 0::numeric) IS DISTINCT FROM 0.0001 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: small decimal should parse';
     END IF;
-    IF common.try_cast('.5', 0::numeric) != 0.5 THEN
+    IF common.try_cast('.5', 0::numeric) IS DISTINCT FROM 0.5 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: leading dot ".5" should parse as 0.5';
     END IF;
-    IF common.try_cast('123.', 0::numeric) != 123 THEN
+    IF common.try_cast('123.', 0::numeric) IS DISTINCT FROM 123 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: trailing dot "123." should parse as 123';
     END IF;
-    IF common.try_cast('  3.14  ', 0::numeric) != 3.14 THEN
+    IF common.try_cast('  3.14  ', 0::numeric) IS DISTINCT FROM 3.14 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: value with whitespace should parse';
     END IF;
 
     -- Test scientific notation
-    IF common.try_cast('1.5e10', 0::numeric) != 15000000000 THEN
+    IF common.try_cast('1.5e10', 0::numeric) IS DISTINCT FROM 15000000000 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: scientific "1.5e10" should parse';
     END IF;
-    IF common.try_cast('2.5E-3', 0::numeric) != 0.0025 THEN
+    IF common.try_cast('2.5E-3', 0::numeric) IS DISTINCT FROM 0.0025 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: scientific "2.5E-3" should parse';
     END IF;
-    IF common.try_cast('1e+6', 0::numeric) != 1000000 THEN
+    IF common.try_cast('1e+6', 0::numeric) IS DISTINCT FROM 1000000 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: scientific "1e+6" should parse';
     END IF;
-    IF common.try_cast('5E2', 0::numeric) != 500 THEN
+    IF common.try_cast('5E2', 0::numeric) IS DISTINCT FROM 500 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: scientific "5E2" should parse';
     END IF;
 
     -- Test large precision
-    IF common.try_cast('123456789.123456789', 0::numeric) != 123456789.123456789 THEN
+    IF common.try_cast('123456789.123456789', 0::numeric) IS DISTINCT FROM 123456789.123456789 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: high precision value should parse';
     END IF;
 
     -- Test invalid input returns default
-    IF common.try_cast('invalid', 0::numeric) != 0 THEN
+    IF common.try_cast('invalid', 0::numeric) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: non-numeric should return default';
     END IF;
-    IF common.try_cast('', 0::numeric) != 0 THEN
+    IF common.try_cast('', 0::numeric) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: empty string should return default';
     END IF;
-    IF common.try_cast('12.34.56', 0::numeric) != 0 THEN
+    IF common.try_cast('12.34.56', 0::numeric) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: multiple dots should return default';
     END IF;
-    IF common.try_cast('12abc', 0::numeric) != 0 THEN
+    IF common.try_cast('12abc', 0::numeric) IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'try_cast(numeric) failed: mixed alphanumeric should return default';
     END IF;
 
     -- Test operator syntax
-    IF ('19.99' ?> 0::numeric) != 19.99 THEN
+    IF ('19.99' ?> 0::numeric) IS DISTINCT FROM 19.99 THEN
         RAISE EXCEPTION 'operator ?>(numeric) failed: decimal should parse';
     END IF;
-    IF ('1.5e10' ?> 0::numeric) != 15000000000 THEN
+    IF ('1.5e10' ?> 0::numeric) IS DISTINCT FROM 15000000000 THEN
         RAISE EXCEPTION 'operator ?>(numeric) failed: scientific notation should parse';
     END IF;
-    IF ('invalid' ?> (-1)::numeric) != -1 THEN
+    IF ('invalid' ?> (-1)::numeric) IS DISTINCT FROM -1 THEN
         RAISE EXCEPTION 'operator ?>(numeric) failed: invalid input should return default';
     END IF;
 END $$;
@@ -637,14 +643,22 @@ BEGIN
             'i'
         );
         IF v_match IS NOT NULL THEN
-            RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
-                years  => COALESCE(v_match[2]::int, 0),
-                months => COALESCE(v_match[3]::int, 0),
-                days   => COALESCE(v_match[5]::int, 0) + 7*COALESCE(v_match[4]::int, 0),
-                hours  => COALESCE(v_match[6]::int, 0),
-                mins   => COALESCE(v_match[7]::int, 0),
-                secs   => COALESCE(v_match[8]::double precision, 0)
-            );
+            -- The captures are unbounded \d+ and make_interval's params are int4,
+            -- so an oversized component raises 22003 — and 7*weeks can overflow
+            -- even when weeks alone fits. A "try" cast must never throw.
+            BEGIN
+                RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
+                    years  => COALESCE(v_match[2]::int, 0),
+                    months => COALESCE(v_match[3]::int, 0),
+                    days   => COALESCE(v_match[5]::int, 0) + 7*COALESCE(v_match[4]::int, 0),
+                    hours  => COALESCE(v_match[6]::int, 0),
+                    mins   => COALESCE(v_match[7]::int, 0),
+                    secs   => COALESCE(v_match[8]::double precision, 0)
+                );
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN $2;
+            END;
         END IF;
     END IF;
 
@@ -656,13 +670,20 @@ BEGIN
             'i'
         );
         IF v_match IS NOT NULL THEN
-            RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
-                days  => COALESCE(v_match[2]::int, 0),
-                hours => COALESCE(v_match[3]::int, 0),
-                mins  => COALESCE(v_match[4]::int, 0),
-                secs  => COALESCE(v_match[5]::int, 0)
-                        + COALESCE(('0.'||v_match[6])::double precision, 0)
-            );
+            -- Same overflow exposure as the ISO branch: the day prefix is an
+            -- unbounded \d+ cast to int4.
+            BEGIN
+                RETURN (CASE WHEN v_match[1] IS NULL THEN 1 ELSE -1 END) * make_interval(
+                    days  => COALESCE(v_match[2]::int, 0),
+                    hours => COALESCE(v_match[3]::int, 0),
+                    mins  => COALESCE(v_match[4]::int, 0),
+                    secs  => COALESCE(v_match[5]::int, 0)
+                            + COALESCE(('0.'||v_match[6])::double precision, 0)
+                );
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN $2;
+            END;
         END IF;
     END IF;
 
@@ -700,7 +721,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "P1Y2M3D" should parse';
     END IF;
-    IF v_result != make_interval(years => 1, months => 2, days => 3) THEN
+    IF v_result IS DISTINCT FROM make_interval(years => 1, months => 2, days => 3) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "P1Y2M3D" incorrect result';
     END IF;
 
@@ -708,7 +729,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "PT5H30M" should parse';
     END IF;
-    IF v_result != make_interval(hours => 5, mins => 30) THEN
+    IF v_result IS DISTINCT FROM make_interval(hours => 5, mins => 30) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "PT5H30M" incorrect result';
     END IF;
 
@@ -716,7 +737,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "P2W" should parse';
     END IF;
-    IF v_result != make_interval(days => 14) THEN
+    IF v_result IS DISTINCT FROM make_interval(days => 14) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: ISO-8601 "P2W" incorrect result (expected 14 days)';
     END IF;
 
@@ -725,7 +746,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: TimeSpan "12:30" should parse';
     END IF;
-    IF v_result != make_interval(hours => 12, mins => 30) THEN
+    IF v_result IS DISTINCT FROM make_interval(hours => 12, mins => 30) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: TimeSpan "12:30" incorrect result';
     END IF;
 
@@ -733,7 +754,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: TimeSpan "1.12:30:45" should parse';
     END IF;
-    IF v_result != make_interval(days => 1, hours => 12, mins => 30, secs => 45) THEN
+    IF v_result IS DISTINCT FROM make_interval(days => 1, hours => 12, mins => 30, secs => 45) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: TimeSpan "1.12:30:45" incorrect result';
     END IF;
 
@@ -742,7 +763,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "2 days" should parse';
     END IF;
-    IF v_result != make_interval(days => 2) THEN
+    IF v_result IS DISTINCT FROM make_interval(days => 2) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "2 days" incorrect result';
     END IF;
 
@@ -750,7 +771,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "3 hours 30 minutes" should parse';
     END IF;
-    IF v_result != make_interval(hours => 3, mins => 30) THEN
+    IF v_result IS DISTINCT FROM make_interval(hours => 3, mins => 30) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "3 hours 30 minutes" incorrect result';
     END IF;
 
@@ -758,7 +779,7 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "1w 2d 3h" should parse';
     END IF;
-    IF v_result != make_interval(days => 9, hours => 3) THEN
+    IF v_result IS DISTINCT FROM make_interval(days => 9, hours => 3) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "1w 2d 3h" incorrect result (expected 9 days 3 hours)';
     END IF;
 
@@ -766,18 +787,18 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "90 sec" should parse';
     END IF;
-    IF v_result != make_interval(secs => 90) THEN
+    IF v_result IS DISTINCT FROM make_interval(secs => 90) THEN
         RAISE EXCEPTION 'try_cast(interval) failed: natural "90 sec" incorrect result';
     END IF;
 
     -- Test invalid input returns default
     v_result := common.try_cast('invalid', v_default);
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: invalid input should return default';
     END IF;
 
     v_result := common.try_cast('', v_default);
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: empty input should return default';
     END IF;
 
@@ -786,13 +807,37 @@ BEGIN
     IF v_result = v_default THEN
         RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" should parse';
     END IF;
-    IF v_result != make_interval(days => 2, hours => 3) THEN
+    IF v_result IS DISTINCT FROM make_interval(days => 2, hours => 3) THEN
         RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" incorrect result';
     END IF;
 
     v_result := 'invalid' ?> v_default;
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'operator ?>(interval) failed: invalid input should return default';
+    END IF;
+
+    -- Oversized components must return the default, not raise. try_cast is the
+    -- documented way to parse untrusted query/body params, so a throw here is a
+    -- 500 on input any caller can send.
+    v_result := common.try_cast('P99999999999Y', v_default);
+    IF v_result IS DISTINCT FROM v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: oversized ISO-8601 year should return default, got %', v_result;
+    END IF;
+
+    v_result := common.try_cast('99999999999999.12:30:45', v_default);
+    IF v_result IS DISTINCT FROM v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: oversized TimeSpan day prefix should return default, got %', v_result;
+    END IF;
+
+    -- Weeks fits int4 on its own; the 7 * weeks multiplication is what overflows.
+    v_result := common.try_cast('P500000000W', v_default);
+    IF v_result IS DISTINCT FROM v_default THEN
+        RAISE EXCEPTION 'try_cast(interval) failed: 7*weeks overflow should return default, got %', v_result;
+    END IF;
+
+    v_result := 'P99999999999Y' ?> v_default;
+    IF v_result IS DISTINCT FROM v_default THEN
+        RAISE EXCEPTION 'operator ?>(interval) failed: oversized input should return default, got %', v_result;
     END IF;
 END $$;
 
@@ -893,77 +938,77 @@ BEGIN
     -- Test ISO-8601 format
     v_result := common.try_cast('2025-01-15 14:30:00', v_default);
     v_expected := '2025-01-15 14:30:00'::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: ISO-8601 format should parse correctly';
     END IF;
 
     v_result := common.try_cast('2025-01-15T14:30:00', v_default);
     v_expected := '2025-01-15 14:30:00'::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: ISO-8601 T-separator should parse correctly';
     END IF;
 
     -- Test date-only format
     v_result := common.try_cast('2025-01-15', v_default);
     v_expected := '2025-01-15 00:00:00'::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: date-only format should parse correctly';
     END IF;
 
     -- Test Unix epoch seconds (integer)
     v_result := common.try_cast('1705327800', v_default);
     v_expected := to_timestamp(1705327800)::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: Unix epoch seconds (integer) should parse correctly';
     END IF;
 
     -- Test Unix epoch seconds (decimal for subsecond precision)
     v_result := common.try_cast('1705327800.500', v_default);
     v_expected := to_timestamp(1705327800.500)::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: Unix epoch seconds (decimal) should parse correctly';
     END IF;
 
     -- Test Unix epoch milliseconds (JavaScript Date.now() style)
     v_result := common.try_cast('1705327800000', v_default);
     v_expected := to_timestamp(1705327800)::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: Unix epoch milliseconds should parse correctly';
     END IF;
 
     -- Test negative epoch (before 1970)
     v_result := common.try_cast('-86400', v_default);
     v_expected := to_timestamp(-86400)::timestamp;  -- 1969-12-31
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: negative Unix epoch should parse correctly';
     END IF;
 
     -- Test invalid input returns default
     v_result := common.try_cast('invalid timestamp', v_default);
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: invalid input should return default';
     END IF;
 
     v_result := common.try_cast('', v_default);
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: empty input should return default';
     END IF;
 
     -- Test invalid date (out of range month)
     v_result := common.try_cast('2025-13-01', v_default);
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: invalid date should return default';
     END IF;
 
     -- Test operator syntax
     v_result := '2025-01-15 14:30:00' ?> v_default;
     v_expected := '2025-01-15 14:30:00'::timestamp;
-    IF v_result != v_expected THEN
+    IF v_result IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'operator ?>(timestamp) failed: ISO-8601 format should parse correctly';
     END IF;
 
     v_result := 'invalid' ?> v_default;
-    IF v_result != v_default THEN
+    IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'operator ?>(timestamp) failed: invalid input should return default';
     END IF;
 END $$;
@@ -1038,27 +1083,27 @@ DECLARE
 BEGIN
     -- ISO-8601 with explicit offset is preserved as the same instant
     v_result := common.try_cast('2025-01-15T14:30:00+02:00', v_default);
-    IF v_result != '2025-01-15T12:30:00+00'::timestamptz THEN
+    IF v_result IS DISTINCT FROM '2025-01-15T12:30:00+00'::timestamptz THEN
         RAISE EXCEPTION 'try_cast(timestamptz) failed: explicit offset should be honored';
     END IF;
 
     -- Unix epoch seconds
     v_result := common.try_cast('1705327800', v_default);
-    IF v_result != to_timestamp(1705327800) THEN
+    IF v_result IS DISTINCT FROM to_timestamp(1705327800) THEN
         RAISE EXCEPTION 'try_cast(timestamptz) failed: epoch seconds should parse';
     END IF;
 
     -- Unix epoch milliseconds
     v_result := common.try_cast('1705327800000', v_default);
-    IF v_result != to_timestamp(1705327800) THEN
+    IF v_result IS DISTINCT FROM to_timestamp(1705327800) THEN
         RAISE EXCEPTION 'try_cast(timestamptz) failed: epoch milliseconds should parse';
     END IF;
 
     -- Invalid and empty return the default
-    IF common.try_cast('not a timestamp', v_default) != v_default THEN
+    IF common.try_cast('not a timestamp', v_default) IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamptz) failed: invalid input should return default';
     END IF;
-    IF common.try_cast('', v_default) != v_default THEN
+    IF common.try_cast('', v_default) IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamptz) failed: empty input should return default';
     END IF;
 END $$;
@@ -1101,8 +1146,8 @@ DECLARE
     v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA common TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA common TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA common TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA common TO %I', v_api_role);
 END $$;
 
 DO $$

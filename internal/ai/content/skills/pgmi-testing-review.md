@@ -1,6 +1,7 @@
 ---
 name: pgmi-testing-review
 description: "Use when writing, organizing, or debugging tests in a pgmi project"
+scope: core
 user_invocable: true
 ---
 
@@ -159,34 +160,57 @@ BEGIN
 END $$;
 ```
 
-### Transactional Isolation
+### An Assertion Must Be Total
 
-**Pattern**: Tests run in transaction, automatically rollback.
+An `IF` whose condition evaluates to NULL takes **no branch**. An assertion built
+from a NULL-yielding operator does not fail — it disappears, silently, and the
+deploy still prints its checkmark.
+
+The NULL usually comes from missing data, which is exactly the state a test
+exists to catch:
+
+- `SELECT ... INTO v_rec` is **not** `STRICT`. Zero rows leaves every field NULL.
+- `jsonb ->>`, `hstore ->` return NULL for an absent key.
+- `array_length('{}', 1)` is NULL, not 0.
+- `=`, `<>`, `<`, `LIKE` all propagate that NULL outward.
 
 ```sql
--- Test setup
-BEGIN;
-    -- Create test data
-    INSERT INTO users (id, name, email)
-    VALUES (gen_random_uuid(), 'Test User', 'test@example.com');
+-- ❌ BAD: passes when the row, the key or the header is missing
+IF v_rec.is_valid OR v_rec.reason != 'malformed key' THEN
+IF NOT v_info.function_exists THEN
+IF v_headers -> 'content-length' != v_expected THEN
+IF v_body NOT LIKE '%deleted%' THEN
+IF array_length(v_claims.member_org_ids, 1) < 1 THEN
 
-    -- Test logic
-    DO $$
-    DECLARE
-        v_user_count INT;
-    BEGIN
-        SELECT COUNT(*) INTO v_user_count FROM users WHERE name = 'Test User';
-
-        IF v_user_count != 1 THEN
-            RAISE EXCEPTION 'TEST FAILED: Expected 1 test user, found %', v_user_count;
-        END IF;
-
-        RAISE NOTICE 'PASS: User creation test';
-    END $$;
-ROLLBACK; -- Cleanup automatic
+-- ✅ GOOD: fires on a wrong value AND on a missing one
+IF v_rec.is_valid IS DISTINCT FROM false
+   OR v_rec.reason IS DISTINCT FROM 'malformed key' THEN
+IF v_info.function_exists IS DISTINCT FROM true THEN
+IF v_headers -> 'content-length' IS DISTINCT FROM v_expected THEN
+IF coalesce(v_body, '') NOT LIKE '%deleted%' THEN
+IF coalesce(array_length(v_claims.member_org_ids, 1), 0) < 1 THEN
 ```
 
-**CALL pgmi_test() Macro**: Executes tests within savepoints with automatic rollback.
+Where several assertions read one record, guard the source once instead:
+
+```sql
+SELECT * INTO v_info FROM api.vw_handler_info WHERE handler_function_name = 'hello_world';
+IF NOT FOUND THEN
+    RAISE EXCEPTION 'vw_handler_info has no row for hello_world';
+END IF;
+```
+
+`EXISTS` and `SQLERRM` are total by construction and need no guard. Control-flow
+`IF`s are free to treat NULL as "skip" — this rule is about conditions that raise.
+
+**Do not assert on what the code under test reports.** A handler returning
+`{"totalDeleted": 10}` while deleting nothing satisfies every assertion made
+against its response body. Re-query the table.
+
+### Transactional Isolation
+
+**Pattern**: `CALL pgmi_test()` wraps each test directory in savepoints with automatic rollback — no manual `BEGIN`/`ROLLBACK` needed.
+
 ```sql
 -- In deploy.sql
 CALL pgmi_test();
@@ -257,15 +281,16 @@ END $$;
 -- Test that invalid input raises exception
 DO $$
 BEGIN
-    -- This should fail
-    PERFORM public.execute_migration_script('nonexistent.sql');
-
-    -- If we reach here, test failed
-    RAISE EXCEPTION 'TEST FAILED: Expected exception for nonexistent file';
-EXCEPTION
-    WHEN OTHERS THEN
-        -- Expected exception, test passes
-        RAISE NOTICE 'PASS: Error handling test';
+    BEGIN
+        PERFORM public.execute_migration_script('nonexistent.sql');
+        RAISE EXCEPTION 'TEST FAILED: Expected exception for nonexistent file';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE '%TEST FAILED%' THEN
+                RAISE;
+            END IF;
+    END;
+    RAISE NOTICE 'PASS: Error handling test';
 END $$;
 ```
 
@@ -350,7 +375,7 @@ func TestParseConnectionString(t *testing.T) {
 ```go
 func TestDeployer(t *testing.T) {
     t.Run("successful deployment", func(t *testing.T) {
-        deployer := NewStandardDeployer(mockConnector, forceApprover)
+        deployer := NewDeploymentService(mockConnector, forceApprover)
         err := deployer.Deploy(ctx, config)
         if err != nil {
             t.Errorf("unexpected error: %v", err)
@@ -358,7 +383,7 @@ func TestDeployer(t *testing.T) {
     })
 
     t.Run("user cancels approval", func(t *testing.T) {
-        deployer := NewStandardDeployer(mockConnector, rejectApprover)
+        deployer := NewDeploymentService(mockConnector, rejectApprover)
         err := deployer.Deploy(ctx, config)
         if err == nil {
             t.Error("expected error when approval rejected")
@@ -366,7 +391,7 @@ func TestDeployer(t *testing.T) {
     })
 
     t.Run("database connection failure", func(t *testing.T) {
-        deployer := NewStandardDeployer(failingConnector, forceApprover)
+        deployer := NewDeploymentService(failingConnector, forceApprover)
         err := deployer.Deploy(ctx, config)
         if err == nil {
             t.Error("expected error when connection fails")
@@ -450,10 +475,10 @@ func TestDeploy(t *testing.T) {
 ```go
 // Mock for Connector interface
 type MockConnector struct {
-    ConnectFunc func(ctx context.Context) (*pgx.Conn, error)
+    ConnectFunc func(ctx context.Context) (*pgxpool.Pool, error)
 }
 
-func (m *MockConnector) Connect(ctx context.Context) (*pgx.Conn, error) {
+func (m *MockConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) {
     if m.ConnectFunc != nil {
         return m.ConnectFunc(ctx)
     }
@@ -463,13 +488,13 @@ func (m *MockConnector) Connect(ctx context.Context) (*pgx.Conn, error) {
 // Usage in test
 func TestDeployerWithFailingConnection(t *testing.T) {
     mockConn := &MockConnector{
-        ConnectFunc: func(ctx context.Context) (*pgx.Conn, error) {
+        ConnectFunc: func(ctx context.Context) (*pgxpool.Pool, error) {
             return nil, errors.New("connection refused")
         },
     }
 
-    deployer := NewStandardDeployer(mockConn, &ForceApprover{})
-    err := deployer.Deploy(context.Background(), &DeployConfig{})
+    deployer := NewDeploymentService(mockConn, &ForceApprover{})
+    err := deployer.Deploy(context.Background(), &DeploymentConfig{})
 
     if err == nil {
         t.Error("expected error when connection fails")
@@ -508,8 +533,8 @@ func TestDeployBasicTemplate(t *testing.T) {
     connStr := getTestConnectionString(t)
 
     // Deploy using the actual deployer
-    deployer := NewStandardDeployer(/* ... */)
-    err := deployer.Deploy(context.Background(), &DeployConfig{
+    deployer := NewDeploymentService(/* ... */)
+    err := deployer.Deploy(context.Background(), &DeploymentConfig{
         Path:         "../../internal/scaffold/templates/basic",
         DatabaseName: "test_deploy_basic",
     })

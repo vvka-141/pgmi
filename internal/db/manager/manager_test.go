@@ -103,7 +103,7 @@ func TestManager_Create_WithSpecialCharsInName(t *testing.T) {
 				},
 			}
 
-			err := mgr.Create(ctx, mockConn, tc.dbName)
+			err := mgr.Create(ctx, mockConn, tc.dbName, nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestManager_Create_SQLInjectionAttempt(t *testing.T) {
 				},
 			}
 
-			err := mgr.Create(ctx, mockConn, tc.dbName)
+			err := mgr.Create(ctx, mockConn, tc.dbName, nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -343,7 +343,7 @@ func TestManager_Create_ConnectionAcquireFailure(t *testing.T) {
 		},
 	}
 
-	err := mgr.Create(ctx, mockConn, "mydb")
+	err := mgr.Create(ctx, mockConn, "mydb", nil)
 	if err == nil {
 		t.Fatal("Expected error from connection acquire failure")
 	}

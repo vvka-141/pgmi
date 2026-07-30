@@ -164,6 +164,29 @@ func TestAPISQL_CallbackNameValidated(t *testing.T) {
 	}
 }
 
+func TestAPISQL_PlanOrderIsByteOrdered(t *testing.T) {
+	sql, _, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !strings.Contains(sql, `ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"`) {
+		t.Error(`pgmi_plan_view execution_order must sort with COLLATE "C": sort_key mixes user sortKeys with path fallbacks, so a linguistic collation makes deployment order locale-dependent`)
+	}
+}
+
+func TestAPISQL_NoDollarQuoteInGeneratedTestSQL(t *testing.T) {
+	sql, _, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if strings.Contains(sql, "$__pgmi__$") {
+		t.Error("pgmi_test_generate must not use $__pgmi__$ dollar-quote tag — a test path containing that token breaks out of the quote; use pgmi_run_test_source() instead")
+	}
+	if !strings.Contains(sql, "pgmi_run_test_source") {
+		t.Error("pgmi_test_generate must delegate to pgmi_run_test_source() to avoid dollar-quote injection")
+	}
+}
+
 func TestAPIContainsExpectedObjects(t *testing.T) {
 	sql, _, err := Load("")
 	if err != nil {

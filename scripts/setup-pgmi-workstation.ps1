@@ -12,8 +12,8 @@
 # ============================================================================
 
 $ContainerRuntime  = "DockerDesktop"   # "DockerDesktop" or "RancherDesktop"
-$ContainerName     = "pgmi-postgres17-azflex"
-$PostgresImage     = "alexeye/postgres-azure-flex:17"
+$ContainerName     = "pgmi-postgres17"
+$PostgresImage     = "postgres:17"   # official image; must match internal/testinfra PostgresImage
 $PostgresPort      = 5432
 $PostgresUser      = "postgres"
 $PostgresPassword  = "postgres"

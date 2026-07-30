@@ -25,15 +25,17 @@ This is an intentional constraint, not an oversight. pgmi's flexibility comes fr
 
 ---
 
-## No migration tracking out of the box
+## Migration tracking is a choice you make, not a default you inherit
 
-The basic template executes files alphabetically every time. There is no built-in `schema_version` table or migration history.
+There is no built-in `schema_version` table. pgmi does not track migrations, because pgmi does not decide what runs — your `deploy.sql` does.
 
-**Basic template:** Every deployment re-runs all files. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`).
+**Basic template, default:** every deployment re-runs every file. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Nothing to drift.
 
-**Advanced template:** Includes a 450-line PL/pgSQL tracking system that records script UUIDs, checksums, and execution history. You own and maintain this code.
+**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and you have Flyway's semantics. The template README compares both models side by side.
 
-**Roll your own:** You can implement tracking in deploy.sql with a few lines — see [deploy.sql guide](DEPLOY-GUIDE.md#idempotent-migrations-with-tracking). The tradeoff is that every tracking system makes assumptions (path-based? UUID-based? checksum-based?) that Flyway and Liquibase don't force you to think about.
+**Advanced template:** a fuller PL/pgSQL tracking system recording script UUIDs, checksums, and execution history. More capable, and more code you own.
+
+The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in three lines you can read.
 
 ---
 
@@ -69,24 +71,32 @@ See [deploy.sql guide](DEPLOY-GUIDE.md#error-context-with-exception-blocks) for 
 
 `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. This is a PostgreSQL constraint, not a pgmi limitation — the same issue affects Flyway, Liquibase, Prisma, Goose, and Drizzle.
 
-pgmi's workaround: structure deploy.sql so that concurrent indexes are top-level statements outside any transaction block. After `COMMIT`, pgmi's temp tables still exist (session-scoped), and each subsequent top-level statement runs in autocommit mode:
+pgmi's execution contract handles it directly: **before your first top-level `COMMIT`, pgmi's atomic mode; after it, psql mode.** The head of deploy.sql (through the first top-level transaction terminator) runs as one transaction; every top-level statement after it runs per-statement autocommit on the same session — which is exactly what `CREATE INDEX CONCURRENTLY` needs. pgmi's temp views survive the `COMMIT` (session-scoped) and stay queryable:
 
 ```sql
--- Phase 1: transactional migrations
+-- Phase 1: transactional migrations (atomic head)
 BEGIN;
--- ... migrations (excluding concurrent index files) ...
+-- ... migrations ...
 COMMIT;
 
--- Phase 2: concurrent indexes as top-level statements (autocommit mode)
--- These CANNOT be inside a DO block — DO creates an implicit transaction context.
--- Write them explicitly; pgmi's temp tables are still available for queries.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_date ON orders(created_at);
+-- Phase 2: concurrent indexes, psql mode (per-statement autocommit)
+CREATE INDEX CONCURRENTLY idx_user_email ON users(email);
+
+-- Phase 3: an atomic backfill says so explicitly
+BEGIN;
+UPDATE users SET email_normalized = lower(email) WHERE email_normalized IS NULL;
+COMMIT;
+
+-- Phase 4: more concurrent work
+CREATE INDEX CONCURRENTLY idx_order_date ON orders(created_at);
 ```
 
-Note: because top-level SQL has no procedural constructs, you cannot dynamically iterate `pgmi_source_view` for concurrent indexes. Write them explicitly in deploy.sql, or use a separate pgmi deployment phase.
+The trade-offs to know:
 
-See [deploy.sql guide](DEPLOY-GUIDE.md#create-index-concurrently-workaround) for the complete pattern.
+- After the first `COMMIT`, statements are **not** implicitly grouped — a later atomic phase writes its own `BEGIN ... COMMIT`. A mid-tail failure keeps earlier autocommitted statements applied, so tail statements should be idempotent. For a concurrent index that means reaping an `INVALID` leftover before `CREATE INDEX CONCURRENTLY IF NOT EXISTS` — `IF NOT EXISTS` alone matches on name and would skip the wreckage forever; see [making a concurrent index re-runnable](DEPLOY-GUIDE.md#making-a-concurrent-index-re-runnable).
+- Concurrent index statements cannot go through `EXECUTE` inside a DO block — PostgreSQL refuses `CREATE INDEX CONCURRENTLY` from any function execution context ("cannot be executed from a function"), even after a `COMMIT`. Write them explicitly at top level; there are no loops or variables there.
+
+See [deploy.sql guide](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full contract and `examples/lock-safe-deploy/` for a runnable project.
 
 ---
 
@@ -100,7 +110,7 @@ NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
 
 There is no JUnit XML, TAP protocol, JSON report, pass/fail summary, or timing information. The test either succeeds (continues) or fails (`RAISE EXCEPTION` aborts the transaction).
 
-**The callback mechanism** (`CALL pgmi_test('pattern', 'my_callback')`) is extensible — you can write a PL/pgSQL function that receives test events and produces structured output. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
+**The callback mechanism** (`CALL pgmi_test('pattern', 'pg_temp.my_callback')`) is extensible — you can write a PL/pgSQL function that receives test events and produces structured output. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
 
 ---
 
@@ -162,7 +172,10 @@ See [Connections](CONNECTIONS.md#connection-pooler-compatibility) for details.
 
 ## The advanced template is a real program
 
-The advanced template's `deploy.sql` is ~450 lines of PL/pgSQL that handles:
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
+
+The advanced template's `deploy.sql` is several hundred lines of PL/pgSQL that
+handles:
 
 - XML parameter declaration and validation
 - Database role setup (owner, writer, reader, deployer)
@@ -197,6 +210,7 @@ See [Why pgmi](WHY-PGMI.md) for when pgmi's approach makes sense.
 ## See also
 
 - [Why pgmi](WHY-PGMI.md) — Philosophy and comparison with other tools
+- [Design records](design/why-execution-fabric.md) — the decisions behind these trade-offs, with rejected alternatives
 - [deploy.sql guide](DEPLOY-GUIDE.md) — Patterns that mitigate these limitations
 - [Connections](CONNECTIONS.md) — Connection pooler details
 - [Testing](TESTING.md) — Test callback extensibility

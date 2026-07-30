@@ -340,6 +340,87 @@ func TestMetadataValidate_FilesWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestMetadataScaffold_Write_SkipsNonSQLFiles(t *testing.T) {
+	resetMetadataFlags()
+	scaffoldWrite = true
+
+	jsonContent := `{"name": "test-project"}`
+	yamlContent := "database: mydb\nhost: localhost\n"
+	mdContent := "# README\nThis is a project.\n"
+
+	projectPath := createTestProject(t, map[string]string{
+		"deploy.sql":         "SELECT 1;",
+		"migrations/001.sql": "CREATE TABLE t1(id int);",
+		"project.json":       jsonContent,
+		"pgmi.yaml":          yamlContent,
+		"README.md":          mdContent,
+	})
+
+	err := runMetadataScaffold(metadataScaffoldCmd, []string{projectPath})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	got, _ := os.ReadFile(filepath.Join(projectPath, "project.json"))
+	if string(got) != jsonContent {
+		t.Errorf("project.json was corrupted: got %q", string(got))
+	}
+	got, _ = os.ReadFile(filepath.Join(projectPath, "pgmi.yaml"))
+	if string(got) != yamlContent {
+		t.Errorf("pgmi.yaml was corrupted: got %q", string(got))
+	}
+	got, _ = os.ReadFile(filepath.Join(projectPath, "README.md"))
+	if string(got) != mdContent {
+		t.Errorf("README.md was corrupted: got %q", string(got))
+	}
+}
+
+func TestMetadataScaffold_Write_SkipsTestFiles(t *testing.T) {
+	resetMetadataFlags()
+	scaffoldWrite = true
+
+	testContent := "SELECT 1 AS test_result;"
+
+	projectPath := createTestProject(t, map[string]string{
+		"deploy.sql":                     "SELECT 1;",
+		"migrations/001.sql":             "CREATE TABLE t1(id int);",
+		"migrations/__test__/test_1.sql": testContent,
+	})
+
+	err := runMetadataScaffold(metadataScaffoldCmd, []string{projectPath})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	got, _ := os.ReadFile(filepath.Join(projectPath, "migrations", "__test__", "test_1.sql"))
+	if string(got) != testContent {
+		t.Errorf("test file was modified: got %q", string(got))
+	}
+}
+
+func TestMetadataPlan_SkipsNonSQLFiles(t *testing.T) {
+	resetMetadataFlags()
+	projectPath := createTestProject(t, map[string]string{
+		"deploy.sql":         "SELECT 1;",
+		"migrations/001.sql": "CREATE TABLE t1(id int);",
+		"project.json":       `{"name": "test"}`,
+		"pgmi.yaml":          "database: mydb\n",
+		"README.md":          "# README\n",
+	})
+
+	result, err := planProject(projectPath)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	for _, entry := range result.Plan {
+		ext := filepath.Ext(entry.Path)
+		if ext != "" && ext != ".sql" {
+			t.Errorf("non-SQL file %q should not appear in plan", entry.Path)
+		}
+	}
+}
+
 func TestMetadataValidate_DuplicateIDs_JSONOutput(t *testing.T) {
 	resetMetadataFlags()
 	validateJSON = true

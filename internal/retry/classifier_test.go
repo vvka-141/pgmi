@@ -73,6 +73,26 @@ func TestPostgreSQLErrorClassifier_IsTransient_PostgreSQLErrors(t *testing.T) {
 			err:         &pgconn.PgError{Code: "57P03", Message: "the database system is starting up"},
 			isTransient: true,
 		},
+		{
+			name:        "idle_session_timeout (57P05)",
+			err:         &pgconn.PgError{Code: "57P05", Message: "terminating connection due to idle-session timeout"},
+			isTransient: true,
+		},
+
+		// Class 57 is prefix-matched, so its two non-transient members have to
+		// be excluded by name. Both were retried before that exclusion existed.
+		{
+			// statement_timeout, pg_cancel_backend, or the client cancelling:
+			// all deliberate. Retrying works against the instruction.
+			name:        "query_canceled (57014) is a decision, not a transient fault",
+			err:         &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"},
+			isTransient: false,
+		},
+		{
+			name:        "database_dropped (57P04) cannot be fixed by trying again",
+			err:         &pgconn.PgError{Code: "57P04", Message: "terminating connection because the database was dropped"},
+			isTransient: false,
+		},
 
 		// Fatal PostgreSQL errors
 		{

@@ -234,6 +234,7 @@ const checksumKey = "checksum: "
 // recorded checksum against the whole file (everything except the checksum
 // value itself), so edits anywhere in the file are detected.
 func ParseManaged(content string) ManagedFile {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
 	i := strings.Index(content, managedMarker)
 	if i < 0 {
 		return ManagedFile{Body: normalizeBody(content)}
@@ -275,6 +276,7 @@ func stampedForm(normalizedBody string, stamp Stamp) string {
 }
 
 func normalizeBody(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.TrimRight(s, "\n") + "\n"
 }
 

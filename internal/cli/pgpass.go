@@ -71,30 +71,32 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {
-		lines = strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		if trimmed := strings.TrimRight(string(data), "\n"); trimmed != "" {
+			lines = strings.Split(trimmed, "\n")
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to read existing .pgpass: %w", err)
 	}
 
-	// Replace existing entry or append
-	found := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, matchPrefix) {
-			lines[i] = newEntry
-			found = true
-			break
+	// libpq uses the FIRST line that matches, so the entry the user just asked
+	// to save goes on top. Appending it looked right and did nothing whenever an
+	// earlier line already matched — `*:*:*:postgres:oldpw` is a common hand-
+	// written entry — and pgmi still reported the password as saved.
+	kept := make([]string, 0, len(lines)+1)
+	kept = append(kept, newEntry)
+	for _, line := range lines {
+		if !strings.HasPrefix(line, matchPrefix) {
+			kept = append(kept, line)
 		}
 	}
-	if !found {
-		lines = append(lines, newEntry)
-	}
 
-	content := strings.Join(lines, "\n") + "\n"
+	content := strings.Join(kept, "\n") + "\n"
 
 	// Atomic write: write to a sibling .tmp then os.Rename so a crash mid-write
 	// can't leave a truncated/empty .pgpass (it holds user credentials).
 	// 0600 is required by PostgreSQL on Unix.
 	tmpPath := path + ".pgmi-tmp"
+	_ = os.Remove(tmpPath)
 	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("write .pgpass: %w", err)
 	}

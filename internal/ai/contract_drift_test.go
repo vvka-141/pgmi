@@ -40,6 +40,17 @@ func TestContract_ViewsExistInSQL(t *testing.T) {
 			t.Errorf("step type %q declared in contract but not found as literal in SQL", st)
 		}
 	}
+
+	for _, ct := range c.Types {
+		if !strings.Contains(combined, ct.Name) {
+			t.Errorf("type %q declared in contract but not found in schema.sql or api-v1.sql", ct.Name)
+		}
+		for _, ev := range ct.Events {
+			if !strings.Contains(combined, "'"+ev+"'") {
+				t.Errorf("event %q of type %q not found as literal in SQL", ev, ct.Name)
+			}
+		}
+	}
 }
 
 func TestContract_ViewColumnsMatchSchema(t *testing.T) {
@@ -86,9 +97,9 @@ func TestContract_ViewColumnsMatchSchema(t *testing.T) {
 		}
 		tableDef := combined[tableStart : tableStart+parenClose]
 
-		sqlCols := map[string]bool{}
+		var sqlCols []string
 		for _, m := range colRe.FindAllStringSubmatch(tableDef, -1) {
-			sqlCols[m[1]] = true
+			sqlCols = append(sqlCols, m[1])
 		}
 
 		if len(sqlCols) == 0 {
@@ -96,18 +107,9 @@ func TestContract_ViewColumnsMatchSchema(t *testing.T) {
 			continue
 		}
 
-		for _, col := range v.Columns {
-			if !sqlCols[col] {
-				t.Errorf("view %q: contract column %q not found in backing table %q columns: %v",
-					v.Name, col, table, keys(sqlCols))
-			}
-		}
-
-		for col := range sqlCols {
-			if !slices.Contains(v.Columns, col) {
-				t.Errorf("view %q: SQL column %q in %q missing from contract",
-					v.Name, col, table)
-			}
+		if !slices.Equal(v.Columns, sqlCols) {
+			t.Errorf("view %q: contract columns %v != SQL columns %v (order matters)",
+				v.Name, v.Columns, sqlCols)
 		}
 	}
 }
@@ -143,12 +145,4 @@ func TestContract_FunctionDefaultsMatchSQL(t *testing.T) {
 			}
 		}
 	}
-}
-
-func keys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }

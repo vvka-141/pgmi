@@ -12,12 +12,21 @@
 {{- if gt (len $parts) 1 }}{{ $frag = index $parts 1 }}{{ end -}}
 {{- if and (not (strings.Contains $pathPart "://")) (not (strings.HasPrefix $dest "/")) (not (strings.HasPrefix $dest "#")) (strings.HasSuffix (lower $pathPart) ".md") -}}
   {{- $rel := lower (strings.TrimSuffix ".md" $pathPart) -}}
-  {{- $abs := path.Join (path.Dir .Page.Path) $rel -}}
+  {{- /* A section page's Path IS its directory (/docs/advanced for
+         docs/advanced/_index.md); only a leaf page needs path.Dir. Taking Dir
+         unconditionally resolved every sibling link on an _index.md one level
+         too high, so they silently became GitHub source links. */ -}}
+  {{- $baseDir := cond (eq .Page.Kind "page") (path.Dir .Page.Path) .Page.Path -}}
+  {{- $abs := path.Join $baseDir $rel -}}
   {{- with site.GetPage $abs -}}
     {{- $dest = .RelPermalink -}}
     {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}
   {{- else -}}
-    {{- $isDocsPath := or (eq $abs "docs") (strings.HasPrefix $abs "docs/") -}}
+    {{- /* .Page.Path is a leading-slash logical path (Hugo >= 0.123), so trim
+           before matching -- without this every unresolved /docs link fell
+           through to the GitHub-source branch and the warning never fired. */ -}}
+    {{- $absNorm := strings.TrimPrefix "/" $abs -}}
+    {{- $isDocsPath := or (eq $absNorm "docs") (strings.HasPrefix $absNorm "docs/") -}}
     {{- if not $isDocsPath -}}
       {{- $repoRel := path.Join (path.Dir (replace $.Page.File.Path "\\" "/")) $pathPart -}}
       {{- $dest = printf "%s/blob/main/%s" (site.Params.BookRepo | default "https://github.com/vvka-141/pgmi") $repoRel -}}

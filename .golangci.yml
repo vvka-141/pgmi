@@ -1,5 +1,11 @@
 run:
-  timeout: 5m
+  # Catches a hung linter, not a slow one. Measured here: 81s warm, 6m36s and
+  # 7m26s cold, because a cold pass compiles the whole dependency tree (AWS,
+  # Azure, GCP SDKs, OpenTelemetry) before any analysis runs. 5m failed there
+  # outright, with a message that reads like a linter problem. Cold is not
+  # exotic: the SQL change protocol mandates `go clean -cache`, `make lint`
+  # then runs two passes, and CI hits it whenever the action's cache misses.
+  timeout: 15m
   tests: true
 
 linters:

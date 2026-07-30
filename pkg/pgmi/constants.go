@@ -18,7 +18,7 @@ const (
 	ExitGeneralError     = 1   // Unknown or unclassified error
 	ExitUsageError       = 2   // CLI usage error (missing args, invalid flags)
 	ExitPanic            = 3   // Internal panic (unexpected crash)
-	ExitConfigError      = 10  // Invalid configuration or parameters
+	ExitConfigError      = 10  // Invalid pgmi configuration, rejected before connecting
 	ExitConnectionError  = 11  // Failed to connect to database
 	ExitApprovalDenied   = 12  // User denied overwrite approval
 	ExitExecutionFailed  = 13  // SQL execution failed
@@ -27,6 +27,14 @@ const (
 	ExitTimeout          = 16  // Operation exceeded --timeout (context deadline exceeded)
 	ExitInterrupted      = 130 // Process interrupted by SIGINT (Ctrl-C) — Unix convention 128+SIGINT
 )
+
+// MinimumServerVersionNum is the oldest PostgreSQL pgmi runs on, in
+// server_version_num form (110000 == 11.0). The floor is set by
+// hashtextextended, which the deploy advisory lock needs and which arrived in
+// PostgreSQL 11. Verified: the core suite and the basic template are green on
+// 11. The advanced template needs more — xid8 (13) and security_invoker views
+// (15) — and documents 15+ separately; that floor is the template's, not pgmi's.
+const MinimumServerVersionNum = 110000
 
 const (
 	// DefaultForceApprovalCountdown is the countdown duration before force approval proceeds.
@@ -41,8 +49,8 @@ const (
 	// DefaultRetryMaxAttempts is the default maximum number of retry attempts.
 	DefaultRetryMaxAttempts = 3
 
-	// DefaultManagementDB is the default database to connect to for management operations.
-	DefaultManagementDB = "postgres"
+	// DefaultMaintenanceDB is the default database to connect to for maintenance operations.
+	DefaultMaintenanceDB = "postgres"
 )
 
 var (
@@ -73,7 +81,12 @@ func ValidateDunderDirectories(path string) error {
 	matches := DunderDirRegexp.FindAllStringSubmatch(path, -1)
 	for _, m := range matches {
 		if !AllowedDunderDirs[m[1]] {
-			return fmt.Errorf("unsupported directory \"__%s__\" in path %q; only __test__ and __tests__ are allowed", m[1], path)
+			// ErrInvalidConfig so this exits 10 like every other project error
+			// caught before connecting — a path that does not exist, a path
+			// that is a file, a duplicate <pgmi-meta id>. It exited 1, which
+			// documents nothing.
+			return fmt.Errorf("unsupported directory \"__%s__\" in path %q; only __test__ and __tests__ are allowed: %w",
+				m[1], path, ErrInvalidConfig)
 		}
 	}
 	return nil

@@ -42,10 +42,16 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --                        Set 'requiresAuth', false explicitly for public endpoints.
 --        - autoLog:      If true, request/response logged to api.rest_exchange (default true)
 --        - outputSchema: REQUIRED on every REST handler (the OpenAPI test enforces it).
---        - requiredTransactionIsolation: Minimum isolation floor the gateway enforces
+--        - minTransactionIsolation: Minimum isolation floor the gateway enforces
 --                        (read committed | repeatable read | serializable). Omit for none.
---                        The caller must open the transaction at >= this level or the
---                        gateway returns 428; see lib/api/00-transaction-isolation.sql.
+--                        The client gateway resolves it via api.rest_route_policy and
+--                        opens the transaction at max(floor, requested); a proxy that
+--                        skips the lookup gets 428. See lib/api/00-transaction-isolation.sql.
+--        - readOnly:     If true, the route declares it only reads. The client gateway
+--                        opens the transaction READ ONLY (accidental writes become hard
+--                        errors; SERIALIZABLE READ ONLY opens DEFERRABLE and needs no
+--                        retries) and OpenAPI advertises x-pgmi-read-only plus the
+--                        derived x-pgmi-replica-safe hint. Default false.
 --
 --   2. HANDLER BODY (text): The function body executed when the route matches.
 --      - The function receives a single parameter called "request" (api.rest_request)
@@ -59,10 +65,16 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0001-4000-8000-000000000001',
-        'uri', '^/hello(\\?.*)?$',
+        'uri', '^/hello$',
         'httpMethod', '^GET$',
         'name', 'hello_world',
         'description', 'Simple hello world endpoint',
+        -- requiresAuth defaults to true, which is the right default and the
+        -- wrong one for a hello world: without this the first endpoint a new
+        -- project ships answers its own smoke test with 401, and there is
+        -- nothing to curl until identity is set up. It takes a name and
+        -- returns a greeting — nothing to protect.
+        'requiresAuth', false,
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -102,7 +114,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0002-4000-8000-000000000001',
-        'uri', '^/echo(\\?.*)?$',
+        'uri', '^/echo$',
         'httpMethod', '^POST$',
         'name', 'echo',
         'description', 'Echo back the request body',
@@ -137,7 +149,10 @@ DECLARE
 BEGIN
     v_response := api.rest_invoke('POST', '/echo', ''::extensions.hstore,
         '{"greeting": "hello from examples.sql"}'::jsonb);
-    RAISE DEBUG '  -> POST /echo  status=%, body=%',
+    -- 401 here is the correct answer, not a broken example: /echo keeps the
+    -- secure default and this probe carries no identity. Send it an
+    -- Authorization header or set auth.idp_subject to reach the handler.
+    RAISE DEBUG '  -> POST /echo  status=% (401 without identity, by design), body=%',
         (v_response).status_code,
         api.content_json((v_response).content);
 END $$;
@@ -149,7 +164,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0003-4000-8000-000000000001',
-        'uri', '^/health(\\?.*)?$',
+        'uri', '^/health$',
         'httpMethod', '^GET$',
         'name', 'health_check',
         'description', 'Kubernetes liveness probe endpoint',
@@ -191,7 +206,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0004-4000-8000-000000000001',
-        'uri', '^/me(\\?.*)?$',
+        'uri', '^/me$',
         'httpMethod', '^GET$',
         'name', 'get_current_user',
         'description', 'Get authenticated user profile from membership schema',
@@ -240,7 +255,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0005-4000-8000-000000000001',
-        'uri', '^/organizations(\\?.*)?$',
+        'uri', '^/organizations$',
         'httpMethod', '^GET$',
         'name', 'list_organizations',
         'description', 'List organizations the authenticated user belongs to (RLS-filtered)',

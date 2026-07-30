@@ -20,25 +20,39 @@ type ForcedApprover struct {
 	verbose bool
 	output  io.Writer
 	sleepFn func(time.Duration)
+	// interactive gates the countdown. Its only purpose is giving a human time
+	// to press Ctrl-C, and --force exists for CI, where output is a log file
+	// and there is no human. Run there it was five seconds of latency per
+	// forced overwrite — billed against --timeout — plus a single ~300-char
+	// line of \r-joined redraws, since \r moves nothing in a non-TTY sink.
+	interactive bool
 	// showSkull controls whether the ASCII danger banner is rendered.
 	// True when output is a TTY and PGMI_NO_BANNER is unset; false in
 	// CI, piped logs, and tests. The banner is a safety-critical
 	// interruption surface — visual jolt that text alone cannot deliver
 	// — so it appears where humans watch and disappears where machines
-	// parse.
+	// parse. PGMI_NO_BANNER silences the banner, not the pause, so the
+	// countdown does not consult it.
 	showSkull bool
 }
 
 func NewForcedApprover(verbose bool) pgmi.Approver {
+	interactive := tui.IsInteractive()
 	return &ForcedApprover{
-		verbose:   verbose,
-		output:    os.Stderr,
-		sleepFn:   nil,
-		showSkull: tui.IsInteractive() && os.Getenv("PGMI_NO_BANNER") == "",
+		verbose:     verbose,
+		output:      os.Stderr,
+		sleepFn:     nil,
+		interactive: interactive,
+		showSkull:   interactive && os.Getenv("PGMI_NO_BANNER") == "",
 	}
 }
 
 func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bool, error) {
+	if !a.interactive {
+		fmt.Fprintf(a.output, "--force: dropping and recreating %q\n", dbName)
+		return true, nil
+	}
+
 	if a.showSkull {
 		warningText := strings.ReplaceAll(dangerSkull, "${dbname}", dbName)
 		fmt.Fprintln(a.output)

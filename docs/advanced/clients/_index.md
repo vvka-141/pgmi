@@ -1,0 +1,47 @@
+---
+title: "Overview"
+description: "Generate typed API clients from an advanced-template OpenAPI contract."
+weight: 80
+aliases:
+  - /docs/clients/
+  - /docs/clients/readme/
+---
+
+# Client Generation
+
+> These guides cover consuming the REST/RPC endpoints the advanced template
+> serves — they are not clients for the pgmi deployment CLI.
+
+The advanced template serves an OpenAPI 3.1 specification at `GET /openapi.json` and an interactive explorer at `GET /docs`. Use these to generate typed clients in any language.
+
+The spec is not hand-written — it is derived live from the same handler
+registry that routes REST, RPC, and MCP, so it can never drift from the
+deployed surface:
+
+![One registration flows into the api.handler registry and out to REST routes, JSON-RPC methods, MCP tools, and the OpenAPI document](../../diagrams/d11-one-registry-many-protocols.drawio.svg)
+
+pgmi does not ship client libraries. Your deployment owns the spec; your pipeline owns the client.
+
+## Quick Start
+
+1. Deploy your project with pgmi
+2. Open `http://localhost:3000/docs` for the interactive API explorer
+3. Pick a language below and generate a typed client
+
+## Language Recipes
+
+| Language | Tool | Recipe |
+|----------|------|--------|
+| TypeScript | openapi-typescript | [TypeScript](typescript.md) |
+| Go | oapi-codegen | [Go](go.md) |
+| Python | openapi-python-client | [Python](python.md) |
+| C# | NSwag | [C#](csharp.md) |
+| Any | openapi-generator | [Generic](generic.md) |
+
+## HTTP Collections
+
+For ad-hoc exploration without codegen, see [HTTP collections](http-collection.md) to generate importable request files for Bruno, VS Code REST Client, or IntelliJ.
+
+## Philosophy
+
+These recipes teach the approach, not pinned versions. The spec is the source of truth; the generated client is a downstream artifact in your CI pipeline. When your handlers change, re-run the generator.

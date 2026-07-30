@@ -1,6 +1,7 @@
 ---
 name: pgmi-test-architecture
 description: "Use when organizing test files, __test__/ directories, or planning test strategy in pgmi"
+scope: core
 user_invocable: true
 ---
 
@@ -164,6 +165,24 @@ CALL pgmi_test('.*/auth/.*');
 CALL pg_temp.pgmi_test();
 ```
 
+**It must sit inside an explicit `BEGIN ... COMMIT`.** The macro expands to
+`SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, and PostgreSQL refuses `SAVEPOINT` inside
+the *implicit* transaction block of a multi-statement query. A `deploy.sql` that
+calls it without a top-level `BEGIN` fails with
+
+```
+ERROR: SAVEPOINT can only be used in transaction blocks (SQLSTATE 25P01)
+```
+
+naming a statement that is nowhere in your file, because pgmi put it there:
+
+```sql
+BEGIN;
+-- migrations
+CALL pgmi_test();
+COMMIT;
+```
+
 **Pattern Syntax**: Uses POSIX regular expressions (PostgreSQL `~` operator), NOT SQL LIKE patterns:
 - Use `.*` for "match anything" (not `%`)
 - Escape literal dots: `\\.` for file extensions
@@ -269,11 +288,11 @@ END $$;
 DO $$
 BEGIN
     -- Setup: Insert first user
-    INSERT INTO users (email) VALUES ('test@example.com');
+    INSERT INTO "user" (email) VALUES ('test@example.com');
 
     -- Act: Try to insert duplicate email
     BEGIN
-        INSERT INTO users (email) VALUES ('test@example.com');
+        INSERT INTO "user" (email) VALUES ('test@example.com');
         RAISE EXCEPTION 'TEST FAILED: Duplicate email was allowed (issue #123)';
     EXCEPTION WHEN unique_violation THEN
         -- Expected behavior - unique constraint working
@@ -297,7 +316,7 @@ BEGIN
     PERFORM send_welcome_email(v_user_id);
 
     -- Assert: All components created
-    IF NOT EXISTS (SELECT 1 FROM users WHERE id = v_user_id) THEN
+    IF NOT EXISTS (SELECT 1 FROM "user" WHERE id = v_user_id) THEN
         RAISE EXCEPTION 'TEST FAILED: User not created';
     END IF;
 
@@ -505,6 +524,11 @@ Pass a pattern to `CALL pgmi_test()` to filter tests:
 CALL pgmi_test('.*/auth/.*');
 ```
 
+An empty plan aborts the deploy with `no_data_found` — both a pattern that
+matches no file and `CALL pgmi_test()` in a project with no tests. Do not add
+your own "were there any tests?" guard to deploy.sql; the macro owns that check
+and sees the pattern your guard would not.
+
 ## Verification Strategy in Deployments
 
 **Pattern**: Run tests after deployment using the preprocessor macro
@@ -514,18 +538,21 @@ CALL pgmi_test('.*/auth/.*');
 DO $$
 DECLARE v_file RECORD;
 BEGIN
-    -- Phase 1: Migrations
+    -- Phase 1: Migrations. is_sql_file keeps non-SQL files out of the EXECUTE:
+    -- the plan carries every loaded file, backups included.
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%' ORDER BY execution_order
+        SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%' ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
 
     -- Phase 2: Setup
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './setup/%' ORDER BY execution_order
+        SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './setup/%' ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -635,7 +662,7 @@ users/
 **_setup.sql**:
 ```sql
 -- Create test fixtures
-INSERT INTO users (id, email, name) VALUES
+INSERT INTO "user" (id, email, name) VALUES
     (9990, 'test1@example.com', 'Test User 1'),
     (9991, 'test2@example.com', 'Test User 2');
 ```
@@ -646,7 +673,7 @@ DO $$
 BEGIN
     -- Should reject duplicate email
     BEGIN
-        INSERT INTO users (email, name) VALUES ('test1@example.com', 'Duplicate');
+        INSERT INTO "user" (email, name) VALUES ('test1@example.com', 'Duplicate');
         RAISE EXCEPTION 'TEST FAILED: Duplicate email accepted';
     EXCEPTION WHEN unique_violation THEN
         RAISE NOTICE '✓ Duplicate email correctly rejected';
@@ -658,7 +685,7 @@ END $$;
 Tests are executed via the `CALL pgmi_test()` macro in deploy.sql:
 ```sql
 -- In deploy.sql, call the pgmi_test() preprocessor macro
-CALL pgmi_test('./users/**');
+CALL pgmi_test('\./users/');
 ```
 
 Then deploy:

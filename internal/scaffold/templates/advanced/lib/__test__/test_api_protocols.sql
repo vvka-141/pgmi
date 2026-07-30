@@ -17,7 +17,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1001-4000-8000-000000000001',
-            'uri', '^/test-hello(\?.*)?$',
+            'uri', '^/test-hello$',
             'httpMethod', '^GET$',
             'name', 'test_hello',
             'description', 'Test hello endpoint',
@@ -38,7 +38,7 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1002-4000-8000-000000000001',
-            'uri', '^/test-echo(\?.*)?$',
+            'uri', '^/test-echo$',
             'httpMethod', '^POST$',
             'name', 'test_echo',
             'description', 'Test echo endpoint',
@@ -58,7 +58,7 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1003-4000-8000-000000000001',
-            'uri', '^/test-health(\?.*)?$',
+            'uri', '^/test-health$',
             'httpMethod', '^GET$',
             'name', 'test_health',
             'description', 'Test health endpoint',
@@ -78,12 +78,12 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-hello', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello expected 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'message' != 'Hello, World!' THEN
+    IF v_content->>'message' IS DISTINCT FROM 'Hello, World!' THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello should return "Hello, World!", got "%"', v_content->>'message';
     END IF;
 
@@ -95,12 +95,12 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-hello?name=Claude', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello?name=Claude expected 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'message' != 'Hello, Claude!' THEN
+    IF v_content->>'message' IS DISTINCT FROM 'Hello, Claude!' THEN
         RAISE EXCEPTION 'TEST FAILED: GET /test-hello?name=Claude should return "Hello, Claude!", got "%"', v_content->>'message';
     END IF;
 
@@ -117,12 +117,12 @@ END;
         convert_to('{"test": "data"}', 'UTF8')
     );
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: REST /test-echo expected 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'method' != 'POST' THEN
+    IF v_content->>'method' IS DISTINCT FROM 'POST' THEN
         RAISE EXCEPTION 'TEST FAILED: REST /test-echo wrong method echo';
     END IF;
 
@@ -134,12 +134,12 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-health', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: REST /test-health expected 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'status' != 'healthy' THEN
+    IF v_content->>'status' IS DISTINCT FROM 'healthy' THEN
         RAISE EXCEPTION 'TEST FAILED: REST /test-health wrong status';
     END IF;
 
@@ -151,7 +151,7 @@ END;
 
     v_response := api.rest_invoke('GET', '/nonexistent-route-xyz', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 404 THEN
+    IF (v_response).status_code IS DISTINCT FROM 404 THEN
         RAISE EXCEPTION 'TEST FAILED: REST /nonexistent-route-xyz expected 404, got %', (v_response).status_code;
     END IF;
 
@@ -189,7 +189,7 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-bare-headers', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: /test-bare-headers expected 200, got %', (v_response).status_code;
     END IF;
     IF (v_response).headers->'content-type' IS DISTINCT FROM 'application/json; charset=utf-8' THEN
@@ -207,7 +207,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: content-length should match body size, got %',
             (v_response).headers->'content-length';
     END IF;
-    IF NOT (v_response).headers ? 'x-route-id' THEN
+    IF coalesce((v_response).headers ? 'x-route-id', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'TEST FAILED: x-route-id should be stamped on REST responses';
     END IF;
 
@@ -288,16 +288,16 @@ END;
         convert_to('{"jsonrpc": "2.0", "method": "test.sum", "params": {"a": 5, "b": 3}, "id": "1"}', 'UTF8')
     );
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC test.sum expected 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'jsonrpc' != '2.0' THEN
+    IF v_content->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC response missing jsonrpc field';
     END IF;
 
-    IF (v_content->'result'->>'result')::numeric != 8 THEN
+    IF (v_content->'result'->>'result')::numeric IS DISTINCT FROM 8 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC test.sum(5,3) expected 8, got %', v_content->'result'->>'result';
     END IF;
 
@@ -314,7 +314,7 @@ END;
         convert_to('{"jsonrpc": "2.0", "method": "test.time", "id": "2"}', 'UTF8')
     );
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC test.time expected 200, got %', (v_response).status_code;
     END IF;
 
@@ -432,11 +432,11 @@ END;
     v_response := api.mcp_call_tool('test_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP tool response missing jsonrpc 2.0';
     END IF;
 
-    IF v_envelope->>'id' != 'req-1' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-1' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP tool request_id not echoed';
     END IF;
 
@@ -457,7 +457,7 @@ END;
     v_response := api.mcp_call_tool('nonexistent_tool_xyz', '{}'::jsonb, NULL, '"req-2"'::jsonb);
     v_envelope := (v_response).envelope;
 
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP error response missing jsonrpc 2.0';
     END IF;
 
@@ -465,7 +465,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: MCP nonexistent_tool_xyz should have error object';
     END IF;
 
-    IF (v_envelope->'error'->>'code')::int != -32602 THEN
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
         RAISE EXCEPTION 'TEST FAILED: MCP unknown tool should use code -32602 (Invalid params)';
     END IF;
 
@@ -478,11 +478,11 @@ END;
     v_response := api.mcp_read_resource('test:///123', NULL, '"req-3"'::jsonb);
     v_envelope := (v_response).envelope;
 
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP resource response missing jsonrpc 2.0';
     END IF;
 
-    IF v_envelope->>'id' != 'req-3' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-3' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP resource request_id not echoed';
     END IF;
 
@@ -491,6 +491,42 @@ END;
     END IF;
 
     RAISE NOTICE '  ✓ MCP resource read returns JSON-RPC 2.0 success response';
+
+    -- ========================================================================
+    -- Test: resource dispatch matches a stored regex, never rebuilds one
+    -- ========================================================================
+
+    -- The acceptance criterion, asserted against the deployed function body:
+    -- uri_template_to_regex must not appear in the dispatch path at all.
+    IF pg_get_functiondef('internal.mcp_dispatch(text,text,jsonb,jsonb,jsonb)'::regprocedure)
+       ~ 'uri_template_to_regex' THEN
+        RAISE EXCEPTION 'TEST FAILED: mcp_dispatch still converts uri_template per request';
+    END IF;
+
+    -- Every resource route carries the derived regex, and it is the one the
+    -- converter produces — a stale value would mis-route, not merely slow down.
+    IF EXISTS (
+        SELECT 1 FROM api.mcp_route
+        WHERE mcp_type = 'resource'
+          AND uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template)
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: a resource route has a stale or missing uri_regexp';
+    END IF;
+
+    -- The trigger, not the registration function, is what guarantees that: prove
+    -- it holds for direct DML too (admin_role is granted UPDATE on this table).
+    UPDATE api.mcp_route SET uri_template = 'test:///{id}/extra'
+    WHERE mcp_name = 'test_resource';
+
+    IF (SELECT uri_regexp FROM api.mcp_route WHERE mcp_name = 'test_resource')
+       IS DISTINCT FROM api.uri_template_to_regex('test:///{id}/extra') THEN
+        RAISE EXCEPTION 'TEST FAILED: direct UPDATE of uri_template left uri_regexp stale';
+    END IF;
+
+    UPDATE api.mcp_route SET uri_template = 'test:///{id}'
+    WHERE mcp_name = 'test_resource';
+
+    RAISE NOTICE '  ✓ MCP resource dispatch reads a stored regex; trigger keeps it in sync';
 
     -- ========================================================================
     -- Test: MCP Prompt (JSON-RPC 2.0 Compliance)
@@ -504,11 +540,11 @@ END;
     );
     v_envelope := (v_response).envelope;
 
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP prompt response missing jsonrpc 2.0';
     END IF;
 
-    IF v_envelope->>'id' != 'req-4' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-4' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP prompt request_id not echoed';
     END IF;
 

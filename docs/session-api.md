@@ -62,9 +62,16 @@ These views and functions are the stable API for deploy.sql. Use these instead o
 
 #### pgmi_source_view
 
-**All project source files (excludes deploy.sql and `__test__/` files).**
+**All project source files (excludes the root `deploy.sql` and `__test__/` files).**
 
 This view provides direct access to all discovered files. For most use cases, prefer `pgmi_plan_view` which adds execution ordering via metadata.
+
+> **Only the *root* `deploy.sql` is excluded.** pgmi executes that one itself, so
+> it never appears here. A `deploy.sql` anywhere else — `examples/deploy.sql`,
+> `sub-project/deploy.sql` — loads like any other file, with `is_sql_file = true`,
+> and a plan loop will execute it. If you keep nested projects inside a project,
+> filter them out by path. See
+> [what gets loaded](DEPLOY-GUIDE.md#what-gets-loaded).
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -78,7 +85,7 @@ This view provides direct access to all discovered files. For most use cases, pr
 | `checksum` | text | SHA-256 of original content |
 | `pgmi_checksum` | text | SHA-256 of normalized content |
 | `path_parts` | text[] | Path split by `/` |
-| `is_sql_file` | boolean | True for recognized SQL extensions |
+| `is_sql_file` | boolean | True for `.sql`, `.ddl`, `.dml`, `.dql`, `.dcl`, `.psql`, `.pgsql`, `.plpgsql` (case-insensitive). The extension decides, not the directory — `001.sql.bak` is false |
 | `is_test_file` | boolean | Always `false` in this view — files matching `__test__/` are routed to `pgmi_test_source_view` instead |
 | `parent_folder_name` | text | Immediate parent directory name |
 
@@ -99,13 +106,20 @@ This view joins `_pgmi_source` with `_pgmi_source_metadata` and provides a clean
 |--------|------|-------------|
 | `path` | text | File path |
 | `content` | text | File content |
-| `checksum` | text | Normalized checksum |
+| `checksum` | text | **Normalized** checksum (≠ `pgmi_source_view.checksum` which is raw) — see [Two checksums](#two-checksums-and-which-to-track-against) |
 | `generic_id` | uuid | Auto-generated UUID from path |
 | `id` | uuid | Explicit ID from [`<pgmi-meta>`](METADATA.md) (NULL if none) |
 | `idempotent` | boolean | Whether file can be re-executed (defaults to `true` for files without metadata) |
 | `description` | text | From `<pgmi-meta>` (defaults to `''` for files without metadata, never NULL) |
 | `sort_key` | text | Execution ordering key |
 | `execution_order` | bigint | Sequential execution number |
+
+**This view holds every loaded file, not only SQL.** `README.md`, `pgmi.yaml`
+and editor leftovers (`001.sql~`, `.bak`, `.orig`) are all in it, and a
+directory filter does not exclude them — a backup saved beside the migration
+you were editing matches `'./migrations/%'` and executes as a migration, with
+the deploy still exiting 0. `is_sql_file` lives on `pgmi_source_view`, so every
+execute loop below joins back to it. That join is the guard, not decoration.
 
 **Recommended usage:**
 
@@ -115,16 +129,37 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content
-        FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
+
+### Two checksums, and which to track against
+
+`pgmi_source_view` carries two checksum columns per file:
+
+| Column | Algorithm |
+|--------|-----------|
+| `checksum` | SHA-256 of the raw file bytes |
+| `pgmi_checksum` | SHA-256 after normalization: comments stripped, whitespace collapsed, and case folded only where SQL ignores it — keywords and unquoted identifiers. Literals, quoted identifiers and dollar-quoted bodies keep their case, so `"Users"`/`"users"` and `'Production'`/`'production'` stay distinct |
+
+**The naming trap:** `pgmi_plan_view.checksum` is the **normalized** checksum, not the raw one. The column name is the same, the value is different. Code that tracks `pgmi_source_view.checksum` into a history table and later compares against `pgmi_plan_view.checksum` will never match.
+
+**Which to use:**
+
+- Track against `pgmi_checksum` (or `pgmi_plan_view.checksum`) when you want reformatting, re-indentation, and comment edits to be free — a touched-up file won't re-execute.
+- Track against `pgmi_source_view.checksum` when you need byte-exact provenance — any edit, including a comment, triggers re-execution.
+
+**Honest cost:** a change that touches *only* comments is invisible to `pgmi_checksum`. If your comments carry operational meaning (e.g., planner hints via `pg_hint_plan`, or `<pgmi-meta>` blocks that don't affect the normalized body), the normalized checksum won't catch the edit.
+
+See [Highlights §5](HIGHLIGHTS.md#5-checksums-that-survive-a-reformat) and [Checksum-based change detection](DEPLOY-GUIDE.md#checksum-based-change-detection) for usage examples.
 
 ### Parameters
 
@@ -157,12 +192,27 @@ For iterating over parameters or building dynamic logic:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `key` | text | Parameter name (e.g., `env`, `version`) |
+| `key` | text | Parameter name, **always lower-cased on load** — `--param apiVersion=2` is stored as `apiversion` |
 | `value` | text | Parameter value (always text, cast as needed) |
 | `type` | text | Declared type hint (`text`, `int`, `boolean`, etc.) |
 | `required` | boolean | Whether parameter was marked required |
 | `default_value` | text | Default value if not provided |
 | `description` | text | Human-readable description |
+
+**Compare lower-cased.** `key` mirrors the session variable pgmi set, and
+PostgreSQL's GUC namespace is case-insensitive — so the two access methods
+disagree for a mixed-case parameter, and the view disagrees *silently*:
+
+```sql
+-- with --param apiVersion=2
+current_setting('pgmi.apiVersion', true)                             -- '2'
+SELECT value FROM pgmi_parameter_view WHERE key = 'apiVersion'       -- no row
+SELECT value FROM pgmi_parameter_view WHERE key = 'apiversion'       -- '2'
+SELECT value FROM pgmi_parameter_view WHERE key = lower('apiVersion') -- '2', safe either way
+```
+
+Storing the original case instead would make `key` name something the session
+variable does not, which trades a visible mismatch for an invisible one.
 
 ```sql
 -- List all parameters
@@ -184,6 +234,8 @@ END $$;
 ```
 
 #### Method 3: deployment_setting() Helper (Advanced Template Only)
+
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
 The advanced template provides a helper function with error handling:
 
@@ -242,10 +294,11 @@ DECLARE v_file RECORD;
 BEGIN
     -- Transaction control is in your hands
     FOR v_file IN (
-        SELECT path, content
-        FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './schemas/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './schemas/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
@@ -262,8 +315,11 @@ BEGIN
     -- Phase 1: Schema changes in one transaction
     BEGIN
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_plan_view
-            WHERE path LIKE './schemas/%' ORDER BY execution_order
+            SELECT p.path, p.content
+            FROM pg_temp.pgmi_plan_view p
+            JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+            WHERE s.is_sql_file AND p.path LIKE './schemas/%'
+            ORDER BY p.execution_order
         ) LOOP
             EXECUTE v_file.content;
         END LOOP;
@@ -273,8 +329,11 @@ BEGIN
 
     -- Phase 2: Migrations
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%' ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -290,8 +349,11 @@ DECLARE
     v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%' ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -299,8 +361,11 @@ BEGIN
     -- Only seed data in development
     IF v_env = 'development' THEN
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_plan_view
-            WHERE path LIKE './seeds/%' ORDER BY execution_order
+            SELECT p.path, p.content
+            FROM pg_temp.pgmi_plan_view p
+            JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+            WHERE s.is_sql_file AND p.path LIKE './seeds/%'
+            ORDER BY p.execution_order
         ) LOOP
             EXECUTE v_file.content;
         END LOOP;
@@ -398,7 +463,7 @@ CALL pgmi_test('.*/integration/.*');
 CALL pgmi_test('.*_critical\.sql$');
 
 -- Run tests with custom callback function
-CALL pgmi_test('.*/auth/.*', 'my_custom_callback');
+CALL pgmi_test('.*/auth/.*', 'pg_temp.my_custom_callback');
 ```
 
 **Automatic behavior:**
@@ -447,7 +512,7 @@ This is an internal function called by the Go preprocessor. It returns the compl
 ```sql
 -- See what SQL the macro generates (for debugging)
 SELECT pg_temp.pgmi_test_generate();
-SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'my_callback');
+SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'pg_temp.my_callback');
 ```
 
 **Critical implementation detail:** The generated SQL uses **top-level SAVEPOINT commands**, not PL/pgSQL savepoints. PostgreSQL's PL/pgSQL does not support `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, or `RELEASE SAVEPOINT` commands directly — they must be issued as top-level SQL statements.
@@ -470,6 +535,12 @@ This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, 
 #### Custom Callbacks
 
 The second argument to `pgmi_test()` is the name of a callback function that receives lifecycle events. Your function must accept a single `pg_temp.pgmi_test_event` argument and return `void`:
+
+**The name must be schema-qualified.** pgmi interpolates it verbatim into
+`SELECT <name>(ROW(...))`, and PostgreSQL never searches `pg_temp` for *function*
+names however the `search_path` is set — so `'my_callback'` fails with
+`ERROR: function my_callback(pgmi_test_event) does not exist (SQLSTATE 42883)`
+while `'pg_temp.my_callback'` resolves.
 
 ```sql
 CREATE FUNCTION pg_temp.my_callback(e pg_temp.pgmi_test_event)
@@ -532,10 +603,11 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content
-        FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
@@ -560,9 +632,11 @@ BEGIN
     -- Phase 1: Schema changes
     RAISE NOTICE '=== Phase 1: Schema ===';
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './schemas/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './schemas/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
@@ -571,9 +645,11 @@ BEGIN
     -- Phase 2: Migrations
     RAISE NOTICE '=== Phase 2: Migrations ===';
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
@@ -586,6 +662,8 @@ END $$;
 `CALL pgmi_test()` is a preprocessor macro that expands to top-level SQL (including `SAVEPOINT` commands), so it **must** appear at the top level of deploy.sql — never inside a `DO` block. Structure your deploy.sql with the DO block for migrations and `CALL pgmi_test()` as a separate top-level statement:
 
 ```sql
+BEGIN;
+
 -- Phase 1: Migrations and seeds (inside DO block)
 DO $$
 DECLARE
@@ -594,9 +672,11 @@ DECLARE
 BEGIN
     -- Always run migrations
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -604,9 +684,11 @@ BEGIN
     -- Only seed data in development
     IF v_env = 'development' THEN
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_plan_view
-            WHERE path LIKE './seeds/%'
-            ORDER BY execution_order
+            SELECT p.path, p.content
+            FROM pg_temp.pgmi_plan_view p
+            JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+            WHERE s.is_sql_file AND p.path LIKE './seeds/%'
+            ORDER BY p.execution_order
         ) LOOP
             EXECUTE v_file.content;
         END LOOP;
@@ -627,9 +709,11 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/v2/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/v2/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -652,14 +736,18 @@ END $$;
 ### Test Isolation with Savepoints
 
 ```sql
+BEGIN;
+
 DO $$
 DECLARE v_file RECORD;
 BEGIN
     -- Deploy your schema
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './schemas/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './schemas/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
@@ -817,4 +905,4 @@ pgmi is not a migration framework. It's an **execution fabric**.
 
 - [Testing Guide](TESTING.md) — Database testing with automatic rollback
 - [Metadata Guide](METADATA.md) — Script tracking and execution ordering
-- [MCP Integration](MCP.md) — Model Context Protocol for AI assistants (advanced template)
+- [MCP Integration](advanced/MCP.md) — Model Context Protocol for AI assistants (advanced template)

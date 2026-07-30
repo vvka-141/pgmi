@@ -292,6 +292,10 @@ BEGIN
         RETURN api.mcp_error(-32600, 'Invalid Request: null request', NULL);
     END IF;
 
+    IF jsonb_typeof(p_request) <> 'object' THEN
+        RETURN api.mcp_error(-32600, 'Invalid Request: expected a JSON-RPC 2.0 request object', NULL);
+    END IF;
+
     -- Extract JSON-RPC envelope fields. v_id is jsonb to preserve type (string,
     -- integer, null). A request without an id member is a notification.
     v_jsonrpc := p_request->>'jsonrpc';
@@ -306,6 +310,21 @@ BEGIN
             RETURN ROW(NULL::jsonb)::api.mcp_response;
         END IF;
         RETURN api.mcp_error(-32600, 'Invalid Request: missing or invalid jsonrpc version', v_id);
+    END IF;
+
+    -- MCP narrows JSON-RPC here: "Requests MUST include a string or integer ID"
+    -- and "Unlike base JSON-RPC, the ID MUST NOT be null." Unvalidated, this
+    -- gateway answered id: null / true / {"a":1} with a result and echoed the
+    -- value back, so a client got a response it could not match to any request.
+    -- 'number' rather than integer-only, to stay identical to the Go server's
+    -- hasWellFormedID (internal/mcp/protocol.go) — two MCP surfaces in one
+    -- product that disagree on what a valid request is are worse than one that
+    -- accepts 1.5.
+    --
+    -- The error carries a NULL id, not v_id: JSON-RPC 2.0 says that when there
+    -- was an error detecting the id, the response id MUST be Null.
+    IF NOT v_is_notification AND jsonb_typeof(v_id) NOT IN ('string', 'number') THEN
+        RETURN api.mcp_error(-32600, 'Invalid Request: id must be a string or number', NULL);
     END IF;
 
     -- Validate method is present
@@ -377,7 +396,16 @@ BEGIN
             RETURN api.mcp_error(-32601, 'Method not found: ' || v_method, v_id);
     END CASE;
 
-EXCEPTION WHEN OTHERS THEN
+EXCEPTION
+-- Propagate the retryable class untouched. mcp_dispatch one layer below
+-- re-raises it deliberately; swallowing it here rolls the statement back to
+-- this block's implicit savepoint and lets the transaction commit, so the
+-- handler's write vanishes while the client is told 'internal error' and never
+-- learns it should retry.
+WHEN serialization_failure OR deadlock_detected THEN
+    RAISE;
+
+WHEN OTHERS THEN
     -- Log detail for operators; return a sanitized message so table/constraint/
     -- column names and schema paths are not exposed to the client. Mirrors
     -- rest_invoke / rpc_invoke / the invocation handlers.
@@ -401,7 +429,7 @@ BEGIN
     -- Test: Initialize handshake (string id)
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb);
     v_envelope := (v_response).envelope;
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'mcp_handle_request initialize: missing jsonrpc';
     END IF;
     IF v_envelope->'result'->'serverInfo' IS NULL THEN
@@ -411,28 +439,28 @@ BEGIN
     -- Test: Integer id round-trips as integer (JSON-RPC 2.0 type preservation)
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":42,"method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
-    IF jsonb_typeof(v_envelope->'id') != 'number' OR (v_envelope->>'id')::int != 42 THEN
+    IF jsonb_typeof(v_envelope->'id') IS DISTINCT FROM 'number' OR (v_envelope->>'id')::int IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'mcp_handle_request: integer id type not preserved, got %', v_envelope->'id';
     END IF;
 
     -- Test: Ping keepalive (string id)
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"2","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
-    IF v_envelope->>'id' != '2' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM '2' THEN
         RAISE EXCEPTION 'mcp_handle_request ping: wrong id';
     END IF;
 
     -- Test: Unknown method returns -32601
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"3","method":"unknown_method"}'::jsonb);
     v_envelope := (v_response).envelope;
-    IF (v_envelope->'error'->>'code')::int != -32601 THEN
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32601 THEN
         RAISE EXCEPTION 'mcp_handle_request unknown method: wrong error code';
     END IF;
 
     -- Test: Missing jsonrpc returns -32600 (request has id, so it's a request not a notification)
     v_response := api.mcp_handle_request('{"id":"4","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
-    IF (v_envelope->'error'->>'code')::int != -32600 THEN
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32600 THEN
         RAISE EXCEPTION 'mcp_handle_request missing jsonrpc: wrong error code';
     END IF;
 

@@ -17,7 +17,9 @@ func TestForcedApprover_ApprovesAfterCountdown(t *testing.T) {
 	sleepCalls := 0
 
 	approver := &ForcedApprover{
-		output: &output,
+		// The countdown is the interactive path; a non-interactive run skips it.
+		interactive: true,
+		output:      &output,
 		sleepFn: func(d time.Duration) {
 			sleepCalls++
 		},
@@ -39,8 +41,10 @@ func TestForcedApprover_OutputContainsDbName(t *testing.T) {
 	var output bytes.Buffer
 
 	approver := &ForcedApprover{
-		output:  &output,
-		sleepFn: func(time.Duration) {},
+		// The countdown is the interactive path; a non-interactive run skips it.
+		interactive: true,
+		output:      &output,
+		sleepFn:     func(time.Duration) {},
 	}
 
 	_, _ = approver.RequestApproval(context.Background(), "my_production_db")
@@ -66,7 +70,9 @@ func TestForcedApprover_ContextCancellation(t *testing.T) {
 
 	sleepCalls := 0
 	approver := &ForcedApprover{
-		output: &output,
+		// The countdown is the interactive path; a non-interactive run skips it.
+		interactive: true,
+		output:      &output,
 		sleepFn: func(d time.Duration) {
 			sleepCalls++
 			if sleepCalls >= 2 {
@@ -285,12 +291,14 @@ func TestForcedApprover_CtxCancelRespondsPromptly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	approver := &ForcedApprover{
-		output:  &output,
-		sleepFn: nil,
+		// The countdown is the interactive path; a non-interactive run skips it.
+		interactive: true,
+		output:      &output,
+		sleepFn:     nil,
 	}
 
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
 
@@ -304,8 +312,14 @@ func TestForcedApprover_CtxCancelRespondsPromptly(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Expected context.Canceled, got: %v", err)
 	}
+	// Sub-second responsiveness is the point: the countdown waits in one-second
+	// ticks, and a select checked only at the end of each tick would swallow
+	// Ctrl-C for up to a second. So the bound must stay under a second — it
+	// cannot be widened to buy margin. The margin comes from cancelling early
+	// instead: 20ms expected against a 500ms bound is 25x, where the original
+	// 200ms was 2.5x and is the ratio that has flaked elsewhere in this repo.
 	if elapsed > 500*time.Millisecond {
-		t.Errorf("Ctrl-C should respond within 500ms, took %v", elapsed)
+		t.Errorf("ctx cancel took %v; the countdown must not swallow Ctrl-C for a whole tick", elapsed)
 	}
 }
 
@@ -358,4 +372,81 @@ func (r *blockingReader) Close() error {
 		close(r.done)
 	}
 	return nil
+}
+
+// TestForcedApprover_NonInteractiveSkipsTheCountdown pins defect 2 of PGMI-269.
+// --force exists for CI, and CI is where output is a log file: the countdown's
+// only purpose is giving a human time to press Ctrl-C, so with no human it was
+// five seconds of latency per forced overwrite — billed against --timeout — and
+// a single ~300-character line, because \r redraws nothing in a non-TTY sink.
+func TestForcedApprover_NonInteractiveSkipsTheCountdown(t *testing.T) {
+	var output strings.Builder
+	slept := 0
+
+	approver := &ForcedApprover{
+		output:      &output,
+		interactive: false,
+		sleepFn:     func(time.Duration) { slept++ },
+	}
+
+	start := time.Now()
+	approved, err := approver.RequestApproval(context.Background(), "clirev")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !approved {
+		t.Error("--force must still approve without a terminal; it is what CI uses")
+	}
+	if slept != 0 {
+		t.Errorf("the countdown slept %d time(s) with no terminal to watch it", slept)
+	}
+	if elapsed > time.Second {
+		t.Errorf("a forced overwrite took %v with no terminal; the wait is pure latency there", elapsed)
+	}
+
+	out := output.String()
+	if strings.Contains(out, "\r") {
+		t.Errorf("carriage returns reached a non-TTY sink, producing one unreadable line:\n%q", out)
+	}
+	if strings.Contains(out, "Ctrl-C aborts") {
+		t.Errorf("the countdown ran where nobody can interrupt it:\n%q", out)
+	}
+	// It still has to record the destructive act, on one readable line.
+	if !strings.Contains(out, "clirev") || strings.Count(out, "\n") != 1 {
+		t.Errorf("a non-interactive forced overwrite must log exactly one line naming the database, got:\n%q", out)
+	}
+}
+
+// TestNonInteractiveApprover_RefusesImmediately pins defect 1. The interactive
+// approver blocks on ReadString; against a CI runner's open-but-silent stdin
+// that hung for the whole of --timeout and reported exit 16, "operation exceeded
+// --timeout", for what was a missing --force.
+func TestNonInteractiveApprover_RefusesImmediately(t *testing.T) {
+	approver := NewNonInteractiveApprover()
+
+	start := time.Now()
+	approved, err := approver.RequestApproval(context.Background(), "clirev")
+	elapsed := time.Since(start)
+
+	if approved {
+		t.Fatal("a destructive overwrite was approved with nobody to confirm it")
+	}
+	if err == nil {
+		t.Fatal("expected a refusal error")
+	}
+	if elapsed > time.Second {
+		t.Errorf("the refusal took %v; it must not wait on input that will never come", elapsed)
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitApprovalDenied {
+		t.Errorf("exit code %d, want %d (approval denied) — not %d, which reads as a slow database",
+			got, pgmi.ExitApprovalDenied, pgmi.ExitTimeout)
+	}
+	// The message has to name the fix, since the operator's mistake is a flag.
+	for _, want := range []string{"--force", "clirev"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
 }

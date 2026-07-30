@@ -55,21 +55,32 @@ BEGIN
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=30&batch_size=100',
         v_admin_headers, null::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Purge endpoint returned %, expected 200', (v_response).status_code;
     END IF;
 
     v_body := api.content_json((v_response).content);
 
-    IF (v_body->>'totalDeleted')::int < 10 THEN
+    IF coalesce((v_body->>'totalDeleted')::int, 0) < 10 THEN
         RAISE EXCEPTION 'Expected >= 10 deleted, got %', v_body->>'totalDeleted';
     END IF;
 
-    IF (v_body->'deleted'->>'rest')::int < 10 THEN
+    IF coalesce((v_body->'deleted'->>'rest')::int, 0) < 10 THEN
         RAISE EXCEPTION 'Expected >= 10 REST deleted, got %', v_body->'deleted'->>'rest';
     END IF;
 
-    RAISE NOTICE '  + Purge endpoint deleted % exchanges (rest=%)',
+    -- The response body is the handler's own report. Ask the table instead: a
+    -- handler that returns {"totalDeleted": 10} while deleting nothing satisfies
+    -- every assertion above.
+    SELECT COUNT(*) INTO v_count_after
+    FROM api.rest_exchange WHERE enqueued_at < now() - interval '30 days';
+
+    IF v_count_after IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'Purge reported % deleted but % exchange(s) older than the retention window remain',
+            v_body->>'totalDeleted', v_count_after;
+    END IF;
+
+    RAISE NOTICE '  + Purge endpoint deleted % exchanges (rest=%); none older than 30 days remain',
         v_body->>'totalDeleted', v_body->'deleted'->>'rest';
 
     -- ========================================================================
@@ -121,7 +132,7 @@ BEGIN
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=0',
         v_admin_headers, null::bytea);
 
-    IF (v_response).status_code != 422 THEN
+    IF (v_response).status_code IS DISTINCT FROM 422 THEN
         RAISE EXCEPTION 'Expected 422 for retention_days=0, got %', (v_response).status_code;
     END IF;
 

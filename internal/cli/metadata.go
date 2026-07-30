@@ -11,6 +11,7 @@ import (
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/metadata"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var metadataCmd = &cobra.Command{
@@ -128,7 +129,7 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 	// Filter files without metadata
 	var filesWithoutMetadata []string
 	for _, file := range scanResult.Files {
-		if file.Metadata == nil {
+		if file.Metadata == nil && pgmi.IsSQLExtension(file.Extension) && !pgmi.IsTestPath(file.Path) {
 			filesWithoutMetadata = append(filesWithoutMetadata, file.Path)
 		}
 	}

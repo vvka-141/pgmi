@@ -23,7 +23,7 @@ BEGIN
         AND c.relname = 'deployment_script_execution_log'
     ) INTO v_table_exists;
 
-    IF NOT v_table_exists THEN
+    IF v_table_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'TEST FAILED: Tracking table does not exist';
     END IF;
     RAISE DEBUG '  Tracking table exists';
@@ -34,7 +34,7 @@ BEGIN
         WHERE file_path LIKE './lib/%'
     ) INTO v_has_tracked_scripts;
 
-    IF NOT v_has_tracked_scripts THEN
+    IF v_has_tracked_scripts IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'TEST FAILED: No lib/ scripts tracked in deployment log';
     END IF;
     RAISE DEBUG '  Scripts tracked correctly';
@@ -47,10 +47,18 @@ BEGIN
     RAISE DEBUG '  Owner role exists: %', v_owner_role;
 
     -- Test 4: Internal schema owned by owner role
-    IF (SELECT nspowner::regrole::TEXT FROM pg_namespace WHERE nspname = 'internal') != v_owner_role THEN
+    IF (SELECT nspowner::regrole::TEXT FROM pg_namespace WHERE nspname = 'internal') IS DISTINCT FROM v_owner_role THEN
         RAISE EXCEPTION 'TEST FAILED: Internal schema not owned by owner role';
     END IF;
     RAISE DEBUG '  Internal schema owned by owner role';
 
     RAISE DEBUG 'Deployment tracking test passed';
 END $$;
+
+-- The idempotent -> non-idempotent flip is covered by
+-- TestAdvancedTemplate_IdempotentToNonIdempotentFlip. It needs three deploys
+-- against one database, so it cannot live here: a __test__ file gets one.
+-- The block that used to sit here built a temp table, re-implemented
+-- deploy.sql's skip predicate against it, and asserted its own
+-- re-implementation behaved as written -- deleting the real predicate left it
+-- green.

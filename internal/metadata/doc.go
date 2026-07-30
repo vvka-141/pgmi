@@ -37,13 +37,14 @@
 //
 // # Fallback Identity
 //
-// Files without metadata receive a deterministic UUID v5 generated from their
-// normalized path. This ensures stable identity even for legacy scripts.
+// Files without metadata receive a deterministic UUID computed as
+// md5(raw_path)::uuid, matching pgmi_plan_view.generic_id exactly.
+// The path includes the "./" prefix the scanner adds and is case-sensitive.
 //
 // Example:
 //
 //	path: "./migrations/001_users.sql"
-//	fallback ID: uuid_v5(namespace, "migrations/001_users.sql")
+//	fallback ID: md5("./migrations/001_users.sql") as UUID
 //
 // # Usage
 //
@@ -64,7 +65,7 @@
 //   - schema.xsd: Canonical XSD schema (embedded via go:embed)
 //   - extractor.go: XML parsing from SQL comments
 //   - validator.go: XSD constraint validation
-//   - identity.go: Deterministic UUID v5 fallback generation
+//   - identity.go: Deterministic md5-based fallback identity generation
 //
 // # Design Principles
 //

@@ -22,7 +22,7 @@ BEGIN
     FROM membership.organization_member
     WHERE organization_id = v_org_id AND user_id = v_bob_id;
 
-    IF v_member.status != 'pending' THEN
+    IF v_member.status IS DISTINCT FROM 'pending' THEN
         RAISE EXCEPTION 'TEST FAILED: expected pending, got %', v_member.status;
     END IF;
     RAISE DEBUG '  ✓ Invitation created as pending';
@@ -50,7 +50,7 @@ BEGIN
     FROM membership.organization_member
     WHERE organization_id = v_org_id AND user_id = v_bob_id;
 
-    IF v_member.status != 'active' THEN
+    IF v_member.status IS DISTINCT FROM 'active' THEN
         RAISE EXCEPTION 'TEST FAILED: expected active, got %', v_member.status;
     END IF;
     IF v_member.joined_at IS NULL THEN

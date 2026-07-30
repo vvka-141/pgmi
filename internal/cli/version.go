@@ -44,6 +44,11 @@ func versionTemplate() string {
 	)
 }
 
+// Seam: the ldflags-vs-build-info divergence only exists in a real build, so a
+// test binary cannot otherwise reach the branch that recovers a go-install
+// version.
+var readBuildInfo = debug.ReadBuildInfo
+
 func resolveVersionInfo() (v, c, d string) {
 	v, c, d = version, commit, date
 
@@ -51,7 +56,7 @@ func resolveVersionInfo() (v, c, d string) {
 		return
 	}
 
-	info, ok := debug.ReadBuildInfo()
+	info, ok := readBuildInfo()
 	if !ok {
 		return
 	}
@@ -81,7 +86,7 @@ func resolveVersionInfo() (v, c, d string) {
 
 // printVersionInfo writes machine-greppable version output to stdout.
 // First line is the version (psql --version convention so `pgmi version | head -1`
-// returns just `pgmi 0.9.1 (compat v1)`); subsequent lines carry build metadata.
+// returns just `pgmi 0.9.1 (compat 1)`); subsequent lines carry build metadata.
 func printVersionInfo() {
 	v, c, d := resolveVersionInfo()
 	fmt.Printf("pgmi %s (compat %s)\n", v, contract.LatestVersion())

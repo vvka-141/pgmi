@@ -118,6 +118,34 @@ type ConnectionConfig struct {
 	SSLPassword string
 }
 
+// String renders the config with its three secrets — Password,
+// AzureClientSecret and SSLPassword — replaced, and reports only whether each
+// was set.
+//
+// Without it, one %v in a log line, a wrapped error or a panic dump prints all
+// three in clear, and redactPasswords does not catch that: it looks for
+// `password=` or a URI, while a struct renders `Password:hunter2` under %+v and
+// a bare positional value under %v. A value receiver so both a
+// ConnectionConfig and a *ConnectionConfig format safely.
+func (c ConnectionConfig) String() string {
+	return fmt.Sprintf(
+		"ConnectionConfig{Host:%s Port:%d Database:%s Username:%s SSLMode:%s AuthMethod:%d "+
+			"Password:%s AzureClientSecret:%s SSLPassword:%s}",
+		c.Host, c.Port, c.Database, c.Username, c.SSLMode, c.AuthMethod,
+		secretState(c.Password), secretState(c.AzureClientSecret), secretState(c.SSLPassword))
+}
+
+// GoString covers %#v, which ignores String and would otherwise dump every
+// field verbatim.
+func (c ConnectionConfig) GoString() string { return c.String() }
+
+func secretState(s string) string {
+	if s == "" {
+		return "unset"
+	}
+	return "[redacted]"
+}
+
 // DeepCopy returns a deep copy of the ConnectionConfig.
 func (c *ConnectionConfig) DeepCopy() ConnectionConfig {
 	cp := *c
@@ -176,7 +204,7 @@ type FileMetadata struct {
 	// Timestamps (using modified_at per MVP spec)
 	ModifiedAt time.Time // Last modification time
 
-	// Metadata (optional, only for files with valid <pgmi:meta> blocks)
+	// Metadata (optional, only for files with valid <pgmi-meta> blocks)
 	// If nil, the file has no metadata and will use a deterministic fallback UUID.
 	Metadata *ScriptMetadata
 }

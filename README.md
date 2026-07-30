@@ -27,15 +27,24 @@ pgmi deploy demo -d demo_db
 ```
 
 ```text
+Database "demo_db" does not exist; creating
 Preparing session: scanning files, loading parameters
 Loaded 7 files
+Loaded 1 parameters
 Executing deploy.sql
 [development] Deploying demo v1.0.0 (5 file(s) in project)
+Dev seed: admin user ready (admin@example.com id=1)
 [pgmi] Test suite started
 [pgmi] Fixture: ./__test__/_setup.sql
 [pgmi] Test: ./__test__/test_user_crud.sql
 [pgmi] Test suite completed (3 steps)
-✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
+
+  ___   ___  _  _ ___
+ |   \ / _ \| \| | __|
+ | |) | (_) | .` | _|
+ |___/ \___/|_|\_|___|
+
+✓ demo_db: 7 files loaded, 1 test macro(s) expanded in 0.91s
 ```
 
 Now the failure case: add a migration creating an `audit_log` table, and a test asserting it contains a `deploy` event (it won't — nothing inserts one):
@@ -66,8 +75,8 @@ END $$;
 ```text
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ Failed after 0.72s — see error above
-pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
+✗ demo_db: failed after 0.72s
+pgmi: error: execution failed: ERROR: Failed in ./__test__/test_audit_log.sql: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 
 pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from the new migration **does not exist** — the database is exactly as it was before the deploy. Tests run inside the deployment transaction (each isolated in its own savepoint, so test data never persists), and only a fully verified deployment commits.
@@ -108,7 +117,8 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 
 - **Your SQL owns the deploy** — transactions, execution order, idempotency, and retries live in `deploy.sql`, not in the tool.
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
-- **Built for coding agents** — the binary embeds machine-readable guidance (`pgmi ai`, llms.txt style) and can expose pgmi commands to agents over MCP (`pgmi serve`).
+- **Atomic head, psql tail** — everything before your first top-level `COMMIT` is one transaction; everything after it autocommits statement-by-statement, so `CREATE INDEX CONCURRENTLY` works inside a deploy. See [the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract).
+- **Built for coding agents** — the binary embeds machine-readable guidance (`pgmi ai`, llms.txt style) and can expose pgmi commands to agents over MCP (`pgmi serve`). The docs site also publishes an [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt) map for agents browsing the web.
 
 ## Install
 
@@ -147,7 +157,7 @@ Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkt
 ## Choose your path
 
 - **Just deploying SQL?** → the **basic** template: a small, explicit migration scaffold. `pgmi init myapp --template basic`
-- **Building a PostgreSQL-backed application?** → the **advanced** template: an editable reference system with role separation, audit logging, and REST/RPC/MCP patterns — yours to own and trim, not a framework to adopt wholesale. Privilege requirements and managed-provider notes: [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql).
+- **Building a PostgreSQL-backed application?** → the **advanced** template: ~19k lines of tested SQL scaffolded into your project as code you own. One handler registry drives REST routing, JSON-RPC dispatch, MCP tools, and a live OpenAPI 3.1 document; per-route transaction policy resolves isolation and read-only before `BEGIN`; multi-tenant membership with RLS; API key lifecycle; audit trails on both the deployment and request planes. It is more infrastructure, not a higher safety tier — [full capability tour](docs/advanced/_index.md). Privilege requirements: [Production Guide](docs/PRODUCTION.md#managed-cloud-postgresql).
 - **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) and the honest [Tradeoffs](docs/TRADEOFFS.md).
 
 Either template can be adapted for production; advanced provides *more infrastructure*, not a higher safety tier. The [Choosing a template](docs/QUICKSTART.md#choosing-a-template) section has a side-by-side decision table; `pgmi templates list` shows what's available.
@@ -187,6 +197,7 @@ A poor fit when:
 | Essay | Description |
 |-------|-------------|
 | [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
+| [Highlights](docs/HIGHLIGHTS.md) | Nine capabilities with no direct equivalent in other tools |
 | [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
 | [Coming from Flyway/Liquibase/Sqitch](docs/COMING-FROM.md) | Migration guides |
 
@@ -202,7 +213,8 @@ A poor fit when:
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [CI/CD](docs/CICD.md) | Deploy from GitHub Actions and other pipelines |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
-| [Advanced-template MCP gateway](docs/MCP.md) | Expose your deployed application to AI assistants |
+| [Advanced template](docs/advanced/_index.md) | ~19k lines you own: one handler registry → REST+RPC+MCP+OpenAPI, per-route transaction policy, RLS auth, API keys, audit trails, inbound queue |
+| [Advanced-template MCP gateway](docs/advanced/MCP.md) | Expose your deployed application to AI assistants |
 
 ## AI assistant support
 
@@ -217,7 +229,7 @@ pgmi ai setup              # Materialize a discoverable skill into the project
 pgmi ai check              # Report whether that skill exists and is current
 ```
 
-`pgmi serve` additionally exposes pgmi commands as MCP tools over stdio — see the [CLI reference](docs/CLI.md#pgmi-serve). (The advanced template's [MCP gateway](docs/MCP.md) is a separate surface: it exposes your *deployed application* to AI assistants.)
+`pgmi serve` additionally exposes pgmi commands as MCP tools over stdio — see the [CLI reference](docs/CLI.md#pgmi-serve). (The advanced template's [MCP gateway](docs/advanced/MCP.md) is a separate surface: it exposes your *deployed application* to AI assistants.)
 
 ## Configuration and authentication
 

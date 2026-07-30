@@ -12,20 +12,31 @@
 </pgmi-meta>
 */
 
-CREATE OR REPLACE FUNCTION api.openapi_path(p_address_regexp text)
-RETURNS text
+DROP FUNCTION IF EXISTS api.openapi_path(text);
+DROP FUNCTION IF EXISTS api.openapi_path(text, text[]);
+DROP FUNCTION IF EXISTS api.openapi_path_parameters(text, text[]);
+
+CREATE OR REPLACE FUNCTION api.openapi_path_parameters(p_canonical_path text)
+RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
-AS $openapi_path$
-    SELECT regexp_replace(
-        replace(
-            regexp_replace(
-                regexp_replace(
-                    regexp_replace(p_address_regexp, '^\^', ''),
-                    '\(\\\\?\?\.\*\)\?\$?$', ''),
-                '\$$', ''),
-            '\.', '.'),
-        '\([^)]+\)', '{param}', 'g');
-$openapi_path$;
+AS $$
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'name', m[1],
+                'in', 'path',
+                'required', true,
+                'schema', jsonb_build_object('type', 'string')
+            )
+        ),
+        '[]'::jsonb
+    )
+    FROM regexp_matches(p_canonical_path, '\{([^}]+)\}', 'g') AS m;
+$$;
+
+COMMENT ON FUNCTION api.openapi_path_parameters(text) IS
+    'OpenAPI parameters array for a route''s path variables, extracted from the canonical_path template (e.g. /users/{id}).';
+
 
 CREATE OR REPLACE FUNCTION api.openapi_methods(p_method_regexp text)
 RETURNS text[]
@@ -56,19 +67,22 @@ DECLARE
     v_request_body jsonb;
     v_security jsonb;
     v_path_item jsonb;
+    v_parameters jsonb;
 BEGIN
     FOR v_route IN
         SELECT
             r.address_regexp,
             r.method_regexp,
             r.route_name,
+            r.canonical_path,
             h.handler_function_name,
             h.title,
             h.description,
             h.accepts,
             h.produces,
             h.requires_auth,
-            h.required_transaction_isolation,
+            h.min_transaction_isolation,
+            h.read_only,
             h.input_json_schema,
             h.output_json_schema
         FROM api.rest_route r
@@ -76,7 +90,8 @@ BEGIN
         WHERE h.deleted_at IS NULL
         ORDER BY r.sequence_number
     LOOP
-        v_path := api.openapi_path(v_route.address_regexp);
+        v_path := v_route.canonical_path;
+        v_parameters := api.openapi_path_parameters(v_route.canonical_path);
         v_methods := api.openapi_methods(v_route.method_regexp);
         v_path_item := COALESCE(v_paths->v_path, '{}'::jsonb);
 
@@ -94,13 +109,32 @@ BEGIN
                             )
                         )
                     )
-                )
+                ),
+                '404', jsonb_build_object('description', 'Not Found'),
+                '405', jsonb_build_object('description', 'Method Not Allowed'),
+                '406', jsonb_build_object('description', 'Not Acceptable'),
+                '415', jsonb_build_object('description', 'Unsupported Media Type'),
+                '422', jsonb_build_object('description', 'Unprocessable Entity')
             );
+
+            IF v_route.requires_auth THEN
+                v_responses := v_responses || jsonb_build_object(
+                    '401', jsonb_build_object('description', 'Unauthorized'));
+            END IF;
+
+            IF v_route.min_transaction_isolation IS NOT NULL THEN
+                v_responses := v_responses || jsonb_build_object(
+                    '428', jsonb_build_object('description', 'Precondition Required'));
+            END IF;
 
             v_operation := jsonb_build_object(
                 'operationId', v_route.handler_function_name,
                 'responses', v_responses
             );
+
+            IF jsonb_array_length(v_parameters) > 0 THEN
+                v_operation := v_operation || jsonb_build_object('parameters', v_parameters);
+            END IF;
 
             IF v_route.title IS NOT NULL THEN
                 v_operation := v_operation || jsonb_build_object('summary', v_route.title);
@@ -126,13 +160,25 @@ BEGIN
             END IF;
 
             IF v_route.requires_auth THEN
-                v_security := jsonb_build_array(jsonb_build_object('bearerAuth', '[]'::jsonb));
+                v_security := jsonb_build_array(jsonb_build_object('apiKeyAuth', '[]'::jsonb));
                 v_operation := v_operation || jsonb_build_object('security', v_security);
             END IF;
 
-            IF v_route.required_transaction_isolation IS NOT NULL THEN
+            IF v_route.min_transaction_isolation IS NOT NULL THEN
                 v_operation := v_operation || jsonb_build_object(
-                    'x-pgmi-transaction-isolation', v_route.required_transaction_isolation);
+                    'x-pgmi-min-transaction-isolation', v_route.min_transaction_isolation);
+            END IF;
+
+            -- x-pgmi-replica-safe is emitted explicitly (true or false) on every
+            -- read-only operation: readOnly alone does NOT mean replica-safe — a
+            -- serializable floor is primary-only (hot standby caps at repeatable
+            -- read) — and an absent key must never be readable as either answer.
+            IF v_route.read_only THEN
+                v_operation := v_operation || jsonb_build_object(
+                    'x-pgmi-read-only', true,
+                    'x-pgmi-replica-safe',
+                    internal.transaction_policy_replica_safe(
+                        v_route.min_transaction_isolation, v_route.read_only));
             END IF;
 
             v_path_item := v_path_item || jsonb_build_object(v_method, v_operation);
@@ -150,9 +196,15 @@ BEGIN
         'paths', v_paths,
         'components', jsonb_build_object(
             'securitySchemes', jsonb_build_object(
-                'bearerAuth', jsonb_build_object(
-                    'type', 'http',
-                    'scheme', 'bearer'
+                'apiKeyAuth', jsonb_build_object(
+                    'type', 'apiKey',
+                    'in', 'header',
+                    'name', 'x-user-id',
+                    'description', 'Identity header in provider|subject form '
+                        || '(e.g. google|alice-123). This header MUST be stripped '
+                        || 'from client requests and re-issued by a trusted gateway '
+                        || 'that has authenticated the user. The database does not '
+                        || 'verify the credential — it trusts whatever the header says.'
                 )
             )
         )
@@ -163,7 +215,7 @@ $fn$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0004-4000-8000-00000000a001',
-        'uri', '^/openapi\.json(\?.*)?$',
+        'uri', '^/openapi\.json$',
         'httpMethod', '^GET$',
         'name', 'openapi_spec',
         'title', 'OpenAPI 3.1 Specification',
@@ -173,8 +225,43 @@ SELECT api.create_or_replace_rest_handler(
         'produces', jsonb_build_array('application/json')
     ),
     $body$
+DECLARE
+    v_etag text := '"' || api.catalog_version() || '"';
+    v_inm  text := api.header((request).headers, 'If-None-Match');
+    v_resp api.http_response;
 BEGIN
-    RETURN api.json_response(200, api.openapi_document());
+    -- Conditional GET. Cache-Control: no-cache means "cache it, but revalidate
+    -- every time" — exactly right for a contract: a client may hold it forever
+    -- and pay one cheap 304 to prove it is still current, but can never serve a
+    -- stale route table (a false 404 for a route a later deploy added).
+    --
+    -- If-None-Match may be a comma-separated list, or '*'. Match on membership,
+    -- not equality, or a well-behaved client sending two tags gets a 200.
+    IF v_inm IS NOT NULL AND (
+           btrim(v_inm) = '*'
+           OR EXISTS (
+               SELECT 1
+               FROM unnest(string_to_array(v_inm, ',')) AS tag
+               WHERE btrim(tag) = v_etag
+                  OR btrim(tag) = 'W/' || v_etag
+           )
+       )
+    THEN
+        v_resp.status_code := 304;
+        v_resp.headers := extensions.hstore(ARRAY[
+            'etag', v_etag,
+            'cache-control', 'no-cache'
+        ]);
+        v_resp.content := NULL;   -- 304 carries no body
+        RETURN v_resp;
+    END IF;
+
+    v_resp := api.json_response(200, api.openapi_document());
+    v_resp.headers := (v_resp).headers || extensions.hstore(ARRAY[
+        'etag', v_etag,
+        'cache-control', 'no-cache'
+    ]);
+    RETURN v_resp;
 END;
     $body$
 );
@@ -182,7 +269,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0004-4000-8000-00000000a002',
-        'uri', '^/docs(\?.*)?$',
+        'uri', '^/docs$',
         'httpMethod', '^GET$',
         'name', 'openapi_docs',
         'title', 'Interactive API Explorer',

@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -82,6 +83,13 @@ func TestValidateParameterKey_InvalidKeys(t *testing.T) {
 		{"too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"empty", ""},
 		{"special chars", "key;DROP TABLE"},
+		// A key becomes the GUC pgmi.<key>, and a PostgreSQL simple identifier
+		// cannot start with a digit. The pattern used to allow it, so
+		// `--param 1abc=v` passed validation and failed later inside session
+		// preparation with a raw 42602 and exit 1 instead of being named here
+		// and exiting 10.
+		{"leading digit", "1abc"},
+		{"only digits", "123"},
 	}
 
 	for _, tt := range tests {
@@ -104,6 +112,11 @@ func TestValidateParameterKey_ValidKeys(t *testing.T) {
 		{"numbers", "key123"},
 		{"mixed", "key_123_test"},
 		{"max length", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, // 63 chars
+		// Digits are fine after the first character, and a leading underscore
+		// is a legal identifier start — narrowing the pattern must not cost
+		// either.
+		{"leading underscore", "_private"},
+		{"digit after letter", "a1"},
 	}
 
 	for _, tt := range tests {
@@ -456,23 +469,36 @@ func TestIsFixtureFile_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestFindParentTestDirectory_OrphanChild(t *testing.T) {
+// A gapped hierarchy must still resolve to its nearest recorded ancestor.
+// Reporting no parent makes pgmi_test_plan treat the directory as a second tree
+// root and emit the root teardown before the nested test runs.
+func TestFindParentTestDirectory_GappedHierarchy(t *testing.T) {
 	dirSet := map[string]bool{
 		"./__test__/":       true,
 		"./__test__/a/b/c/": true,
 		// Missing intermediate "./__test__/a/" and "./__test__/a/b/"
 	}
 
-	// "./__test__/a/b/c/" parent is "./__test__/a/b/" which is not in the set
 	parent := findParentTestDirectory("./__test__/a/b/c/", dirSet)
-	if parent != nil {
-		t.Errorf("expected nil parent for orphan child, got %q", *parent)
+	if parent == nil {
+		t.Fatal("expected the nearest recorded ancestor, got nil — the directory becomes its own tree root")
+	}
+	if *parent != "./__test__/" {
+		t.Errorf("expected nearest ancestor %q, got %q", "./__test__/", *parent)
 	}
 
-	// "./__test__/" has no parent at all
-	parent = findParentTestDirectory("./__test__/", dirSet)
-	if parent != nil {
+	// A tree root genuinely has no parent.
+	if parent := findParentTestDirectory("./__test__/", dirSet); parent != nil {
 		t.Errorf("expected nil parent for root test dir, got %q", *parent)
+	}
+
+	// Ancestors are matched by path, so a sibling tree is never adopted.
+	siblings := map[string]bool{
+		"./a/__test__/":     true,
+		"./b/__test__/x/y/": true,
+	}
+	if parent := findParentTestDirectory("./b/__test__/x/y/", siblings); parent != nil {
+		t.Errorf("expected nil parent across separate test roots, got %q", *parent)
 	}
 }
 
@@ -518,5 +544,46 @@ func TestValidateParameterKey_AllValidVariants(t *testing.T) {
 		if err := validateParameterKey(key); err != nil {
 			t.Errorf("Expected key %q to be valid, got error: %v", key, err)
 		}
+	}
+}
+
+func TestValidateParameterValue_ErrorOmitsValue(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		value     string
+		wantInErr string
+		denyInErr string
+	}{
+		{
+			name:      "NUL byte reports key not value",
+			key:       "db_password",
+			value:     "sec\x00ret",
+			wantInErr: "db_password",
+			denyInErr: "sec",
+		},
+		{
+			name:      "invalid UTF-8 reports key not value",
+			key:       "api_key",
+			value:     "before\xff\xfeafter",
+			wantInErr: "api_key",
+			denyInErr: "before",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateParameterValue(tt.key, tt.value)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tt.wantInErr) {
+				t.Errorf("error %q should contain key %q", msg, tt.wantInErr)
+			}
+			if strings.Contains(msg, tt.denyInErr) {
+				t.Errorf("error %q must not contain value fragment %q", msg, tt.denyInErr)
+			}
+		})
 	}
 }

@@ -29,14 +29,8 @@ WHERE is_active = true;
 COMMENT ON VIEW membership.vw_active_organizations IS
     'Active organizations only. Excludes soft-deleted organizations.';
 
-CREATE OR REPLACE VIEW membership.vw_user_owned_organizations
-WITH (security_invoker = true) AS
-SELECT o.object_id, o.name, o.slug, o.owner_user_id, o.is_personal, o.created_at
-FROM membership.organization o
-WHERE o.is_active = true;
-
-COMMENT ON VIEW membership.vw_user_owned_organizations IS
-    'Organizations owned by a user. Filtered to active orgs only.';
+-- membership.vw_user_owned_organizations lives in 05-current-user.sql: it is
+-- scoped to api.current_user_id(), which is not defined until that file.
 
 CREATE OR REPLACE VIEW membership.vw_user_memberships
 WITH (security_invoker = true) AS

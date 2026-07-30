@@ -60,7 +60,11 @@ SELECT
     h.leakproof,
     h.security,
     h.language_name,
-    h.owner_name
+    h.owner_name,
+
+    -- Appended last: CREATE OR REPLACE VIEW may only add columns at the end.
+    h.min_transaction_isolation,
+    h.read_only
 
 FROM api.handler h;
 

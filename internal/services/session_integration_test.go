@@ -37,7 +37,7 @@ func TestPrepareSession_FullLifecycle(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	session, err := sm.PrepareSession(ctx, connConfig, "/", map[string]string{"env": "test"}, "", false)
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), map[string]string{"env": "test"}, "", false)
 	if err != nil {
 		t.Fatalf("PrepareSession failed: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	session, err := sm.PrepareSession(ctx, connConfig, "/", nil, "", true)
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
 	if err != nil {
 		t.Fatalf("PrepareSession with verbose failed: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
 	params := map[string]string{"env": "staging", "version": "3.0"}
-	session, err := sm.PrepareSession(ctx, connConfig, "/", params, "", false)
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), params, "", false)
 	if err != nil {
 		t.Fatalf("PrepareSession failed: %v", err)
 	}
@@ -167,10 +167,21 @@ func TestPrepareSession_CleanupOnError(t *testing.T) {
 
 	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
 
-	_, err := sm.PrepareSession(context.Background(), connConfig, "/", nil, "", false)
+	_, err := sm.PrepareSession(context.Background(), connConfig, mustScanProject(t, sm), nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error for invalid connection")
 	}
 
 	_ = connString // used only to ensure PGMI_TEST_CONN is set
+}
+
+// mustScanProject scans the fixture project or fails the test; PrepareSession
+// takes the scan result so callers can validate before creating a database.
+func mustScanProject(t *testing.T, sm *services.SessionManager) pgmi.FileScanResult {
+	t.Helper()
+	result, err := sm.ScanProject("/")
+	if err != nil {
+		t.Fatalf("ScanProject failed: %v", err)
+	}
+	return result
 }

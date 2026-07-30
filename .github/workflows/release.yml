@@ -5,8 +5,10 @@ on:
     tags:
       - 'v*'
 
+# Only the publishing job writes. verify, examples and snapshot check out and
+# build; a token that can rewrite the repository is not something they need.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -21,17 +23,46 @@ jobs:
         with:
           go-version: '1.25'
 
+      # Releases are cut from main. Without this, a v* tag pushed from any
+      # commit — a stale branch, an unmerged fix — publishes as a release.
+      - name: Tag must point at a commit on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not an ancestor of main."
+            echo "Merge the branch first, then tag the resulting commit on main."
+            exit 1
+          fi
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
           version: v1.64.8
           install-mode: goinstall
 
+      # PGMI_REQUIRE_DB: a release must never be cut off a run whose integration
+      # tests all skipped because Docker was unreachable.
       - name: Tests
+        env:
+          PGMI_REQUIRE_DB: '1'
         run: go test -race -timeout 10m ./...
 
       - name: Connection & security tests
+        env:
+          PGMI_REQUIRE_DB: '1'
         run: go test -race -tags conntest -timeout 5m ./internal/db/conntest/...
+
+      # pgmi is a credential-handling binary that operators install prebuilt, so
+      # a reachable CVE in an auth path is one they cannot patch themselves.
+      #
+      # At the pinned version this blocks on reachable findings only: in the
+      # default symbol scan level govulncheck exits 3 only when a finding has a
+      # call stack into your code (internal/scan/text.go). A vulnerability in a
+      # module you require but never call is reported and exits 0. Do not
+      # "fix" a red gate by suppressing it — bump the module, or record why the
+      # finding is not reachable in RELEASES.md.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
       - name: Validate GoReleaser config
         uses: goreleaser/goreleaser-action@v6
@@ -40,10 +71,30 @@ jobs:
           version: "~> v2"
           args: check
 
+      # The release page leads with this narrative. Fail here, before anything is
+      # published, rather than ship a page that reads as a commit log.
+      - name: Release notes exist for this tag
+        run: ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > /dev/null
+
+  # The same end-to-end gates ci.yml runs on a branch. A tag ran only the
+  # package tests, so a release could publish with the flagship examples broken
+  # — including the lock-safe deploy this release headlines.
+  examples:
+    name: Examples
+    uses: ./.github/workflows/examples.yml
+
+  # Produces the artifacts for real, without uploading them, so a packaging
+  # failure surfaces here instead of halfway through publishing.
+  snapshot:
+    name: Snapshot Build
+    uses: ./.github/workflows/snapshot.yml
+
   release:
     name: Release
-    needs: [verify]
+    needs: [verify, examples, snapshot]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -53,8 +104,22 @@ jobs:
         with:
           go-version: '1.25'
 
+      # Pinned: this runs with CLOUDSMITH_API_KEY in the environment, so an
+      # unpinned install hands the publication credential to whatever version
+      # PyPI serves that day.
       - name: Install Cloudsmith CLI
-        run: pip install cloudsmith-cli
+        run: pip install cloudsmith-cli==1.19.0
+
+      # RELEASE_SUMMARY is rendered at the top of the release body by
+      # .goreleaser.yaml. Single-sourced from RELEASES.md so the narrative that
+      # ships to strangers is the same one that lives in the repo.
+      - name: Load release notes from RELEASES.md
+        run: |
+          {
+            echo 'RELEASE_SUMMARY<<PGMI_RELEASE_NOTES_EOF'
+            ./scripts/release-notes.sh "${GITHUB_REF_NAME}"
+            echo 'PGMI_RELEASE_NOTES_EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

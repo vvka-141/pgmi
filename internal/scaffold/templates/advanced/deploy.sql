@@ -5,7 +5,8 @@
 -- session-scoped temporary tables, then hands control to this script.
 --
 -- Available:
---   pg_temp.pgmi_plan_view         - Your SQL files in execution order
+--   pg_temp.pgmi_plan_view         - Every project file in execution order
+--                                    (join pgmi_source_view for is_sql_file)
 --   pg_temp.pgmi_source_view       - Source files
 --   pg_temp.pgmi_parameter_view    - CLI params (--param key=value)
 --   pg_temp.pgmi_test_source_view  - Test files from __test__/ directories
@@ -186,10 +187,20 @@ BEGIN
         EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100', v_customer_role, v_customer_password);
     END IF;
 
-    -- Role hierarchy
+    -- Role hierarchy. The customer role deliberately does NOT inherit the api
+    -- role: the api role is the trusted gateway, and the gateway entrypoints
+    -- (api.rest_invoke and siblings) are SECURITY DEFINER functions that take
+    -- the caller's identity from an unverified x-user-id header. A login role
+    -- that can call them can act as any user. The customer role holds direct
+    -- grants for everything it legitimately needs (schema usage, RLS-scoped
+    -- SELECTs, membership functions, the api.current_* identity helpers).
     EXECUTE format('GRANT %I TO %I', v_owner_role, v_admin_role);
     EXECUTE format('GRANT %I TO %I', v_api_role, v_admin_role);
-    EXECUTE format('GRANT %I TO %I', v_api_role, v_customer_role);
+
+    -- Roles are cluster-scoped, so dropping the GRANT is not enough: a cluster
+    -- where an earlier deploy granted it keeps the membership forever. Converge
+    -- it explicitly.
+    EXECUTE format('REVOKE %I FROM %I', v_api_role, v_customer_role);
 
     -- Grant owner to current_user for SET ROLE
     EXECUTE format('GRANT %I TO CURRENT_USER', v_owner_role);
@@ -318,7 +329,7 @@ COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_obj
 COMMENT ON COLUMN internal.deployment_script_execution_log.deployment_script_content_checksum IS 'References the specific content version executed. Enables content diffing across deployments.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.xact_id IS 'PostgreSQL transaction ID (xid8). Correlates with pg_stat_activity and WAL for debugging.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.file_path IS 'Original file path at execution time. May change if files are renamed.';
-COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script is re-runnable. Non-idempotent scripts execute only once per object_id.';
+COMMENT ON COLUMN internal.deployment_script_execution_log.idempotent IS 'Whether the script was re-runnable at execution time. A non-idempotent script runs once after being marked non-idempotent (deploy.sql skips it only when a prior execution logged idempotent = false), so flipping an already-run idempotent script to non-idempotent still runs it once under the new contract.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.sort_key IS 'Execution ordering key from <pgmi-meta sortKeys="...">. NULL for path-ordered scripts.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.executed_at IS 'Timestamp when execution completed.';
 COMMENT ON COLUMN internal.deployment_script_execution_log.executed_by IS 'Database role that executed the script (usually the owner role).';
@@ -390,9 +401,16 @@ BEGIN
     LOOP
         v_object_id := COALESCE(v_script.id, v_script.generic_id);
 
+        -- Skip a non-idempotent script only once it has run UNDER the
+        -- non-idempotent contract (a log row with idempotent = false). Matching
+        -- on object_id alone was wrong: a file that ran as idempotent (say,
+        -- CREATE TABLE IF NOT EXISTS), then was edited into a one-time backfill
+        -- and flipped to idempotent="false", would see its own earlier idempotent
+        -- log rows and skip forever — the backfill would silently never run.
         IF NOT v_script.idempotent AND EXISTS (
             SELECT 1 FROM internal.deployment_script_execution_log
             WHERE deployment_script_object_id = v_object_id
+              AND NOT idempotent
         ) THEN
             v_skipped := v_skipped + 1;
             CONTINUE;
@@ -408,7 +426,20 @@ BEGIN
         BEGIN
             EXECUTE v_script.content;
         EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM;
+            -- Preserve the original SQLSTATE and DETAIL. A bare RAISE EXCEPTION
+            -- re-raises as P0001 and drops both, so an upstream classifier can no
+            -- longer tell a retryable 40001/40P01 from a permanent failure — the
+            -- exact signal the retry contract depends on.
+            DECLARE
+                v_sqlstate text;
+                v_detail   text;
+            BEGIN
+                GET STACKED DIAGNOSTICS
+                    v_sqlstate = RETURNED_SQLSTATE,
+                    v_detail   = PG_EXCEPTION_DETAIL;
+                RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM
+                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
+            END;
         END;
 
         INSERT INTO internal.deployment_script_execution_log(
@@ -456,6 +487,62 @@ BEGIN;
     DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
     SELECT pg_temp.deploy();
     SELECT pg_temp.apply_entity_standards_all();
+    DO $privs$
+    DECLARE
+        v_admin_role text := pg_temp.deployment_setting('database_admin_role');
+        v_api_role text := pg_temp.deployment_setting('database_api_role');
+        v_customer_role text := pg_temp.deployment_setting('database_customer_role');
+        v_registration_fn text;
+    BEGIN
+        -- PostgreSQL grants EXECUTE to PUBLIC on every function it creates, so
+        -- any role holding USAGE on the api schema — including the customer
+        -- login role — can call the SECURITY DEFINER gateway entrypoints and
+        -- impersonate any user through the identity headers. Revoking PUBLIC
+        -- here, after every file has run, also covers functions created by the
+        -- late sortKey bands; the roles that need them are re-granted below and
+        -- the customer role keeps its own explicit grants.
+        REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA api FROM PUBLIC;
+        EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO %I, %I',
+                       v_admin_role, v_api_role);
+
+        -- Registration is deploy-time DDL, never a runtime capability: these
+        -- CREATE FUNCTION from a caller-supplied body and run SECURITY DEFINER,
+        -- so whoever calls them executes arbitrary SQL as the owner.
+        FOREACH v_registration_fn IN ARRAY ARRAY[
+            'api.create_or_replace_rest_handler(jsonb, text)',
+            'api.create_or_replace_rpc_handler(jsonb, text)',
+            'api.create_or_replace_mcp_handler(jsonb, text)'
+        ] LOOP
+            EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, %I',
+                           v_registration_fn, v_api_role);
+            EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I',
+                           v_registration_fn, v_admin_role);
+        END LOOP;
+
+        -- Schema membership needs the same treatment, and it is not covered by
+        -- the api revoke above. The customer role holds USAGE on it, so every
+        -- credential function in membership/08-api-keys.sql shipped
+        -- PUBLIC-executable — including validate_api_key, which resolves a raw
+        -- key to its owner, and generate_api_key_material. ALL ROUTINES, not
+        -- ALL FUNCTIONS: the latter leaves procedures behind. What the customer
+        -- role legitimately needs is granted where those functions are defined.
+        REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA membership FROM PUBLIC;
+        EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I',
+                       v_admin_role);
+
+        -- membership/01 and /03 grant EXECUTE ON ALL ROUTINES to the api and
+        -- customer roles, and ALL ROUTINES binds only to what exists at that
+        -- moment: on a first deploy the api-key band has not run yet, on a
+        -- redeploy it has. Without these the customer's reachable surface
+        -- differs between the two. Both functions below are gateway surface —
+        -- one resolves a raw key to its owner, the other mints secret material.
+        EXECUTE format('REVOKE EXECUTE ON FUNCTION membership.validate_api_key(text) FROM %I',
+                       v_customer_role);
+        EXECUTE format('REVOKE EXECUTE ON FUNCTION membership.generate_api_key_material() FROM %I, %I',
+                       v_api_role, v_customer_role);
+
+        RAISE NOTICE '[pgmi] API privileges converged (PUBLIC revoked, registration admin-only)';
+    END $privs$;
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;

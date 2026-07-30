@@ -16,6 +16,8 @@ For CLI flag details, see [CLI reference](CLI.md#connection-flags). For CI/CD pi
 
 pgmi resolves CLI flags and environment variables into a concrete connector at startup:
 
+![The connection factory: connection string, flags, and environment resolve into a ConnectionConfig; NewConnector picks the concrete connector by auth method; cloud connectors mint short-lived tokens](diagrams/d07-connection-factory.drawio.svg)
+
 | Auth method | Connector | How tokens work |
 |-------------|-----------|-----------------|
 | Standard | `StandardConnector` | Username/password via pgx, with retry (3 attempts, exponential backoff) |
@@ -239,22 +241,16 @@ The maintenance database is the one in your connection string. The target databa
 
 ---
 
-## PostgreSQL compatibility test
+## PostgreSQL compatibility check
 
-pgmi runs a 7-line compatibility check on every connection to verify the target is a real PostgreSQL instance:
+After connecting, pgmi pings the pool and then probes the server version:
 
 ```sql
-SELECT
-    version(),
-    current_database(),
-    current_user,
-    pg_backend_pid(),
-    inet_server_addr(),
-    inet_server_port(),
-    current_setting('server_version_num')::int
+SELECT current_setting('server_version_num')::int,
+       current_setting('server_version')
 ```
 
-This catches connection issues early (wrong database, wrong user, non-PostgreSQL target) before pgmi creates session tables.
+Servers below PostgreSQL 11 (`server_version_num < 110000`) are rejected with exit code 10 before any session tables are created.
 
 ---
 

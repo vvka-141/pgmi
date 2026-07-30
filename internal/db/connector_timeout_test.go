@@ -3,70 +3,94 @@ package db
 import (
 	"context"
 	"errors"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
+// blackholeAddr returns an address that accepts TCP connections and then says
+// nothing. pgx completes the dial and blocks waiting for the server's reply to
+// the startup message, which is the only way to reach the context deadline
+// deterministically — pointing the connector at an unresolvable host instead
+// fails DNS in about 2ms and never exercises the timeout at all.
+func blackholeAddr(t *testing.T) (host string, port int) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	var mu sync.Mutex
+	var accepted []net.Conn
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			accepted = append(accepted, conn)
+			mu.Unlock()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range accepted {
+			_ = conn.Close()
+		}
+	})
+
+	addr := ln.Addr().(*net.TCPAddr)
+	return addr.IP.String(), addr.Port
+}
+
 // TestStandardConnector_RespectsContextTimeout verifies that the connector respects
 // the context timeout passed from the CLI.
 func TestStandardConnector_RespectsContextTimeout(t *testing.T) {
+	host, port := blackholeAddr(t)
+
 	config := &pgmi.ConnectionConfig{
-		Host:     "nonexistent.invalid", // Will fail to connect
-		Port:     5432,
+		Host:     host,
+		Port:     port,
 		Database: "testdb",
 		Username: "testuser",
 		Password: "testpass",
 	}
 
-	connector := NewStandardConnector(config)
-
-	// Set a short timeout to verify it's respected
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	const timeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	start := time.Now()
-	_, err := connector.Connect(ctx)
+	pool, err := NewStandardConnector(config).Connect(ctx)
 	elapsed := time.Since(start)
 
+	if pool != nil {
+		pool.Close()
+	}
 	if err == nil {
-		t.Fatal("Expected connection error, got nil")
+		t.Fatal("expected a connection error, got nil")
 	}
-
-	// Should fail promptly — generous bound proves "didn't hang" without being a latency microbenchmark
-	if elapsed > 2*time.Second {
-		t.Errorf("Expected connection to fail promptly (timeout was 100ms), took %v", elapsed)
-	}
-
-	// Verify it's actually a context deadline error (not some other failure)
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Logf("Error is not directly DeadlineExceeded (may be wrapped): %v", err)
+		t.Errorf("error must carry context.DeadlineExceeded, got: %v", err)
 	}
 
-	t.Logf("Connection failed as expected within %v (timeout was 100ms)", elapsed)
-}
-
-// TestStandardConnector_MaxDelayConstraint verifies that backoff delays never exceed 1 minute.
-func TestStandardConnector_MaxDelayConstraint(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
-		Host:     "localhost",
-		Port:     5432,
-		Database: "testdb",
-		Username: "testuser",
-		Password: "testpass",
+	// Lower bound only. An upper bound would be a latency measurement the
+	// scheduler decides, and it has failed under concurrent load. Returning
+	// *before* the deadline is the real defect: it means something other than
+	// the context ended the attempt.
+	if elapsed < timeout {
+		t.Errorf("returned after %v, before the %v deadline — the context was not what stopped it", elapsed, timeout)
 	}
-
-	connector := NewStandardConnector(config)
-
-	// Verify the retry executor is configured with max delay of 1 minute
-	// The actual backoff strategy is internal, but we can verify behavior through integration
-
-	// This is a conceptual test - the actual max delay is enforced by the
-	// ExponentialBackoffStrategy.MaxDelay setting in NewStandardConnector
-	if connector.retryExecutor == nil {
-		t.Fatal("Expected retryExecutor to be initialized")
-	}
-
-	t.Log("StandardConnector is configured with max delay of 1 minute")
 }

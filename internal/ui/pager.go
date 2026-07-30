@@ -18,6 +18,16 @@ func defaultPager() string {
 	return "less -R"
 }
 
+func resolvePager(pgmiPager, pager string) string {
+	if pgmiPager != "" {
+		return pgmiPager
+	}
+	if pager != "" {
+		return pager
+	}
+	return defaultPager()
+}
+
 // PageWriter returns a writer that pages output when stdout is a TTY.
 // When not interactive or PGMI_PAGER=cat, returns os.Stdout directly.
 // The caller must call the returned close function when done writing.
@@ -26,13 +36,7 @@ func PageWriter() (io.Writer, func()) {
 		return os.Stdout, func() {}
 	}
 
-	pager := os.Getenv("PGMI_PAGER")
-	if pager == "" {
-		pager = os.Getenv("PAGER")
-	}
-	if pager == "" {
-		pager = defaultPager()
-	}
+	pager := resolvePager(os.Getenv("PGMI_PAGER"), os.Getenv("PAGER"))
 
 	if pager == "cat" {
 		return os.Stdout, func() {}

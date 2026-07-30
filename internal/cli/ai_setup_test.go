@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/ai"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func claudeContent(t *testing.T) string {
@@ -24,11 +27,29 @@ func TestResolveAssistant(t *testing.T) {
 			t.Errorf("resolveAssistant(%s) = %q, %v", name, got, err)
 		}
 	}
-	if _, err := resolveAssistant("unknown"); err == nil {
-		t.Error("expected error for unsupported assistant")
-	}
-	if _, err := resolveAssistant(""); err == nil {
-		t.Error("expected error when assistant unset in non-interactive mode")
+	// Both failures are a flag given a value the CLI does not accept, which is
+	// exit 2 — the same code `init --template nosuch` returns. They used to
+	// exit 1, which distinguishes a typo from nothing at all.
+	for _, tc := range []struct{ name, arg string }{
+		{"unsupported assistant", "unknown"},
+		{"assistant unset in non-interactive mode", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveAssistant(tc.arg)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !errors.Is(err, pgmi.ErrUsage) {
+				t.Errorf("not an ErrUsage chain, so this exits 1 rather than 2: %v", err)
+			}
+			if got := pgmi.ExitCodeForError(err); got != pgmi.ExitUsageError {
+				t.Errorf("exit code %d, want %d", got, pgmi.ExitUsageError)
+			}
+			// The message has to keep listing what IS accepted.
+			if !strings.Contains(err.Error(), "claude") {
+				t.Errorf("the supported list is missing from %v", err)
+			}
+		})
 	}
 }
 
@@ -49,21 +70,43 @@ func TestSkillsRoot(t *testing.T) {
 		t.Errorf("global root = %q, want absolute path ending in .claude/skills", global)
 	}
 
-	cases := map[string]string{
+	localCases := map[string]string{
 		"antigravity": filepath.Join(".agents", "skills"),
 		"cursor":      ".cursor",
 		"copilot":     ".github",
 		"windsurf":    ".windsurf",
 		"cline":       ".clinerules",
 	}
-	for name, want := range cases {
+	for name, want := range localCases {
 		got, err := skillsRoot(name, false)
 		if err != nil {
-			t.Errorf("skillsRoot(%s): %v", name, err)
+			t.Errorf("skillsRoot(%s, local): %v", name, err)
 			continue
 		}
 		if got != want {
-			t.Errorf("skillsRoot(%s) = %q, want %q", name, got, want)
+			t.Errorf("skillsRoot(%s, local) = %q, want %q", name, got, want)
+		}
+	}
+
+	globalSupported := []string{"claude", "codex", "codex-skills", "opencode", "agents", "gemini"}
+	for _, name := range globalSupported {
+		got, err := skillsRoot(name, true)
+		if err != nil {
+			t.Errorf("skillsRoot(%s, global) unexpected error: %v", name, err)
+			continue
+		}
+		if !filepath.IsAbs(got) {
+			t.Errorf("skillsRoot(%s, global) = %q, want absolute path", name, got)
+		}
+	}
+
+	globalUnsupported := []string{"cursor", "copilot", "windsurf", "cline", "antigravity"}
+	for _, name := range globalUnsupported {
+		_, err := skillsRoot(name, true)
+		if err == nil {
+			t.Errorf("skillsRoot(%s, global) should error (no global path), but succeeded", name)
+		} else if !strings.Contains(err.Error(), "does not support --global") {
+			t.Errorf("skillsRoot(%s, global) error = %q, want 'does not support --global'", name, err)
 		}
 	}
 }
@@ -186,12 +229,22 @@ func TestRunAISetupAndCheck_EndToEnd(t *testing.T) {
 
 	// Hand-edit → check fails, setup without force fails, setup with force fixes.
 	f, _ := os.ReadFile(skill)
-	os.WriteFile(skill, append(f, []byte("\nedit\n")...), 0644)
+	edited := append(f, []byte("\nedit\n")...)
+	os.WriteFile(skill, edited, 0644)
 	if err := runAICheck(aiCheckCmd, nil); err == nil {
 		t.Error("check should fail on hand-edited file")
 	}
 	if err := runAISetup(aiSetupCmd, nil); err == nil {
 		t.Error("setup without --force should refuse to overwrite edited file")
+	}
+	// Returning an error is the signal; leaving the bytes alone is the point.
+	// A writer that overwrote the file and *also* reported the conflict would
+	// satisfy the check above while destroying the edit it warned about.
+	if after, err := os.ReadFile(skill); err != nil {
+		t.Errorf("reading the refused file: %v", err)
+	} else if !bytes.Equal(after, edited) {
+		t.Errorf("setup refused the file but rewrote it anyway; the hand edit is gone:\n%s",
+			string(after))
 	}
 	setupForce = true
 	if err := runAISetup(aiSetupCmd, nil); err != nil {

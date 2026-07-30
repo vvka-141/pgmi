@@ -28,7 +28,7 @@ var infoCmd = &cobra.Command{
 
 Shows file counts by directory, template type, deploy.sql presence,
 test coverage, and metadata usage.`,
-	Args: cobra.MaximumNArgs(1),
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: runInfo,
 }
 

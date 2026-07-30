@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,22 +79,19 @@ func TestInitCmd_ArgsValidation_TooMany(t *testing.T) {
 	}
 }
 
+// The host is in the RFC 6761 .invalid TLD and cannot resolve; the timeout
+// exists only so a hung resolver fails the suite instead of hanging it.
 func TestDeployCmd_UnreachableHost_ExitCode11(t *testing.T) {
 	resetDeployFlags()
 	clearPGEnv(t)
-
-	tempDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tempDir, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
-		t.Fatalf("Failed to create deploy.sql: %v", err)
-	}
 
 	deployFlags.host = "nonexistent.invalid"
 	deployFlags.port = 5432
 	deployFlags.database = "testdb"
 	deployFlags.username = "testuser"
-	deployFlags.timeout = 500 * time.Millisecond
+	deployFlags.timeout = 30 * time.Second
 
-	err := runDeploy(deployCmd, []string{tempDir})
+	err := runDeploy(deployCmd, []string{deployProjectDir(t)})
 
 	if err == nil {
 		t.Fatal("Expected connection error, got nil")
@@ -104,4 +102,56 @@ func TestDeployCmd_UnreachableHost_ExitCode11(t *testing.T) {
 		t.Errorf("Expected exit code %d (connection error), got %d for: %v",
 			pgmi.ExitConnectionError, exitCode, err)
 	}
+}
+
+// The listener completes the TCP handshake and then never speaks, so the
+// startup packet has no reply and the deadline is the only reachable outcome —
+// a connection error cannot win this race no matter how loaded the machine is.
+func TestDeployCmd_UnresponsiveServer_ExitCode11(t *testing.T) {
+	resetDeployFlags()
+	clearPGEnv(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+
+	deployFlags.host = "127.0.0.1"
+	deployFlags.port = listener.Addr().(*net.TCPAddr).Port
+	deployFlags.database = "testdb"
+	deployFlags.username = "testuser"
+	deployFlags.timeout = time.Second
+
+	err = runDeploy(deployCmd, []string{deployProjectDir(t)})
+
+	if err == nil {
+		t.Fatal("Expected timeout error, got nil")
+	}
+
+	exitCode := pgmi.ExitCodeForError(err)
+	if exitCode != pgmi.ExitConnectionError {
+		t.Errorf("Expected exit code %d (connection), got %d for: %v",
+			pgmi.ExitConnectionError, exitCode, err)
+	}
+}
+
+func deployProjectDir(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+	return dir
 }

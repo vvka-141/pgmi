@@ -20,6 +20,10 @@ run `pgmi deploy` with a pinned API version.
 - **Secrets from your CI secret store**, never on the command line. See the
   [Security Guide](SECURITY.md).
 
+pgmi's exit codes are the pipeline contract — every failure point is numbered, so CI branches on `$?` instead of parsing output:
+
+![The deploy sequence: validate, connect, lock, prepare the session, preprocess, then your deploy.sql runs — with exit codes at each failure point](diagrams/d04-deploy-sequence.drawio.svg)
+
 ## GitHub Actions
 
 ```yaml
@@ -71,6 +75,8 @@ Why these choices:
   Point it at a direct connection, not a transaction-mode pooler.
 
 ### Passing role passwords (advanced template)
+
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
 The advanced template sets role passwords at deploy time. Provide them via a params
 file generated from secrets — never as command-line `--param` (argv leaks to the

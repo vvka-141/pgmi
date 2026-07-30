@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -308,4 +309,28 @@ func TestEmbedFileSystemPerformance(t *testing.T) {
 
 	// This test primarily ensures no memory leaks or performance degradation
 	// The exact timing is not critical, but it should complete reasonably fast
+}
+
+// TestNoDotDirectoriesEmbedded guards a build-reproducibility trap: the embed
+// directive is `all:templates`, whose `all:` prefix deliberately includes
+// dotfiles so each template ships its .gitignore. That same prefix also sweeps
+// in any dot-DIRECTORY a developer happens to create inside the template tree
+// — .claude/, .idea/, .vscode/ — and those are gitignored, so a local build
+// scaffolds them into user projects while a CI build from a fresh clone does
+// not. Same version, different output.
+//
+// Dotfiles stay allowed; only dot-directories are rejected.
+func TestNoDotDirectoriesEmbedded(t *testing.T) {
+	err := fs.WalkDir(templatesFS, "templates", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			t.Errorf("dot-directory %q is embedded in the template tree; it is gitignored, "+
+				"so this binary scaffolds it into user projects but a CI build does not", path)
+			return fs.SkipDir
+		}
+		return nil
+	})
+	require.NoError(t, err)
 }

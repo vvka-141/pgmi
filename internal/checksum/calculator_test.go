@@ -20,17 +20,17 @@ func TestSHA256Calculator_CalculateRaw(t *testing.T) {
 		{
 			name:     "Simple SQL",
 			content:  "SELECT * FROM users;",
-			expected: "4e91ca433862f92161a85e2bd89bcf0a9058b09e73dc0b2b1b56be87f06e4b2a",
+			expected: "d1ec24bdafb79996d598fd0707064fc6766042c1054c8ca379da5fc6a3a03e5a",
 		},
 		{
 			name:     "SQL with comments",
 			content:  "-- Comment\nSELECT * FROM users;",
-			expected: "f0e5a61d6e0df8c5cda0b8f2ad1c5f2a8be96d82a3e86f7be2aad5a0e2f5b6f4",
+			expected: "439dc674a27b169ae8ccbf89c825a4689b1faf94d5d21a95b77e77365dc9effe",
 		},
 		{
 			name:     "Whitespace variations should differ",
 			content:  "SELECT  *  FROM  users;",
-			expected: "df5e5a7e4f0c0e0b0e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f",
+			expected: "e09890a6b2a21a9fcffa0da5317f5a8872877b525570d035a38a8962cae50e53",
 		},
 	}
 
@@ -38,15 +38,8 @@ func TestSHA256Calculator_CalculateRaw(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := calc.CalculateRaw([]byte(tt.content))
 
-			// Verify it's a valid 64-character hex string (SHA-256)
-			if len(result) != 64 {
-				t.Errorf("CalculateRaw() returned hash of length %d, expected 64", len(result))
-			}
-
-			// Verify it's consistent
-			result2 := calc.CalculateRaw([]byte(tt.content))
-			if result != result2 {
-				t.Errorf("CalculateRaw() is not deterministic: %s != %s", result, result2)
+			if result != tt.expected {
+				t.Errorf("CalculateRaw() = %s, expected %s", result, tt.expected)
 			}
 		})
 	}
@@ -70,13 +63,13 @@ func TestSHA256Calculator_CalculateNormalized(t *testing.T) {
 		{
 			name:        "Simple SQL",
 			content:     "SELECT * FROM users;",
-			expected:    "",
+			expected:    "770ec17e2277e313a56c78ecab71d0ee460922cac72efddf9869ca4194276572",
 			description: "Simple SQL should be normalized to lowercase",
 		},
 		{
 			name:        "SQL with uppercase",
 			content:     "SELECT * FROM USERS;",
-			expected:    "",
+			expected:    "770ec17e2277e313a56c78ecab71d0ee460922cac72efddf9869ca4194276572",
 			description: "Uppercase should become lowercase",
 		},
 	}
@@ -85,15 +78,8 @@ func TestSHA256Calculator_CalculateNormalized(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := calc.CalculateNormalized([]byte(tt.content))
 
-			// Verify it's a valid 64-character hex string (SHA-256)
-			if len(result) != 64 {
-				t.Errorf("CalculateNormalized() returned hash of length %d, expected 64", len(result))
-			}
-
-			// Verify it's consistent
-			result2 := calc.CalculateNormalized([]byte(tt.content))
-			if result != result2 {
-				t.Errorf("CalculateNormalized() is not deterministic: %s != %s", result, result2)
+			if result != tt.expected {
+				t.Errorf("CalculateNormalized() = %s, expected %s", result, tt.expected)
 			}
 		})
 	}
@@ -395,5 +381,41 @@ func BenchmarkSHA256Calculator_CalculateNormalized(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		calc.CalculateNormalized(content)
+	}
+}
+
+// The normalized checksum is the only one pgmi_source_view exposes, so a user
+// gating "has this script changed" on it must not be told two scripts are the
+// same when PostgreSQL would deploy them differently.
+func TestCalculateNormalized_FoldsCaseOnlyWhereSQLDoes(t *testing.T) {
+	calc := New()
+	same := func(a, b string) bool {
+		return calc.CalculateNormalized([]byte(a)) == calc.CalculateNormalized([]byte(b))
+	}
+
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		// "Users" and "users" are two different tables.
+		{"quoted identifier", `CREATE TABLE "Users" (id int);`, `CREATE TABLE "users" (id int);`, false},
+		// Different seeded data, and the same shape as an ALTER ROLE password.
+		{"string literal", `INSERT INTO cfg VALUES ('Production');`, `INSERT INTO cfg VALUES ('production');`, false},
+		{"dollar-quoted body", `DO $$ BEGIN PERFORM 'Xy'; END $$;`, `DO $$ BEGIN PERFORM 'xy'; END $$;`, false},
+
+		// Case is genuinely insensitive here, and staying insensitive is the
+		// point of a normalized checksum.
+		{"keywords and unquoted identifiers", `SELECT * FROM USERS;`, `select * from users;`, true},
+		{"line endings", "SELECT 1;\r\nSELECT 2;\r\n", "SELECT 1;\nSELECT 2;\n", true},
+		{"comments and indentation", "-- note\nSELECT   1;", "SELECT 1;", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := same(tt.a, tt.b); got != tt.want {
+				t.Errorf("same(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
 	}
 }

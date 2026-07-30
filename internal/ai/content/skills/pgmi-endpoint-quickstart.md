@@ -1,6 +1,7 @@
 ---
 name: pgmi-endpoint-quickstart
 description: "End-to-end recipe for adding a domain entity plus a REST endpoint and test to the advanced template — the three layers (core kernel, api handler, __test__), sort keys, the four-phase handler body, auth, and the test idiom in one place. Load before building your first advanced-template endpoint."
+scope: advanced-template
 user_invocable: true
 ---
 
@@ -29,8 +30,8 @@ the DML. This is the handler→kernel contract (`pgmi-handler-patterns`).
 **Sort keys — what actually works (verified against a live deploy):**
 
 - The kernel **and** the handler both live in the **user band `005+`** (the
-  framework reserves `001–004`; a file keyed `003/0xx` is dropped from
-  `pgmi_plan_view` and silently never runs). Key the kernel **before** the
+  framework reserves `001–004`; a file keyed `003/0xx` runs too early —
+  before the `api.*` objects it depends on exist — and fails loudly). Key the kernel **before** the
   handler (`005/005` → `005/010`) so the entity type exists when the handler is
   registered — registration compiles the body, so `core.<entity>` must already
   exist.
@@ -186,22 +187,33 @@ END;
 
 | Key | Default | Note |
 |-----|---------|------|
-| `requiresAuth` | **`true`** | Omit it and the endpoint is authenticated (401 without identity). |
+| `requiresAuth` | **`true`** | Omit it and the endpoint is authenticated (401 unless an active user resolves). |
 | `autoLog` | **`true`** | Request logging. |
 | `httpMethod` | `^(GET\|POST\|PUT\|DELETE\|PATCH)$` | POSIX regex; anchor your own (`^POST$`). |
 | `name` | — | `api.<name>`; `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` (≤49 chars). |
 | `outputSchema` | — | **Required on every REST handler** — the OpenAPI test fails the deploy (`REST handlers without output schema: …`) if any handler omits it. |
 | `inputSchema` | — | JSON Schema for the request body (declare it on write endpoints). Validated at registration; empty `{}` is rejected. |
-| `requiredTransactionIsolation` | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The caller must open the transaction at ≥ this level or the gateway returns 428 (`pgmi.transaction_isolation_too_weak`). |
+| `minTransactionIsolation` | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The client gateway resolves it via `api.rest_route_policy` and opens the transaction at `max(floor, requested)`; a proxy that skips the lookup gets 428 (`pgmi.transaction_isolation_too_weak`). |
+| `readOnly` | `false` | Route only reads: the client gateway opens the transaction `READ ONLY` (`SERIALIZABLE READ ONLY` opens `DEFERRABLE`, which never hits 40001). A read-write transaction is rejected 428 (`pgmi.transaction_read_only_required`). OpenAPI advertises `x-pgmi-read-only` + derived `x-pgmi-replica-safe`. |
+| `pathParams` | — (positional) | Names for the `uri`'s capture groups, in order: `'pathParams', jsonb_build_array('orgId', 'userId')` turns `^/orgs/([^/]+)/users/(\d+)$` into `/orgs/{orgId}/users/{userId}` in the OpenAPI document, with a required `in: path` parameter for each. Omit it and they are named `{p1}`, `{p2}`, …. Declaring the wrong number of names is rejected at registration. |
 
 ---
 
 ## 3. Auth model
 
-`requiresAuth: true` ⇒ the gateway returns 401 unless a user resolves. Identity
-enters as the `x-user-id` header in **`provider|subject`** form (e.g.
-`google|alice-123`); a raw value without `|` fails closed. The gateway sets
-`auth.idp_subject` and resolves a membership user. In handlers, read identity via
+`requiresAuth: true` ⇒ the gateway returns 401 unless the request resolves to an
+**active** `membership.user` via `api.current_user_id()`. Identity enters as the
+`x-user-id` header in **`provider|subject`** form (e.g. `google|alice-123`); a
+raw value without `|` fails closed, and so does a well-formed subject that
+matches no active user — deactivating a user revokes access immediately.
+
+The gate is not authentication: an upstream proxy is still what proves the
+caller is who the header says. Note that when a request carries both
+`x-user-id` and `x-user-email`, the gateway JIT-provisions the user, so on a
+read-write request an unknown emailed identity resolves by being created. That
+is why these headers must never survive from the client.
+
+The gateway sets `auth.idp_subject` and resolves a membership user. In handlers, read identity via
 `api.vw_current_user` and scope to the caller's orgs with
 `WHERE org_id = ANY(api.current_member_org_ids())` — the template is
 **multi-organization**; there is no single tenant GUC.
@@ -254,6 +266,17 @@ BEGIN
         '{"name":"Widget","price":1.00}'::jsonb);
     IF (v_resp).status_code <> 401 THEN
         RAISE EXCEPTION 'expected 401, got %', (v_resp).status_code;
+    END IF;
+
+    -- Forged but well-formed identity → 401. Assert this one explicitly: a
+    -- header-shaped string is not a user, and an endpoint that accepts it is
+    -- an open write endpoint that looks authenticated. No x-user-email, or the
+    -- gateway would JIT-provision the identity and it would legitimately pass.
+    v_resp := api.rest_invoke('POST', '/products',
+        'x-user-id=>google|nobody-12345'::extensions.hstore,
+        '{"name":"Widget","price":1.00}'::jsonb);
+    IF (v_resp).status_code <> 401 THEN
+        RAISE EXCEPTION 'forged identity accepted (expected 401, got %)', (v_resp).status_code;
     END IF;
 END $$;
 ```

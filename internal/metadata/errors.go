@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // MetadataError represents a structured error with context and helpful hints.
@@ -44,6 +46,13 @@ func (e *MetadataError) Error() string {
 	return msg
 }
 
+// Unwrap reports every metadata failure as invalid configuration, so it exits
+// 10 like the other project errors caught before pgmi connects — a duplicate
+// <pgmi-meta id>, an unsupported __dunder__ directory, a path that is not a
+// directory. A malformed id or a bad idempotent value used to exit 1, which
+// tells a CI script nothing about whose fault it is.
+func (e *MetadataError) Unwrap() error { return pgmi.ErrInvalidConfig }
+
 // wrapXMLError converts xml package errors to MetadataError with line numbers.
 func wrapXMLError(err error, filePath string) error {
 	var syntaxErr *xml.SyntaxError
@@ -82,9 +91,14 @@ func formatValidationErrors(result ValidationResult, filePath string) error {
 		fmt.Fprintf(&msg, "  %d. %s\n", i+1, err)
 	}
 
+	// Both pointers have to be reachable by the person reading this. The old
+	// first line named internal/metadata/schema.xsd, a path inside pgmi's own
+	// repository that nobody deploying a project can open.
 	msg.WriteString("\nSee metadata format documentation:\n")
-	msg.WriteString("  Schema: internal/metadata/schema.xsd\n")
+	msg.WriteString("  Reference: docs/METADATA.md, or run `pgmi ai skill pgmi-metadata-system`\n")
 	msg.WriteString("  Generate template: pgmi metadata scaffold <path>\n")
 
-	return fmt.Errorf("%s", msg.String())
+	// ErrInvalidConfig so this exits 10 like every other project error caught
+	// before connecting, rather than the undifferentiated 1.
+	return fmt.Errorf("%s: %w", msg.String(), pgmi.ErrInvalidConfig)
 }

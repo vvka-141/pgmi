@@ -81,35 +81,35 @@ func TestNewSessionManager_NilDeps(t *testing.T) {
 	}
 }
 
-func TestPrepareSession_ValidateDeploySQLFails(t *testing.T) {
+func TestScanProject_ValidateDeploySQLFails(t *testing.T) {
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return &mockConnector{}, nil
 	}
 	scanner := &mockFileScanner{validateErr: fmt.Errorf("deploy.sql missing")}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(context.TODO(), &pgmi.ConnectionConfig{}, "/src", nil, "", false)
+	_, err := sm.ScanProject("/src")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !strings.Contains(err.Error(), "file scanning failed") {
-		t.Errorf("Expected 'file scanning failed' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "failed to validate deploy.sql") {
+		t.Errorf("Expected 'failed to validate deploy.sql' in error, got: %v", err)
 	}
 }
 
-func TestPrepareSession_ScanDirectoryFails(t *testing.T) {
+func TestScanProject_ScanDirectoryFails(t *testing.T) {
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return &mockConnector{}, nil
 	}
 	scanner := &mockFileScanner{scanErr: fmt.Errorf("permission denied")}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(context.TODO(), &pgmi.ConnectionConfig{}, "/src", nil, "", false)
+	_, err := sm.ScanProject("/src")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !strings.Contains(err.Error(), "file scanning failed") {
-		t.Errorf("Expected 'file scanning failed' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "failed to scan directory") {
+		t.Errorf("Expected 'failed to scan directory' in error, got: %v", err)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestPrepareSession_ConnectorFactoryFails(t *testing.T) {
 	scanner := &mockFileScanner{}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, "/src", nil, "", false)
+	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, pgmi.FileScanResult{}, nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -136,7 +136,7 @@ func TestPrepareSession_ConnectFails(t *testing.T) {
 	scanner := &mockFileScanner{}
 	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
 
-	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, "/src", nil, "", false)
+	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, pgmi.FileScanResult{}, nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}

@@ -1,6 +1,7 @@
 ---
 name: pgmi-postgres-review
 description: "Use when writing SQL/PL/pgSQL and need correctness and performance guidance"
+scope: core
 user_invocable: true
 ---
 
@@ -219,7 +220,7 @@ END;
 - Check if target variable is a composite type (CREATE TYPE)
 - Verify pattern: must be `SELECT * FROM` not `SELECT`
 
-**Reference**: `.claude/skills/reference/postgresql-patterns.md` → "Dynamic SQL with EXECUTE"
+**Reference**: `pgmi ai skill postgresql-patterns` → "Dynamic SQL with EXECUTE"
 
 **Real Incident**: HTTP framework failure (2025-11-22) - Handler executed correctly but response wasn't captured due to this pattern.
 
@@ -245,7 +246,7 @@ format('SELECT ($1::api.rest_request)')
 
 **Rule**: `%I` is for identifiers (tables, columns, schemas). Type names should be hardcoded or validated separately.
 
-**Reference**: `.claude/skills/reference/postgresql-patterns.md` → "Type Handling in format()"
+**Reference**: `pgmi ai skill postgresql-patterns` → "Type Handling in format()"
 
 ### Row-by-Row Processing
 
@@ -253,21 +254,21 @@ format('SELECT ($1::api.rest_request)')
 
 **❌ REJECT** (slow for large datasets):
 ```sql
-FOR v_record IN SELECT * FROM users LOOP
-    UPDATE users SET last_seen = now() WHERE id = v_record.id;
+FOR v_record IN SELECT * FROM "user" LOOP
+    UPDATE "user" SET last_seen = now() WHERE id = v_record.id;
 END LOOP;
 -- N separate UPDATE statements
 ```
 
 **✅ REQUIRE** (set-based):
 ```sql
-UPDATE users SET last_seen = now();
+UPDATE "user" SET last_seen = now();
 -- Single UPDATE statement
 ```
 
 **When Loops Are Necessary**: Use array_agg and bulk operations.
 
-**Reference**: `.claude/skills/reference/postgresql-patterns.md` → "Performance Patterns"
+**Reference**: `pgmi ai skill postgresql-patterns` → "Performance Patterns"
 
 ---
 
@@ -309,10 +310,11 @@ UPDATE users SET last_seen = now();
 ```markdown
 **[deploy.sql:45]** PL/pgSQL Loop Over Set Operation
 
-- **Problem**: Lines 45-52 use FOR loop to insert files:
+- **Problem**: Lines 45-52 use FOR loop to record files in the ledger:
   \```sql
   FOR v_file IN SELECT * FROM pg_temp.pgmi_source_view LOOP
-      INSERT INTO pg_temp.pgmi_plan VALUES (v_file.content);
+      INSERT INTO _migration (path, checksum)
+      VALUES (v_file.path, v_file.pgmi_checksum);
   END LOOP;
   \```
 
@@ -324,8 +326,9 @@ UPDATE users SET last_seen = now();
 
 - **Fix**: Use single INSERT...SELECT:
   \```sql
-  INSERT INTO pg_temp.pgmi_plan (command_sql)
-  SELECT content FROM pg_temp.pgmi_source_view ORDER BY path;
+  INSERT INTO _migration (path, checksum)
+  SELECT path, pgmi_checksum FROM pg_temp.pgmi_source_view
+  WHERE is_sql_file ORDER BY path;
   \```
 
 - **Rationale**: "Set Operations Over Loops" (pgmi-postgres-review:184-201).
@@ -356,7 +359,7 @@ SELECT
     id,
     UPPER(name) AS normalized_name,
     created_at::DATE AS created_date
-FROM users;
+FROM "user";
 ```
 
 **✅ Aggregations and Window Functions**
@@ -449,7 +452,7 @@ BEGIN
     COMMIT;
 
     -- Phase 2: Migrations
-    FOR v_file IN (SELECT content FROM pg_temp.pgmi_plan_view WHERE path LIKE './migrations/%' ORDER BY execution_order) LOOP
+    FOR v_file IN (SELECT p.content FROM pg_temp.pgmi_plan_view p JOIN pg_temp.pgmi_source_view s ON s.path = p.path WHERE s.is_sql_file AND p.path LIKE './migrations/%' ORDER BY p.execution_order) LOOP
         EXECUTE v_file.content;
     END LOOP;
     COMMIT;
@@ -505,6 +508,11 @@ WHERE ...;
 ```
 
 ### ✅ Set Operations Over Loops
+
+A loop is for orchestrating `EXECUTE` — one file at a time is the whole point
+there. Everything else about a file set is a query. Recording an apply-once
+ledger is the common case:
+
 ```sql
 -- ❌ BAD: Procedural loop
 DO $$
@@ -512,16 +520,22 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN SELECT * FROM pg_temp.pgmi_source_view LOOP
-        INSERT INTO pg_temp.pgmi_plan (sequence_number, command_sql)
-        VALUES (DEFAULT, v_file.content);
+        INSERT INTO _migration (path, checksum)
+        VALUES (v_file.path, v_file.pgmi_checksum);
     END LOOP;
 END $$;
 
 -- ✅ GOOD: Single set operation
-INSERT INTO pg_temp.pgmi_plan (sequence_number, command_sql)
-SELECT ROW_NUMBER() OVER (ORDER BY path), content
-FROM pg_temp.pgmi_source_view;
+INSERT INTO _migration (path, checksum)
+SELECT path, pgmi_checksum
+FROM pg_temp.pgmi_source_view
+WHERE is_sql_file
+ORDER BY path;
 ```
+
+`_migration` is *your* table — pgmi ships no ledger. The session exposes read-only
+views (`pgmi_source_view`, `pgmi_plan_view`, …); there is nothing pgmi-owned to
+INSERT into.
 
 ### ✅ LATERAL Joins for Correlated Subqueries
 ```sql
@@ -684,9 +698,9 @@ $$ LANGUAGE plpgsql;
 
 -- ✅ SAFE: format() with %L for literals
 CREATE FUNCTION safe_where(p_value TEXT)
-RETURNS SETOF users AS $$
+RETURNS SETOF "user" AS $$
 BEGIN
-    RETURN QUERY EXECUTE format('SELECT * FROM users WHERE name = %L', p_value);
+    RETURN QUERY EXECUTE format('SELECT * FROM "user" WHERE name = %L', p_value);
 END;
 $$ LANGUAGE plpgsql;
 ```
@@ -750,10 +764,10 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Reversible with explicit rollback guidance
 -- Migration: 002_add_email_column.sql
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE "user" ADD COLUMN IF NOT EXISTS email TEXT;
 
 -- Rollback: Documented in migration or separate file
--- ALTER TABLE users DROP COLUMN IF EXISTS email;
+-- ALTER TABLE "user" DROP COLUMN IF EXISTS email;
 ```
 
 **Review Checklist**:
@@ -780,7 +794,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
 ```sql
 BEGIN;
     -- Migration DDL
-    ALTER TABLE users ADD COLUMN new_field TEXT;
+    ALTER TABLE "user" ADD COLUMN new_field TEXT;
 
     -- Validation
     DO $$
@@ -814,7 +828,7 @@ DELETE FROM archive.old_users;
 ```sql
 -- ❌ BAD: Cursor for simple iteration
 DECLARE
-    cur CURSOR FOR SELECT * FROM users;
+    cur CURSOR FOR SELECT * FROM "user";
     rec RECORD;
 BEGIN
     OPEN cur;
@@ -830,7 +844,7 @@ END;
 DECLARE
     rec RECORD;
 BEGIN
-    FOR rec IN SELECT * FROM users LOOP
+    FOR rec IN SELECT * FROM "user" LOOP
         -- Process rec
     END LOOP;
 END;
@@ -838,31 +852,31 @@ END;
 -- ✅ BETTER: Set operation (no loop at all)
 INSERT INTO processed_users
 SELECT id, UPPER(name)
-FROM users;
+FROM "user";
 ```
 
 ### ❌ Unnecessary Dynamic SQL
 ```sql
 -- ❌ BAD: Dynamic SQL for static query
-EXECUTE 'SELECT * FROM users WHERE id = ' || user_id;
+EXECUTE 'SELECT * FROM "user" WHERE id = ' || user_id;
 
 -- ✅ GOOD: Static SQL (better performance, safer)
-SELECT * FROM users WHERE id = user_id;
+SELECT * FROM "user" WHERE id = user_id;
 ```
 
 ### ❌ Transaction Anti-Patterns
 ```sql
 -- ❌ BAD: Transaction per row (high overhead)
-FOR rec IN SELECT * FROM users LOOP
+FOR rec IN SELECT * FROM "user" LOOP
     BEGIN
-        UPDATE users SET processed = true WHERE id = rec.id;
+        UPDATE "user" SET processed = true WHERE id = rec.id;
         COMMIT; -- Can't COMMIT in function!
     END;
 END LOOP;
 
 -- ✅ GOOD: Single transaction for batch
-UPDATE users SET processed = true
-WHERE id IN (SELECT id FROM users WHERE NOT processed);
+UPDATE "user" SET processed = true
+WHERE id IN (SELECT id FROM "user" WHERE NOT processed);
 COMMIT;
 ```
 
@@ -914,10 +928,14 @@ $$ LANGUAGE SQL IMMUTABLE;
 ### Direct Execution Pattern
 ```sql
 -- pgmi uses direct execution with EXECUTE
--- Query files from pgmi_plan_view and execute directly
+-- Query files from pgmi_plan_view and execute directly. The plan holds every
+-- loaded file, so is_sql_file is the guard that keeps README.md and editor
+-- backups out of the EXECUTE.
 FOR v_file IN (
-    SELECT path, content FROM pg_temp.pgmi_plan_view
-    ORDER BY execution_order
+    SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+    WHERE s.is_sql_file
+    ORDER BY p.execution_order
 )
 LOOP
     RAISE NOTICE 'Executing: %', v_file.path;

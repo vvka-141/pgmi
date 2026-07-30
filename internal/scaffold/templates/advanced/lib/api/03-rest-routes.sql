@@ -27,17 +27,38 @@ CREATE TABLE IF NOT EXISTS api.rest_route (
     version_regexp text NOT NULL DEFAULT '.*',
 
     route_name text,
-    auto_log boolean NOT NULL DEFAULT true
+    auto_log boolean NOT NULL DEFAULT true,
+    canonical_path text NOT NULL DEFAULT ''
 );
+
+ALTER TABLE api.rest_route
+    ADD COLUMN IF NOT EXISTS canonical_path text NOT NULL DEFAULT '';
+
+ALTER TABLE api.rest_route
+    DROP COLUMN IF EXISTS path_param_names;
 
 CREATE INDEX IF NOT EXISTS ix_rest_route_lookup
     ON api.rest_route(sequence_number DESC);
+
+-- route_name becomes the handler's function name (api.<name>), so two routes
+-- cannot share one — the second CREATE OR REPLACE would overwrite the first's
+-- body. rpc_route.method_name and mcp_route.mcp_name are both NOT NULL UNIQUE;
+-- route_name was neither, and the collision was caught only incidentally by the
+-- UNIQUE on api.handler.handler_func. Make the guarantee explicit and local.
+-- Partial: an unnamed route (route_name IS NULL) gets a generated function name
+-- and cannot collide.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rest_route_name
+    ON api.rest_route(route_name)
+    WHERE route_name IS NOT NULL;
 
 COMMENT ON TABLE api.rest_route IS
     'REST routes matched by sequence_number DESC. Later-registered routes take priority when patterns overlap.';
 
 COMMENT ON COLUMN api.rest_route.sequence_number IS
     'Auto-incrementing priority. Higher values (later registration) match first.';
+
+COMMENT ON COLUMN api.rest_route.canonical_path IS
+    'OpenAPI path template (e.g. /users/{id}). Declared via the path metadata key, or derived from address_regexp for uri-only registrations. The single source of truth for the OpenAPI document path string and parameter names.';
 
 -- ============================================================================
 -- Grant Permissions

@@ -132,16 +132,28 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-protected-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected REST without auth should return 401, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'title' != 'Unauthorized' THEN
+    IF v_content->>'title' IS DISTINCT FROM 'Unauthorized' THEN
         RAISE EXCEPTION 'TEST FAILED: 401 response should have title "Unauthorized"';
     END IF;
 
     RAISE NOTICE '  ✓ REST: Protected handler returns 401 without x-user-id';
+
+    -- ========================================================================
+    -- requiresAuth gates on a RESOLVED active user, not on header syntax, so
+    -- every positive case below needs a real membership.user row. Provisioning
+    -- them here is the point, not boilerplate: before this, these same requests
+    -- passed with identities that existed nowhere.
+    -- ========================================================================
+
+    PERFORM membership.upsert_user('test', 'user123', 'authtest-user123@example.com');
+    PERFORM membership.upsert_user('test', 'user456', 'authtest-user456@example.com');
+    PERFORM membership.upsert_user('test', 'user789', 'authtest-user789@example.com');
+    PERFORM membership.upsert_user('test', 'alice',   'authtest-alice@example.com');
 
     -- ========================================================================
     -- Test: REST protected handler accepts authenticated requests
@@ -154,12 +166,12 @@ END;
         NULL::bytea
     );
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected REST with auth should return 200, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'user_id' != 'test|user123' THEN
+    IF v_content->>'user_id' IS DISTINCT FROM 'test|user123' THEN
         RAISE EXCEPTION 'TEST FAILED: Session variable auth.user_id should be "test|user123", got "%"', v_content->>'user_id';
     END IF;
 
@@ -177,7 +189,7 @@ END;
         NULL::bytea
     );
 
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: user-id alias must NOT satisfy auth gate, expected 401 got %', (v_response).status_code;
     END IF;
 
@@ -189,7 +201,7 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-public-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: Public REST should return 200, got %', (v_response).status_code;
     END IF;
 
@@ -206,12 +218,12 @@ END;
         convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "1"}', 'UTF8')
     );
 
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected RPC without auth should return HTTP 401, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF (v_content->'error'->>'code')::int != -32001 THEN
+    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected RPC without auth should return JSON-RPC error -32001, got %', v_content->'error'->>'code';
     END IF;
 
@@ -232,7 +244,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Protected RPC with auth should succeed, got error: %', v_content->'error';
     END IF;
 
-    IF v_content->'result'->>'user_id' != 'test|user456' THEN
+    IF v_content->'result'->>'user_id' IS DISTINCT FROM 'test|user456' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC session variable auth.user_id should be "test|user456"';
     END IF;
 
@@ -272,7 +284,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Protected MCP without context should return JSON-RPC error';
     END IF;
 
-    IF ((v_mcp_response).envelope->'error'->>'code')::int != -32001 THEN
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected MCP auth error should have code -32001, got %', (v_mcp_response).envelope->'error'->>'code';
     END IF;
 
@@ -315,7 +327,7 @@ END;
     RAISE NOTICE '  ✓ MCP: Public tool succeeds without auth';
 
     -- ========================================================================
-    -- Hardening (PGMI-16): present-but-malformed identities are rejected across
+    -- Hardening: present-but-malformed identities are rejected across
     -- REST, RPC, and MCP; identity must not leak across successive calls.
     -- ========================================================================
 
@@ -324,7 +336,7 @@ END;
         'GET', '/test-protected-rest',
         'x-user-id=>alice'::extensions.hstore, NULL::bytea
     );
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: malformed x-user-id must return 401, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ REST: malformed x-user-id (no pipe) rejected with 401';
@@ -334,7 +346,7 @@ END;
         'GET', '/test-protected-rest',
         'x-user-id=>|alice'::extensions.hstore, NULL::bytea
     );
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: leading-pipe x-user-id must return 401, got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ REST: empty-provider x-user-id (|subject) rejected with 401';
@@ -379,7 +391,7 @@ END;
     RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
     -- ========================================================================
-    -- PGMI-26: the MCP dispatcher (mcp_handle_request) must apply the same
+    -- The MCP dispatcher (mcp_handle_request) must apply the same
     -- validated, reset-first auth context to the discovery path (tools/list),
     -- and must not leak raw SQLERRM to the client.
     -- ========================================================================
@@ -451,7 +463,7 @@ END;
     RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
 
     -- ========================================================================
-    -- PGMI-33: the gateway JIT-provisions a membership.user row for a first-time
+    -- The gateway JIT-provisions a membership.user row for a first-time
     -- authenticated identity, so api.current_user_id() resolves and /me +
     -- /organizations work without any out-of-band row creation.
     -- ========================================================================
@@ -461,11 +473,11 @@ END;
         'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: /me for a freshly-authenticated identity should be 200 (JIT-provisioned), got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->>'email' != 'jit-pgmi33@example.com' THEN
+    IF v_content->>'email' IS DISTINCT FROM 'jit-pgmi33@example.com' THEN
         RAISE EXCEPTION 'TEST FAILED: /me returned wrong/absent user, got %', v_content;
     END IF;
     RAISE NOTICE '  ✓ REST: /me JIT-provisions a first-time identity (200, current_user_id resolves)';
@@ -475,11 +487,11 @@ END;
         'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: /organizations should be 200, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF jsonb_array_length(v_content->'organizations') < 1 THEN
+    IF coalesce(jsonb_array_length(v_content->'organizations'), 0) < 1 THEN
         RAISE EXCEPTION 'TEST FAILED: /organizations should list the auto-created personal org, got %', v_content;
     END IF;
     RAISE NOTICE '  ✓ REST: /organizations returns the JIT-provisioned personal org';
@@ -490,10 +502,85 @@ END;
         'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: repeated /me should stay 200 (idempotent provisioning), got %', (v_response).status_code;
     END IF;
     RAISE NOTICE '  ✓ REST: JIT provisioning is idempotent across repeated requests';
+
+    -- ========================================================================
+    -- requiresAuth must gate on a resolved ACTIVE user, not on the
+    -- header merely being well formed. Both cases below returned 200/201
+    -- before the fix, because the gate only asked whether the GUC was set.
+    -- ========================================================================
+
+    -- (1) Forged but well-formed identity, no x-user-email so nothing is
+    -- JIT-provisioned: the subject exists nowhere in membership.
+    v_response := api.rest_invoke(
+        'GET', '/test-protected-rest',
+        'x-user-id=>google|nobody-12345'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: forged well-formed identity must return 401, got % — the auth gate is checking header shape, not a resolved user',
+            (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: forged well-formed x-user-id (unresolvable subject) rejected with 401';
+
+    -- Same identity over RPC and MCP: all three gates must agree.
+    v_response := api.rpc_invoke(
+        v_route_id,
+        'x-user-id=>google|nobody-12345'::extensions.hstore,
+        convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "forged-1"}', 'UTF8')
+    );
+    v_content := api.content_json((v_response).content);
+    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: forged RPC identity should return -32001, got %', v_content->'error';
+    END IF;
+    RAISE NOTICE '  ✓ RPC: forged well-formed identity rejected with -32001';
+
+    v_mcp_response := api.mcp_call_tool(
+        'test_protected_tool', '{}'::jsonb,
+        '{"user_id": "google|nobody-12345"}'::jsonb, '"forged-2"'::jsonb
+    );
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
+        RAISE EXCEPTION 'TEST FAILED: forged MCP identity should return -32001, got %', (v_mcp_response).envelope->'error';
+    END IF;
+    RAISE NOTICE '  ✓ MCP: forged well-formed identity rejected with -32001';
+
+    -- Discovery must agree with invocation: an unresolvable identity must not
+    -- see a tool it would then be refused.
+    v_mcp_response := api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"disc-forged","method":"tools/list"}'::jsonb,
+        '{"user_id":"google|nobody-12345"}'::jsonb
+    );
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
+        WHERE t->>'name' = 'test_protected_tool'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: tools/list exposed an auth-gated tool to an unresolvable identity';
+    END IF;
+    RAISE NOTICE '  ✓ MCP: tools/list hides auth-gated tools from an unresolvable identity';
+
+    -- (2) Deactivation must actually revoke access. jittest|user-pgmi33 was
+    -- provisioned and served 200 above; deactivating it must close the door
+    -- even though the header is unchanged and still well formed.
+    UPDATE membership."user" u
+    SET is_active = false
+    FROM membership.user_identity ui
+    WHERE ui.user_object_id = u.object_id
+      AND ui.idp_provider = 'jittest'
+      AND ui.idp_subject_id = 'user-pgmi33';
+
+    v_response := api.rest_invoke(
+        'GET', '/organizations',
+        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
+        NULL::bytea
+    );
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: deactivated user must return 401, got % — deactivation is not revoking access',
+            (v_response).status_code;
+    END IF;
+    RAISE NOTICE '  ✓ REST: deactivated user is refused with 401 (deactivation revokes access)';
 
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;

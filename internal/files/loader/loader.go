@@ -43,8 +43,8 @@ func execBatch(ctx context.Context, conn *pgxpool.Conn, batch *pgx.Batch, labels
 }
 
 // LoadFilesIntoSession loads file metadata into session-scoped tables.
-// Non-test files go into pg_temp.pgmi_source, test files go into pg_temp.pgmi_test_source.
-// Also loads script metadata (from <pgmi:meta> XML blocks) into pg_temp.pgmi_source_metadata.
+// Non-test files go into pg_temp._pgmi_source, test files go into pg_temp._pgmi_test_source.
+// Also loads script metadata (from <pgmi-meta> XML blocks) into pg_temp._pgmi_source_metadata.
 func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	// Separate test files from non-test files
 	var sourceFiles, testFiles []pgmi.FileMetadata
@@ -73,10 +73,31 @@ func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, f
 		return fmt.Errorf("failed to insert metadata: %w", err)
 	}
 
+	if len(files) == 0 {
+		return nil
+	}
+	return l.analyzeSessionTables(ctx, conn)
+}
+
+// analyzeSessionTables gives the planner statistics for the tables just filled.
+//
+// Autovacuum cannot see a temp table, so without this every plan is built on
+// default estimates. pgmi_test_plan is a recursive CTE joined against them, and
+// on a 20-directory project it took 546ms per call that way and 1.8ms after —
+// paid on every deploy, since each deploy is a fresh session.
+//
+// ANALYZE is legal inside a transaction block; VACUUM is not, and is not needed
+// here — these tables have no dead rows.
+func (l *Loader) analyzeSessionTables(ctx context.Context, conn *pgxpool.Conn) error {
+	const stmt = `ANALYZE pg_temp._pgmi_source, pg_temp._pgmi_source_metadata,
+	              pg_temp._pgmi_test_source, pg_temp._pgmi_test_directory`
+	if _, err := conn.Exec(ctx, stmt); err != nil {
+		return fmt.Errorf("failed to analyze session tables: %w", err)
+	}
 	return nil
 }
 
-// insertTestFiles inserts test file content into pg_temp.pgmi_test_source.
+// insertTestFiles inserts test file content into pg_temp._pgmi_test_source.
 // Only SQL files are inserted (non-SQL files like README.md are skipped).
 func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	if len(files) == 0 {
@@ -188,19 +209,23 @@ func extractTestDirectory(path string) string {
 	return path[:lastSlash+1]
 }
 
-// findParentTestDirectory finds the parent directory in the test hierarchy.
-// Returns nil if no parent exists in the directory set.
+// findParentTestDirectory finds the nearest ancestor of dir that is itself in
+// the directory set, or nil when dir is a tree root.
+//
+// Only directories that directly hold a file enter the set, so an intermediate
+// level can be missing: __test__/sub/deep/test_b.sql with nothing in
+// __test__/sub/. Matching only the immediate parent left such a directory
+// parentless, pgmi_test_plan treated it as a second tree root, and the root
+// teardown was emitted before the nested test — which then ran against a
+// rolled-back parent fixture.
 func findParentTestDirectory(dir string, dirSet map[string]bool) *string {
-	trimmed := strings.TrimSuffix(dir, "/")
-	parts := strings.Split(trimmed, "/")
+	parts := strings.Split(strings.TrimSuffix(dir, "/"), "/")
 
-	if len(parts) < 2 {
-		return nil
-	}
-
-	parentPath := strings.Join(parts[:len(parts)-1], "/") + "/"
-	if dirSet[parentPath] {
-		return &parentPath
+	for i := len(parts) - 1; i >= 1; i-- {
+		candidate := strings.Join(parts[:i], "/") + "/"
+		if dirSet[candidate] {
+			return &candidate
+		}
 	}
 	return nil
 }
@@ -233,7 +258,7 @@ func isFixtureFile(filename string) bool {
 	return lower == "_setup.sql" || lower == "_setup.psql"
 }
 
-// insertFiles inserts file metadata into the pg_temp.pgmi_source table using the pgmi_register_file function.
+// insertFiles inserts file metadata into the pg_temp._pgmi_source table using the pgmi_register_file function.
 func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	if len(files) == 0 {
 		return nil
@@ -253,7 +278,7 @@ func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pg
 		"failed to complete file batch insert")
 }
 
-// LoadParametersIntoSession loads parameters into the pg_temp.pgmi_parameter table
+// LoadParametersIntoSession loads parameters into the pg_temp._pgmi_parameter table
 // and automatically sets them as PostgreSQL session variables with 'pgmi.' prefix.
 //
 // This eliminates the need for users to call pgmi_init_params() in deploy.sql.
@@ -279,8 +304,12 @@ func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Co
 	return nil
 }
 
-// insertParams inserts parameters into the pg_temp.pgmi_parameter table using batch insert.
-// Keys are normalized to lowercase for case-insensitive lookups.
+// insertParams inserts parameters into the pg_temp._pgmi_parameter table using batch insert.
+//
+// Keys are lower-cased so the view names the same thing the session variable
+// does: setSessionVariables builds pgmi.<lower(key)>, and PostgreSQL's GUC
+// namespace is case-insensitive anyway. Preserving the original case here would
+// make pgmi_parameter_view.key disagree with the variable actually set.
 func (l *Loader) insertParams(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
 	if len(params) == 0 {
 		return nil
@@ -323,7 +352,7 @@ func (l *Loader) setSessionVariables(ctx context.Context, conn *pgxpool.Conn, pa
 		"failed to complete session variable batch set")
 }
 
-// insertMetadata inserts script metadata into the pg_temp.pgmi_source_metadata table.
+// insertMetadata inserts script metadata into the pg_temp._pgmi_source_metadata table.
 // Only processes files that have metadata (FileMetadata.Metadata != nil).
 func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files []pgmi.FileMetadata) error {
 	insertSQL := `INSERT INTO pg_temp._pgmi_source_metadata (path, id, idempotent, sort_keys, description) VALUES ($1, $2, $3, $4, $5)`
@@ -334,11 +363,22 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 		if file.Metadata == nil {
 			continue
 		}
+		// sortKeys is optional in <pgmi-meta>, and absent it parses to a nil
+		// slice, which pgx sends as SQL NULL — violating the column's NOT NULL
+		// and failing the deploy with a raw 23502. The column defaults to '{}'
+		// for exactly this case, and pgmi_plan_view's fallback is written for
+		// it too: NULLIF(m.sort_keys, '{}') is what makes such a file order by
+		// path. Send the empty array the rest of the system expects.
+		sortKeys := file.Metadata.SortKeys
+		if sortKeys == nil {
+			sortKeys = []string{}
+		}
+
 		batch.Queue(insertSQL,
 			file.Path,
 			file.Metadata.ID,
 			file.Metadata.Idempotent,
-			file.Metadata.SortKeys,
+			sortKeys,
 			file.Metadata.Description,
 		)
 		labels = append(labels, file.Path)
@@ -353,11 +393,18 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 		"failed to complete metadata batch insert")
 }
 
-var keyPattern = regexp.MustCompile(`^[a-zA-Z0-9_]{1,63}$`)
+// A parameter becomes the GUC pgmi.<key>, so the key has to be a PostgreSQL
+// simple identifier: letter or underscore first, then letters, digits or
+// underscores. The old pattern allowed a leading digit, which PostgreSQL
+// refuses — `--param 1abc=v` passed this check and then died inside session
+// preparation with a raw 42602 ("Custom parameter names must be two or more
+// simple identifiers separated by dots") and exit 1, instead of being named
+// here and exiting 10 like every other malformed key.
+var keyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 
 func validateParameterKey(key string) error {
 	if !keyPattern.MatchString(key) {
-		return fmt.Errorf("invalid parameter key '%s': must be alphanumeric with underscores, 1-63 characters (PostgreSQL identifier limit)", key)
+		return fmt.Errorf("invalid parameter key '%s': must start with a letter or underscore and contain only letters, digits and underscores, 1-63 characters (PostgreSQL identifier limit)", key)
 	}
 	return nil
 }

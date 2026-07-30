@@ -67,47 +67,30 @@ func resolveConnection(
 	return connConfig, maintenanceDB, nil
 }
 
-// resolveTargetDatabase consolidates database precedence logic.
-// The -d/--database flag always takes precedence over the connection string database.
-//
-// Parameters:
-//   - flagDatabase: Database from -d/--database CLI flag (highest priority)
-//   - connConfigDatabase: Database from parsed connection string
-//   - requireDatabase: If true, returns error when no database is provided
-//   - commandName: Name of command for error messages (e.g., "deploy", "test")
-//   - verbose: Enable verbose logging
-//
-// Returns:
-//   - Resolved target database name
-//   - Error if database is required but not provided
-func resolveTargetDatabase(
-	flagDatabase string,
-	connConfigDatabase string,
-	requireDatabase bool,
-	commandName string,
-	verbose bool,
-) (string, error) {
+// resolveTargetDatabase resolves the deployment target: the -d/--database flag
+// always outranks the database in the connection string.
+func resolveTargetDatabase(flagDatabase, connConfigDatabase string, verbose bool) (string, error) {
 	targetDB := flagDatabase
 
 	if targetDB != "" {
-		// User explicitly provided -d flag, use it (overrides connection string)
 		if verbose && connConfigDatabase != "" && targetDB != connConfigDatabase {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Using --database flag (%s) instead of connection string database (%s)\n",
 				targetDB, connConfigDatabase)
 		}
 	} else {
-		// No -d flag, use database from connection string
 		targetDB = connConfigDatabase
 	}
 
-	// Validate that we have a database if required
-	if requireDatabase && targetDB == "" {
-		return "", fmt.Errorf("database name is required\n"+
+	// Every line here must run as written: <project_path> is positional and
+	// required, so omitting it fails at argument validation (exit 2) before
+	// the connection string is ever read.
+	if targetDB == "" {
+		return "", fmt.Errorf("%w: database name is required\n"+
 			"Provide via:\n"+
-			"  1. --database/-d flag: pgmi %s ./migrations -d mydb\n"+
-			"  2. Connection string: pgmi %s --connection \"postgresql://user@host/mydb\"\n"+
+			"  1. --database/-d flag: pgmi deploy . -d mydb\n"+
+			"  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n"+
 			"  3. Environment variable: export PGDATABASE=mydb",
-			commandName, commandName)
+			pgmi.ErrInvalidConfig)
 	}
 
 	return targetDB, nil

@@ -1,6 +1,7 @@
 ---
 name: pgmi-system-design
 description: "Application-as-dataset patterns, feature design"
+scope: core
 user_invocable: false
 ---
 

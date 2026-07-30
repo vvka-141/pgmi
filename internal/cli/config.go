@@ -23,7 +23,7 @@ var configCmd = &cobra.Command{
 
 The wizard handles local, Azure Entra ID, AWS IAM, and Google Cloud SQL
 auth. Requires an interactive terminal — for CI, write pgmi.yaml by hand.`,
-	Args: cobra.MaximumNArgs(1),
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: runConfig,
 }
 
@@ -70,7 +70,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := saveConnectionToConfig(targetDir, &connResult.Config, connResult.ManagementDatabase); err != nil {
+	if err := saveConnectionToConfig(targetDir, &connResult.Config, connResult.MaintenanceDatabase); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 

@@ -23,7 +23,7 @@ DO $$ BEGIN RAISE DEBUG '-> Installing admin analytics handlers'; END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000001',
-        'uri', '^/admin/dashboard(\?.*)?$',
+        'uri', '^/admin/dashboard$',
         'httpMethod', '^GET$',
         'name', 'admin_dashboard',
         'description', 'Combined dashboard: handler, route, and exchange summaries',
@@ -98,7 +98,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000002',
-        'uri', '^/admin/handlers(\?.*)?$',
+        'uri', '^/admin/handlers$',
         'httpMethod', '^GET$',
         'name', 'admin_handlers',
         'description', 'List all handlers with health and binding info',
@@ -119,14 +119,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     SELECT COUNT(*) INTO v_total FROM api.vw_handler_info;
@@ -171,7 +173,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000003',
-        'uri', '^/admin/handlers/stats(\?.*)?$',
+        'uri', '^/admin/handlers/stats$',
         'httpMethod', '^GET$',
         'name', 'admin_handler_stats',
         'description', 'Handler statistics grouped by type, volatility, security, etc.',
@@ -215,7 +217,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000004',
-        'uri', '^/admin/routes(\?.*)?$',
+        'uri', '^/admin/routes$',
         'httpMethod', '^GET$',
         'name', 'admin_routes',
         'description', 'Unified route listing across REST, RPC, and MCP',
@@ -236,14 +238,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     SELECT COUNT(*) INTO v_total FROM api.vw_route_info;
@@ -285,7 +289,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000005',
-        'uri', '^/admin/exchanges(\?.*)?$',
+        'uri', '^/admin/exchanges$',
         'httpMethod', '^GET$',
         'name', 'admin_exchanges',
         'description', 'Paginated exchange list across REST, RPC, MCP with filters',
@@ -307,14 +311,16 @@ DECLARE
     v_items jsonb;
     v_total int;
 BEGIN
+    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
+    -- should get 403, not a 422 that reveals the endpoint validates pagination.
+    IF NOT api.current_user_is_admin() THEN
+        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    END IF;
+
     v_q := api.query_params((request).url);
     v_page := api.pagination_params(v_q);
     IF (v_page.o_error).status_code IS NOT NULL THEN
         RETURN v_page.o_error;
-    END IF;
-
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
     END IF;
 
     v_protocol := v_q -> 'protocol';
@@ -395,7 +401,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000006',
-        'uri', '^/admin/exchanges/stats(\?.*)?$',
+        'uri', '^/admin/exchanges/stats$',
         'httpMethod', '^GET$',
         'name', 'admin_exchange_stats',
         'description', 'Exchange statistics grouped by protocol, status, error, pending',
@@ -437,7 +443,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000007',
-        'uri', '^/admin/exchanges/([^/]+)/replay(\?.*)?$',
+        'path', '/admin/exchanges/{exchangeId}/replay',
         'httpMethod', '^GET$',
         'name', 'admin_exchange_replay',
         'description', 'Get replay SQL for a specific exchange by ID',
@@ -509,7 +515,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000008',
-        'uri', '^/admin/maintenance/purge-exchanges(\?.*)?$',
+        'uri', '^/admin/maintenance/purge-exchanges$',
         'httpMethod', '^POST$',
         'name', 'admin_purge_exchanges',
         'description', 'Single-batch exchange purge (admin only); POST to avoid CSRF/prefetch on a destructive operation',

@@ -45,9 +45,11 @@ BEGIN
 
     -- Always run migrations
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -90,7 +92,7 @@ pgmi is a good fit when:
 
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
-- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the advanced template does this automatically)
+- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the [advanced template](advanced/_index.md) does this automatically)
 - See [deploy.sql guide](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
@@ -126,18 +128,28 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Aspect | pgmi | Traditional tools |
 |--------|------|-------------------|
 | Learning curve | Low to start (templates work out of the box), higher for custom logic | Lower (conventions handle it) |
-| Flexibility | Maximum (full PL/pgSQL) | Limited (framework DSL) |
+| Flexibility | Full PL/pgSQL — deploy.sql controls execution, transactions, ordering | Framework DSL or conventions |
+| Transaction control | Explicit (you decide) | Implicit (framework decides) |
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |
-| Transaction control | Explicit (you decide) | Implicit (framework decides) |
 | Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
 | Cloud auth | Native (Azure, AWS, GCP IAM) | Varies by tool |
 | File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
+| Test gate location | Inside the deploy transaction, against the target, post-migration — a failing test aborts the commit | A separate command against a dev database, before the apply (Atlas [`migrate test`](https://atlasgo.io/testing/migrate)); or assertions embedded in migration files (Flyway [transaction testing](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions)) |
+| Checksum semantics | Raw SHA-256 **and** comment/whitespace-normalized; reformatting a file is free | Raw bytes only; reformatting triggers a checksum mismatch that requires `repair` (Flyway) or plan recalculation (Atlas) |
+| Plan inspectability | `pgmi_plan_view` is a SQL view — assertable by project-authored queries | Atlas [`migrate lint`](https://atlasgo.io/versioned/lint) ships 50+ vendor-supplied analyzers (requires a dev database); Flyway validates checksums against history |
+| Same file at multiple positions | Yes — `UNNEST(sort_keys)` places one idempotent file at several stages | One file, one ordinal |
+| Database-free CI validation | Structure, metadata, UUID uniqueness, and full execution order computable offline (`--json`) | Atlas lint and Flyway validate both require a database connection |
+| Coding-agent support | Skills, session contract, and MCP shipped in the binary (`pgmi ai`) | Documentation site |
 
-For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md).
+For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md). For the
+other side — the capabilities that are hard to reproduce with another tool at all —
+see [Highlights](HIGHLIGHTS.md).
 
 ## Design principles
+
+The full engineering decision records — including what was rejected and why — live in the design section: [why session-centric](design/why-session-centric.md), [why no orchestration flags](design/why-no-orchestration-flags.md), [why an execution fabric](design/why-execution-fabric.md).
 
 ### PostgreSQL is the deployment engine
 

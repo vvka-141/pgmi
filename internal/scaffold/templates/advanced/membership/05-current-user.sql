@@ -49,10 +49,10 @@ COMMENT ON FUNCTION api.parse_idp_subject_id(TEXT) IS
 -- Inline tests for pure functions
 DO $$
 BEGIN
-    IF api.parse_idp_provider('google|12345') != 'google' THEN
+    IF api.parse_idp_provider('google|12345') IS DISTINCT FROM 'google' THEN
         RAISE EXCEPTION 'TEST FAILED: parse_idp_provider';
     END IF;
-    IF api.parse_idp_subject_id('google|12345') != '12345' THEN
+    IF api.parse_idp_subject_id('google|12345') IS DISTINCT FROM '12345' THEN
         RAISE EXCEPTION 'TEST FAILED: parse_idp_subject_id';
     END IF;
 END $$;
@@ -72,11 +72,28 @@ AS $$
     FROM membership.user_identity ui
     JOIN membership."user" u ON u.object_id = ui.user_object_id
     WHERE ui.idp_provider = api.parse_idp_provider(api.current_idp_subject())
-      AND ui.idp_subject_id = api.parse_idp_subject_id(api.current_idp_subject());
+      AND ui.idp_subject_id = api.parse_idp_subject_id(api.current_idp_subject())
+      -- 01-schema.sql states the invariant: "Inactive users cannot authenticate
+      -- or access any organization." Without this predicate, deactivating a user
+      -- did not end their access -- only validate_api_key enforced it, so the
+      -- OIDC path was the way around it.
+      AND u.is_active
+      -- An API-key identity is only as live as the key behind it. disable_api_key
+      -- and expiry leave the user_identity row in place (only revoke deletes it),
+      -- so without this a disabled or expired key still resolved to a fully
+      -- authenticated session through the OIDC path, which never consults
+      -- api_key state.
+      AND (ui.idp_provider <> 'apikey' OR EXISTS (
+            SELECT 1 FROM membership.api_key k
+            WHERE k.key_id = ui.idp_subject_id
+              AND k.status = 'active'
+              AND k.deleted_at IS NULL
+              AND (k.expires_at IS NULL OR k.expires_at > now())
+          ));
 $$;
 
 COMMENT ON FUNCTION api.current_user_id() IS
-    'Resolves the session identity to a membership.user UUID. SECURITY DEFINER — used as RLS anchor.';
+    'Resolves the session identity to a membership.user UUID. Rejects deactivated users, and API-key identities whose key is disabled or expired. SECURITY DEFINER — used as RLS anchor.';
 
 CREATE OR REPLACE FUNCTION api.is_authenticated()
 RETURNS BOOLEAN
@@ -110,6 +127,33 @@ $$;
 COMMENT ON FUNCTION api.current_user_is_admin() IS
     'Returns true when the current user holds the system-wide superuser role. Authorization gate for cross-tenant /admin/* endpoints.';
 
+-- The organization an API-key session is confined to, or NULL when the session
+-- did not authenticate with a key.
+--
+-- membership.api_key records organization_id at creation, but the credential the
+-- auth path actually consumes is the user_identity row, which carries no org. So
+-- the scoping existed in the schema and nowhere in the enforcement: a key issued
+-- for org A reached every org its owner belonged to. Derived from the identity
+-- rather than read from auth.tenant_id, because that GUC is set from a client
+-- header and must not be able to widen a key's reach.
+CREATE OR REPLACE FUNCTION api.current_api_key_org_id()
+RETURNS UUID
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = membership, api, pg_temp
+AS $$
+    SELECT k.organization_id
+    FROM membership.api_key k
+    WHERE api.parse_idp_provider(api.current_idp_subject()) = 'apikey'
+      AND k.key_id = api.parse_idp_subject_id(api.current_idp_subject())
+      AND k.status = 'active'
+      AND k.deleted_at IS NULL
+      AND (k.expires_at IS NULL OR k.expires_at > now());
+$$;
+
+COMMENT ON FUNCTION api.current_api_key_org_id() IS
+    'The organization an API-key session is confined to, or NULL for a non-key session. Derived from the key itself, never from the client-supplied auth.tenant_id.';
+
 -- SECURITY DEFINER: reads organization_member bypassing RLS; predicate for every org-scoped policy
 CREATE OR REPLACE FUNCTION api.current_member_org_ids()
 RETURNS UUID[]
@@ -119,11 +163,24 @@ SET search_path = membership, api, pg_temp
 AS $$
     SELECT COALESCE(array_agg(om.organization_id), '{}')
     FROM membership.organization_member om
-    WHERE om.user_id = api.current_user_id() AND om.status = 'active';
+    -- The sibling api.current_owner_org_ids() filters o.is_active; this one did
+    -- not, and it is the anchor every core.apply_org_rls table hangs off. Soft-
+    -- deleting an organization hid it from the views while leaving every domain
+    -- row in it readable.
+    JOIN membership.organization o ON o.object_id = om.organization_id
+    WHERE om.user_id = api.current_user_id()
+      AND om.status = 'active'
+      AND o.is_active
+      -- An API-key session is scoped to the organization the key was issued for.
+      -- The key's org was recorded at creation but never consulted afterwards,
+      -- so a key issued for org A authorized every other org its owner belonged
+      -- to. auth.tenant_id carries it; before this it had zero readers.
+      AND (api.current_api_key_org_id() IS NULL
+           OR om.organization_id = api.current_api_key_org_id());
 $$;
 
 COMMENT ON FUNCTION api.current_member_org_ids() IS
-    'Returns org IDs where the current user is an active member. Primary RLS anchor for org-scoped policies.';
+    'Returns org IDs where the current user is an active member of an active organization, intersected with the API key''s organization when the session authenticated with one. Primary RLS anchor for org-scoped policies.';
 
 CREATE OR REPLACE FUNCTION api.current_owner_org_ids()
 RETURNS UUID[]
@@ -143,7 +200,8 @@ COMMENT ON FUNCTION api.current_owner_org_ids() IS
 -- Current User View
 -- ============================================================================
 
-CREATE OR REPLACE VIEW api.vw_current_user AS
+CREATE OR REPLACE VIEW api.vw_current_user
+WITH (security_invoker = true) AS
 SELECT
     u.object_id AS user_id,
     u.email,
@@ -161,8 +219,12 @@ COMMENT ON VIEW api.vw_current_user IS
 -- Performance Indexes for RLS
 -- ============================================================================
 
-CREATE INDEX IF NOT EXISTS ix_user_identity_provider_subject
-    ON membership.user_identity(idp_provider, idp_subject_id);
+-- Dropped, not merely un-created: the UNIQUE constraint uq_identity
+-- (01-schema.sql) already builds a btree on exactly (idp_provider,
+-- idp_subject_id), so this was a second copy of it on the hottest auth-path
+-- table — equal size, plus write amplification on every identity insert. A
+-- deleted CREATE INDEX never converges an existing deployment; this does.
+DROP INDEX IF EXISTS membership.ix_user_identity_provider_subject;
 
 CREATE INDEX IF NOT EXISTS ix_org_member_user_status
     ON membership.organization_member(user_id, status)
@@ -188,3 +250,21 @@ BEGIN
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '  ✓ current user context installed'; END $$;
+
+-- ============================================================================
+-- Caller-scoped views
+-- ============================================================================
+-- Defined here rather than in 02-views.sql because they depend on
+-- api.current_user_id().
+
+CREATE OR REPLACE VIEW membership.vw_user_owned_organizations
+WITH (security_invoker = true) AS
+SELECT o.object_id, o.name, o.slug, o.owner_user_id, o.is_personal, o.created_at
+FROM membership.organization o
+WHERE o.is_active = true
+  -- The name promises ownership and the body filtered only is_active, so the
+  -- view returned every active organization to every caller.
+  AND o.owner_user_id = (SELECT api.current_user_id());
+
+COMMENT ON VIEW membership.vw_user_owned_organizations IS
+    'Organizations owned by the current user. Active organizations only.';

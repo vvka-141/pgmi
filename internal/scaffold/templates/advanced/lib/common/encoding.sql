@@ -49,20 +49,43 @@ END $$;
 -- These types wrap decoded text, preserving encoding provenance.
 -- As composite types we own, we can create casts from/to them.
 
-DROP TYPE IF EXISTS common.utf8 CASCADE;
-CREATE TYPE common.utf8 AS (v text);
+-- The types are created once and never dropped. This file is idempotent, so a
+-- DROP TYPE ... CASCADE here would run on every deploy and take every dependent
+-- object with it -- including a user's column, view or function typed
+-- common.utf8, which these types invite by being documented as a public
+-- convenience. CASCADE cannot tell those apart from the casts below.
+DO $$
+BEGIN
+    IF to_regtype('common.utf8') IS NULL THEN
+        CREATE TYPE common.utf8 AS (v text);
+    END IF;
+    IF to_regtype('common.latin1') IS NULL THEN
+        CREATE TYPE common.latin1 AS (v text);
+    END IF;
+    IF to_regtype('common.win1252') IS NULL THEN
+        CREATE TYPE common.win1252 AS (v text);
+    END IF;
+END $$;
+
 COMMENT ON TYPE common.utf8 IS
     'UTF-8 decoded text wrapper. Enables cast chaining: my_bytea::utf8::jsonb';
-
-DROP TYPE IF EXISTS common.latin1 CASCADE;
-CREATE TYPE common.latin1 AS (v text);
 COMMENT ON TYPE common.latin1 IS
     'Latin-1 (ISO-8859-1) decoded text wrapper. Enables cast chaining: my_bytea::latin1::text';
-
-DROP TYPE IF EXISTS common.win1252 CASCADE;
-CREATE TYPE common.win1252 AS (v text);
 COMMENT ON TYPE common.win1252 IS
     'Windows-1252 decoded text wrapper. Enables cast chaining: my_bytea::win1252::text';
+
+-- CREATE CAST has no OR REPLACE, so each cast is dropped by name before being
+-- recreated. Naming them individually is what keeps the redeploy from touching
+-- anything the template does not own.
+DROP CAST IF EXISTS (bytea AS common.utf8);
+DROP CAST IF EXISTS (bytea AS common.latin1);
+DROP CAST IF EXISTS (bytea AS common.win1252);
+DROP CAST IF EXISTS (common.utf8 AS text);
+DROP CAST IF EXISTS (common.latin1 AS text);
+DROP CAST IF EXISTS (common.win1252 AS text);
+DROP CAST IF EXISTS (common.utf8 AS jsonb);
+DROP CAST IF EXISTS (common.utf8 AS json);
+DROP CAST IF EXISTS (common.utf8 AS xml);
 
 -- ============================================================================
 -- bytea → Encoding Type Casts
@@ -259,52 +282,52 @@ BEGIN
 
     -- Test 1: bytea::utf8::text chain
     v_result_text := v_bytea_json::common.utf8::text;
-    IF v_result_text != '{"key": "value", "num": 42}' THEN
+    IF v_result_text IS DISTINCT FROM '{"key": "value", "num": 42}' THEN
         RAISE EXCEPTION 'bytea::utf8::text failed: got %', v_result_text;
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::text chain works';
 
     -- Test 2: bytea::utf8::jsonb chain
     v_result_jsonb := v_bytea_json::common.utf8::jsonb;
-    IF v_result_jsonb->>'key' != 'value' THEN
+    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
         RAISE EXCEPTION 'bytea::utf8::jsonb failed: key extraction incorrect';
     END IF;
-    IF (v_result_jsonb->>'num')::int != 42 THEN
+    IF (v_result_jsonb->>'num')::int IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'bytea::utf8::jsonb failed: num extraction incorrect';
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::jsonb chain works';
 
     -- Test 3: bytea::utf8::json chain
     v_result_json := v_bytea_json::common.utf8::json;
-    IF v_result_json->>'key' != 'value' THEN
+    IF v_result_json->>'key' IS DISTINCT FROM 'value' THEN
         RAISE EXCEPTION 'bytea::utf8::json failed: key extraction incorrect';
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::json chain works';
 
     -- Test 4: bytea::utf8::xml chain
     v_result_xml := v_bytea_xml::common.utf8::xml;
-    IF (xpath('/root/item/text()', v_result_xml))[1]::text != 'test' THEN
+    IF (xpath('/root/item/text()', v_result_xml))[1]::text IS DISTINCT FROM 'test' THEN
         RAISE EXCEPTION 'bytea::utf8::xml failed: xpath extraction incorrect';
     END IF;
     RAISE NOTICE '  ✓ bytea::utf8::xml chain works';
 
     -- Test 5: bytea::latin1::text chain
     v_result_text := v_bytea_latin1::common.latin1::text;
-    IF v_result_text != 'Héllo Wörld' THEN
+    IF v_result_text IS DISTINCT FROM 'Héllo Wörld' THEN
         RAISE EXCEPTION 'bytea::latin1::text failed: got %', v_result_text;
     END IF;
     RAISE NOTICE '  ✓ bytea::latin1::text chain works';
 
     -- Test 6: Convenience function utf8()::jsonb
     v_result_jsonb := common.utf8(v_bytea_json)::jsonb;
-    IF v_result_jsonb->>'key' != 'value' THEN
+    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
         RAISE EXCEPTION 'utf8()::jsonb failed';
     END IF;
     RAISE NOTICE '  ✓ utf8() function with cast chain works';
 
     -- Test 7: One-step to_jsonb()
     v_result_jsonb := common.to_jsonb(v_bytea_json);
-    IF v_result_jsonb->>'key' != 'value' THEN
+    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
         RAISE EXCEPTION 'to_jsonb() failed';
     END IF;
     RAISE NOTICE '  ✓ to_jsonb() one-step function works';

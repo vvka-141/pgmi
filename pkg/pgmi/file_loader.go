@@ -10,12 +10,12 @@ import (
 // into PostgreSQL session-scoped temporary tables.
 // Implementations must be safe for concurrent use by multiple goroutines.
 type FileLoader interface {
-	// LoadFilesIntoSession creates the pg_temp.pgmi_source, pg_temp.pgmi_test_directory,
-	// and pg_temp.pgmi_test_source tables, loading file metadata and test files.
+	// LoadFilesIntoSession creates the pg_temp._pgmi_source, pg_temp._pgmi_test_directory,
+	// and pg_temp._pgmi_test_source tables, loading file metadata and test files.
 	// Must use the provided connection to ensure session-scoped tables are in the same session.
 	LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, files []FileMetadata) error
 
-	// LoadParametersIntoSession creates the pg_temp.pgmi_parameter table and loads parameters.
+	// LoadParametersIntoSession creates the pg_temp._pgmi_parameter table and loads parameters.
 	// Must use the provided connection to ensure session-scoped tables are in the same session.
 	LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error
 }

@@ -193,34 +193,7 @@ func TestDeploymentService_DirectMode_FixtureExecution(t *testing.T) {
 	}
 }
 
-// TestDeploymentService_DirectMode_NoTests verifies that pgmi_test() with no
-// matching tests doesn't cause errors.
-func TestDeploymentService_DirectMode_NoTests(t *testing.T) {
-	connString := testhelpers.RequireDatabase(t)
-
-	ctx := context.Background()
-	deployer := testhelpers.NewTestDeployer(t)
-
-	projectPath := t.TempDir()
-	createDirectModeProjectNoTests(t, projectPath)
-
-	testDB := "pgmi_direct_mode_no_tests"
-	defer testhelpers.CleanupTestDB(t, connString, testDB)
-
-	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
-		ConnectionString:    connString,
-		MaintenanceDatabase: "postgres",
-		DatabaseName:        testDB,
-		SourcePath:          projectPath,
-		Overwrite:           true,
-		Force:               true,
-		Verbose:             testing.Verbose(),
-	})
-
-	if err != nil {
-		t.Fatalf("Deploy with no tests failed: %v", err)
-	}
-}
+// An empty test plan now fails the deploy — see TestTestGate_EmptyPlanFailsTheDeploy.
 
 // Helper functions to create test projects
 
@@ -494,24 +467,6 @@ SAVEPOINT _tests;
 CALL pgmi_test();
 ROLLBACK TO SAVEPOINT _tests;
 COMMIT;
-`
-	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
-		t.Fatalf("Failed to create deploy.sql: %v", err)
-	}
-}
-
-func createDirectModeProjectNoTests(t *testing.T, projectPath string) {
-	t.Helper()
-
-	// Create deploy.sql with pgmi_test() but no __test__ directory
-	deploySQL := `
--- Execute tests (none exist, should be no-op)
-BEGIN;
-CALL pgmi_test();
-COMMIT;
-
--- Simple statement to verify deploy.sql completed
-SELECT 1;
 `
 	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
 		t.Fatalf("Failed to create deploy.sql: %v", err)

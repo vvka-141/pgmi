@@ -30,13 +30,13 @@ BEGIN
     -- GET /me — Alice sees her own profile
     v_response := api.rest_invoke('GET', '/me', v_headers, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: Alice GET /me expected 200, got %', (v_response).status_code;
     END IF;
 
     v_body := api.content_json((v_response).content);
 
-    IF v_body->>'email' != 'alice@acme.com' THEN
+    IF v_body->>'email' IS DISTINCT FROM 'alice@acme.com' THEN
         RAISE EXCEPTION 'TEST FAILED: Alice email mismatch: %', v_body->>'email';
     END IF;
 
@@ -46,7 +46,7 @@ BEGIN
     v_response := api.rest_invoke('GET', '/organizations', v_headers, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF jsonb_array_length(v_body->'organizations') != 2 THEN
+    IF jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 2 THEN
         RAISE EXCEPTION 'TEST FAILED: Alice should see 2 orgs, got %',
             jsonb_array_length(v_body->'organizations');
     END IF;
@@ -64,7 +64,7 @@ BEGIN
     v_response := api.rest_invoke('GET', '/me', v_headers, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF v_body->>'email' != 'bob@acme.com' THEN
+    IF v_body->>'email' IS DISTINCT FROM 'bob@acme.com' THEN
         RAISE EXCEPTION 'TEST FAILED: Bob email mismatch: %', v_body->>'email';
     END IF;
 
@@ -74,7 +74,7 @@ BEGIN
     v_response := api.rest_invoke('GET', '/organizations', v_headers, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF jsonb_array_length(v_body->'organizations') != 2 THEN
+    IF jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 2 THEN
         RAISE EXCEPTION 'TEST FAILED: Bob should see 2 orgs, got %',
             jsonb_array_length(v_body->'organizations');
     END IF;
@@ -87,14 +87,14 @@ BEGIN
 
     v_response := api.rest_invoke('GET', '/me', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: unauthenticated GET /me expected 401, got %',
             (v_response).status_code;
     END IF;
 
     v_response := api.rest_invoke('GET', '/organizations', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: unauthenticated GET /organizations expected 401, got %',
             (v_response).status_code;
     END IF;

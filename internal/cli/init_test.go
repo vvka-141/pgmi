@@ -41,6 +41,24 @@ func TestRunInit_AdvancedTemplate(t *testing.T) {
 	}
 }
 
+// The AI surface is push-discovery: if init does not name it, a fresh project
+// ships no artifact that tells an assistant pgmi exists.
+func TestNextSteps_SurfacesDeployAndAISetup(t *testing.T) {
+	out := nextSteps("./demo", "mydb")
+
+	for _, want := range []string{
+		"pgmi deploy ./demo -d mydb",
+		// bare `pgmi ai setup` exits 1 without a TTY, which is exactly how an
+		// AI assistant runs it
+		"cd ./demo && pgmi ai setup --assistant claude",
+		".claude/skills/pgmi/",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("init next-steps must mention %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestManagedCloudCaveat(t *testing.T) {
 	if got := managedCloudCaveat("basic"); got != "" {
 		t.Errorf("basic template should have no managed-cloud caveat, got %q", got)
@@ -50,7 +68,7 @@ func TestManagedCloudCaveat(t *testing.T) {
 	if adv == "" {
 		t.Fatal("advanced template should emit a managed-cloud caveat")
 	}
-	for _, want := range []string{"entity-standards.sql", "superuser", "PRODUCTION.md#managed-cloud-postgresql"} {
+	for _, want := range []string{"CREATEROLE", "CREATE EXTENSION", "PRODUCTION.md#managed-cloud-postgresql"} {
 		if !strings.Contains(adv, want) {
 			t.Errorf("advanced caveat missing %q; got: %s", want, adv)
 		}

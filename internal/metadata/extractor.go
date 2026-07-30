@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/vvka-141/pgmi/internal/preprocessor"
 )
 
 var ErrNoMetadata = errors.New("no PGMI metadata found")
@@ -14,9 +16,13 @@ const (
 	MaxMetadataSize = 10 * 1024
 )
 
-// blockCommentRegex matches SQL block comments /* ... */
-// It uses non-greedy matching to capture the first comment block only.
-var blockCommentRegex = regexp.MustCompile(`(?s)/\*\s*(.*?)\s*\*/`)
+// blockComments locates SQL block comments with the same state machine the
+// preprocessor uses. A regex cannot do this job: it ends the first comment at
+// the first */, so a nested comment or a */ inside a <description> truncates
+// the XML, and it cannot tell a /* in a dollar-quoted function body from a
+// real comment, so a file merely *mentioning* <pgmi-meta in a string was
+// rejected for having two blocks.
+var blockComments = preprocessor.NewCommentStripper().BlockComments
 
 // metaElementRegex detects the presence of <pgmi-meta tags
 var metaElementRegex = regexp.MustCompile(`<\s*pgmi-meta[\s>]`)
@@ -46,9 +52,8 @@ var oldMetaElementRegex = regexp.MustCompile(`<\s*pgmi:meta[\s>]`)
 //   - Multiple <pgmi-meta> blocks → MetadataError
 //   - Invalid XML syntax → wrapped xml.SyntaxError
 func Extract(content string, filePath string) (*Metadata, error) {
-	// Find all block comments
-	matches := blockCommentRegex.FindAllStringSubmatch(content, -1)
-	if len(matches) == 0 {
+	spans := blockComments(content)
+	if len(spans) == 0 {
 		return nil, ErrNoMetadata
 	}
 
@@ -56,12 +61,9 @@ func Extract(content string, filePath string) (*Metadata, error) {
 	var metadataXML string
 	var metadataCount int
 
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-
-		commentContent := match[1]
+	for _, span := range spans {
+		// Trim the /* */ delimiters and the whitespace the old regex ate.
+		commentContent := strings.TrimSpace(content[span.Start+2 : span.End-2])
 
 		// Check for old format first (backward compatibility detection)
 		if oldMetaElementRegex.MatchString(commentContent) {

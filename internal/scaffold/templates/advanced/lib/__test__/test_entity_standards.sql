@@ -36,10 +36,10 @@ BEGIN
                   AND attname = 'deleted_at' AND NOT attisdropped)
     INTO v_created_at_exists, v_deleted_at_exists;
 
-    IF NOT v_created_at_exists THEN
+    IF v_created_at_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'created_at not injected by entity standards sweep';
     END IF;
-    IF NOT v_deleted_at_exists THEN
+    IF v_deleted_at_exists IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'deleted_at not injected by entity standards sweep';
     END IF;
 
@@ -76,7 +76,7 @@ BEGIN
           AND attname = 'created_at' AND NOT attisdropped
     ) INTO v_plain_has_created;
 
-    IF v_plain_has_created THEN
+    IF v_plain_has_created IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'Sweep wrongly injected created_at on table without core.entity_id marker';
     END IF;
 
@@ -85,11 +85,55 @@ BEGIN
     -- ========================================================================
     -- Idempotency: repeated calls are a no-op
     -- ========================================================================
+    -- "It did not raise" is not idempotence. The sweep runs on every deploy, so
+    -- a re-apply that reset created_at would silently rewrite lifecycle
+    -- timestamps on every redeploy of every project built on this template.
+    -- Snapshot a real row and the column set, re-apply twice, compare.
 
-    PERFORM pg_temp.apply_entity_table_standards('core.entity_standards_probe'::regclass);
-    PERFORM pg_temp.apply_entity_table_standards('core.entity_standards_probe'::regclass);
+    DECLARE
+        v_probe_id uuid;
+        v_created_before timestamptz;
+        v_created_after timestamptz;
+        v_columns_before text;
+        v_columns_after text;
+    BEGIN
+        INSERT INTO core.entity_standards_probe (label)
+        VALUES ('idempotency probe') RETURNING object_id INTO v_probe_id;
 
-    RAISE NOTICE '  + Repeated apply_entity_table_standards calls are idempotent';
+        SELECT created_at INTO STRICT v_created_before
+        FROM core.entity_standards_probe WHERE object_id = v_probe_id;
+
+        SELECT string_agg(attname || ':' || atttypid::regtype::text, ',' ORDER BY attnum)
+        INTO v_columns_before
+        FROM pg_attribute
+        WHERE attrelid = 'core.entity_standards_probe'::regclass
+          AND attnum > 0 AND NOT attisdropped;
+
+        PERFORM pg_temp.apply_entity_table_standards('core.entity_standards_probe'::regclass);
+        PERFORM pg_temp.apply_entity_table_standards('core.entity_standards_probe'::regclass);
+
+        SELECT created_at INTO STRICT v_created_after
+        FROM core.entity_standards_probe WHERE object_id = v_probe_id;
+
+        SELECT string_agg(attname || ':' || atttypid::regtype::text, ',' ORDER BY attnum)
+        INTO v_columns_after
+        FROM pg_attribute
+        WHERE attrelid = 'core.entity_standards_probe'::regclass
+          AND attnum > 0 AND NOT attisdropped;
+
+        IF v_created_after IS DISTINCT FROM v_created_before THEN
+            RAISE EXCEPTION 'apply_entity_table_standards rewrote created_at on re-apply: % -> %',
+                v_created_before, v_created_after;
+        END IF;
+        IF v_columns_after IS DISTINCT FROM v_columns_before THEN
+            RAISE EXCEPTION 'apply_entity_table_standards changed the column set on re-apply: % -> %',
+                v_columns_before, v_columns_after;
+        END IF;
+
+        DELETE FROM core.entity_standards_probe WHERE object_id = v_probe_id;
+    END;
+
+    RAISE NOTICE '  + Repeated apply_entity_table_standards calls leave rows and columns untouched';
 
     -- ========================================================================
     -- Inline call path: columns exist immediately for index creation

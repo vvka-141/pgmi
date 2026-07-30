@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -14,13 +17,16 @@ import (
 
 // DeployResult contains statistics from a completed deployment.
 type DeployResult struct {
-	FilesLoaded int
-	TestMacros  int
-	Duration    time.Duration
-	Database    string
+	FilesLoaded    int
+	TestMacros     int
+	Duration       time.Duration
+	Database       string
+	ExecutionUnits int
+	UnitsCommitted int
+	ExecutionMode  string
 }
 
-type managementDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
+type maintenanceDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
 
 // DeploymentService implements the Deployer interface.
 // Not safe for concurrent Deploy() calls on the same instance.
@@ -31,7 +37,7 @@ type DeploymentService struct {
 	sessionManager   pgmi.SessionPreparer
 	fileScanner      pgmi.FileScanner
 	dbManager        pgmi.DatabaseManager
-	mgmtConnector    managementDBConnFunc
+	mgmtConnector    maintenanceDBConnFunc
 	lastResult       *DeployResult
 }
 
@@ -96,7 +102,7 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 	pool, err := connector.Connect(ctx)
 	if err != nil {
 		closeConnector(connector)
-		return nil, nil, fmt.Errorf("failed to connect to management database: %w", err)
+		return nil, nil, fmt.Errorf("failed to connect to maintenance database: %w", err)
 	}
 
 	dbConn := db.NewPoolAdapter(pool)
@@ -121,9 +127,18 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 		return err
 	}
 
-	// Validate the project before touching the server: a typo'd path must not
-	// leave a freshly created database behind
-	if err := s.fileScanner.ValidateDeploySQL(config.SourcePath); err != nil {
+	// Scan the project before touching the server: a typo'd path, a missing
+	// deploy.sql or an unreadable file must not leave a freshly created
+	// database behind.
+	scanResult, err := s.sessionManager.ScanProject(config.SourcePath)
+	if err != nil {
+		return fmt.Errorf("file scanning failed: %w", err)
+	}
+
+	// --compat is resolved entirely offline, so rejecting it here keeps
+	// --overwrite from dropping and recreating a database only to fail on a
+	// check that never needed the server.
+	if _, _, err := contract.Load(config.Compat); err != nil {
 		return err
 	}
 
@@ -144,7 +159,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	targetConfig := connConfig.DeepCopy()
 	targetConfig.Database = config.DatabaseName
 	s.logger.Info("Preparing session: scanning files, loading parameters")
-	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, config.SourcePath, config.Parameters, config.Compat, config.Verbose)
+	session, err := s.sessionManager.PrepareSession(ctx, &targetConfig, scanResult, config.Parameters, config.Compat, config.Verbose)
 	if err != nil {
 		return err // Error already wrapped by SessionManager
 	}
@@ -214,18 +229,44 @@ func (s *DeploymentService) executeDeploySQL(
 		s.logger.Verbose("Expanded %d test macro(s) in deploy.sql", result.MacroCount)
 	}
 
-	// Execute preprocessed deploy.sql as a single script
-	_, err = conn.Exec(ctx, result.ExpandedSQL)
-	if err != nil {
-		return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+	// Execute deploy.sql as a sequence of simple-query messages on ONE
+	// connection: everything through the first top-level transaction
+	// terminator is one message (atomic mode — unchanged semantics), each
+	// top-level statement after it is its own message (psql mode:
+	// per-statement autocommit, so CREATE INDEX CONCURRENTLY works and an
+	// explicit BEGIN ... COMMIT forms a real transaction). A script with no
+	// top-level terminator stays a single message. A mid-tail failure leaves
+	// earlier autocommitted units applied — that is the documented contract.
+	//
+	// Attach the exact text sent per unit: PostgreSQL reports error positions
+	// as offsets into it, and nothing downstream can resolve them to a line
+	// without it. Tail units are whitespace-padded to full-script offsets, so
+	// positions and line numbers resolve identically to a single message.
+	units := preprocessor.SplitExecutionUnits(result.ExpandedSQL)
+	s.lastResult.ExecutionUnits = len(units)
+	if len(units) > 1 {
+		s.logger.Verbose("deploy.sql splits into %d execution units at the first top-level transaction terminator", len(units))
 	}
+	for i, unit := range units {
+		if _, err := conn.Exec(ctx, unit); err != nil {
+			s.lastResult.UnitsCommitted = i
+			if i == 0 {
+				s.lastResult.ExecutionMode = "atomic"
+			} else {
+				s.lastResult.ExecutionMode = "psql"
+			}
+			scriptErr := pgmi.NewScriptError(err, "deploy.sql", unit, result.MacroCount > 0)
+			return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
+		}
+	}
+	s.lastResult.UnitsCommitted = len(units)
 
 	return result.MacroCount, nil
 }
 
-func validateOverwriteTarget(targetDB, managementDB string) error {
-	if strings.EqualFold(targetDB, managementDB) {
-		return fmt.Errorf("cannot overwrite management database %q\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d: %w", targetDB, pgmi.ErrInvalidConfig)
+func validateOverwriteTarget(targetDB, maintenanceDB string) error {
+	if strings.EqualFold(targetDB, maintenanceDB) {
+		return fmt.Errorf("cannot overwrite maintenance database %q\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d: %w", targetDB, pgmi.ErrInvalidConfig)
 	}
 	if pgmi.IsTemplateDatabase(targetDB) {
 		return fmt.Errorf("cannot drop template database %q (template0/template1 are protected by PostgreSQL): %w", targetDB, pgmi.ErrInvalidConfig)
@@ -233,13 +274,13 @@ func validateOverwriteTarget(targetDB, managementDB string) error {
 	return nil
 }
 
-// connectManagement resolves the management DB name (defaulting to "postgres") and connects.
-func (s *DeploymentService) connectManagement(ctx context.Context, connConfig *pgmi.ConnectionConfig, maintenanceDB string) (pgmi.DBConnection, func(), error) {
+// connectMaintenance resolves the maintenance DB name (defaulting to "postgres") and connects.
+func (s *DeploymentService) connectMaintenance(ctx context.Context, connConfig *pgmi.ConnectionConfig, maintenanceDB string) (pgmi.DBConnection, func(), error) {
 	mgmtDB := maintenanceDB
 	if mgmtDB == "" {
-		mgmtDB = pgmi.DefaultManagementDB
+		mgmtDB = pgmi.DefaultMaintenanceDB
 	}
-	s.logger.Verbose("Connecting to management database %q", mgmtDB)
+	s.logger.Verbose("Connecting to maintenance database %q", mgmtDB)
 	return s.mgmtConnector(ctx, connConfig, mgmtDB)
 }
 
@@ -248,12 +289,14 @@ func (s *DeploymentService) connectManagement(ctx context.Context, connConfig *p
 func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBConnection, dbName string) (existed bool, err error) {
 	exists, err := s.dbManager.Exists(ctx, dbConn, dbName)
 	if err != nil {
-		return false, fmt.Errorf("failed to check if database exists: %w", err)
+		return false, err // manager.Exists already names the operation and database
 	}
 	if !exists {
 		s.logger.Info("Database %q does not exist; creating", dbName)
-		if err := s.dbManager.Create(ctx, dbConn, dbName); err != nil {
-			return false, fmt.Errorf("failed to create database: %w", err)
+		// Nil settings: a database that does not exist yet has nothing to
+		// preserve, so it takes the server defaults as PostgreSQL intends.
+		if err := s.dbManager.Create(ctx, dbConn, dbName, nil); err != nil {
+			return false, classifyCreateFailure(err)
 		}
 		return false, nil
 	}
@@ -264,14 +307,14 @@ func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBC
 func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
 	managementDB := config.MaintenanceDatabase
 	if managementDB == "" {
-		managementDB = pgmi.DefaultManagementDB
+		managementDB = pgmi.DefaultMaintenanceDB
 	}
 
 	if err := validateOverwriteTarget(config.DatabaseName, managementDB); err != nil {
 		return err
 	}
 
-	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, managementDB)
+	dbConn, cleanup, err := s.connectMaintenance(ctx, connConfig, managementDB)
 	if err != nil {
 		return err
 	}
@@ -294,19 +337,32 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 		return pgmi.ErrApprovalDenied
 	}
 
+	// Read the encoding and locale before the database ceases to exist. Without
+	// this, --overwrite recreated it from the server defaults, so a LATIN1/C
+	// database came back UTF8/en_US.utf8 — a change to how bytes are stored and
+	// how every index orders, from a flag that only promises to empty it.
+	settings, err := s.dbManager.Settings(ctx, dbConn, config.DatabaseName)
+	if err != nil {
+		return err
+	}
+	if settings != nil {
+		s.logger.Verbose("Preserving encoding %s, collation %s across the recreate",
+			settings.Encoding, settings.Collate)
+	}
+
 	s.logger.Verbose("Terminating connections to %q", config.DatabaseName)
 	if err := s.dbManager.TerminateConnections(ctx, dbConn, config.DatabaseName); err != nil {
-		return fmt.Errorf("failed to terminate connections: %w", err)
+		return err // manager.TerminateConnections already names the database
 	}
 
 	s.logger.Verbose("DROP DATABASE %q", config.DatabaseName)
 	if err := s.dbManager.Drop(ctx, dbConn, config.DatabaseName); err != nil {
-		return fmt.Errorf("failed to drop database: %w", err)
+		return err // manager.Drop already names the database
 	}
 
 	s.logger.Verbose("CREATE DATABASE %q", config.DatabaseName)
-	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName); err != nil {
-		return fmt.Errorf("failed to create database: %w", err)
+	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName, settings); err != nil {
+		return classifyCreateFailure(err)
 	}
 
 	s.logger.Info("Recreated database %q", config.DatabaseName)
@@ -315,21 +371,63 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 
 // ensureDatabaseExists ensures the target database exists, creating it if necessary.
 func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
-	dbConn, cleanup, err := s.connectManagement(ctx, connConfig, config.MaintenanceDatabase)
+	// Probe the target directly. When it answers, the database exists and no
+	// maintenance connection is needed at all -- which is what lets a CI role
+	// holding CONNECT on only its own database deploy. The maintenance database
+	// is dialed solely to create a target that is genuinely absent.
+	if _, cleanup, err := s.mgmtConnector(ctx, connConfig, config.DatabaseName); err == nil {
+		cleanup()
+		s.logger.Verbose("Database %q already exists", config.DatabaseName)
+		return nil
+	} else if !isUndefinedDatabase(err) {
+		return err
+	}
+
+	s.logger.Verbose("Database %q not found; using the maintenance database to create it", config.DatabaseName)
+
+	dbConn, cleanup, err := s.connectMaintenance(ctx, connConfig, config.MaintenanceDatabase)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	existed, err := s.createIfMissing(ctx, dbConn, config.DatabaseName)
-	if err != nil {
+	if _, err := s.createIfMissing(ctx, dbConn, config.DatabaseName); err != nil {
 		return err
 	}
-	if existed {
-		s.logger.Verbose("Database %q already exists", config.DatabaseName)
-	} else {
-		s.logger.Verbose("Created database %q", config.DatabaseName)
-	}
+	s.logger.Verbose("Created database %q", config.DatabaseName)
 
 	return nil
+}
+
+// isUndefinedDatabase reports whether err is PostgreSQL's invalid_catalog_name,
+// the response to connecting to a database that does not exist.
+func isUndefinedDatabase(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "3D000"
+}
+
+// classifyCreateFailure turns a lost CREATE DATABASE race into the concurrent
+// deploy result it is.
+//
+// Create only runs after Exists reported false, so "already exists" coming back
+// means another deploy created it in between. Two pgmi runs starting together
+// with --overwrite hit this reliably: the advisory lock that serialises them
+// lives inside the session, and DROP/CREATE happens before any session exists.
+//
+// PostgreSQL reports it two ways. 42P04 is the ordinary duplicate_database;
+// 23505 on pg_database_datname_index is what a genuine race produces, and it
+// reached the user verbatim — an internal catalog index name in place of a
+// diagnosis, exiting 1, so CI could not tell a retryable collision from a real
+// failure. Both now map to ExitConcurrentDeploy (15).
+//
+// The wrapper is dropped rather than replaced: manager.Create already says
+// "failed to create database %q", so adding to it produced "failed to create
+// database: failed to create database ...".
+func classifyCreateFailure(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "42P04" || pgErr.Code == "23505") {
+		return fmt.Errorf("%w: the database was created by another deploy while this one was starting",
+			pgmi.ErrConcurrentDeploy)
+	}
+	return err
 }

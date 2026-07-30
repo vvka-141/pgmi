@@ -1,9 +1,12 @@
 ---
 name: pgmi-api-architecture
-description: "REST/RPC/MCP protocol design and HTTP template architecture"
+description: "Advanced template: REST/RPC/MCP protocol design and HTTP architecture"
+scope: advanced-template
 user_invocable: false
 ---
 
+
+> This skill describes application code you own after `pgmi init --template advanced`, not pgmi core.
 
 **Purpose**: Documents the fundamental architectural principle that REST, RPC, and MCP in pgmi's advanced template are all HTTP-native protocols designed to run behind a web server/gateway.
 
@@ -192,10 +195,15 @@ SQL (RLS, handlers) reads. The snippets above are protocol-illustrative; in the
 - `requiresAuth` (handler metadata) **defaults to `true`** — if omitted or set, the
   gateway returns 401 when no user resolves. Set `'requiresAuth', false` for a
   public endpoint.
-- `requiredTransactionIsolation` (handler metadata) declares an isolation floor
-  (`read committed` / `repeatable read` / `serializable`). Gateways only
-  *validate* the current level — the caller opens the transaction at ≥ the
-  floor or the call is rejected with `pgmi.transaction_isolation_too_weak`
+- `minTransactionIsolation` (handler metadata) declares an isolation floor
+  (`read committed` / `repeatable read` / `serializable`); `readOnly: true`
+  declares a read-only route. The client gateway resolves the policy BEFORE
+  opening the transaction — `api.rest_route_policy` / `api.rpc_route_policy` /
+  `api.mcp_request_policy` return `(isolation = max(floor, requested),
+  read_only, deferrable)` — and opens with those characteristics, so routes
+  just work and `X-PGMI-Transaction-Isolation` is escalation, not obligation.
+  The SQL gateways only *validate* (fail closed): a shortfall is rejected with
+  `pgmi.transaction_isolation_too_weak` / `pgmi.transaction_read_only_required`
   (428 for REST, `-32600` for RPC/MCP).
 - The template is **multi-organization**: there is no single "current tenant" GUC.
   Scope queries to the caller's orgs with

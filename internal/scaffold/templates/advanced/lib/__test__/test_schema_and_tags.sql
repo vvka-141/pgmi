@@ -34,7 +34,7 @@ BEGIN
         v_malformed_ok := false;
     END;
 
-    IF v_malformed_ok THEN
+    IF v_malformed_ok IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'api.json_schema accepted malformed type keyword (expected check_violation)';
     END IF;
 
@@ -47,7 +47,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_rest_handler_id,
-            'uri', '^/schema-rest(\?.*)?$',
+            'uri', '^/schema-rest$',
             'httpMethod', '^GET$',
             'name', 'schema_rest_test',
             'requiresAuth', false,
@@ -128,7 +128,7 @@ END;
     IF v_response_body ? '$schema' THEN
         RAISE EXCEPTION 'RPC response $schema must not be at envelope top level (JSON-RPC 2.0 violation): %', v_response_body;
     END IF;
-    IF NOT (v_response_body->'result') ? '$schema' THEN
+    IF coalesce((v_response_body->'result') ? '$schema', false) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'RPC response.result missing $schema key (x-include-schema=true): %', v_response_body;
     END IF;
 
@@ -214,14 +214,14 @@ END;
 
     -- Tag filter: specific tag returns one tool
     v_list := api.mcp_list_tools(ARRAY['alpha']);
-    IF jsonb_array_length(v_list->'tools') <> 1
-       OR (v_list->'tools'->0->>'name') <> 'schema_tool_alpha' THEN
+    IF jsonb_array_length(v_list->'tools') IS DISTINCT FROM 1
+       OR (v_list->'tools'->0->>'name') IS DISTINCT FROM 'schema_tool_alpha' THEN
         RAISE EXCEPTION 'mcp_list_tools(ARRAY[''alpha'']) did not filter correctly: %', v_list;
     END IF;
 
     -- Tag filter: shared tag returns both
     v_list := api.mcp_list_tools(ARRAY['schema-test']);
-    IF jsonb_array_length(v_list->'tools') < 2 THEN
+    IF coalesce(jsonb_array_length(v_list->'tools'), 0) < 2 THEN
         RAISE EXCEPTION 'mcp_list_tools(ARRAY[''schema-test'']) should match both tools: %', v_list;
     END IF;
 
@@ -234,7 +234,7 @@ END;
         v_all_count := jsonb_array_length(v_list->'tools');
         v_list := api.mcp_list_tools(ARRAY[]::text[]);
         v_empty_count := jsonb_array_length(v_list->'tools');
-        IF v_empty_count <> v_all_count THEN
+        IF v_empty_count IS DISTINCT FROM v_all_count THEN
             RAISE EXCEPTION 'mcp_list_tools(empty array) must behave identically to mcp_list_tools() — got % vs %',
                 v_empty_count, v_all_count;
         END IF;
@@ -246,7 +246,7 @@ END;
 END $$;
 
 -- ============================================================================
--- Test: x-include-schema directive is matched case-insensitively (PGMI-10A)
+-- Test: x-include-schema directive is matched case-insensitively
 -- A handler registering a mixed-case key (X-Include-Schema) or value (TRUE)
 -- must still trigger $schema injection — the directive lookup must not depend
 -- on the exact case stored in response_headers.
@@ -263,7 +263,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/schema-case(\?.*)?$',
+            'uri', '^/schema-case$',
             'httpMethod', '^GET$',
             'name', 'schema_case_test',
             'requiresAuth', false,
@@ -328,26 +328,43 @@ END;
 
     -- Ensure no session auth is carried over from earlier tests
     PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
 
     v_list := api.mcp_list_tools();
     IF EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
         WHERE t->>'name' = 'auth_only_probe'
     ) THEN
-        RAISE EXCEPTION 'auth_only_probe must be hidden when auth.user_id is unset: %', v_list;
+        RAISE EXCEPTION 'auth_only_probe must be hidden when unauthenticated: %', v_list;
     END IF;
 
-    PERFORM set_config('auth.user_id', 'test|alice', true);
+    -- A well-formed identity that resolves to nothing must stay unauthenticated
+    -- for discovery too, or a forged header enumerates the auth-gated catalog.
+    PERFORM set_config('auth.user_id', 'test|ghost-probe', true);
+    PERFORM set_config('auth.idp_subject', 'test|ghost-probe', true);
+
+    v_list := api.mcp_list_tools();
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
+        WHERE t->>'name' = 'auth_only_probe'
+    ) THEN
+        RAISE EXCEPTION 'auth_only_probe must stay hidden from an unresolvable identity: %', v_list;
+    END IF;
+
+    PERFORM membership.upsert_user('test', 'schemaprobe', 'schema-probe@example.com');
+    PERFORM set_config('auth.user_id', 'test|schemaprobe', true);
+    PERFORM set_config('auth.idp_subject', 'test|schemaprobe', true);
 
     v_list := api.mcp_list_tools();
     IF NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(v_list->'tools') t
         WHERE t->>'name' = 'auth_only_probe'
     ) THEN
-        RAISE EXCEPTION 'auth_only_probe must appear when auth.user_id is set: %', v_list;
+        RAISE EXCEPTION 'auth_only_probe must appear for a resolved user: %', v_list;
     END IF;
 
     PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
 
     RAISE NOTICE '  + mcp_list_tools hides auth-required tools when unauthenticated';
 
@@ -445,6 +462,117 @@ END;
 END $$;
 
 -- ============================================================================
+-- Test: the same discovery auth filter on resources, templates, and prompts
+-- ============================================================================
+-- api.mcp_list_{tools,resources,resource_templates,prompts} all carry the same
+-- predicate — NOT requires_auth OR current_user_id() IS NOT NULL — but only
+-- tools was covered. The two resource assertions above register their fixtures
+-- with requiresAuth false, so they pass whatever the filter does.
+--
+-- Unfiltered, MCP discovery hands an unauthenticated caller the names,
+-- descriptions, resource URIs and prompt argument lists of everything it is not
+-- allowed to invoke.
+DO $$
+DECLARE
+    v_state   record;
+    v_surface record;
+    v_expect  boolean;
+BEGIN
+    RAISE NOTICE '-> Testing resources/templates/prompts discovery auth filter';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'e3000011-0001-4000-8000-000000000001',
+            'type', 'resource', 'name', 'auth_only_resource',
+            'description', 'Auth-required static resource',
+            'uriTemplate', 'postgres:///secret-catalog',
+            'mimeType', 'application/json', 'requiresAuth', true),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object('uri', (request).uri, 'text', '{}')),
+        (request).request_id);
+END;
+        $body$);
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'e3000011-0002-4000-8000-000000000001',
+            'type', 'resource', 'name', 'auth_only_template',
+            'description', 'Auth-required templated resource',
+            'uriTemplate', 'postgres:///secret-docs/{doc_id}',
+            'mimeType', 'application/json', 'requiresAuth', true),
+        $body$
+BEGIN
+    RETURN api.mcp_resource_result(
+        jsonb_build_array(jsonb_build_object('uri', (request).uri, 'text', '{}')),
+        (request).request_id);
+END;
+        $body$);
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'e3000011-0003-4000-8000-000000000001',
+            'type', 'prompt', 'name', 'auth_only_prompt',
+            'description', 'Auth-required prompt',
+            'arguments', jsonb_build_array(jsonb_build_object(
+                'name', 'secret_arg', 'description', 'Should not leak', 'required', true)),
+            'requiresAuth', true),
+        $body$
+BEGIN
+    RETURN api.mcp_prompt_result(
+        jsonb_build_array(jsonb_build_object('role', 'user',
+            'content', jsonb_build_object('type', 'text', 'text', 'hi'))),
+        (request).request_id);
+END;
+        $body$);
+
+    FOR v_state IN
+        SELECT * FROM (VALUES
+            -- The middle state is the one worth keeping: a well-formed subject
+            -- that resolves to no user must not count as authenticated, or a
+            -- forged header enumerates the whole auth-gated catalog.
+            ('unauthenticated',       '',                    false),
+            ('unresolvable identity', 'test|mcp-disc-ghost', false),
+            ('resolved user',         'test|mcpdiscovery',   true)
+        ) AS s(label, subject, expect_visible)
+    LOOP
+        v_expect := v_state.expect_visible;
+
+        IF v_expect THEN
+            PERFORM membership.upsert_user('test', 'mcpdiscovery', 'mcp-discovery@example.com');
+        END IF;
+        PERFORM set_config('auth.user_id', v_state.subject, true);
+        PERFORM set_config('auth.idp_subject', v_state.subject, true);
+
+        FOR v_surface IN
+            SELECT * FROM (VALUES
+                ('resources/list',
+                 api.mcp_list_resources()->'resources',                   'auth_only_resource'),
+                ('resources/templates/list',
+                 api.mcp_list_resource_templates()->'resourceTemplates',  'auth_only_template'),
+                ('prompts/list',
+                 api.mcp_list_prompts()->'prompts',                       'auth_only_prompt')
+            ) AS t(surface, listing, entry_name)
+        LOOP
+            IF (v_surface.listing @> jsonb_build_array(
+                    jsonb_build_object('name', v_surface.entry_name))) IS DISTINCT FROM v_expect THEN
+                RAISE EXCEPTION '% must % % in the "%" state: %',
+                    v_surface.surface,
+                    CASE WHEN v_expect THEN 'expose' ELSE 'hide' END,
+                    v_surface.entry_name, v_state.label, v_surface.listing;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
+
+    RAISE NOTICE '  + resources, resource templates and prompts all hide auth-required entries';
+    RAISE NOTICE '✓ MCP discovery auth filter tests passed';
+END $$;
+
+-- ============================================================================
 -- Test: registered response_headers propagate to REST responses
 -- (except the x-include-schema directive, which stays internal).
 -- ============================================================================
@@ -459,7 +587,7 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/headers-probe(\?.*)?$',
+            'uri', '^/headers-probe$',
             'httpMethod', '^GET$',
             'name', 'headers_probe',
             'requiresAuth', false,
@@ -478,11 +606,11 @@ END;
 
     v_response := api.rest_invoke('GET', '/headers-probe', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).headers->'x-content-type-options' <> 'nosniff' THEN
+    IF (v_response).headers->'x-content-type-options' IS DISTINCT FROM 'nosniff' THEN
         RAISE EXCEPTION 'X-Content-Type-Options not propagated (got %): %',
             (v_response).headers->'x-content-type-options', (v_response).headers;
     END IF;
-    IF (v_response).headers->'x-frame-options' <> 'DENY' THEN
+    IF (v_response).headers->'x-frame-options' IS DISTINCT FROM 'DENY' THEN
         RAISE EXCEPTION 'X-Frame-Options not propagated: %', (v_response).headers;
     END IF;
     -- x-include-schema is a directive — MUST NOT leak to the wire
@@ -491,6 +619,49 @@ END;
     END IF;
 
     RAISE NOTICE '  + registered response_headers propagate (case-insensitive) and x-include-schema is stripped';
+
+    -- A handler that hand-builds its response and sets 'Content-Type' (mixed
+    -- case, as an author naturally would) must not end up with TWO content-types:
+    -- its own, plus the JSON default wrongly appended because a case-sensitive
+    -- guard missed the mixed-case key.
+    DECLARE
+        v_ct_count int;
+        v_ct_value text;
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(
+            jsonb_build_object(
+                'id', 'dddddddd-0188-4000-8000-0000000000ab',
+                'uri', '^/mixedcase-ct$', 'httpMethod', '^GET$',
+                'name', 'mixedcase_ct_probe', 'requiresAuth', false, 'autoLog', false
+            ),
+            $body$
+DECLARE v api.http_response;
+BEGIN
+    v.status_code := 200;
+    v.headers := extensions.hstore(ARRAY['Content-Type', 'text/csv']);
+    v.content := convert_to('a,b,c', 'UTF8');
+    RETURN v;
+END;
+            $body$
+        );
+
+        v_response := api.rest_invoke('GET', '/mixedcase-ct');
+
+        SELECT count(*), max(value)
+        INTO v_ct_count, v_ct_value
+        FROM extensions.each((v_response).headers)
+        WHERE lower(key) = 'content-type';
+
+        IF v_ct_count IS DISTINCT FROM 1 THEN
+            RAISE EXCEPTION 'a mixed-case Content-Type must yield exactly one content-type on the wire, got %: %',
+                v_ct_count, (v_response).headers;
+        END IF;
+        IF v_ct_value IS DISTINCT FROM 'text/csv' THEN
+            RAISE EXCEPTION 'the handler''s own content-type must win, got %', v_ct_value;
+        END IF;
+
+        RAISE NOTICE '  + a mixed-case handler Content-Type does not produce a duplicate';
+    END;
 
     RAISE NOTICE '✓ response_headers propagation tests passed';
 END $$;

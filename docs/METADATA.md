@@ -137,12 +137,13 @@ SELECT gen_random_uuid();
 
 Files without metadata get a deterministic UUID based on their path:
 ```
-UUID v5 = SHA1(namespace, normalized_path)
+generic_id = md5(raw_path)::uuid
 ```
 
 This means:
 - `./migrations/001.sql` always gets the same fallback UUID
-- Case changes (`./SETUP/File.SQL` → `./setup/file.sql`) get the same UUID
+- Case changes (`./SETUP/File.SQL` vs `./setup/file.sql`) produce **different** UUIDs — use explicit `<pgmi-meta>` id if you need rename-stable identity
+- The fallback UUID is not RFC-4122 compliant (it matches PostgreSQL's `md5(path::bytea)::uuid`)
 - But path changes (`./old/file.sql` → `./new/file.sql`) get different UUIDs
 
 Use explicit metadata when path stability matters.
@@ -217,6 +218,8 @@ On each deployment:
 ---
 
 ## Execution Order (Sort Keys)
+
+![pgmi_plan_view derivation: source and metadata join, sortKeys unnest into one execution entry each, and your deploy.sql queries the resulting plan](diagrams/d06-plan-ordering.drawio.svg)
 
 Sort keys give you explicit control over execution order, overriding the default lexicographic path ordering.
 
@@ -383,7 +386,7 @@ pgmi metadata plan ./myproject --json
 ```sql
 /*
 <pgmi-meta
-    id="a1b2c3d4-e5f6-4789-a012-3456789abcdef"
+    id="a1b2c3d4-e5f6-4789-a012-3456789abcde"
     idempotent="true">
   <description>Safe UUID casting utility</description>
   <sortKeys>
@@ -443,25 +446,49 @@ CREATE TABLE IF NOT EXISTS logs (id SERIAL PRIMARY KEY);
 
 ## Error Messages
 
-pgmi provides actionable error messages for metadata issues:
+`pgmi metadata validate <path>` exits 1 on the first problem it can name.
+A malformed block stops the scan:
 
 ```
-metadata error in ./migrations/001_users.sql (line 5): id attribute is required
+$ pgmi metadata validate ./myproject
+Scanning and validating SQL files...
+Validating metadata graph...
+pgmi: error: validation failed: failed to process file migrations\001_users.sql: metadata error in ./migrations/001_users.sql: invalid PGMI metadata in ./migrations/001_users.sql:
+  1. id attribute is required and cannot be the nil UUID (00000000-0000-0000-0000-000000000000).
+  Each script must have a unique identifier.
+  Generate with: uuidgen (Linux/Mac), [guid]::NewGuid() (PowerShell), or https://www.uuidgenerator.net/
 
-Hint: Each script must have a unique identifier.
-  Generate with: uuidgen (Linux/Mac), [guid]::NewGuid() (PowerShell)
+See metadata format documentation:
+  Schema: internal/metadata/schema.xsd
+  Generate template: pgmi metadata scaffold <path>
 ```
 
+Uniqueness is a property of the whole project, so it is checked after every
+file parses — the summary prints first, then the collision:
+
 ```
-metadata error: duplicate script ID found
+$ pgmi metadata validate ./myproject
+Scanning and validating SQL files...
+Validating metadata graph...
 
-ID: 550e8400-e29b-41d4-a716-446655440000
-Files:
-  - ./migrations/001_users.sql
-  - ./setup/users_setup.sql
+Validation Summary:
+  Total files: 2
+  Files with metadata: 2
+  Files without metadata: 0
 
-Hint: Each script must have a globally unique identifier.
-  Generate a new UUID for one of these files.
+Error: Duplicate IDs detected:
+  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql
+
+pgmi: error: metadata validation failed
+```
+
+Give one of the two files a new UUID. You do not have to run `validate` to be
+protected: `pgmi deploy` rejects the same collision during file scanning, before
+it connects, with exit 10 rather than 1:
+
+```
+pgmi: error: file scanning failed: duplicate <pgmi-meta id> across files; each script must have a unique id:
+  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql: invalid configuration
 ```
 
 ---

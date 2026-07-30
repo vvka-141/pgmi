@@ -82,3 +82,12 @@ go.work.sum
 # Test scaffolds (pgmi init output during development)
 test_*/
 .user/
+
+# Scratch space. A Hugo build of the blog was committed here once and shipped
+# 14 MB of unrelated generated HTML in every source archive.
+.tmp/
+
+# Loose images at the repository root are diagram-review exports, never
+# published assets — those live under docs/.
+/*.png
+/*.jpg

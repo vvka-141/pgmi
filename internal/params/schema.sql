@@ -28,11 +28,30 @@
 --   §pgmi_persist_test_plan - Export test plan to permanent schema
 -- ============================================================================
 
--- Clean up (allows re-running during development)
-DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
-DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+-- Clean up (allows re-running during development).
+--
+-- Guarded on pg_my_temp_schema(): on a fresh session no temp schema exists yet,
+-- and each DROP ... IF EXISTS pg_temp.* would raise
+--   NOTICE: schema "pg_temp" does not exist, skipping
+-- These are the first four lines a user sees on every deploy, and they are pgmi
+-- talking to itself. Nothing to drop then anyway, so skip the block entirely.
+-- (pg_my_temp_schema() returns 0 until the session materializes pg_temp; note
+-- to_regnamespace('pg_temp') does NOT work here — it never resolves the alias.)
+DO $$
+BEGIN
+    IF pg_my_temp_schema() <> 0 THEN
+        -- _pgmi_source_metadata references _pgmi_source: DROP _pgmi_source CASCADE
+        -- drops only that FK constraint, not the referencing table, so re-running
+        -- schema.sql in one session hit "relation _pgmi_source_metadata already
+        -- exists". Drop it (and pgmi_test_event, likewise not covered) explicitly.
+        DROP TABLE IF EXISTS pg_temp._pgmi_source_metadata CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
+        DROP TYPE IF EXISTS pg_temp.pgmi_test_event CASCADE;
+    END IF;
+END $$;
 
 
 -- §_pgmi_parameter ───────────────────────────────────────────────────────────
@@ -164,7 +183,7 @@ COMMENT ON TABLE pg_temp._pgmi_test_directory IS
 -- §_pgmi_test_source ──────────────────────────────────────────────────────────
 -- Populated by: Go for files inside __test__/ directories
 -- Used by: pgmi_test_plan() and pgmi_test() macro execution
--- is_fixture: true for _setup.sql files (run before tests in same directory)
+-- is_fixture: true for _setup.sql/_setup.psql (run before tests in same directory)
 CREATE TEMP TABLE pg_temp._pgmi_test_source
 (
     path         TEXT NOT NULL PRIMARY KEY,
@@ -182,6 +201,19 @@ GRANT SELECT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
 
 COMMENT ON TABLE pg_temp._pgmi_test_source IS
     'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
+
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_run_test_source(p_path text)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_detail text;
+BEGIN
+    EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = p_path);
+EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    RAISE EXCEPTION 'Failed in %: %', p_path, SQLERRM
+        USING ERRCODE = SQLSTATE, DETAIL = COALESCE(v_detail, '');
+END;
+$$;
 
 -- §pgmi_test_event ────────────────────────────────────────────────────────────
 -- Composite type passed to test callbacks during pgmi_test() execution
@@ -348,7 +380,7 @@ CROSS JOIN LATERAL (
     FROM pg_temp._pgmi_test_source ts
     WHERE NOT v.is_exit AND ts.directory = v.path AND ts.is_fixture
     UNION ALL
-    SELECT ROW_NUMBER() OVER (ORDER BY ts.filename)::INT, 'test', ts.path
+    SELECT ROW_NUMBER() OVER (ORDER BY ts.filename COLLATE "C")::INT, 'test', ts.path
     FROM pg_temp._pgmi_test_source ts
     WHERE NOT v.is_exit AND ts.directory = v.path AND NOT ts.is_fixture
       AND (p_pattern IS NULL OR ts.path ~ pg_temp.pgmi_validate_pattern(p_pattern))
@@ -411,11 +443,18 @@ BEGIN
              THEN array_to_string(v_parts[1:v_row.depth + 1], '/') || '/'
              ELSE './'
         END;
-    v_row.extension          :=
-        CASE WHEN v_row.name ~ '\.'
-             THEN substring(v_row.name from '(\.[^.]+)$')
-             ELSE ''
-        END;
+    -- Extract only an extension the table's chk_extension_format accepts
+    -- (^(\.[a-zA-Z0-9]+)?$). The old pattern '(\.[^.]+)$' took ANY non-dot tail,
+    -- so an editor backup ('notes.txt~') or a punctuation tail extracted a value
+    -- the CHECK then rejected, aborting the whole registration; a trailing dot
+    -- ('notes.') matched '\.' but captured nothing, yielding NULL against a
+    -- NOT NULL column. Both are reachable — the Go scanner does no name filtering.
+    -- No match (no extension, punctuation tail, trailing dot) means '' — no
+    -- extension — which is what those filenames have.
+    v_row.extension          := COALESCE(
+        substring(v_row.name from '(\.[a-zA-Z0-9]+)$'),
+        ''
+    );
     v_row.content            := in_content;
     v_row.size_bytes         := octet_length(in_content);
     v_row.checksum           := in_checksum;

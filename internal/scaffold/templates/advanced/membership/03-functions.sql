@@ -221,9 +221,9 @@ DECLARE
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
     v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_api_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA membership TO %I', v_customer_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_customer_role);
     -- upsert_user is privileged: only internal.setup_auth_session (SECURITY DEFINER
     -- running as owner) may provision users. Revoking from PUBLIC, api, and customer
     -- closes the identity-overwrite attack path while keeping the gateway flow

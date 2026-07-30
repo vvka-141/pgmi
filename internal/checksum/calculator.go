@@ -20,8 +20,9 @@ type Calculator interface {
 
 // SHA256 implements checksum calculation using SHA-256.
 // It follows the pgmi normalization strategy:
-//  1. Convert to lowercase
-//  2. Remove SQL comments (-- and /* */) while preserving string literals
+//  1. Remove SQL comments (-- and /* */) while preserving string literals
+//  2. Fold case where SQL itself ignores it — keywords and unquoted
+//     identifiers — and nowhere else
 //  3. Collapse whitespace to single spaces
 //
 // SHA256 is a zero-size type and is safe for concurrent use by multiple goroutines.
@@ -50,7 +51,7 @@ func (c SHA256) CalculateNormalized(content []byte) string {
 // normalize applies the normalization rules to content.
 // Uses strings.Builder for efficient string construction to avoid multiple allocations.
 func (c SHA256) normalize(content string) string {
-	cleaned := c.removeComments(content)
+	cleaned := c.scan(content, true)
 
 	var b strings.Builder
 	b.Grow(len(cleaned))
@@ -63,7 +64,7 @@ func (c SHA256) normalize(content string) string {
 				lastWasSpace = true
 			}
 		} else {
-			b.WriteRune(unicode.ToLower(r))
+			b.WriteRune(r)
 			lastWasSpace = false
 		}
 	}
@@ -79,18 +80,36 @@ const (
 	csBlockComment
 	csSingleQuote
 	csDollarQuote
+	csQuotedIdentifier
 )
 
 // removeComments removes SQL comments while preserving string literals.
-// Handles single-quoted strings (doubled-apostrophe escapes), dollar-quoted strings ($$...$$, $tag$...$tag$),
-// and nested block comments (/* /* */ */).
+// Handles single-quoted strings (doubled-apostrophe and E” backslash escapes),
+// dollar-quoted strings ($$...$$, $tag$...$tag$), quoted identifiers, and
+// nested block comments (/* /* */ */).
+//
+// A comment becomes one space rather than nothing: deleting it outright would
+// normalize a/*x*/b to ab, which collides with the different statement `ab`.
+// That is why this does not simply call the preprocessor's Strip, whose
+// contract is to remove comment bytes entirely.
 func (c SHA256) removeComments(content string) string {
+	return c.scan(content, false)
+}
+
+// scan is that removal, optionally folding case as it goes. Folding belongs
+// here, not in a second pass, because only this scan knows which bytes are
+// outside a literal. SQL ignores case for keywords and unquoted identifiers
+// alone: "Users" and "users" are different tables, and 'Production' and
+// 'production' are different data. Folding those made two scripts that deploy
+// differently share one checksum, so a change gated on it was skipped.
+func (c SHA256) scan(content string, foldCase bool) string {
 	var b strings.Builder
 	b.Grow(len(content))
 
 	state := csNormal
 	blockDepth := 0
 	dollarTag := ""
+	escapeString := false
 	i := 0
 
 	for i < len(content) {
@@ -113,6 +132,11 @@ func (c SHA256) removeComments(content string) string {
 				i += 2
 			} else if ch == '\'' {
 				state = csSingleQuote
+				escapeString = escapeStringPrefixed(content, i)
+				b.WriteByte(ch)
+				i++
+			} else if ch == '"' {
+				state = csQuotedIdentifier
 				b.WriteByte(ch)
 				i++
 			} else if ch == '$' {
@@ -127,6 +151,9 @@ func (c SHA256) removeComments(content string) string {
 					i++
 				}
 			} else {
+				if foldCase {
+					ch = foldASCII(ch)
+				}
 				b.WriteByte(ch)
 				i++
 			}
@@ -160,9 +187,33 @@ func (c SHA256) removeComments(content string) string {
 			}
 
 		case csSingleQuote:
+			if escapeString && ch == '\\' && i+1 < len(content) {
+				// Only E'...' lets a backslash escape the next byte. Without
+				// this, E'a\'-- x' ended at the escaped quote and the rest of
+				// the line vanished as a comment, so two different statements
+				// normalized to the same bytes.
+				b.WriteByte(ch)
+				b.WriteByte(next)
+				i += 2
+				continue
+			}
 			b.WriteByte(ch)
 			if ch == '\'' {
 				if next == '\'' {
+					b.WriteByte(next)
+					i += 2
+				} else {
+					state = csNormal
+					i++
+				}
+			} else {
+				i++
+			}
+
+		case csQuotedIdentifier:
+			b.WriteByte(ch)
+			if ch == '"' {
+				if next == '"' {
 					b.WriteByte(next)
 					i += 2
 				} else {
@@ -215,6 +266,33 @@ func extractDollarTag(s string, i int) string {
 	}
 
 	return ""
+}
+
+// escapeStringPrefixed reports whether the quote at content[i] opens an E'...'
+// escape string. With standard_conforming_strings on — the default since 9.1 —
+// a backslash is literal in an ordinary '...' literal. The E must be a whole
+// token: in abcE'x' the lexer reads the identifier abcE, so the backslash
+// stays literal. Mirrors the preprocessor's rune-based version.
+func escapeStringPrefixed(content string, i int) bool {
+	if i == 0 || (content[i-1] != 'E' && content[i-1] != 'e') {
+		return false
+	}
+	return i == 1 || !isIdentifierByte(content[i-2])
+}
+
+// foldASCII lowercases an ASCII letter. Bytes above 0x7F are left alone: they
+// are UTF-8 continuation bytes here, and folding one in isolation would corrupt
+// the character it belongs to.
+func foldASCII(ch byte) byte {
+	if ch >= 'A' && ch <= 'Z' {
+		return ch + ('a' - 'A')
+	}
+	return ch
+}
+
+func isIdentifierByte(ch byte) bool {
+	return ch == '_' || ch == '$' || ch >= 0x80 ||
+		(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func isTagStart(ch byte) bool {

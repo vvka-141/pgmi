@@ -360,6 +360,35 @@ func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
 	}
 }
 
+func TestRedactForMacros_PreservesByteLength(t *testing.T) {
+	stripper := NewCommentStripper()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"multi-byte in line comment", "-- café résumé\nSELECT 1;"},
+		{"multi-byte in block comment", "/* naïve über */SELECT 1;"},
+		{"multi-byte in single-quoted literal", "SELECT 'naïve';"},
+		{"multi-byte in dollar-quoted body", "DO $$SELECT 'über'$$ LANGUAGE sql;"},
+		{"multi-byte dollar tag", "DO $naïve$body$naïve$;"},
+		{"emoji in comment", "-- 🎉 done\nSELECT 1;"},
+		{"CJK in literal", "SELECT '漢字';"},
+		{"mixed ASCII and multi-byte", "SELECT 1; -- résumé\nDO $$ 'über' $$;"},
+		{"CRLF with multi-byte", "-- café\r\nSELECT 1;"},
+		{"non-breaking space outside literals", "SELECT 1;"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mask := stripper.RedactForMacros(tt.input)
+			if len(mask) != len(tt.input) {
+				t.Errorf("byte length changed: input=%d mask=%d", len(tt.input), len(mask))
+			}
+		})
+	}
+}
+
 func BenchmarkCommentStripper_Strip(b *testing.B) {
 	stripper := NewCommentStripper()
 	input := `-- Header comment

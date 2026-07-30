@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -22,10 +21,7 @@ import (
 // TestSessionVariableSystem tests the complete session variable workflow
 // including parameter initialization and access patterns.
 func TestSessionVariableSystem(t *testing.T) {
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("Skipping integration test: PGMI_TEST_CONN not set")
-	}
+	connStr := requireTestDB(t)
 
 	tests := []struct {
 		name          string
@@ -206,14 +202,6 @@ func createSchemaAndLoadSessionVariables(ctx context.Context, conn *pgxpool.Conn
 	return err
 }
 
-func getTestConnectionString(t *testing.T) string {
-	connStr := getEnvOrDefault("PGMI_TEST_CONN", "")
-	if connStr == "" {
-		t.Skip("PGMI_TEST_CONN environment variable not set")
-	}
-	return connStr
-}
-
 func createTestDatabase(t *testing.T, connStr string) string {
 	ctx := context.Background()
 	testDB := "pgmi_test_" + time.Now().Format("20060102_150405_000")
@@ -255,12 +243,4 @@ func replaceDatabase(connStr, newDB string) string {
 
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		config.Host, config.Port, config.Username, config.Password, config.Database, config.SSLMode)
-}
-
-func getEnvOrDefault(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value != "" {
-		return value
-	}
-	return defaultValue
 }

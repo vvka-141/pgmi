@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/vvka-141/pgmi/internal/tui"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var (
@@ -56,7 +56,7 @@ version. Default target is project-local .claude/skills/pgmi/ (commit it to
 share). Re-running is idempotent; a hand-edited file is not overwritten without
 --force. setup also offers a one-line pgmi pointer in CLAUDE.md
 (--claude-md / --no-claude-md to decide without a prompt).`,
-	Args: cobra.NoArgs,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: runAISetup,
 }
 
@@ -70,7 +70,7 @@ whether it matches this binary's version.
   pgmi ai check --global   Check ~/.claude/skills/pgmi/
 
 Exits non-zero when guidance is missing, stale, or hand-edited.`,
-	Args: cobra.NoArgs,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: runAICheck,
 }
 
@@ -239,22 +239,29 @@ func runAICheck(cmd *cobra.Command, args []string) error {
 	}
 
 	if needsSetup {
-		return fmt.Errorf("guidance missing, stale, or hand-edited; run `pgmi ai setup`")
+		return fmt.Errorf("guidance missing, stale, or hand-edited; run `pgmi ai setup --assistant %s`", assistant)
 	}
 	return nil
 }
 
 // resolveAssistant validates an explicit assistant name, or picks the default in
 // an interactive terminal. Non-interactive contexts must name the assistant.
+// resolveAssistant validates the --assistant value for both `ai setup` and
+// `ai check`. Both failures are ErrUsage, so they exit 2 like `init --template
+// nosuch` does — the same mistake, a flag given a value the CLI does not
+// accept. They used to exit 1, which says only "something went wrong".
 func resolveAssistant(name string) (string, error) {
 	if name == "" {
 		if !tui.IsInteractive() {
-			return "", fmt.Errorf("--assistant is required in non-interactive mode (supported: %s)", strings.Join(ai.SupportedAssistants, ", "))
+			return "", fmt.Errorf("%w: --assistant is required in non-interactive mode (supported: %s)",
+				pgmi.ErrUsage, strings.Join(ai.SupportedAssistants, ", "))
 		}
 		name = "claude"
 	}
 	if _, err := ai.AdapterFor(name); err != nil {
-		return "", err
+		// AdapterFor already names the offender and lists every supported
+		// value; only the classification was missing.
+		return "", fmt.Errorf("%w: %w", pgmi.ErrUsage, err)
 	}
 	return name, nil
 }
@@ -266,6 +273,8 @@ func skillsRoot(assistant string, global bool) (string, error) {
 			return "", fmt.Errorf("locate home directory: %w", err)
 		}
 		switch assistant {
+		case "claude":
+			return filepath.Join(home, ".claude", "skills"), nil
 		case "codex":
 			return filepath.Join(home, ".codex"), nil
 		case "codex-skills":
@@ -277,10 +286,12 @@ func skillsRoot(assistant string, global bool) (string, error) {
 		case "gemini":
 			return filepath.Join(home, ".gemini"), nil
 		default:
-			return filepath.Join(home, ".claude", "skills"), nil
+			return "", fmt.Errorf("assistant %q does not support --global", assistant)
 		}
 	}
 	switch assistant {
+	case "claude":
+		return filepath.Join(".claude", "skills"), nil
 	case "agents", "codex", "opencode", "gemini":
 		return ".", nil
 	case "codex-skills":
@@ -296,7 +307,7 @@ func skillsRoot(assistant string, global bool) (string, error) {
 	case "cline":
 		return ".clinerules", nil
 	default:
-		return filepath.Join(".claude", "skills"), nil
+		return "", fmt.Errorf("unknown assistant %q", assistant)
 	}
 }
 
@@ -362,7 +373,7 @@ func maybeWriteClaudeMd() error {
 
 	want := setupClaudeMd
 	if !want && tui.IsInteractive() {
-		want = promptYesNo("Add a one-line pgmi pointer to CLAUDE.md?")
+		want = tui.PromptContinue("Add a one-line pgmi pointer to CLAUDE.md?")
 	}
 	if !want {
 		return nil
@@ -412,17 +423,6 @@ func upsertClaudeMdPointer(path string) (bool, error) {
 		prefix += "\n"
 	}
 	return true, os.WriteFile(path, []byte(prefix+"\n"+block), 0644)
-}
-
-func promptYesNo(question string) bool {
-	fmt.Fprintf(os.Stderr, "%s [Y/n] ", question)
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return false
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "" || answer == "y" || answer == "yes"
 }
 
 // displayPath shows a path relative to the working directory when possible.

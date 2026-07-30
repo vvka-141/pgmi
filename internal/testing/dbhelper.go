@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -47,18 +48,49 @@ func getOrStartTestContainer() (string, error) {
 
 // GetTestConnectionString returns the test database connection string.
 // Priority: PGMI_TEST_CONN env var > auto-started testcontainer > skip test.
+//
+// Set PGMI_REQUIRE_DB to turn the skip into a failure. CI does, because a
+// registry hiccup or a stopped daemon would otherwise skip every integration
+// test and report the job green.
 func GetTestConnectionString(t *testing.T) string {
 	t.Helper()
 
-	if connString := os.Getenv("PGMI_TEST_CONN"); connString != "" {
-		return connString
+	conn, msg, fatal := resolveTestConnection(
+		os.Getenv("PGMI_TEST_CONN"),
+		os.Getenv("PGMI_REQUIRE_DB"),
+		getOrStartTestContainer,
+	)
+	switch {
+	case msg == "":
+		return conn
+	case fatal:
+		t.Fatal(msg)
+	default:
+		t.Skip(msg)
+	}
+	return ""
+}
+
+// resolveTestConnection decides how to react to each way of obtaining a test
+// database. An empty msg means conn is usable; otherwise fatal says whether the
+// caller must fail rather than skip. Split out from GetTestConnectionString so
+// the requirement can be tested without making the Docker daemon unreachable.
+func resolveTestConnection(connEnv, requireEnv string, start func() (string, error)) (conn, msg string, fatal bool) {
+	if connEnv != "" {
+		return connEnv, "", false
 	}
 
-	connString, err := getOrStartTestContainer()
-	if err != nil {
-		t.Skipf("PGMI_TEST_CONN not set and Docker unavailable: %v", err)
+	conn, err := start()
+	if err == nil {
+		return conn, "", false
 	}
-	return connString
+
+	switch strings.ToLower(strings.TrimSpace(requireEnv)) {
+	case "", "0", "false", "no":
+		return "", fmt.Sprintf("PGMI_TEST_CONN not set and Docker unavailable: %v", err), false
+	default:
+		return "", fmt.Sprintf("PGMI_REQUIRE_DB is set but no test database is available: %v", err), true
+	}
 }
 
 // SkipIfShort skips the test if running in short mode (-short flag).

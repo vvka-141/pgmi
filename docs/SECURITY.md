@@ -8,36 +8,44 @@ weight: 110
 
 pgmi handles sensitive parameters (passwords, API keys, tokens) as part of database deployments. This guide covers pgmi's security model, known threat vectors, and recommended practices for CI/CD pipelines.
 
-> **API keys**: the advanced template ships a machine-to-machine API key subsystem (`membership.api_key`, SHA-256-hashed, hash-safe compare, SECURITY DEFINER lifecycle). See [API keys](./API-KEYS.md).
+> **API keys**: the advanced template ships a machine-to-machine API key subsystem (`membership.api_key`, SHA-256-hashed, hash-safe compare, SECURITY DEFINER lifecycle). See [API keys](./advanced/API-KEYS.md).
+
+## Runtime security stack (advanced template)
+
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
+
+This page covers pgmi core's deployment-time security. Projects scaffolded
+from the [advanced template](advanced/_index.md) additionally layer a runtime
+defense for the APIs they serve — one identity pipeline for humans and
+machines, ending at row-level security:
+
+![The layered security stack: identity providers and API keys converge on the auth.idp_subject session GUC, resolve through membership, and end at row-level security](diagrams/d13-security-stack.drawio.svg)
 
 ## Required Permissions
 
 | Operation | Minimum Privilege |
 |-----------|------------------|
-| `pgmi deploy` (new database) | `CREATEDB` on the PostgreSQL cluster |
-| `pgmi deploy` (existing database) | `CREATE` on `pg_temp` schema (granted by default to all roles) |
+| `pgmi deploy` (existing database) | `CONNECT` on the target database, plus `CREATE` on `pg_temp` (granted by default to all roles) |
+| `pgmi deploy` (new database) | additionally `CREATEDB` and `CONNECT` on the maintenance database |
+| `pgmi deploy --overwrite` | additionally `CONNECT` on the maintenance database |
 | DDL in migrations | Depends on your SQL — typically schema owner or `CREATE` on target schema |
 | Advanced template role setup | `CREATEROLE` + `CREATE EXTENSION` (initial setup only — no superuser) |
 
 pgmi itself only needs to: connect, create temp tables (automatic for any role), set session variables, and execute your deploy.sql. The actual permissions depend on what your SQL does.
 
+**Deploying to an existing database touches only that database.** pgmi connects
+to the target first and reaches for a maintenance database (`postgres` by
+default, see [`maintenance_database`](CONFIGURATION.md#maintenance_database))
+only when the target does not exist and has to be created — so a CI role
+granted `CONNECT` on nothing but its own application database is sufficient for
+the common case. `--overwrite` always needs the maintenance connection, because
+a database cannot drop itself.
+
 ---
 
 ## How Parameters Flow
 
-```
-CLI (--param / --params-file)
-        │
-        ▼
-Go process (in-memory map)
-        │
-        ├──► pg_temp.pgmi_parameter_view (session-scoped, INSERT via $1/$2)
-        │
-        └──► PostgreSQL session variables (set_config($1, $2, false))
-        │
-        ▼
-Session ends → temp table dropped, session variables gone
-```
+![Secrets as parameters: a CI-generated params file flows into one PostgreSQL session where your SQL reads current_setting('pgmi.*'); the command line, pgmi's logs, and disk are never on the path](diagrams/d08-secrets-flow.drawio.svg)
 
 Every pgmi-internal database operation uses **parameterized queries** (`$1`, `$2` placeholders). Parameter values are never interpolated into SQL strings by pgmi itself. This eliminates SQL injection in pgmi's own code; your `deploy.sql` and application SQL are your responsibility.
 
@@ -46,11 +54,24 @@ Every pgmi-internal database operation uses **parameterized queries** (`$1`, `$2
 The **pgmi core CLI** logs **parameter counts only**, never keys or values — even in `--verbose` mode.
 
 ```
-✓ Loaded 3 parameters into pg_temp._pgmi_parameter
-[VERBOSE] CLI parameters override 2 value(s)
+[VERBOSE] Loaded 3 parameters from file (total: 3)
+[VERBOSE] CLI parameters override 1 value(s)
+[VERBOSE] Loading parameters into pg_temp._pgmi_parameter
+Loaded 4 parameters
 ```
 
 No parameter name, value, or hint about content ever appears in **pgmi's own (core CLI) output**.
+
+### Connection passwords in error messages
+
+An error message can quote back the connection string it failed on — `net/url`
+does exactly that when a password contains an unescaped `@`, and again when one
+contains a bare `%`. pgmi redacts the password before that text reaches stderr,
+`--json`, MCP `structuredContent`, or the connection wizard's on-screen error,
+covering the URI form (`postgresql://user:secret@host/db`, including a `secret`
+that itself contains `@`), the keyword form (`password=`, `sslpassword=`), and
+the quoted ADO.NET form (`Password='p ass'`). The host, user and failure reason
+are preserved — a redacted message still has to be diagnosable.
 
 ### Your SQL controls its own logging
 
@@ -59,6 +80,18 @@ This guarantee covers only pgmi core. Your `deploy.sql` and template SQL run wit
 - `--verbose` sets `client_min_messages = 'debug'` on the session, enabling `RAISE DEBUG` output from your SQL. Ensure your scripts do not leak secrets via `RAISE DEBUG`.
 - **Redact by default.** When logging parameters from SQL, mask secret-like keys. The advanced template's `deploy.sql` masks keys matching `(password|secret|token|key|credential|auth)`; follow the same pattern in your own scripts.
 - A password reaching the server via `ALTER ROLE ... PASSWORD` can land in the PostgreSQL server log under `log_statement = ddl`/`all` — set `log_statement` accordingly.
+- **A failing top-level statement has its source line echoed back**, psql-style, with a caret under the error position:
+
+  ```
+  pgmi: error: execution failed: ERROR: unrecognized role option "totally_bogus_keyword" (SQLSTATE 42601)
+  LOCATION: deploy.sql line 1, column 42
+  LINE 1: CREATE ROLE app LOGIN PASSWORD 'hunter2' TOTALLY_BOGUS_KEYWORD;
+                                                   ^
+  ```
+
+  This is pgmi's own output, so `log_statement = 'none'` does not suppress it — a secret written **literally** into `deploy.sql` reaches stderr, `--json` and CI logs on any error on that line. Suppressing the line is not the fix; it is what makes a syntax error diagnosable.
+
+  **Parameters are not exposed this way.** A value passed via `--params-file` reaches SQL through `current_setting('pgmi.key')`, evaluated server-side, so it is never part of the statement text pgmi holds or echoes — including when that statement fails. Nor is it exposed when your SQL interpolates it with `format(... %L ...)` inside `EXECUTE`: PostgreSQL reports that context as `at EXECUTE` without the expanded statement. Pinned by `TestParameterValuesNeverReachDeployErrors`.
 
 ## Threat Model
 

@@ -76,6 +76,16 @@ func TestDeploymentConfig_Validate(t *testing.T) {
 			wantError: false,
 		},
 		{
+			name: "zero timeout means no limit",
+			config: pgmi.DeploymentConfig{
+				SourcePath:       "./migrations",
+				DatabaseName:     "mydb",
+				ConnectionString: "postgresql://localhost:5432/postgres",
+				Timeout:          0,
+			},
+			wantError: false,
+		},
+		{
 			name: "negative timeout",
 			config: pgmi.DeploymentConfig{
 				SourcePath:       "./migrations",

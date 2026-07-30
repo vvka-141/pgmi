@@ -1,10 +1,16 @@
 name: Snapshot Build
 
+# A full `release --snapshot`: builds, archives, packages and checksums every
+# target, uploading nothing. `goreleaser check` in the release gate validates
+# config syntax and renders no template, so an archive name_template or nfpms
+# entry that only breaks at render time would first break while publishing —
+# after the tag is pushed. release.yml calls this before it publishes.
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   snapshot:
@@ -27,6 +33,21 @@ jobs:
           args: release --snapshot --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke-test built binary
+        run: |
+          bin="$(find dist -maxdepth 2 -name pgmi -type f | head -n 1)"
+          if [[ -z "$bin" ]]; then
+            echo "::error::no pgmi binary found in dist/" >&2
+            exit 1
+          fi
+          chmod +x "$bin"
+          version="$("$bin" --version 2>&1)"
+          echo "pgmi --version: $version"
+          if echo "$version" | grep -qiE '(dev|unknown)'; then
+            echo "::error::snapshot binary reports dev/unknown version: $version" >&2
+            exit 1
+          fi
 
       - name: Upload snapshot artifacts
         uses: actions/upload-artifact@v5

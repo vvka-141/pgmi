@@ -18,9 +18,7 @@ func main() {
 		}
 	}()
 
-	if os.Getenv("PGMI_TEST_PANIC") == "1" {
-		panic("intentional test panic")
-	}
+	triggerTestPanic()
 
 	if err := cli.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "pgmi: error: %s\n", pgmi.FormatError(err))

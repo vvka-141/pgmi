@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 //go:embed all:templates
@@ -57,7 +59,7 @@ func (s *Scaffolder) CreateProject(projectName, templateName, targetPath string)
 		return fmt.Errorf("failed to check target directory: %w", err)
 	}
 	if !isEmpty {
-		return fmt.Errorf("target directory '%s' is not empty\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n• Choose a different location\n• Remove existing files manually\n• Use a new directory name", targetPath)
+		return fmt.Errorf("%w: target directory '%s' is not empty\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n• Choose a different location\n• Remove existing files manually\n• Use a new directory name", pgmi.ErrUsage, targetPath)
 	}
 
 	// Create target directory if it doesn't exist

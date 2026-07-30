@@ -1,0 +1,21 @@
+<mxGraphModel adaptiveColors="none" background="#fbfaf7" grid="0" page="1" pageWidth="1200" pageHeight="500">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="lbl" value="CONNECTION FACTORY — ONE CONFIG, FOUR AUTH PROVIDERS" style="text;html=1;align=left;fontStyle=1;fontSize=11;fontColor=#143d2b;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="460" height="20" as="geometry" /></mxCell>
+    <mxCell id="in" value="connection string · flags ·&#10;pgmi.yaml · environment&#10;($PGPASSWORD, AZURE_*, …)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;dashed=1;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="150" width="210" height="80" as="geometry" /></mxCell>
+    <mxCell id="pr" value="parser + resolver → ConnectionConfig&#10;&#10;password precedence:&#10;$PGPASSWORD → ~/.pgpass → connection string&#10;(no --password flag exists)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="300" y="140" width="290" height="100" as="geometry" /></mxCell>
+    <mxCell id="fx" value="NewConnector&#10;factory on AuthMethod" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="640" y="155" width="170" height="70" as="geometry" /></mxCell>
+    <mxCell id="cc" value="concrete connectors" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=#ffffff;strokeColor=#d9ded5;fontColor=#5d665d;fontStyle=1;fontSize=11" vertex="1" parent="1"><mxGeometry x="860" y="44" width="250" height="292" as="geometry" /></mxCell>
+    <mxCell id="c1" value="standard — static password" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="875" y="72" width="220" height="44" as="geometry" /></mxCell>
+    <mxCell id="c2" value="Azure Entra ID — token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="875" y="136" width="220" height="44" as="geometry" /></mxCell>
+    <mxCell id="c3" value="AWS IAM — token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="875" y="200" width="220" height="44" as="geometry" /></mxCell>
+    <mxCell id="c4" value="Google Cloud SQL IAM — token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="875" y="264" width="220" height="44" as="geometry" /></mxCell>
+    <mxCell id="db" value="PostgreSQL" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#ffffff;strokeColor=#0f766e;fontColor=#172018;fontSize=12" vertex="1" parent="1"><mxGeometry x="905" y="372" width="160" height="76" as="geometry" /></mxCell>
+    <mxCell id="e4" value="one session" style="html=1;endArrow=classic;strokeColor=#0f766e;fontColor=#5d665d;fontSize=11;exitX=0.5;exitY=1;entryX=0.5;entryY=0" edge="1" parent="1" source="cc" target="db"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e1" style="html=1;endArrow=classic;strokeColor=#5d665d;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="in" target="pr"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e2" style="html=1;endArrow=classic;strokeColor=#143d2b;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="pr" target="fx"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="e3" style="html=1;endArrow=classic;strokeColor=#143d2b;exitX=1;exitY=0.5;entryX=0;entryY=0.5" edge="1" parent="1" source="fx" target="cc"><mxGeometry relative="1" as="geometry" /></mxCell>
+    <mxCell id="cap" value="cloud connectors mint short-lived tokens per session — managed-identity deployments store no database password anywhere" style="text;html=1;align=center;fontStyle=2;fontSize=12;fontColor=#5d665d;" vertex="1" parent="1"><mxGeometry x="100" y="462" width="800" height="20" as="geometry" /></mxCell>
+  </root>
+</mxGraphModel>

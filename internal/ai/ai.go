@@ -20,15 +20,17 @@ import (
 var contentFS embed.FS
 
 var (
-	skillNameRe = regexp.MustCompile(`(?m)^name:\s*["']?([^"'\n]+)["']?`)
-	skillDescRe = regexp.MustCompile(`(?m)^description:\s*["']?([^"'\n]+)["']?`)
+	skillNameRe  = regexp.MustCompile(`(?m)^name:\s*["']?([^"'\n]+)["']?`)
+	skillDescRe  = regexp.MustCompile(`(?m)^description:\s*["']?([^"'\n]+)["']?`)
+	skillScopeRe = regexp.MustCompile(`(?m)^scope:\s*["']?([^"'\n]+)["']?`)
 )
 
 // SkillInfo contains metadata parsed from a skill's YAML frontmatter
 type SkillInfo struct {
-	Name        string
-	Description string
-	FilePath    string
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Scope       string `json:"scope"`
+	FilePath    string `json:"filePath"`
 }
 
 // GetOverview returns the main AI overview document
@@ -179,6 +181,11 @@ func parseSkillFrontmatter(content, path string) SkillInfo {
 		info.Description = strings.TrimSpace(matches[1])
 	}
 
+	// Extract scope
+	if matches := skillScopeRe.FindStringSubmatch(frontmatter); len(matches) > 1 {
+		info.Scope = strings.TrimSpace(matches[1])
+	}
+
 	return info
 }
 
@@ -190,4 +197,5 @@ func getAdvancedTemplateSkill() (string, error) {
 var advancedTemplateSkillInfo = SkillInfo{
 	Name:        "advanced-template",
 	Description: "Advanced template framework API reference (lib/README.md)",
+	Scope:       "advanced-template",
 }

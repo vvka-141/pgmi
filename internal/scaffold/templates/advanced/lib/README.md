@@ -22,7 +22,7 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 
 | File | Purpose |
 |------|---------|
-| `00-transaction-isolation.sql` | Transaction isolation contract: normalizer, ordering, gateway validation primitive |
+| `00-transaction-isolation.sql` | Transaction policy contract: normalizer, ordering, gateway validation primitives, resolve-then-open resolver |
 | `01-types.sql` | Request/response types + `api.json_schema` / `api.xml_schema` domains |
 | `02-handler-registry.sql` | `api.handler` table for handler metadata (central registry) |
 | `03-rest-routes.sql` | REST handler creation and resolution |
@@ -55,11 +55,16 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 - Setting `responseHeaders.x-include-schema = 'true'` merges `outputSchema` into REST responses (as `$schema` at body root) or RPC responses (inside `result.$schema`, preserving JSON-RPC 2.0 envelope).
 - Handler names are capped at 49 chars; longer names are rejected at registration to prevent PostgreSQL 63-byte identifier truncation collisions.
 
-**Transaction isolation contract (`00-transaction-isolation.sql`):**
-- A handler may declare a minimum transaction isolation floor with the metadata key `requiredTransactionIsolation` (`read committed` | `repeatable read` | `serializable`, case- and separator-insensitive; `read uncommitted` folds onto `read committed`). It is stored on `api.handler.required_transaction_isolation`; unsupported values are rejected at registration. Absent ⇒ no requirement (behaves as `read committed`).
-- Levels are ordered `read committed < repeatable read < serializable`. A call satisfies a route iff the current transaction's actual level ranks ≥ the floor.
-- **The caller sets the level; the gateway only validates it.** `SET TRANSACTION ISOLATION LEVEL` is transaction control and is illegal inside functions, so the gateway reads `current_setting('transaction_isolation')` and, when it is too weak, rejects before dispatching — REST returns `428 Precondition Required`, RPC returns HTTP 428 with a JSON-RPC error, MCP returns a `-32600` envelope. All three carry the machine token `pgmi.transaction_isolation_too_weak`.
-- Callers request a level over the wire with the `X-PGMI-Transaction-Isolation` header. The bundled MCP client (`tools/mcp-gateway.py`) honors it by opening the transaction at that level. For REST/RPC (served by an operator-supplied reverse proxy), the proxy must `BEGIN TRANSACTION ISOLATION LEVEL <x>` before calling `api.rest_invoke` / `api.rpc_invoke` — see the header docs in `tools/mcp-gateway.py`.
+**Transaction policy contract (`00-transaction-isolation.sql`):**
+Per-route isolation floor (`minTransactionIsolation`), read-only declaration (`readOnly`), resolve-then-open, `DEFERRABLE` derivation, fail-closed DB-side check, and replica-safe hint. Full reference: [Transaction policy](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/).
+
+**Cacheable contract (`08-registration.sql`, `11-openapi.sql`):**
+- `api.catalog_version()` digests exactly the registry columns the OpenAPI document is built from, so it changes **iff** the published contract changes. Deliberately *not* `api.handler.def_hash` (that hashes the function body and would miss a changed uri/auth/schema) and *not* a digest of the rendered document (too expensive to compute per response).
+- `GET /openapi.json` returns a strong `ETag` and `Cache-Control: no-cache` — cache it, but revalidate. A conditional `If-None-Match` returns **304 with no body** (measured: 7 KB → 0). `If-None-Match` may be a list or `*`.
+- **Every** REST/RPC response — success or error — stamps `x-pgmi-catalog-version` with the same digest. A client that preloads routes learns its contract went stale from a call it was already making, instead of polling the spec. Without that, a client-side route cache serves a false 404 for a route a later deploy added; the caching is what makes client-side routing *safe*, not merely fast.
+
+**Serialization-failure retry contract (`09-gateways.sql`):**
+`40001`/`40P01` propagate with SQLSTATE intact; catching them in PL/pgSQL is unsafe (commits a lost write); retry belongs to whoever owns `BEGIN`. Full reference: [Transaction policy — retry contract](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/#serialization-failure-retry-contract).
 
 ### `core/` - Entity Hierarchy
 

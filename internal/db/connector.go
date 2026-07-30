@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -97,14 +98,14 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 		newPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			pool = nil
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		// Test the connection
 		if err := newPool.Ping(ctx); err != nil {
 			newPool.Close()
 			pool = nil
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database)
+			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		pool = newPool
@@ -157,12 +158,55 @@ func newConnError(err error, format string, args ...any) error {
 	return &connError{msg: fmt.Sprintf(format, args...), err: err}
 }
 
+// SQLSTATEs PostgreSQL returns while refusing a connection.
+const (
+	sqlStateInvalidAuthSpec    = "28000"
+	sqlStateInvalidPassword    = "28P01"
+	sqlStateInvalidCatalogName = "3D000"
+	sqlStateInsufficientPriv   = "42501"
+	sqlStateTooManyConnections = "53300"
+	sqlStateCannotConnectNow   = "57P03"
+)
+
 // wrapConnectionError wraps raw pgx connection errors with actionable guidance.
 // All returned errors satisfy errors.Is(err, pgmi.ErrConnectionFailed) and
 // errors.Is(err, originalErr).
-func wrapConnectionError(err error, host string, port int, database string) error {
-	errStr := strings.ToLower(err.Error())
+func wrapConnectionError(err error, host string, port int, database, username string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
+
+	// The server's own SQLSTATE decides, never the prose: pgx reports every
+	// attempt it made, and against a server that does not offer TLS the text
+	// always opens with "tls error: server refused TLS connection" — which
+	// would swallow every server-side refusal into the SSL branch below.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case sqlStateInvalidPassword:
+			return newConnError(err, "password authentication failed for user %q on database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", username, database)
+
+		case sqlStateInvalidAuthSpec:
+			return newConnError(err, "authentication rejected for user %q on database %q: %s\nno pg_hba.conf entry matches this host, user, and method", username, database, pgErr.Message)
+
+		case sqlStateInvalidCatalogName:
+			return newConnError(err, "database %q does not exist\ncreate it with `createdb %s` or pass --overwrite to let pgmi create it", database, database)
+
+		case sqlStateInsufficientPriv:
+			return newConnError(err, "%s\ngrant access with: GRANT CONNECT ON DATABASE %s TO %s", pgErr.Message, database, username)
+
+		case sqlStateTooManyConnections:
+			return newConnError(err, "too many connections to database %q\nserver is at max_connections; close idle backends or wait", database)
+
+		case sqlStateCannotConnectNow:
+			return newConnError(err, "server at %s is not accepting connections: %s\nit is starting up or recovering; retry shortly", addr, pgErr.Message)
+
+		default:
+			return newConnError(err, "server at %s refused the connection: %s (SQLSTATE %s)", addr, pgErr.Message, pgErr.Code)
+		}
+	}
+
+	// No SQLSTATE: the server never answered, so all we have is the transport
+	// error text.
+	errStr := strings.ToLower(err.Error())
 
 	switch {
 	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "actively refused"):
@@ -172,7 +216,7 @@ func wrapConnectionError(err error, host string, port int, database string) erro
 		return newConnError(err, "cannot resolve host %q\ncheck hostname spelling, DNS, and $PGHOST", host)
 
 	case strings.Contains(errStr, "password authentication failed"):
-		return newConnError(err, "password authentication failed for database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", database)
+		return newConnError(err, "password authentication failed for user %q on database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", username, database)
 
 	case strings.Contains(errStr, "does not exist"):
 		return newConnError(err, "database %q does not exist\ncreate it with `createdb %s` or pass --overwrite to let pgmi create it", database, database)

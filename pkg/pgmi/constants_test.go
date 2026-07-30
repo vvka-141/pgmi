@@ -1,6 +1,8 @@
 package pgmi_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -106,5 +108,29 @@ func TestIsSQLExtension(t *testing.T) {
 				t.Errorf("IsSQLExtension(%q) = %v, want %v", tt.ext, got, tt.want)
 			}
 		})
+	}
+}
+
+// A misspelled dunder directory is a project error caught before pgmi connects,
+// exactly like a path that does not exist, a path that is a file, or a
+// duplicate <pgmi-meta id> — all of which exit 10. This one exited 1, which
+// tells a script nothing. Confirmed against the binary: `__tets__` now exits 10
+// while a duplicate id still does and a valid __tests__ project still exits 0.
+func TestValidateDunderDirectories_UnsupportedIsInvalidConfig(t *testing.T) {
+	err := pgmi.ValidateDunderDirectories("./__tets__/test_x.sql")
+	if err == nil {
+		t.Fatal("a misspelled dunder directory must be rejected")
+	}
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("not an ErrInvalidConfig chain, so this exits 1 rather than 10: %v", err)
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConfigError {
+		t.Errorf("exit code %d, want %d", got, pgmi.ExitConfigError)
+	}
+	// The message still has to name the offender and the allowed spellings.
+	for _, want := range []string{"__tets__", "__test__", "__tests__"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message no longer mentions %q: %v", want, err)
+		}
 	}
 }

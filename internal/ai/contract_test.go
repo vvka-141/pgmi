@@ -6,15 +6,14 @@ import (
 	"testing"
 )
 
-func TestGetContract_ViewsMatchEmbeddedSQL(t *testing.T) {
-	schema, err := contentFS.ReadFile("content/../../../params/schema.sql")
-	if err != nil {
-		// Embedded FS doesn't reach outside content/; read from contract package's perspective.
-		// We verify against the contract's own expectations instead.
-		t.Skip("cannot read schema.sql from embedded FS (expected)")
-	}
-	_ = schema
-}
+// TestGetContract_ViewsMatchEmbeddedSQL was removed rather than fixed. It asked
+// contentFS for "content/../../../params/schema.sql", which an embed.FS cannot
+// serve by construction, so it skipped on every run since it was written and
+// asserted nothing — the name was the only claim it made.
+//
+// The property it named is real and is checked, against a live session rather
+// than by scraping SQL text: services.TestContractViewColumnsMatchLiveSession
+// compares ai.GetContract() with the columns pg_temp actually exposes.
 
 func TestGetContract_Structure(t *testing.T) {
 	c := GetContract()
@@ -27,6 +26,17 @@ func TestGetContract_Structure(t *testing.T) {
 	}
 	if len(c.StepTypes) != 3 {
 		t.Errorf("expected 3 step types, got %d", len(c.StepTypes))
+	}
+	if c.StepTypesNote == "" {
+		t.Error("expected step_types_note to disambiguate from event values")
+	}
+	if len(c.Types) == 0 {
+		t.Fatal("expected types")
+	}
+	for _, ct := range c.Types {
+		if len(ct.Fields) == 0 {
+			t.Errorf("type %s has no fields", ct.Name)
+		}
 	}
 	if len(c.ExitCodes) == 0 {
 		t.Fatal("expected exit codes")

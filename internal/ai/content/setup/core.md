@@ -25,8 +25,9 @@ When pgmi runs, it exposes the project to SQL through session-scoped views in
   excluding `deploy.sql` and `__test__/` files.
 - `pgmi_parameter_view` — CLI `--param key=value` pairs. Also readable as
   `current_setting('pgmi.key', true)`.
-- `pgmi_plan_view` — files in execution order, derived from `<pgmi-meta>` sort
-  keys when present.
+- `pgmi_plan_view` — the same files in execution order, derived from
+  `<pgmi-meta>` sort keys when present. Like `pgmi_source_view` it holds every
+  file, not only SQL, so an execute loop must join back for `is_sql_file`.
 - `pgmi_test_source_view`, `pgmi_test_directory_view` — test files and their
   directory hierarchy.
 - `pgmi_source_metadata_view` — parsed `<pgmi-meta>` blocks.
@@ -40,15 +41,45 @@ Query the `*_view` names — they are the stable contract. The underscore-prefix
 DO $$
 DECLARE v_file RECORD;
 BEGIN
+    -- is_sql_file is the execution guard: without it an editor backup left
+    -- beside a migration (001.sql~, .bak) is executed as a migration.
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
+
+### The execution contract
+
+**Before your first top-level `COMMIT`, atomic mode; after it, psql mode.**
+Everything through the first top-level transaction terminator (`COMMIT`, `END`,
+`ROLLBACK`, `ABORT`, and their `WORK`/`TRANSACTION`/`AND CHAIN` forms) runs as
+one transaction; every top-level statement after it autocommits on its own, exactly
+as in psql. A `deploy.sql` with no top-level terminator is entirely atomic. The
+scaffolded templates are **not** that shape: they open with `BEGIN`, `COMMIT`
+after the test gate, and keep the DONE banner in the tail — so work you append
+to one lands after that `COMMIT` and autocommits.
+
+So statements between mid-file `COMMIT`s are **not** implicitly grouped (a later
+phase that must be atomic writes its own `BEGIN ... COMMIT`), and a mid-tail
+failure leaves earlier autocommitted statements applied — write them
+idempotently.
+
+`CALL pgmi_test()` expands to `SAVEPOINT`, which PostgreSQL refuses inside the
+implicit block of a multi-statement query — so it needs an explicit top-level
+`BEGIN ... COMMIT` around it, or the deploy fails with `25P01 SAVEPOINT can only
+be used in transaction blocks` naming a statement you never wrote.
+
+`CREATE INDEX CONCURRENTLY`, `VACUUM` and `CREATE DATABASE` cannot run through
+`EXECUTE` at all (`25001 ... cannot be executed from a function`), whatever the
+transaction state. Put them at top level after the first `COMMIT`, never inside
+the plan loop.
 
 ## Basic vs advanced
 

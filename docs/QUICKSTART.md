@@ -33,23 +33,23 @@ docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgr
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 pgmi init demo --template basic
-pgmi deploy demo -d pgmi_demo
+pgmi deploy demo -d demo_db
 ```
 
-pgmi creates the `pgmi_demo` database, loads the project into a session, and your generated `deploy.sql` runs the migrations and the test suite inside one transaction:
+pgmi creates the `demo_db` database, loads the project into a session, and your generated `deploy.sql` runs the migrations and the test suite in the [atomic head](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) of the script — everything up to the first top-level `COMMIT` is one transaction:
 
 ```text
 [pgmi] Test suite started
 [pgmi] Fixture: ./__test__/_setup.sql
 [pgmi] Test: ./__test__/test_user_crud.sql
 [pgmi] Test suite completed (3 steps)
-✓ 7 files loaded, 1 test macro(s) expanded in 0.91s
+✓ demo_db: 7 files loaded, 1 test macro(s) expanded in 0.91s
 ```
 
 Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/__test__/test_user_crud.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
 
 ```bash
-pgmi deploy demo -d pgmi_demo
+pgmi deploy demo -d demo_db
 ```
 
 pgmi exits with code `13` and the database is untouched — everything the deployment did before the failing test rolled back with it. That test gate, inside your own deployment transaction, is the core of the pgmi model.
@@ -175,7 +175,7 @@ cd myapp
 
 > **Interactive setup**: if you run `pgmi init myapp` (without flags) on a TTY, an interactive wizard walks you through template choice and connection setup, saving a `pgmi.yaml` for later `pgmi deploy` runs. Add `--template <name>` to skip the template prompt, or set `PGMI_NON_INTERACTIVE=1` / `CI=1` to bypass wizards entirely.
 >
-> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold` from the project root to auto-generate them. Basic template users can ignore this.
+> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold .` from the project root to auto-generate them. Basic template users can ignore this.
 
 This creates a ready-to-deploy project:
 
@@ -244,16 +244,24 @@ timeout: 3m
 > set PGPASSWORD=your-postgres-password
 > ```
 >
-> Alternatively, use a full connection string:
+> Alternatively, use a full connection string. Name the **target** database in
+> it — `myapp`, not `postgres`:
 > ```bash
 > # Linux/macOS
-> export PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/postgres"
+> export PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/myapp"
 >
 > # Windows PowerShell
-> $env:PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/postgres"
+> $env:PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/myapp"
 > ```
 >
-> When `PGMI_CONNECTION_STRING` is set, it provides the host, port, username, and password. pgmi connects to the database in the connection string first (typically `postgres`) to run `CREATE DATABASE`, then switches to the target database from `pgmi.yaml` to deploy. This is why the connection string points to `postgres` while `pgmi.yaml` says `myapp` — they serve different purposes.
+> A database name in `PGMI_CONNECTION_STRING` is an **environment** source, and
+> environment beats `pgmi.yaml` in the [precedence chain](CONFIGURATION.md#precedence-chain).
+> So it *replaces* `connection.database`, it does not complement it: end the
+> string in `/postgres` and pgmi deploys into `postgres` — creating your tables
+> in the maintenance database and never creating `myapp` at all.
+>
+> If you would rather keep `/postgres` in the string, say the target on the
+> command line, which outranks both: `pgmi deploy . -d myapp`.
 
 ### deploy.sql — your deployment logic
 
@@ -295,11 +303,11 @@ What this does:
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-NOTICE: Dev seed: admin user ready (admin@example.com id=1)
-NOTICE: [pgmi] Test suite started
-NOTICE: [pgmi] Fixture: ./__test__/_setup.sql
-NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
-NOTICE: [pgmi] Test suite completed (...)
+Dev seed: admin user ready (admin@example.com id=1)
+[pgmi] Test suite started
+[pgmi] Fixture: ./__test__/_setup.sql
+[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test suite completed (3 steps)
 
   ___   ___  _  _ ___
  |   \ / _ \| \| | __|
@@ -375,6 +383,8 @@ psql -h localhost -U postgres -d myapp -c "\dt"
 
 You should see both the `user` and `order` tables. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
 
+> **Where the atomic boundary is.** The generated `deploy.sql` has a `COMMIT` after the test gate (line 99). Everything you add *above* it shares the test-gated transaction; anything *below* it autocommits statement by statement. If you need `CREATE INDEX CONCURRENTLY` or another command that cannot run inside a transaction, put it after the `COMMIT`. See [the execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full rules.
+
 ---
 
 ## What just happened?
@@ -400,7 +410,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** when you want 
 | **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
 | **Execution view** | `pg_temp.pgmi_source_view` | `pg_temp.pgmi_plan_view` (with multi-phase support) |
 | **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
-| **Script tracking** | None (stateless) | UUID-based tracking in `internal.deployment_script_execution_log` |
+| **Script tracking** | None by default; a 3-line opt-in `_migration` ledger ships commented in `deploy.sql` | UUID-based tracking in `internal.deployment_script_execution_log` |
 | **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
 | **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, utils, api), `membership/`, `tools/` |
 | **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |

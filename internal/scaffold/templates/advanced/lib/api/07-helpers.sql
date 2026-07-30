@@ -53,18 +53,18 @@ DECLARE
     v_headers extensions.hstore;
 BEGIN
     v_json := api.content_json(convert_to('{"key": "value"}', 'UTF8'));
-    IF v_json->>'key' != 'value' THEN
+    IF v_json->>'key' IS DISTINCT FROM 'value' THEN
         RAISE EXCEPTION 'content_json failed';
     END IF;
 
     v_text := api.content_text(convert_to('hello world', 'UTF8'));
-    IF v_text != 'hello world' THEN
+    IF v_text IS DISTINCT FROM 'hello world' THEN
         RAISE EXCEPTION 'content_text failed';
     END IF;
 
     v_headers := extensions.hstore(ARRAY['content-type', 'application/json']);
     v_header := api.header(v_headers, 'Content-Type');
-    IF v_header != 'application/json' THEN
+    IF v_header IS DISTINCT FROM 'application/json' THEN
         RAISE EXCEPTION 'header case-insensitive lookup failed';
     END IF;
 END $$;
@@ -133,6 +133,158 @@ $$;
 COMMENT ON FUNCTION api.uri_template_to_regex(text) IS
     'Converts a URI template (e.g. /users/{id}) to an anchored POSIX regex where each {param} matches one path segment.';
 
+-- ============================================================================
+-- MCP Resource URI Regex — derived once, not per request
+-- ============================================================================
+-- URI templates are static after registration, so converting them on every
+-- resources/read was pure repeated work: three regexp_replace passes per
+-- candidate route per request. api.mcp_route.uri_regexp holds the conversion and
+-- dispatch matches against it.
+--
+-- A trigger, not a write in the registration function: admin_role holds INSERT/
+-- UPDATE/DELETE on api.mcp_route, so direct DML is a granted path. A derived
+-- column that only the registration function maintained would go stale silently
+-- under that DML — and a stale regex mis-routes resource requests, which is a
+-- worse bug than the one being fixed. The trigger makes desync impossible.
+
+CREATE OR REPLACE FUNCTION internal.sync_mcp_uri_regexp()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.uri_regexp := api.uri_template_to_regex(NEW.uri_template);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tr_mcp_route_uri_regexp ON api.mcp_route;
+CREATE TRIGGER tr_mcp_route_uri_regexp
+    BEFORE INSERT OR UPDATE OF uri_template ON api.mcp_route
+    FOR EACH ROW EXECUTE FUNCTION internal.sync_mcp_uri_regexp();
+
+-- Backfill, and self-heal if api.uri_template_to_regex itself ever changes: the
+-- trigger only fires on write, so a redeploy that redefines the conversion would
+-- otherwise leave every stored regex stale.
+UPDATE api.mcp_route
+SET uri_regexp = api.uri_template_to_regex(uri_template)
+WHERE uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template);
+
+-- ============================================================================
+-- Route Path Tokens
+-- ============================================================================
+-- Splits a stored route regex into literal runs and capture groups. The OpenAPI
+-- generator and the registration guard both read path parameters from here, so
+-- there is exactly one definition of "what counts as a path parameter" — two
+-- would drift. group_index is NULL for literal runs and 1..N, left to right,
+-- for capture groups.
+--
+-- The three nested strips remove the anchors and the optional query-string
+-- suffix routes conventionally carry ('(\?.*)?$'), which is not a parameter.
+
+-- Dollar-quoted with a named tag: the strip patterns below contain '$$', which
+-- would close an anonymous $$ body mid-string.
+CREATE OR REPLACE FUNCTION api.route_path_tokens(p_address_regexp text)
+RETURNS TABLE (ord bigint, token text, group_index bigint)
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $route_path_tokens$
+    WITH c_pattern AS (
+        SELECT regexp_replace(
+                   regexp_replace(
+                       regexp_replace(p_address_regexp, '^\^', ''),
+                       '\(\\\\?\?\.\*\)\?\$?$', ''),
+                   '\$$', '') AS pattern
+    ),
+    c_token AS (
+        SELECT t.ord, t.m[1] AS token
+        FROM c_pattern
+        CROSS JOIN LATERAL regexp_matches(c_pattern.pattern, '\([^)]*\)|[^(]+', 'g')
+            WITH ORDINALITY AS t(m, ord)
+    )
+    SELECT
+        c_token.ord,
+        c_token.token,
+        CASE
+            WHEN c_token.token LIKE '(%'
+            THEN row_number() OVER (PARTITION BY c_token.token LIKE '(%' ORDER BY c_token.ord)
+        END
+    FROM c_token;
+$route_path_tokens$;
+
+COMMENT ON FUNCTION api.route_path_tokens(text) IS
+    'Splits a route regex into literal runs and capture groups (group_index 1..N left to right). Used to derive canonical_path from a regex for uri-only (level-2) route registrations.';
+
+DROP FUNCTION IF EXISTS api.route_path_param_name(text[], bigint);
+
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM api.route_path_tokens('^/orgs/([^/]+)/users/(\d+)$') WHERE group_index IS NOT NULL) IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'route_path_tokens must find both capture groups in a two-parameter route';
+    END IF;
+
+    IF (SELECT count(*) FROM api.route_path_tokens('^/hello(\?.*)?$') WHERE group_index IS NOT NULL) IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'route_path_tokens must not treat the query-string suffix as a path parameter';
+    END IF;
+END $$;
+
+-- ============================================================================
+-- Path Template Helpers
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION api.path_template_to_regex(p_path text)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT '^' || regexp_replace(
+        api.regexp_quote(
+            regexp_replace(p_path, '\{[^}]+\}', '<<<PLACEHOLDER>>>', 'g')
+        ),
+        '<<<PLACEHOLDER>>>',
+        '([^/]+)',
+        'g'
+    ) || '$';
+$$;
+
+COMMENT ON FUNCTION api.path_template_to_regex(text) IS
+    'Converts a path template (e.g. /users/{id}) to an anchored POSIX regex with capture groups for each parameter.';
+
+CREATE OR REPLACE FUNCTION api.path_template_params(p_path text)
+RETURNS text[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT COALESCE(
+        ARRAY(SELECT m[1] FROM regexp_matches(p_path, '\{([^}]+)\}', 'g') AS m),
+        '{}'::text[]
+    );
+$$;
+
+COMMENT ON FUNCTION api.path_template_params(text) IS
+    'Extracts parameter names from a path template. /orgs/{orgId}/users/{userId} returns ARRAY[''orgId'', ''userId''].';
+
+DO $$
+BEGIN
+    IF api.path_template_to_regex('/users/{id}') IS DISTINCT FROM '^/users/([^/]+)$' THEN
+        RAISE EXCEPTION 'path_template_to_regex: simple param failed, got %',
+            api.path_template_to_regex('/users/{id}');
+    END IF;
+
+    IF api.path_template_to_regex('/openapi.json') IS DISTINCT FROM '^/openapi\.json$' THEN
+        RAISE EXCEPTION 'path_template_to_regex: dot escaping failed, got %',
+            api.path_template_to_regex('/openapi.json');
+    END IF;
+
+    IF api.path_template_to_regex('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM '^/orgs/([^/]+)/users/([^/]+)$' THEN
+        RAISE EXCEPTION 'path_template_to_regex: multi-param failed';
+    END IF;
+
+    IF api.path_template_to_regex('/hello') IS DISTINCT FROM '^/hello$' THEN
+        RAISE EXCEPTION 'path_template_to_regex: no-param failed';
+    END IF;
+
+    IF api.path_template_params('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM ARRAY['orgId', 'userId'] THEN
+        RAISE EXCEPTION 'path_template_params: multi-param failed';
+    END IF;
+
+    IF api.path_template_params('/hello') IS DISTINCT FROM '{}'::text[] THEN
+        RAISE EXCEPTION 'path_template_params: no-param failed';
+    END IF;
+END $$;
+
 -- HTTP Accept content negotiation. Returns true when the client accepts at
 -- least one of the server's produced media types. Parses the Accept header
 -- into media ranges (split on ',', drop ';q='/parameters) and matches each
@@ -150,19 +302,27 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
             SELECT 1
             FROM unnest(string_to_array(p_accept, ',')) AS raw_range
             CROSS JOIN LATERAL (
-                SELECT lower(btrim(split_part(raw_range, ';', 1))) AS media_range
+                SELECT lower(btrim(split_part(raw_range, ';', 1))) AS media_range,
+                       -- RFC 9110 §12.5.1: qvalue 0 means "not acceptable".
+                       -- Treating it as acceptance turned an explicit refusal
+                       -- into a 200 of exactly the type the client rejected.
+                       COALESCE(
+                           NULLIF(btrim(substring(lower(raw_range) FROM ';[[:space:]]*q=([0-9.]+)')), '')::numeric,
+                           1
+                       ) AS qvalue
             ) r
             CROSS JOIN unnest(p_produces) AS produced
-            WHERE r.media_range = '*/*'
-               OR r.media_range = lower(btrim(produced))
-               OR (right(r.media_range, 2) = '/*'
-                   AND split_part(r.media_range, '/', 1) = lower(split_part(btrim(produced), '/', 1)))
+            WHERE r.qvalue > 0
+              AND (r.media_range = '*/*'
+                   OR r.media_range = lower(btrim(produced))
+                   OR (right(r.media_range, 2) = '/*'
+                       AND split_part(r.media_range, '/', 1) = lower(split_part(btrim(produced), '/', 1))))
         )
     END;
 $$;
 
 COMMENT ON FUNCTION api.accept_matches(text, text[]) IS
-    'HTTP content negotiation. Returns true when the Accept header matches at least one of the produced media types; supports */*, type/* wildcards. NULL or empty Accept accepts all.';
+    'HTTP content negotiation. Returns true when the Accept header matches at least one of the produced media types; supports */*, type/* wildcards and honours q=0 as an explicit refusal (RFC 9110 12.5.1). NULL or empty Accept accepts all.';
 
 -- Single-value query-string parser. hstore cannot hold duplicate keys, so for
 -- a repeated key (?tag=a&tag=b) this keeps the FIRST occurrence. Use
@@ -221,7 +381,93 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION api.url_path(text) IS
-    'Extracts the path component from a URL by stripping the query string.';
+    'Extracts the path component from a URL by stripping the query string. A bare fragment is left in place on purpose: the http/https grammar (RFC 9110 §4.2.1) has no fragment component, so a literal "#" in a request target is malformed, and removing it would let /admin#x resolve to the route for /admin. A fragment behind a query is already gone with the query.';
+
+CREATE OR REPLACE FUNCTION api.canonical_path(p_path text)
+RETURNS text
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+DECLARE
+    v_path text;
+    v_result text;
+    v_i int;
+    v_len int;
+    v_hex text;
+    v_byte int;
+    v_segments text[];
+    v_out text[];
+    v_seg text;
+BEGIN
+    v_path := split_part(p_path, '?', 1);
+    IF v_path = '' THEN
+        RETURN '/';
+    END IF;
+
+    -- §6.2.2.1 + §6.2.2.2: uppercase percent-encoding hex, decode unreserved
+    v_result := '';
+    v_i := 1;
+    v_len := length(v_path);
+    WHILE v_i <= v_len LOOP
+        IF substring(v_path FROM v_i FOR 1) = '%' AND v_i + 2 <= v_len THEN
+            v_hex := upper(substring(v_path FROM v_i + 1 FOR 2));
+            IF v_hex ~ '^[0-9A-F]{2}$' THEN
+                v_byte := get_byte(decode(v_hex, 'hex'), 0);
+                IF (v_byte BETWEEN 65 AND 90)
+                   OR (v_byte BETWEEN 97 AND 122)
+                   OR (v_byte BETWEEN 48 AND 57)
+                   OR v_byte IN (45, 46, 95, 126)
+                THEN
+                    v_result := v_result || chr(v_byte);
+                ELSE
+                    v_result := v_result || '%' || v_hex;
+                END IF;
+                v_i := v_i + 3;
+                CONTINUE;
+            END IF;
+        END IF;
+        v_result := v_result || substring(v_path FROM v_i FOR 1);
+        v_i := v_i + 1;
+    END LOOP;
+    v_path := v_result;
+
+    IF left(v_path, 1) IS DISTINCT FROM '/' THEN
+        v_path := '/' || v_path;
+    END IF;
+
+    -- §6.2.2.3 / §5.2.4: remove dot-segments
+    v_segments := string_to_array(v_path, '/');
+    v_out := ARRAY[]::text[];
+    FOREACH v_seg IN ARRAY v_segments LOOP
+        IF v_seg = '.' THEN
+            CONTINUE;
+        ELSIF v_seg = '..' THEN
+            IF COALESCE(array_length(v_out, 1), 0) > 1 THEN
+                v_out := v_out[1:array_length(v_out, 1) - 1];
+            END IF;
+        ELSE
+            v_out := array_append(v_out, v_seg);
+        END IF;
+    END LOOP;
+    v_path := array_to_string(v_out, '/');
+
+    -- pgmi policy: collapse duplicate slashes
+    v_path := regexp_replace(v_path, '/+', '/', 'g');
+
+    -- pgmi policy + §6.2.3: ensure leading slash
+    IF v_path = '' OR left(v_path, 1) IS DISTINCT FROM '/' THEN
+        v_path := '/' || v_path;
+    END IF;
+
+    -- pgmi policy: strip trailing slash except root
+    IF v_path IS DISTINCT FROM '/' AND right(v_path, 1) = '/' THEN
+        v_path := left(v_path, length(v_path) - 1);
+    END IF;
+
+    RETURN v_path;
+END;
+$$;
+
+COMMENT ON FUNCTION api.canonical_path(text) IS
+    'RFC 3986 syntax-based normalization plus pgmi policy: uppercases percent-encoding hex (§6.2.2.1), decodes unreserved characters (§6.2.2.2), removes dot-segments (§5.2.4), collapses duplicate slashes, ensures leading slash, strips trailing slash.';
 
 -- Inline tests
 DO $$
@@ -232,7 +478,7 @@ DECLARE
     v_decoded text;
     v_quoted text;
 BEGIN
-    -- Test accept_matches (PGMI-31 content negotiation)
+    -- Test accept_matches (content negotiation)
     IF NOT api.accept_matches('application/*', ARRAY['application/json']) THEN
         RAISE EXCEPTION 'accept_matches: media range application/* should match application/json';
     END IF;
@@ -251,52 +497,64 @@ BEGIN
     IF api.accept_matches('text/html', ARRAY['application/json']) THEN
         RAISE EXCEPTION 'accept_matches: unrelated type must not match';
     END IF;
+    -- q=0 is an explicit refusal (RFC 9110 12.5.1), including through a
+    -- wildcard. tools/mcp-gateway.py answers the same question about the same
+    -- header and must agree; see TestMCPGateway_AcceptQValues.
+    IF api.accept_matches('application/json;q=0', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: q=0 is a refusal, not an acceptance';
+    END IF;
+    IF api.accept_matches('*/*;q=0', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: a wildcard refused with q=0 must not match';
+    END IF;
+    IF api.accept_matches('text/html, application/json;q=0', ARRAY['application/json']) THEN
+        RAISE EXCEPTION 'accept_matches: a refused range must not be rescued by an earlier one';
+    END IF;
 
     -- Test url_decode
     v_decoded := api.url_decode('John%20Doe');
-    IF v_decoded != 'John Doe' THEN
+    IF v_decoded IS DISTINCT FROM 'John Doe' THEN
         RAISE EXCEPTION 'url_decode percent failed: got %', v_decoded;
     END IF;
 
     v_decoded := api.url_decode('hello+world');
-    IF v_decoded != 'hello world' THEN
+    IF v_decoded IS DISTINCT FROM 'hello world' THEN
         RAISE EXCEPTION 'url_decode plus failed: got %', v_decoded;
     END IF;
 
     v_decoded := api.url_decode('100%25+complete');
-    IF v_decoded != '100% complete' THEN
+    IF v_decoded IS DISTINCT FROM '100% complete' THEN
         RAISE EXCEPTION 'url_decode mixed failed: got %', v_decoded;
     END IF;
 
     v_decoded := api.url_decode('%GG%20hello');
-    IF v_decoded != '%GG hello' THEN
+    IF v_decoded IS DISTINCT FROM '%GG hello' THEN
         RAISE EXCEPTION 'url_decode must skip invalid %% and decode later valid sequences: got %', v_decoded;
     END IF;
 
     v_decoded := api.url_decode('trailing%');
-    IF v_decoded != 'trailing%' THEN
+    IF v_decoded IS DISTINCT FROM 'trailing%' THEN
         RAISE EXCEPTION 'url_decode trailing %% should stay literal: got %', v_decoded;
     END IF;
 
     v_decoded := api.url_decode('trailing%1');
-    IF v_decoded != 'trailing%1' THEN
+    IF v_decoded IS DISTINCT FROM 'trailing%1' THEN
         RAISE EXCEPTION 'url_decode trailing %%X should stay literal: got %', v_decoded;
     END IF;
 
     -- Test regexp_quote
     v_quoted := api.regexp_quote('file.json');
-    IF v_quoted != 'file\.json' THEN
+    IF v_quoted IS DISTINCT FROM 'file\.json' THEN
         RAISE EXCEPTION 'regexp_quote dot failed: got %', v_quoted;
     END IF;
 
     v_quoted := api.regexp_quote('a+b*c?');
-    IF v_quoted != 'a\+b\*c\?' THEN
+    IF v_quoted IS DISTINCT FROM 'a\+b\*c\?' THEN
         RAISE EXCEPTION 'regexp_quote metachar failed: got %', v_quoted;
     END IF;
 
     -- Test uri_template_to_regex
     v_quoted := api.uri_template_to_regex('/api/resource.json/{id}');
-    IF v_quoted != '^/api/resource\.json/[^/]+$' THEN
+    IF v_quoted IS DISTINCT FROM '^/api/resource\.json/[^/]+$' THEN
         RAISE EXCEPTION 'uri_template_to_regex failed: got %', v_quoted;
     END IF;
 
@@ -310,34 +568,101 @@ BEGIN
 
     -- Test query_params with URL encoding
     v_params := api.query_params('/api/users?name=john&age=30');
-    IF v_params->'name' != 'john' OR v_params->'age' != '30' THEN
+    IF v_params->'name' IS DISTINCT FROM 'john' OR v_params->'age' IS DISTINCT FROM '30' THEN
         RAISE EXCEPTION 'query_params basic failed';
     END IF;
 
     v_params := api.query_params('/search?q=hello%20world&filter=a%2Bb');
-    IF v_params->'q' != 'hello world' THEN
+    IF v_params->'q' IS DISTINCT FROM 'hello world' THEN
         RAISE EXCEPTION 'query_params url decode failed: got %', v_params->'q';
     END IF;
-    IF v_params->'filter' != 'a+b' THEN
+    IF v_params->'filter' IS DISTINCT FROM 'a+b' THEN
         RAISE EXCEPTION 'query_params url decode plus failed: got %', v_params->'filter';
     END IF;
 
     -- query_params drops repeated keys (first wins); query_params_multi keeps all
-    IF api.query_params('/f?tag=a&tag=b')->'tag' != 'a' THEN
+    IF api.query_params('/f?tag=a&tag=b')->'tag' IS DISTINCT FROM 'a' THEN
         RAISE EXCEPTION 'query_params should keep first value for repeated key';
     END IF;
 
     v_params_multi := api.query_params_multi('/f?tag=a&tag=b&q=hi');
-    IF v_params_multi->'tag' != '["a", "b"]'::jsonb THEN
+    IF v_params_multi->'tag' IS DISTINCT FROM '["a", "b"]'::jsonb THEN
         RAISE EXCEPTION 'query_params_multi must preserve duplicate keys: got %', v_params_multi->'tag';
     END IF;
-    IF v_params_multi->'q'->>0 != 'hi' THEN
+    IF v_params_multi->'q'->>0 IS DISTINCT FROM 'hi' THEN
         RAISE EXCEPTION 'query_params_multi single value should be a one-element array: got %', v_params_multi->'q';
     END IF;
 
     v_path := api.url_path('/api/users?name=john');
-    IF v_path != '/api/users' THEN
+    IF v_path IS DISTINCT FROM '/api/users' THEN
         RAISE EXCEPTION 'url_path failed';
+    END IF;
+
+    -- Keeping the fragment is the decision, not an oversight: stripping it
+    -- would let a malformed /admin#x reach the route for /admin.
+    IF api.url_path('/api/users#frag') IS DISTINCT FROM '/api/users#frag' THEN
+        RAISE EXCEPTION 'url_path must not strip a bare fragment: got %',
+            api.url_path('/api/users#frag');
+    END IF;
+    IF api.url_path('/api/users?name=john#frag') IS DISTINCT FROM '/api/users' THEN
+        RAISE EXCEPTION 'url_path: a fragment behind a query goes with the query: got %',
+            api.url_path('/api/users?name=john#frag');
+    END IF;
+
+    -- canonical_path: RFC 3986 normalization + pgmi policy
+    IF api.canonical_path('/hello') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: canonical path must pass through unchanged';
+    END IF;
+    IF api.canonical_path('/hello?x=1') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must strip query string';
+    END IF;
+    IF api.canonical_path('/hel%6Co') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must decode unreserved %%6C → l';
+    END IF;
+    IF api.canonical_path('/hel%6co') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: lowercase hex must decode identically';
+    END IF;
+    IF api.canonical_path('/a/../hello') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must remove dot-segments';
+    END IF;
+    IF api.canonical_path('') IS DISTINCT FROM '/' THEN
+        RAISE EXCEPTION 'canonical_path: empty path must become /';
+    END IF;
+    IF api.canonical_path('/hello/') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must strip trailing slash';
+    END IF;
+    IF api.canonical_path('hello') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must add leading slash';
+    END IF;
+    IF api.canonical_path('/hello//') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must collapse duplicate slashes';
+    END IF;
+    IF api.canonical_path('//hello') IS DISTINCT FROM '/hello' THEN
+        RAISE EXCEPTION 'canonical_path: must collapse leading duplicate slashes';
+    END IF;
+    IF api.canonical_path('/') IS DISTINCT FROM '/' THEN
+        RAISE EXCEPTION 'canonical_path: root must survive';
+    END IF;
+    IF api.canonical_path('/Users') IS DISTINCT FROM '/Users' THEN
+        RAISE EXCEPTION 'canonical_path: path case must be preserved';
+    END IF;
+    IF api.canonical_path('/a%2Fb') IS DISTINCT FROM '/a%2Fb' THEN
+        RAISE EXCEPTION 'canonical_path: %%2F must not become segment separator';
+    END IF;
+    IF api.canonical_path('/public/../admin') IS DISTINCT FROM '/admin' THEN
+        RAISE EXCEPTION 'canonical_path: dot-segments must resolve before route match';
+    END IF;
+    IF api.canonical_path('/public/%2e%2e/admin') IS DISTINCT FROM '/admin' THEN
+        RAISE EXCEPTION 'canonical_path: percent-encoded dot-segments must resolve';
+    END IF;
+    IF api.canonical_path('/a/%7E/b') IS DISTINCT FROM '/a/~/b' THEN
+        RAISE EXCEPTION 'canonical_path: tilde is unreserved, must decode';
+    END IF;
+    IF api.canonical_path('/a/%20/b') IS DISTINCT FROM '/a/%20/b' THEN
+        RAISE EXCEPTION 'canonical_path: space is reserved, must stay encoded';
+    END IF;
+    IF api.canonical_path('/a/%2D%2E%5F/b') IS DISTINCT FROM '/a/-._/b' THEN
+        RAISE EXCEPTION 'canonical_path: dash dot underscore are unreserved, must decode';
     END IF;
 END $$;
 
@@ -359,6 +684,19 @@ $$;
 
 COMMENT ON FUNCTION api.json_response(integer, jsonb) IS
     'Builds an HTTP response with application/json content-type and the given status code.';
+
+-- RFC 9110 §15.5.2 makes at least one challenge mandatory on a 401. The scheme
+-- is a deployment decision -- the gateway in front may validate a JWT, a
+-- session cookie, or something else -- so it is a GUC rather than a code edit.
+-- Set it in deploy.sql with ALTER DATABASE ... SET api.www_authenticate = '...'.
+CREATE OR REPLACE FUNCTION api.www_authenticate_challenge()
+RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(NULLIF(current_setting('api.www_authenticate', true), ''), 'X-User-Id');
+$$;
+
+COMMENT ON FUNCTION api.www_authenticate_challenge() IS
+    'The challenge stamped on a 401 (RFC 9110 15.5.2). Defaults to X-User-Id; override with the api.www_authenticate GUC (e.g. Bearer for a JWT-proxy deployment).';
 
 -- Drop the pre-RFC-9457 signature so the extended one below is the only
 -- problem_response; an added-parameter overload would make 3-arg calls
@@ -424,13 +762,13 @@ DECLARE
     v_content jsonb;
 BEGIN
     v_response := api.json_response(200, '{"status": "ok"}'::jsonb);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'json_response status failed';
     END IF;
 
     v_response := api.problem_response(404, 'Not Found', 'Resource does not exist');
     v_content := api.content_json((v_response).content);
-    IF v_content->>'title' != 'Not Found' THEN
+    IF v_content->>'title' IS DISTINCT FROM 'Not Found' THEN
         RAISE EXCEPTION 'problem_response failed';
     END IF;
     IF v_content ? 'code' OR v_content ? 'invalid-params' THEN
@@ -444,10 +782,10 @@ BEGIN
         invalid_params => jsonb_build_array(api.invalid_param('total', 'must be positive'))
     );
     v_content := api.content_json((v_response).content);
-    IF v_content->>'code' != 'validation_error' THEN
+    IF v_content->>'code' IS DISTINCT FROM 'validation_error' THEN
         RAISE EXCEPTION 'problem_response code member missing';
     END IF;
-    IF v_content->'invalid-params'->0->>'name' != 'total' THEN
+    IF v_content->'invalid-params'->0->>'name' IS DISTINCT FROM 'total' THEN
         RAISE EXCEPTION 'problem_response invalid-params member missing';
     END IF;
 END $$;
@@ -496,25 +834,25 @@ DECLARE
 BEGIN
     -- Defaults when nothing supplied
     v_page := api.pagination_params(''::extensions.hstore);
-    IF v_page.o_limit <> 50 OR v_page.o_offset <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+    IF v_page.o_limit IS DISTINCT FROM 50 OR v_page.o_offset IS DISTINCT FROM 0 OR (v_page.o_error).status_code IS NOT NULL THEN
         RAISE EXCEPTION 'pagination_params defaults failed (limit=%, offset=%)', v_page.o_limit, v_page.o_offset;
     END IF;
 
     -- Clamp to max and floor offset at 0
     v_page := api.pagination_params('limit=>5000, offset=>-3'::extensions.hstore);
-    IF v_page.o_limit <> 200 OR v_page.o_offset <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+    IF v_page.o_limit IS DISTINCT FROM 200 OR v_page.o_offset IS DISTINCT FROM 0 OR (v_page.o_error).status_code IS NOT NULL THEN
         RAISE EXCEPTION 'pagination_params clamping failed (limit=%, offset=%)', v_page.o_limit, v_page.o_offset;
     END IF;
 
     -- Non-integer limit -> 422 in o_error
     v_page := api.pagination_params('limit=>abc'::extensions.hstore);
-    IF (v_page.o_error).status_code <> 422 THEN
+    IF (v_page.o_error).status_code IS DISTINCT FROM 422 THEN
         RAISE EXCEPTION 'pagination_params should 422 on non-integer limit, got %', (v_page.o_error).status_code;
     END IF;
 
     -- limit=0 is honored (empty page), not treated as missing
     v_page := api.pagination_params('limit=>0'::extensions.hstore);
-    IF v_page.o_limit <> 0 OR (v_page.o_error).status_code IS NOT NULL THEN
+    IF v_page.o_limit IS DISTINCT FROM 0 OR (v_page.o_error).status_code IS NOT NULL THEN
         RAISE EXCEPTION 'pagination_params should honor limit=0, got %', v_page.o_limit;
     END IF;
 END $$;
@@ -573,12 +911,12 @@ DECLARE
 BEGIN
     v_response := api.jsonrpc_success('{"value": 42}'::jsonb, '"req-1"'::jsonb);
     v_content := api.content_json((v_response).content);
-    IF v_content->>'jsonrpc' != '2.0' THEN
+    IF v_content->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'jsonrpc_success failed';
     END IF;
 
     v_response := api.jsonrpc_error(-32601, 'Method not found');
-    IF (v_response).status_code != 404 THEN
+    IF (v_response).status_code IS DISTINCT FROM 404 THEN
         RAISE EXCEPTION 'jsonrpc_error status mapping failed: expected 404, got %', (v_response).status_code;
     END IF;
 END $$;
@@ -742,10 +1080,10 @@ BEGIN
     -- Test mcp_success (string id)
     v_response := api.mcp_success('{"value": 42}'::jsonb, '"req-1"'::jsonb);
     v_envelope := (v_response).envelope;
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'mcp_success: missing jsonrpc 2.0';
     END IF;
-    IF v_envelope->>'id' != 'req-1' OR jsonb_typeof(v_envelope->'id') != 'string' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-1' OR jsonb_typeof(v_envelope->'id') IS DISTINCT FROM 'string' THEN
         RAISE EXCEPTION 'mcp_success: id type not preserved as string';
     END IF;
     IF v_envelope->'result' IS NULL THEN
@@ -755,27 +1093,27 @@ BEGIN
     -- Test mcp_success with integer id — JSON-RPC 2.0 requires type preservation
     v_response := api.mcp_success('{}'::jsonb, '42'::jsonb);
     v_envelope := (v_response).envelope;
-    IF jsonb_typeof(v_envelope->'id') != 'number' OR (v_envelope->>'id')::int != 42 THEN
+    IF jsonb_typeof(v_envelope->'id') IS DISTINCT FROM 'number' OR (v_envelope->>'id')::int IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'mcp_success: integer id must stay numeric, got %', v_envelope->'id';
     END IF;
 
     -- Test mcp_error
     v_response := api.mcp_error(-32603, 'Internal error', '"req-2"'::jsonb);
     v_envelope := (v_response).envelope;
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'mcp_error: missing jsonrpc 2.0';
     END IF;
-    IF v_envelope->>'id' != 'req-2' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'req-2' THEN
         RAISE EXCEPTION 'mcp_error: wrong id';
     END IF;
-    IF (v_envelope->'error'->>'code')::int != -32603 THEN
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32603 THEN
         RAISE EXCEPTION 'mcp_error: wrong error code';
     END IF;
 
     -- Test mcp_tool_result
     v_response := api.mcp_tool_result('[{"type": "text", "text": "Hello"}]'::jsonb, '"req-3"'::jsonb);
     v_envelope := (v_response).envelope;
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'mcp_tool_result: missing jsonrpc 2.0';
     END IF;
     IF v_envelope->'result'->'content' IS NULL THEN
@@ -791,7 +1129,7 @@ BEGIN
     );
     v_envelope := (v_response).envelope;
     IF v_envelope->'result'->'structuredContent' IS NULL
-       OR (v_envelope->'result'->'structuredContent'->>'answer')::int != 42 THEN
+       OR (v_envelope->'result'->'structuredContent'->>'answer')::int IS DISTINCT FROM 42 THEN
         RAISE EXCEPTION 'mcp_tool_result: structuredContent not emitted when provided';
     END IF;
 
@@ -814,7 +1152,7 @@ BEGIN
 
     -- Test mcp_text helper
     v_text := api.mcp_text('Hello world');
-    IF v_text->>'type' != 'text' OR v_text->>'text' != 'Hello world' THEN
+    IF v_text->>'type' IS DISTINCT FROM 'text' OR v_text->>'text' IS DISTINCT FROM 'Hello world' THEN
         RAISE EXCEPTION 'mcp_text failed';
     END IF;
 END $$;
@@ -826,6 +1164,7 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.regexp_quote - regex metacharacter escaping';
     RAISE NOTICE '  ✓ api.uri_template_to_regex - URI template to regex conversion';
     RAISE NOTICE '  ✓ api.query_params/url_path - URL parsing with decoding';
+    RAISE NOTICE '  ✓ api.canonical_path - RFC 3986 path normalization';
     RAISE NOTICE '  ✓ api.json_response - JSON response builder';
     RAISE NOTICE '  ✓ api.problem_response - RFC 9457 error response';
     RAISE NOTICE '  ✓ api.jsonrpc_success/error - JSON-RPC 2.0 responses';
@@ -844,6 +1183,6 @@ DECLARE
     v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO %I', v_api_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO %I', v_admin_role);
+    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO %I', v_api_role);
 END $$;

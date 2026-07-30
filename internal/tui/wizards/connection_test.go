@@ -1002,6 +1002,66 @@ func TestConnectionWizard_ConnStringFlow_ValidationMissing(t *testing.T) {
 	}
 }
 
+func TestConnectionWizard_ConnStringFlow_ParsesRealValues(t *testing.T) {
+	mock := &mockTester{info: "Connected"}
+	w := NewConnectionWizard(WithTester(mock))
+
+	m := selectConnStringProvider(t, w)
+	m = typeString(t, m, "postgresql://alice:s3cret@db.example.com:5433/app?sslmode=require")
+	m, cmd := update(t, m, keyMsg("enter"))
+
+	wiz := asWizard(t, m)
+	if wiz.step != stepTestConnection {
+		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
+	}
+	cfg := wiz.result.Config
+	if cfg.Host != "db.example.com" {
+		t.Errorf("Host = %q, want db.example.com", cfg.Host)
+	}
+	if cfg.Port != 5433 {
+		t.Errorf("Port = %d, want 5433", cfg.Port)
+	}
+	if cfg.Database != "app" {
+		t.Errorf("Database = %q, want app", cfg.Database)
+	}
+	if cfg.Username != "alice" {
+		t.Errorf("Username = %q, want alice", cfg.Username)
+	}
+	if cfg.SSLMode != "require" {
+		t.Errorf("SSLMode = %q, want require", cfg.SSLMode)
+	}
+	if wiz.result.MaintenanceDatabase != pgmi.DefaultMaintenanceDB {
+		t.Errorf("MaintenanceDatabase = %q, want %q", wiz.result.MaintenanceDatabase, pgmi.DefaultMaintenanceDB)
+	}
+
+	msgs := drainCmds(cmd)
+	result, ok := findTestResult(msgs)
+	if !ok {
+		t.Fatal("expected testResultMsg")
+	}
+	m, _ = update(t, m, result)
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz = asWizard(t, m)
+	if wiz.step != stepDone {
+		t.Errorf("step = %d, want stepDone", wiz.step)
+	}
+}
+
+func TestConnectionWizard_ConnStringFlow_InvalidStringShowsError(t *testing.T) {
+	w := NewConnectionWizard()
+	m := selectConnStringProvider(t, w)
+
+	m = typeString(t, m, "not-a-valid-connection-string")
+	m, _ = update(t, m, keyMsg("enter"))
+	wiz := asWizard(t, m)
+	if wiz.validationErr == "" {
+		t.Error("expected validation error for invalid connection string")
+	}
+	if wiz.step != stepInputConnString {
+		t.Errorf("should stay on stepInputConnString, got %d", wiz.step)
+	}
+}
+
 func TestConnectionWizard_CtrlC_Cancels(t *testing.T) {
 	w := NewConnectionWizard()
 	_, cmd := update(t, w, tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -1262,5 +1322,49 @@ func TestInitWizard_CheckDirBlocking(t *testing.T) {
 	// Non-existent dir → no blocking
 	if blocking := checkDirBlocking(filepath.Join(t.TempDir(), "nonexistent")); len(blocking) != 0 {
 		t.Errorf("non-existent dir should not block, got %v", blocking)
+	}
+}
+
+// docs/SECURITY.md promises that when an error quotes back the connection
+// string it failed on, pgmi redacts the password before that text is shown.
+// The CLI does; the wizard rendered err.Error() straight into validationErr,
+// and the wizard is a fourth surface the page does not enumerate.
+//
+// Reaching it needs nothing exotic. net/url rejects a string whose password
+// contains a bare '%' and quotes the whole string in the rejection, so pasting
+// "…://user:pa%ss@host/db" into the connection-string step printed the password
+// on screen.
+func TestConnectionWizard_ConnStringErrorRedactsThePassword(t *testing.T) {
+	const secret = "pa%ssword-SECRET"
+
+	w := NewConnectionWizard()
+	w.step = stepInputConnString
+	w.inputs = w.createConnStringInputs()
+	w.inputs[0].SetValue("postgresql://user:" + secret + "@localhost:5432/db")
+
+	err := w.validateInputs()
+	if err == nil {
+		t.Fatal("a password with a bare % must fail to parse, or this proves nothing")
+	}
+	if !strings.Contains(err.Error(), secret) {
+		t.Fatalf("the raw parser error no longer carries the password, so this test "+
+			"can no longer distinguish a redacting wizard from a leaking one: %v", err)
+	}
+
+	m, _ := update(t, &w, keyMsg("enter"))
+	got := asWizard(t, m).validationErr
+
+	if got == "" {
+		t.Fatal("validationErr was not set for an unparseable connection string")
+	}
+	if strings.Contains(got, secret) {
+		t.Errorf("the wizard displays the password: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Errorf("expected the password replaced with [redacted], got %q", got)
+	}
+	// The message still has to be diagnosable — host and reason survive.
+	if !strings.Contains(got, "localhost") {
+		t.Errorf("redaction removed the host too, leaving nothing to act on: %q", got)
 	}
 }

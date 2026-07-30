@@ -83,10 +83,10 @@ const (
 
 // ConnectionResult holds the result of the connection wizard.
 type ConnectionResult struct {
-	Cancelled          bool
-	Config             pgmi.ConnectionConfig
-	Tested             bool
-	ManagementDatabase string
+	Cancelled           bool
+	Config              pgmi.ConnectionConfig
+	Tested              bool
+	MaintenanceDatabase string
 }
 
 // Provider represents a database hosting provider.
@@ -193,6 +193,9 @@ type ConnectionWizard struct {
 
 	// Connection tester (injectable for testing)
 	tester ConnectionTester
+
+	// Parsed connection string (set by validateInputs for stepInputConnString)
+	parsedConnString *pgmi.ConnectionConfig
 }
 
 type wizardStep int
@@ -457,7 +460,7 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	database.Width = 40
 
 	mgmtDB := textinput.New()
-	mgmtDB.SetValue(pgmi.DefaultManagementDB)
+	mgmtDB.SetValue(pgmi.DefaultMaintenanceDB)
 	mgmtDB.CharLimit = 64
 	mgmtDB.Width = 40
 
@@ -575,7 +578,12 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Enter on last field submits the form
 		if err := w.validateInputs(); err != nil {
-			w.validationErr = err.Error()
+			// FormatError, not err.Error(): on the paste-a-connection-string
+			// step this message is the parser's, and net/url quotes the whole
+			// string back when it rejects one — a password containing a bare %
+			// is enough. FormatError redacts that; it leaves an ordinary
+			// validation message untouched.
+			w.validationErr = pgmi.FormatError(err)
 			return w, nil
 		}
 		w.validationErr = ""
@@ -632,6 +640,11 @@ func (w *ConnectionWizard) validateInputs() error {
 		if w.inputs[0].Value() == "" {
 			return fmt.Errorf("connection string is required")
 		}
+		parsed, err := db.ParseConnectionString(w.inputs[0].Value())
+		if err != nil {
+			return fmt.Errorf("invalid connection string: %w", err)
+		}
+		w.parsedConnString = parsed
 	}
 	return nil
 }
@@ -654,9 +667,9 @@ func (w *ConnectionWizard) buildConfig() {
 			cfg.Port = 5432
 		}
 		cfg.Database = w.inputs[2].Value()
-		w.result.ManagementDatabase = w.inputs[3].Value()
-		if w.result.ManagementDatabase == "" {
-			w.result.ManagementDatabase = pgmi.DefaultManagementDB
+		w.result.MaintenanceDatabase = w.inputs[3].Value()
+		if w.result.MaintenanceDatabase == "" {
+			w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
 		}
 		cfg.Username = w.inputs[4].Value()
 		if cfg.Username == "" {
@@ -669,7 +682,7 @@ func (w *ConnectionWizard) buildConfig() {
 		cfg.Host = w.inputs[0].Value()
 		cfg.Port = 5432
 		cfg.Database = w.inputs[1].Value()
-		w.result.ManagementDatabase = pgmi.DefaultManagementDB
+		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.SSLMode = "require"
 		cfg.AuthMethod = pgmi.AuthMethodAzureEntraID
@@ -682,7 +695,7 @@ func (w *ConnectionWizard) buildConfig() {
 			cfg.Port = 5432
 		}
 		cfg.Database = w.inputs[2].Value()
-		w.result.ManagementDatabase = pgmi.DefaultManagementDB
+		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
 		cfg.Username = w.inputs[3].Value()
 		cfg.AWSRegion = w.inputs[4].Value()
 		cfg.SSLMode = "require"
@@ -691,18 +704,14 @@ func (w *ConnectionWizard) buildConfig() {
 	case stepInputGoogle:
 		cfg.GoogleInstance = w.inputs[0].Value()
 		cfg.Database = w.inputs[1].Value()
-		w.result.ManagementDatabase = pgmi.DefaultManagementDB
+		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.AuthMethod = pgmi.AuthMethodGoogleIAM
 
 	case stepInputConnString:
-		// Parse connection string - for now just store it
-		// The actual parsing happens in db.ParseConnectionString
-		connStr := w.inputs[0].Value()
-		// Simple extraction for display purposes
-		cfg.Host = "from connection string"
-		cfg.Database = "from connection string"
-		cfg.AdditionalParams["connection_string"] = connStr
+		cfg = *w.parsedConnString
+		cfg.AdditionalParams = make(map[string]string)
+		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
 	}
 
 	w.result.Config = cfg
@@ -716,10 +725,10 @@ type testResultMsg struct {
 
 func (w *ConnectionWizard) testConnection() tea.Cmd {
 	cfg := w.result.Config
-	// Test against the management database to verify server connectivity.
+	// Test against the maintenance database to verify server connectivity.
 	// The target database may not exist yet — pgmi creates it during deployment.
 	testCfg := cfg
-	testCfg.Database = w.result.ManagementDatabase
+	testCfg.Database = w.result.MaintenanceDatabase
 	tester := w.tester
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -891,7 +900,7 @@ func (w ConnectionWizard) viewForm(fc formConfig) string {
 func (w ConnectionWizard) viewHostForm() string {
 	return w.viewForm(formConfig{
 		subtitle: "Connection Details",
-		labels:   []string{"Host:", "Port:", "Database:", "Management DB:", "Username:", "Password:"},
+		labels:   []string{"Host:", "Port:", "Database:", "Maintenance DB:", "Username:", "Password:"},
 		hints: map[int]string{
 			2: "target database — created automatically if it doesn't exist",
 			3: "existing database pgmi connects to for server-level operations",
@@ -981,7 +990,9 @@ func (w ConnectionWizard) viewTestConnection() string {
 			b.WriteString("\n")
 			errMsg := "unknown error"
 			if w.testErr != nil {
-				errMsg = w.testErr.Error()
+				// Same reason: a pasted connection string is handed to
+				// pgx.Connect verbatim, so its failure can carry the password.
+				errMsg = pgmi.FormatError(w.testErr)
 			}
 			b.WriteString(w.styles.Description.Render(errMsg))
 			b.WriteString("\n\n")

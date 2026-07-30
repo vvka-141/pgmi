@@ -160,7 +160,7 @@ Examples:
 
 1. Create a feature branch from `main`
 2. Implement your changes with tests
-3. Run `go test ./...` to verify all tests pass
+3. Run `make test-integration` to verify all tests pass (requires Docker or `PGMI_TEST_CONN`)
 4. Run `go build ./...` to ensure everything compiles
 5. Update documentation if needed
 6. Submit PR to `main` with clear description of changes

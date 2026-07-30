@@ -15,8 +15,6 @@ func TestResolveTargetDatabase(t *testing.T) {
 		name               string
 		flagDatabase       string
 		connConfigDatabase string
-		requireDatabase    bool
-		commandName        string
 		verbose            bool
 		wantDatabase       string
 		wantErr            bool
@@ -25,73 +23,38 @@ func TestResolveTargetDatabase(t *testing.T) {
 			name:               "flag database takes precedence over connection string",
 			flagDatabase:       "myapp",
 			connConfigDatabase: "postgres",
-			requireDatabase:    true,
-			commandName:        "deploy",
-			verbose:            false,
 			wantDatabase:       "myapp",
-			wantErr:            false,
 		},
 		{
 			name:               "use connection string database when flag not provided",
 			flagDatabase:       "",
 			connConfigDatabase: "myapp",
-			requireDatabase:    true,
-			commandName:        "deploy",
-			verbose:            false,
 			wantDatabase:       "myapp",
-			wantErr:            false,
 		},
 		{
-			name:               "error when no database provided and required",
+			name:               "error when neither source supplies a database",
 			flagDatabase:       "",
 			connConfigDatabase: "",
-			requireDatabase:    true,
-			commandName:        "deploy",
-			verbose:            false,
-			wantDatabase:       "",
 			wantErr:            true,
-		},
-		{
-			name:               "empty database allowed when not required",
-			flagDatabase:       "",
-			connConfigDatabase: "",
-			requireDatabase:    false,
-			commandName:        "deploy",
-			verbose:            false,
-			wantDatabase:       "",
-			wantErr:            false,
 		},
 		{
 			name:               "flag database overrides connection string (same name)",
 			flagDatabase:       "myapp",
 			connConfigDatabase: "myapp",
-			requireDatabase:    true,
-			commandName:        "deploy",
-			verbose:            false,
 			wantDatabase:       "myapp",
-			wantErr:            false,
 		},
 		{
 			name:               "verbose logging when flag overrides connection string",
 			flagDatabase:       "override_db",
 			connConfigDatabase: "original_db",
-			requireDatabase:    true,
-			commandName:        "test",
 			verbose:            true,
 			wantDatabase:       "override_db",
-			wantErr:            false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDatabase, err := resolveTargetDatabase(
-				tt.flagDatabase,
-				tt.connConfigDatabase,
-				tt.requireDatabase,
-				tt.commandName,
-				tt.verbose,
-			)
+			gotDatabase, err := resolveTargetDatabase(tt.flagDatabase, tt.connConfigDatabase, tt.verbose)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveTargetDatabase() error = %v, wantErr %v", err, tt.wantErr)
@@ -335,7 +298,7 @@ func TestResolveConnection_GranularFlags(t *testing.T) {
 
 // TestResolveTargetDatabase_ErrorMessages tests that helpful error messages are returned.
 func TestResolveTargetDatabase_ErrorMessages(t *testing.T) {
-	_, err := resolveTargetDatabase("", "", true, "deploy", false)
+	_, err := resolveTargetDatabase("", "", false)
 
 	if err == nil {
 		t.Fatal("expected error when no database provided, got nil")
@@ -353,6 +316,18 @@ func TestResolveTargetDatabase_ErrorMessages(t *testing.T) {
 	for _, phrase := range expectedPhrases {
 		if !strings.Contains(errMsg, phrase) {
 			t.Errorf("error message missing expected phrase %q\nGot: %s", phrase, errMsg)
+		}
+	}
+
+	// A remediation the reader cannot paste is worse than none: <project_path>
+	// is positional and required, so a sample without it exits 2 before the
+	// connection string is read.
+	for line := range strings.SplitSeq(errMsg, "\n") {
+		if !strings.Contains(line, "pgmi deploy") {
+			continue
+		}
+		if !strings.Contains(line, "pgmi deploy . ") {
+			t.Errorf("remediation omits the required <project_path>: %q", strings.TrimSpace(line))
 		}
 	}
 }

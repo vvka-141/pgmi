@@ -1,6 +1,7 @@
 ---
 name: pgmi-metadata-system
-description: "Use when working with <pgmi-meta> blocks, sortKeys, or execution ordering in advanced templates"
+description: "Use when working with <pgmi-meta> blocks, sortKeys, or execution ordering in any pgmi project"
+scope: core
 user_invocable: true
 ---
 
@@ -185,9 +186,9 @@ migrations/2025-01-16/001
 
 -- Safe to run multiple times
 CREATE OR REPLACE FUNCTION api.get_users()
-RETURNS SETOF users
+RETURNS SETOF "user"
 AS $$
-    SELECT * FROM users WHERE deleted_at IS NULL;
+    SELECT * FROM "user" WHERE deleted_at IS NULL;
 $$ LANGUAGE sql;
 ```
 
@@ -208,7 +209,7 @@ $$ LANGUAGE sql;
 */
 
 -- Should only run once
-ALTER TABLE users ADD COLUMN email TEXT;
+ALTER TABLE "user" ADD COLUMN email TEXT;
 ```
 
 ### Tracking Behavior
@@ -228,30 +229,28 @@ END IF;
 
 ## Fallback Identity System
 
-**Files without metadata automatically receive deterministic UUID**:
+**Files without metadata automatically receive a deterministic UUID**:
 ```
-UUID v5 = SHA1(namespace_uuid, normalized_path)
+generic_id = md5(raw_path)::uuid
 ```
 
-**Normalization Rules**:
-- Lowercase conversion
-- Remove leading `./`
-- Forward slashes enforced
+The CLI (`pgmi metadata plan`) and the session view (`pgmi_plan_view.generic_id`)
+use the same algorithm: MD5 of the raw, case-sensitive path including the `./`
+prefix the scanner adds. The result is not RFC-4122 compliant.
 
 **Example**:
 ```
-"./migrations/001_users.sql" → uuid_v5(namespace, "migrations/001_users.sql")
-"./SETUP/Schema.SQL"         → uuid_v5(namespace, "setup/schema.sql")
+"./migrations/001_users.sql" → md5("./migrations/001_users.sql") as UUID
+"./SETUP/Schema.SQL"         → md5("./SETUP/Schema.SQL") as UUID   (different from lowercase)
 ```
 
 **Benefits**:
 - No metadata required for simple projects
 - Consistent identity for files without metadata
-- Survives case-only renames
 
-**Limitation**:
-- Fallback UUID changes if file path changes
-- Use explicit metadata for stability across renames
+**Limitations**:
+- Fallback UUID changes if file path changes (including case changes)
+- Use explicit `<pgmi-meta>` id for stability across renames
 
 ## Session-Scoped Database Objects
 
@@ -280,21 +279,29 @@ SELECT
     COALESCE(m.idempotent, true) AS idempotent,
     COALESCE(m.description, '') AS description,
     unnested.sort_key,
-    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
+    ROW_NUMBER() OVER (
+        ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"
+    ) AS execution_order
 FROM pg_temp._pgmi_source s
 LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
 CROSS JOIN LATERAL UNNEST(
     COALESCE(NULLIF(m.sort_keys, '{}'), ARRAY[s.path])
 ) AS unnested(sort_key)
-ORDER BY unnested.sort_key, s.path;
+;
 ```
 
 **Key Columns**:
 - `id`: User-provided UUID from metadata (nullable)
 - `generic_id`: Deterministic fallback UUID (md5 of path)
 - `sort_key`: Expanded from sort_keys array (one row per key)
-- `execution_order`: Sequential order based on sort_key + path
+- `execution_order`: Sequential order based on sort_key + path, compared as bytes
 - `idempotent`: Controls one-time vs always-rerun behavior
+
+**Why `COLLATE "C"`**: `sort_key` mixes two domains — your sortKeys (`001/000`) and
+the path fallback for files without metadata (`./migrations/002_data.sql`). Under a
+linguistic collation such as `en_US.utf8`, `.` sorts *after* digits, so the two groups
+invert and the same project deploys in a different order on a different server. Byte
+order makes the plan a property of the project, not of the server's locale.
 
 **How UNNEST Works**:
 ```sql
@@ -440,9 +447,11 @@ CREATE TABLE IF NOT EXISTS example_script_log (
 
 ```sql
 FOR v_script IN (
-    SELECT * FROM pg_temp.pgmi_plan_view
-    WHERE id IS NOT NULL  -- Only explicit metadata scripts
-    ORDER BY execution_order ASC
+    SELECT p.* FROM pg_temp.pgmi_plan_view p
+    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+    WHERE s.is_sql_file          -- the plan holds every file, not only SQL
+      AND p.id IS NOT NULL       -- only explicit metadata scripts
+    ORDER BY p.execution_order ASC
 )
 LOOP
     RAISE NOTICE '  → [#%] % (% | sort_key: %)',
@@ -472,7 +481,7 @@ BEGIN
     -- Get script from plan
     SELECT * INTO v_script
     FROM pg_temp.pgmi_plan_view
-    WHERE generic_id = p_script_id AND sort_key = p_sort_key;
+    WHERE COALESCE(id, generic_id) = p_script_id AND sort_key = p_sort_key;
 
     -- Check execution log
     SELECT * INTO v_exec_log
@@ -632,7 +641,7 @@ When modifying metadata system:
 ```sql
 /*
 <pgmi-meta
-    id="a1b2c3d4-e5f6-4789-a012-3456789abcdef"
+    id="a1b2c3d4-e5f6-4789-a012-3456789abcde"
     idempotent="true">
 
   <description>
@@ -682,7 +691,7 @@ $$;
 </pgmi-meta>
 */
 
-ALTER TABLE users ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE "user" ADD COLUMN deleted_at TIMESTAMPTZ;
 CREATE INDEX idx_users_deleted_at ON users(deleted_at) WHERE deleted_at IS NOT NULL;
 ```
 

@@ -1,9 +1,12 @@
 ---
 name: pgmi-mcp
-description: "MCP handler implementation, types, context7 integration"
+description: "Advanced template: MCP handler implementation, types, context7 integration"
+scope: advanced-template
 user_invocable: false
 ---
 
+
+> This skill describes application code you own after `pgmi init --template advanced`, not pgmi core.
 
 **Purpose**: Documents MCP (Model Context Protocol) implementation patterns in pgmi's advanced template.
 
@@ -77,14 +80,16 @@ api.mcp_server_capabilities() RETURNS jsonb
 
 ```sql
 -- Handles MCP handshake (MUST be called first by clients)
-api.mcp_initialize(p_params jsonb, p_request_id text) RETURNS api.mcp_response
+api.mcp_initialize(p_params jsonb, p_request_id jsonb) RETURNS api.mcp_response
 
--- Supported protocol versions: '2024-11-05', '2025-03-26'
+-- Supported protocol versions: '2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'
+-- An unsupported version is NOT an error: the server answers with its newest
+-- supported version and the client decides whether to proceed or disconnect.
 
 -- Success response:
 -- {jsonrpc: "2.0", id: "...", result: {protocolVersion, serverInfo, capabilities}}
 
--- Error (invalid version):
+-- Error (protocolVersion absent from params):
 -- {jsonrpc: "2.0", id: "...", error: {code: -32602, message: "..."}}
 ```
 
@@ -92,7 +97,7 @@ api.mcp_initialize(p_params jsonb, p_request_id text) RETURNS api.mcp_response
 
 ```sql
 -- Responds to liveness checks
-api.mcp_ping(p_request_id text) RETURNS api.mcp_response
+api.mcp_ping(p_request_id jsonb) RETURNS api.mcp_response
 -- Returns: {jsonrpc: "2.0", id: "...", result: {}}
 ```
 
@@ -273,17 +278,21 @@ END;
 );
 ```
 
-### Transaction Isolation Floor
+### Transaction Policy
 
 Any handler (tool, resource, or prompt) may declare a minimum transaction
-isolation level with the metadata key `requiredTransactionIsolation`
+isolation level with the metadata key `minTransactionIsolation`
 (`read committed` | `repeatable read` | `serializable`; case- and
-separator-insensitive; unsupported values are rejected at registration). The
-gateway cannot raise the level itself — the caller opens the transaction at
-the required level (the bundled HTTP gateway honors the
-`X-PGMI-Transaction-Isolation` request header), and the database gateway
-rejects a too-weak transaction with a `-32600` error carrying
-`data.code = 'pgmi.transaction_isolation_too_weak'`.
+separator-insensitive; unsupported values are rejected at registration) and a
+read-only policy with `readOnly: true`. The bundled HTTP gateway resolves the
+policy before opening the transaction (`api.mcp_request_policy(request,
+requested)`) and opens at `max(floor, requested)`, `READ ONLY` when declared
+(`SERIALIZABLE READ ONLY` opens `DEFERRABLE` — it can never abort with 40001),
+so routes just work and `X-PGMI-Transaction-Isolation` is escalation, not
+obligation. The database gateway cannot change the characteristics itself; it
+rejects a shortfall fail-closed with a `-32600` error carrying
+`data.code = 'pgmi.transaction_isolation_too_weak'` (or
+`pgmi.transaction_read_only_required`).
 
 ---
 
@@ -296,7 +305,7 @@ api.mcp_call_tool(
     p_name text,           -- Tool name
     p_arguments jsonb,     -- Tool arguments
     p_context jsonb,       -- Auth: {"user_id": "...", "tenant_id": "..."}
-    p_request_id text      -- Request ID to echo
+    p_request_id jsonb     -- Request ID to echo, jsonb to preserve its JSON type
 ) RETURNS api.mcp_response
 ```
 
@@ -306,7 +315,7 @@ api.mcp_call_tool(
 api.mcp_read_resource(
     p_uri text,            -- Resource URI
     p_context jsonb,       -- Auth context
-    p_request_id text
+    p_request_id jsonb
 ) RETURNS api.mcp_response
 ```
 
@@ -317,7 +326,7 @@ api.mcp_get_prompt(
     p_name text,           -- Prompt name
     p_arguments jsonb,     -- Prompt arguments
     p_context jsonb,       -- Auth context
-    p_request_id text
+    p_request_id jsonb
 ) RETURNS api.mcp_response
 ```
 
@@ -575,18 +584,23 @@ END $$;
 
 ### Testing via Dispatcher
 
+The template ships with no pre-registered MCP handlers — register your own
+first (see `docs/advanced/MCP-HANDLERS.md` for complete recipes), then test:
+
 ```sql
 -- Full round-trip test
 SELECT (api.mcp_handle_request(
     '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb
 )).envelope;
 
+-- Lists only handlers YOU have registered
 SELECT (api.mcp_handle_request(
     '{"jsonrpc":"2.0","id":"2","method":"tools/list"}'::jsonb
 )).envelope;
 
+-- Replace 'your_tool' with the name of a handler you registered
 SELECT (api.mcp_handle_request(
-    '{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"database_info","arguments":{}}}'::jsonb
+    '{"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"your_tool","arguments":{}}}'::jsonb
 )).envelope;
 ```
 
@@ -669,7 +683,7 @@ Tools should validate arguments against their inputSchema. Use context7 to verif
 ## See Also
 
 - **`pgmi-api-architecture`**: HTTP-first protocol design principles
-- **`docs/MCP.md`**: Full MCP documentation for users
+- **`docs/advanced/MCP.md`**: Full MCP documentation for users
 - **MCP Specification**: Fetch via context7 for current details
 
 ---

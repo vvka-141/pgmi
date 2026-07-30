@@ -33,14 +33,112 @@ jobs:
         with:
           go-version: '1.25'
 
+      # PGMI_REQUIRE_DB: without it an unreachable Docker daemon skips every
+      # integration test and the job still passes.
       - name: Run tests
-        run: go test -race -coverprofile=coverage.out -timeout 10m ./...
+        env:
+          PGMI_REQUIRE_DB: '1'
+        run: go test -race -tags pgmi_testhooks -coverprofile=coverage.out -timeout 10m ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
         continue-on-error: true
+
+  # The compatibility table is a claim, and until this job existed nothing
+  # checked it: every test ran against a single PostgreSQL 17 image. Both floors
+  # are covered — 11 for pgmi core and the basic template, 15 for the advanced
+  # template — so a construct that silently raises either one red-lines here
+  # instead of reaching a user.
+  #
+  # Official postgres:N images via `services`, which is both cheaper than
+  # testcontainers for a matrix and published per major, so a version is one
+  # matrix entry.
+  test-pg-versions:
+    name: PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['11', '15', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      PGMI_REQUIRE_DB: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Core and basic template
+        run: |
+          go test -timeout 25m \
+            ./internal/services/... ./internal/params/... ./internal/contract/... \
+            ./internal/files/... ./internal/cli/... ./internal/preprocessor/... \
+            ./internal/db/... ./internal/metadata/...
+          go test -timeout 10m -run 'TestTemplateDeployment/basic' ./internal/scaffold
+
+      # The advanced template is 15+ and says so: it needs xid8 (13) and
+      # security_invoker views (15). Running it on 11 would conflate the two
+      # floors and make the core result unreadable.
+      - name: Advanced template
+        if: matrix.pg != '11'
+        run: go test -timeout 15m ./internal/scaffold
+
+  # pgmi ships Windows and macOS binaries, so their behaviour has to be
+  # exercised somewhere: path separators and drive letters in project scanning,
+  # .pgpass location, CRLF through the head/tail splitter, signal handling.
+  #
+  # -short only. GitHub's Windows and macOS runners cannot run the Linux
+  # containers the integration tests need, so PGMI_REQUIRE_DB would fail every
+  # one of them. No -race either: on Windows it needs a C toolchain, and a data
+  # race is in Go code rather than in the platform behaviour these jobs exist to
+  # cover. The Linux job above runs the full suite under -race.
+  test-platforms:
+    name: Test (${{ matrix.os }}, ${{ matrix.shell }})
+    runs-on: ${{ matrix.os }}
+    # macOS has never been observed green here. Make it blocking once one run
+    # has passed — this must not stay non-blocking (PGMI-258 follow-up).
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            shell: pwsh
+          # Both shells on Windows: a test that resolved `bash` through PATH
+          # passed under Git Bash and failed from PowerShell (PGMI-239..244).
+          # One shell green is not a green suite.
+          - os: windows-latest
+            shell: bash
+          - os: macos-latest
+            shell: bash
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Run unit tests
+        run: go test -short -tags pgmi_testhooks -timeout 10m ./...
 
   connection-tests:
     name: Connection & Security Tests
@@ -53,25 +151,17 @@ jobs:
           go-version: '1.25'
 
       - name: Run connection tests
+        env:
+          PGMI_REQUIRE_DB: '1'
         run: go test -race -tags conntest -timeout 5m ./internal/db/conntest/...
 
-  example-test-gated:
-    name: Example — test-gated deployment
+  # Informational on branches: the vulnerability database moves independently of
+  # this repo, so a CVE published overnight must not red-line unrelated PRs. The
+  # release job runs the same pinned command as a hard gate.
+  vulncheck:
+    name: Vulnerability scan
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -79,33 +169,17 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Build pgmi
-        run: go build -o pgmi ./cmd/pgmi
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
-      - name: Success path — tests pass, deployment commits
-        working-directory: examples/test-gated-deploy
-        run: ../../pgmi deploy . -d pgmi_example --force
-
-      - name: Failure path — failing test rolls the whole deployment back
-        working-directory: examples/test-gated-deploy
-        run: |
-          cp break-it/test_audit_log.sql __test__/
-          set +e
-          ../../pgmi deploy . -d pgmi_example_broken --force
-          code=$?
-          set -e
-          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
-
-      - name: Verify rollback — the failed deploy left no trace
-        run: |
-          rolled_back=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5434 -U postgres -d pgmi_example_broken -tAc \
-            "SELECT to_regclass('public.audit_log') IS NULL")
-          test "$rolled_back" = "t" || { echo "audit_log survived the rollback"; exit 1; }
+  examples:
+    name: Examples
+    uses: ./.github/workflows/examples.yml
 
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test, connection-tests, example-test-gated]
+    needs: [lint, test, test-pg-versions, test-platforms, connection-tests, examples]
     strategy:
       matrix:
         goos: [linux, darwin, windows]

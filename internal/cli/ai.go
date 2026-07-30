@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/vvka-141/pgmi/internal/ui"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var aiCmd = &cobra.Command{
@@ -52,7 +53,7 @@ identifiers.
 
 Output includes: view names and columns, test function signatures,
 step types, exit codes, and preprocessor macro forms.`,
-	Args: cobra.NoArgs,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: runAIContract,
 }
 
@@ -73,7 +74,7 @@ adds a transport-core skeleton and recommended generator.
 
 This is the APPLICATION API (deployed handlers). For the SESSION API
 (temp views/functions for deploy.sql), use pgmi ai contract.`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              usageArgs(cobra.MaximumNArgs(1)),
 	ValidArgsFunction: completeClientLangs,
 	RunE:              runAIClient,
 }
@@ -109,15 +110,19 @@ func runAISkills(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Use `pgmi ai skill <name>` to get full skill content.")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "| Skill | Description |")
-	fmt.Fprintln(w, "|-------|-------------|")
+	fmt.Fprintln(w, "| Skill | Scope | Description |")
+	fmt.Fprintln(w, "|-------|-------|-------------|")
 
 	for _, s := range skills {
 		desc := s.Description
 		if desc == "" {
 			desc = "(no description)"
 		}
-		fmt.Fprintf(w, "| `%s` | %s |\n", s.Name, desc)
+		scope := s.Scope
+		if scope == "" {
+			scope = "core"
+		}
+		fmt.Fprintf(w, "| `%s` | %s | %s |\n", s.Name, scope, desc)
 	}
 
 	fmt.Fprintln(w)
@@ -131,7 +136,11 @@ func runAISkill(cmd *cobra.Command, args []string) error {
 
 	content, err := ai.GetSkill(name)
 	if err != nil {
-		return err
+		// ErrUsage so an unknown skill exits 2, matching `templates describe
+		// nosuch` — the same mistake, a name the CLI does not know. Tagged here
+		// rather than in ai.GetSkill because the MCP ai_skill tool shares that
+		// lookup and reports failures as tool results, not exit codes.
+		return fmt.Errorf("%w: %w", pgmi.ErrUsage, err)
 	}
 
 	ui.Page(content)

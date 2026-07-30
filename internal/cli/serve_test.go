@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,7 @@ import (
 // decoded result object plus whether it was an error result.
 func callTool(t *testing.T, name string, args map[string]any) (map[string]any, bool) {
 	t.Helper()
-	srv := buildMCPServer("0.0.0-test")
+	srv := buildMCPServer()
 
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
@@ -53,8 +54,179 @@ func resultText(t *testing.T, result map[string]any) string {
 	return text
 }
 
+// listTools returns the tools/list descriptors from the real server.
+func listTools(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	srv := buildMCPServer()
+	var out strings.Builder
+	if err := srv.Serve(context.Background(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	var resp struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byName := map[string]map[string]any{}
+	for _, d := range resp.Result.Tools {
+		name, _ := d["name"].(string)
+		byName[name] = d
+	}
+	return byName
+}
+
+// The spec ties the two together: a tool declaring outputSchema must return
+// conforming structuredContent, and a tool returning plain text must not declare
+// one. Splitting the tools by return type keeps that promise honest.
+func TestServeOutputSchemaMatchesStructuredOutput(t *testing.T) {
+	tools := listTools(t)
+
+	structured := []string{"ai_skills", "templates_list", "metadata_plan", "metadata_validate", "init", "deploy"}
+	textOnly := []string{"ai_overview", "ai_skill", "ai_contract"}
+
+	for _, name := range structured {
+		if tools[name] == nil {
+			t.Fatalf("tool %q not registered", name)
+		}
+		if tools[name]["outputSchema"] == nil {
+			t.Errorf("tool %q returns a structured value and must declare outputSchema", name)
+		}
+	}
+	for _, name := range textOnly {
+		if tools[name] == nil {
+			t.Fatalf("tool %q not registered", name)
+		}
+		if tools[name]["outputSchema"] != nil {
+			t.Errorf("tool %q returns text and produces no structuredContent, so it must not declare outputSchema", name)
+		}
+	}
+}
+
+// The declared schema is only worth having if the tool actually emits
+// structuredContent. Exercise a tool that needs neither database nor filesystem.
+func TestServeStructuredToolEmitsStructuredContent(t *testing.T) {
+	result, isErr := callTool(t, "templates_list", nil)
+	if isErr {
+		t.Fatalf("templates_list failed: %v", result)
+	}
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("templates_list declares an outputSchema but sent no structuredContent: %v", result)
+	}
+	if _, ok := sc["templates"].([]any); !ok {
+		t.Errorf("structuredContent must match the declared schema (templates array), got: %v", sc)
+	}
+}
+
+func TestConfirmOverwrite(t *testing.T) {
+	tests := []struct {
+		name      string
+		overwrite bool
+		database  string
+		confirm   string
+		wantErr   bool
+	}{
+		{"no overwrite needs no confirmation", false, "prod", "", false},
+		{"no overwrite ignores a stray confirmation", false, "prod", "whatever", false},
+		{"overwrite without confirmation is refused", true, "prod", "", true},
+		{"overwrite with a mismatched name is refused", true, "prod", "prod_test", true},
+		{"overwrite with the exact name proceeds", true, "prod", "prod", false},
+		{"confirmation is case-sensitive", true, "prod", "PROD", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := confirmOverwrite(tt.overwrite, tt.database, tt.confirm)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("confirmOverwrite(%v, %q, %q) error = %v, wantErr %v",
+					tt.overwrite, tt.database, tt.confirm, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// The guard must run before anything connects: a bad echo-back on a deploy with a
+// real-looking connection string must fail without touching a server.
+func TestServeDeployOverwriteRequiresConfirmation(t *testing.T) {
+	result, isErr := callTool(t, "deploy", map[string]any{
+		"path":       t.TempDir(),
+		"connection": "postgresql://nobody@127.0.0.1:1/postgres",
+		"database":   "important_prod",
+		"overwrite":  true,
+	})
+	if !isErr {
+		t.Fatal("overwrite without confirmDatabaseName must be refused")
+	}
+	if text := resultText(t, result); !strings.Contains(text, "confirmDatabaseName") {
+		t.Errorf("error should name the missing parameter, got: %s", text)
+	}
+
+	result, isErr = callTool(t, "deploy", map[string]any{
+		"path":                t.TempDir(),
+		"connection":          "postgresql://nobody@127.0.0.1:1/postgres",
+		"database":            "important_prod",
+		"overwrite":           true,
+		"confirmDatabaseName": "important_prd",
+	})
+	if !isErr {
+		t.Fatal("a mismatched confirmDatabaseName must be refused")
+	}
+	if text := resultText(t, result); !strings.Contains(text, "does not match") {
+		t.Errorf("error should say the names disagree, got: %s", text)
+	}
+}
+
+// The handshake is the only place an MCP client learns which pgmi it is
+// driving, so it must agree with what `pgmi version` reports. A go-install
+// build leaves the ldflags `version` at "dev" and recovers the real one from
+// build info — the divergence this guards. Faking build info is what makes it
+// reachable from a test binary, where Main.Version is otherwise "(devel)".
+func TestServeHandshakeReportsTheRealVersion(t *testing.T) {
+	if version != "dev" {
+		t.Skipf("binary was stamped with -ldflags version=%q; nothing to recover", version)
+	}
+	orig := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = orig })
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v9.9.9-fake"}}, true
+	}
+
+	srv := buildMCPServer()
+	var out strings.Builder
+	err := srv.Serve(context.Background(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`), &out)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	var resp struct {
+		Result struct {
+			ServerInfo struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	wantVersion, _, _ := resolveVersionInfo()
+	if resp.Result.ServerInfo.Name != "pgmi" {
+		t.Errorf("serverInfo.name = %q, want %q", resp.Result.ServerInfo.Name, "pgmi")
+	}
+	if resp.Result.ServerInfo.Version != wantVersion {
+		t.Errorf("serverInfo.version = %q, but pgmi version reports %q",
+			resp.Result.ServerInfo.Version, wantVersion)
+	}
+}
+
 func TestServeToolsListHasAllTools(t *testing.T) {
-	srv := buildMCPServer("v")
+	srv := buildMCPServer()
 	var out strings.Builder
 	err := srv.Serve(context.Background(),
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`), &out)

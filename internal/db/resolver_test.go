@@ -976,3 +976,161 @@ func TestResolveConnectionParams_CertFlagsPrecedence(t *testing.T) {
 		t.Errorf("SSLPassword = %q, want env-pass (env only)", cfg.SSLPassword)
 	}
 }
+
+// TestResolveConnectionParams_ConnectionStringCertBeatsEnv pins the libpq rule:
+// an environment variable supplies a default, so a value given in the connection
+// string wins. Inverted, a stale PGSSLROOTCERT swaps the trust anchor out from
+// under a verify-full connection string and PGSSLCERT swaps the mTLS client
+// identity, both without a word to the operator.
+func TestResolveConnectionParams_ConnectionStringCertBeatsEnv(t *testing.T) {
+	connStr := "postgresql://u@h/db?sslmode=verify-full" +
+		"&sslrootcert=/from/conn-ca.crt&sslcert=/from/conn.crt" +
+		"&sslkey=/from/conn.key&sslpassword=fromconn"
+
+	env := &EnvVars{
+		PGSSLROOTCERT: "/from/env-ca.crt",
+		PGSSLCERT:     "/from/env.crt",
+		PGSSLKEY:      "/from/env.key",
+		PGSSLPASSWORD: "fromenv",
+	}
+
+	cfg, _, err := ResolveConnectionParams(connStr,
+		&GranularConnFlags{}, &AzureFlags{}, &AWSFlags{}, &GoogleFlags{},
+		&CertFlags{}, env, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, c := range []struct{ field, got, want string }{
+		{"SSLRootCert", cfg.SSLRootCert, "/from/conn-ca.crt"},
+		{"SSLCert", cfg.SSLCert, "/from/conn.crt"},
+		{"SSLKey", cfg.SSLKey, "/from/conn.key"},
+		{"SSLPassword", cfg.SSLPassword, "fromconn"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q — the environment overrode the connection string",
+				c.field, c.got, c.want)
+		}
+	}
+}
+
+// The mirror case, so the fix cannot be "ignore the environment". Where the
+// connection string says nothing, the environment still supplies the default.
+func TestResolveConnectionParams_EnvFillsCertGapsInConnectionString(t *testing.T) {
+	connStr := "postgresql://u@h/db?sslmode=verify-full&sslcert=/from/conn.crt"
+
+	env := &EnvVars{
+		PGSSLROOTCERT: "/from/env-ca.crt",
+		PGSSLCERT:     "/from/env.crt",
+		PGSSLKEY:      "/from/env.key",
+		PGSSLPASSWORD: "fromenv",
+	}
+
+	cfg, _, err := ResolveConnectionParams(connStr,
+		&GranularConnFlags{}, &AzureFlags{}, &AWSFlags{}, &GoogleFlags{},
+		&CertFlags{}, env, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.SSLCert != "/from/conn.crt" {
+		t.Errorf("SSLCert = %q, want /from/conn.crt", cfg.SSLCert)
+	}
+	for _, c := range []struct{ field, got, want string }{
+		{"SSLRootCert", cfg.SSLRootCert, "/from/env-ca.crt"},
+		{"SSLKey", cfg.SSLKey, "/from/env.key"},
+		{"SSLPassword", cfg.SSLPassword, "fromenv"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q — the environment must still fill what the "+
+				"connection string leaves unset", c.field, c.got, c.want)
+		}
+	}
+}
+
+// A CLI flag stays above the connection string. That edge is pgmi's own
+// convention, not libpq's, and moving the connection string up must not take it.
+func TestResolveConnectionParams_CertFlagBeatsConnectionString(t *testing.T) {
+	connStr := "postgresql://u@h/db?sslmode=verify-full&sslrootcert=/from/conn-ca.crt"
+
+	cfg, _, err := ResolveConnectionParams(connStr,
+		&GranularConnFlags{}, &AzureFlags{}, &AWSFlags{}, &GoogleFlags{},
+		&CertFlags{SSLRootCert: "/from/flag-ca.crt"},
+		&EnvVars{PGSSLROOTCERT: "/from/env-ca.crt"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.SSLRootCert != "/from/flag-ca.crt" {
+		t.Errorf("SSLRootCert = %q, want /from/flag-ca.crt (--sslrootcert is the top of the chain)",
+			cfg.SSLRootCert)
+	}
+}
+
+// A connection string replaces the pgmi.yaml connection block; it does not
+// merge with it field by field. Every other ProjectConfig case in this file
+// passes "" for the string, so nothing covered the combination.
+//
+// The distinction matters because the documented precedence chain reads as
+// per-field ("higher sources override lower ones"), and for flags and
+// environment variables it is. For --connection it is not: a string naming
+// only a host leaves port, username, sslmode and database at their built-in
+// defaults even when pgmi.yaml specifies all four.
+//
+// That is the safer of the two designs, which is why this pins it rather than
+// changing it. Merging yaml's sslmode = require into a string that points at a
+// different host would silently apply one host's trust policy to another.
+func TestResolveConnectionParams_ConnectionStringReplacesProjectConfig(t *testing.T) {
+	pc := &config.ProjectConfig{
+		Connection: config.ConnectionConfig{
+			Host:     "yamlhost",
+			Port:     5434,
+			Username: "yamluser",
+			Database: "yamldb",
+			SSLMode:  "require",
+		},
+	}
+
+	t.Run("a host-only string leaves every other field at its default", func(t *testing.T) {
+		cfg, _, err := ResolveConnectionParams("postgresql://stringhost",
+			&GranularConnFlags{}, nil, nil, nil, nil, &EnvVars{}, pc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, f := range []struct{ name, got, notWant string }{
+			{"Host", cfg.Host, "yamlhost"},
+			{"Username", cfg.Username, "yamluser"},
+			{"SSLMode", cfg.SSLMode, "require"},
+			{"Database", cfg.Database, "yamldb"},
+		} {
+			if f.got == f.notWant {
+				t.Errorf("%s = %q, taken from pgmi.yaml — the connection string is "+
+					"supposed to replace that block, not merge with it", f.name, f.got)
+			}
+		}
+		if cfg.Host != "stringhost" {
+			t.Errorf("Host = %q, want stringhost (from the connection string)", cfg.Host)
+		}
+		if cfg.Port == 5434 {
+			t.Error("Port = 5434, taken from pgmi.yaml rather than the default")
+		}
+		// The consequence users hit: pgmi.yaml names a database, the string does
+		// not, and the deploy targets postgres.
+		if cfg.Database != "postgres" {
+			t.Errorf("Database = %q, want postgres — a string without a dbname falls to "+
+				"the built-in default, documented in CONFIGURATION.md", cfg.Database)
+		}
+	})
+
+	t.Run("without a string the same pgmi.yaml supplies everything", func(t *testing.T) {
+		cfg, _, err := ResolveConnectionParams("",
+			&GranularConnFlags{}, nil, nil, nil, nil, &EnvVars{}, pc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Host != "yamlhost" || cfg.Port != 5434 || cfg.Username != "yamluser" ||
+			cfg.Database != "yamldb" || cfg.SSLMode != "require" {
+			t.Errorf("pgmi.yaml was not applied without a connection string: %+v", cfg)
+		}
+	})
+}

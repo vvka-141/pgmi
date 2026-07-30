@@ -17,19 +17,12 @@ In this paradigm:
 
 ### Why This Matters
 
-Traditional architecture:
-```
-User → Web Server → Business Logic → ORM → Database
-                         ↑
-                   (complexity lives here)
-```
+In a traditional stack, business logic spreads across the middle tier (web
+servers, services, ORM) and the database is reduced to storage. In the
+dataset-centric architecture, protocols trigger PostgreSQL transactions and
+the complexity lives where the data lives:
 
-Dataset-centric architecture:
-```
-User → Gateway → PostgreSQL Transaction
-                        ↑
-                  (complexity lives here)
-```
+![Traditional stack versus application-as-a-dataset](https://vvka-141.github.io/pgmi/docs/diagrams/d10-application-as-dataset.drawio.svg)
 
 **Benefits:**
 - **Transactional guarantees**: Every state change is atomic, consistent, isolated, durable
@@ -175,7 +168,7 @@ $$ LANGUAGE plpgsql;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'confirm-order-handler-uuid',
-        'uri', '^/orders/([0-9a-f-]+)/confirm$',
+        'path', '/orders/{orderId}/confirm',
         'httpMethod', '^POST$',
         'name', 'confirm_order',
         'requiresAuth', true

@@ -12,6 +12,35 @@ For the session API reference (views, columns, functions), see [Session API](ses
 
 ![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
 
+The whole deployment is one connection with a numbered failure surface:
+
+![The deploy sequence: validate, connect, lock, prepare the session, preprocess, then your deploy.sql runs — with exit codes at each failure point](diagrams/d04-deploy-sequence.drawio.svg)
+
+---
+
+## What gets loaded
+
+pgmi loads **every file** under the project path into the session — not just
+SQL. Use `is_sql_file` in `pgmi_source_view` to filter, or read a `.json`,
+`.csv` or `.xml` file as data (see the loading recipes below).
+
+Four things are excluded:
+
+| Excluded | Why |
+|---|---|
+| The root `deploy.sql` | pgmi executes it; it never appears in `pgmi_source_view`. Nested ones (`examples/deploy.sql`) load normally. |
+| `__test__/` and `__tests__/` | Loaded into `pgmi_test_source_view` instead, so a deployment loop can never execute a test file by accident. |
+| Hidden files and directories (any name starting with `.`) | `.git`, `.venv`, `.idea`, `.env` — tooling and secrets, not project content. |
+| `node_modules/` and `__pycache__/` | Dependency and build caches. |
+
+Everything else is read as **text**. A binary file inside the project path
+(and outside the exclusions above) fails the deploy before any connection is
+made, naming the file — move it out of the project path or into a hidden
+directory.
+
+Discovery decides what enters the session; it never decides what runs. Your
+`deploy.sql` still selects and orders everything it executes.
+
 ---
 
 ## The basic pattern
@@ -86,8 +115,11 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         BEGIN
@@ -141,7 +173,7 @@ BEGIN
 END $$;
 ```
 
-The `checksum` column from `pgmi_source_view` is a SHA-256 of the original file content. If the file changes, it re-executes.
+`pgmi_source_view` carries two checksums: `checksum` (raw SHA-256) and `pgmi_checksum` (normalized — comments stripped, case-folded, whitespace collapsed). Track against whichever fits — see [Checksum-based change detection](#checksum-based-change-detection).
 
 ---
 
@@ -293,7 +325,14 @@ For large or complex CSV files (quoted fields, escaping), use PostgreSQL's `COPY
 
 ## Checksum-based change detection
 
-Skip files that haven't changed since the last deployment:
+Skip files that haven't changed since the last deployment. This example tracks
+`pgmi_checksum` (the normalized checksum — comments stripped, case-folded,
+whitespace collapsed) so that reformatting or adding comments won't force a
+re-load. Swap to `checksum` if you need byte-exact change detection.
+
+> **Column name warning:** `pgmi_source_view.checksum` is the raw SHA-256;
+> `pgmi_plan_view.checksum` is the normalized one. Same column name, different
+> value. See [Session API — Two checksums](session-api.md#two-checksums-and-which-to-track-against).
 
 ```sql
 CREATE TABLE IF NOT EXISTS loaded_data_file (
@@ -306,13 +345,13 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content, checksum
+        SELECT path, content, pgmi_checksum
         FROM pg_temp.pgmi_source_view
         WHERE directory = './data/' AND extension = '.json'
     ) LOOP
         IF EXISTS (
             SELECT 1 FROM loaded_data_file
-            WHERE path = v_file.path AND checksum = v_file.checksum
+            WHERE path = v_file.path AND checksum = v_file.pgmi_checksum
         ) THEN
             RAISE NOTICE 'Skipping (unchanged): %', v_file.path;
             CONTINUE;
@@ -321,7 +360,7 @@ BEGIN
         -- Process file content here
 
         INSERT INTO loaded_data_file (path, checksum)
-        VALUES (v_file.path, v_file.checksum)
+        VALUES (v_file.path, v_file.pgmi_checksum)
         ON CONFLICT (path) DO UPDATE
             SET checksum = EXCLUDED.checksum, loaded_at = now();
     END LOOP;
@@ -370,12 +409,70 @@ END $$;
 
 ---
 
-## CREATE INDEX CONCURRENTLY workaround
+## Atomic mode, then psql mode: the execution contract
 
-`CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. Structure your deploy.sql to handle this:
+The whole contract in one sentence: **before your first top-level `COMMIT`,
+pgmi's atomic mode; after it, psql mode.**
+
+pgmi executes deploy.sql on one connection as follows:
+
+- **Head (atomic mode).** Everything up to and including the *first* top-level
+  transaction terminator — `COMMIT` (or its synonyms `END`, `COMMIT WORK`,
+  `COMMIT TRANSACTION`), a top-level `ROLLBACK`, or their `AND CHAIN`
+  variants, and `ABORT` — is sent as one unit and runs as a single
+  transaction. A deploy.sql with **no** top-level terminator is entirely
+  atomic: one transaction, all-or-nothing.
+- **Tail (psql mode).** Every top-level statement after that terminator runs
+  as its own statement, exactly as if you pasted the script into psql:
+  per-statement autocommit, and an explicit `BEGIN ... COMMIT` forms a real
+  multi-statement transaction. This is what makes `CREATE INDEX CONCURRENTLY`
+  work — it only runs outside a transaction block.
+
+**The scaffolded templates are not the no-terminator shape.** Both open with
+`BEGIN`, commit after the test gate, and keep the DONE banner in the tail:
 
 ```sql
--- Phase 1: Schema changes (transactional)
+BEGIN;
+-- migrations, seeds, CALL pgmi_test()
+COMMIT;          <-- the head ends here
+
+DO $$ BEGIN RAISE NOTICE 'DONE'; END $$;   <-- already psql mode
+```
+
+So work appended to a scaffolded deploy.sql lands *after* that `COMMIT` and
+autocommits statement by statement. If it must be gated by the tests, put it
+before the `COMMIT`; if it must be atomic on its own, give it its own
+`BEGIN ... COMMIT`.
+
+Three things that look like terminators and are not: `ROLLBACK TO SAVEPOINT`
+(savepoint control), `COMMIT PREPARED` / `ROLLBACK PREPARED` (they act on a
+foreign prepared transaction), and the `END` that closes a `BEGIN ATOMIC`
+function body — pgmi steps over such a body whole, semicolons and all, so a
+SQL-standard function definition never splits your script.
+
+Two consequences to internalize:
+
+- **Statements between mid-file COMMITs are not implicitly grouped.** A later
+  phase that must be atomic writes its own explicit `BEGIN ... COMMIT` — which
+  also makes the phase boundaries readable top to bottom.
+- **A mid-tail failure stops the deploy but keeps earlier tail statements.**
+  Autocommitted work before the failing statement stays applied (a failure
+  *inside* an explicit tail `BEGIN ... COMMIT` rolls back that transaction
+  only). Make tail statements idempotent so a re-run converges.
+
+One more honest note: the advisory lock the advanced template takes with
+`pg_advisory_xact_lock` is transaction-scoped — it ends at the head's
+`COMMIT`. During the tail, the only concurrency guard is pgmi's own
+session-level deploy lock, which excludes concurrent *pgmi* deploys but not a
+non-pgmi migrator.
+
+### Zero-downtime phased deployment
+
+The interleaved pattern — schema change, concurrent index, transactional
+backfill, another concurrent index — reads top to bottom as it executes:
+
+```sql
+-- Phase 1: schema changes + gated tests (atomic head)
 BEGIN;
 
 DO $$
@@ -384,7 +481,6 @@ BEGIN
     FOR v_file IN (
         SELECT path, content FROM pg_temp.pgmi_source_view
         WHERE directory = './migrations/' AND is_sql_file
-            AND path NOT LIKE '%_concurrent.sql'
         ORDER BY path
     ) LOOP
         EXECUTE v_file.content;
@@ -393,22 +489,71 @@ END $$;
 
 COMMIT;
 
--- Phase 2: Concurrent indexes (non-transactional, must be idempotent)
--- These MUST be top-level statements — DO blocks create an implicit transaction
--- context, which causes CREATE INDEX CONCURRENTLY to fail.
--- pgmi's temp tables survive COMMIT (session-scoped), so they're still queryable.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_date ON orders(created_at);
+-- Phase 2: concurrent index (psql mode — autocommit, outside any transaction).
+-- pgmi's temp views survive COMMIT (session-scoped), so they are still queryable.
+CREATE INDEX CONCURRENTLY idx_user_email ON users(email);
+
+-- Phase 3: batched backfill — atomic because it says so
+BEGIN;
+UPDATE users SET email_normalized = lower(email) WHERE email_normalized IS NULL;
+COMMIT;
+
+-- Phase 4: another concurrent index
+CREATE INDEX CONCURRENTLY idx_order_date ON orders(created_at);
 ```
 
-Because top-level SQL has no procedural constructs (no loops, no variables), concurrent index statements must be written explicitly — you cannot dynamically iterate `pgmi_source_view` for them. Always use `IF NOT EXISTS`:
+Concurrent index statements must be written explicitly at top level — they
+cannot go through `EXECUTE` inside a DO block, because PostgreSQL refuses
+`CREATE INDEX CONCURRENTLY` from any function execution context (the error is
+"cannot be executed from a function"; it fails there even after a `COMMIT`).
+
+#### Making a concurrent index re-runnable
+
+The bare form above builds cleanly once. It is not re-runnable, and neither of
+the two obvious guards is right on its own:
+
+- **`CREATE INDEX CONCURRENTLY IF NOT EXISTS`** matches on *name* — "there is
+  no guarantee that the existing index is anything like the one that would have
+  been created." A concurrent build that fails leaves an `INVALID` index behind
+  (ignored by the planner, still paying write overhead), and `IF NOT EXISTS`
+  sees that name, skips, and the index never comes back.
+- **`DROP INDEX IF EXISTS` then create** does converge, but it discards a
+  perfectly good index on every deploy and pays a full rebuild for it — with a
+  window in between where the index is simply gone and plans degrade. The drop
+  itself takes `ACCESS EXCLUSIVE`, the lock the rest of this section exists to
+  avoid.
+
+Drop only the wreckage, then create only if absent:
 
 ```sql
--- migrations/003_user_email_concurrent.sql
+-- Reap a previous failed build; a healthy index is left alone.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_index
+        WHERE indexrelid = to_regclass('idx_user_email') AND NOT indisvalid
+    ) THEN
+        DROP INDEX idx_user_email;
+    END IF;
+END $$;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_email ON users(email);
 ```
 
-This is a PostgreSQL constraint, not a pgmi limitation — `CREATE INDEX CONCURRENTLY` behaves the same way in Flyway, Liquibase, and every other tool that uses transactions. See [Trade-offs](TRADEOFFS.md#create-index-concurrently) for more context.
+`DROP INDEX` (without `CONCURRENTLY`) is an ordinary transactional statement,
+so it is legal inside the `DO` block; only the *build* has to be top level.
+Name the index explicitly rather than sweeping every `NOT indisvalid` row —
+an in-flight `CREATE INDEX CONCURRENTLY` in another session is also `INVALID`
+until it finishes, and a blanket sweep would drop it out from under them.
+`REINDEX INDEX CONCURRENTLY` is the other supported recovery.
+
+A head that ends its implicit transaction with a bare `COMMIT` (no `BEGIN`)
+works too — PostgreSQL prints a harmless "there is no transaction in progress"
+warning and commits the work — but write the `BEGIN` for clarity.
+
+See [Trade-offs](TRADEOFFS.md#create-index-concurrently) for how this compares
+to other tools, and `examples/lock-safe-deploy/` for a complete runnable
+project.
 
 ---
 
@@ -436,6 +581,19 @@ CALL pgmi_test();
 
 COMMIT;
 ```
+
+The `BEGIN;` is not optional. `CALL pgmi_test()` is a macro: pgmi expands it
+into `SAVEPOINT` / `ROLLBACK TO SAVEPOINT` before the script reaches the server,
+and PostgreSQL refuses `SAVEPOINT` inside the *implicit* transaction block of a
+multi-statement query. A `deploy.sql` that calls it without an explicit `BEGIN`
+fails with:
+
+```
+ERROR: SAVEPOINT can only be used in transaction blocks (SQLSTATE 25P01)
+```
+
+`SAVEPOINT` appears nowhere in your file, so the message names something you did
+not write. Adding the `BEGIN` is the whole fix.
 
 See [Testing](TESTING.md#the-gated-deployment-pattern) for details on how the test gate works.
 

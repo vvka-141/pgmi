@@ -1,6 +1,6 @@
 # pgmi - AI Assistant Guide
 
-> PostgreSQL-native execution fabric for database deployments. Minimal interference, maximum empowerment.
+> PostgreSQL-native deployment driver. You write the deployment in SQL and PL/pgSQL; pgmi handles connection, parameters, and exit codes.
 
 ## What is pgmi?
 
@@ -14,12 +14,14 @@ pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tab
 # Initialize a project
 pgmi init myproject --template basic
 
-# Deploy to database
+# Deploy to database. Tests are not a separate command: deploy.sql calls
+# CALL pgmi_test(), so they run inside the same transaction and a failing
+# test rolls the whole deployment back.
 pgmi deploy ./myproject --connection "postgresql://user:pass@host/db"
-
-# Run tests
-pgmi deploy ./myproject --connection "..." --param run_tests=true
 ```
+
+There is no `--test`, `--skip-tests`, or `--dry-run` flag, and no parameter pgmi
+interprets to control any of them. What runs is whatever `deploy.sql` executes.
 
 ## Core Concepts
 
@@ -29,8 +31,8 @@ pgmi creates temporary tables in `pg_temp` schema:
 
 | View | Purpose |
 |------|---------|
-| `pgmi_source_view` | All SQL files with path, content, metadata (excludes deploy.sql and `__test__/`) |
-| `pgmi_plan_view` | Execution order derived from `<pgmi-meta>` sortKeys |
+| `pgmi_source_view` | All project files with path, content, metadata, `is_sql_file` (excludes deploy.sql and `__test__/`) |
+| `pgmi_plan_view` | All project files in execution order, derived from `<pgmi-meta>` sortKeys |
 | `pgmi_parameter_view` | CLI parameters (`--param key=value`) |
 | `pgmi_test_source_view` | Test files from `__test__/` directories |
 | `pgmi_test_directory_view` | Test directory hierarchy |
@@ -39,33 +41,114 @@ pgmi creates temporary tables in `pg_temp` schema:
 All names end in `_view` — they are the stable public API. Do not query the
 `_pgmi_*` internal tables directly; they are implementation details.
 
+### What Gets Loaded
+
+Every file under the project path enters the session, not just SQL. Four things
+never arrive:
+
+| Never loaded | Note |
+|---|---|
+| The **root** `deploy.sql` | pgmi executes it. A nested `./nested/deploy.sql` **does** load, with `is_sql_file` true — a plan loop will happily execute it |
+| `__test__/`, `__tests__/` | Go to `pgmi_test_source_view`, not `pgmi_source_view` |
+| Any path segment starting with `.` | `.git`, `.venv`, `.claude`, `.env`. SQL you park in a dot-directory is invisible |
+| `node_modules/`, `__pycache__/` | Exact names only — pgmi's own `__test__` is not affected |
+
+Everything else is read as text; a binary file fails the deploy before pgmi
+connects. `is_sql_file` is true only for `.sql .ddl .dml .dql .dcl .psql .pgsql
+.plpgsql` — `001.sql.bak` and `notes.txt` load with `is_sql_file` false, which
+is what makes the guard below matter.
+
 ### deploy.sql Pattern
 
 ```sql
 DO $$
 DECLARE v_file RECORD;
 BEGIN
+    -- pgmi_plan_view carries EVERY loaded file, not only SQL — README.md,
+    -- pgmi.yaml and editor leftovers (001.sql~, .bak) are all in it.
+    -- is_sql_file is the execution guard; without it a stale backup of a
+    -- migration runs as a migration.
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
 
+### Execution Contract: atomic head, then psql tail
+
+**Before your first top-level `COMMIT`, atomic mode; after it, psql mode.**
+
+- **Head** — everything through the first top-level transaction terminator
+  (`COMMIT`, `END`, `ROLLBACK`, and their `WORK`/`TRANSACTION`/`AND CHAIN`
+  forms, and `ABORT`) is one transaction. A deploy.sql with no top-level
+  terminator is entirely atomic. The scaffolded templates are **not** that
+  shape: they open with `BEGIN`, `COMMIT` after the test gate, and keep the
+  DONE banner in the tail — so anything you append to one autocommits.
+- **Tail** — every top-level statement after it autocommits on its own, as in
+  psql. An explicit `BEGIN ... COMMIT` forms a real transaction.
+
+```sql
+BEGIN;
+-- migrations + CALL pgmi_test(): all-or-nothing
+COMMIT;
+
+-- psql mode from here: this cannot run inside a transaction
+CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
+```
+
+Two rules follow. Statements between mid-file `COMMIT`s are **not** implicitly
+grouped — a later phase that must be atomic writes its own `BEGIN ... COMMIT`.
+And a mid-tail failure keeps earlier autocommitted statements applied, so write
+tail statements idempotently. A concurrent index needs both guards: a failed
+build leaves an `INVALID` index that `IF NOT EXISTS` skips over by name, so
+drop that leftover in a `DO` block first, then
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
+
+`CREATE INDEX CONCURRENTLY`, `VACUUM` and `CREATE DATABASE` are refused inside
+`EXECUTE` whatever the transaction state (`25001 ... cannot be executed from a
+function`). Put them at top level in the tail, never in a plan loop.
+
 ### Parameters
+
+Parameters are passed with `--param key=value` and read back with
+`current_setting('pgmi.key', true)`. pgmi does not interpret them — they mean
+whatever your `deploy.sql` decides they mean.
 
 ```sql
 -- Access parameters with defaults
 v_env := COALESCE(current_setting('pgmi.env', true), 'development');
 
--- Conditional logic based on parameters
-IF COALESCE(current_setting('pgmi.run_tests', true), 'false') = 'true' THEN
-    CALL pgmi_test();
+-- Conditional logic based on parameters (this branch exists because deploy.sql
+-- wrote it, not because pgmi knows what "env" is)
+IF v_env <> 'production' THEN
+    PERFORM seed_dev_data();
 END IF;
 ```
+
+## Key Differentiators
+
+Nine capabilities have no direct equivalent in other PostgreSQL deployment tools.
+The three most relevant to agents:
+
+1. **Tests gate the deploy transaction** — `CALL pgmi_test()` runs inside the
+   deployment transaction; a failing test aborts the commit, so the target
+   database is unchanged. Other tools run tests as a separate command against a
+   dev database.
+2. **Reformat-proof checksums** — `pgmi_checksum` strips comments, case-folds,
+   and collapses whitespace before hashing, so reformatting a file doesn't
+   trigger a checksum mismatch (the most common Flyway support-thread class).
+3. **Agent-native tooling** — the binary you're already calling (`pgmi ai`,
+   `pgmi ai contract`, `pgmi serve`) embeds machine-readable guidance and a
+   session API contract. No docs site required.
+
+Full list with honest competitor lines and code links:
+[Highlights](https://vvka-141.github.io/pgmi/docs/highlights/)
 
 ## Available Skills
 
@@ -74,14 +157,17 @@ Use `pgmi ai skill <name>` to get detailed guidance:
 | Skill | Use When |
 |-------|----------|
 | `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
+| `pgmi-debug-deploy` | A deploy failed — map the exit code to a diagnosis |
 | `pgmi-philosophy` | Understanding architectural decisions |
 | `pgmi-system-design` | Designing features the pgmi way (physical/logical/API layering) |
 | `pgmi-templates` | Creating or modifying scaffold templates |
 | `pgmi-testing-review` | Writing, organizing, or debugging tests |
 | `pgmi-postgres-review` | Writing SQL with correctness and performance guidance |
+| `pgmi-security-review` | Reviewing for SQL injection, RLS, or secret handling |
 | `pgmi-metadata-system` | Working with `<pgmi-meta>` blocks, sortKeys, execution ordering |
 | `pgmi-test-architecture` | Organizing `__test__/` directories and test strategy |
 | `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
+| `advanced-template` | Looking up the scaffolded framework's SQL API (advanced template) |
 | `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
 | `pgmi-handler-patterns` | Writing REST/RPC handler bodies — the four-phase defensive doctrine (advanced template) |
 | `pgmi-endpoint-quickstart` | End-to-end recipe: add an entity + REST endpoint + test (advanced template) |
@@ -104,7 +190,7 @@ CREATE TABLE accounts (...);
 
 ```
 __test__/
-  _setup.sql           # REQUIRED name for fixtures
+  _setup.sql           # the fixture name — _setup.psql also works, nothing else does
   test_something.sql   # Test files
 ```
 
@@ -233,7 +319,7 @@ stderr; the server exits cleanly on EOF or SIGINT.
 
 ```
   -v, --verbose          Verbose output (sets client_min_messages = 'debug')
-  -h, --help             Help for any command
+      --help             Help for any command (-h is --host on deploy)
 ```
 
 ## Common Questions

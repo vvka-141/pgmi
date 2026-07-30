@@ -37,6 +37,14 @@ The minimum PostgreSQL version depends on which layer you use:
 
 The 11+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **15+**: `security_invoker` views, which the membership/RLS model relies on, were introduced in PostgreSQL 15.
 
+Both floors are tested, not asserted. CI runs the core suite and the basic
+template against PostgreSQL 11, 15 and 17, and the advanced template against 15
+and 17, so a construct that raises either floor fails the build. A server below
+11 is refused before any schema work with `invalid configuration: this server
+reports PostgreSQL <version>, and pgmi requires 11 or newer` and exit code 10 —
+`hashtextextended`, which the deploy advisory lock needs, is what sets that
+floor.
+
 ---
 
 ## Managed cloud PostgreSQL
@@ -81,8 +89,11 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -116,8 +127,11 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -139,22 +153,46 @@ COMMIT;
 
 **Note:** This is still all-or-nothing. The `BEGIN...EXCEPTION...END` block creates an implicit savepoint for error recovery, not separate transactions. If any file fails, the entire deployment rolls back.
 
-### Per-file commits (when you really need them)
+### Committing in phases
 
-True per-file commits are complex in pgmi's model because:
-1. You can't use COMMIT inside PL/pgSQL DO blocks (only inside procedures via `CREATE PROCEDURE` + `CALL`)
-2. Each top-level SQL statement auto-commits when not in a transaction
-3. Top-level SQL has no procedural constructs (no loops, no variables) — so you can't iterate `pgmi_source_view` outside a DO block
+pgmi's [execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)
+makes this first-class, and no external orchestration is involved. Everything
+through your first top-level transaction terminator is one atomic unit; after
+it, each top-level statement autocommits, exactly as in psql:
 
-**Recommended approach:** Use idempotent migrations with single-transaction deployment. If deployment fails, fix the issue and redeploy — pgmi will re-run idempotent scripts safely.
+```sql
+-- deploy.sql
+BEGIN;
+-- schema changes that must land together
+COMMIT;
 
-If you genuinely need per-file commits (e.g., very large data migrations that can't fit in one transaction), consider:
+-- from here on, each top-level statement commits on its own
+CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
 
-1. **External orchestration:** Run `pgmi deploy` multiple times with different `--param` values to control which phase runs
-2. **Idempotent scripts with tracking:** Each script checks a tracking table before running (see [Metadata Guide](METADATA.md) for UUID-based tracking)
-3. **Split into separate projects:** One pgmi project per logical phase, deployed sequentially
+BEGIN;
+-- anything that must be atomic again says so
+COMMIT;
+```
 
-**Why this matters:** pgmi's session-based model intentionally keeps everything in one transaction for atomicity. Breaking this requires moving orchestration outside of deploy.sql.
+Two constraints still apply. Both are PostgreSQL's, not pgmi's:
+
+1. **Transaction control needs the tail, not a procedure.** `COMMIT` raises
+   `invalid transaction termination` whenever a transaction block surrounds it —
+   in a `DO` block *and* in a `CALL`ed procedure alike. That is always the case
+   in the atomic head, so a plan loop there commits once when the head ends,
+   never per file. Run the same `DO` block at top level in the tail and `COMMIT`
+   works: outside a transaction block, PostgreSQL 11+ lets both `DO` and `CALL`
+   end and start transactions. Procedures buy you nothing the tail doesn't.
+2. **`EXECUTE` runs statements in a function context.** `CREATE INDEX
+   CONCURRENTLY`, `VACUUM`, and `CREATE DATABASE` are refused there whatever the
+   transaction state — `CREATE INDEX CONCURRENTLY cannot be executed from a
+   function`. Write those at top level in the tail, never through the plan loop.
+
+**Recommended default:** idempotent migrations in the atomic head. If a deploy
+fails, fix it and redeploy. Reach for the tail when a statement genuinely cannot
+run inside a transaction, or when a data migration is too large for one — and
+write everything after the first `COMMIT` idempotently, because a later failure
+leaves the already-committed statements applied.
 
 ### Phased deployment
 
@@ -169,9 +207,11 @@ BEGIN
     -- Phase 1: Extensions
     RAISE NOTICE '=== Phase 1: Extensions ===';
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './extensions/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './extensions/%'
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -181,9 +221,11 @@ BEGIN
     -- Phase 2: Migrations
     RAISE NOTICE '=== Phase 2: Migrations ===';
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -193,9 +235,11 @@ BEGIN
     -- Phase 3: Idempotent setup
     RAISE NOTICE '=== Phase 3: Setup ===';
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './setup/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './setup/%'
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -245,30 +289,44 @@ RESET lock_timeout;
 
 ### Concurrent index creation
 
-For large tables, use `CONCURRENTLY` to avoid blocking:
+For large tables, use `CONCURRENTLY` to avoid blocking.
 
-```sql
--- 003_add_user_email_index.sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email);
-```
-
-**Note:** `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. Structure your deploy.sql accordingly:
+**It does not belong in a migration file.** Migration files reach PostgreSQL
+through `EXECUTE v_file.content` inside a `DO` block, and `CREATE INDEX
+CONCURRENTLY cannot be executed from a function` — the transaction state is
+irrelevant. Write it at top level in `deploy.sql`, after your first `COMMIT`,
+where pgmi's execution contract puts you in psql mode (per-statement
+autocommit):
 
 ```sql
 -- deploy.sql: Handle concurrent index separately
--- First, run regular migrations in a transaction
+-- First, run regular migrations in a transaction (the atomic head)
 BEGIN;
 -- ... regular migrations ...
 COMMIT;
 
--- Then run the concurrent index (outside transaction)
+-- Then run the concurrent index (psql mode: autocommit, outside any transaction).
+-- Reap a previous failed build first: it leaves an INVALID index, and
+-- IF NOT EXISTS matches on name alone, so it would skip the rebuild forever.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_index
+        WHERE indexrelid = to_regclass('idx_users_email') AND NOT indisvalid
+    ) THEN
+        DROP INDEX idx_users_email;
+    END IF;
+END $$;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email);
 
--- Finally, continue with remaining work
+-- Finally, continue with remaining work — atomic because it says so
 BEGIN;
 -- ... remaining migrations ...
 COMMIT;
 ```
+
+After the first `COMMIT`, statements are not implicitly grouped: any later phase that must be atomic writes its own `BEGIN ... COMMIT`, and a mid-script failure keeps the already-autocommitted statements applied — write them idempotently. The `DO` block above is what makes this one idempotent; see [making a concurrent index re-runnable](DEPLOY-GUIDE.md#making-a-concurrent-index-re-runnable) for why neither guard works alone, and the [deploy.sql guide](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full contract.
 
 ## Rollback strategies
 
@@ -319,9 +377,11 @@ BEGIN
     ELSE
         -- Normal deployment
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_plan_view
-            WHERE path LIKE './migrations/%'
-            ORDER BY execution_order
+            SELECT p.path, p.content
+            FROM pg_temp.pgmi_plan_view p
+            JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+            WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+            ORDER BY p.execution_order
         )
         LOOP
             RAISE NOTICE 'Executing: %', v_file.path;
@@ -350,8 +410,11 @@ DECLARE
     v_current_path TEXT;
 BEGIN
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         v_current_path := v_file.path;
@@ -367,7 +430,7 @@ END $$;
 COMMIT;
 ```
 
-**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, see [Per-file commits](#per-file-commits-when-you-really-need-them).
+**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, see [Committing in phases](#committing-in-phases).
 
 **Important:** PL/pgSQL does not support direct SAVEPOINT commands. If you need savepoint-based isolation (like the test framework provides), use top-level SQL outside of DO blocks, or use `BEGIN...EXCEPTION...END` blocks which create implicit savepoints for error recovery.
 
@@ -395,8 +458,11 @@ BEGIN
     SELECT count(*) INTO v_total FROM pg_temp.pgmi_plan_view;
 
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         v_count := v_count + 1;
@@ -426,8 +492,11 @@ BEGIN
     VALUES (v_deployment_id, now(), v_env, v_files_count);
 
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -445,9 +514,22 @@ END $$;
 
 ## Audit and compliance
 
+### Advanced template: runtime security stack
+
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
+
+Deployments scaffolded from the [advanced template](advanced/_index.md) carry
+a layered runtime defense for the APIs they serve — trusted-gateway identity,
+session GUCs that fail closed, JIT-provisioned membership, and row-level
+security:
+
+![The layered security stack: identity providers and API keys converge on the auth.idp_subject session GUC, resolve through membership, and end at row-level security](diagrams/d13-security-stack.drawio.svg)
+
 ### Advanced template: built-in tracking
 
-The advanced template maintains a persistent execution log in `internal.deployment_script_execution_log`:
+> **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
+
+The [advanced template](advanced/_index.md) maintains a persistent execution log in `internal.deployment_script_execution_log`:
 
 | Column | Description |
 |--------|-------------|
@@ -463,6 +545,8 @@ The advanced template maintains a persistent execution log in `internal.deployme
 Non-idempotent scripts are skipped on subsequent deployments. The companion view `internal.vw_deployment_script` provides last execution and execution count per script.
 
 ### Basic template: stateless
+
+> **Scope: basic template only.** This describes the `deploy.sql` that `pgmi init --template basic` copied into your project, not behaviour of the pgmi binary.
 
 The basic template does not persist execution history. Every deployment re-executes all files (using `CREATE OR REPLACE` / `IF NOT EXISTS` for safety). Implement your own tracking in deploy.sql if needed — see the [Audit logging](#audit-logging) section below.
 

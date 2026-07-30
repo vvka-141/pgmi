@@ -100,7 +100,7 @@ func TestNeedsConnectionWizard(t *testing.T) {
 			dir := t.TempDir()
 			tt.setup(t, dir)
 
-			projectCfg, _ := loadProjectConfig(dir, false)
+			projectCfg, _ := loadProjectConfig(dir)
 			got := needsConnectionWizard(projectCfg)
 			if got != tt.want {
 				t.Errorf("needsConnectionWizard() = %v, want %v", got, tt.want)

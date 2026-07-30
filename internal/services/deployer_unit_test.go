@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -38,7 +40,7 @@ func newTestService(
 	dbMgr *mockDatabaseManager,
 	approver *mockApprover,
 	sessPreparer *mockSessionPreparer,
-	mgmtConn managementDBConnFunc,
+	mgmtConn maintenanceDBConnFunc,
 ) *DeploymentService {
 	cf, _, lg, _, fs, _ := validDeps()
 	if approver == nil {
@@ -59,15 +61,28 @@ func newTestService(
 
 func noop() {}
 
-func successfulMgmtConn() managementDBConnFunc {
+func successfulMgmtConn() maintenanceDBConnFunc {
 	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
 		return &mockDBConnection{}, noop, nil
 	}
 }
 
-func failingMgmtConn(err error) managementDBConnFunc {
+func failingMgmtConn(err error) maintenanceDBConnFunc {
 	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
 		return nil, nil, err
+	}
+}
+
+// missingTargetMgmtConn simulates a target database that does not exist: the
+// probe gets PostgreSQL's invalid_catalog_name, every other database connects.
+// Dialed database names are appended to dialed in call order.
+func missingTargetMgmtConn(targetDB string, dialed *[]string) maintenanceDBConnFunc {
+	return func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+		*dialed = append(*dialed, dbName)
+		if dbName == targetDB {
+			return nil, nil, &pgconn.PgError{Code: "3D000", Message: `database "` + targetDB + `" does not exist`}
+		}
+		return &mockDBConnection{}, noop, nil
 	}
 }
 
@@ -143,8 +158,8 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 func TestDeploy_MissingDeploySQL_FailsBeforeConnecting(t *testing.T) {
 	for _, overwrite := range []bool{false, true} {
 		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {
-			cf, ap, lg, sm, _, dm := validDeps()
-			fs := &mockFileScanner{validateErr: fmt.Errorf("%w in /src", pgmi.ErrDeploySQLNotFound)}
+			cf, ap, lg, _, fs, dm := validDeps()
+			sm := &mockSessionPreparer{scanErr: fmt.Errorf("%w in /src", pgmi.ErrDeploySQLNotFound)}
 			svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
 
 			connected := false
@@ -213,6 +228,13 @@ func TestDeploy_OverwriteDenied(t *testing.T) {
 	err := svc.Deploy(context.Background(), cfg)
 	if !errors.Is(err, pgmi.ErrApprovalDenied) {
 		t.Fatalf("Expected ErrApprovalDenied, got: %v", err)
+	}
+
+	// The error is the signal; not dropping the database is the point. A deploy
+	// that dropped first and reported the denial afterwards satisfies the check
+	// above and destroys the database the approver was asked about.
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("approval was denied but the database was dropped anyway: %v", dbMgr.dropped)
 	}
 }
 
@@ -296,7 +318,8 @@ func TestDeploy_EnsureDBCreates(t *testing.T) {
 
 func TestDeploy_EnsureDBCheckFails(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsErr: fmt.Errorf("check failed")}
-	svc := newTestService(dbMgr, nil, nil, successfulMgmtConn())
+	var dialed []string
+	svc := newTestService(dbMgr, nil, nil, missingTargetMgmtConn("testdb", &dialed))
 
 	err := svc.Deploy(context.Background(), validConfig())
 	if err == nil {
@@ -309,7 +332,8 @@ func TestDeploy_EnsureDBCheckFails(t *testing.T) {
 
 func TestDeploy_EnsureDBCreateFails(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: false, createErr: fmt.Errorf("create failed")}
-	svc := newTestService(dbMgr, nil, nil, successfulMgmtConn())
+	var dialed []string
+	svc := newTestService(dbMgr, nil, nil, missingTargetMgmtConn("testdb", &dialed))
 
 	err := svc.Deploy(context.Background(), validConfig())
 	if err == nil {
@@ -320,7 +344,7 @@ func TestDeploy_EnsureDBCreateFails(t *testing.T) {
 	}
 }
 
-// --- Management connector failure tests ---
+// --- Maintenance connector failure tests ---
 
 func TestDeploy_MgmtConnectorFails_Overwrite(t *testing.T) {
 	svc := newTestService(nil, nil, nil, failingMgmtConn(fmt.Errorf("conn refused")))
@@ -401,20 +425,18 @@ func TestDeploy_CustomMaintenanceDB(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 	sessPreparer := &mockSessionPreparer{err: errMockStop}
 
-	var capturedDB string
-	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
-		capturedDB = dbName
-		return &mockDBConnection{}, noop, nil
-	}
-
-	svc := newTestService(dbMgr, nil, sessPreparer, customMgmt)
+	var dialed []string
+	svc := newTestService(dbMgr, nil, sessPreparer, missingTargetMgmtConn("testdb", &dialed))
 
 	cfg := validConfig()
 	cfg.MaintenanceDatabase = "custom_maint"
 
 	_ = svc.Deploy(context.Background(), cfg)
-	if capturedDB != "custom_maint" {
-		t.Fatalf("Expected maintenance DB 'custom_maint', got: %q", capturedDB)
+	if len(dialed) != 2 {
+		t.Fatalf("Expected a probe of the target followed by the maintenance fallback, got %v", dialed)
+	}
+	if dialed[1] != "custom_maint" {
+		t.Fatalf("Expected maintenance DB 'custom_maint', got: %q", dialed[1])
 	}
 }
 
@@ -443,23 +465,23 @@ func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
 
 // --- Overwrite target validation tests ---
 
-func TestDeploy_OverwriteBlocksManagementDB(t *testing.T) {
+func TestDeploy_OverwriteBlocksMaintenanceDB(t *testing.T) {
 	svc := newTestService(nil, &mockApprover{approved: true}, nil, successfulMgmtConn())
 
 	cfg := validConfig()
 	cfg.Overwrite = true
 	cfg.Force = true
-	cfg.DatabaseName = "postgres" // same as DefaultManagementDB
+	cfg.DatabaseName = "postgres" // same as DefaultMaintenanceDB
 
 	err := svc.Deploy(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("Expected error when overwriting management database")
+		t.Fatal("Expected error when overwriting maintenance database")
 	}
 	if !errors.Is(err, pgmi.ErrInvalidConfig) {
 		t.Errorf("Expected ErrInvalidConfig, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "management database") {
-		t.Errorf("Error should mention management database, got: %v", err)
+	if !strings.Contains(err.Error(), "maintenance database") {
+		t.Errorf("Error should mention maintenance database, got: %v", err)
 	}
 }
 
@@ -487,7 +509,7 @@ func TestDeploy_OverwriteBlocksTemplateDatabases(t *testing.T) {
 	}
 }
 
-func TestDeploy_OverwriteBlocksCustomManagementDB(t *testing.T) {
+func TestDeploy_OverwriteBlocksCustomMaintenanceDB(t *testing.T) {
 	svc := newTestService(nil, &mockApprover{approved: true}, nil, successfulMgmtConn())
 
 	cfg := validConfig()
@@ -513,7 +535,7 @@ func TestDeploy_OverwriteAllowsDifferentDB(t *testing.T) {
 	cfg := validConfig()
 	cfg.Overwrite = true
 	cfg.Force = true
-	cfg.DatabaseName = "myapp" // different from management DB
+	cfg.DatabaseName = "myapp" // different from maintenance DB
 
 	err := svc.Deploy(context.Background(), cfg)
 	// Should pass validation and proceed (mock stop from session prep)
@@ -531,8 +553,8 @@ func TestValidateOverwriteTarget(t *testing.T) {
 		errSubstr string
 	}{
 		{"different DB is fine", "myapp", "postgres", false, ""},
-		{"same as management DB", "postgres", "postgres", true, "management"},
-		{"case-insensitive management", "POSTGRES", "postgres", true, "management"},
+		{"same as maintenance DB", "postgres", "postgres", true, "maintenance"},
+		{"case-insensitive maintenance", "POSTGRES", "postgres", true, "maintenance"},
 		{"template0", "template0", "postgres", true, "template"},
 		{"template1", "template1", "postgres", true, "template"},
 		{"TEMPLATE0 case-insensitive", "TEMPLATE0", "postgres", true, "template"},
@@ -547,5 +569,206 @@ func TestValidateOverwriteTarget(t *testing.T) {
 				t.Errorf("expected error containing %q, got: %v", tt.errSubstr, err)
 			}
 		})
+	}
+}
+
+// Two pgmi runs starting together race on CREATE DATABASE, because the advisory
+// lock that serialises deploys lives inside the session and the database work
+// happens before any session exists. The loser used to receive PostgreSQL's
+// catalog error verbatim and exit 1:
+//
+//	failed to ensure database exists: failed to create database: failed to create
+//	database "x": ERROR: duplicate key value violates unique constraint
+//	"pg_database_datname_index" (SQLSTATE 23505)
+//
+// An internal index name in place of a diagnosis, and an exit code CI cannot
+// tell apart from a real failure.
+func TestDeploy_LostCreateRaceIsAConcurrentDeploy(t *testing.T) {
+	for _, tc := range []struct{ name, code string }{
+		{"duplicate_database", "42P04"},
+		{"unique_violation on pg_database", "23505"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dialed []string
+			dbMgr := &mockDatabaseManager{
+				createErr: &pgconn.PgError{Code: tc.code, Message: "database already exists"},
+			}
+			svc := newTestService(dbMgr, nil, nil, missingTargetMgmtConn("testdb", &dialed))
+
+			err := svc.Deploy(context.Background(), validConfig())
+			if err == nil {
+				t.Fatal("a failed CREATE DATABASE must not succeed")
+			}
+			if !errors.Is(err, pgmi.ErrConcurrentDeploy) {
+				t.Errorf("got %v, want an ErrConcurrentDeploy chain", err)
+			}
+			if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConcurrentDeploy {
+				t.Errorf("exit code %d, want %d -- CI retries on 15, not on 1",
+					got, pgmi.ExitConcurrentDeploy)
+			}
+			if strings.Contains(err.Error(), "pg_database_datname_index") {
+				t.Errorf("the catalog index name reached the user: %v", err)
+			}
+		})
+	}
+}
+
+// A CREATE failure that is not a collision keeps its own cause, and is not
+// mislabelled as someone else's deploy.
+func TestDeploy_CreateFailureOtherThanCollisionIsNotConcurrent(t *testing.T) {
+	var dialed []string
+	dbMgr := &mockDatabaseManager{
+		createErr: &pgconn.PgError{Code: "42501", Message: "permission denied to create database"},
+	}
+	svc := newTestService(dbMgr, nil, nil, missingTargetMgmtConn("testdb", &dialed))
+
+	err := svc.Deploy(context.Background(), validConfig())
+	if err == nil {
+		t.Fatal("expected the permission error to surface")
+	}
+	if errors.Is(err, pgmi.ErrConcurrentDeploy) {
+		t.Errorf("a permission failure was reported as a concurrent deploy: %v", err)
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("the original cause was lost: %v", err)
+	}
+}
+
+// db/manager already names both the operation and the database in its errors
+// ("failed to drop database %q: ..."). The deployer wrapped each call again
+// with a prefix saying the same thing, so a real failure read:
+//
+//	overwrite workflow failed: failed to drop database: failed to drop database
+//	"tmpl_probe": ERROR: cannot drop a template database (SQLSTATE 42809)
+//
+// Reproduced against PG 17.10 by marking a database IS_TEMPLATE, which makes
+// DROP fail deterministically. The mocks below return errors shaped the way the
+// real manager shapes them, so the doubling is visible without a server.
+func TestDeploy_ManagerErrorsAreNotWrappedTwice(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "42809", Message: "cannot drop a template database"}
+
+	for _, tc := range []struct {
+		name      string
+		mgr       *mockDatabaseManager
+		overwrite bool
+		phrase    string
+	}{
+		{
+			name: "drop",
+			mgr: &mockDatabaseManager{existsResult: true,
+				dropErr: fmt.Errorf("failed to drop database %q: %w", "testdb", pgErr)},
+			overwrite: true,
+			phrase:    "failed to drop database",
+		},
+		{
+			name: "terminate",
+			mgr: &mockDatabaseManager{existsResult: true,
+				terminateErr: fmt.Errorf("failed to terminate connections to database %q: %w", "testdb", pgErr)},
+			overwrite: true,
+			phrase:    "failed to terminate connections",
+		},
+		{
+			name: "exists",
+			mgr: &mockDatabaseManager{
+				existsErr: fmt.Errorf("failed to check existence of database %q: %w", "testdb", pgErr)},
+			phrase: "failed to check existence of database",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dialed []string
+			mgmt := successfulMgmtConn()
+			if !tc.overwrite {
+				mgmt = missingTargetMgmtConn("testdb", &dialed)
+			}
+			svc := newTestService(tc.mgr, &mockApprover{approved: true}, nil, mgmt)
+
+			cfg := validConfig()
+			cfg.Overwrite = tc.overwrite
+			cfg.Force = tc.overwrite
+
+			err := svc.Deploy(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("expected the manager failure to surface")
+			}
+			if n := strings.Count(err.Error(), tc.phrase); n != 1 {
+				t.Errorf("%q appears %d times, want 1:\n%v", tc.phrase, n, err)
+			}
+			// The database name comes from the manager's message, so dropping the
+			// outer wrapper must not cost it.
+			if !strings.Contains(err.Error(), "testdb") {
+				t.Errorf("the database name was lost: %v", err)
+			}
+		})
+	}
+}
+
+// --overwrite promises to drop and recreate the target database. A bare CREATE
+// DATABASE inherits the server defaults, so overwriting a LATIN1/C database
+// produced a UTF8/en_US.utf8 one — encoding changes how bytes are stored, and
+// collation changes index ordering and every comparison. Neither is something
+// the user asked for by emptying a database.
+//
+// Confirmed against PG 17.10 before the fix: LATIN1 / C became
+// UTF8 / en_US.utf8. After it, both that database and a default one come back
+// unchanged.
+func TestDeploy_OverwritePreservesEncodingAndLocale(t *testing.T) {
+	comment := "important note"
+	settings := &pgmi.DatabaseSettings{
+		Encoding: "LATIN1", Collate: "C", CType: "C", PreserveLocale: true,
+		Owner: "app_owner", ConnectionLimit: 42,
+		Options: []string{"statement_timeout=7s"}, Comment: &comment,
+	}
+	dbMgr := &mockDatabaseManager{existsResult: true, settings: settings}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
+	svc := newTestService(dbMgr, &mockApprover{approved: true}, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite, cfg.Force = true, true
+
+	if err := svc.Deploy(context.Background(), cfg); !errors.Is(err, errMockStop) {
+		t.Fatalf("expected errMockStop after the recreate, got: %v", err)
+	}
+
+	if dbMgr.createdWith == nil {
+		t.Fatal("the database was recreated with the server defaults; its encoding and " +
+			"collation were silently replaced")
+	}
+	if !reflect.DeepEqual(dbMgr.createdWith, settings) {
+		t.Errorf("recreated as %+v, want %+v", *dbMgr.createdWith, *settings)
+	}
+}
+
+// A database matching the server defaults has nothing to preserve, and must
+// keep taking the plain CREATE DATABASE path so it still inherits template1 —
+// specifying settings would force template0 and drop whatever a site installed
+// there.
+func TestDeploy_OverwriteOfADefaultDatabaseStaysOnTemplate1(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, settings: nil}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
+	svc := newTestService(dbMgr, &mockApprover{approved: true}, sessPreparer, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite, cfg.Force = true, true
+
+	if err := svc.Deploy(context.Background(), cfg); !errors.Is(err, errMockStop) {
+		t.Fatalf("expected errMockStop, got: %v", err)
+	}
+	if dbMgr.createdWith != nil {
+		t.Errorf("forced template0 for a database that matched the defaults: %+v", *dbMgr.createdWith)
+	}
+}
+
+// Creating a database that never existed has nothing to preserve either.
+func TestDeploy_CreatingAMissingDatabaseUsesServerDefaults(t *testing.T) {
+	var dialed []string
+	dbMgr := &mockDatabaseManager{}
+	sessPreparer := &mockSessionPreparer{err: errMockStop}
+	svc := newTestService(dbMgr, nil, sessPreparer, missingTargetMgmtConn("testdb", &dialed))
+
+	if err := svc.Deploy(context.Background(), validConfig()); !errors.Is(err, errMockStop) {
+		t.Fatalf("expected errMockStop, got: %v", err)
+	}
+	if dbMgr.createdWith != nil {
+		t.Errorf("a brand new database was given explicit settings: %+v", *dbMgr.createdWith)
 	}
 }

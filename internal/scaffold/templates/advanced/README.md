@@ -111,16 +111,20 @@ func handleREST(w http.ResponseWriter, r *http.Request) {
 ```
 myproject/
 ├── lib/                      # Pre-built framework — extend around it; see "Trimming the template"
-│   ├── api/                  # HTTP framework (types, routing, gateways)
+│   ├── api/                  # HTTP framework (types, routing, gateways, MCP)
 │   ├── core/                 # Managed object infrastructure
-│   ├── internal/             # Deployment tracking, text attributes
 │   ├── common/               # Cross-cutting primitives (casting, encoding, text)
-│   └── __test__/             # Framework tests
+│   ├── __test__/             # Framework tests
+│   └── README.md             # Framework API reference (also `pgmi ai skill advanced-template`)
+├── membership/               # Identity, organizations, invitations, RLS, API keys
 ├── api/                      # YOUR API HANDLERS
 │   └── examples.sql          # Starting point - modify/replace this
 ├── __test__/                 # YOUR TESTS
+├── tools/                    # MCP stdio gateway (mcp-gateway.py, requirements.txt)
 ├── deploy.sql                # Deployment orchestrator (includes infrastructure bootstrap)
+├── session.xml               # Parameter declarations consumed by deploy.sql
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
+├── ARCHITECTURE.md           # Design rationale
 └── README.md
 ```
 
@@ -259,7 +263,12 @@ Every script requires a `<pgmi-meta>` block:
 |-----------|----------|-------------|
 | `id` | Yes | UUID for path-independent tracking |
 | `idempotent` | Yes | `true` = re-run every deploy, `false` = once only |
-| `sortKeys` | Yes | Execution order (lexicographic) |
+
+### Child elements
+
+| Element | Required | Description |
+|---------|----------|-------------|
+| `sortKeys` | No | Execution order (lexicographic). Falls back to file path when absent |
 | `description` | No | Human-readable purpose |
 
 ### Sort Key Conventions
@@ -282,7 +291,7 @@ The framework supports REST, RPC, and MCP protocols:
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'handler-uuid',
-        'uri', '^/users/([0-9]+)$',
+        'path', '/users/{userId}',
         'httpMethod', '^GET$',
         'name', 'get_user',
         'description', 'Get user by ID'
@@ -354,6 +363,8 @@ END;
 -- Invoke: api.mcp_call_tool('query_database', arguments, context, request_id)
 ```
 
+Any handler may declare a minimum isolation floor (`minTransactionIsolation`) and a read-only policy (`readOnly`). The client gateway resolves the policy before `BEGIN`; the database enforces it fail-closed. See [Transaction policy](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/).
+
 ## Parameters
 
 | Parameter | Default | Required | Description |
@@ -387,14 +398,19 @@ database_customer_role (LOGIN)
   └── RLS-restricted access
 ```
 
-## Four-Schema Design
+## Schema Design
 
-| Schema | Purpose | Access |
-|--------|---------|--------|
-| `common` | Cross-cutting primitives (casting, encoding, text) | All roles |
-| `api` | HTTP types, routing, handlers | API role (EXECUTE only) |
-| `core` | Business domain (your tables) | Admin role |
-| `internal` | Deployment tracking, infrastructure | Owner only |
+`deploy.sql` creates six schemas. `search_path` is set database-wide to
+`core, api, membership, internal, extensions, common, pg_temp`.
+
+| Schema | Purpose | USAGE granted to |
+|--------|---------|------------------|
+| `common` | Cross-cutting primitives (casting, encoding, text) | admin, api, customer |
+| `api` | HTTP types, routing, handlers | api, customer |
+| `core` | Business domain (your tables) | api |
+| `membership` | User identity, organizations, invitations, access control | admin, api, customer |
+| `internal` | Deployment tracking, infrastructure | owner only |
+| `extensions` | `uuid-ossp` and `pgcrypto`, kept out of `search_path` conflicts | PUBLIC |
 
 ## Extending the Framework
 
@@ -413,6 +429,22 @@ myproject/
 ```
 
 Your files execute after framework files (use sortKeys `005/xxx` or higher).
+
+## Working with an AI assistant
+
+This template has real conventions an assistant will not guess — the four-phase
+handler body, kernel-before-handler sort keys, `<pgmi-meta>` blocks, mandatory
+`outputSchema`, RLS through `api.current_member_org_ids()`. Give it the rules
+before it writes any SQL:
+
+```bash
+pgmi ai setup          # writes .claude/skills/pgmi/ — commit it
+pgmi ai check          # is that guidance current for this binary?
+```
+
+`--assistant cursor|copilot|windsurf|cline` targets other tools. To read the
+same material yourself: `pgmi ai`, `pgmi ai skills`, `pgmi ai skill
+pgmi-endpoint-quickstart`.
 
 ## Testing
 

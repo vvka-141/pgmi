@@ -2,6 +2,7 @@ package preprocessor
 
 import (
 	"regexp"
+	"unicode/utf8"
 )
 
 // MacroCall represents a detected macro invocation in SQL.
@@ -84,9 +85,9 @@ func (d *macroDetector) Detect(sql string, mask string) []MacroCall {
 		// same in sql and mask (it is whitespace/punctuation outside of
 		// strings), so this works on either source.
 		if startPos < len(mask) {
-			firstChar := rune(mask[startPos])
-			if firstChar != 'c' && firstChar != 'C' {
-				startPos++
+			r, size := utf8.DecodeRuneInString(mask[startPos:])
+			if r != 'c' && r != 'C' {
+				startPos += size
 			}
 		}
 

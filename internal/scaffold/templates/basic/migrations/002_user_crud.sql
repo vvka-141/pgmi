@@ -3,12 +3,12 @@ RETURNS "user"
 LANGUAGE SQL
 AS $$
     INSERT INTO "user" (email, name) VALUES (p_email, p_name)
-    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+    ON CONFLICT (email) DO UPDATE SET name = COALESCE(EXCLUDED.name, "user".name)
     RETURNING *;
-$$ VOLATILE;
+$$;
 
 COMMENT ON FUNCTION upsert_user(TEXT, TEXT) IS
-    'Inserts or updates a user by email. Idempotent — safe to call repeatedly with the same email.';
+    'Inserts or updates a user by email. Idempotent — safe to call repeatedly with the same email. Omitting p_name leaves an existing name alone: a bare EXCLUDED.name would overwrite it with NULL, so ensuring a user exists would silently erase their name.';
 
 CREATE OR REPLACE FUNCTION get_user(p_email TEXT)
 RETURNS "user"

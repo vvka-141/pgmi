@@ -149,6 +149,14 @@ MAX_CONNECTIONS=100`,
 # Comment 3`,
 			expected: map[string]string{},
 		},
+		{
+			name:    "UTF-8 BOM prefix",
+			content: "\xef\xbb\xbfdbPassword=s3cret\ndbHost=localhost",
+			expected: map[string]string{
+				"dbPassword": "s3cret",
+				"dbHost":     "localhost",
+			},
+		},
 	}
 
 	for _, tt := range tests {

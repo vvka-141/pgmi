@@ -34,17 +34,17 @@ BEGIN
     v_headers := ('x-user-id=>' || v_bob_subject)::extensions.hstore;
 
     v_response := api.rest_invoke('GET', '/admin/dashboard', v_headers, NULL::bytea);
-    IF (v_response).status_code != 403 THEN
+    IF (v_response).status_code IS DISTINCT FROM 403 THEN
         RAISE EXCEPTION 'TEST FAILED: non-admin GET /admin/dashboard expected 403, got %', (v_response).status_code;
     END IF;
 
     v_response := api.rest_invoke('GET', '/admin/exchanges', v_headers, NULL::bytea);
-    IF (v_response).status_code != 403 THEN
+    IF (v_response).status_code IS DISTINCT FROM 403 THEN
         RAISE EXCEPTION 'TEST FAILED: non-admin GET /admin/exchanges expected 403, got %', (v_response).status_code;
     END IF;
 
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges', v_headers, NULL::bytea);
-    IF (v_response).status_code != 403 THEN
+    IF (v_response).status_code IS DISTINCT FROM 403 THEN
         RAISE EXCEPTION 'TEST FAILED: non-admin POST purge-exchanges expected 403, got %', (v_response).status_code;
     END IF;
 
@@ -54,7 +54,7 @@ BEGIN
     -- Unauthenticated → 401 (gateway gate, before the body runs)
     -- ════════════════════════════════════════════════════════════════════
     v_response := api.rest_invoke('GET', '/admin/dashboard', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code != 401 THEN
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
         RAISE EXCEPTION 'TEST FAILED: unauthenticated /admin/dashboard expected 401, got %', (v_response).status_code;
     END IF;
 
@@ -66,21 +66,28 @@ BEGIN
     PERFORM set_config('auth.idp_subject', v_admin_subject, true);
     v_headers := ('x-user-id=>' || v_admin_subject)::extensions.hstore;
 
-    -- purge is POST-only: a destructive GET must not match any route → 404
+    -- purge is POST-only: a destructive GET must not reach the handler. The
+    -- resource exists, so RFC 9110 §15.5.6 makes this 405 + Allow, not 404.
     v_response := api.rest_invoke('GET', '/admin/maintenance/purge-exchanges', v_headers, NULL::bytea);
-    IF (v_response).status_code != 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: GET purge-exchanges expected 404 (POST-only), got %', (v_response).status_code;
+    IF (v_response).status_code IS DISTINCT FROM 405 THEN
+        RAISE EXCEPTION 'TEST FAILED: GET purge-exchanges expected 405 (POST-only), got %', (v_response).status_code;
+    END IF;
+    IF ((v_response).headers->'allow') IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: 405 must carry an Allow header (RFC 9110 15.5.6)';
+    END IF;
+    IF ((v_response).headers->'allow') !~ 'POST' THEN
+        RAISE EXCEPTION 'TEST FAILED: Allow must advertise POST, got %', (v_response).headers->'allow';
     END IF;
 
     -- admin sees the dashboard
     v_response := api.rest_invoke('GET', '/admin/dashboard', v_headers, NULL::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: admin GET /admin/dashboard expected 200, got %', (v_response).status_code;
     END IF;
 
     -- admin can purge via POST
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges', v_headers, NULL::bytea);
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: admin POST purge-exchanges expected 200, got %', (v_response).status_code;
     END IF;
 

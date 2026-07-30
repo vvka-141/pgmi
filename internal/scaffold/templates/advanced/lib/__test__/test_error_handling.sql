@@ -75,13 +75,13 @@ END;
 
     v_response := api.rest_invoke('GET', '/test-error-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 500 THEN
+    IF (v_response).status_code IS DISTINCT FROM 500 THEN
         RAISE EXCEPTION 'TEST FAILED: REST error should return 500, got %', (v_response).status_code;
     END IF;
 
     v_content := api.content_json((v_response).content);
 
-    IF v_content->>'type' != 'about:blank' OR v_content->>'title' != 'Internal Server Error' THEN
+    IF v_content->>'type' IS DISTINCT FROM 'about:blank' OR v_content->>'title' IS DISTINCT FROM 'Internal Server Error' THEN
         RAISE EXCEPTION 'TEST FAILED: REST error should return RFC 9457 problem format';
     END IF;
 
@@ -90,7 +90,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: REST error detail should NOT expose internal exception to clients';
     END IF;
 
-    IF v_content->>'detail' != 'An internal error occurred' THEN
+    IF v_content->>'detail' IS DISTINCT FROM 'An internal error occurred' THEN
         RAISE EXCEPTION 'TEST FAILED: REST error detail should be sanitized, got: %', v_content->>'detail';
     END IF;
 
@@ -101,7 +101,7 @@ END;
     WHERE handler_object_id = 'ffffffff-e001-4000-8000-000000000001'::uuid
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF v_exchange_detail NOT LIKE '%Deliberate REST test error%' THEN
+    IF coalesce(v_exchange_detail, '') NOT LIKE '%Deliberate REST test error%' THEN
         RAISE EXCEPTION 'TEST FAILED: REST exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
@@ -122,11 +122,11 @@ END;
 
     v_content := api.content_json((v_response).content);
 
-    IF v_content->>'jsonrpc' != '2.0' THEN
+    IF v_content->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC error should return JSON-RPC 2.0 format';
     END IF;
 
-    IF (v_content->'error'->>'code')::int != -32603 THEN
+    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32603 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC error code should be -32603 (Internal error), got %', v_content->'error'->>'code';
     END IF;
 
@@ -135,7 +135,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: RPC error should NOT expose internal exception to clients';
     END IF;
 
-    IF v_content->'error'->>'message' != 'Internal error' THEN
+    IF v_content->'error'->>'message' IS DISTINCT FROM 'Internal error' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC error message should be sanitized, got: %', v_content->'error'->>'message';
     END IF;
 
@@ -146,7 +146,7 @@ END;
     WHERE handler_object_id = 'ffffffff-e002-4000-8000-000000000001'::uuid
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF v_exchange_detail NOT LIKE '%Deliberate RPC test error%' THEN
+    IF coalesce(v_exchange_detail, '') NOT LIKE '%Deliberate RPC test error%' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
@@ -160,7 +160,7 @@ END;
 
     v_mcp_response := api.mcp_call_tool('test_error_tool', '{}'::jsonb, NULL, '"err-req-1"'::jsonb);
 
-    IF (v_mcp_response).envelope->>'jsonrpc' != '2.0' THEN
+    IF (v_mcp_response).envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP error should be JSON-RPC 2.0 format';
     END IF;
 
@@ -174,7 +174,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: MCP tool execution failure must set result.isError=true';
     END IF;
 
-    IF (v_mcp_response).envelope->>'id' != 'err-req-1' THEN
+    IF (v_mcp_response).envelope->>'id' IS DISTINCT FROM 'err-req-1' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP error should preserve request_id in envelope.id';
     END IF;
 
@@ -184,7 +184,7 @@ END;
             (v_mcp_response).envelope->'result'->'content'->0->>'text';
     END IF;
 
-    IF (v_mcp_response).envelope->'result'->'content'->0->>'text' != 'Tool execution failed' THEN
+    IF (v_mcp_response).envelope->'result'->'content'->0->>'text' IS DISTINCT FROM 'Tool execution failed' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP error should be sanitized to "Tool execution failed", got: %',
             (v_mcp_response).envelope->'result'->'content'->0->>'text';
     END IF;
@@ -196,7 +196,7 @@ END;
     WHERE handler_object_id = 'ffffffff-e003-4000-8000-000000000001'::uuid
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF v_exchange_detail NOT LIKE '%Deliberate MCP test error%' THEN
+    IF coalesce(v_exchange_detail, '') NOT LIKE '%Deliberate MCP test error%' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
@@ -238,7 +238,7 @@ END;
     );
 
     v_response := api.rest_invoke('GET', '/test-conflict-rest', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code != 409 THEN
+    IF (v_response).status_code IS DISTINCT FROM 409 THEN
         RAISE EXCEPTION 'TEST FAILED: REST unique_violation should map to 409, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
@@ -253,11 +253,11 @@ END;
         ''::extensions.hstore,
         convert_to('{"jsonrpc": "2.0", "method": "test.conflict", "id": "conf-1"}', 'UTF8')
     );
-    IF (v_response).status_code != 409 THEN
+    IF (v_response).status_code IS DISTINCT FROM 409 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC unique_violation should map to HTTP 409, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF (v_content->'error'->>'code')::int != -32602 THEN
+    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC client-error should use code -32602, got %', v_content->'error'->>'code';
     END IF;
     IF v_content->'error'->>'message' LIKE '%duplicate key value for test%' THEN

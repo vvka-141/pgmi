@@ -1,0 +1,288 @@
+name: Examples
+
+# The end-to-end example gates. Defined once and called by both ci.yml and
+# release.yml: a tag used to run only the package tests, so a release could
+# publish while the flagship examples in the README were broken.
+on:
+  workflow_call:
+
+jobs:
+  example-test-gated:
+    name: Example — test-gated deployment
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Success path — tests pass, deployment commits
+        working-directory: examples/test-gated-deploy
+        run: ../../pgmi deploy . -d pgmi_example --force
+
+      - name: Failure path — failing test rolls the whole deployment back
+        working-directory: examples/test-gated-deploy
+        run: |
+          cp break-it/test_audit_log.sql __test__/
+          set +e
+          ../../pgmi deploy . -d pgmi_example_broken --force
+          code=$?
+          set -e
+          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
+
+      - name: Verify rollback — the failed deploy left no trace
+        run: |
+          rolled_back=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5434 -U postgres -d pgmi_example_broken -tAc \
+            "SELECT to_regclass('public.audit_log') IS NULL")
+          test "$rolled_back" = "t" || { echo "audit_log survived the rollback"; exit 1; }
+
+  example-execution-order:
+    name: Example — execution-order policy
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5435/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Success path — one file at two plan positions, deploy commits
+        working-directory: examples/execution-order-policy/project
+        run: ../../../pgmi deploy . -d catalog_demo --force
+
+      - name: Verify — catalog load committed
+        run: |
+          count=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5435 -U postgres -d catalog_demo -tAc \
+            "SELECT count(*) FROM catalog.product")
+          test "$count" = "5" || { echo "expected 5 products, got $count"; exit 1; }
+
+      - name: Failure path — duplicate sort key fails the collision gate
+        working-directory: examples/execution-order-policy/project
+        run: |
+          cp ../break-it/012_categories.sql load/
+          set +e
+          ../../../pgmi deploy . -d catalog_demo --force
+          code=$?
+          set -e
+          rm load/012_categories.sql
+          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
+
+      - name: Failure path — unlisted file fails the manifest assertion
+        working-directory: examples/execution-order-policy/project
+        run: |
+          cp ../break-it/015_discounts.sql load/
+          set +e
+          ../../../pgmi deploy . -d catalog_demo --force
+          code=$?
+          set -e
+          rm load/015_discounts.sql
+          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
+
+      - name: Verify — failed deploys executed no project script
+        run: |
+          untouched=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5435 -U postgres -d catalog_demo -tAc \
+            "SELECT to_regclass('catalog.category') IS NULL AND to_regclass('catalog.discount') IS NULL")
+          test "$untouched" = "t" || { echo "a rejected deploy left objects behind"; exit 1; }
+
+  example-seed-demo:
+    name: Example — seed-demo (desired-state reference data)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5437/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: First deploy — seeds roles and permissions, tests pass
+        working-directory: examples/seed-demo
+        run: ../../pgmi deploy . -d seed_demo --force
+
+      - name: Redeploy — idempotent, same seed file converges with no changes
+        working-directory: examples/seed-demo
+        run: ../../pgmi deploy . -d seed_demo --force
+
+      - name: Verify — catalog invariants hold after two deploys
+        run: |
+          role_count=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5437 -U postgres -d seed_demo -tAc \
+            "SELECT count(*) FROM role WHERE deprecated_at IS NULL")
+          test "$role_count" -gt 0 || { echo "expected at least one active role"; exit 1; }
+          perm_count=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5437 -U postgres -d seed_demo -tAc \
+            "SELECT count(*) FROM permission WHERE deprecated_at IS NULL")
+          test "$perm_count" -gt 0 || { echo "expected at least one active permission"; exit 1; }
+
+  example-lock-safe:
+    name: Example — lock-safe deploy
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5436:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5436/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Deploy — atomic head, then CIC / backfill / CIC in psql mode
+        working-directory: examples/lock-safe-deploy/project
+        run: ../../../pgmi deploy . -d lock_safe_demo --force
+
+      - name: Verify — both concurrent indexes are VALID
+        run: |
+          valid=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -tAc \
+            "SELECT bool_and(i.indisvalid) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE c.relname IN ('idx_orders_customer', 'idx_orders_status')
+             HAVING count(*) = 2")
+          test "$valid" = "t" || { echo "expected 2 VALID concurrent indexes"; exit 1; }
+
+      - name: Verify — deferred constraint was validated in the tail
+        run: |
+          validated=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -tAc \
+            "SELECT convalidated FROM pg_constraint WHERE conname = 'orders_amount_nonneg'")
+          test "$validated" = "t" || { echo "orders_amount_nonneg should be validated"; exit 1; }
+
+      - name: Failure path — broken tail statement leaves earlier units applied
+        working-directory: examples/lock-safe-deploy/project
+        run: |
+          cp deploy.sql deploy.sql.bak
+          cp ../break-it/deploy.sql deploy.sql
+          set +e
+          ../../../pgmi deploy . -d lock_safe_broken --force
+          code=$?
+          set -e
+          mv deploy.sql.bak deploy.sql
+          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
+
+      - name: Verify — earlier tail units survived the mid-tail failure
+        run: |
+          idx_customer=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_broken -tAc \
+            "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE c.relname = 'idx_orders_customer'")
+          test "$idx_customer" = "t" || { echo "idx_orders_customer should survive the later failure"; exit 1; }
+          no_status_idx=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_broken -tAc \
+            "SELECT to_regclass('idx_orders_status') IS NULL")
+          test "$no_status_idx" = "t" || { echo "idx_orders_status should not exist (it referenced a bad column)"; exit 1; }
+
+      - name: Recovery — corrected redeploy converges
+        working-directory: examples/lock-safe-deploy/project
+        run: ../../../pgmi deploy . -d lock_safe_broken --force
+
+      - name: Verify — recovery deploy created both indexes
+        run: |
+          both_valid=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_broken -tAc \
+            "SELECT bool_and(i.indisvalid) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE c.relname IN ('idx_orders_customer', 'idx_orders_status')
+             HAVING count(*) = 2")
+          test "$both_valid" = "t" || { echo "expected both indexes VALID after recovery"; exit 1; }
+
+      - name: Redeploy — the tail is idempotent, a second run converges
+        working-directory: examples/lock-safe-deploy/project
+        run: ../../../pgmi deploy . -d lock_safe_demo --force
+
+  example-tap-reporter:
+    name: Example — TAP reporter callback
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5438:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5438/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Deploy with TAP callback — tests emit TAP 14 output
+        working-directory: examples/tap-reporter
+        run: |
+          output=$(../../pgmi deploy . -d tap_demo --force 2>&1)
+          echo "$output"
+          echo "$output" | grep -q 'TAP version 14' || { echo "missing TAP version line"; exit 1; }
+          echo "$output" | grep -q '1\.\.2' || { echo "missing plan line"; exit 1; }
+          echo "$output" | grep -q 'ok 1 - ' || { echo "missing ok 1"; exit 1; }
+          echo "$output" | grep -q 'ok 2 - ' || { echo "missing ok 2"; exit 1; }
+
+      - name: Redeploy — idempotent, TAP output reproduced
+        working-directory: examples/tap-reporter
+        run: ../../pgmi deploy . -d tap_demo --force

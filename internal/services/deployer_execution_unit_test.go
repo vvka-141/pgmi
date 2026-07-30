@@ -60,6 +60,11 @@ func TestDeploy_OverwriteApproverError(t *testing.T) {
 	if !strings.Contains(err.Error(), "approval") {
 		t.Fatalf("Expected approval error, got: %v", err)
 	}
+	// An approver that failed gave no answer, which is not the same as yes.
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("the approval request failed but the database was dropped anyway: %v",
+			dbMgr.dropped)
+	}
 }
 
 func TestDeploy_AuthMethodCopiedToConnConfig(t *testing.T) {
@@ -83,18 +88,38 @@ func TestDeploy_EnsureDBExists_MgmtDefaultsToPostgres(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
 
-	var capturedDB string
-	mgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
-		capturedDB = dbName
-		return &mockDBConnection{}, noop, nil
-	}
-
-	svc := newTestService(dbMgr, nil, sessPreparer, mgmt)
+	var dialed []string
+	svc := newTestService(dbMgr, nil, sessPreparer, missingTargetMgmtConn("testdb", &dialed))
 	cfg := validConfig()
 	cfg.MaintenanceDatabase = ""
 
 	_ = svc.Deploy(context.Background(), cfg)
-	if capturedDB != pgmi.DefaultManagementDB {
-		t.Fatalf("Expected default management DB %q, got %q", pgmi.DefaultManagementDB, capturedDB)
+
+	if len(dialed) != 2 {
+		t.Fatalf("Expected a probe of the target followed by the maintenance fallback, got %v", dialed)
+	}
+	if dialed[1] != pgmi.DefaultMaintenanceDB {
+		t.Fatalf("Expected default maintenance DB %q, got %q", pgmi.DefaultMaintenanceDB, dialed[1])
+	}
+}
+
+// A deploy to a database that already exists must not touch a maintenance
+// database at all: a CI role is routinely granted CONNECT on its own database
+// and nothing else.
+func TestDeploy_ExistingDatabase_SkipsMaintenanceConnection(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
+
+	var dialed []string
+	mgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+		dialed = append(dialed, dbName)
+		return &mockDBConnection{}, noop, nil
+	}
+
+	svc := newTestService(dbMgr, nil, sessPreparer, mgmt)
+	_ = svc.Deploy(context.Background(), validConfig())
+
+	if len(dialed) != 1 || dialed[0] != "testdb" {
+		t.Fatalf("Expected exactly one dial, of the target database, got %v", dialed)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,14 @@ import (
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
+
+// ReleaseDeployLock is indirected so a test can observe that the failure path
+// releases the lock. The end-to-end symptom — a spurious ErrConcurrentDeploy on
+// an immediate retry — depends on how fast the server reaps a disconnected
+// backend, so it cannot be reproduced on demand over loopback. Exported only
+// because internal/testing imports this package, which keeps the test in the
+// external test package.
+var ReleaseDeployLock = pgmi.ReleaseDeployLock
 
 // SessionManager handles session initialization shared between deployment and testing.
 // Responsibility: Scan files, connect to database, prepare session (utility functions, files, parameters).
@@ -70,17 +79,11 @@ func NewSessionManager(
 func (sm *SessionManager) PrepareSession(
 	ctx context.Context,
 	connConfig *pgmi.ConnectionConfig,
-	sourcePath string,
+	scanResult pgmi.FileScanResult,
 	parameters map[string]string,
 	compat string,
 	verbose bool,
 ) (*pgmi.Session, error) {
-	// Scan and validate source files
-	scanResult, err := sm.scanAndValidateFiles(sourcePath)
-	if err != nil {
-		return nil, fmt.Errorf("file scanning failed: %w", err)
-	}
-
 	// Connect to target database
 	pool, connectorCleanup, err := sm.connectToDatabase(ctx, connConfig)
 	if err != nil {
@@ -96,26 +99,47 @@ func (sm *SessionManager) PrepareSession(
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 
-	var success bool
+	// lockAcquired is declared here so the cleanup below can see it: abandoning
+	// a half-prepared session must release the advisory lock explicitly, exactly
+	// as Session.Close does. Closing the pool only starts a disconnect the server
+	// may not have processed by the time the operator re-runs, which is how an
+	// immediate retry after a preparation failure hit ErrConcurrentDeploy.
+	// context.Background() rather than ctx: a preparation failure caused by a
+	// cancelled or expired ctx would make the unlock a silent no-op.
+	var success, lockAcquired bool
 	defer func() {
-		if !success {
-			conn.Release()
-			pool.Close()
-			connectorCleanup()
+		if success {
+			return
 		}
+		if lockAcquired {
+			unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ReleaseDeployLock(unlockCtx, conn)
+			cancel()
+		}
+		conn.Release()
+		pool.Close()
+		connectorCleanup()
 	}()
+
+	// Before anything else touches the server. The advisory lock below already
+	// needs hashtextextended (PostgreSQL 11), so without this an older server
+	// answers with "function hashtextextended does not exist" — an error naming
+	// neither pgmi nor the version it requires.
+	if err := checkServerVersion(ctx, conn); err != nil {
+		return nil, err
+	}
 
 	// Serialise concurrent `pgmi deploy` against the same target database.
 	// pg_try_advisory_lock returns false immediately if another session
 	// already holds the lock — we surface that as a distinct sentinel so
 	// the caller gets a clear message and a dedicated exit code (15)
-	// instead of a cryptic mid-deploy SQL error. The lock is session-
-	// scoped; releasing the pg_temp session on disconnect releases it.
+	// instead of a cryptic mid-deploy SQL error. The lock is session-scoped,
+	// but every exit from here releases it explicitly rather than leaving it
+	// to the disconnect: see the cleanup above and Session.Close.
 	//
 	// The key is derived from the DB name via hashtextextended (PostgreSQL 11+,
 	// pgmi's minimum supported version) so two deployments against DIFFERENT
 	// databases on the same cluster do not block each other.
-	var lockAcquired bool
 	if err := conn.QueryRow(
 		ctx,
 		`SELECT pg_try_advisory_lock(hashtextextended('pgmi.deploy.' || current_database(), 0))`,
@@ -145,8 +169,35 @@ func (sm *SessionManager) PrepareSession(
 	return session, nil
 }
 
-// scanAndValidateFiles scans the source directory and validates files.
-func (sm *SessionManager) scanAndValidateFiles(sourcePath string) (pgmi.FileScanResult, error) {
+// checkServerVersion rejects a server below pgmi's floor before any work is
+// done, so the operator gets a pgmi-authored diagnostic naming the requirement
+// rather than whatever the first unsupported construct happens to raise.
+func checkServerVersion(ctx context.Context, conn *pgxpool.Conn) error {
+	var versionNum int
+	var versionText string
+	if err := conn.QueryRow(ctx,
+		`SELECT current_setting('server_version_num')::int, current_setting('server_version')`,
+	).Scan(&versionNum, &versionText); err != nil {
+		return fmt.Errorf("failed to read the server version: %w", err)
+	}
+	return verifyServerVersion(versionNum, versionText)
+}
+
+// verifyServerVersion is split out so the rejection is testable without an
+// unsupported server to hand.
+func verifyServerVersion(versionNum int, versionText string) error {
+	if versionNum >= pgmi.MinimumServerVersionNum {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: this server reports PostgreSQL %s, and pgmi requires %d or newer",
+		pgmi.ErrInvalidConfig, versionText, pgmi.MinimumServerVersionNum/10000)
+}
+
+// ScanProject scans the source directory and validates files. Callers run this
+// before creating or overwriting a database so an unscannable project fails
+// without leaving one behind.
+func (sm *SessionManager) ScanProject(sourcePath string) (pgmi.FileScanResult, error) {
 	sm.logger.Verbose("Scanning %s", sourcePath)
 
 	// Validate deploy.sql exists
@@ -157,7 +208,7 @@ func (sm *SessionManager) scanAndValidateFiles(sourcePath string) (pgmi.FileScan
 	// Scan all files (excluding deploy.sql)
 	scanResult, err := sm.fileScanner.ScanDirectory(sourcePath)
 	if err != nil {
-		return pgmi.FileScanResult{}, fmt.Errorf("failed to scan directory %q: %w", sourcePath, err)
+		return pgmi.FileScanResult{}, fmt.Errorf("failed to scan directory \"%s\": %w", sourcePath, err)
 	}
 
 	if err := validateNoDuplicateScriptIDs(scanResult.Files); err != nil {

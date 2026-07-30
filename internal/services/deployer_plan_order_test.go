@@ -4,16 +4,22 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	testhelpers "github.com/vvka-141/pgmi/internal/testing"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// TestPlanOrder_NestedDirectories verifies pgmi_test_plan() returns correct pre-order DFS:
-// fixture(0) → test(0) → fixture(1) → test(1) → ... → teardown(N) → ... → teardown(0)
-// Due to PostgreSQL savepoint nesting, only the root teardown_end persists to the table.
-// Full plan order is verified in TestPlanDebug_QueryPlanDirectly which queries pgmi_test_plan() directly.
+// TestPlanOrder_NestedDirectories covers what the callback stream can show after
+// the fact: every event but the root teardown_end is rolled back with its own
+// savepoint, so the table holds three rows however deep the tree is.
+//
+// The plan itself — teardowns at their subtree exit positions — is asserted by
+// TEST 7b in testdata/session_foundation_test.sql, which reads pgmi_test_plan()
+// directly and so sees all ten steps.
 func TestPlanOrder_NestedDirectories(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
@@ -92,7 +98,527 @@ func TestPlanOrder_NestedDirectories(t *testing.T) {
 		t.Errorf("Persisted teardown_end should be root (depth=0), got depth=%d", teardownDepth)
 	}
 
-	t.Log("Note: Full DFS ordering verified in TestPlanDebug_QueryPlanDirectly")
+}
+
+// TestPlanOrder_MixedSortKeysAndPathFallback pins pgmi_plan_view.execution_order to
+// C byte order. sort_key mixes two domains — user sortKeys ("001/000") and path
+// fallbacks ("./migrations/...") — and under a linguistic collation like en_US.utf8
+// '.' sorts after digits, silently inverting the two groups. The deployment order
+// must not depend on the server's locale.
+func TestPlanOrder_MixedSortKeysAndPathFallback(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	createMixedSortKeyProject(t, projectPath)
+
+	testDB := "pgmi_plan_collation"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+
+	var dbCollate, defaultOrder, cOrder string
+	if err := pool.QueryRow(ctx,
+		`SELECT db_collate, default_order, c_order FROM collation_probe`,
+	).Scan(&dbCollate, &defaultOrder, &cOrder); err != nil {
+		t.Fatalf("Failed to read collation_probe: %v", err)
+	}
+	if defaultOrder == cOrder {
+		t.Fatalf("this server's collation (%s) orders the fixture filenames exactly as C does, "+
+			"so the assertion below cannot distinguish a fixed pgmi_plan_view from a broken one; "+
+			"run against a linguistic-collation database (the project's test image is en_US.utf8)",
+			dbCollate)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT path FROM plan_order_capture ORDER BY execution_order`)
+	if err != nil {
+		t.Fatalf("Failed to query plan_order_capture: %v", err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			t.Fatalf("Failed to scan: %v", err)
+		}
+		got = append(got, path)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Row iteration failed: %v", err)
+	}
+
+	want := []string{
+		"./fallback-b.sql",
+		"./fallback_a.sql",
+		"./migrations/002_data.sql",
+		"./setup/functions.sql",
+		"./first.sql",
+		"./last.sql",
+	}
+	if !sliceEqual(got, want) {
+		t.Errorf("execution_order is not C byte order\nGot:      %v\nExpected: %v", got, want)
+	}
+}
+
+// TestTestPlanOrder_IntraDirectoryIsByteOrdered pins the test order WITHIN one
+// __test__ directory to C byte order. pgmi_test_plan orders sibling tests by
+// filename, and under a linguistic collation like en_US.utf8 glibc ignores
+// punctuation at the primary level: test_a.sql and test-b.sql compare as
+// "testa" vs "testb" and swap relative to byte order. Same project, same pgmi,
+// different server locale, different execution order — so a test that seeds
+// state for a sibling passes locally and fails in CI.
+//
+// The fixture only proves anything on a server whose default collation
+// disagrees with C, so the deploy captures both orderings and the test fails
+// loudly rather than passing vacuously when it cannot discriminate.
+func TestTestPlanOrder_IntraDirectoryIsByteOrdered(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	createPunctuatedTestNameProject(t, projectPath)
+
+	testDB := "pgmi_test_plan_collation"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+
+	var dbCollate, defaultOrder, cOrder string
+	if err := pool.QueryRow(ctx,
+		`SELECT db_collate, default_order, c_order FROM collation_probe`,
+	).Scan(&dbCollate, &defaultOrder, &cOrder); err != nil {
+		t.Fatalf("Failed to read collation_probe: %v", err)
+	}
+	if defaultOrder == cOrder {
+		t.Fatalf("this server's collation (%s) orders the fixture filenames exactly as C does, "+
+			"so the assertion below cannot distinguish a fixed pgmi_test_plan from a broken one; "+
+			"run against a linguistic-collation database (the project's test image is en_US.utf8)",
+			dbCollate)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT script_path FROM test_plan_capture ORDER BY ordinal`)
+	if err != nil {
+		t.Fatalf("Failed to query test_plan_capture: %v", err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			t.Fatalf("Failed to scan: %v", err)
+		}
+		got = append(got, path)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Row iteration failed: %v", err)
+	}
+
+	// C byte order: '-' is 0x2D, '_' is 0x5F, 'c' is 0x63.
+	want := []string{
+		"./__test__/test-b.sql",
+		"./__test__/test_a.sql",
+		"./__test__/testc.sql",
+	}
+	if !sliceEqual(got, want) {
+		t.Errorf("intra-directory test order is not C byte order (db collate %s)\nGot:      %v\nExpected: %v",
+			dbCollate, got, want)
+	}
+}
+
+// TestTestPlan_GappedDirectoryStaysUnderItsAncestor covers a __test__ tree with a
+// hole in it: files at ./__test__/ and ./__test__/sub/deep/, none directly in
+// ./__test__/sub/. Only directories that hold a file become _pgmi_test_directory
+// rows, so the deep directory's immediate parent is absent; if it is recorded as
+// a root instead of a descendant, pgmi_test_plan emits the root teardown before
+// the deep test and that test runs against a rolled-back parent fixture.
+func TestTestPlan_GappedDirectoryStaysUnderItsAncestor(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	createGappedTestHierarchyProject(t, projectPath)
+
+	testDB := "pgmi_test_plan_gap"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+
+	rows, err := pool.Query(ctx,
+		`SELECT ordinal, step_type, coalesce(script_path, directory), depth
+		 FROM test_plan_capture ORDER BY ordinal`)
+	if err != nil {
+		t.Fatalf("Failed to query test_plan_capture: %v", err)
+	}
+	defer rows.Close()
+
+	var (
+		plan            []string
+		rootTeardown    = -1
+		lastDeepOrdinal = -1
+	)
+	for rows.Next() {
+		var ordinal, depth int
+		var stepType, label string
+		if err := rows.Scan(&ordinal, &stepType, &label, &depth); err != nil {
+			t.Fatalf("Failed to scan: %v", err)
+		}
+		plan = append(plan, stepType+":"+label)
+
+		if stepType == "teardown" && label == "./__test__/" {
+			rootTeardown = ordinal
+		}
+		if strings.HasPrefix(label, "./__test__/sub/deep/") {
+			lastDeepOrdinal = ordinal
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Row iteration failed: %v", err)
+	}
+
+	if rootTeardown == -1 || lastDeepOrdinal == -1 {
+		t.Fatalf("fixture did not produce both a root teardown and a nested step; plan was %v", plan)
+	}
+
+	// The deep directory is a descendant of ./__test__/, so every one of its
+	// steps — including its own teardown — must complete before the root
+	// teardown rolls the root fixture back.
+	if rootTeardown < lastDeepOrdinal {
+		t.Errorf("./__test__/ teardown runs at ordinal %d, before ./__test__/sub/deep/ finishes at %d — "+
+			"the nested test executes against a rolled-back parent fixture\nplan: %v",
+			rootTeardown, lastDeepOrdinal, plan)
+	}
+
+	// The depth column drives savepoint nesting in the generated SQL, so a
+	// gapped directory reported at depth 0 is the same defect seen from the
+	// other side.
+	var deepDepth int
+	if err := pool.QueryRow(ctx,
+		`SELECT min(depth) FROM test_plan_capture WHERE directory = './__test__/sub/deep/'`,
+	).Scan(&deepDepth); err != nil {
+		t.Fatalf("Failed to read nested depth: %v", err)
+	}
+	if deepDepth == 0 {
+		t.Errorf("./__test__/sub/deep/ is reported at depth 0 — it was treated as its own tree root")
+	}
+}
+
+// createGappedTestHierarchyProject builds a __test__ tree whose middle level
+// holds no files of its own.
+func createGappedTestHierarchyProject(t *testing.T, projectPath string) {
+	t.Helper()
+
+	rootPath := filepath.Join(projectPath, "__test__")
+	deepPath := filepath.Join(rootPath, "sub", "deep")
+	if err := os.MkdirAll(deepPath, 0755); err != nil {
+		t.Fatalf("Failed to create %s: %v", deepPath, err)
+	}
+
+	files := map[string]string{
+		filepath.Join(rootPath, "_setup.sql"): "CREATE TEMP TABLE gap_state (v TEXT);\n",
+		filepath.Join(rootPath, "test_a.sql"): "INSERT INTO gap_state VALUES ('a');\n",
+		filepath.Join(deepPath, "test_b.sql"): "INSERT INTO gap_state VALUES ('b');\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(name, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create %s: %v", name, err)
+		}
+	}
+
+	deploySQL := `
+CREATE TABLE test_plan_capture (
+    ordinal INT PRIMARY KEY,
+    step_type TEXT NOT NULL,
+    script_path TEXT,
+    directory TEXT NOT NULL,
+    depth INT NOT NULL
+);
+
+INSERT INTO test_plan_capture (ordinal, step_type, script_path, directory, depth)
+SELECT ordinal, step_type, script_path, directory, depth
+FROM pg_temp.pgmi_test_plan(NULL);
+
+-- Commit the capture before running the suite: if the plan is wrong the suite
+-- aborts, and the Go assertions still get the plan they need to say why.
+COMMIT;
+
+-- test_b writes into the fixture's table, so a plan that tears the root down
+-- first fails here too, not only in the assertions above.
+BEGIN;
+CALL pgmi_test();
+COMMIT;
+`
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+}
+
+// TestDeployError_ReportsLineAfterMacroExpansion proves the reported line is the
+// line of the script pgmi actually sent, not of the file on disk. CALL pgmi_test()
+// expands into many lines before the syntax error, so a naive line count against
+// deploy.sql would point at the wrong statement.
+func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+
+	testDir := filepath.Join(projectPath, "__test__")
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create __test__: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "test_noop.sql"), []byte(`SELECT 1;`), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// The macro expands to many statements, so "SELEC 1;" sits on line 4 of
+	// deploy.sql but much further down in the script PostgreSQL parses.
+	deploySQL := "BEGIN;\nCALL pgmi_test();\nCOMMIT;\nSELEC 1;\n"
+	const rawLine = 4
+
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	testDB := "pgmi_error_position"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+		Verbose:             testing.Verbose(),
+	})
+	if err == nil {
+		t.Fatal("expected the syntax error to fail the deploy")
+	}
+
+	loc := pgmi.LocateError(err)
+	if loc == nil {
+		t.Fatalf("expected a resolved error location, got none from: %v", err)
+	}
+
+	// The mapping is correct if and only if the reported line holds the bad SQL.
+	if loc.SourceLine != "SELEC 1;" {
+		t.Errorf("reported line %d does not hold the offending statement: got %q, want %q",
+			loc.Line, loc.SourceLine, "SELEC 1;")
+	}
+	if !loc.Expanded {
+		t.Error("expected the location to be flagged as expanded — deploy.sql contained a pgmi_test() macro")
+	}
+	if loc.Line <= rawLine {
+		t.Errorf("expected macro expansion to push the error past line %d of the file on disk, got line %d",
+			rawLine, loc.Line)
+	}
+
+	if out := pgmi.FormatError(err); !strings.Contains(out, "LINE ") {
+		t.Errorf("FormatError should point at the offending line, got:\n%s", out)
+	}
+}
+
+// TestDeploy_SessionPreparationIsSilent guards the first thing a new user sees.
+// Session preparation is pgmi's own plumbing; its notices are noise the user did
+// not ask for, and the README/Quickstart transcripts should not have to abridge
+// them away. Notices raised BY deploy.sql remain the user's console and are
+// untouched — this asserts only that pgmi itself says nothing.
+func TestDeploy_SessionPreparationIsSilent(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	ctx := context.Background()
+	deployer := testhelpers.NewTestDeployer(t)
+
+	projectPath := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(projectPath, "deploy.sql"),
+		[]byte("SELECT 1;\n"), 0644,
+	); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+
+	var mu sync.Mutex
+	var notices []string
+
+	orig := db.NoticeHandler
+	db.NoticeHandler = func(message, _, _ string) {
+		mu.Lock()
+		notices = append(notices, message)
+		mu.Unlock()
+	}
+	defer func() { db.NoticeHandler = orig }()
+
+	testDB := "pgmi_silent_prep"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+	err := deployer.Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        testDB,
+		SourcePath:          projectPath,
+		Overwrite:           true,
+		Force:               true,
+	})
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notices) > 0 {
+		t.Errorf("session preparation must not emit notices; a deploy.sql of `SELECT 1;` produced %d:\n  %s",
+			len(notices), strings.Join(notices, "\n  "))
+	}
+}
+
+// createPunctuatedTestNameProject builds a single __test__ directory whose file
+// names differ only in the punctuation glibc ignores at the primary collation
+// level, so C byte order and en_US.utf8 disagree about the first two.
+func createPunctuatedTestNameProject(t *testing.T, projectPath string) {
+	t.Helper()
+
+	testDir := filepath.Join(projectPath, "__test__")
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create __test__: %v", err)
+	}
+
+	for _, name := range []string{"test_a.sql", "test-b.sql", "testc.sql"} {
+		if err := os.WriteFile(filepath.Join(testDir, name), []byte("SELECT 1;\n"), 0644); err != nil {
+			t.Fatalf("Failed to create %s: %v", name, err)
+		}
+	}
+
+	deploySQL := `
+CREATE TABLE test_plan_capture (
+    ordinal INT PRIMARY KEY,
+    script_path TEXT NOT NULL
+);
+
+INSERT INTO test_plan_capture (ordinal, script_path)
+SELECT ordinal, script_path
+FROM pg_temp.pgmi_test_plan(NULL)
+WHERE step_type = 'test';
+
+-- Records whether this server's collation can tell the fixture names apart
+-- from C byte order. When it cannot, the ordering assertion proves nothing and
+-- the Go test fails on this instead of passing quietly.
+CREATE TABLE collation_probe AS
+WITH f(name) AS (VALUES ('test_a.sql'), ('test-b.sql'))
+SELECT
+    (SELECT datcollate FROM pg_database WHERE datname = current_database()) AS db_collate,
+    (SELECT string_agg(name, ',' ORDER BY name) FROM f) AS default_order,
+    (SELECT string_agg(name, ',' ORDER BY name COLLATE "C") FROM f) AS c_order;
+`
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+}
+
+func createMixedSortKeyProject(t *testing.T, projectPath string) {
+	t.Helper()
+
+	for _, dir := range []string{"migrations", "setup"} {
+		if err := os.MkdirAll(filepath.Join(projectPath, dir), 0755); err != nil {
+			t.Fatalf("Failed to create %s: %v", dir, err)
+		}
+	}
+
+	files := map[string]string{
+		filepath.Join("migrations", "002_data.sql"): "SELECT 'no metadata: sorts by path';\n",
+		filepath.Join("setup", "functions.sql"):     "SELECT 'no metadata: sorts by path';\n",
+		"fallback_a.sql":                            "SELECT 'no metadata: punctuation pair for collation probe';\n",
+		"fallback-b.sql":                            "SELECT 'no metadata: punctuation pair for collation probe';\n",
+		"first.sql": `/*
+<pgmi-meta id="c0000001-0001-4000-8000-000000000001" idempotent="true">
+  <sortKeys><key>001/000</key></sortKeys>
+</pgmi-meta>
+*/
+SELECT 'sortKey 001/000';
+`,
+		"last.sql": `/*
+<pgmi-meta id="c0000001-0001-4000-8000-000000000002" idempotent="true">
+  <sortKeys><key>999/000</key></sortKeys>
+</pgmi-meta>
+*/
+SELECT 'sortKey 999/000';
+`,
+	}
+
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(projectPath, name), []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create %s: %v", name, err)
+		}
+	}
+
+	deploySQL := `
+CREATE TABLE plan_order_capture (
+    execution_order BIGINT PRIMARY KEY,
+    sort_key TEXT NOT NULL,
+    path TEXT NOT NULL
+);
+
+INSERT INTO plan_order_capture (execution_order, sort_key, path)
+SELECT execution_order, sort_key, path FROM pg_temp.pgmi_plan_view;
+
+CREATE TABLE collation_probe AS
+WITH f(name) AS (VALUES ('fallback_a.sql'), ('fallback-b.sql'))
+SELECT
+    (SELECT datcollate FROM pg_database WHERE datname = current_database()) AS db_collate,
+    (SELECT string_agg(name, ',' ORDER BY name) FROM f) AS default_order,
+    (SELECT string_agg(name, ',' ORDER BY name COLLATE "C") FROM f) AS c_order;
+`
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
 }
 
 func createDiagnosticNestedProject(t *testing.T, projectPath string) {

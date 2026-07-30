@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 //go:embed api-v1.sql
@@ -32,7 +33,7 @@ func Load(version string) (string, Version, error) {
 	case V1:
 		return apiV1SQL, v, nil
 	default:
-		return "", "", fmt.Errorf("unsupported API version %q; supported: %v", version, SupportedVersions())
+		return "", "", fmt.Errorf("%w: unsupported API version %q; supported: %v", pgmi.ErrInvalidConfig, version, SupportedVersions())
 	}
 }
 

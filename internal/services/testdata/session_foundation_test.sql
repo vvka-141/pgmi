@@ -175,13 +175,53 @@ BEGIN
         './__test__/billing/test_stripe.sql'         -- Level 1 test (billing sibling)
     ];
 
-    IF v_ordinal != v_expected_order THEN
+    IF v_ordinal IS DISTINCT FROM v_expected_order THEN
         RAISE EXCEPTION E'✗ FAILED: Execution order incorrect\nExpected: %\nGot: %',
             array_to_string(v_expected_order, ', '),
             array_to_string(v_ordinal, ', ');
     END IF;
 
     RAISE NOTICE '✓ PASSED: Multi-level execution order correct';
+END $$;
+
+-- TEST 7b: Full Plan Sequence Including Teardowns
+-- TEST 7 filters teardowns out, so it cannot see where they land. Their position
+-- is what makes the DFS a DFS: a teardown rolls its directory's savepoint back,
+-- so one emitted early runs every later test in that subtree against reverted
+-- fixture state. Nothing else in the repo compares teardown ordinals.
+DO $$
+DECLARE
+    v_plan TEXT[];
+    v_expected TEXT[];
+BEGIN
+    RAISE NOTICE '';
+    RAISE NOTICE 'TEST 7b: Full Plan Sequence Including Teardowns';
+
+    SELECT array_agg(step_type || ':' || COALESCE(script_path, directory) ORDER BY ordinal)
+    INTO v_plan
+    FROM pg_temp.pgmi_test_plan();
+
+    v_expected := ARRAY[
+        'fixture:./__test__/_setup.sql',
+        'test:./__test__/test_basic.sql',
+        'fixture:./__test__/auth/_setup.sql',
+        'test:./__test__/auth/test_login.sql',
+        'test:./__test__/auth/oauth/test_google.sql',
+        'teardown:./__test__/auth/oauth/',
+        'teardown:./__test__/auth/',
+        'test:./__test__/billing/test_stripe.sql',
+        'teardown:./__test__/billing/',
+        'teardown:./__test__/'
+    ];
+
+    IF v_plan IS DISTINCT FROM v_expected THEN
+        RAISE EXCEPTION E'✗ FAILED: Full plan sequence incorrect\nExpected: %\nGot: %',
+            array_to_string(v_expected, E'\n          '),
+            array_to_string(v_plan, E'\n          ');
+    END IF;
+
+    RAISE NOTICE '✓ PASSED: Full plan sequence correct (% steps, teardowns at subtree exit)',
+        cardinality(v_plan);
 END $$;
 
 -- TEST 8: Teardown Structure

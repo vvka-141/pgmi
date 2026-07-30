@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -12,7 +14,14 @@ import (
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/params"
+	"github.com/vvka-141/pgmi/internal/testinfra"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+)
+
+var (
+	execContainerOnce sync.Once
+	execContainerConn string
+	execContainerErr  error
 )
 
 func requireTestDB(t *testing.T) string {
@@ -20,11 +29,32 @@ func requireTestDB(t *testing.T) string {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	conn := os.Getenv("PGMI_TEST_CONN")
-	if conn == "" {
-		t.Skip("PGMI_TEST_CONN not set")
+	if conn := os.Getenv("PGMI_TEST_CONN"); conn != "" {
+		return conn
 	}
-	return conn
+	execContainerOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				execContainerErr = fmt.Errorf("testcontainer startup panicked: %v", r)
+			}
+		}()
+		container, err := testinfra.StartSimplePostgres(context.Background())
+		if err != nil {
+			execContainerErr = err
+			return
+		}
+		execContainerConn = container.ConnString
+	})
+	if execContainerErr == nil {
+		return execContainerConn
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PGMI_REQUIRE_DB"))) {
+	case "", "0", "false", "no":
+		t.Skipf("PGMI_TEST_CONN not set and Docker unavailable: %v", execContainerErr)
+	default:
+		t.Fatalf("PGMI_REQUIRE_DB is set but no test database is available: %v", execContainerErr)
+	}
+	return ""
 }
 
 func createTestDB(t *testing.T, connString, dbName string) func() {
@@ -83,7 +113,7 @@ func prepareSessionTables(t *testing.T, ctx context.Context, conn *pgxpool.Conn)
 
 func newServiceWithReadContent(content string) *DeploymentService {
 	fs := &mockFileScanner{readContent: content}
-	return NewDeploymentService(
+	svc := NewDeploymentService(
 		func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) { return &mockConnector{}, nil },
 		&mockApprover{},
 		&mockLogger{},
@@ -91,6 +121,10 @@ func newServiceWithReadContent(content string) *DeploymentService {
 		fs,
 		&mockDatabaseManager{},
 	)
+	// Deploy() allocates this before it reaches executeDeploySQL, which records
+	// unit counts into it. Calling the unexported method directly skips that.
+	svc.lastResult = &DeployResult{}
+	return svc
 }
 
 func TestExecuteDeploySQL_DirectExecution_Internal(t *testing.T) {

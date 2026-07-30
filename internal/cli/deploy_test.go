@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -482,4 +483,57 @@ func TestBuildDeploymentConfig_Validate(t *testing.T) {
 	if config.ConnectionString == "" {
 		t.Error("config.ConnectionString is empty")
 	}
+}
+
+// -h is the host everywhere in the PostgreSQL toolchain, and pgmi's own
+// connection-conflict error tells users to write `-h localhost -p 5432`.
+// While cobra owned -h for --help, that invocation printed help and exited 0
+// having deployed nothing — a green CI run with no deployment.
+func TestDeployHostShorthand(t *testing.T) {
+	resetDeployFlags()
+	t.Cleanup(resetDeployFlags)
+
+	hostFlag := deployCmd.Flags().ShorthandLookup("h")
+	if hostFlag == nil {
+		t.Fatal("-h is not bound on deploy; it falls through to pflag's help fallback, which exits 0 without deploying")
+	}
+	if hostFlag.Name != "host" {
+		t.Fatalf("-h is bound to --%s, want --host", hostFlag.Name)
+	}
+
+	// A no-op deploy must never look like a successful one: -h consumes its
+	// value rather than triggering help.
+	if err := deployCmd.Flags().Parse([]string{"-h", "127.0.0.1", "-d", "app"}); err != nil {
+		t.Fatalf("parsing -h 127.0.0.1 failed: %v", err)
+	}
+	if deployFlags.host != "127.0.0.1" {
+		t.Errorf("host = %q, want 127.0.0.1", deployFlags.host)
+	}
+}
+
+func TestDeadlineContext(t *testing.T) {
+	t.Run("zero means no deadline", func(t *testing.T) {
+		ctx, cancel := deadlineContext(context.Background(), 0)
+		defer cancel()
+
+		if _, ok := ctx.Deadline(); ok {
+			t.Error("expected no deadline for duration 0")
+		}
+		if ctx.Err() != nil {
+			t.Errorf("context should not be expired, got: %v", ctx.Err())
+		}
+	})
+
+	t.Run("nonzero sets deadline", func(t *testing.T) {
+		ctx, cancel := deadlineContext(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected a deadline for nonzero duration")
+		}
+		if time.Until(deadline) < 4*time.Minute {
+			t.Errorf("deadline too soon: %v", deadline)
+		}
+	})
 }

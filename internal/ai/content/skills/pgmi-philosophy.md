@@ -1,6 +1,7 @@
 ---
 name: pgmi-philosophy
 description: "Architectural decisions, execution fabric vs migration framework"
+scope: core
 user_invocable: false
 ---
 
@@ -82,10 +83,14 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
-    -- User controls execution order via query
+    -- User controls execution order via query. is_sql_file is the execution
+    -- guard: the plan holds every loaded file, including README.md and
+    -- editor backups.
     FOR v_file IN (
-        SELECT path, content FROM pg_temp.pgmi_plan_view
-        ORDER BY execution_order
+        SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+        ORDER BY p.execution_order
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
@@ -132,8 +137,11 @@ END $$;
 ### 4. Dual Checksum Strategy
 
 **Normalized Checksum** (content identity):
-- Converts content to lowercase
 - Removes all SQL comments (`--` and `/* */`)
+- Folds case only where SQL itself ignores it — keywords and unquoted
+  identifiers. String literals, quoted identifiers and dollar-quoted bodies keep
+  their case, because `"Users"` and `"users"` are different tables and
+  `'Production'` and `'production'` are different data
 - Collapses whitespace sequences to single spaces
 - Enables tracking scripts independent of formatting changes
 
@@ -271,7 +279,7 @@ DO $outer$
 DECLARE
     v_file RECORD;
 BEGIN
-    FOR v_file IN (SELECT content FROM pg_temp.pgmi_plan_view) LOOP
+    FOR v_file IN (SELECT p.content FROM pg_temp.pgmi_plan_view p JOIN pg_temp.pgmi_source_view s ON s.path = p.path WHERE s.is_sql_file) LOOP
         EXECUTE v_file.content;
     END LOOP;
 END $outer$;
@@ -283,8 +291,10 @@ END $outer$;
 ```sql
 -- Query files in execution order and execute directly
 FOR v_file IN (
-    SELECT path, content FROM pg_temp.pgmi_plan_view
-    ORDER BY execution_order
+    SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+    WHERE s.is_sql_file
+    ORDER BY p.execution_order
 )
 LOOP
     EXECUTE v_file.content;
@@ -308,10 +318,10 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/api/.*');
 **`pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
 ```sql
 -- Run all tests
-pgmi_test();
+CALL pgmi_test();
 
 -- Run filtered tests
-pgmi_test('.*/pre-deployment/.*');
+CALL pgmi_test('.*/pre-deployment/.*');
 ```
 
 ## Design Heuristics
@@ -390,9 +400,10 @@ BEGIN
     IF COALESCE(current_setting('pgmi.skip_migrations', true), 'false') = 'false' THEN
         RAISE NOTICE 'Running migrations...';
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_plan_view
-            WHERE path LIKE './migrations/%'
-            ORDER BY execution_order
+            SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
+            JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+            WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+            ORDER BY p.execution_order
         )
         LOOP
             RAISE NOTICE 'Executing: %', v_file.path;

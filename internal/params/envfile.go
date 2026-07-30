@@ -21,6 +21,7 @@ import (
 // This implementation is compatible with godotenv behavior for simple cases
 // but does not support advanced features like variable expansion or multiline values.
 func ParseEnvFile(content []byte) (map[string]string, error) {
+	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	result := make(map[string]string)
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	lineNum := 0

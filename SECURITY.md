@@ -4,14 +4,13 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.x.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+| Latest 0.x | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to: **security@pgmi.dev** (or create a private security advisory on GitHub).
+Instead, please [create a private security advisory](https://github.com/vvka-141/pgmi/security/advisories/new) on GitHub.
 
 ### What to Include
 
@@ -44,9 +43,9 @@ When reporting a vulnerability, please include:
 
 ### Parameters
 
-- Parameters passed via `--param` are stored in session-scoped temporary tables
-- pgmi never logs or persists parameter values
-- Avoid passing secrets as parameters when possible; use PostgreSQL's native secret management
+Secrets as parameters is supported and expected. The only banned path is the command line (`--param key=secret` leaks to `ps`, shell history, and CI logs). Use `--params-file` or a CI/CD-generated seeding file instead.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the full parameter security model, threat vectors, and CI/CD pipeline patterns.
 
 ### Template Code
 

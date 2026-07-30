@@ -10,6 +10,19 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 
 > **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
+> **⚠️ Read this first: pgmi re-executes every migration on every deploy.** The
+> basic template keeps no ledger — each file runs again every time you
+> `pgmi deploy`. That is safe *only* when your SQL is idempotent
+> (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`,
+> `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). If you arrive with Flyway's,
+> Liquibase's, or Sqitch's "each migration runs exactly once" mental model, a
+> non-idempotent statement like a bare `ALTER TABLE ... ADD COLUMN` **succeeds on
+> the first deploy and fails on the second.** Two ways out: make every migration
+> idempotent, or turn on apply-once tracking — the basic template's `deploy.sql`
+> ships a commented-out opt-in block for exactly this, and
+> [Tracking migration state](#tracking-migration-state) below lays out the
+> options.
+
 ![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
 
 ## Quick concept mapping
@@ -78,9 +91,11 @@ myapp/
    BEGIN
        -- Execute all migrations in filename order
        FOR v_file IN (
-           SELECT path, content FROM pg_temp.pgmi_plan_view
-           WHERE path LIKE './migrations/%'
-           ORDER BY execution_order
+           SELECT p.path, p.content
+           FROM pg_temp.pgmi_plan_view p
+           JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+           WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+           ORDER BY p.execution_order
        )
        LOOP
            RAISE NOTICE 'Executing: %', v_file.path;
@@ -113,8 +128,11 @@ myapp/
 - **Transaction control**: You decide transaction boundaries. Want all-or-nothing? Use `BEGIN...COMMIT`. Want error context per file? Use exception blocks:
   ```sql
   FOR v_file IN (
-      SELECT path, content FROM pg_temp.pgmi_plan_view
-      WHERE path LIKE './migrations/%' ORDER BY execution_order
+      SELECT p.path, p.content
+      FROM pg_temp.pgmi_plan_view p
+      JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+      WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+      ORDER BY p.execution_order
   )
   LOOP
       BEGIN
@@ -129,13 +147,25 @@ myapp/
 - **Conditional logic**: Skip migrations based on environment, feature flags, or database state:
   ```sql
   IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
-      FOR v_file IN (SELECT path, content FROM pg_temp.pgmi_plan_view WHERE path LIKE './production/%') LOOP
+      FOR v_file IN (
+          SELECT p.path, p.content
+          FROM pg_temp.pgmi_plan_view p
+          JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+          WHERE s.is_sql_file AND p.path LIKE './production/%'
+          ORDER BY p.execution_order
+      ) LOOP
           EXECUTE v_file.content;
       END LOOP;
   END IF;
   ```
 
 - **No Java dependency**: pgmi is a single Go binary.
+
+### Concrete differences in Flyway terms
+
+- **Checksum mismatch after formatting**: Flyway checksums are raw bytes — reformatting a file triggers a mismatch that requires `flyway repair`. pgmi provides both a raw checksum and a normalized one (comments stripped, whitespace collapsed); tracking against the normalized checksum makes reformatting free.
+- **Test gate location**: Flyway's [documented testing approach](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions) embeds assertions in migration files and uses transaction rollback to iterate. Tests run interactively before committing through Flyway. With pgmi, `CALL pgmi_test()` runs tests *inside* the deploy transaction, against the target, post-migration — a failing test means the commit never happened.
+- **Plan inspectability**: Flyway validates checksums against `flyway_schema_history`. pgmi's `pgmi_plan_view` is a SQL view you can query and assert on — "no two files may claim the same sort key" or "the plan must match this signed manifest" are queries, not tool features you wait for.
 
 ## Coming from Liquibase
 
@@ -195,9 +225,11 @@ myapp/
        v_file RECORD;
    BEGIN
        FOR v_file IN (
-           SELECT path, content FROM pg_temp.pgmi_plan_view
-           WHERE path LIKE './migrations/%'
-           ORDER BY execution_order
+           SELECT p.path, p.content
+           FROM pg_temp.pgmi_plan_view p
+           JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+           WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+           ORDER BY p.execution_order
        )
        LOOP
            RAISE NOTICE 'Executing: %', v_file.path;
@@ -242,6 +274,12 @@ myapp/
 - **Full PostgreSQL power**: Use any PostgreSQL feature, not just what Liquibase supports
 - **Simpler debugging**: Errors are PostgreSQL errors, not Liquibase interpretation errors
 
+### Concrete differences in Liquibase terms
+
+- **Preconditions vs. test gates**: Liquibase preconditions check state *before* a changeset runs. pgmi's `CALL pgmi_test()` tests the database *after* migrations ran but *before* committing — a failed test aborts the deploy, and the database is unchanged.
+- **Changelog tracking**: Liquibase tracks applied changesets in `databasechangelog` and validates checksums (MD5) against it. pgmi ships both a raw and a normalized checksum; you choose whether to track at all and which checksum to use — reformatting doesn't break the normalized one.
+- **Plan visibility**: Liquibase's execution plan is changelog-order, resolved internally. pgmi's `pgmi_plan_view` is a SQL view — your deploy.sql can query, filter, and assert on the plan before executing anything.
+
 ## Coming from raw psql scripts
 
 If you're currently running SQL files manually with `psql`, pgmi adds structure without complexity.
@@ -280,8 +318,11 @@ pgmi deploy . --database mydb
        v_file RECORD;
    BEGIN
        FOR v_file IN (
-           SELECT path, content FROM pg_temp.pgmi_plan_view
-           ORDER BY execution_order
+           SELECT p.path, p.content
+           FROM pg_temp.pgmi_plan_view p
+           JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+           WHERE s.is_sql_file
+           ORDER BY p.execution_order
        )
        LOOP
            RAISE NOTICE 'Executing: %', v_file.path;
@@ -312,6 +353,12 @@ Sqitch is the closest tool to pgmi in spirit — native SQL scripts, no DSL, no 
 Be clear-eyed about the trade: Sqitch gives you a mature change-management **model** — deploy/verify/revert, dependency resolution, and history are first-class tool concepts you configure. pgmi gives you a smaller **mechanism** — your project files as queryable session data — and delegates the entire orchestration program to your SQL.
 
 Choose Sqitch if you want the tool to own change state and reversion. Choose pgmi when you want test gates, environment branching, and data loading expressed inside one SQL-controlled deployment program — the deployment transaction and its verification gate as a single control flow you write yourself.
+
+### Concrete differences in Sqitch terms
+
+- **Verify vs. test gate**: `sqitch verify` runs verify scripts as a separate step after deployment. pgmi's `CALL pgmi_test()` runs inside the deployment transaction — a failed test aborts the commit. Sqitch verification confirms what was applied; pgmi verification decides whether to apply at all.
+- **Plan inspectability**: Sqitch's plan is a text file (`sqitch.plan`) resolved by the tool. pgmi's `pgmi_plan_view` is a SQL view — your deploy.sql can assert on the plan ("nothing may run before the tenancy migration") using the same language as the deployment itself.
+- **Same file at multiple positions**: Sqitch requires a separate deploy script per change. pgmi's `UNNEST(sort_keys)` lets one idempotent file (e.g. a role-grant script) execute at multiple plan positions without duplication.
 
 ### Migration path
 
@@ -369,9 +416,11 @@ DECLARE
     v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content, checksum FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content, p.checksum
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     )
     LOOP
         IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN

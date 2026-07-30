@@ -13,7 +13,9 @@ Key facts:
 
 - [Overview](https://vvka-141.github.io/pgmi/docs/readme/): documentation map by reader intent
 - [Quickstart](https://vvka-141.github.io/pgmi/docs/quickstart/): first deployment, including a five-minute Docker path
+- [What pgmi gives you, and what you own](https://vvka-141.github.io/pgmi/docs/core-vs-template/): the boundary between pgmi core (the binary and its session contract) and the scaffolded project code that becomes yours on init
 - [Why pgmi](https://vvka-141.github.io/pgmi/docs/why-pgmi/): when the approach fits, comparison with Flyway/Liquibase/Sqitch/Atlas
+- [Highlights](https://vvka-141.github.io/pgmi/docs/highlights/): nine capabilities with no direct equivalent in other tools — each with an honest competitor line and a link to the implementing code; includes "what this page deliberately doesn't claim"
 - [deploy.sql guide](https://vvka-141.github.io/pgmi/docs/deploy-guide/): authoring patterns — ordering, environment branching, data ingestion, multi-phase
 - [Session API](https://vvka-141.github.io/pgmi/docs/session-api/): views, columns, functions reference
 - [Testing](https://vvka-141.github.io/pgmi/docs/testing/): test directories, fixtures, savepoint isolation, gated deployments
@@ -23,8 +25,14 @@ Key facts:
 - [Security](https://vvka-141.github.io/pgmi/docs/security/): secrets handling and CI/CD patterns
 - [Production guide](https://vvka-141.github.io/pgmi/docs/production/): compatibility matrix, rollback, monitoring
 - [pgmi serve](https://vvka-141.github.io/pgmi/docs/cli/#pgmi-serve): core CLI MCP server over stdio; exposes pgmi project-inspection commands to coding agents
+- [Advanced template overview](https://vvka-141.github.io/pgmi/docs/advanced/): the scaffolded application stack (REST/RPC/MCP framework, membership, API keys, transaction policy) and the basic/advanced boundary
 - [Advanced-template MCP gateway](https://vvka-141.github.io/pgmi/docs/mcp/): optional scaffolded application subsystem; exposes your deployed PostgreSQL application's tools, resources, and prompts over HTTP
+- [Run the MCP gateway](https://vvka-141.github.io/pgmi/docs/advanced/mcp-gateway/): deploy, start, connect an AI client, transaction policy, production notes
+- [Author MCP handlers](https://vvka-141.github.io/pgmi/docs/advanced/mcp-handlers/): write MCP tools, resources, and prompts in SQL; schemas, tags, auth, testing
+- [MCP SQL API reference](https://vvka-141.github.io/pgmi/docs/advanced/mcp-sql-api/): dispatcher functions, method routing, response builders
+- [MCP protocol compliance](https://vvka-141.github.io/pgmi/docs/advanced/mcp-protocol/): supported versions, transport behavior, error semantics, limitations
 - [Advanced-template API keys](https://vvka-141.github.io/pgmi/docs/api-keys/): authentication for callers of generated REST/RPC/MCP APIs; unrelated to pgmi CLI or PostgreSQL connection authentication
+- [Per-route transaction policy](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/): declare isolation level, read-only, DEFERRABLE and replica-safety per route in handler metadata; the gateway derives the transaction and the retry contract from the declaration
 
 ## Optional
 
@@ -32,3 +40,10 @@ Key facts:
 - [Tradeoffs](https://vvka-141.github.io/pgmi/docs/tradeoffs/): honest limitations and who should not use pgmi
 - [Metadata](https://vvka-141.github.io/pgmi/docs/metadata/): optional pgmi-meta blocks for ordering and idempotency tracking
 - [CI/CD](https://vvka-141.github.io/pgmi/docs/cicd/): pipeline deployment examples
+- [API clients](https://vvka-141.github.io/pgmi/docs/advanced/clients/): generate typed clients from an advanced-template OpenAPI contract — TypeScript, Go, Python, C#, generic, and an HTTP request collection
+- [Semantic MCP curation](https://vvka-141.github.io/pgmi/docs/advanced/semantic-mcp-tool-curation/): recipe for surfacing relevant MCP tools with embedding-based curation
+- [Design: why session-centric](https://vvka-141.github.io/pgmi/docs/design/why-session-centric/): why all deployment work happens in one PostgreSQL session, and what was rejected to get there
+- [Design: why execution fabric](https://vvka-141.github.io/pgmi/docs/design/why-execution-fabric/): why pgmi is an execution fabric rather than a migration framework, and what it deliberately does not do
+- [Design: why no orchestration flags](https://vvka-141.github.io/pgmi/docs/design/why-no-orchestration-flags/): why the CLI has no --dry-run, --rollback, or --skip — and the SQL-side equivalent of each rejected flag
+- [Design: the transactional web boundary](https://vvka-141.github.io/pgmi/docs/design/transactional-web-boundary/): the advanced template's API framework — one declaration, many derivations
+- [Design: API versioning](https://vvka-141.github.io/pgmi/docs/design/api-versioning/): session API versioning and compatibility guarantees

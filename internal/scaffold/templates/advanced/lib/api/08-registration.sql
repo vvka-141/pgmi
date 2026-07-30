@@ -168,7 +168,8 @@ DECLARE
     v_response_headers jsonb;
     v_auto_log boolean;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
+    v_read_only boolean;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -182,25 +183,92 @@ DECLARE
 
     v_input_schema api.json_schema;
     v_output_schema api.json_schema;
+
+    v_path text;
+    v_canonical_path text;
+    v_existing_handler uuid;
+    v_example text;
+    v_overlap_msg text;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
         RAISE EXCEPTION 'REST handler metadata requires "id" (uuid)';
     END IF;
 
-    v_uri := p_metadata->>'uri';
-    IF v_uri IS NULL THEN
-        RAISE EXCEPTION 'REST handler metadata requires "uri" (regex pattern)';
+    v_path := p_metadata->>'path';
+    v_uri  := p_metadata->>'uri';
+
+    IF v_path IS NULL AND v_uri IS NULL THEN
+        RAISE EXCEPTION 'REST handler metadata requires "path" (e.g. /users/{id}) or "uri" (regex pattern)'
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    IF v_path IS NOT NULL THEN
+        v_canonical_path := v_path;
+        IF v_uri IS NULL THEN
+            v_uri := api.path_template_to_regex(v_path);
+        END IF;
+    ELSE
+        SELECT COALESCE(
+            replace(
+                string_agg(
+                    CASE
+                        WHEN t.group_index IS NULL THEN t.token
+                        ELSE '{p' || t.group_index || '}'
+                    END,
+                    '' ORDER BY t.ord
+                ),
+                '\.', '.'
+            ),
+            ''
+        ) INTO v_canonical_path
+        FROM api.route_path_tokens(v_uri) t;
+    END IF;
+
+    v_example := p_metadata->>'example';
+
+    IF v_canonical_path NOT LIKE '%{%' THEN
+        IF v_canonical_path !~ v_uri THEN
+            RAISE EXCEPTION
+                'Route % self-consistency failure: canonical path "%" does not match uri regex "%"',
+                COALESCE(p_metadata->>'name', v_id::text), v_canonical_path, v_uri
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+    ELSIF v_path IS NOT NULL AND p_metadata ? 'uri' THEN
+        IF v_example IS NULL THEN
+            RAISE EXCEPTION
+                'Route % declares both path and uri with parameters; provide an "example" URL to prove they agree',
+                COALESCE(p_metadata->>'name', v_id::text)
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+    END IF;
+
+    IF v_example IS NOT NULL AND v_example !~ v_uri THEN
+        RAISE EXCEPTION
+            'Route % self-consistency failure: example "%" does not match uri regex "%"',
+            COALESCE(p_metadata->>'name', v_id::text), v_example, v_uri
+            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
     v_http_method := COALESCE(p_metadata->>'httpMethod', '^(GET|POST|PUT|DELETE|PATCH)$');
+
+    -- Same trap as the uri: a bare 'GET' matches any method containing it.
+    -- version is deliberately exempt -- its default '.*' is a match-anything.
+    IF left(v_http_method, 1) IS DISTINCT FROM '^' OR right(v_http_method, 1) IS DISTINCT FROM '$' THEN
+        RAISE EXCEPTION
+            'Route % httpMethod must be anchored with ^ and $, got %',
+            COALESCE(p_metadata->>'name', v_id::text), v_http_method
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
     v_version := COALESCE(p_metadata->>'version', '.*');
     v_name := p_metadata->>'name';
     v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
+    v_read_only := COALESCE((p_metadata->>'readOnly')::boolean, false);
     v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
 
@@ -224,6 +292,50 @@ BEGIN
     ELSE
         v_function_name := 'rest_handler_' || replace(v_id::text, '-', '_');
     END IF;
+
+    -- Two handlers sharing a name would both CREATE OR REPLACE the same
+    -- api.<name>(api.rest_request), so the second silently replaces the first's
+    -- body. Today that is caught only incidentally — api.handler.handler_func is
+    -- UNIQUE and the identical signature yields the identical OID — which fails
+    -- the deploy with a raw unique_violation and a 40-line INSERT dump, naming
+    -- neither handler. RPC has had this pre-check since it was written; REST
+    -- never got it. Say which name, and which handler already owns it.
+    SELECT handler_object_id INTO v_existing_handler
+    FROM api.rest_route
+    WHERE route_name = v_name AND handler_object_id <> v_id;
+
+    IF v_existing_handler IS NOT NULL THEN
+        RAISE EXCEPTION 'REST route name "%" is already registered to handler %', v_name, v_existing_handler
+            USING ERRCODE = 'unique_violation',
+                  HINT = 'Handler names become function names (api.<name>): two handlers cannot share one. Rename this handler, or reuse the existing handler''s id to replace it.';
+    END IF;
+
+    SELECT string_agg(
+        format('%s overlaps %s',
+            COALESCE(v_name, v_id::text),
+            COALESCE(r.route_name, r.handler_object_id::text)),
+        ', '
+    )
+    INTO v_overlap_msg
+    FROM api.rest_route r
+    WHERE r.handler_object_id <> v_id
+      AND (
+          (v_canonical_path NOT LIKE '%{%' AND v_canonical_path ~ r.address_regexp)
+          OR
+          (r.canonical_path NOT LIKE '%{%' AND r.canonical_path <> '' AND r.canonical_path ~ v_uri)
+      )
+      AND EXISTS (
+          SELECT 1
+          FROM unnest(ARRAY['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS']) AS m(method)
+          WHERE m.method ~ v_http_method AND m.method ~ r.method_regexp
+      );
+
+    IF v_overlap_msg IS NOT NULL THEN
+        RAISE EXCEPTION 'Route overlap detected: %', v_overlap_msg
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Overlapping routes catch each other''s canonical paths. Use more specific patterns or different HTTP methods.';
+    END IF;
+
     v_boundary := internal.random_dollar_quote_boundary(p_handler_body);
 
     v_function_sql := format(
@@ -257,13 +369,13 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation, read_only,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rest', v_handler_oid::regprocedure, v_function_name,
-        v_accepts, v_produces, v_response_headers, v_requires_auth, v_required_isolation,
+        v_accepts, v_produces, v_response_headers, v_requires_auth, v_min_isolation, v_read_only,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
@@ -277,7 +389,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         produces = EXCLUDED.produces,
         response_headers = EXCLUDED.response_headers,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
+        read_only = EXCLUDED.read_only,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -295,14 +408,23 @@ $%s$ LANGUAGE plpgsql$sql$,
         input_json_schema = EXCLUDED.input_json_schema,
         output_json_schema = EXCLUDED.output_json_schema;
 
-    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log)
-    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log)
+    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log, canonical_path)
+    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log, v_canonical_path)
     ON CONFLICT (handler_object_id) DO UPDATE SET
         address_regexp = EXCLUDED.address_regexp,
         method_regexp = EXCLUDED.method_regexp,
         version_regexp = EXCLUDED.version_regexp,
         route_name = EXCLUDED.route_name,
-        auto_log = EXCLUDED.auto_log;
+        auto_log = EXCLUDED.auto_log,
+        canonical_path = EXCLUDED.canonical_path,
+        -- Routes are matched sequence_number DESC, so this column IS the
+        -- precedence. It was assigned on first insert and never refreshed, so
+        -- re-registering kept the original order: a fresh database and an
+        -- existing one could route differently from identical sources -- the
+        -- deploy was not reproducible. DEFAULT draws the next identity value,
+        -- making precedence the registration order of the current deploy, which
+        -- is what the column already documents.
+        sequence_number = DEFAULT;
 
     RAISE DEBUG 'register REST: Registered route %', v_name;
 END;
@@ -333,7 +455,8 @@ DECLARE
     v_response_headers jsonb;
     v_auto_log boolean;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
+    v_read_only boolean;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -375,7 +498,8 @@ BEGIN
     v_description := p_metadata->>'description';
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, true);
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
+    v_read_only := COALESCE((p_metadata->>'readOnly')::boolean, false);
 
     RAISE DEBUG 'register RPC: id=%, method=%', v_id, v_method_name;
 
@@ -426,13 +550,13 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation, read_only,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, 'rpc', v_handler_oid::regprocedure, v_function_name,
-        v_accepts, v_produces, v_response_headers, v_requires_auth, v_required_isolation,
+        v_accepts, v_produces, v_response_headers, v_requires_auth, v_min_isolation, v_read_only,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
@@ -446,7 +570,8 @@ $%s$ LANGUAGE plpgsql$sql$,
         produces = EXCLUDED.produces,
         response_headers = EXCLUDED.response_headers,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
+        read_only = EXCLUDED.read_only,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -495,13 +620,14 @@ DECLARE
     v_name text;
     v_title text;
     v_description text;
-    v_input_schema jsonb;
+    v_input_schema api.json_schema;
     v_uri_template text;
     v_mime_type text;
     v_arguments jsonb;
     v_handler_type api.handler_type;
     v_requires_auth boolean;
-    v_required_isolation text;
+    v_min_isolation text;
+    v_read_only boolean;
 
     v_function_schema text := 'api';
     v_function_name text;
@@ -515,6 +641,7 @@ DECLARE
 
     v_output_schema api.json_schema;
     v_tags text[];
+    v_existing_handler uuid;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -531,15 +658,34 @@ BEGIN
         RAISE EXCEPTION 'MCP handler metadata requires "name"';
     END IF;
 
+    -- api.mcp_route.mcp_name is UNIQUE, so a collision already fails the deploy —
+    -- but as a raw unique_violation naming neither handler. Catch it here and say
+    -- which name and which owner, like REST and RPC do.
+    SELECT handler_object_id INTO v_existing_handler
+    FROM api.mcp_route
+    WHERE mcp_name = v_name AND handler_object_id <> v_id;
+
+    IF v_existing_handler IS NOT NULL THEN
+        RAISE EXCEPTION 'MCP name "%" is already registered to handler %', v_name, v_existing_handler
+            USING ERRCODE = 'unique_violation',
+                  HINT = 'MCP names are unique across tools, resources and prompts, and become function names. Rename this handler, or reuse the existing handler''s id to replace it.';
+    END IF;
+
     v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
-    v_input_schema := p_metadata->'inputSchema';
+    v_input_schema := COALESCE(p_metadata->'inputSchema', '{"type":"object"}'::jsonb)::api.json_schema;
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
     v_uri_template := p_metadata->>'uriTemplate';
+
+    IF v_type = 'resource' AND v_uri_template IS NULL THEN
+        RAISE EXCEPTION 'MCP resource "%" requires "uriTemplate"', v_name
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
     v_mime_type := COALESCE(p_metadata->>'mimeType', 'application/json');
     v_arguments := p_metadata->'arguments';
     v_requires_auth := COALESCE((p_metadata->>'requiresAuth')::boolean, true);
-    v_required_isolation := internal.normalize_transaction_isolation(p_metadata->>'requiredTransactionIsolation', true);
+    v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
+    v_read_only := COALESCE((p_metadata->>'readOnly')::boolean, false);
     v_tags := CASE
         WHEN p_metadata->'tags' IS NOT NULL
         THEN ARRAY(SELECT jsonb_array_elements_text(p_metadata->'tags'))
@@ -585,25 +731,26 @@ $%s$ LANGUAGE plpgsql$sql$,
 
     INSERT INTO api.handler (
         object_id, handler_type, handler_func, handler_function_name,
-        accepts, produces, response_headers, requires_auth, required_transaction_isolation,
+        accepts, produces, response_headers, requires_auth, min_transaction_isolation, read_only,
         handler_exec_sql, handler_sql_submitted, handler_sql_canonical, def_hash,
         returns_type, returns_set, volatility, parallel, leakproof, security, language_name, owner_name,
         title, description, input_json_schema, output_json_schema
     ) VALUES (
         v_id, v_handler_type, v_handler_oid::regprocedure, v_function_name,
-        ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth, v_required_isolation,
+        ARRAY['application/json'], ARRAY['application/json'], '{}'::jsonb, v_requires_auth, v_min_isolation, v_read_only,
         v_handler_exec_sql, v_function_sql, v_snapshot.handler_canonical, v_def_hash,
         v_snapshot.returns_type, v_snapshot.returns_set, v_snapshot.volatility,
         v_snapshot.parallel, v_snapshot.leakproof, v_snapshot.security,
         v_snapshot.language_name, v_snapshot.owner_name,
-        v_title, v_description, v_input_schema::api.json_schema, v_output_schema
+        v_title, v_description, v_input_schema, v_output_schema
     )
     ON CONFLICT (object_id) DO UPDATE SET
         handler_type = EXCLUDED.handler_type,
         handler_func = EXCLUDED.handler_func,
         handler_function_name = EXCLUDED.handler_function_name,
         requires_auth = EXCLUDED.requires_auth,
-        required_transaction_isolation = EXCLUDED.required_transaction_isolation,
+        min_transaction_isolation = EXCLUDED.min_transaction_isolation,
+        read_only = EXCLUDED.read_only,
         handler_exec_sql = EXCLUDED.handler_exec_sql,
         handler_sql_submitted = EXCLUDED.handler_sql_submitted,
         handler_sql_canonical = EXCLUDED.handler_sql_canonical,
@@ -639,8 +786,76 @@ $func$;
 COMMENT ON FUNCTION api.create_or_replace_mcp_handler(jsonb, text) IS
     'Registers an MCP handler (tool/resource/prompt): creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.mcp_route. SECURITY DEFINER.';
 
+-- ============================================================================
+-- Catalog Version — the cache-invalidation signal
+-- ============================================================================
+-- A digest of exactly the registry columns the OpenAPI document is built from,
+-- so it changes when — and only when — the published contract changes. Served as
+-- the /openapi.json ETag and stamped on every response as x-pgmi-catalog-version.
+--
+-- NOT api.handler.def_hash: that hashes the handler's function BODY, so it would
+-- miss a route whose uri, method, auth requirement, isolation floor, or schemas
+-- changed without the body changing. The ETag would then claim "unchanged" about
+-- a document that changed — worse than shipping no ETag at all.
+--
+-- NOT a digest of the rendered document: this is stamped on every response, and
+-- rebuilding the whole spec per request is precisely the cost this exists to
+-- avoid. Digesting the source rows is cheap and exactly as sensitive.
+--
+-- Lives here, not in 11-openapi.sql, because internal.finalize_response_headers
+-- (004/009) calls it and PostgreSQL validates SQL function bodies at creation.
+
+CREATE OR REPLACE FUNCTION api.catalog_version()
+RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE
+SET search_path = api, extensions, pg_temp
+AS $catalog_version$
+    SELECT COALESCE(
+        encode(
+            extensions.digest(
+                string_agg(c.row_fingerprint, E'\n' ORDER BY c.row_fingerprint),
+                'sha256'),
+            'hex'),
+        'empty')
+    FROM (
+        SELECT concat_ws('|',
+            h.object_id::text,
+            h.handler_function_name,
+            h.title,
+            h.description,
+            h.requires_auth::text,
+            h.min_transaction_isolation,
+            h.read_only::text,
+            h.accepts::text,
+            h.produces::text,
+            h.input_json_schema::text,
+            h.output_json_schema::text,
+            r.address_regexp,
+            r.method_regexp,
+            r.canonical_path
+        ) AS row_fingerprint
+        FROM api.rest_route r
+        JOIN api.handler h ON h.object_id = r.handler_object_id
+        WHERE h.deleted_at IS NULL
+    ) c;
+$catalog_version$;
+
+COMMENT ON FUNCTION api.catalog_version() IS
+    'Digest of the registry columns the OpenAPI document is built from. Changes iff the published contract changes. Served as the /openapi.json ETag and stamped on every response as x-pgmi-catalog-version, so a client learns its cached contract went stale without polling the spec.';
+
+DO $$
+DECLARE
+    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
+BEGIN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION api.catalog_version() TO %I, %I, %I',
+        v_admin_role, v_api_role, v_customer_role);
+END $$;
+
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.create_or_replace_rest_handler() - REST handler registration';
     RAISE NOTICE '  ✓ api.create_or_replace_rpc_handler() - RPC handler registration';
     RAISE NOTICE '  ✓ api.create_or_replace_mcp_handler() - MCP handler registration';
+    RAISE NOTICE '  ✓ api.catalog_version() - contract fingerprint (ETag / x-pgmi-catalog-version)';
 END $$;

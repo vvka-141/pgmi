@@ -1,6 +1,7 @@
 ---
 name: pgmi-templates
-description: "Use when creating or modifying scaffold templates"
+description: "Contributor: use when creating or modifying scaffold templates in the pgmi repo"
+scope: contributor
 user_invocable: true
 ---
 
@@ -37,7 +38,7 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 
 | Aspect | **basic** | **advanced** |
 |--------|-----------|--------------|
-| **Purpose** | Learning pgmi fundamentals | Production-ready deployments |
+| **Purpose** | Low-ceremony start, readable in one sitting | Full reference application to read and take from |
 | **Structure** | Flat with `migrations/` folder | Domain-organized (common/api/core/internal/membership) |
 | **Execution Model** | Directory-based phases | Metadata-driven UNNEST sort key ordering |
 | **Ordering** | Alphabetical (lexicographic) | Explicit sort keys (lexicographic on keys) |
@@ -49,7 +50,7 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 | **HTTP Framework** | No | Yes (routing, handlers, queuing) |
 | **Idempotency** | Manual (user-written) | Metadata-driven (`idempotent` flag) |
 | **Lines of Code** | ~100 | ~1500 |
-| **Best For** | Learning, simple migrations | Production, complex apps |
+| **Best For** | Learning, small systems | Systems that want the whole stack scaffolded |
 
 ### basic Template
 
@@ -260,11 +261,14 @@ DO $$
 DECLARE
     v_file RECORD;
 BEGIN
+    -- is_sql_file is the execution guard: pgmi_plan_view holds every loaded
+    -- file, so without it an editor backup runs as a migration.
     FOR v_file IN (
-        SELECT path, content
-        FROM pg_temp.pgmi_plan_view
-        WHERE path LIKE './migrations/%'
-        ORDER BY execution_order
+        SELECT p.path, p.content
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
         EXECUTE v_file.content;
@@ -717,368 +721,90 @@ psql -d mydb -c "SELECT ordinal, step_type, script_path FROM internal.pgmi_test_
 
 ### HTTP Framework: Error Handling & Observability
 
-The advanced template includes production-grade error handling with automatic classification, structured tracking, and distributed tracing support.
+There is no separate classification layer. Error handling is a `CASE` on
+`SQLSTATE` inside each gateway function (`lib/api/09-gateways.sql`), and the
+request log is the exchange tables (`lib/api/06-queue-infrastructure.sql`).
 
-#### Error Classification Functions
+#### SQLSTATE → HTTP status
 
-Four helper functions provide intelligent error handling:
+`api.rest_invoke` maps constraint and data errors to 4xx so clients, caches and
+retry middleware see the right class instead of a blanket 500:
 
-**1. `api.classify_sqlstate(sqlstate text) → text`**
+| SQLSTATE | Status | Client detail |
+|---|---|---|
+| `23505` unique_violation | 409 | Resource already exists |
+| `23514` check_violation | 422 | A submitted value violates a constraint |
+| `23502` not_null_violation | 400 | A required value is missing |
+| `23503` foreign_key_violation | 400 | References a resource that does not exist |
+| `22P02` invalid_text_representation | 400 | A submitted value is malformed |
+| `22023` invalid_parameter_value | 400 | A submitted parameter value is invalid |
+| `22001` string_data_right_truncation | 422 | A submitted value is too long |
+| `22003` numeric_value_out_of_range | 422 | A submitted number is out of range |
+| `22007` invalid_datetime_format | 400 | A submitted date or time is malformed |
+| `22008` datetime_field_overflow | 422 | A submitted date or time is out of range |
+| `25006` read_only_sql_transaction | 428 *or* 500 | see below |
+| anything else | 500 | An internal error occurred |
 
-Categorizes PostgreSQL errors into actionable classes:
+`25006` has two causes and they are not the same defect. A route that did *not*
+declare `read_only`, dispatched inside a READ ONLY transaction, is the caller's
+mistake — 428 plus an `x-pgmi-transaction-required: read-write` header. A route
+that *did* declare `read_only` and then wrote anyway broke its own contract —
+that is a handler bug, and 500 is the honest answer.
 
-```sql
-CREATE OR REPLACE FUNCTION api.classify_sqlstate(sqlstate text)
-RETURNS text AS $$
-    SELECT CASE
-        -- Transient errors (safe to retry)
-        WHEN $1 LIKE '08%' THEN 'connection_failure'
-        WHEN $1 IN ('40001', '40P01') THEN 'serialization_conflict'
-        WHEN $1 = '55P03' THEN 'lock_timeout'
-        WHEN $1 IN ('57014', '57P01') THEN 'query_timeout'
+`api.rpc_invoke` applies the same status mapping and pairs it with a JSON-RPC
+error code (`-32602` for the constraint classes, `-32600` for the 428 case).
 
-        -- Client errors (fix request and retry)
-        WHEN $1 = '23505' THEN 'unique_violation'
-        WHEN $1 = '23503' THEN 'foreign_key_violation'
-        WHEN $1 = '23514' THEN 'check_violation'
-        WHEN $1 = '23502' THEN 'not_null_violation'
-        WHEN $1 LIKE '22%' THEN 'data_exception'
-
-        -- Server errors (investigate)
-        ELSE 'internal_error'
-    END;
-$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
-```
-
-**Error Classes:**
-- `connection_failure` - Database connection issues (transient)
-- `serialization_conflict` - Deadlock or serialization failure (transient, retry)
-- `lock_timeout` - Lock acquisition timeout (transient, retry with backoff)
-- `query_timeout` - Statement timeout exceeded (transient or query issue)
-- `unique_violation` - Duplicate key (client fix required)
-- `foreign_key_violation` - Invalid FK reference (client fix required)
-- `check_violation` - CHECK constraint failed (client fix required)
-- `not_null_violation` - NULL in NOT NULL column (client fix required)
-- `data_exception` - Invalid data format (client fix required)
-- `internal_error` - Unexpected server error (investigate)
-
-**2. `api.sqlstate_to_http_status(sqlstate text) → integer`**
-
-Maps PostgreSQL errors to appropriate HTTP status codes:
+#### Serialization failures are re-raised, never caught
 
 ```sql
-CREATE OR REPLACE FUNCTION api.sqlstate_to_http_status(sqlstate text)
-RETURNS integer AS $$
-    SELECT CASE api.classify_sqlstate($1)
-        WHEN 'connection_failure' THEN 503        -- Service Unavailable
-        WHEN 'serialization_conflict' THEN 503    -- Service Unavailable (retry)
-        WHEN 'lock_timeout' THEN 503              -- Service Unavailable (retry)
-        WHEN 'query_timeout' THEN 504             -- Gateway Timeout
-        WHEN 'unique_violation' THEN 409          -- Conflict
-        WHEN 'foreign_key_violation' THEN 400     -- Bad Request
-        WHEN 'check_violation' THEN 400           -- Bad Request
-        WHEN 'not_null_violation' THEN 400        -- Bad Request
-        WHEN 'data_exception' THEN 400            -- Bad Request
-        ELSE 500                                  -- Internal Server Error
-    END;
-$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+WHEN serialization_failure OR deadlock_detected THEN
+    RAISE;
 ```
 
-**Benefits:**
-- Clients know whether to retry (503, 504) or fix request (400, 409)
-- Distinguishes transient failures from client errors
-- HTTP-compliant error responses (not everything is 500)
+Catching `40001` / `40P01` is unsafe, not merely lossy: the failed statement
+rolls back to the block's implicit savepoint but the transaction stays alive and
+**commits**, so the handler's write silently vanishes while the client is told
+"internal error". A savepoint cannot refresh the snapshot, so no in-SQL retry
+converges under repeatable read or serializable. Retry belongs to whoever owns
+`BEGIN`.
 
-**3. `api.extract_trace_id(headers extensions.hstore) → text`**
+#### Client body vs logged copy
 
-Extracts correlation ID from standard tracing headers:
+The two diverge deliberately. The client gets a generic per-class message; the
+logged copy keeps `sqlstate=<code> detail=<SQLERRM truncated to 200 chars>`.
+Full `SQLERRM` frequently embeds attacker-supplied input or PII (handlers
+commonly raise `Invalid email: <user_input>`), so truncation limits the blast
+radius if exchange-table grants ever loosen. `x-error-sqlstate` and
+`x-execution-time-ms` ride on the logged response only.
+
+#### Exchange tables
+
+`api.inbound_queue` is an abstract base — `CHECK (false) NO INHERIT` makes it
+uninsertable while children still accept rows. Three children inherit it:
 
 ```sql
-CREATE OR REPLACE FUNCTION api.extract_trace_id(headers extensions.hstore)
-RETURNS text AS $$
-    SELECT COALESCE(
-        $1->'X-Trace-ID',
-        $1->'X-Request-ID',
-        $1->'X-Correlation-ID',
-        gen_random_uuid()::text
-    );
-$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+api.rest_exchange   -- request api.rest_request, response api.http_response, completed_at
+api.rpc_exchange    -- same shape, RPC request type
+api.mcp_exchange    -- adds mcp_type/mcp_name; always complete, no pending state
 ```
 
-**Distributed Tracing:**
-- Checks standard headers in order: `X-Trace-ID`, `X-Request-ID`, `X-Correlation-ID`
-- Auto-generates UUID if not provided
-- Enables request correlation across services, logs, and databases
-- Essential for debugging distributed systems
+Ordering across protocols comes from the shared `api.inbound_queue_seq`, so
+`sequence_number` is globally comparable. `api.inbound_queue_with_protocol`
+discriminates by `tableoid` rather than carrying a redundant protocol column.
+Partial indexes `WHERE response IS NULL` support `FOR UPDATE SKIP LOCKED`
+draining of pending REST/RPC items.
 
-**4. `api.build_error_context() → jsonb`**
+Rows are written only when the route registered `autoLog` — and that holds on
+the failure path too, so a `POST /login` registered `autoLog=false` never
+persists plaintext credentials on a constraint violation.
 
-Captures comprehensive error context using PostgreSQL's `GET STACKED DIAGNOSTICS`:
+**Grants:** the api role has `INSERT`/`UPDATE` but is explicitly `REVOKE
+SELECT`-ed on every exchange table. It logs its own activity and can read none
+of it; a compromised api session cannot harvest every handler exception across
+the deployment. The admin role holds full access for ops triage.
 
-```sql
-CREATE OR REPLACE FUNCTION api.build_error_context()
-RETURNS jsonb AS $$
-DECLARE
-    v_sqlstate text;
-    v_message text;
-    v_detail text;
-    v_hint text;
-    v_context text;
-BEGIN
-    GET STACKED DIAGNOSTICS
-        v_sqlstate = RETURNED_SQLSTATE,
-        v_message = MESSAGE_TEXT,
-        v_detail = PG_EXCEPTION_DETAIL,
-        v_hint = PG_EXCEPTION_HINT,
-        v_context = PG_EXCEPTION_CONTEXT;
-
-    RETURN jsonb_build_object(
-        'sqlstate', v_sqlstate,
-        'error_class', api.classify_sqlstate(v_sqlstate),
-        'message', v_message,
-        'detail', v_detail,
-        'hint', v_hint,
-        'context', v_context,
-        'timestamp', now()
-    );
-END;
-$$ LANGUAGE plpgsql;
-```
-
-**Captured Data:**
-- `sqlstate` - PostgreSQL error code (e.g., `23505` for unique violation)
-- `error_class` - Classified category (e.g., `unique_violation`)
-- `message` - Human-readable error message
-- `detail` - Additional context (e.g., "Key (email)=(user@example.com) already exists")
-- `hint` - Suggested resolution (e.g., "Use ON CONFLICT clause")
-- `context` - Stack trace showing where error occurred
-- `timestamp` - When error occurred
-
-#### Observability Schema
-
-**Enhanced `http_incoming_queue` Table:**
-
-Three new columns provide comprehensive observability:
-
-```sql
-CREATE TABLE api.http_incoming_queue (
-    -- ... existing columns ...
-    error_history jsonb,              -- Structured error tracking
-    trace_id text,                    -- Distributed tracing
-    execution_time_ms numeric(10,2),  -- Performance metrics
-    -- ... constraints ...
-);
-```
-
-**Column Details:**
-
-1. **`error_history jsonb`**
-   - Array of structured error objects
-   - Accumulates errors across retry attempts
-   - Each entry contains full context from `build_error_context()`
-   - Enables root cause analysis without log diving
-   - GIN index for efficient JSON queries
-
-2. **`trace_id text`**
-   - Request correlation identifier
-   - Extracted from standard headers or auto-generated
-   - Links requests across services and logs
-   - B-tree index for efficient filtering
-   - Essential for distributed tracing
-
-3. **`execution_time_ms numeric(10,2)`**
-   - Handler execution time in milliseconds
-   - Measured from handler start to completion
-   - Excludes queue wait time
-   - B-tree index (DESC) for performance analysis
-   - Identifies slow handlers
-
-**Indexes:**
-```sql
--- Efficient JSON queries on error history
-CREATE INDEX ix_http_incoming_queue_error_history
-    ON api.http_incoming_queue USING gin(error_history)
-    WHERE error_history IS NOT NULL;
-
--- Fast trace_id lookups for debugging
-CREATE INDEX ix_http_incoming_queue_trace_id
-    ON api.http_incoming_queue(trace_id)
-    WHERE trace_id IS NOT NULL;
-
--- Performance analysis queries
-CREATE INDEX ix_http_incoming_queue_execution_time
-    ON api.http_incoming_queue(execution_time_ms DESC)
-    WHERE execution_time_ms IS NOT NULL;
-```
-
-#### Enhanced Monitoring View
-
-**`api.pvw_http_incoming_queue_messages()` - New Fields:**
-
-```sql
-RETURNS TABLE(
-    -- ... existing fields ...
-    trace_id text,                  -- Correlation identifier
-    execution_time_ms numeric,      -- Performance metric
-    error_history jsonb,            -- Full error context array
-    error_count integer,            -- Total errors accumulated
-    last_error_class text,          -- Classification of most recent error
-    last_error_message text,        -- Human-readable last error
-    last_sqlstate text,             -- PostgreSQL error code
-    -- ... more fields ...
-)
-```
-
-**Computed Fields:**
-```sql
-SELECT
-    -- ... existing fields ...
-    q.trace_id,
-    q.execution_time_ms,
-    q.error_history,
-    COALESCE(jsonb_array_length(q.error_history), 0) as error_count,
-    q.error_history->-1->>'error_class' as last_error_class,
-    q.error_history->-1->>'message' as last_error_message,
-    q.error_history->-1->>'sqlstate' as last_sqlstate,
-    -- ... more fields ...
-FROM api.http_incoming_queue q
--- ... joins and filters ...
-```
-
-#### Error Response Headers
-
-When errors occur, `api.rest_invoke()` adds metadata to response headers:
-
-```sql
-v_response.headers := v_std_headers
-    || extensions.hstore(ARRAY[
-        'X-Route-Id', v_route.object_id::text,
-        'X-Error-Class', v_error_context->>'error_class',
-        'X-SQLSTATE', v_error_context->>'sqlstate',
-        'X-Execution-Time-Ms', v_execution_ms::text,
-        'X-Trace-ID', v_trace_id
-    ]);
-```
-
-**Headers:**
-- `X-Error-Class` - Error classification (e.g., `serialization_conflict`, `unique_violation`)
-- `X-SQLSTATE` - PostgreSQL error code (e.g., `40P01`, `23505`)
-- `X-Execution-Time-Ms` - Time spent before failure
-- `X-Trace-ID` - Correlation identifier for distributed tracing
-- `X-Route-Id` - Which route handler failed
-
-**Client Benefits:**
-- Know whether to retry (503/504) or fix request (400/409)
-- Correlation ID for support requests
-- Performance metrics for optimization
-- Error classification for intelligent retry strategies
-
-#### Debugging Examples
-
-**Find all requests with errors in the last hour:**
-```sql
-SELECT
-    trace_id,
-    request_method,
-    request_url,
-    error_count,
-    last_error_class,
-    last_error_message,
-    last_sqlstate,
-    execution_time_ms
-FROM api.pvw_http_incoming_queue_messages(interval '1 hour')
-WHERE error_count > 0
-ORDER BY enqueued_at DESC;
-```
-
-**Investigate specific error with full context:**
-```sql
-SELECT
-    trace_id,
-    error_history
-FROM api.http_incoming_queue
-WHERE trace_id = '<trace-id-from-logs>'
-LIMIT 1;
-
--- Expand all error attempts
-SELECT
-    trace_id,
-    jsonb_array_elements(error_history) as error_attempt
-FROM api.http_incoming_queue
-WHERE trace_id = '<trace-id-from-logs>';
-```
-
-**Analyze error patterns over 24 hours:**
-```sql
-SELECT
-    error_history->-1->>'error_class' AS error_class,
-    COUNT(*) AS occurrences,
-    AVG(execution_time_ms) AS avg_execution_time,
-    MAX(execution_time_ms) AS max_execution_time
-FROM api.http_incoming_queue
-WHERE error_history IS NOT NULL
-  AND enqueued_at > now() - interval '24 hours'
-GROUP BY error_history->-1->>'error_class'
-ORDER BY occurrences DESC;
-```
-
-**Find slow requests (performance debugging):**
-```sql
-SELECT
-    trace_id,
-    request_method || ' ' || request_url AS endpoint,
-    execution_time_ms,
-    error_count
-FROM api.pvw_http_incoming_queue_messages(interval '1 hour')
-WHERE execution_time_ms > 1000  -- Slower than 1 second
-ORDER BY execution_time_ms DESC
-LIMIT 20;
-```
-
-**Track retry attempts for specific error class:**
-```sql
-SELECT
-    trace_id,
-    processing_attempts,
-    jsonb_array_length(error_history) as error_count,
-    error_history->0->>'timestamp' as first_error,
-    error_history->-1->>'timestamp' as last_error,
-    error_history->-1->>'error_class' as error_class
-FROM api.http_incoming_queue
-WHERE error_history IS NOT NULL
-  AND error_history->-1->>'error_class' = 'serialization_conflict'
-  AND enqueued_at > now() - interval '24 hours'
-ORDER BY processing_attempts DESC;
-```
-
-#### Production Benefits
-
-**HTTP Compliance:**
-- Returns appropriate status codes (503, 504, 409, 400, not just 500)
-- Clients can implement intelligent retry strategies
-- RESTful error responses with proper semantics
-
-**Distributed Tracing:**
-- Correlation IDs link requests across services
-- End-to-end visibility in distributed systems
-- Support teams can trace issues across boundaries
-
-**Structured Debugging:**
-- Full error context captured (SQLSTATE, detail, hint, stack trace)
-- No log diving required for root cause analysis
-- Error history shows retry progression
-
-**Performance Monitoring:**
-- Execution time tracking per request
-- Identify slow handlers and optimize
-- Correlate errors with execution time
-
-**Operational Excellence:**
-- Error classification enables automated alerting (transient vs permanent)
-- Accumulated error history shows patterns
-- Observability built into the framework, not bolted on
-
-**See:** `api/foundation.sql` (lines 771-1026 for helper functions, lines 1535-1780 for http_invoke error handling)
+**See:** `lib/api/09-gateways.sql` (gateway error handling),
+`lib/api/06-queue-infrastructure.sql` (exchange tables and grants).
 
 ---
 

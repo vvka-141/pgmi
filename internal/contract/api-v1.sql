@@ -73,7 +73,7 @@ GRANT SELECT ON pg_temp.pgmi_source_metadata_view TO PUBLIC;
 -- Joins: _pgmi_source LEFT JOIN _pgmi_source_metadata
 -- Purpose: Provides execution order for deploy.sql to iterate
 -- Key behavior: UNNEST(sort_keys) means files with N sort keys appear N times
--- Order: sort_key ASC, path ASC (deterministic)
+-- Order: sort_key ASC, path ASC under COLLATE "C" (deterministic, locale-independent)
 CREATE OR REPLACE TEMP VIEW pgmi_plan_view AS
 SELECT
     -- File identity
@@ -84,6 +84,12 @@ SELECT
     -- Metadata (with fallback for files without metadata)
     -- Fallback uses MD5 hash cast to UUID (built-in, no extension required)
     -- Note: Not RFC 4122 compliant, but consistent with deploy.sql and available during session init
+    -- Do not "fix" this to convert_to(s.path,'UTF8'): pgx never sends
+    -- client_encoding, so a LATIN1 session stores pgmi's UTF-8 path bytes
+    -- verbatim and convert_to would re-encode them, diverging from
+    -- metadata.GenerateFallbackID on exactly the databases most tests skip.
+    -- The cast is safe only because chk_path_no_backslash (schema.sql) bars the
+    -- escapes byteain would otherwise parse.
     md5(s.path::bytea)::uuid AS generic_id,
     m.id,  -- NULL for files without metadata
     COALESCE(m.idempotent, true) AS idempotent,
@@ -92,8 +98,13 @@ SELECT
     -- UNNEST sort keys: each key becomes a separate execution entry
     unnested.sort_key,
 
-    -- Assign sequential execution order (deterministic tie-breaking with path)
-    ROW_NUMBER() OVER (ORDER BY unnested.sort_key, s.path) AS execution_order
+    -- Assign sequential execution order (deterministic tie-breaking with path).
+    -- COLLATE "C": sort_key mixes user sortKeys ('001/000') with path fallbacks
+    -- ('./migrations/x.sql'). Under a linguistic collation '.' sorts after digits,
+    -- so the deployment order would depend on the server's locale, not the project.
+    ROW_NUMBER() OVER (
+        ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"
+    ) AS execution_order
 
 FROM pg_temp._pgmi_source s
 LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
@@ -112,8 +123,9 @@ CROSS JOIN LATERAL UNNEST(
 COMMENT ON VIEW pg_temp.pgmi_plan_view IS
     'Execution plan with multi-phase support via UNNEST(sort_keys).
      Files with multiple sort keys execute multiple times at different stages.
-     Order: sort_key ASC, path ASC (deterministic).
-     Files without metadata use path as sort key (lexicographic order).';
+     Order: sort_key ASC, path ASC under COLLATE "C" — byte order, so the plan is
+     identical on every server regardless of database collation.
+     Files without metadata use path as sort key (lexicographic byte order).';
 
 GRANT SELECT ON pg_temp.pgmi_plan_view TO PUBLIC;
 
@@ -140,6 +152,7 @@ DECLARE
     v_tsp_name TEXT;
     v_callback TEXT;
     v_last_ordinal INT := 0;
+    v_test_count INT := 0;
 BEGIN
     v_callback := COALESCE(p_callback, 'pg_temp.pgmi_test_callback');
 
@@ -176,7 +189,7 @@ BEGIN
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
                 v_sql := v_sql || format(
-                    'DO $__pgmi__$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = %L); END $__pgmi__$;',
+                    'SELECT pg_temp.pgmi_run_test_source(%L);',
                     v_step.script_path
                 ) || E'\n';
                 v_sql := v_sql || format(
@@ -185,6 +198,8 @@ BEGIN
                 ) || E'\n';
 
             WHEN 'test' THEN
+                v_test_count := v_test_count + 1;
+
                 -- Ensure dir savepoint exists
                 v_idx := array_position(v_dir_paths, v_step.directory);
                 IF v_idx IS NULL THEN
@@ -212,7 +227,7 @@ BEGIN
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
                 v_sql := v_sql || format(
-                    'DO $__pgmi__$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = %L); END $__pgmi__$;',
+                    'SELECT pg_temp.pgmi_run_test_source(%L);',
                     v_step.script_path
                 ) || E'\n';
                 v_sql := v_sql || format(
@@ -244,6 +259,22 @@ BEGIN
         END CASE;
     END LOOP;
 
+    -- An empty plan means the deploy is test-gated by nothing: discovery broke,
+    -- or the pattern matched no file. Both look like a passing suite otherwise.
+    -- The message is a literal, never the pattern: it lands inside a dollar
+    -- quote, and a pattern carrying that tag would close it.
+    IF v_test_count = 0 THEN
+        RETURN format(
+            'DO $__pgmi_no_tests__$ BEGIN RAISE EXCEPTION %L USING HINT = %L, ERRCODE = ''no_data_found''; END $__pgmi_no_tests__$;',
+            CASE WHEN p_pattern IS NULL
+                 THEN 'pgmi: no tests were discovered'
+                 ELSE 'pgmi: no tests matched the requested pattern' END,
+            CASE WHEN p_pattern IS NULL
+                 THEN 'pgmi_test() ran nothing. Tests are *.sql files under a __test__/ directory; remove the call if this project has none.'
+                 ELSE 'pgmi_test(pattern) ran nothing. Check the pattern against pg_temp.pgmi_test_source_view.' END
+        );
+    END IF;
+
     -- Suite end
     v_sql := v_sql || format(
         'SELECT %s(ROW(''suite_end'', NULL, '''', 0, %s, NULL)::pg_temp.pgmi_test_event);',
@@ -260,4 +291,6 @@ Parameters:
   p_pattern  - POSIX regex to filter tests (NULL = all tests)
   p_callback - Function to call for test lifecycle events (default: pgmi_test_callback)
 Returns: SQL string ready for EXECUTE that runs the test suite.
+         When the plan contains no test, the returned SQL raises no_data_found
+         instead: a test-gated deploy that gated on nothing must not report success.
 Used by: Go preprocessor to expand pgmi_test() macro calls.';

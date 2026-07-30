@@ -19,7 +19,7 @@ var completionCmd = &cobra.Command{
   pgmi completion zsh        > "${fpath[1]}/_pgmi"
   pgmi completion fish       > ~/.config/fish/completions/pgmi.fish
   pgmi completion powershell | Out-String | Invoke-Expression`,
-	Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+	Args:      usageArgs(cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs)),
 	ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch args[0] {
