@@ -82,6 +82,28 @@ func TestReleaseNotesScriptRejectsUnfinishedSections(t *testing.T) {
 			tag:        "v1.2.3",
 			wantReason: "still marked a draft",
 		},
+		{
+			// RELEASES.md opens by explaining this very rule, and quotes the
+			// marker inside backticks to do it. An unanchored match read that
+			// sentence as a draft marker, so v0.12.0 could not be released even
+			// with the real marker removed and the heading dated — and no
+			// fixture here carried a preamble, so nothing caught it.
+			name: "instructional prose quoting the marker passes",
+			releases: "# Releases\n\n" +
+				"> **Writing a release?** The tag build fails if the heading carries no\n" +
+				"> `YYYY-MM-DD` date, or if a `<!-- DRAFT -->` marker still sits above it.\n\n" +
+				"## v1.2.3 — 2026-07-26\n\nWhat changed, for a stranger.\n",
+			tag:      "v1.2.3",
+			wantPass: true,
+		},
+		{
+			// The anchor allows leading whitespace, so an indented real marker
+			// must not become a way to sneak a draft out.
+			name:       "an indented draft marker still fails",
+			releases:   "# Releases\n\n  <!-- DRAFT -->\n## v1.2.3 — 2026-07-26\n\nBody.\n",
+			tag:        "v1.2.3",
+			wantReason: "still marked a draft",
+		},
 	}
 
 	for _, tt := range tests {

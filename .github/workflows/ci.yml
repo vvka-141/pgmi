@@ -111,9 +111,6 @@ jobs:
   test-platforms:
     name: Test (${{ matrix.os }}, ${{ matrix.shell }})
     runs-on: ${{ matrix.os }}
-    # macOS has never been observed green here. Make it blocking once one run
-    # has passed — this must not stay non-blocking (PGMI-258 follow-up).
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:

@@ -169,6 +169,7 @@ import os
 import re
 import json
 import random
+import socketserver
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import psycopg
@@ -520,6 +521,29 @@ class MCPHandler(BaseHTTPRequestHandler):
         print(f"[MCP] {format % args if args else format}")
 
 
+class _Gateway(HTTPServer):
+    """HTTPServer that does not reverse-resolve its own bind address.
+
+    http.server fills server_name by calling socket.getfqdn(host) inside
+    server_bind(), and server_bind() runs BEFORE server_activate() calls
+    listen(). On a host whose reverse DNS is slow or unanswered the socket
+    therefore sits bound-but-not-listening for the whole lookup: the banner
+    above says "Listening", and every client is refused until it finishes.
+
+    Measured on the macOS CI runner, where the gateway printed its full banner
+    and then refused connections for more than 20 seconds. Reproduced directly
+    against CPython by delaying getfqdn: the call order is getfqdn then listen,
+    and a connection attempt in between is refused.
+
+    server_name and server_port are only read to build CGI-style variables,
+    which this gateway does not use, so the address itself is a truthful value.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     """Start the MCP HTTP gateway."""
     if not DATABASE_URL:
@@ -544,7 +568,7 @@ def main():
     print(f"")
     print(f"Press Ctrl+C to stop")
 
-    server = HTTPServer((HOST, PORT), MCPHandler)
+    server = _Gateway((HOST, PORT), MCPHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

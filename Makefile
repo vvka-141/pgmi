@@ -47,7 +47,7 @@ release-ready:         ## Full pre-release gate: lint, full suite, connection te
 	$(MAKE) build
 	@echo ""
 	@echo "Not covered here — the tag workflow runs these:"
-	@echo "  * the three end-to-end example gates (.github/workflows/examples.yml)"
+	@echo "  * the five end-to-end example gates (.github/workflows/examples.yml)"
 	@echo "  * the full snapshot build — archives, .deb, checksums for all 6 targets"
 	@echo "    (.github/workflows/snapshot.yml; goreleaser check here only reads the config)"
 	@echo "  * the race detector (needs CGO)"

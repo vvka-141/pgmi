@@ -113,6 +113,8 @@ including an honest `x-pgmi-replica-safe` hint.
 
 ### Also in this release
 
+#### Running a deploy
+
 - **A `BEGIN ATOMIC` function body no longer breaks the atomicity contract.**
   A SQL-standard function body is not dollar-quoted, so its `END` read as a
   `COMMIT`: a deploy.sql defining one and no explicit `COMMIT` — the shape the
@@ -120,37 +122,121 @@ including an honest `x-pgmi-replica-safe` hint.
   function, and a later failure left it applied. After a real `COMMIT` the same
   body was cut into invalid fragments instead. Such a body is now stepped over
   whole.
-- **HTTP semantics in the advanced template**: malformed client input returned
-  500 (so 5xx alerting fired on user typos and retry middleware treated a
-  permanently-bad request as retryable) — the whole `22xxx` data-exception
-  class now maps to 400/422. 401s carry the `WWW-Authenticate` challenge RFC
-  9110 makes mandatory, error responses no longer lose `Vary` and the catalog
-  version, 304s stop contradicting the 200 they revalidate, and `Accept`
-  honours `q=0` as the refusal it is.
+- **`pgmi deploy .` works inside a git repository.** File discovery walked
+  `.git/`, and `.git/index` is binary, so the most-documented invocation failed
+  in essentially every real project — and created the target database before
+  failing. Projects are scanned before any database is created, so a project
+  that cannot be scanned leaves nothing behind.
+- **`--overwrite` recreates the database you had.** It dropped and recreated
+  with the server defaults, so a LATIN1 or `C`-collation database came back as
+  UTF8/`en_US.utf8` — encoding changes how bytes are stored, collation changes
+  index ordering and every comparison. Owner, connection limit, per-database
+  `ALTER DATABASE ... SET` values and the comment were discarded too; a
+  `statement_timeout` set as a safeguard vanished silently.
+- **Redeploying no longer destroys user objects.** `lib/common/encoding.sql`
+  ran `DROP TYPE ... CASCADE` on every deploy, and CASCADE cannot tell the
+  template's own casts from a column, view or function you typed `common.utf8`.
+  The casts are dropped by name.
+- **The deploy lock is released when it should be.** It was unlocked inside an
+  aborted transaction — where it silently did nothing — so a failed tail left
+  the lock alive until the server processed the disconnect. Release is now
+  synchronous on session close, including when session preparation itself
+  fails, so back-to-back deploys no longer race the previous session and an
+  immediate retry is not greeted with exit 15.
+- **A deploy to an existing database no longer touches a maintenance
+  database**, so a CI role granted `CONNECT` on only its own database works.
+- **A file saved by a Windows editor deploys.** A UTF-8 BOM is valid UTF-8, so
+  it passed every check and reached PostgreSQL glued to the first keyword:
+  `syntax error at or near "CREATE"` on a line that reads as correct, with
+  nothing to point at the cause. Only `deploy.sql` was being stripped.
+- **Two scripts that deploy differently no longer share one checksum.** The
+  normalized checksum — the content identity behind idempotency tracking —
+  lowercased the whole file, including string literals and quoted identifiers.
+  `"Users"` and `"users"` are different tables and `'Production'` and
+  `'production'` are different data, so an edit could read as no change and be
+  skipped. Case is folded only where SQL itself ignores it.
+- **Deploys got faster on projects with tests.** Autovacuum cannot see a temp
+  table, so pgmi's session tables carried no statistics and every deploy.sql
+  query was planned on default estimates. On a 20-directory project the test
+  plan cost 546ms per call; it now costs 1.8ms, on every deploy.
+
+#### The advanced template's web surface
+
+- **A security-hardening pass.** The customer role could execute arbitrary SQL
+  as the database owner — it inherited the gateway role, and PostgreSQL's
+  default `PUBLIC` execute grant exposed the SECURITY DEFINER entrypoints and
+  the handler-registration functions. The role graph is converged on every
+  deploy and registration is admin-only. API-key lifecycle and creation are
+  caller-authorized and tenant-scoped (a customer session could previously
+  manage or mint keys across organizations); handler registration rejects name
+  collisions instead of silently overwriting; error wrappers preserve the
+  original SQLSTATE and DETAIL.
+- **HTTP semantics.** Malformed client input returned 500, so 5xx alerting
+  fired on user typos and retry middleware treated a permanently-bad request as
+  retryable — the whole `22xxx` data-exception class now maps to 400/422. 401s
+  carry the `WWW-Authenticate` challenge RFC 9110 makes mandatory, error
+  responses no longer lose `Vary` and the catalog version, 304s stop
+  contradicting the 200 they revalidate, and `Accept` honours `q=0` as the
+  refusal it is — on the scaffolded Python gateway as well as the SQL one,
+  which previously disagreed about the same header.
 - **`autoLog: false` is honored when the handler fails.** It was applied on
   success and dropped on the error path, where the logged request carries
   headers and body — so a `POST /login` marked `autoLog: false` persisted
   plaintext credentials on any constraint violation.
-- **Soft-deleted handlers stop serving traffic.** They were already absent
-  from the OpenAPI document while all eleven gateway and discovery lookups
-  still dispatched them: invisible in the contract, live in production.
-- **Redeploying no longer destroys user objects.** `lib/common/encoding.sql`
-  is idempotent and ran `DROP TYPE ... CASCADE` on every deploy; CASCADE
-  cannot tell the template's own casts from a column, view or function you
-  typed `common.utf8`. The casts are now dropped by name.
+- **Soft-deleted handlers stop serving traffic.** They were already absent from
+  the OpenAPI document while all eleven gateway and discovery lookups still
+  dispatched them: invisible in the contract, live in production.
 - **Every shipped example route was a prefix catch-all.** A doubled backslash
   collapsed the query-string group to `.*`, so `/healthz` was served by the
-  `/health` handler and `/hello/admin` by `/hello`. Registration now rejects
-  an unanchored pattern.
-- **The deploy lock is released even when a tail transaction fails.** The
-  unlock ran in an aborted transaction, where it silently did nothing, so the
-  lock lived until the server processed the disconnect — and an immediate
-  re-run could fail with exit 15.
-- **A deploy to an existing database no longer touches a maintenance
-  database**, so a CI role granted `CONNECT` on only its own database works.
+  `/health` handler and `/hello/admin` by `/hello`. Registration rejects an
+  unanchored pattern.
+- **The MCP surface actually works over HTTP.** The scaffolded gateway wrote an
+  MCP protocol version where the HTTP version belongs, so every response was
+  unparseable by any client. It also refused connections until the host's
+  reverse DNS answered, because `http.server` resolves the bind address before
+  it listens — on a VPN or a container without a resolver it printed
+  `Listening` and served nothing. The MCP dispatcher separately swallowed
+  `40001`, committing lost writes while telling the caller "internal error";
+  the retry contract now holds on MCP as on REST and RPC, with coverage on both.
+- **The OpenAPI contract is cacheable and correct**: strong ETag with 304
+  revalidation, a catalog version stamped on every response so cached route
+  tables learn they are stale, and a fix for multi-parameter routes that
+  produced invalid OpenAPI.
+- **`pgmi serve` tool results conform to the schemas they advertise.** Six
+  tools declared an output schema describing only success, while every failure
+  returned a differently-shaped error object — which the MCP spec forbids and a
+  validating client may reject rather than display. Each schema admits both
+  shapes, so the failure envelope (SQLSTATE, exit code, notice stream) survives
+  intact.
+
+#### What pgmi tells you
+
 - **The documented exit-code table now holds.** Configuration errors that
-  landed on exit 1 or 13 return 10, an unknown command returns 2, and
-  `--compat` is validated before `--overwrite` drops anything.
+  landed on exit 1 or 13 return 10 — including a misspelled `__test__`
+  directory — an unknown command returns 2, `--compat` is validated before
+  `--overwrite` drops anything, and a deploy killed by `--timeout` exits 16
+  rather than 13, so CI stops reporting a slow deploy as broken SQL.
+- **A password saved to `.pgpass` is the one libpq uses.** The entry was
+  appended, and libpq stops at the first line whose host, port, database and
+  user match — so a common `*:*:*:user:oldpw` kept answering. pgmi printed
+  "Saved" and the next connection authenticated with the stale password.
+- **First-hour polish**: failing SQL reports the file line it came from;
+  pgmi's own usage errors exit 2; noisy session-preparation notices are gone;
+  `pgmi init` surfaces `pgmi ai setup` so coding agents discover pgmi's
+  embedded guidance.
+
+#### How pgmi itself is built and shipped
+
+- **The release is better gated.** Tagging runs the five end-to-end example
+  projects, refuses a tag that is not on `main`, refuses release notes still
+  marked draft or undated, scans dependencies for known vulnerabilities, and
+  builds every archive, package and checksum before publishing any of them.
+  `make release-ready` runs the full suite rather than `-short`, and prints
+  what it does not cover.
+- **A vulnerability reachable from pgmi's own code is fixed.** Adding that scan
+  immediately found one: `golang.org/x/text` before v0.39.0 could loop forever
+  on invalid input, reached through `pgx.Connect` from the connection wizard
+  (GO-2026-5970). Binaries from this release carry the fixed version.
 - **The publishing pipeline installs a pinned CLI.** `cloudsmith-cli` was
   installed unpinned and then executed with the publication credential in its
   environment. It is pinned now, and the release token defaults to read-only
@@ -161,64 +247,10 @@ including an honest `x-pgmi-replica-safe` hint.
   of four, and described an unsupported version as an error when it is
   negotiated. Agents read this before writing handlers, so stale guidance here
   becomes wrong code.
-
-- **A security-hardening pass over the advanced template**: the customer role
-  could execute arbitrary SQL as the database owner — it inherited the gateway
-  role, and PostgreSQL's default `PUBLIC` execute grant exposed the
-  SECURITY DEFINER entrypoints and the handler-registration functions. The
-  role graph is now converged on every deploy and registration is admin-only.
-  API-key lifecycle and creation are also caller-authorized and tenant-scoped
-  (previously a customer session could manage or mint keys across
-  organizations); handler registration rejects name collisions instead of
-  silently overwriting; error wrappers preserve the original SQLSTATE and
-  DETAIL.
-- **`pgmi deploy .` works inside a git repository.** File discovery walked
-  `.git/`, and `.git/index` is binary, so the most-documented invocation
-  failed in essentially every real project — and created the target database
-  before failing. Projects are now scanned before any database is created, so
-  a project that cannot be scanned leaves nothing behind.
-- **The MCP surface actually works over HTTP**: the scaffolded gateway wrote
-  an MCP protocol version where the HTTP version belongs, so every response
-  was unparseable by any client. The MCP dispatcher also swallowed `40001`,
-  which committed lost writes while telling the caller "internal error" — the
-  retry contract now holds on MCP as it does on REST and RPC, with test
-  coverage on both paths.
-- **The OpenAPI contract is cacheable and correct**: strong ETag with 304
-  revalidation, a catalog version stamped on every response so cached route
-  tables learn they are stale, and a fix for multi-parameter routes that
-  produced invalid OpenAPI.
-- **First-hour polish**: failing SQL now reports the file line it came from;
-  pgmi's own usage errors exit 2; noisy session-preparation notices are gone;
-  `pgmi init` surfaces `pgmi ai setup` so coding agents discover pgmi's
-  embedded guidance.
 - **The docs grew a visual layer**: a capability tour for the advanced
   template, a five-page MCP section, twelve architecture diagrams, and design
   records for the decisions people ask about (why session-centric, why no
   `--dry-run`, why an execution fabric).
-- **Deploy lock release is now synchronous on session close**, so back-to-back
-  deployments no longer race the previous session's advisory lock — and also
-  when session preparation itself fails, which previously left the lock to the
-  disconnect and could greet an immediate retry with "another deployment is
-  already running".
-- **`pgmi serve` tool results conform to the schemas they advertise.** Six
-  tools declared an output schema describing only success, while every failure
-  returned a differently-shaped error object — which the MCP spec forbids and a
-  validating client may reject rather than display. Each schema now admits both
-  shapes, so the failure envelope (SQLSTATE, exit code, notice stream) survives
-  intact.
-- **The scaffolded Python MCP gateway honours `Accept: …;q=0`** as the refusal
-  it is, matching the SQL gateway. The two shipped surfaces answered the same
-  header differently.
-- **The release itself is better gated.** Tagging now runs the three end-to-end
-  example projects, refuses a tag that is not on `main`, refuses release notes
-  still marked draft or undated, scans dependencies for known vulnerabilities,
-  and builds every archive, package and checksum before it publishes any of
-  them. `make release-ready` runs the full suite rather than `-short`, and
-  prints what it does not cover.
-- **A vulnerability reachable from pgmi's own code is fixed.** Adding that scan
-  immediately found one: `golang.org/x/text` before v0.39.0 could loop forever
-  on invalid input, reached through `pgx.Connect` from the connection wizard
-  (GO-2026-5970). Binaries from this release carry the fixed version.
 
 ### Verification gates
 
@@ -229,7 +261,9 @@ including an honest `x-pgmi-replica-safe` hint.
 | `golangci-lint run` (native + `GOOS=linux`) | PASS |
 | Session API contract (`api-v1.sql`) | unchanged — compat **v1** |
 | `go test ./internal/scaffold` (advanced + basic, live PostgreSQL 17) | PASS |
-| CI example projects (`test-gated-deploy`, `execution-order-policy`, `lock-safe-deploy`) | PASS |
+| PostgreSQL matrix — 11, 15, 17 (both compatibility floors) | PASS |
+| Platform matrix — Linux, Windows (PowerShell + bash), macOS | PASS |
+| CI example projects (`test-gated-deploy`, `execution-order-policy`, `lock-safe-deploy`, `seed-demo`, `tap-reporter`) | PASS |
 | `govulncheck ./...` (v1.6.0) | PASS — 0 reachable; 2 unreachable, see below |
 
 Two advisories are reported at the module level and do not affect pgmi:
@@ -244,13 +278,24 @@ Two advisories are reported at the module level and do not affect pgmi:
 Both are listed here rather than suppressed, so the next release can tell
 "still not reachable" from "nobody looked".
 
-**macOS binaries are not CI-tested.** The `test-platforms` matrix includes
-`macos-latest` but marks it `continue-on-error`, and the `release.yml` tag
-workflow does not run platform tests at all — so no darwin binary has ever been
-gated on a passing macOS run. The unit tests (`go test -short`) are the same
-code as on Linux and Windows; what is untested is platform-specific behaviour
-(signal handling, `.pgpass` location, path separators). If you hit a
-macOS-only issue, please report it.
+**macOS is now gated, and fixing it found a real bug.** The `test-platforms`
+matrix had `macos-latest` marked `continue-on-error` because it had never been
+observed green. Diagnosing that failure turned up a defect in the shipped
+gateway rather than a problem with the runner: `tools/mcp-gateway.py` printed
+`Listening: http://HOST:PORT` and then refused every connection until the
+host's reverse DNS answered. `http.server` fills `server_name` with
+`socket.getfqdn(host)` inside `server_bind()`, which runs *before*
+`server_activate()` calls `listen()` — so the socket sits bound but not
+listening for the whole lookup, with no error to explain it. Anywhere reverse
+DNS is slow or absent — a VPN, a container with no resolver, an air-gapped
+host — the gateway looked started and served nothing. It now binds without
+resolving, `continue-on-error` is gone, and macOS is a blocking check.
+
+What is still untested there is platform-specific behaviour the unit tests do
+not reach (signal handling, `.pgpass` location, path separators), and the
+`release.yml` tag workflow still runs on Linux only — a tag inherits its
+guarantee from `main` being green. If you hit a macOS-only issue, please
+report it.
 
 ## v0.11.0 — 2026-06-27
 

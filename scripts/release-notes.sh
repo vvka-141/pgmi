@@ -59,8 +59,13 @@ pre_heading="$(awk -v tag="$tag" '
     { buf = buf $0 "\n" }
 ' "$releases")"
 
-# A DRAFT marker anywhere in the pre-heading gap or the section body blocks release.
-draft_marker="$(printf '%s\n%s' "$pre_heading" "$body" | grep -iE '<!--[[:space:]]*draft' | head -n 1)" || true
+# A DRAFT marker anywhere in the pre-heading gap or the section body blocks
+# release. The match is anchored to the start of the line because the marker is
+# a marker only when the line IS one: RELEASES.md opens by explaining this rule
+# and quotes `<!-- DRAFT -->` inside backticks to do so, and an unanchored match
+# read that sentence as a draft marker. Every release was blocked by its own
+# documentation, and removing the real marker did not help.
+draft_marker="$(printf '%s\n%s' "$pre_heading" "$body" | grep -iE '^[[:space:]]*<!--[[:space:]]*draft' | head -n 1)" || true
 
 if [[ -n "$draft_marker" ]]; then
     cat >&2 <<EOF
