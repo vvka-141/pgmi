@@ -36,9 +36,15 @@ jobs:
 
       - name: Smoke-test built binary
         run: |
-          bin="$(find dist -maxdepth 2 -name pgmi -type f | head -n 1)"
+          # dist/ holds four files named exactly `pgmi` — linux and darwin,
+          # amd64 and arm64. Without the path filter `head -n 1` takes whichever
+          # find happens to return first, and a darwin or arm64 binary on this
+          # runner exits 126, "cannot execute binary file". Name the one this
+          # job can actually run.
+          bin="$(find dist -maxdepth 2 -path '*linux_amd64*' -name pgmi -type f | head -n 1)"
           if [[ -z "$bin" ]]; then
-            echo "::error::no pgmi binary found in dist/" >&2
+            echo "::error::no linux/amd64 pgmi binary found in dist/" >&2
+            find dist -maxdepth 2 -name 'pgmi*' -type f >&2
             exit 1
           fi
           chmod +x "$bin"
