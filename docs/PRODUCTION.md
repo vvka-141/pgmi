@@ -51,26 +51,31 @@ floor.
 
 The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
 
-1. **`CREATEROLE`** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles. The deploy role needs `CREATEROLE` (the admin role every managed provider grants — `rds_superuser`, `azure_pg_admin`, `supabase_admin`, Cloud SQL's `cloudsqlsuperuser` — has it).
-2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. All four are on every major managed provider's default whitelist.
+1. **`CREATEROLE`** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles. Verify that the provider's deployment role can create them.
+2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. Extension availability and the role allowed to install each one vary by provider and service tier.
 3. **`CREATE SCHEMA`** — the template lays out its `core` / `api` / `membership` / `extensions` schemas.
 
 Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
-| Provider | Basic template | Advanced template | Notes |
-|----------|----------------|-------------------|-------|
-| Self-hosted / Docker / Kubernetes | ✅ | ✅ | Full control; nothing special required. |
-| AWS RDS for PostgreSQL | ✅ | ✅ | `rds_superuser` has `CREATEROLE` and installs the four whitelisted extensions. No event trigger needed. |
-| AWS Aurora PostgreSQL | ✅ | ✅ | Same as RDS. |
-| Azure Database for PostgreSQL — Flexible Server | ✅ | ✅ | `azure_pg_admin` covers `CREATEROLE` + extension install. |
-| Azure Cosmos DB for PostgreSQL (formerly Citus) | ✅ | ⚠️ | Citus-specific semantics; advanced template not validated against sharded tables. |
-| Google Cloud SQL for PostgreSQL | ✅ | ✅ | `cloudsqlsuperuser` grants `CREATEROLE` and the whitelisted extensions. |
-| Google AlloyDB | ✅ | ✅ | Inherits Cloud SQL's admin model. |
-| Supabase | ✅ | ✅ | `supabase_admin` covers role + extension creation. |
-| Neon | ✅ | ✅ | The project's owner role has `CREATEROLE` and can install the extensions. |
-| Railway / Render / Fly.io (managed instances) | ✅ | ✅ | The provisioned owner role can create roles, schemas, and extensions. |
+| Provider | Basic template | Advanced template | Verification |
+|----------|----------------|-------------------|--------------|
+| Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 11, 15, and 17 for core/basic and 15 and 17 for advanced. |
+| AWS RDS for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| AWS Aurora PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
+| Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Google AlloyDB | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Supabase | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Neon | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Railway / Render / Fly.io managed PostgreSQL | Expected | Capability-dependent | Not continuously tested against these services. Verify role and extension capabilities. |
 
-> **Verify the deploy role's grants**, not superuser status: it needs `CREATEROLE`, `CREATE SCHEMA`, and `CREATE EXTENSION` for the four listed extensions. On a managed provider, deploy with that provider's admin role (`rds_superuser`, `azure_pg_admin`, `supabase_admin`, etc.) — it carries all three. If a provider locks one of the four extensions out of its whitelist, remove that extension's `CREATE EXTENSION` line and the features depending on it.
+`Tested` means the repository exercises the combination in CI. `Expected` means
+the core requirements are standard PostgreSQL features, but the provider is not
+part of continuous integration. `Capability-dependent` means the advanced
+template works only when the actual deploy role can create roles and schemas and
+install all four required extensions. Verify those capabilities on the selected
+service and tier before production use.
 
 ---
 
@@ -78,7 +83,9 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 
 ### Single-transaction deployment
 
-All changes succeed or fail together. Maximum safety, but holds locks longer.
+Transactional changes succeed or fail together. This provides the strongest
+atomicity, but holds locks longer. Sequence advances and effects outside the
+transaction are not covered.
 
 ```sql
 -- deploy.sql
@@ -597,187 +604,15 @@ pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 # postgresql://user:pass@pgbouncer:6432/mydb
 ```
 
-## CI/CD patterns
+## CI/CD
 
-### GitHub Actions
+The complete pipeline pattern lives in [CI/CD](CICD.md): install a pinned,
+checksum-verified binary; use a direct connection from the CI secret store; pin
+the session contract with `--compat 1`; and use `--force` only to bypass an
+interactive confirmation. Provider authentication examples are in
+[Connections](CONNECTIONS.md).
 
-```yaml
-deploy:
-  runs-on: ubuntu-latest
-  env:
-    PGMI_VERSION: v0.11.0         # pin to a specific release tag
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Install pgmi (pinned, checksum-verified)
-      run: |
-        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
-        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
-        curl -fsSLO "${base}/${file}"
-        curl -fsSLO "${base}/checksums.txt"
-        sha256sum --ignore-missing -c checksums.txt
-        tar -xzf "${file}" pgmi
-        sudo install pgmi /usr/local/bin/pgmi
-
-    - name: Deploy
-      env:
-        PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
-      run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} --compat 1 --force \
-          --param env=production \
-          --timeout 15m
-```
-
-### GitLab CI
-
-```yaml
-deploy:
-  stage: deploy
-  image: ubuntu:latest
-  variables:
-    PGMI_VERSION: v0.11.0
-    PGMI_CONNECTION_STRING: $DATABASE_URL
-  before_script:
-    - |
-      file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
-      base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
-      curl -fsSLO "${base}/${file}"
-      curl -fsSLO "${base}/checksums.txt"
-      sha256sum --ignore-missing -c checksums.txt
-      tar -xzf "${file}" pgmi
-      install pgmi /usr/local/bin/pgmi
-  script:
-    - pgmi deploy . -d $DATABASE_NAME --compat 1 --force --param env=production
-```
-
-### Azure DevOps
-
-```yaml
-steps:
-  - task: AzureCLI@2
-    inputs:
-      azureSubscription: 'my-service-connection'
-      scriptType: 'bash'
-      scriptLocation: 'inlineScript'
-      inlineScript: |
-        pgmi deploy . -d $DATABASE_NAME \
-          --host $PGHOST \
-          --azure \
-          --sslmode require \
-          --compat 1 --force \
-          --param env=production \
-          --timeout 15m
-```
-
-### GitHub Actions (Azure)
-
-```yaml
-deploy:
-  runs-on: ubuntu-latest
-  permissions:
-    id-token: write
-    contents: read
-  steps:
-    - uses: actions/checkout@v4
-
-    - uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-    - name: Deploy
-      run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
-          --host ${{ vars.AZURE_PG_HOST }} \
-          --azure \
-          --sslmode require \
-          --compat 1 --force \
-          --param env=production \
-          --timeout 15m
-```
-
-### GitHub Actions (AWS)
-
-```yaml
-deploy:
-  runs-on: ubuntu-latest
-  permissions:
-    id-token: write
-    contents: read
-  steps:
-    - uses: actions/checkout@v4
-
-    - uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-        aws-region: ${{ vars.AWS_REGION }}
-
-    - name: Install pgmi
-      env:
-        PGMI_VERSION: v0.11.0
-      run: |
-        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
-        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
-        curl -fsSLO "${base}/${file}"
-        curl -fsSLO "${base}/checksums.txt"
-        sha256sum --ignore-missing -c checksums.txt
-        tar -xzf "${file}" pgmi
-        sudo install pgmi /usr/local/bin/pgmi
-
-    - name: Deploy
-      run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
-          --host ${{ vars.RDS_HOST }} \
-          -U ${{ vars.RDS_USER }} \
-          --aws --aws-region ${{ vars.AWS_REGION }} \
-          --sslmode require \
-          --force \
-          --param env=production \
-          --compat 1 \
-          --timeout 15m
-```
-
-### GitHub Actions (GCP)
-
-```yaml
-deploy:
-  runs-on: ubuntu-latest
-  permissions:
-    id-token: write
-    contents: read
-  steps:
-    - uses: actions/checkout@v4
-
-    - uses: google-github-actions/auth@v2
-      with:
-        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-    - name: Install pgmi
-      env:
-        PGMI_VERSION: v0.11.0
-      run: |
-        file="pgmi_${PGMI_VERSION#v}_linux_amd64.tar.gz"
-        base="https://github.com/vvka-141/pgmi/releases/download/${PGMI_VERSION}"
-        curl -fsSLO "${base}/${file}"
-        curl -fsSLO "${base}/checksums.txt"
-        sha256sum --ignore-missing -c checksums.txt
-        tar -xzf "${file}" pgmi
-        sudo install pgmi /usr/local/bin/pgmi
-
-    - name: Deploy
-      run: |
-        pgmi deploy . -d ${{ vars.DATABASE_NAME }} \
-          -U ${{ vars.CLOUDSQL_USER }} \
-          --google --google-instance ${{ vars.CLOUDSQL_INSTANCE }} \
-          --force \
-          --param env=production \
-          --compat 1 \
-          --timeout 15m
-```
-
-### Deployment gates
+## Deployment gates
 
 Use pgmi's exit codes for pipeline control:
 

@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a change grounded in a concrete deployment problem
+title: "feature: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current approach
+      description: How do you handle this today in PostgreSQL, deploy.sql, or surrounding infrastructure?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Responsibility
+      description: pgmi's CLI handles infrastructure; deployment orchestration belongs in deploy.sql.
+      options:
+        - Infrastructure or connection concern
+        - Session API or execution-fabric concern
+        - deploy.sql or template concern
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include a PostgreSQL-native or deploy.sql solution if one exists.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for this request.
+          required: true

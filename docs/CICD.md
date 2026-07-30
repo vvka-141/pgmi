@@ -40,7 +40,7 @@ jobs:
       PGMI_VERSION: v0.11.0         # pin to a specific release tag
       DB_NAME: myapp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install pgmi (pinned, checksum-verified)
         run: |

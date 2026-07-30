@@ -1,0 +1,59 @@
+name: Bug report
+description: Report reproducible incorrect behavior in pgmi
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Do not include passwords, tokens, or connection strings containing credentials.
+  - type: input
+    id: version
+    attributes:
+      label: pgmi version
+      description: Output of `pgmi version`
+      placeholder: pgmi version 0.11.0
+    validations:
+      required: true
+  - type: input
+    id: postgres
+    attributes:
+      label: PostgreSQL version
+      placeholder: PostgreSQL 17.5
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and environment
+      placeholder: Windows 11, PowerShell 7.5, direct PostgreSQL connection
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the exact command and the smallest project or SQL needed to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized output
+      description: Remove credentials and other sensitive values.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed credentials and other sensitive data.
+          required: true

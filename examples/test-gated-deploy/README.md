@@ -23,8 +23,9 @@ pgmi deploy . -d pgmi_example
 
 `deploy.sql` applies `migrations/` in order, then `CALL pgmi_test()` runs every
 test in `__test__/` inside the same transaction (each test isolated in its own
-savepoint, so test data never persists). Everything passes → the transaction
-commits. Exit code `0`.
+savepoint, so its transactional test data is rolled back). Everything passes →
+the transaction commits. Exit code `0`. Sequence advances and external effects
+are not rolled back.
 
 ## Break it
 

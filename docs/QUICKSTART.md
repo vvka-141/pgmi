@@ -52,7 +52,10 @@ Now see what makes this different from `psql -f`: make a test fail and watch the
 pgmi deploy demo -d demo_db
 ```
 
-pgmi exits with code `13` and the database is untouched — everything the deployment did before the failing test rolled back with it. That test gate, inside your own deployment transaction, is the core of the pgmi model.
+pgmi exits with code `13`, and PostgreSQL rolls back the transactional schema and
+data changes made before the failing test. Sequence counters and external or
+explicitly non-transactional effects are not rolled back. That test gate, inside
+your own deployment transaction, is the core of the pgmi model.
 
 Clean up with `docker rm -f pgmi-demo`. For a real setup against your own PostgreSQL server, continue below.
 

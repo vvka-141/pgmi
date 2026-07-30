@@ -276,7 +276,7 @@ myapp/
 
 ### Concrete differences in Liquibase terms
 
-- **Preconditions vs. test gates**: Liquibase preconditions check state *before* a changeset runs. pgmi's `CALL pgmi_test()` tests the database *after* migrations ran but *before* committing — a failed test aborts the deploy, and the database is unchanged.
+- **Preconditions vs. test gates**: Liquibase preconditions check state *before* a changeset runs. pgmi's `CALL pgmi_test()` tests the database *after* migrations ran but *before* committing — a failed test aborts the deploy and rolls back its transactional schema and data changes. PostgreSQL sequence advances and effects outside the transaction are not rolled back.
 - **Changelog tracking**: Liquibase tracks applied changesets in `databasechangelog` and validates checksums (MD5) against it. pgmi ships both a raw and a normalized checksum; you choose whether to track at all and which checksum to use — reformatting doesn't break the normalized one.
 - **Plan visibility**: Liquibase's execution plan is changelog-order, resolved internally. pgmi's `pgmi_plan_view` is a SQL view — your deploy.sql can query, filter, and assert on the plan before executing anything.
 
@@ -335,7 +335,7 @@ pgmi deploy . --database mydb
 
 - **Atomic deployments**: Wrap everything in a transaction
 - **Parameterization**: Pass environment-specific values via `--param`
-- **Testing**: Add `__test__/` or `__tests__/` directories with automatic rollback
+- **Testing**: Add `__test__/` or `__tests__/` directories with savepoint isolation
 - **Reproducibility**: Same deploy.sql, same behavior
 
 ## Coming from Sqitch

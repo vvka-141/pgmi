@@ -59,7 +59,9 @@ says "may not apply" tells the reader nothing they can act on.
 
 ## Highlights claims
 
-`docs/HIGHLIGHTS.md` makes nine capability claims, each anchored to code or a
-guide. Every claim must be re-verified at release time — check the linked code
-still exists and the described behaviour still holds. Add this to the
+`docs/HIGHLIGHTS.md` currently describes ten capabilities, each anchored to code
+or a guide. Every claim must be re-verified at release time: check the linked
+code still exists, the described behaviour still holds, and every competitor
+statement is supported by current primary documentation. Avoid absolute
+uniqueness claims unless the evidence establishes them. Add this to the
 release-checklist item PGMI-175 (post-release sync verification).

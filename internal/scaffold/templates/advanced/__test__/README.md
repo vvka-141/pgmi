@@ -1,7 +1,8 @@
 # Your Application Tests
 
-Place your test files here. Tests are executed after deployment in a transaction
-that automatically rolls back, ensuring no side effects.
+Place your test files here. Tests are executed after deployment in savepoints
+that roll back their transactional changes. Sequence advances and external
+effects are not rolled back.
 
 ## Example Test Structure
 

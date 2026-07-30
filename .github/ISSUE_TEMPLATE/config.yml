@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vvka-141/pgmi/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Documentation
+    url: https://vvka-141.github.io/pgmi/
+    about: Read the guides and reference documentation before opening an issue.

@@ -1,18 +1,17 @@
 ---
 title: "Highlights"
-description: "Nine pgmi capabilities that have no direct equivalent in other PostgreSQL deployment tools — each with a link to the code or guide that implements it."
+description: "Ten distinctive pgmi capabilities, each grounded in the implementation or a guide."
 weight: 25
 ---
 
 # Highlights
 
 [Why pgmi?](WHY-PGMI.md) explains when the approach fits. [Tradeoffs](TRADEOFFS.md)
-is the honest cost list. This page is the third side: **capabilities that are hard
-or impossible to reproduce with another tool**, each with a pointer to the code or
-guide that implements it.
+is the honest cost list. This page is the third side: **ten capabilities that
+distinguish pgmi's model**, each with a pointer to the implementation or guide.
 
-Items 1, 4, 5, 6, 7 and 8 are **pgmi core** — they work in any project. Items 2 and 3
-are **the advanced template** — application code you own after
+Items 1, 4, 5, 6, 7, 8 and 10 are **pgmi core** — they work in any project.
+Items 2 and 3 are **the advanced template** — application code you own after
 `pgmi init --template advanced`, not part of the binary. Item 9 is both.
 
 ---
@@ -20,9 +19,10 @@ are **the advanced template** — application code you own after
 ## 1. The test gate is the transaction, not a separate command
 
 Migrations, database tests, and the commit decision are one PostgreSQL transaction
-against the **target** database. A failing test doesn't fail a build step — it aborts
-the deployment that was already half-applied, and the database is byte-identical to
-what it was before.
+against the **target** database. A failing test doesn't fail a separate build step:
+it aborts the deployment that was already half-applied and rolls back its
+transactional schema and data changes. PostgreSQL sequence advances and effects
+outside the transaction are not rolled back.
 
 ```sql
 BEGIN;
@@ -31,13 +31,14 @@ CALL pgmi_test();      -- each test isolated in its own savepoint
 COMMIT;                -- reached only if every test passed
 ```
 
-Other tools test migrations too, but the test and the apply are separate events.
-Atlas ships a real testing framework (`atlas migrate test`, `.test.hcl`) plus
-`migrate lint` with 50+ safety analyzers — both run against a *dev* database before
-the apply. Flyway's documented approach is to embed assertions in the migration file
-itself and trip a placeholder switch to force a rollback. Neither can make a
-production commit conditional on tests that ran against production's post-migration
-state, because the tests didn't run there.
+Other tools test migrations too. Atlas runs
+[`migrate test`](https://atlasgo.io/testing/migrate) against a dev database.
+Flyway documents
+[transactional assertions embedded in a migration](https://www.red-gate.com/hub/product-learning/flyway/test-driven-development-flyway),
+including a switch that raises an error and rolls the transaction back. pgmi's
+distinction is the combination of a separate hierarchical test tree, per-test
+savepoint isolation, callback events, and a gate invoked by your `deploy.sql`
+inside the target deployment transaction.
 
 → [Testing guide](TESTING.md) · runnable, CI-verified: [`examples/test-gated-deploy/`](https://github.com/vvka-141/pgmi/tree/main/examples/test-gated-deploy)
 
@@ -168,7 +169,8 @@ twice.
 `__test__/` directories nest. `pgmi_test_plan()` walks them depth-first in pure SQL:
 each directory's `_setup.sql` fixture runs once for the whole subtree, each test rolls
 back to its own savepoint, and each subtree tears down on exit. A child test sees its
-parents' fixtures; no test sees another test's writes; nothing survives the deploy.
+parents' fixtures; no test sees another test's transactional writes. Sequence
+advances and external effects are outside savepoint rollback.
 
 Test execution also emits a typed event stream — `suite_start`, `fixture_start`,
 `test_start`, `test_end`, `rollback`, `teardown_end` — as a `pgmi_test_event`
@@ -222,14 +224,15 @@ instead of clobbered.
 
 ## 10. `CREATE INDEX CONCURRENTLY` works inside a deploy
 
-Most migration tools wrap everything in a single transaction, which makes
-`CREATE INDEX CONCURRENTLY`, `VACUUM`, and `CREATE DATABASE` impossible.
+Some deployment tools require per-script configuration for statements that cannot
+run in a transaction. Flyway, for example, supports
+[`executeInTransaction=false`](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html).
 pgmi's [execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)
 splits deploy.sql at the first top-level `COMMIT`: everything before it is
 one atomic transaction (your test gate lives here); everything after it runs
 statement-by-statement with autocommit, exactly like psql. Put
-`CREATE INDEX CONCURRENTLY` in the tail and it just works — no special flag,
-no separate script, no second tool invocation.
+`CREATE INDEX CONCURRENTLY` in the tail; the transaction boundary remains visible
+in SQL, with no framework-specific per-script setting or second tool invocation.
 
 → [Execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) · [Lock-safe deploy example](https://github.com/vvka-141/pgmi/tree/main/examples/lock-safe-deploy)
 

@@ -7,15 +7,20 @@
 
 **Programmable PostgreSQL deployments, controlled entirely by SQL.**
 
-pgmi loads your project files into one PostgreSQL session as queryable data, then runs the `deploy.sql` **you** write. Your deployment selects migrations, loads reference data, tests the changed database — and commits only if everything passes. A failing test rolls the whole deployment back.
+pgmi loads your project files into one PostgreSQL session as queryable data, then
+runs the `deploy.sql` **you** write. Your deployment selects migrations, loads
+reference data, tests the changed database — and commits only if everything
+passes. A failing test aborts the deployment transaction.
 
 Migration frameworks provide their own ordering, history, and transaction model. pgmi gives those decisions to your deploy.sql. (Architecturally it's an *execution fabric*, not a migration framework — [Why pgmi?](docs/WHY-PGMI.md) explains the distinction.)
 
-![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](docs/diagrams/d00-test-gated-deploy.drawio.svg)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise roll back transactional changes](docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
 ## See it work
 
-Nothing running? Start a disposable PostgreSQL in Docker (already have one? point `PGMI_CONNECTION_STRING` at it and skip the first line):
+Install pgmi first using one of the commands in [Install](#install). Then, if
+nothing is running, start a disposable PostgreSQL in Docker (already have one?
+point `PGMI_CONNECTION_STRING` at it and skip the first line):
 
 ```bash
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
@@ -79,7 +84,11 @@ END $$;
 pgmi: error: execution failed: ERROR: Failed in ./__test__/test_audit_log.sql: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 
-pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from the new migration **does not exist** — the database is exactly as it was before the deploy. Tests run inside the deployment transaction (each isolated in its own savepoint, so test data never persists), and only a fully verified deployment commits.
+pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from
+the new migration **does not exist**. Tests run inside the deployment transaction
+(each isolated in its own savepoint), and only a deployment whose tests pass
+commits. PostgreSQL does not roll back sequence advances or effects outside the
+transaction.
 
 A complete, CI-verified version of this pattern lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) — both paths run on every push.
 
@@ -190,14 +199,14 @@ A poor fit when:
 |-------|-------------|
 | [Getting Started](docs/QUICKSTART.md) | Your first deployment in 10 minutes (binary-first) |
 | [deploy.sql Guide](docs/DEPLOY-GUIDE.md) | Authoring patterns: data ingestion, environment branching, multi-phase |
-| [Testing](docs/TESTING.md) | Database tests with automatic rollback |
+| [Testing](docs/TESTING.md) | Database tests with savepoint isolation and deploy gates |
 
 **Why pgmi exists** (deep dives)
 
 | Essay | Description |
 |-------|-------------|
 | [Why pgmi?](docs/WHY-PGMI.md) | When pgmi's approach makes sense |
-| [Highlights](docs/HIGHLIGHTS.md) | Nine capabilities with no direct equivalent in other tools |
+| [Highlights](docs/HIGHLIGHTS.md) | Ten distinctive pgmi capabilities, grounded in code and guides |
 | [Tradeoffs](docs/TRADEOFFS.md) | Honest limitations and who should use pgmi |
 | [Coming from Flyway/Liquibase/Sqitch](docs/COMING-FROM.md) | Migration guides |
 
@@ -239,7 +248,9 @@ Beyond standard PostgreSQL auth (connection strings, `PGPASSWORD`, `.pgpass`), p
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development
+guidelines, [SUPPORT.md](SUPPORT.md) for questions and issue routing, and the
+[Code of Conduct](CODE_OF_CONDUCT.md) for community standards.
 
 ## License
 

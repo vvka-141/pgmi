@@ -469,7 +469,7 @@ CALL pgmi_test('.*/auth/.*', 'pg_temp.my_custom_callback');
 **Automatic behavior:**
 - Creates SAVEPOINTs before each `_setup.sql`
 - Executes tests in lexicographic order
-- Rolls back to SAVEPOINT after tests (no side effects)
+- Rolls back transactional test changes to the SAVEPOINT; sequence advances and external effects are not rolled back
 - Includes ancestor `_setup.sql` files needed by matching tests
 - Calls `pgmi_test_generate()` internally to produce inline SQL
 
@@ -903,6 +903,6 @@ pgmi is not a migration framework. It's an **execution fabric**.
 
 ## See Also
 
-- [Testing Guide](TESTING.md) — Database testing with automatic rollback
+- [Testing Guide](TESTING.md) — Database testing with savepoint isolation and deploy gates
 - [Metadata Guide](METADATA.md) — Script tracking and execution ordering
 - [MCP Integration](advanced/MCP.md) — Model Context Protocol for AI assistants (advanced template)

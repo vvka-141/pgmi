@@ -537,13 +537,14 @@ END $$;
 - ✅ Schema manipulation (CREATE TABLE, ALTER, etc.)
 - ✅ Data insertion/modification for testing
 - ✅ Integration tests (multiple components)
-- ✅ Tests requiring rollback (no side effects)
+- ✅ Tests requiring transactional rollback
 
 **Isolation:**
 - Tests in `__test__/` are automatically isolated by pgmi
 - Executed via `pgmi_test()` macro in deploy.sql
 - Run within savepoints with automatic rollback
-- Reason: Test data never persists, migrations commit normally
+- Transactional test data is rolled back while migrations commit normally;
+  sequence advances and external effects are not rolled back
 
 ---
 
@@ -1234,4 +1235,3 @@ pgmi uses a two-tier API: internal tables (`_pgmi_*` prefix) and public views (`
 - **CLAUDE.md:** Core philosophy, parameter system, development guidelines
 - **Template READMEs:** User-facing deployment guides
 - **PostgreSQL Documentation:** https://www.postgresql.org/docs/current/
-

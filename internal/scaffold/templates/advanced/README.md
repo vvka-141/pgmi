@@ -448,7 +448,9 @@ pgmi-endpoint-quickstart`.
 
 ## Testing
 
-Tests run as part of deployment via the `pgmi_test()` macro in deploy.sql. Each test runs in a savepoint that rolls back, so test data never persists while your migrations commit.
+Tests run as part of deployment via the `pgmi_test()` macro in deploy.sql. Each
+test runs in a savepoint that rolls back its transactional changes while your
+migrations commit. Sequence advances and external effects are not rolled back.
 
 To filter tests, pass a pattern to the macro in deploy.sql:
 

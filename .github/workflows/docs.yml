@@ -6,6 +6,27 @@ on:
     paths:
       - 'docs/**'
       - 'website/**'
+      - 'internal/ai/content/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'CODE_OF_CONDUCT.md'
+      - 'SECURITY.md'
+      - 'SUPPORT.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'internal/ai/content/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'CODE_OF_CONDUCT.md'
+      - 'SECURITY.md'
+      - 'SUPPORT.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -33,23 +54,48 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version-file: go.mod
+      - name: Check links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --root-dir "$GITHUB_WORKSPACE"
+            --no-progress
+            --max-retries 3
+            --retry-wait-time 2
+            --exclude-mail
+            README.md
+            CONTRIBUTING.md
+            CODE_OF_CONDUCT.md
+            SECURITY.md
+            SUPPORT.md
+            'docs/**/*.md'
+            'examples/**/*.md'
+            'website/content/**/*.md'
+          fail: true
       - name: Install Hugo extended
         run: |
           curl -sSL -o hugo.deb "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb"
           sudo dpkg -i hugo.deb
       - name: Configure Pages
         id: pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
         with:
           enablement: true
-      - name: Build
+      - name: Build pull request
+        if: github.event_name == 'pull_request'
+        run: hugo --source website --minify --gc --baseURL "https://example.invalid/pgmi/"
+      - name: Build Pages
+        if: github.event_name != 'pull_request'
         run: hugo --source website --minify --gc --baseURL "${{ steps.pages.outputs.base_url }}/"
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: website/public
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:

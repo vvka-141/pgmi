@@ -16,9 +16,10 @@ Testing database code is hard because **changes persist**. If a test creates a t
 
 Most teams solve this with cleanup scripts — `DELETE FROM`, `DROP TABLE IF EXISTS`, teardown hooks. This is fragile. Miss one cleanup step and your test suite breaks in subtle, hard-to-debug ways.
 
-pgmi takes a different approach: **your tests never leave permanent changes in the database.**
+pgmi takes a different approach: **each test's transactional changes are rolled
+back before the next test runs.**
 
-![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise rollback, database unchanged](diagrams/d00-test-gated-deploy.drawio.svg)
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass — otherwise roll back transactional changes](diagrams/d00-test-gated-deploy.drawio.svg)
 
 **Video walkthrough:** [Transactional Testing with pgmi](https://youtu.be/mSqHOQIJ_uk)
 
@@ -32,7 +33,9 @@ When you use the `CALL pgmi_test()` macro in your `deploy.sql`, pgmi:
 2. Runs your fixtures and tests inside savepoints
 3. Rolls back each test's changes via savepoint rollback
 
-Test data never persists. Your migrations commit, but test state is isolated. Every time.
+Transactional test data does not persist. Your migrations commit, but each test's
+transactional state is isolated. PostgreSQL sequence advances and effects outside
+the transaction are not rolled back.
 
 PostgreSQL **savepoints** isolate each test from every other test. Each test gets a clean copy of the fixture state, regardless of what previous tests did.
 
@@ -517,15 +520,18 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 |---------------------|-----------|
 | Write `teardown.sql` to clean up after tests | Not needed — savepoint rollback handles it |
 | Worry about test execution order | Not needed — each test starts from fixture state |
-| Manage test database separately | Not needed — tests run against your real deployment, then vanish |
+| Manage test database separately | Not needed — tests run against the target deployment and transactional test state is rolled back |
 | Build a test runner or assertion framework | Not needed — `RAISE EXCEPTION` is the assertion |
-| Truncate tables, drop temp objects, clean up test state | Not needed — outer `ROLLBACK` erases everything (note: sequence advances from `nextval()` are not rolled back — this is standard PostgreSQL behavior) |
+| Truncate tables, drop temp objects, clean up transactional test state | Not needed — outer `ROLLBACK` reverts transactional changes (sequence advances from `nextval()` are not rolled back) |
 
 ---
 
 ## The gated deployment pattern
 
-The `CALL pgmi_test()` macro runs tests **as a gate before committing** — if any test fails, the entire deployment rolls back and your database is unchanged. An empty test plan (no `__test__/` files, or a pattern that matches nothing) also fails the deploy with `no_data_found` — a gate that gated on nothing is not a gate.
+The `CALL pgmi_test()` macro runs tests **as a gate before committing** — if any
+test fails, the deployment transaction rolls back. An empty test plan (no
+`__test__/` files, or a pattern that matches nothing) also fails the deploy with
+`no_data_found` — a gate that gated on nothing is not a gate.
 
 ### How it works
 
@@ -580,11 +586,15 @@ The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreS
 13. COMMIT;
 ```
 
-If any test raises an exception (steps 6–11), PostgreSQL aborts the transaction and `COMMIT` at step 13 never runs. Your migrations from steps 2–3 are rolled back. **The database is unchanged.**
+If any test raises an exception (steps 6–11), PostgreSQL aborts the transaction and
+`COMMIT` at step 13 never runs. The transactional schema and data changes from
+steps 2–3 are rolled back.
 
 If all tests pass, the savepoints roll back the test data (so it doesn't persist), but the migrations remain, and `COMMIT` makes them permanent.
 
-**Successful deployment implies all tests passed. Failed tests mean zero changes to your database.**
+**Successful deployment implies all tests passed.** Failed tests prevent the
+transactional deployment changes from committing. Sequence counters and external
+or explicitly non-transactional effects may still advance or occur.
 
 ---
 
@@ -617,9 +627,9 @@ pgmi deploy . --overwrite --force --verbose
 
 The `CALL pgmi_test()` macro:
 - Runs **only** files from `__test__/` or `__tests__/` directories
-- Uses **savepoints** to isolate each test — test data never persists
+- Uses **savepoints** to isolate each test's transactional state
 - Stops at the **first failure** — no partial results to interpret
-- Gates the `COMMIT` — failed tests mean zero changes to your database
+- Gates the `COMMIT` — failed tests roll back transactional deployment changes
 
 ---
 
@@ -770,7 +780,10 @@ keeping test numbers monotonic.
 
 ## Teardown
 
-pgmi uses **implicit teardown via savepoint rollback** — there are no explicit teardown scripts. When a directory's tests finish, pgmi rolls back to the savepoint created before the directory's fixture, undoing all changes from both the fixture and the tests.
+pgmi uses **implicit teardown via savepoint rollback** — there are no explicit
+teardown scripts. When a directory's tests finish, pgmi rolls back to the
+savepoint created before the directory's fixture, undoing transactional changes
+from both the fixture and the tests.
 
 ```
 SAVEPOINT sp_orders_setup;          ← fixture boundary
@@ -778,7 +791,7 @@ SAVEPOINT sp_orders_setup;          ← fixture boundary
     SAVEPOINT sp_test_1;
     ... test_order_total.sql ...    ← test modifies data
     ROLLBACK TO sp_test_1;          ← test changes undone
-ROLLBACK TO sp_orders_setup;        ← fixture + everything undone
+ROLLBACK TO sp_orders_setup;        ← transactional fixture and test changes undone
 ```
 
 This means:
@@ -801,7 +814,11 @@ This means:
 | **ORM rollback** | Transaction per test | Fast | No | ORM subset only | Application test suite |
 | **Neon branching** | Copy-on-write branch | Fast (API call) | No | Yes (managed) | Separate step against the branch |
 
-**pgmi's advantage:** Tests run against the actual deployment (real schema, real data, real transactions) with zero infrastructure. No Docker, no API calls, no separate test database. The test gate is the deploy transaction itself — a failing test means the commit never happened and the target database is unchanged. Other tools test before the apply or against a copy; pgmi tests *the apply*.
+**pgmi's advantage:** Tests run against the actual deployment (real schema, real
+data, real transactions) with no separate test infrastructure. The test gate is
+the deploy transaction itself: a failing test prevents its transactional schema
+and data changes from committing. Other tools may test before the apply or against
+a copy; pgmi tests *the apply*.
 
 **No report format ships built in.** pgmi emits a typed *event stream* rather than
 a fixed report: `suite_start`, `fixture_start`, `test_start`, `test_end`, `rollback`,
@@ -818,7 +835,7 @@ The [gated deployment pattern](#the-gated-deployment-pattern) provides auditable
 
 1. Migrations run inside `BEGIN`
 2. `CALL pgmi_test()` executes all tests
-3. If any test fails → `RAISE EXCEPTION` → transaction aborts → database unchanged
+3. If any test fails → `RAISE EXCEPTION` → transaction aborts → transactional changes roll back
 4. If all tests pass → `COMMIT` → changes persist
 
 **For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Tests passing is a precondition for the commit — there is no way to commit with failing tests, and no way to commit with an empty test plan (the macro refuses to pass when it discovers nothing to run).

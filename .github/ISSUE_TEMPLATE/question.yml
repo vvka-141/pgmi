@@ -1,0 +1,36 @@
+name: Question
+description: Ask for help using or understanding pgmi
+title: "question: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [documentation](https://vvka-141.github.io/pgmi/) and search existing issues first. Do not include credentials.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Include relevant SQL, commands, and sanitized output.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Include pgmi and PostgreSQL versions when relevant.
+      placeholder: pgmi 0.11.0; PostgreSQL 17.5
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the documentation and existing issues.
+          required: true
+        - label: I removed credentials and other sensitive data.
+          required: true

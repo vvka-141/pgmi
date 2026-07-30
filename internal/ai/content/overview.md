@@ -133,13 +133,13 @@ END IF;
 
 ## Key Differentiators
 
-Nine capabilities have no direct equivalent in other PostgreSQL deployment tools.
+Ten distinctive capabilities are grounded in the implementation and guides.
 The three most relevant to agents:
 
 1. **Tests gate the deploy transaction** — `CALL pgmi_test()` runs inside the
-   deployment transaction; a failing test aborts the commit, so the target
-   database is unchanged. Other tools run tests as a separate command against a
-   dev database.
+   deployment transaction; a failing test aborts the commit and rolls back its
+   transactional schema and data changes. Sequence advances and effects outside
+   the transaction are not rolled back.
 2. **Reformat-proof checksums** — `pgmi_checksum` strips comments, case-folds,
    and collapses whitespace before hashing, so reformatting a file doesn't
    trigger a checksum mismatch (the most common Flyway support-thread class).

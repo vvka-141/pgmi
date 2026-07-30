@@ -34,7 +34,11 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be
+reported privately through the
+[GitHub private reporting channel](https://github.com/vvka-141/pgmi/security/advisories/new).
+Prefix the title with `Code of Conduct` so maintainers can route it correctly.
+All complaints will be reviewed and investigated promptly and fairly.
 
 Project maintainers are obligated to respect the privacy and security of the reporter of any incident.
 

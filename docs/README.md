@@ -54,7 +54,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [Session API](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [Testing](TESTING.md) |
 | What's the difference between templates? | Basic = small, explicit migration scaffold. Advanced = ~19k lines of tested SQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Quickstart](QUICKSTART.md#choosing-a-template) and the [capability tour](advanced/_index.md) |
-| How do I filter which files run? | `WHERE` clause on `pg_temp.pgmi_plan_view` — see [Session API](session-api.md) |
+| How do I filter which files run? | Join `pgmi_plan_view` to `pgmi_source_view`, require `is_sql_file`, then add your path filter — see [Session API](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI reference](CLI.md#exit-codes) |
 
 ---
@@ -65,7 +65,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 - **[Quickstart](QUICKSTART.md)** — Your first deployment (install, configure, deploy, verify)
 - **[Why pgmi](WHY-PGMI.md)** — When pgmi's approach makes sense (and when it doesn't)
 - **[Core vs. template](core-vs-template.md)** — The boundary between pgmi core and your scaffolded project
-- **[Highlights](HIGHLIGHTS.md)** — Nine capabilities with no direct equivalent in other tools
+- **[Highlights](HIGHLIGHTS.md)** — Ten distinctive pgmi capabilities, grounded in code and guides
 - **[Coming from other tools](COMING-FROM.md)** — Migration guides from Flyway, Liquibase, and raw psql
 
 ### Reference
@@ -79,7 +79,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 - **[Trade-offs](TRADEOFFS.md)** — Honest limitations and who should use pgmi
 
 ### Features
-- **[Testing](TESTING.md)** — Database testing with automatic rollback
+- **[Testing](TESTING.md)** — Database testing with savepoint isolation and deploy gates
 - **[Script metadata](METADATA.md)** — Script tracking with UUIDs, idempotency, sort keys
 - **[Security](SECURITY.md)** — Secrets handling and CI/CD patterns
 

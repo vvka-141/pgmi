@@ -334,4 +334,4 @@ END $$;
 
 - [MCP SQL API reference](MCP-SQL-API.md) — every dispatcher function and response builder
 - [Run the MCP gateway](MCP-GATEWAY.md) — serve what you authored
-- [Testing](../TESTING.md) — database testing with automatic rollback
+- [Testing](../TESTING.md) — database testing with savepoint isolation and deploy gates

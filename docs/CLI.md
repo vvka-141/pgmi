@@ -390,6 +390,35 @@ pgmi templates list
 
 ---
 
+## pgmi config
+
+Launch the interactive connection wizard and save its result to `pgmi.yaml`.
+
+```bash
+pgmi config [path]
+```
+
+If `path` is omitted, pgmi writes `pgmi.yaml` in the current directory. The
+wizard supports local PostgreSQL, Azure Entra ID, AWS IAM, and Google Cloud SQL
+authentication.
+
+```bash
+# Configure the current directory
+pgmi config
+
+# Configure an existing project
+pgmi config ./myproject
+```
+
+The command requires an interactive terminal. In CI, write `pgmi.yaml` directly
+or use PostgreSQL environment variables instead. If `pgmi.yaml` already exists,
+pgmi asks before replacing its connection settings; an unparseable file also
+requires explicit confirmation before it is overwritten.
+
+See [Configuration](CONFIGURATION.md) for the file schema and precedence rules.
+
+---
+
 ## pgmi metadata
 
 Offline metadata operations (no database connection required).

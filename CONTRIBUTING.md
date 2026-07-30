@@ -1,16 +1,22 @@
 # Contributing to pgmi
 
-Thank you for your interest in contributing to pgmi! This document provides guidelines and standards for contributing to the project.
+Thank you for your interest in contributing to pgmi. This document covers the
+checks and conventions needed to prepare a change for review.
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md). Please report unacceptable behavior to the maintainers.
+By participating in this project, you agree to abide by our
+[Code of Conduct](CODE_OF_CONDUCT.md). Report conduct incidents privately through
+the [private reporting channel](https://github.com/vvka-141/pgmi/security/advisories/new)
+and prefix the title with `Code of Conduct`.
 
 ## Reporting Issues
 
 ### Bug Reports
 
-Before creating a bug report, please check existing issues. When reporting, include:
+Before creating a bug report, check existing issues, then use the
+[bug report form](https://github.com/vvka-141/pgmi/issues/new?template=bug.yml).
+Include:
 
 - **Clear title** describing the issue
 - **Steps to reproduce** the behavior
@@ -20,7 +26,9 @@ Before creating a bug report, please check existing issues. When reporting, incl
 
 ### Feature Requests
 
-Feature requests are welcome! Please:
+Use the
+[feature request form](https://github.com/vvka-141/pgmi/issues/new?template=feature.yml)
+and:
 
 - Check existing issues for similar requests
 - Describe the use case and problem you're solving
@@ -29,6 +37,27 @@ Feature requests are welcome! Please:
 ### Security Issues
 
 For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open public issues for security problems.
+
+## Development setup
+
+You need:
+
+- Go 1.25.12 or the version declared by `go.mod`
+- Docker, or `PGMI_TEST_CONN` pointing to a PostgreSQL test database, for
+  integration tests
+- golangci-lint 1.64.8 for `make lint`
+
+Start with:
+
+```bash
+make doctor
+make test
+make build
+```
+
+`make test` runs the short unit suite and does not require PostgreSQL.
+`make test-integration` runs the full suite and starts a PostgreSQL
+Testcontainer when `PGMI_TEST_CONN` is not set.
 
 ## Code Style
 
@@ -80,7 +109,8 @@ func NewDeploymentService(
 - Write table-driven tests using `[]struct` pattern
 - Use descriptive test names: `TestFunctionName_Scenario`
 - Prefer in-memory implementations for external dependencies (filesystem, database) when possible
-- Integration tests should use Docker Compose or test fixtures
+- Integration tests should use the repository's Testcontainers helpers or
+  `PGMI_TEST_CONN`
 
 Example:
 
@@ -134,7 +164,8 @@ This project uses a simplified gitflow:
 1. Create feature branch from `main`: `git checkout -b feature/my-feature`
 2. Implement changes with tests
 3. Push and create PR to `main`
-4. After merge, maintainers tag releases: `git tag v0.7.x && git push origin v0.7.x`
+4. After merge, maintainers create a semantic version tag. See
+   [Release Guide](RELEASES.md).
 
 ## Commit Messages
 
@@ -160,15 +191,32 @@ Examples:
 
 1. Create a feature branch from `main`
 2. Implement your changes with tests
-3. Run `make test-integration` to verify all tests pass (requires Docker or `PGMI_TEST_CONN`)
-4. Run `go build ./...` to ensure everything compiles
-5. Update documentation if needed
-6. Submit PR to `main` with clear description of changes
+3. Run `make test` and `make lint`
+4. Run `make test-integration` (requires Docker or `PGMI_TEST_CONN`)
+5. Run `make build`
+6. If the change affects scaffolding templates, embedded SQL, or deploy/test
+   execution, run `make build-clean` and
+   `go test ./internal/scaffold -v -run TestTemplateDeployment -timeout 5m`
+7. Update documentation in the same change as the behavior it describes
+8. Submit a PR to `main` with a clear description and verification notes
+
+On Windows without `make`, the core equivalents are:
+
+```powershell
+go test -short -tags pgmi_testhooks ./...
+go test -tags pgmi_testhooks ./...
+golangci-lint run
+go build -o pgmi.exe ./cmd/pgmi
+```
+
+Set `PGMI_REQUIRE_DB=1` for the full integration run when a missing database
+must fail rather than skip.
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/vvka-141/pgmi/discussions) for questions
-- Check existing issues and discussions first
+- Read [Support](SUPPORT.md), then use the
+  [question form](https://github.com/vvka-141/pgmi/issues/new?template=question.yml)
+- Check existing issues first
 - For security issues, see [SECURITY.md](SECURITY.md)
 
 ## License
