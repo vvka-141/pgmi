@@ -18,17 +18,24 @@ BEGIN
     END LOOP;
 END $$;
 
--- 2. Ordering policy: no two files may claim the same plan position
+-- 2. Ordering policy: no two plan rows may claim the same position.
+--    Group under COLLATE "C" — the same discipline pgmi_plan_view uses — so the
+--    check never depends on the server's default collation.
 DO $$
 DECLARE
     v_collisions TEXT;
 BEGIN
-    SELECT string_agg(format('%s: %s', sort_key, paths), E'\n' ORDER BY sort_key)
+    SELECT string_agg(
+               format('%s: %s', sort_key, paths),
+               E'\n' ORDER BY sort_key COLLATE "C"
+           )
       INTO v_collisions
       FROM (
-          SELECT sort_key, string_agg(path, ', ' ORDER BY path) AS paths
+          SELECT
+              sort_key COLLATE "C" AS sort_key,
+              string_agg(path, ', ' ORDER BY path COLLATE "C") AS paths
           FROM pg_temp.pgmi_plan_view
-          GROUP BY sort_key
+          GROUP BY sort_key COLLATE "C"
           HAVING count(*) > 1
       ) AS collision;
 
