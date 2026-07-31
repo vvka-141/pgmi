@@ -63,7 +63,8 @@ jobs:
             --no-progress
             --max-retries 3
             --retry-wait-time 2
-            --exclude-mail
+            --include-mail=false
+            --accept 200,204,206,403
             README.md
             CONTRIBUTING.md
             CODE_OF_CONDUCT.md

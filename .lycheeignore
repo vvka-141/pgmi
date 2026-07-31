@@ -1,0 +1,5 @@
+# Hugo resolves these at render time; they do not exist as repo paths.
+# The site build in this same workflow is what verifies them.
+^file://.*/pgmi/docs/diagrams/
+^file://.*/website/content/articles/index\.xml$
+^file://.*/website/content/docs/diagrams/
