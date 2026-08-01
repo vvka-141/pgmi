@@ -242,6 +242,26 @@ jobs:
              HAVING count(*) = 2")
           test "$both_valid" = "t" || { echo "expected both indexes VALID after recovery"; exit 1; }
 
+      - name: Failure path — a failed concurrent build leaves an INVALID index
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -c             "DROP INDEX idx_orders_customer;"
+          set +e
+          PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -c             "CREATE UNIQUE INDEX CONCURRENTLY idx_orders_customer ON orders (customer_id);"
+          set -e
+          invalid=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -tAc             "SELECT NOT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE c.relname = 'idx_orders_customer'")
+          test "$invalid" = "t" || { echo "setup failed: expected an INVALID index"; exit 1; }
+
+      - name: Recovery — the deploy reaps the INVALID index and rebuilds it
+        working-directory: examples/lock-safe-deploy/project
+        run: ../../../pgmi deploy . -d lock_safe_demo --force
+
+      - name: Verify — the leftover was reaped and the index is healthy again
+        run: |
+          state=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5436 -U postgres -d lock_safe_demo -tAc             "SELECT i.indisvalid AND NOT i.indisunique FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+             WHERE c.relname = 'idx_orders_customer'")
+          test "$state" = "t" || { echo "expected a valid, non-unique rebuilt index"; exit 1; }
+
       - name: Redeploy — the tail is idempotent, a second run converges
         working-directory: examples/lock-safe-deploy/project
         run: ../../../pgmi deploy . -d lock_safe_demo --force

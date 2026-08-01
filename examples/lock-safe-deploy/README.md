@@ -1,6 +1,6 @@
 # Lock-safe deploy
 
-A zero-downtime phased deployment demonstrating pgmi's execution contract:
+A phased deployment demonstrating pgmi's execution contract:
 **before your first top-level `COMMIT`, pgmi's atomic mode; after it, psql
 mode.** The head of `deploy.sql` runs as one transaction; every top-level
 statement after it runs in per-statement autocommit on the same session —
@@ -14,7 +14,10 @@ Four phases, read top to bottom as they execute (`project/deploy.sql`):
 2. **Concurrent index** — `CREATE INDEX CONCURRENTLY`, forbidden inside a
    transaction block, legal here because the statement runs in autocommit.
    Written as reap-then-`IF NOT EXISTS` so a re-run converges past a failed
-   `INVALID` build without rebuilding a healthy index.
+   `INVALID` build without rebuilding a healthy index. The reap is the one step
+   in the tail that takes `ACCESS EXCLUSIVE`: it carries phase 1's short
+   `lock_timeout` and re-checks validity while holding the lock, because an
+   in-flight `CONCURRENTLY` in another session is `indisvalid` too.
 3. **Atomic backfill** — statements after the first `COMMIT` are not
    implicitly grouped, so a phase that must be atomic says so with its own
    `BEGIN ... COMMIT`.
