@@ -1,0 +1,81 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="a04-lock-queue" name="lock-queue">
+    <mxGraphModel dx="1000" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#fbfaf7" adaptiveColors="none">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="hdr" value="three sessions, one table" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="18" width="300" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="axis" value="time &#8594;" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="210" y="18" width="80" height="22" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l1" value="session 1&#10;a long report" style="text;html=1;align=left;verticalAlign=middle;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="160" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" value="session 2&#10;the migration" style="text;html=1;align=left;verticalAlign=middle;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="160" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" value="session 3&#10;an ordinary SELECT" style="text;html=1;align=left;verticalAlign=middle;fontColor=#172018;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="160" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="b1" value="holds ACCESS SHARE &#8212; granted, for the whole transaction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="210" y="64" width="650" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="waiting for ACCESS EXCLUSIVE &#8212; 18.1 s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf3e7;strokeColor=#b45309;strokeWidth=2;dashed=1;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="279" y="124" width="581" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b2run" value="runs&#10;commits" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=9;align=center;" vertex="1" parent="1">
+          <mxGeometry x="860" y="124" width="46" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="waiting &#8212; 16.0 s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#5d665d;dashed=1;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="348" y="184" width="558" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a21" style="edgeStyle=none;html=1;strokeColor=#5d665d;endArrow=classic;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="124" as="sourcePoint" />
+            <mxPoint x="330" y="104" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a21l" value="blocked by" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="338" y="104" width="90" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="a32" style="edgeStyle=none;html=1;strokeColor=#b45309;strokeWidth=2;endArrow=classic;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="430" y="184" as="sourcePoint" />
+            <mxPoint x="430" y="164" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a32l" value="blocked by the ALTER &#8212; not by session 1" style="text;html=1;align=left;verticalAlign=middle;fontColor=#b45309;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="438" y="164" width="300" height="18" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rel" style="edgeStyle=none;html=1;strokeColor=#5d665d;dashed=1;endArrow=none;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="860" y="52" as="sourcePoint" />
+            <mxPoint x="860" y="236" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rell" value="session 1 commits &#8212; the queue&#10;drains in order, not all at once" style="text;html=1;align=left;verticalAlign=top;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="640" y="240" width="270" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tm1" value="t = 0" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="210" y="104" width="60" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="tm2" value="t = 2 s" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="279" y="164" width="60" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="tm3" value="t = 4 s" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="348" y="224" width="60" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="caption" value="ACCESS SHARE never conflicts with ACCESS SHARE, so session 3 could have run immediately. It queues behind a lock request that is itself still waiting &#8212; and then behind the ALTER&#39;s own transaction." style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="286" width="880" height="24" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
