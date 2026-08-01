@@ -1,0 +1,73 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="a05-execution-boundary" name="execution-boundary">
+    <mxGraphModel dx="1000" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#fbfaf7" adaptiveColors="none">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="sesslbl" value="one PostgreSQL session" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="18" width="300" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="sessband" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d9ded5;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="36" y="46" width="884" height="244" as="geometry" />
+        </mxCell>
+
+        <mxCell id="headlbl" value="ATOMIC HEAD &#8212; ONE MESSAGE, ONE TRANSACTION" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="52" y="58" width="380" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="head" value="ALTER TABLE &#183; ADD CONSTRAINT NOT VALID&#10;CALL pgmi_test()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="52" y="84" width="300" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="headnote" value="strong locks held until the COMMIT &#8212;&#10;the tests run inside that window" style="text;html=1;align=left;verticalAlign=top;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="52" y="176" width="300" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bnd" style="edgeStyle=none;html=1;strokeColor=#b45309;strokeWidth=2;endArrow=none;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="382" y="72" as="sourcePoint" />
+            <mxPoint x="382" y="238" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="bndl" value="first top-level&#10;COMMIT" style="text;html=1;align=center;verticalAlign=middle;fontColor=#b45309;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="322" y="296" width="120" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="taillbl" value="PSQL MODE &#8212; ONE MESSAGE PER STATEMENT" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="412" y="58" width="380" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" value="CREATE INDEX CONCURRENTLY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="412" y="84" width="240" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" value="BEGIN &#183; UPDATE &#183; COMMIT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf1e7;strokeColor=#143d2b;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="412" y="122" width="240" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="t3" value="VALIDATE CONSTRAINT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="412" y="160" width="240" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="t4" value="CREATE INDEX CONCURRENTLY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9f4e8;strokeColor=#0f766e;fontColor=#172018;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="412" y="198" width="240" height="32" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n1" value="legal only because it arrives alone" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="664" y="84" width="250" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="a phase that must be atomic says so" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="664" y="122" width="250" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="SHARE UPDATE EXCLUSIVE &#8212; reads and&#10;writes continue" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="664" y="160" width="250" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="a mid-tail failure leaves&#10;earlier units applied" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="664" y="198" width="250" height="32" as="geometry" />
+        </mxCell>
+
+        <mxCell id="temp" value="pgmi_plan_view / pgmi_source_view &#8212; session-scoped, readable on both sides of the boundary" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="52" y="250" width="850" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="caption" value="Everything up to the first terminator is sent as one message and is one transaction. Everything after it is sent one statement at a time, exactly as psql would." style="text;html=1;align=left;verticalAlign=middle;fontColor=#5d665d;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="336" width="880" height="24" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
