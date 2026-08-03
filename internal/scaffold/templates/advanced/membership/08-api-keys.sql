@@ -295,30 +295,39 @@ DECLARE
     v_computed_hash text;
     v_key membership.api_key%ROWTYPE;
 BEGIN
-    -- Parse from the RIGHT, not by splitting on '_'. The prefix is operator-chosen
-    -- and a natural one contains an underscore ('acme_prod'), which the old
-    -- split-into-exactly-3-parts parse rejected as malformed — so create_api_key
-    -- issued keys that validate_api_key would never accept, silently and
-    -- permanently breaking auth for every key under that prefix.
+    -- Strip the prefix literally, then parse what remains. Do not match the
+    -- prefix with a pattern: it is operator-chosen and a natural one contains an
+    -- underscore ('acme_prod'), which a split-on-'_' parse rejected as malformed
+    -- — create_api_key issued keys validate_api_key would never accept, silently
+    -- and permanently breaking auth for every key under that prefix.
     --
-    -- The two trailing segments are fixed width by construction
-    -- (generate_api_key_material: 6 random bytes -> 12 hex, 32 -> 64 hex), so
-    -- anchoring on them makes the prefix whatever precedes the last two, however
-    -- many underscores it contains. Greedy .* takes the longest prefix, so the
-    -- final 12-hex/64-hex pair is always the one used.
+    -- key_id is matched at the width 01-schema.sql declares (>= 6), NOT at the
+    -- width generate_api_key_material happens to emit today (12). key_id width is
+    -- a property of when a key was issued; pinning the parse to the current
+    -- generator strands every key already in the table. The secret stays pinned
+    -- at exactly 64 hex so a key with a tampered secret reaches the hash
+    -- comparison instead of dying at the parse.
     IF p_raw_key IS NULL THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
         RETURN;
     END IF;
 
-    v_parts := regexp_match(p_raw_key, '^(.*)_([0-9a-f]{12})_([0-9a-f]{64})$');
-
-    IF v_parts IS NULL OR v_parts[1] IS DISTINCT FROM v_prefix THEN
+    IF left(p_raw_key, length(v_prefix) + 1) IS DISTINCT FROM v_prefix || '_' THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
         RETURN;
     END IF;
 
-    v_key_id := v_parts[2];
+    v_parts := regexp_match(
+        substr(p_raw_key, length(v_prefix) + 2),
+        '^([0-9a-f]{6,})_([0-9a-f]{64})$'
+    );
+
+    IF v_parts IS NULL THEN
+        RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
+        RETURN;
+    END IF;
+
+    v_key_id := v_parts[1];
 
     SELECT c_key.* INTO v_key
     FROM membership.api_key c_key

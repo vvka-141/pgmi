@@ -232,9 +232,7 @@ BEGIN
         RAISE EXCEPTION 'Wrong prefix should report malformed, got: %', v_validation.reason;
     END IF;
 
-    -- Structurally valid (12-hex key_id, 64-hex secret) but no such key: that is
-    -- "unknown", not "malformed". A key whose segments are the wrong width never
-    -- came from generate_api_key_material and is malformed — asserted below.
+    -- Structurally valid but no such key: that is "unknown", not "malformed".
     SELECT * INTO v_validation FROM membership.validate_api_key(
         membership.api_key_prefix() || '_aaaaaaaaaaaa_' || repeat('b', 64)
     );
@@ -242,11 +240,14 @@ BEGIN
         RAISE EXCEPTION 'Unknown key_id should report unknown key, got: %', v_validation.reason;
     END IF;
 
+    -- Malformed because the SECRET is neither hex nor 64 wide. key_id width is
+    -- deliberately not what makes this malformed — see the backward-compatibility
+    -- test below.
     SELECT * INTO v_validation FROM membership.validate_api_key(
         membership.api_key_prefix() || '_aaaaaaaa_notarealsecret'
     );
     IF v_validation.is_valid OR v_validation.reason IS DISTINCT FROM 'malformed key' THEN
-        RAISE EXCEPTION 'Wrong-width segments should report malformed, got: %', v_validation.reason;
+        RAISE EXCEPTION 'Non-hex secret should report malformed, got: %', v_validation.reason;
     END IF;
 
     -- Wrong secret, RIGHT shape: flip the last hex digit. This is the case that
@@ -272,6 +273,62 @@ BEGIN
     RAISE DEBUG '  ✓ validate rejects NULL/malformed/unknown/tampered keys';
 
     RAISE DEBUG '✓ API key validation edge-case tests passed';
+END $$;
+
+-- ============================================================================
+-- Test: a key already in the table validates, whatever width its key_id is
+-- key_id width is a property of when a key was issued, not of what
+-- generate_api_key_material emits today. Every other test here mints its key
+-- through create_api_key, so the suite alone only ever exercises the current
+-- generator width — a parse pinned to that width rejects every previously
+-- issued key and stays green. Seed the way pre-existing rows got there:
+-- direct INSERT, at widths the CHECK constraint allows.
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_alice_id uuid := current_setting('test.alice_id')::uuid;
+    v_org_id uuid;
+    v_validation record;
+    v_case record;
+    v_full_key text;
+BEGIN
+    RAISE DEBUG '→ Testing already-issued keys of every legal key_id width';
+
+    SELECT object_id INTO STRICT v_org_id
+    FROM membership.organization
+    WHERE owner_user_id = v_alice_id AND is_personal = true;
+
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('pgmi',      'abc123'),        -- the minimum the CHECK constraint allows
+            ('pgmi',      '8b178281'),      -- a width no generator ever emitted
+            ('pgmi',      'aabbccddeeff'),  -- the width issued today
+            ('acme_prod', 'deadbeef')       -- legal width under an underscore-bearing prefix
+        ) AS t(prefix, key_id)
+    LOOP
+        PERFORM set_config('pgmi.api_key_prefix', v_case.prefix, true);
+        v_full_key := v_case.prefix || '_' || v_case.key_id || '_' || repeat('a', 64);
+
+        INSERT INTO membership.api_key (organization_id, user_id, key_id, key_hash, display_name)
+        VALUES (v_org_id, v_alice_id, v_case.key_id,
+                encode(extensions.digest(v_full_key, 'sha256'), 'hex'),
+                'seeded ' || v_case.key_id);
+
+        SELECT * INTO v_validation FROM membership.validate_api_key(v_full_key);
+        IF v_validation.is_valid IS DISTINCT FROM true THEN
+            RAISE EXCEPTION 'an already-issued key under prefix "%" with a %-char key_id must validate; got: %',
+                v_case.prefix, length(v_case.key_id), v_validation.reason;
+        END IF;
+        IF v_validation.key_id IS DISTINCT FROM v_case.key_id THEN
+            RAISE EXCEPTION 'prefix "%": validation resolved key_id "%", want "%"',
+                v_case.prefix, v_validation.key_id, v_case.key_id;
+        END IF;
+    END LOOP;
+
+    PERFORM set_config('pgmi.api_key_prefix', '', true);
+    RAISE DEBUG '  ✓ keys of every legal key_id width still validate';
+    RAISE DEBUG '✓ API key backward-compatibility tests passed';
 END $$;
 
 -- ============================================================================
