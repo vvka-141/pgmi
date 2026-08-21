@@ -3,7 +3,7 @@ title: "Your ALTER TABLE Is Fast. The Queue Behind It Is Not."
 date: 2026-08-01
 author: "Alexey Evlampiev"
 description: "How a PostgreSQL lock queue turns a six-millisecond schema change into a sixteen-second outage, and the two moves that bound the damage."
-weight: 1
+weight: 2
 ---
 
 # Your ALTER TABLE Is Fast. The Queue Behind It Is Not.
