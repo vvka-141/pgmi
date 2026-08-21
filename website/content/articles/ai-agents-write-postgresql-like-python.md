@@ -272,7 +272,7 @@ AI agents don't write bad SQL at random. They port the idioms of exception-drive
 ## Sources
 
 - PostgreSQL documentation: [Trapping Errors (PL/pgSQL control structures)](https://www.postgresql.org/docs/current/plpgsql-control-structures.html) — exception blocks and their cost; [Data Validity Checking Functions](https://www.postgresql.org/docs/current/functions-info.html) — `pg_input_is_valid`, `pg_input_error_info`; [Subtransactions](https://www.postgresql.org/docs/current/subxacts.html); [Serialization Failure Handling](https://www.postgresql.org/docs/current/mvcc-serialization-failure-handling.html)
-- GitLab: [Why we spent the last month eliminating PostgreSQL subtransactions](https://about.gitlab.com/blog/2021/09/29/why-we-spent-the-last-month-eliminating-postgresql-subtransactions/)
+- GitLab: [Why we spent the last month eliminating PostgreSQL subtransactions](https://about.gitlab.com/blog/why-we-spent-the-last-month-eliminating-postgresql-subtransactions/)
 - postgres.ai: [PostgreSQL Subtransactions Considered Harmful](https://postgres.ai/blog/20210831-postgresql-subtransactions-considered-harmful)
 - Cybertec: [Subtransactions and performance in PostgreSQL](https://www.cybertec-postgresql.com/en/subtransactions-and-performance-in-postgresql/)
 - IETF: [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html); [Zalando RESTful API Guidelines](https://github.com/zalando/restful-api-guidelines/blob/main/chapters/http-status-codes-and-errors.adoc); [Spring Framework error responses](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-rest-exceptions.html)
