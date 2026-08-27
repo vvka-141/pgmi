@@ -392,6 +392,12 @@ reviewable program logic rather than hidden runner behavior or a convention
 reconstructed by separate tooling. That is both the freedom and the obligation
 of the model.
 
+Questions three and four are placement questions. An invariant checked by the
+runner and the same invariant checked by the deployment are not the same
+guarantee: only one of them is evaluated where the state actually changes.
+[A Decision Belongs Where Its Authority Lives](https://alexeyevlampiev.github.io/locality-of-authority/)
+states that argument in its general form.
+
 The runnable project behind every transcript lives at
 [`examples/execution-order-policy`](https://github.com/vvka-141/pgmi/tree/main/examples/execution-order-policy)
 — five source scripts plus a `deploy.sql`, two break-it variants, and the CI

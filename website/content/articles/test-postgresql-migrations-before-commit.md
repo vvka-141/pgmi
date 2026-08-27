@@ -342,6 +342,11 @@ transaction, and "the migration succeeded" stops meaning "the statements
 didn't error" and starts meaning "the database provably reached the state we
 intended — or is untouched."
 
+An external tool cannot make that same statement about itself. Its record of
+what it applied is maintained apart from the state it describes, so the two can
+diverge — worked through in
+[Why We Are Still Getting Database Deployments Wrong](https://alexeyevlampiev.github.io/posts/database-deployments-wrong-2026/).
+
 Start with one assertion after your next risky backfill. The rest of the
 pattern grows from there.
 

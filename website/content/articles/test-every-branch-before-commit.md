@@ -595,6 +595,11 @@ remaining test state before commit. Savepoints make that walk affordable — a t
 to a shared branch point instead of rebuilding the path to it — and PostgreSQL's
 transactional DDL lets the walk gate the deployment that ships it.
 
+That gate is a placement decision as much as a testing one: the evidence and the commit
+it authorises hold in one transaction, which is what makes the result a guarantee rather
+than a report. [A Decision Belongs Where Its Authority Lives](https://alexeyevlampiev.github.io/locality-of-authority/)
+argues the general case.
+
 Start small. Pick one lifecycle your database already implements — an order, a device, a
 job, an approval, a subscription, a claim — with three or four meaningful states. Do not redesign your testing stack. Represent just that lifecycle as
 directories, put each transition in a `_setup.sql`, and see how much repeated

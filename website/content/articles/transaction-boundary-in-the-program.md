@@ -370,6 +370,11 @@ commit points visible, the partial states designed before production discovers
 them. Not risk removed by decree — risk you can read, and therefore risk you
 can choose.
 
+Where that boundary is written down is a placement question, and its general
+form — a decision belongs where authority over the state it changes already
+lives — is argued in
+[A Decision Belongs Where Its Authority Lives](https://alexeyevlampiev.github.io/locality-of-authority/).
+
 The phased deployment, the mid-tail failure and the convergent recovery are all
 in
 [`examples/lock-safe-deploy`](https://github.com/vvka-141/pgmi/tree/main/examples/lock-safe-deploy),

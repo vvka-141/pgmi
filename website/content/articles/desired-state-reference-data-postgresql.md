@@ -576,6 +576,11 @@ that refuses to commit a catalog your own invariants reject — all in one
 transaction. Delivery into the session is the remaining integration choice in
 this pattern; the semantics are yours either way.
 
+Reference data mastered outside the database reaches the same shape from the
+other side: it becomes usable only once it has been accepted, versioned, and
+validated inside the system that decides against it — the argument of
+[The Lakehouse Publishes. Applications Decide Locally.](https://alexeyevlampiev.github.io/posts/lakehouse-publishes-applications-decide-locally/)
+
 Seed data as data. Convergence over insertion. Commit only what your invariants
 accept.
 
