@@ -3,7 +3,7 @@ title: "Scenario-Tree Testing in PostgreSQL: Every Authored Branch, Shared Histo
 date: 2026-08-25
 author: "Alexey Evlampiev"
 description: "Express the branching scenarios of your business logic as a directory tree; walk it with savepoints so each branch inherits its history instead of rebuilding it; and let the walk decide whether your deployment commits."
-weight: 1
+weight: 2
 ---
 # Scenario-Tree Testing in PostgreSQL: Every Authored Branch, Shared History, Before COMMIT
 
