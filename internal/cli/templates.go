@@ -31,6 +31,8 @@ var templatesCmd = &cobra.Command{
 
   pgmi templates list
   pgmi templates describe basic`,
+	Args: usageArgs(cobra.NoArgs),
+	RunE: showHelp,
 }
 
 var templatesListCmd = &cobra.Command{

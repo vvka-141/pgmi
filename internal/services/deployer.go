@@ -199,6 +199,8 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	connConfig.AzureTenantID = config.AzureTenantID
 	connConfig.AzureClientID = config.AzureClientID
 	connConfig.AzureClientSecret = config.AzureClientSecret
+	connConfig.AWSRegion = config.AWSRegion
+	connConfig.GoogleInstance = config.GoogleInstance
 
 	return connConfig, nil
 }
@@ -260,6 +262,13 @@ func (s *DeploymentService) executeDeploySQL(
 		}
 	}
 	s.lastResult.UnitsCommitted = len(units)
+
+	// Session cleanup rolls back whatever is still open, so a script ending
+	// inside BEGIN ... without its COMMIT applied nothing from that block.
+	if status := conn.Conn().PgConn().TxStatus(); status != 'I' {
+		s.lastResult.UnitsCommitted = len(units) - 1
+		return result.MacroCount, fmt.Errorf("%w: deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT", pgmi.ErrExecutionFailed)
+	}
 
 	return result.MacroCount, nil
 }

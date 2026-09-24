@@ -12,7 +12,7 @@ Demonstrates a custom test callback that produces [TAP 14](https://testanything.
 
 ```bash
 pgmi deploy . -d tap_demo --force \
-  -c "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
+  --connection "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
 ```
 
 ## Output

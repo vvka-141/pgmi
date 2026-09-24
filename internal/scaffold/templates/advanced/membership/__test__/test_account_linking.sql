@@ -1,5 +1,5 @@
 -- ============================================================================
--- Test: Account linking via verified email
+-- Test: Account linking only via an email verified on both sides
 -- ============================================================================
 
 DO $$
@@ -9,14 +9,15 @@ DECLARE
     v_identity_count BIGINT;
     v_unverified_id UUID;
     v_unverified_user_id UUID;
+    v_case record;
 BEGIN
     RAISE DEBUG '→ Testing account linking';
 
-    v_linked_id := membership.upsert_user('azure-ad', 'alice-azure-001', 'alice@example.com', 'Alice Azure', false);
+    v_linked_id := membership.upsert_user('azure-ad', 'alice-azure-001', 'alice@example.com', 'Alice Azure', true);
     IF v_linked_id IS DISTINCT FROM v_alice_id THEN
-        RAISE EXCEPTION 'TEST FAILED: auto-link should return existing user %, got %', v_alice_id, v_linked_id;
+        RAISE EXCEPTION 'TEST FAILED: verified email on both sides should link to existing user %, got %', v_alice_id, v_linked_id;
     END IF;
-    RAISE DEBUG '  ✓ Auto-linked azure-ad identity to existing verified user';
+    RAISE DEBUG '  ✓ Linked azure-ad identity: email verified by both sides';
 
     SELECT count(*) INTO v_identity_count
     FROM membership.user_identity WHERE user_object_id = v_alice_id;
@@ -55,12 +56,28 @@ BEGIN
             jsonb_array_length(v_claims.identities), array_length(v_claims.member_org_ids, 1);
     END;
 
+    -- Linking on an email that either side has not verified is an account
+    -- takeover: whoever can present the address signs in as its owner.
     v_unverified_id := membership.upsert_user('local', 'unverified-001', 'unverified@example.com', 'Unverified', false);
-    v_unverified_user_id := membership.upsert_user('google', 'unverified-google', 'unverified@example.com', 'Unverified Google', false);
-    IF v_unverified_user_id IS DISTINCT FROM v_unverified_id THEN
-        RAISE EXCEPTION 'TEST FAILED: same email should link to existing user';
-    END IF;
-    RAISE DEBUG '  ✓ Auto-links to existing user with same email (even unverified)';
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('github',  'attacker-1', 'alice@example.com',      false, 'unverified identity onto a verified account'),
+            ('github',  'attacker-2', 'unverified@example.com', true,  'verified identity onto an unverified account'),
+            ('google',  'attacker-3', 'unverified@example.com', false, 'unverified identity onto an unverified account')
+        ) AS t(provider, subject, email, verified, label)
+    LOOP
+        BEGIN
+            v_unverified_user_id := membership.upsert_user(v_case.provider, v_case.subject, v_case.email, NULL, v_case.verified);
+            RAISE EXCEPTION 'TEST FAILED: linked % (got user %)', v_case.label, v_unverified_user_id;
+        EXCEPTION WHEN SQLSTATE 'P0409' THEN
+            NULL;
+        END;
+        IF EXISTS (SELECT 1 FROM membership.user_identity
+                   WHERE idp_provider = v_case.provider AND idp_subject_id = v_case.subject) THEN
+            RAISE EXCEPTION 'TEST FAILED: refused link still stored identity %|%', v_case.provider, v_case.subject;
+        END IF;
+    END LOOP;
+    RAISE DEBUG '  ✓ Refuses to link unless the email is verified on both sides';
 
     RAISE DEBUG '✓ Account linking tests passed';
 END $$;

@@ -11,6 +11,9 @@
     $env:PGMI_VERSION = "v0.10.0"; irm ... | iex
 #>
 
+# A script block, so `irm | iex` leaves no settings, variables or functions
+# behind in the caller's session.
+& {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -20,15 +23,13 @@ $InstallDir = if ($env:PGMI_INSTALL_DIR) { $env:PGMI_INSTALL_DIR } else { Join-P
 function Write-Status { param([string]$Msg) Write-Host "[*] $Msg" -ForegroundColor Cyan }
 function Write-Ok     { param([string]$Msg) Write-Host "[+] $Msg" -ForegroundColor Green }
 function Write-Warn   { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
-function Write-Err    { param([string]$Msg) Write-Host "[-] $Msg" -ForegroundColor Red }
 
 function Get-Architecture {
     switch ($env:PROCESSOR_ARCHITECTURE) {
         "AMD64" { return "amd64" }
         "ARM64" { return "arm64" }
         default {
-            Write-Err "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
-            exit 1
+            throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
         }
     }
 }
@@ -42,12 +43,12 @@ function Get-Version {
 
     Write-Status "Fetching latest release..."
     try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing
+        $headers = @{}
+        if ($env:GITHUB_TOKEN) { $headers.Authorization = "Bearer $env:GITHUB_TOKEN" }
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $headers -UseBasicParsing
         return $release.tag_name
     } catch {
-        Write-Err "Failed to fetch latest version from GitHub API."
-        Write-Err $_.Exception.Message
-        exit 1
+        throw "Failed to fetch the latest version from the GitHub API ($($_.Exception.Message)). If you are rate-limited, set GITHUB_TOKEN or pin a version with PGMI_VERSION."
     }
 }
 
@@ -82,10 +83,9 @@ function Install-Pgmi {
 
         Write-Status "Verifying SHA256 checksum..."
         $checksumContent = Get-Content $checksumsPath
-        $expectedLine = $checksumContent | Where-Object { $_ -match $fileName }
+        $expectedLine = $checksumContent | Where-Object { ($_ -split '\s+')[1] -eq $fileName }
         if (-not $expectedLine) {
-            Write-Err "Checksum entry not found for $fileName in checksums.txt"
-            exit 1
+            throw "Checksum entry not found for $fileName in checksums.txt"
         }
         $expectedHash = ($expectedLine -split '\s+')[0]
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -99,10 +99,7 @@ function Install-Pgmi {
         }
 
         if ($actualHash -ne $expectedHash) {
-            Write-Err "Checksum mismatch!"
-            Write-Err "  Expected: $expectedHash"
-            Write-Err "  Actual:   $actualHash"
-            exit 1
+            throw "Checksum mismatch for ${fileName}: expected $expectedHash, got $actualHash"
         }
         Write-Ok "Checksum verified."
 
@@ -117,9 +114,10 @@ function Install-Pgmi {
         Write-Ok "Installed pgmi.exe to $InstallDir"
 
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if ($userPath -notlike "*$InstallDir*") {
+        $pathEntries = if ($userPath) { $userPath -split ';' } else { @() }
+        if ($pathEntries -notcontains $InstallDir) {
             Write-Status "Adding $InstallDir to user PATH..."
-            [Environment]::SetEnvironmentVariable("Path", "$userPath;$InstallDir", "User")
+            [Environment]::SetEnvironmentVariable("Path", (@($pathEntries | Where-Object { $_ }) + $InstallDir) -join ';', "User")
             $env:Path = "$InstallDir;$env:Path"
             Write-Ok "PATH updated."
         } else {
@@ -145,3 +143,4 @@ function Install-Pgmi {
 }
 
 Install-Pgmi
+}

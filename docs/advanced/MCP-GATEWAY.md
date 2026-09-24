@@ -17,7 +17,7 @@ weight: 40
 ```bash
 pgmi init --template advanced myproject
 cd myproject
-pgmi deploy --connection "postgresql://user:pass@localhost:5432/mydb"
+pgmi deploy . --connection "postgresql://user:pass@localhost:5432/postgres" -d mydb
 ```
 
 ### 2. Start the HTTP Gateway

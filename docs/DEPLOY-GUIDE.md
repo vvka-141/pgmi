@@ -460,6 +460,10 @@ Two consequences to internalize:
   *inside* an explicit tail `BEGIN ... COMMIT` rolls back that transaction
   only). Make tail statements idempotent so a re-run converges.
 
+A script that ends inside an open `BEGIN` — a missing final `COMMIT` — applies
+nothing from that transaction: pgmi rolls it back and fails the deploy with
+exit 13 rather than report a success that did not land.
+
 One more honest note: the advisory lock the advanced template takes with
 `pg_advisory_xact_lock` is transaction-scoped — it ends at the head's
 `COMMIT`. During the tail, the only concurrency guard is pgmi's own

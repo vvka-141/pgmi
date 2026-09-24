@@ -34,9 +34,8 @@ func TestTemplateTransactionIsolation(t *testing.T) {
 		Overwrite:        true,
 		Force:            true,
 		Parameters: map[string]string{
-			"database_admin_password":    "TestPassword123!",
-			"database_customer_password": "CustomerPassword123!",
-			"env":                        "test",
+			"database_admin_password": "TestPassword123!",
+			"env":                     "test",
 		},
 		Verbose: testing.Verbose(),
 	})

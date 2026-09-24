@@ -1,7 +1,7 @@
 # pgmi
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
@@ -20,10 +20,18 @@ Migration frameworks provide their own ordering, history, and transaction model.
 
 Install pgmi first using one of the commands in [Install](#install). Then, if
 nothing is running, start a disposable PostgreSQL in Docker (already have one?
-point `PGMI_CONNECTION_STRING` at it and skip the first line):
+skip this block and point `PGMI_CONNECTION_STRING` at it):
 
 ```bash
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+docker exec pgmi-demo timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
+```
+
+If either command prints an error — say, port 5434 is already in use — stop
+here: run `docker rm pgmi-demo` and pick another port, in both `-p` and the
+connection string below. Otherwise the deploy reaches whatever server holds it.
+
+```bash
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 
@@ -134,6 +142,10 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 **macOS / Linux:**
 ```bash
 curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
+```
+It installs to `/usr/local/bin`. Without root or sudo, choose a directory you own:
+```bash
+curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
 **Windows (PowerShell):**

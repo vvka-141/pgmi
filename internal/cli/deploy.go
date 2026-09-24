@@ -241,6 +241,8 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *co
 		AzureTenantID:       connConfig.AzureTenantID,
 		AzureClientID:       connConfig.AzureClientID,
 		AzureClientSecret:   connConfig.AzureClientSecret,
+		AWSRegion:           connConfig.AWSRegion,
+		GoogleInstance:      connConfig.GoogleInstance,
 	}, nil
 }
 

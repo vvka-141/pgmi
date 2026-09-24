@@ -42,7 +42,7 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 
 You need:
 
-- Go 1.25.12 or the version declared by `go.mod`
+- Go 1.26 or the version declared by `go.mod`
 - Docker, or `PGMI_TEST_CONN` pointing to a PostgreSQL test database, for
   integration tests
 - golangci-lint 1.64.8 for `make lint`

@@ -25,6 +25,7 @@ var aiCmd = &cobra.Command{
 
 Pull commands (overview, skills, skill, client) print to stdout for piping.
 setup and check write files and report status on stderr.`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: runAIOverview,
 }
 

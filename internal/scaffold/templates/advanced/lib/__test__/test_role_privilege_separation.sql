@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Test: Role privilege separation
 --
--- The customer role is the least-privileged login role. It must not be able to
+-- The customer role is the least-privileged role, and NOLOGIN. It must not be able to
 -- reach the gateway entrypoints (SECURITY DEFINER, identity taken from an
 -- unverified header) nor the registration functions (CREATE FUNCTION from a
 -- caller-supplied body, executed as the owner). Either one is a full
@@ -34,6 +34,15 @@ BEGIN
     END IF;
 
     RAISE NOTICE '  + customer role inherits neither api nor owner';
+
+    -- Identity is auth.idp_subject, a custom setting any session may set: a
+    -- session logged in as customer could claim to be any user.
+    IF (SELECT rolcanlogin FROM pg_roles WHERE rolname = v_customer_role) IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'customer role % can log in — any session can set auth.idp_subject and act as any user',
+            v_customer_role;
+    END IF;
+
+    RAISE NOTICE '  + customer role cannot log in';
 
     -- Registration is deploy-time DDL: only the admin role may call it.
     FOREACH v_registration_fn IN ARRAY ARRAY[

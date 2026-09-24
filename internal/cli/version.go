@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/contract"
@@ -22,6 +23,7 @@ var versionCmd = &cobra.Command{
 
 The first line is greppable: ` + "`pgmi version | head -1`" + ` returns just the
 version string (psql --version convention).`,
+	Args: usageArgs(cobra.NoArgs),
 	Run: func(cmd *cobra.Command, args []string) {
 		printVersionInfo()
 	},
@@ -62,7 +64,7 @@ func resolveVersionInfo() (v, c, d string) {
 	}
 
 	if v == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		v = info.Main.Version
+		v = strings.TrimPrefix(info.Main.Version, "v")
 	}
 
 	settings := make(map[string]string)

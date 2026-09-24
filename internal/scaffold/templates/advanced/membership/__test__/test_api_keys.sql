@@ -302,7 +302,8 @@ BEGIN
     FOR v_case IN
         SELECT * FROM (VALUES
             ('pgmi',      'abc123'),        -- the minimum the CHECK constraint allows
-            ('pgmi',      '8b178281'),      -- a width no generator ever emitted
+            ('pgmi',      '8b178281'),      -- 8 hex, seeded by hand
+            ('pgmi',      'aB3xK9qZ'),      -- v0.10.0's generator: 8 mixed-case alphanumerics
             ('pgmi',      'aabbccddeeff'),  -- the width issued today
             ('acme_prod', 'deadbeef')       -- legal width under an underscore-bearing prefix
         ) AS t(prefix, key_id)

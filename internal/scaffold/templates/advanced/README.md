@@ -163,7 +163,6 @@ generated values; the names below are placeholders.
 umask 077
 cat > secrets.env <<'EOF'
 database_admin_password=CHANGE_ME
-database_customer_password=CHANGE_ME
 EOF
 
 pgmi deploy . --database myapp_dev --params-file secrets.env
@@ -201,7 +200,13 @@ SELECT api.create_or_replace_rest_handler(
         'uri', '^/my-endpoint$',
         'httpMethod', '^GET$',
         'name', 'my_endpoint',
-        'description', 'My custom endpoint'
+        'description', 'My custom endpoint',
+        'requiresAuth', false,
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object('message', jsonb_build_object('type', 'string')),
+            'required', jsonb_build_array('message')
+        )
     ),
     $body$
 BEGIN
@@ -228,9 +233,9 @@ DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    v_response := api.rest_invoke('GET', '/my-endpoint', NULL, NULL::bytea);
+    v_response := api.rest_invoke('GET', '/my-endpoint', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code != 200 THEN
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Expected 200, got %', (v_response).status_code;
     END IF;
 
@@ -370,11 +375,10 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`) an
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
 | `database_admin_password` | - | **Yes** | Admin role password |
-| `database_customer_password` | - | **Yes** | Customer role password |
 | `database_owner_role` | `<dbname>_owner` | No | Owner role (NOLOGIN) |
 | `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN, full access) |
 | `database_api_role` | `<dbname>_api` | No | API group role (NOLOGIN, permission bundle) |
-| `database_customer_role` | `<dbname>_customer` | No | Customer role (LOGIN, RLS-restricted) |
+| `database_customer_role` | `<dbname>_customer` | No | Customer role (NOLOGIN, RLS-restricted) |
 | `env` | `development` | No | Environment name |
 
 Pass the required password parameters via `--params-file` (or a CI/CD-generated
@@ -393,10 +397,16 @@ database_admin_role (LOGIN)
   └── inherits: owner + api
   └── full database access
 
-database_customer_role (LOGIN)
-  └── inherits: api
+database_customer_role (NOLOGIN)
+  └── inherits: nothing (holds direct, RLS-scoped grants)
   └── RLS-restricted access
 ```
+
+The customer role cannot log in. Row-level security identifies the caller by
+`auth.idp_subject`, a session setting any session can set, so only the gateway
+(which sets it from the authenticated request) may act for a user. Grant the
+customer role to your own login role only for a connection you trust to set
+that identity.
 
 ## Schema Design
 

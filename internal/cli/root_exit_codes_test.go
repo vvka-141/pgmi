@@ -79,6 +79,12 @@ func TestRootCmd_UsageErrorsExitTwo(t *testing.T) {
 		{"unknown flag", []string{"deploy", ".", "--nope"}},
 		{"too many args", []string{"deploy", "a", "b"}},
 		{"missing required arg", []string{"deploy"}},
+		// A typo under a command group used to print help and exit 0, so a CI
+		// step like `pgmi metadata validte .` passed green having checked nothing.
+		{"mistyped metadata subcommand", []string{"metadata", "validte", "."}},
+		{"mistyped templates subcommand", []string{"templates", "nosuch"}},
+		{"mistyped ai subcommand", []string{"ai", "chek"}},
+		{"extra args to version", []string{"version", "extra"}},
 	}
 
 	for _, tt := range tests {

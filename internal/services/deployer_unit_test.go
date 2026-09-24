@@ -772,3 +772,28 @@ func TestDeploy_CreatingAMissingDatabaseUsesServerDefaults(t *testing.T) {
 		t.Errorf("a brand new database was given explicit settings: %+v", *dbMgr.createdWith)
 	}
 }
+
+// The CLI flattens the resolved connection into a string and the deployer
+// parses it back, so every auth field the string cannot carry has to travel
+// on DeploymentConfig. AWS region and Google instance did not: `deploy --aws`
+// and `deploy --google` failed with "requires region/instance" whatever was
+// passed.
+func TestValidateAndParseConfig_CarriesCloudAuthSettings(t *testing.T) {
+	svc := newTestService(nil, nil, nil, nil)
+
+	cfg := validConfig()
+	cfg.AuthMethod = pgmi.AuthMethodAWSIAM
+	cfg.AWSRegion = "us-east-1"
+	cfg.GoogleInstance = "proj:region:inst"
+
+	connConfig, err := svc.validateAndParseConfig(cfg)
+	if err != nil {
+		t.Fatalf("validateAndParseConfig: %v", err)
+	}
+	if connConfig.AWSRegion != "us-east-1" {
+		t.Errorf("AWSRegion = %q, want %q", connConfig.AWSRegion, "us-east-1")
+	}
+	if connConfig.GoogleInstance != "proj:region:inst" {
+		t.Errorf("GoogleInstance = %q, want %q", connConfig.GoogleInstance, "proj:region:inst")
+	}
+}

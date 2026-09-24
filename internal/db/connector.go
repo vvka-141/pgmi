@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -223,6 +224,18 @@ func wrapConnectionError(err error, host string, port int, database, username st
 
 	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out"):
 		return newConnError(err, "connection timed out to %s\ncheck network reachability and server load; raise --timeout if needed", addr)
+
+	// pgx joins every attempt's error, so a certificate failure on one address
+	// must win over an EOF on another.
+	case strings.Contains(errStr, "x509") || strings.Contains(errStr, "certificate"):
+		return newConnError(err, "SSL/TLS connection error: %v\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert", err)
+
+	// Before the SSL case: under sslmode=prefer a socket closed mid-handshake
+	// reads "tls error: EOF", yet TLS is not the cause. The wording keeps
+	// "server closed the connection", which the retry classifier matches.
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		strings.Contains(errStr, "error: eof") || strings.Contains(errStr, "unexpected eof"):
+		return newConnError(err, "%s: server closed the connection\nit may still be starting up; check: pg_isready -h %s -p %d", addr, host, port)
 
 	case strings.Contains(errStr, "ssl") || strings.Contains(errStr, "tls"):
 		return newConnError(err, "SSL/TLS connection error: %v\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert", err)

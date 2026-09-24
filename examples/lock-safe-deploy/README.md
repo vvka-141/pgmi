@@ -17,7 +17,7 @@ Four phases, read top to bottom as they execute (`project/deploy.sql`):
    `INVALID` build without rebuilding a healthy index. The reap is the one step
    in the tail that takes `ACCESS EXCLUSIVE`: it carries phase 1's short
    `lock_timeout` and re-checks validity while holding the lock, because an
-   in-flight `CONCURRENTLY` in another session is `indisvalid` too.
+   in-flight `CONCURRENTLY` in another session is not yet `indisvalid` either.
 3. **Atomic backfill** — statements after the first `COMMIT` are not
    implicitly grouped, so a phase that must be atomic says so with its own
    `BEGIN ... COMMIT`.
@@ -38,7 +38,15 @@ Needs a PostgreSQL server (any recent version; a throwaway container works):
 
 ```bash
 docker run -d --name pgmi-example -e POSTGRES_PASSWORD=postgres -p 5440:5432 postgres:16
+docker exec pgmi-example timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
+```
+
+If either command prints an error (say, the port is already in use), stop: run
+`docker rm pgmi-example` and pick another port, in both `-p` and the connection string.
+
+```bash
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5440/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5440/postgres"
 
 cd project
 pgmi deploy . -d lock_safe_demo --force

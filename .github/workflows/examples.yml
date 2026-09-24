@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -76,7 +76,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -141,7 +141,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -185,7 +185,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -288,7 +288,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -306,3 +306,19 @@ jobs:
       - name: Redeploy — idempotent, TAP output reproduced
         working-directory: examples/tap-reporter
         run: ../../pgmi deploy . -d tap_demo --force
+
+  docs-walkthrough:
+    name: Docs — README and Quickstart walkthrough
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Run the documented first-run path verbatim
+        run: scripts/verify-walkthrough.sh ./pgmi

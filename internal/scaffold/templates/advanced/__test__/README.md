@@ -28,7 +28,7 @@ Tests use pure PostgreSQL - no framework required:
 DO $$
 BEGIN
     -- Test your handler
-    IF (api.rest_invoke('GET', '/my-endpoint', NULL, NULL::bytea)).status_code != 200 THEN
+    IF (api.rest_invoke('GET', '/my-endpoint', ''::extensions.hstore, NULL::bytea)).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'Expected 200 OK';
     END IF;
 

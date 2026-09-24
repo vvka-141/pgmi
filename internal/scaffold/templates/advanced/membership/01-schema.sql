@@ -366,7 +366,7 @@ COMMENT ON TABLE membership.api_key IS
     'API keys for machine-to-machine authentication. The full key is shown only at creation; only its SHA-256 hash is persisted.';
 
 COMMENT ON COLUMN membership.api_key.key_id IS
-    'Short hex identifier stored unhashed for O(1) lookup. Part of the full key: {prefix}_{key_id}_{secret}. Currently issued at 12 hex chars; validate_api_key accepts any width the CHECK constraint allows, so keys issued at an older width keep working.';
+    'Short identifier stored unhashed for O(1) lookup. Part of the full key: {prefix}_{key_id}_{secret}. Currently issued as 12 hex chars; validate_api_key accepts any key_id of 6+ characters without an underscore, so keys issued by older generators keep working.';
 
 COMMENT ON COLUMN membership.api_key.key_hash IS
     'SHA-256 hex of the full API key.';

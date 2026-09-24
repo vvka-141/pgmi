@@ -223,6 +223,42 @@ $body$
 END $$;
 
 
+-- List and create on one path is the most basic REST shape: two routes whose
+-- regexes catch each other's path but whose methods never intersect. The
+-- deploy-time check below must accept them, as registration already does.
+DO $$
+BEGIN
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-3003-4000-8000-000000000001',
+            'uri', '^/method-split(\?.*)?$',
+            'httpMethod', '^GET$',
+            'name', 'method_split_list',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, '[]'::jsonb);
+END;
+$body$
+    );
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-3003-4000-8000-000000000002',
+            'uri', '^/method-split(\?.*)?$',
+            'httpMethod', '^POST$',
+            'name', 'method_split_create',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(201, '{}'::jsonb);
+END;
+$body$
+    );
+END $$;
+
+
 DO $$
 DECLARE
     v_overlap record;
@@ -237,7 +273,7 @@ BEGIN
     )
     INTO v_bad
     FROM (
-        SELECT r.route_name, r.address_regexp, r.handler_object_id,
+        SELECT r.route_name, r.address_regexp, r.handler_object_id, r.method_regexp,
                r.canonical_path AS opath
         FROM api.rest_route r
     ) r1
@@ -250,7 +286,12 @@ BEGIN
     ) paths(r1_path)
     WHERE r1.handler_object_id IS DISTINCT FROM r2.handler_object_id
       AND paths.r1_path IS NOT NULL
-      AND paths.r1_path ~ r2.address_regexp;
+      AND paths.r1_path ~ r2.address_regexp
+      AND EXISTS (
+          SELECT 1
+          FROM unnest(ARRAY['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS']) AS m(method)
+          WHERE m.method ~ r1.method_regexp AND m.method ~ r2.method_regexp
+      );
 
     IF v_bad IS NOT NULL THEN
         RAISE EXCEPTION 'route overlap detected: %', v_bad;

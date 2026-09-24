@@ -23,9 +23,9 @@ Machine-to-machine authentication for agents, MCP clients, and CI pipelines call
 {prefix}_{key_id}_{secret}
 ```
 
-- **prefix** — short tenant-configurable label (default `pgmi`), sourced from the `pgmi.api_key_prefix` GUC. Set via `ALTER DATABASE mydb SET pgmi.api_key_prefix = 'myapp'` or `--param api_key_prefix=myapp` on deploy.
-- **key_id** — 8-char alphanumeric identifier stored unhashed for O(1) lookup. Never secret on its own.
-- **secret** — 32 bytes of random material encoded as URL-safe base64.
+- **prefix** — short tenant-configurable label (default `pgmi`), sourced from the `pgmi.api_key_prefix` GUC. Set it with `ALTER DATABASE mydb SET pgmi.api_key_prefix = 'myapp'`, or edit `membership.api_key_prefix()`.
+- **key_id** — identifier stored unhashed for O(1) lookup, issued as 12 hex characters. Never secret on its own. Keys issued by older generators (any 6+ characters without an underscore) still validate.
+- **secret** — 32 bytes of random material encoded as 64 hex characters.
 
 Only `SHA-256(full_key)` is persisted. The raw key is returned exactly once, at creation, and never recoverable.
 

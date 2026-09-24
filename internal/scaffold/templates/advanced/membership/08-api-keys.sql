@@ -24,9 +24,8 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API key authentication'; END $$;
 -- validate_api_key and generate_api_key_material both read from it, so changing
 -- it here changes both sides atomically.
 --
--- The prefix may contain underscores ('acme_prod'). validate_api_key parses from
--- the right, anchoring on the fixed-width key_id and secret, so the prefix is
--- simply whatever precedes them.
+-- The prefix may contain underscores ('acme_prod'); validate_api_key strips it
+-- literally rather than matching it with a pattern.
 
 CREATE OR REPLACE FUNCTION membership.api_key_prefix()
 RETURNS text
@@ -301,11 +300,12 @@ BEGIN
     -- — create_api_key issued keys validate_api_key would never accept, silently
     -- and permanently breaking auth for every key under that prefix.
     --
-    -- key_id is matched at the width 01-schema.sql declares (>= 6), NOT at the
-    -- width generate_api_key_material happens to emit today (12). key_id width is
-    -- a property of when a key was issued; pinning the parse to the current
-    -- generator strands every key already in the table. The secret stays pinned
-    -- at exactly 64 hex so a key with a tampered secret reaches the hash
+    -- key_id accepts anything 01-schema.sql allows (>= 6 characters) that the
+    -- earlier split-on-'_' parse accepted: no underscore, any alphabet. Its shape
+    -- is a property of when a key was issued -- 12 hex today, 8 mixed-case
+    -- alphanumerics from v0.10.0's generator -- so pinning the parse to the
+    -- current generator strands every key already in the table. The secret stays
+    -- pinned at exactly 64 hex so a key with a tampered secret reaches the hash
     -- comparison instead of dying at the parse.
     IF p_raw_key IS NULL THEN
         RETURN QUERY SELECT false, NULL::uuid, NULL::uuid, NULL::text, 'malformed key'::text;
@@ -319,7 +319,7 @@ BEGIN
 
     v_parts := regexp_match(
         substr(p_raw_key, length(v_prefix) + 2),
-        '^([0-9a-f]{6,})_([0-9a-f]{64})$'
+        '^([^_]{6,})_([0-9a-f]{64})$'
     );
 
     IF v_parts IS NULL THEN

@@ -5,6 +5,7 @@ set -e
 # Downloads the requested release, verifies its SHA256 against checksums.txt, then installs.
 # Usage: curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
 # Or with specific version: curl -sSL ... | PGMI_VERSION=v0.10.0 bash
+# Without root or sudo: curl -sSL ... | INSTALL_DIR="$HOME/.local/bin" bash
 # Windows: use scripts/install.ps1 instead (irm .../install.ps1 | iex)
 
 REPO="vvka-141/pgmi"
@@ -40,9 +41,14 @@ detect_platform() {
 
 get_latest_version() {
     if [ "$VERSION" = "latest" ]; then
-        VERSION=$(curl -sS "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+        local auth=()
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+        fi
+        VERSION=$(curl -sS "${auth[@]}" "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
         if [ -z "$VERSION" ]; then
-            echo "Error: Failed to fetch latest version"
+            echo "Error: Failed to fetch the latest version from the GitHub API"
+            echo "If you are rate-limited, set GITHUB_TOKEN or pin a version with PGMI_VERSION=vX.Y.Z"
             exit 1
         fi
     fi
@@ -87,12 +93,12 @@ install_pgmi() {
     local TMP_DIR=$(mktemp -d)
     trap "rm -rf $TMP_DIR" EXIT
 
-    if ! curl -sSL -o "${TMP_DIR}/${FILENAME}" "${BASE}/${FILENAME}"; then
+    if ! curl -fsSL -o "${TMP_DIR}/${FILENAME}" "${BASE}/${FILENAME}"; then
         echo "Error: Failed to download ${BASE}/${FILENAME}"
         exit 1
     fi
 
-    if ! curl -sSL -o "${TMP_DIR}/checksums.txt" "${BASE}/checksums.txt"; then
+    if ! curl -fsSL -o "${TMP_DIR}/checksums.txt" "${BASE}/checksums.txt"; then
         echo "Error: Failed to download ${BASE}/checksums.txt"
         exit 1
     fi
@@ -106,8 +112,13 @@ install_pgmi() {
 
     echo "Installing to ${INSTALL_DIR}..."
 
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || true
     if [ -w "$INSTALL_DIR" ]; then
         mv pgmi "${INSTALL_DIR}/"
+    elif ! command -v sudo >/dev/null 2>&1; then
+        echo "Error: ${INSTALL_DIR} is not writable and sudo is not available"
+        echo "Rerun with a directory you own, e.g.: INSTALL_DIR=\"\$HOME/.local/bin\" bash"
+        exit 1
     else
         echo "Note: Requires sudo to install to ${INSTALL_DIR}"
         sudo mv pgmi "${INSTALL_DIR}/"

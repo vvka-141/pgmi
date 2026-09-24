@@ -18,6 +18,13 @@ func usageArgs(fn cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
+// showHelp backs command groups: Cobra validates Args only on runnable
+// commands, so a group without RunE printed help for a mistyped subcommand and
+// exited 0.
+func showHelp(cmd *cobra.Command, _ []string) error {
+	return cmd.Help()
+}
+
 // RequireProjectPath validates that exactly one project_path argument is provided.
 func RequireProjectPath(cmd *cobra.Command, args []string) error {
 	if len(args) < 1 {

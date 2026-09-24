@@ -3,10 +3,12 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/vvka-141/pgmi/internal/retry"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -187,6 +189,32 @@ func TestWrapConnectionError(t *testing.T) {
 			wantContains: "SSL/TLS connection error",
 		},
 		{
+			name: "server closed the connection during TLS negotiation",
+			errMsg: "failed to connect to `user=postgres database=demo_db`:\n" +
+				"\t127.0.0.1:5441 (127.0.0.1): tls error: EOF\n" +
+				"\t127.0.0.1:5441 (127.0.0.1): failed to receive message: unexpected EOF",
+			host:         "127.0.0.1",
+			port:         5441,
+			database:     "demo_db",
+			wantContains: "127.0.0.1:5441: server closed the connection",
+		},
+		{
+			name:         "server closed the connection without TLS",
+			errMsg:       "127.0.0.1:5441 (127.0.0.1): failed to receive message: unexpected EOF",
+			host:         "127.0.0.1",
+			port:         5441,
+			database:     "demo_db",
+			wantContains: "127.0.0.1:5441: server closed the connection",
+		},
+		{
+			name:         "certificate failure stays an SSL problem",
+			errMsg:       "tls error: x509: certificate signed by unknown authority",
+			host:         "db.example.com",
+			port:         5432,
+			database:     "mydb",
+			wantContains: "SSL/TLS connection error",
+		},
+		{
 			name:         "too many connections",
 			errMsg:       "FATAL: too many connections for role",
 			host:         "localhost",
@@ -231,5 +259,40 @@ func TestWrapConnectionError(t *testing.T) {
 				t.Error("wrapped error does not chain pgmi.ErrConnectionFailed")
 			}
 		})
+	}
+}
+
+// The retry executor classifies the error wrapConnectionError returns, whose
+// Error() is the friendly text alone. A server closing the connection during
+// startup must stay retryable after it is reworded.
+func TestWrapConnectionErrorKeepsClosedConnectionRetryable(t *testing.T) {
+	classifier := retry.NewPostgreSQLErrorClassifier()
+	for name, original := range map[string]error{
+		"text only": errors.New("127.0.0.1:5441 (127.0.0.1): tls error: EOF\n" +
+			"\t127.0.0.1:5441 (127.0.0.1): failed to receive message: unexpected EOF"),
+		"wrapped io.ErrUnexpectedEOF": fmt.Errorf("failed to receive message: %w", io.ErrUnexpectedEOF),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wrapped := wrapConnectionError(original, "127.0.0.1", 5441, "demo_db", "postgres")
+			if !strings.Contains(wrapped.Error(), "server closed the connection") {
+				t.Errorf("wrapConnectionError() = %q, want the closed-connection hint", wrapped.Error())
+			}
+			if !classifier.IsTransient(wrapped) {
+				t.Errorf("%q is not retried; a server still starting up must be", wrapped.Error())
+			}
+		})
+	}
+}
+
+// pgx joins every connection attempt's error. When one attempt hit a real
+// certificate failure, an EOF from another must not hide it.
+func TestWrapConnectionErrorPrefersCertificateFailureOverEOF(t *testing.T) {
+	joined := errors.Join(
+		errors.New("[::1]:5432 (localhost): tls error: x509: certificate signed by unknown authority"),
+		fmt.Errorf("127.0.0.1:5432 (localhost): failed to receive message: %w", io.ErrUnexpectedEOF),
+	)
+	wrapped := wrapConnectionError(joined, "localhost", 5432, "mydb", "postgres")
+	if !strings.Contains(wrapped.Error(), "SSL/TLS connection error") {
+		t.Errorf("wrapConnectionError() = %q, want the SSL/TLS hint", wrapped.Error())
 	}
 }

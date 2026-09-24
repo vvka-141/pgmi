@@ -26,6 +26,13 @@ Any reachable PostgreSQL works; a disposable Docker container is the fastest:
 
 ```bash
 docker run -d --name pgmi-seed -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+docker exec pgmi-seed timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
+```
+
+If either command prints an error (say, the port is already in use), stop: run
+`docker rm pgmi-seed` and pick another port, in both `-p` and the connection string.
+
+```bash
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 

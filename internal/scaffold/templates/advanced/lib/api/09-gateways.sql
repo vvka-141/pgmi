@@ -138,11 +138,18 @@ BEGIN
        OR internal.transaction_is_read_only() THEN
         RETURN;
     END IF;
-    PERFORM membership.upsert_user(
-        api.parse_idp_provider(v_subject),
-        api.parse_idp_subject_id(v_subject),
-        p_email
-    );
+    -- The gateway has no verified-email claim, so a new identity whose email
+    -- already belongs to an account is not linked: it stays unprovisioned and
+    -- auth-required routes answer 401, rather than signing in as that account.
+    BEGIN
+        PERFORM membership.upsert_user(
+            api.parse_idp_provider(v_subject),
+            api.parse_idp_subject_id(v_subject),
+            p_email
+        );
+    EXCEPTION WHEN SQLSTATE 'P0409' THEN
+        RAISE LOG 'provision_current_user: identity not linked: %', SQLERRM;
+    END;
 END;
 $$;
 
@@ -260,6 +267,35 @@ $$;
 
 COMMENT ON FUNCTION internal.finalize_error(api.http_response, timestamptz, extensions.hstore) IS
     'Stamps a gateway error response with the same header set as a successful one, plus cache-control: no-store.';
+
+-- Exchange logs keep requests and responses for replay and audit, which must
+-- not turn them into a store of live credentials: bearer tokens, raw API keys
+-- and session cookies are dropped from the logged copy only.
+CREATE OR REPLACE FUNCTION internal.without_credentials(p_headers extensions.hstore)
+RETURNS extensions.hstore
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(extensions.hstore(array_agg(h.key), array_agg(h.value)), ''::extensions.hstore)
+    FROM extensions.each(p_headers) AS h
+    WHERE lower(h.key) <> ALL (ARRAY['authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key']);
+$$;
+
+CREATE OR REPLACE FUNCTION internal.loggable(p_request api.rest_request)
+RETURNS api.rest_request
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT (p_request.method, p_request.url, internal.without_credentials(p_request.headers), p_request.content)::api.rest_request;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.loggable(p_request api.rpc_request)
+RETURNS api.rpc_request
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT (p_request.route_id, internal.without_credentials(p_request.headers), p_request.content)::api.rpc_request;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.loggable(p_response api.http_response)
+RETURNS api.http_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT (p_response.status_code, internal.without_credentials(p_response.headers), p_response.content)::api.http_response;
+$$;
 
 CREATE OR REPLACE FUNCTION api.rest_invoke(
     p_method text,
@@ -490,7 +526,7 @@ BEGIN
         -- Skipping beats failing every correctly-opened read-only request.
         IF v_route.auto_log AND NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_route.object_id, v_request, v_response, now());
+            VALUES (v_route.object_id, internal.loggable(v_request), internal.loggable(v_response), now());
         END IF;
 
         -- RFC 9110 §9.3.2: HEAD is identical to GET except that the body is
@@ -582,7 +618,7 @@ BEGIN
         -- otherwise persist plaintext credentials on any constraint violation.
         IF v_route.auto_log AND NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.rest_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_route.object_id, v_request, v_response, now());
+            VALUES (v_route.object_id, internal.loggable(v_request), internal.loggable(v_response), now());
         END IF;
 
         -- Return sanitized error to client (hide internal details).
@@ -822,7 +858,7 @@ BEGIN
         -- Exchange logging is a write; skip in a READ ONLY transaction (see rest_invoke).
         IF v_handler.auto_log AND NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_handler.object_id, v_request, v_response, now());
+            VALUES (v_handler.object_id, internal.loggable(v_request), internal.loggable(v_response), now());
         END IF;
 
         RETURN v_response;
@@ -891,7 +927,7 @@ BEGIN
         -- autoLog=false must hold on the failure path too (see rest_invoke).
         IF v_handler.auto_log AND NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.rpc_exchange (handler_object_id, request, response, completed_at)
-            VALUES (v_handler.object_id, v_request, v_response, now());
+            VALUES (v_handler.object_id, internal.loggable(v_request), internal.loggable(v_response), now());
         END IF;
 
         -- Return sanitized error to client (hide internal details).

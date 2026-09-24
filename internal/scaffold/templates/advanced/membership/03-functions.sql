@@ -152,6 +152,7 @@ DECLARE
     v_user_id UUID;
     v_org_id UUID;
     v_is_new_user BOOLEAN;
+    v_existing_verified BOOLEAN;
 BEGIN
     RAISE DEBUG 'upsert_user: provider=%, subject=%', p_provider, p_subject_id;
 
@@ -175,12 +176,31 @@ BEGIN
 
     INSERT INTO membership."user" (email, display_name, email_verified)
     VALUES (lower(trim(p_email)), p_display_name, p_email_verified)
-    ON CONFLICT (email) DO UPDATE SET
-        display_name = COALESCE(EXCLUDED.display_name, membership."user".display_name),
-        email_verified = membership."user".email_verified OR EXCLUDED.email_verified,
-        updated_at = now()
-    -- xmax = 0: system column is zero for freshly inserted tuples, nonzero on conflict update
-    RETURNING object_id, (xmax = 0) INTO v_user_id, v_is_new_user;
+    ON CONFLICT (email) DO NOTHING
+    RETURNING object_id INTO v_user_id;
+    v_is_new_user := FOUND;
+
+    -- A new identity whose email already belongs to an account is linked to it
+    -- only when both sides have verified that email. Otherwise anyone able to
+    -- present the address -- an IdP that lets users set their own email, a
+    -- second IdP -- would sign in as the account's owner.
+    IF NOT v_is_new_user THEN
+        SELECT u.object_id, u.email_verified INTO v_user_id, v_existing_verified
+        FROM membership."user" u
+        WHERE u.email = lower(trim(p_email))
+        FOR UPDATE;
+
+        IF NOT (v_existing_verified AND p_email_verified) THEN
+            RAISE EXCEPTION 'identity %|% cannot be linked to the existing account for this email', p_provider, p_subject_id
+                USING ERRCODE = 'P0409',
+                      HINT = 'Account linking requires the email to be verified by both the existing account and the new identity provider.';
+        END IF;
+
+        UPDATE membership."user"
+        SET display_name = COALESCE(p_display_name, display_name),
+            updated_at = now()
+        WHERE object_id = v_user_id;
+    END IF;
 
     RAISE DEBUG 'upsert_user: User % (is_new: %)', v_user_id, v_is_new_user;
 

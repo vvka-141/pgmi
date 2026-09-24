@@ -40,11 +40,11 @@ CREATE OR REPLACE FUNCTION api.parse_idp_subject_id(p_subject TEXT)
 RETURNS TEXT
 LANGUAGE sql IMMUTABLE PARALLEL SAFE
 AS $$
-    SELECT split_part(p_subject, '|', 2);
+    SELECT substr(p_subject, NULLIF(strpos(p_subject, '|'), 0) + 1);
 $$;
 
 COMMENT ON FUNCTION api.parse_idp_subject_id(TEXT) IS
-    'Extracts the subject ID from a provider|subject_id string.';
+    'Extracts the subject ID from a provider|subject_id string: everything after the first pipe, so connection-scoped subjects (samlp|<connection>|<user>) stay distinct.';
 
 -- Inline tests for pure functions
 DO $$
@@ -54,6 +54,14 @@ BEGIN
     END IF;
     IF api.parse_idp_subject_id('google|12345') IS DISTINCT FROM '12345' THEN
         RAISE EXCEPTION 'TEST FAILED: parse_idp_subject_id';
+    END IF;
+    -- Auth0 enterprise and custom-OAuth subjects carry the connection too
+    -- (samlp|<connection>|<user>): the subject is everything after the first
+    -- pipe, or two users of one connection collapse into one identity.
+    IF api.parse_idp_provider('samlp|acme-sso|alice') IS DISTINCT FROM 'samlp'
+       OR api.parse_idp_subject_id('samlp|acme-sso|alice') IS DISTINCT FROM 'acme-sso|alice' THEN
+        RAISE EXCEPTION 'TEST FAILED: a multi-pipe subject must keep everything after the first pipe, got %',
+            api.parse_idp_subject_id('samlp|acme-sso|alice');
     END IF;
 END $$;
 

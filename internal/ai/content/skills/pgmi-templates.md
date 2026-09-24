@@ -163,10 +163,9 @@ advanced/
 
 **Parameter Contract:**
 - `database_admin_password` (REQUIRED) - Password for the admin LOGIN role
-- `database_customer_password` (REQUIRED) - Password for the customer LOGIN role
 - `env` (optional) - Environment identifier (dev/staging/prod)
 
-The API role is a NOLOGIN group role (a permission bundle), so it has no password.
+The API and customer roles are NOLOGIN (permission bundles), so they have no password. The customer role must stay NOLOGIN: RLS identifies the caller by `auth.idp_subject`, which any session can set.
 
 **Use Cases:**
 - Production database deployments
@@ -601,7 +600,7 @@ CREATE ROLE myapp_admin LOGIN PASSWORD '${database_admin_password}';
 GRANT myapp_owner TO myapp_admin; -- Can act as owner
 
 -- API is a NOLOGIN group role (a permission bundle); no password.
--- LOGIN roles (admin, customer) are GRANTed membership to inherit it.
+-- The admin LOGIN role is GRANTed membership to inherit it.
 CREATE ROLE myapp_api NOLOGIN;
 GRANT USAGE ON SCHEMA api TO myapp_api;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO myapp_api;
@@ -859,8 +858,7 @@ func TestAdvancedTemplateDeployment(t *testing.T) {
         Overwrite:        true,
         Force:            true,
         Parameters:       map[string]string{
-            "database_admin_password":    "TestPass123!",
-            "database_customer_password": "CustPass123!",
+            "database_admin_password": "TestPass123!",
         },
     })
     require.NoError(t, err)
@@ -973,7 +971,6 @@ go build -o pgmi.exe ./cmd/pgmi
 # command line (argv leaks to ps, shell history, and CI logs):
 #   secrets.env:
 #     database_admin_password=...
-#     database_customer_password=...
 pgmi deploy . --params-file secrets.env
 ```
 

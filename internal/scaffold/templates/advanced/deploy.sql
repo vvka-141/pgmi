@@ -157,7 +157,6 @@ DECLARE
     v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password');
     v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
     v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
-    v_customer_password TEXT := pg_temp.deployment_setting('database_customer_password');
 BEGIN
     -- Owner role (NOLOGIN) - owns all database objects
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_owner_role) THEN
@@ -179,12 +178,16 @@ BEGIN
         EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
     END IF;
 
-    -- Customer role (LOGIN) - inherits api, RLS-restricted
+    -- Customer role (NOLOGIN) - RLS-restricted permission bundle. Identity comes
+    -- from auth.idp_subject, a custom setting any session may set, so a session
+    -- that could log in as this role could claim to be any user. Only the
+    -- gateway, which owns that setting, may act as it. ALTER on an existing role
+    -- converges a cluster where an earlier deploy created it with LOGIN.
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_customer_role) THEN
-        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 100', v_customer_role, v_customer_password);
+        EXECUTE format('CREATE ROLE %I NOLOGIN', v_customer_role);
         RAISE NOTICE '[pgmi] Created customer role: %', v_customer_role;
     ELSE
-        EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 100', v_customer_role, v_customer_password);
+        EXECUTE format('ALTER ROLE %I WITH NOLOGIN PASSWORD NULL', v_customer_role);
     END IF;
 
     -- Role hierarchy. The customer role deliberately does NOT inherit the api

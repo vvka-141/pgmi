@@ -25,6 +25,8 @@ var metadataCmd = &cobra.Command{
 
 All three subcommands operate purely on the filesystem — no database
 connection is opened.`,
+	Args: usageArgs(cobra.NoArgs),
+	RunE: showHelp,
 }
 
 var metadataScaffoldCmd = &cobra.Command{

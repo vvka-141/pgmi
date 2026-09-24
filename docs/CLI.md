@@ -290,10 +290,12 @@ pgmi deploy ./myproject -d myapp --azure \
   --host myserver.postgres.database.azure.com \
   --sslmode require
 
-# Azure Entra ID with Service Principal
-pgmi deploy ./myproject -d myapp \
+# Azure Entra ID with Service Principal (secret via AZURE_CLIENT_SECRET)
+pgmi deploy ./myproject -d myapp --azure \
+  --host myserver.postgres.database.azure.com \
   --azure-tenant-id "your-tenant-id" \
-  --azure-client-id "your-client-id"
+  --azure-client-id "your-client-id" \
+  --sslmode require
 
 # mTLS with client certificate
 pgmi deploy ./myproject -d myapp \

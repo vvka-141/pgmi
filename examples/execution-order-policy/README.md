@@ -23,7 +23,15 @@ Needs a PostgreSQL server (any recent version; a throwaway container works):
 
 ```bash
 docker run -d --name pgmi-example -e POSTGRES_PASSWORD=postgres -p 5440:5432 postgres:16
+docker exec pgmi-example timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
+```
+
+If either command prints an error (say, the port is already in use), stop: run
+`docker rm pgmi-example` and pick another port, in both `-p` and the connection string.
+
+```bash
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5440/postgres"
+# PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5440/postgres"
 
 cd project
 pgmi deploy . -d catalog_demo --force

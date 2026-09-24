@@ -7,6 +7,69 @@
 > step before you tag. The shape and the rules are in
 > [`.github/RELEASE_NOTES_TEMPLATE.md`](.github/RELEASE_NOTES_TEMPLATE.md).
 > Write for a stranger who arrived from a search result.
+>
+> Before anything publishes, the snapshot build runs `scripts/verify-walkthrough.sh`
+> against a GoReleaser build of the tagged commit — the same config the release
+> job publishes with: the README "See it work" blocks as written, its failure
+> demo, and the Quickstart steps. Run it locally with
+> `scripts/verify-walkthrough.sh <binary>` (Docker required). About ten minutes
+> after the release publishes, and nightly, `verify-install.yml` installs it
+> through every documented channel and checks each serves the new version — look
+> at that run before announcing a release.
+
+## v0.12.1 — 2026-09-24
+
+**A security release for the advanced template: three ways one user could end up signed in as another are closed, and credentials no longer land in the request logs.** If you scaffolded the advanced template, read Upgrading — the template is your code, so a new pgmi binary changes nothing until you take the fixes into your project.
+
+A full review of the release candidate found these, each reproduced against a live deployment before it was fixed:
+
+- **A second sign-in with a matching email took over the account.** A new identity whose email already belonged to an account was linked to it, verified or not. An identity provider that lets users set their own email, or simply a second provider, signed its user in as the account's owner, administrators included. Linking now requires the email to be verified on both sides; otherwise the new identity stays unlinked and gets `401`.
+- **Users of one enterprise connection became one user.** Subjects shaped like `samlp|<connection>|<user>` (Auth0 enterprise and custom OAuth connections) were cut at the second `|`, so everyone on that connection resolved to the same account. The subject is now everything after the first `|`.
+- **The customer role could claim to be anyone.** It was a login role, and row-level security identifies the caller from a session setting any session can set. Anyone holding its password could act as any user and mint working API keys for them. The customer role is now `NOLOGIN`; only the gateway acts for a user.
+- **Credentials were written to the exchange logs.** Every logged request kept its `Authorization`, `Cookie` and API-key headers in plaintext for the retention period, and the admin replay endpoint returned them. Logged copies now drop them.
+
+It also fixes the API keys v0.12.0 stopped accepting: any key id other than exactly 12 lowercase hex characters — keys seeded by hand, or issued by v0.10.0 — was refused as `malformed key`.
+
+### Upgrading
+
+- **Advanced-template projects:** scaffold a fresh copy and take the changes into your project:
+
+  ```bash
+  pgmi init /tmp/pgmi-0.12.1 --template advanced
+  diff -ru /tmp/pgmi-0.12.1/membership membership
+  diff -ru /tmp/pgmi-0.12.1/lib lib
+  diff -u /tmp/pgmi-0.12.1/deploy.sql deploy.sql
+  diff -u /tmp/pgmi-0.12.1/session.xml session.xml
+  ```
+
+  Then, before redeploying:
+  - Remove `database_customer_password` from your parameters or params file: the parameter no longer exists and the deploy rejects unknown parameters. Anything that logs in as the customer role directly must go through the gateway; the deploy turns the role's login off.
+  - Users who signed in through a second identity provider with an unverified email were linked to the matching account. Review `membership.user_identity` for identities you did not intend, and remove them.
+  - If your identity provider issues subjects with more than one `|`, users of the same connection were merged into one account; their `membership.user_identity.idp_subject_id` holds only the connection name. That cannot be split automatically: set it to the full `<connection>|<user>` of the account's real owner, and the other users of that connection sign in as new accounts.
+  - Credentials already in the exchange logs stay there until you scrub them. After redeploying:
+
+    ```sql
+    UPDATE api.rest_exchange SET request = internal.loggable(request), response = internal.loggable(response);
+    UPDATE api.rpc_exchange  SET request = internal.loggable(request), response = internal.loggable(response);
+    ```
+- **deploy.sql that ends inside an open transaction** — a `BEGIN` without its final `COMMIT` — now fails with exit 13. It used to exit 0 while nothing from that transaction was applied.
+- **Building from source** (`go install`) now needs Go 1.26: the `golang.org/x/crypto` security fix requires it. With Go's default toolchain setting an older Go downloads 1.26 automatically. Prebuilt binaries and packages are unaffected.
+- **Everything else:** no action needed. The session API contract is unchanged at v1.
+
+### Also in this release
+
+- Dependency security updates for four advisories reachable from pgmi's code: GO-2026-6355 and GO-2026-6354 (`golang.org/x/crypto` 0.56.0), GO-2026-6348 (`google.golang.org/grpc` 1.83.1) and GO-2026-6253 (`github.com/moby/go-archive` 0.3.0).
+- `pgmi deploy --aws --aws-region …` and `--google --google-instance …` always failed with "requires region/instance", whatever was passed. They now reach the cloud provider.
+- A mistyped subcommand — `pgmi metadata validte .`, `pgmi ai chek` — printed help and exited 0, so a CI step with a typo passed having checked nothing. It now exits 2.
+- The advanced template's endpoint recipe — a `GET` and a `POST` on one path — failed its own route test on every deploy. It deploys.
+- The README and Quickstart Docker demo waited for nothing: pasted quickly, `pgmi deploy` reached PostgreSQL while it was still initialising and failed. Every Docker snippet now starts the server and waits for it in one block, then deploys in a second, so an error from `docker run` — a port already in use — stops you before a deploy can reach whatever server holds that port.
+- A server that closes the connection — still starting up, restarting, or not PostgreSQL at all — was reported as an SSL/TLS problem and pointed you at `--sslmode`. It now says the server closed the connection and suggests `pg_isready`.
+- `install.ps1` closed your PowerShell window when it failed, taking the error message with it, and on success left strict mode and its variables behind in your session. It now reports errors, leaves the shell open, and leaves nothing behind.
+- `install.sh` needed `sudo` to write to `/usr/local/bin`, which fails in containers without it. It now tells you to rerun with `INSTALL_DIR="$HOME/.local/bin"`, and creates that directory. Both installers use `GITHUB_TOKEN` when set, so a rate-limited network can still resolve the latest version.
+- `go install` builds printed `pgmi v0.12.0` where release binaries print `pgmi 0.12.0`. Both now print the same format.
+- The lock-safe example's cleanup of a failed concurrent index build queued for `ACCESS EXCLUSIVE` for up to 3 seconds — rebuilding the lock queue the example exists to avoid — and could drop another session's in-progress build. It now waits at most 250ms for the lock and re-checks the index while holding it. If you copied that cleanup, update it.
+- Several documented commands did not work as written: the CI guide pinned v0.11.0, the advanced README's handler example failed the template's tests, and the Quickstart's Docker detour left a connection string set that silently overrode `pgmi.yaml`. All fixed.
+- Every release is now gated on the README and Quickstart walkthrough passing against a GoReleaser build of the tagged commit, and every install channel is checked after each release and nightly.
 
 ## v0.12.0 — 2026-07-30
 

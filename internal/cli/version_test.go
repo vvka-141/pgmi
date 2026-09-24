@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 func TestResolveVersionInfo_LdflagsOverride(t *testing.T) {
 	original := version
@@ -26,4 +29,18 @@ func TestResolveVersionInfo_DevFallback(t *testing.T) {
 	// In a test binary, ReadBuildInfo returns test module info.
 	// We just verify it doesn't panic and returns something.
 	t.Logf("resolved: version=%s commit=%s date=%s", v, c, d)
+}
+
+func TestResolveVersionInfo_GoInstallMatchesReleaseFormat(t *testing.T) {
+	origV, origC, origD, origRead := version, commit, date, readBuildInfo
+	defer func() { version, commit, date, readBuildInfo = origV, origC, origD, origRead }()
+
+	version, commit, date = "dev", "unknown", "unknown"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v0.12.0"}}, true
+	}
+
+	if v, _, _ := resolveVersionInfo(); v != "0.12.0" {
+		t.Errorf("go install version = %q, want %q to match release binaries", v, "0.12.0")
+	}
 }

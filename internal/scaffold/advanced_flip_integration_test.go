@@ -73,9 +73,8 @@ func TestAdvancedTemplate_IdempotentToNonIdempotentFlip(t *testing.T) {
 			Overwrite:           overwrite,
 			Force:               true,
 			Parameters: map[string]string{
-				"database_admin_password":    "TestPassword123!",
-				"database_customer_password": "CustomerPassword123!",
-				"env":                        "test",
+				"database_admin_password": "TestPassword123!",
+				"env":                     "test",
 			},
 		})
 		if err != nil {

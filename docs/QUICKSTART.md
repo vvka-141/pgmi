@@ -29,7 +29,13 @@ Have Docker but no PostgreSQL at hand? This detour needs nothing else — no pas
 
 ```bash
 docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+docker exec pgmi-demo timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
+```
 
+If either command prints an error (say, the port is already in use), stop: run
+`docker rm pgmi-demo` and pick another port, in both `-p` and the connection string.
+
+```bash
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 pgmi init demo --template basic
@@ -57,7 +63,7 @@ data changes made before the failing test. Sequence counters and external or
 explicitly non-transactional effects are not rolled back. That test gate, inside
 your own deployment transaction, is the core of the pgmi model.
 
-Clean up with `docker rm -f pgmi-demo`. For a real setup against your own PostgreSQL server, continue below.
+Clean up with `docker rm -f pgmi-demo`, and clear the connection string before continuing — it outranks the `pgmi.yaml` you are about to edit: `unset PGMI_CONNECTION_STRING` (PowerShell: `Remove-Item Env:PGMI_CONNECTION_STRING`). For a real setup against your own PostgreSQL server, continue below.
 
 ---
 
@@ -93,11 +99,13 @@ Commit: <sha>, Built: <date>, Platform: <os>/<arch>
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
 
 <details>
-<summary>Install from source (optional — requires Go 1.25+)</summary>
+<summary>Install from source (optional — requires Go 1.26+)</summary>
 
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
 ```
+
+`pgmi --version` then reports `Commit: unknown, Built: unknown`: a module-proxy build carries no VCS stamp.
 
 If `pgmi` is then not found, your Go bin directory is not on your PATH:
 
@@ -193,7 +201,8 @@ myapp/
 ├── __test__/               ← Your test files (or __tests__/)
 │   ├── _setup.sql          ← Test fixture (seed data)
 │   └── test_user_crud.sql
-└── README.md
+├── README.md
+└── .gitignore
 ```
 
 > **Note:** Both `__test__/` and `__tests__/` work identically. Use whichever matches your team's convention.
@@ -205,16 +214,21 @@ Let's look at what was generated.
 Open `pgmi.yaml`. It looks like this:
 
 ```yaml
-connection:
-  database: mydb
-  host: localhost
-  port: 5432
-  sslmode: prefer
+# pgmi project configuration
+# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
 
+connection:
+  database: mydb              # Target database (change this!)
+  host: localhost             # PostgreSQL host
+  port: 5432                  # PostgreSQL port
+  sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  # username: postgres        # PostgreSQL user (default: current OS user)
+
+# Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
 params:
   env: development
 
-timeout: 3m
+timeout: 3m                   # Deployment timeout
 ```
 
 This tells pgmi: "when I deploy, connect to `localhost:5432` and use a database called `mydb`". No JSON, no XML — just this small YAML file for connection defaults.
@@ -257,9 +271,10 @@ timeout: 3m
 > $env:PGMI_CONNECTION_STRING="postgresql://postgres:your-postgres-password@localhost:5432/myapp"
 > ```
 >
-> A database name in `PGMI_CONNECTION_STRING` is an **environment** source, and
-> environment beats `pgmi.yaml` in the [precedence chain](CONFIGURATION.md#precedence-chain).
-> So it *replaces* `connection.database`, it does not complement it: end the
+> `PGMI_CONNECTION_STRING` is an **environment** source, and environment beats
+> `pgmi.yaml` in the [precedence chain](CONFIGURATION.md#precedence-chain). It
+> replaces the whole `connection:` block — host and port as well as the
+> database — it does not complement it: end the
 > string in `/postgres` and pgmi deploys into `postgres` — creating your tables
 > in the maintenance database and never creating `myapp` at all.
 >
@@ -468,7 +483,11 @@ Now that you have a working project:
 
 ### "pgmi: command not found"
 
-Your Go bin directory is not in your PATH. See [Step 1](#step-1-install-pgmi) for instructions.
+The directory pgmi was installed into is not on your PATH:
+
+- **install.sh**: `/usr/local/bin`, or whatever you set `INSTALL_DIR` to.
+- **install.ps1**: `%LOCALAPPDATA%\pgmi`, or `PGMI_INSTALL_DIR` if you set it. The script adds it to your user PATH; terminals that were already open need a restart.
+- **go install**: `$(go env GOPATH)/bin` — see [Step 1](#step-1-install-pgmi).
 
 ### "connection refused" or "could not connect to server"
 

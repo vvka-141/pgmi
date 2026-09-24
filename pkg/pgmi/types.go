@@ -51,6 +51,9 @@ type DeploymentConfig struct {
 	AzureTenantID     string
 	AzureClientID     string
 	AzureClientSecret string
+
+	AWSRegion      string
+	GoogleInstance string
 }
 
 // Validate checks if the DeploymentConfig has all required fields and valid values.

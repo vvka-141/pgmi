@@ -37,7 +37,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      PGMI_VERSION: v0.11.0         # pin to a specific release tag
+      PGMI_VERSION: v0.12.1         # pin to a specific release tag
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v5
@@ -87,12 +87,10 @@ process list and CI logs; see the [Security Guide](SECURITY.md)):
         env:
           PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
           DATABASE_ADMIN_PASSWORD: ${{ secrets.DATABASE_ADMIN_PASSWORD }}
-          DATABASE_CUSTOMER_PASSWORD: ${{ secrets.DATABASE_CUSTOMER_PASSWORD }}
         run: |
           umask 077
           cat > "$RUNNER_TEMP/secrets.env" <<EOF
           database_admin_password=$DATABASE_ADMIN_PASSWORD
-          database_customer_password=$DATABASE_CUSTOMER_PASSWORD
           EOF
           pgmi deploy . -d "$DB_NAME" --compat 1 --force \
             --params-file "$RUNNER_TEMP/secrets.env"
@@ -105,12 +103,12 @@ The three steps — install, connect via secret, `pgmi deploy … --compat 1` �
 anywhere. Alternatives for the install step:
 
 - **Install script, pinned:**
-  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.11.0 bash`
+  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.12.1 bash`
   (verifies the download against `checksums.txt`). The `PGMI_VERSION` prefix must sit on
   `bash`, not `curl`, or the script falls back to the latest release.
 - **Debian/Ubuntu runners (APT, GPG-verified):**
   `curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash && sudo apt install -y pgmi`.
-- **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v0.11.0`
+- **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v0.12.1`
   — pin the tag (never `@latest`); note this requires the Go toolchain and compiles
   from source, so it is slower and less reproducible than a release binary.
 

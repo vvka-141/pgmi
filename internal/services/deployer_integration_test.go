@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -359,5 +360,39 @@ END $$;
 	err = os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(rootSQL), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+}
+
+// A deploy.sql that ends inside an open transaction commits nothing: the
+// session's cleanup rolls it back. Reporting success there tells the operator
+// a deploy landed that did not.
+func TestDeploymentService_Deploy_OpenTransactionAtEndFails(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	for name, rootSQL := range map[string]string{
+		"head never committed": "BEGIN;\nCREATE TABLE forgot_head(x int);\n",
+		"tail never committed": "BEGIN;\nSELECT 1;\nCOMMIT;\nBEGIN;\nCREATE TABLE forgot_tail(x int);\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			projectPath := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(rootSQL), 0644); err != nil {
+				t.Fatal(err)
+			}
+			testDB := "pgmi_test_open_tx"
+			defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+			err := testhelpers.NewTestDeployer(t).Deploy(ctx, pgmi.DeploymentConfig{
+				ConnectionString:    connString,
+				MaintenanceDatabase: "postgres",
+				DatabaseName:        testDB,
+				SourcePath:          projectPath,
+				Overwrite:           true,
+				Force:               true,
+			})
+			if !errors.Is(err, pgmi.ErrExecutionFailed) {
+				t.Fatalf("deploy.sql left a transaction open; want ErrExecutionFailed, got %v", err)
+			}
+		})
 	}
 }

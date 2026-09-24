@@ -38,7 +38,7 @@ BEGIN
     EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', p_table);
 
     -- Re-check while holding it. An index being built by a CONCURRENTLY in
-    -- another session is also indisvalid, and may have become valid since the
+    -- another session is also not yet indisvalid, and may have become valid since the
     -- probe above -- dropping it then would destroy healthy work.
     IF EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = v_index AND NOT indisvalid) THEN
         RAISE NOTICE 'reaping INVALID index %', p_index;

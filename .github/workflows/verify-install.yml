@@ -1,0 +1,143 @@
+name: Verify Install
+
+# Installs pgmi through every channel the README documents and checks that
+# each one serves the latest release and that it works. Runs after each
+# release (publishing to the tap and Cloudsmith lags by minutes) and nightly,
+# because a channel can break with nothing changing here: a Homebrew
+# deprecation, a Cloudsmith outage, an install script edited on main.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Explicit bash adds pipefail, so a failed `curl | bash` or `brew | tee` fails
+# its own step instead of surfacing later as an empty version.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  expected:
+    name: Latest release
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.latest.outputs.version }}
+    steps:
+      - name: Let the tap and APT index catch up
+        if: github.event_name == 'workflow_run'
+        run: sleep 600
+
+      - id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)"
+          echo "latest release: $tag"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: ${{ matrix.channel }}
+    needs: expected
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [install.sh, install.sh without sudo, apt, go install]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        if: matrix.channel == 'go install'
+        with:
+          go-version: '1.26'
+
+      - name: Install
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ matrix.channel }}" in
+            install.sh)
+              curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash ;;
+            "install.sh without sudo")
+              curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH" ;;
+            apt)
+              curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
+              sudo apt update && sudo apt install -y pgmi ;;
+            "go install")
+              (cd "$RUNNER_TEMP" && go list -m "github.com/vvka-141/pgmi@v${{ needs.expected.outputs.version }}")
+              go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+              echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH" ;;
+          esac
+
+      - name: Serves the latest release
+        run: |
+          got="$(pgmi --version | head -n 1 | awk '{print $2}')"; got="${got#v}"
+          echo "pgmi --version: $got"
+          if [ "$got" != "${{ needs.expected.outputs.version }}" ]; then
+            echo "::error::${{ matrix.channel }} serves $got, latest release is ${{ needs.expected.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Documented walkthrough
+        run: scripts/verify-walkthrough.sh "$(command -v pgmi)"
+
+  homebrew:
+    name: homebrew
+    needs: expected
+    runs-on: macos-latest
+    steps:
+      - name: Install
+        run: |
+          brew install --cask vvka-141/pgmi/pgmi 2>&1 | tee brew.log
+          if grep -q '^Warning:' brew.log; then
+            grep '^Warning:' brew.log | while read -r line; do echo "::warning::brew: $line"; done
+          fi
+
+      - name: Serves the latest release
+        run: |
+          got="$(pgmi --version | head -n 1 | awk '{print $2}')"; got="${got#v}"
+          echo "pgmi --version: $got"
+          if [ "$got" != "${{ needs.expected.outputs.version }}" ]; then
+            echo "::error::homebrew serves $got, latest release is ${{ needs.expected.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Scaffolds a project
+        run: pgmi init demo --template basic && test -f demo/deploy.sql
+
+  windows:
+    name: install.ps1
+    needs: expected
+    runs-on: windows-latest
+    steps:
+      - name: Install
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
+          "$env:LOCALAPPDATA\pgmi" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Serves the latest release
+        shell: pwsh
+        run: |
+          $got = ((pgmi --version | Select-Object -First 1) -split ' ')[1].TrimStart('v')
+          "pgmi --version: $got"
+          if ($got -ne "${{ needs.expected.outputs.version }}") {
+            "::error::install.ps1 serves $got, latest release is ${{ needs.expected.outputs.version }}"
+            exit 1
+          }
+
+      - name: Scaffolds a project
+        shell: pwsh
+        run: |
+          pgmi init demo --template basic
+          if (-not (Test-Path demo/deploy.sql)) { exit 1 }
