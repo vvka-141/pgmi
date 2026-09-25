@@ -235,3 +235,27 @@ BEGIN
 
     RAISE NOTICE '  + validate_api_key and generate_api_key_material are out of customer reach';
 END $$;
+
+
+-- The api role reaches membership data through functions. No RLS policy lets
+-- it write the tables, so a direct write grant is a latent hole that a future
+-- permissive policy would open without anyone deciding to.
+DO $$
+DECLARE
+    v_api_role text := pg_temp.deployment_setting('database_api_role');
+    v_writable text;
+BEGIN
+    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ' ORDER BY tablename)
+    INTO v_writable
+    FROM pg_tables
+    WHERE schemaname = 'membership'
+      AND (has_table_privilege(v_api_role, format('%I.%I', schemaname, tablename), 'INSERT')
+           OR has_table_privilege(v_api_role, format('%I.%I', schemaname, tablename), 'UPDATE')
+           OR has_table_privilege(v_api_role, format('%I.%I', schemaname, tablename), 'DELETE'));
+
+    IF v_writable IS NOT NULL THEN
+        RAISE EXCEPTION 'the api role can write membership tables directly: %', v_writable;
+    END IF;
+
+    RAISE NOTICE '  ✓ the api role has no direct write grant on membership tables';
+END $$;

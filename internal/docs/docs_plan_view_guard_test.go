@@ -42,7 +42,7 @@ func TestDocsPlanViewLoopsFilterSQLFiles(t *testing.T) {
 
 		for _, m := range planViewLoop.FindAllStringIndex(text, -1) {
 			q := text[m[0]:m[1]]
-			if !strings.Contains(q, "content") || exactPathFilter.MatchString(q) {
+			if !pullsContent(q) || exactPathFilter.MatchString(q) {
 				continue
 			}
 			if strings.Contains(q, "is_sql_file") {

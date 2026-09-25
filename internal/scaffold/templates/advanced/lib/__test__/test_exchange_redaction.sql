@@ -105,3 +105,32 @@ $body$
 
     RAISE NOTICE '  ✓ credentials are dropped from logged requests and responses, other headers kept';
 END $$;
+
+
+DO $$
+DECLARE
+    v_logged jsonb;
+BEGIN
+    RAISE NOTICE '→ Testing that the MCP exchange log drops credentials from the context';
+
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'ffffffff-c001-4000-8000-000000000010', 'type', 'tool', 'name', 'redaction_mcp_probe',
+        'description', 'redaction probe', 'requiresAuth', false, 'inputSchema', '{"type":"object"}'::jsonb),
+        $body$BEGIN RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id); END;$body$);
+
+    PERFORM api.mcp_call_tool('redaction_mcp_probe', '{}'::jsonb,
+        '{"user_id": "test|redaction", "token": "Bearer SECRET", "api_key": "pgmi_raw"}'::jsonb, '"r-1"'::jsonb);
+
+    SELECT to_jsonb((request).context) INTO v_logged
+    FROM api.mcp_exchange WHERE mcp_name = 'redaction_mcp_probe'
+    ORDER BY enqueued_at DESC LIMIT 1;
+
+    IF v_logged IS NULL OR v_logged ? 'token' OR v_logged ? 'api_key' THEN
+        RAISE EXCEPTION 'TEST FAILED: the MCP exchange log kept a credential from the context: %', v_logged;
+    END IF;
+    IF v_logged->>'user_id' IS DISTINCT FROM 'test|redaction' THEN
+        RAISE EXCEPTION 'TEST FAILED: the MCP exchange log must keep who called, got %', v_logged;
+    END IF;
+
+    RAISE NOTICE '  ✓ MCP exchange log keeps user_id and drops tokens and keys';
+END $$;

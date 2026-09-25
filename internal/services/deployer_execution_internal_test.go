@@ -111,14 +111,12 @@ func prepareSessionTables(t *testing.T, ctx context.Context, conn *pgxpool.Conn)
 	}
 }
 
-func newServiceWithReadContent(content string) *DeploymentService {
-	fs := &mockFileScanner{readContent: content}
+func newExecService() *DeploymentService {
 	svc := NewDeploymentService(
 		func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) { return &mockConnector{}, nil },
 		&mockApprover{},
 		&mockLogger{},
 		&mockSessionPreparer{},
-		fs,
 		&mockDatabaseManager{},
 	)
 	// Deploy() allocates this before it reaches executeDeploySQL, which records
@@ -149,9 +147,9 @@ func TestExecuteDeploySQL_DirectExecution_Internal(t *testing.T) {
 		CREATE TABLE direct_exec_test(id int);
 		INSERT INTO direct_exec_test VALUES (1), (2), (3);
 	`
-	svc := newServiceWithReadContent(deploySQL)
+	svc := newExecService()
 
-	if _, err := svc.executeDeploySQL(ctx, conn, "/fake/path"); err != nil {
+	if _, err := svc.executeDeploySQL(ctx, conn, pgmi.FileScanResult{DeploySQL: deploySQL}); err != nil {
 		t.Fatalf("executeDeploySQL failed: %v", err)
 	}
 
@@ -182,33 +180,13 @@ func TestExecuteDeploySQL_SyntaxError_Internal(t *testing.T) {
 
 	prepareSessionTables(t, ctx, conn)
 
-	svc := newServiceWithReadContent("SELCT INVALID SYNTAX;")
+	svc := newExecService()
 
-	_, err = svc.executeDeploySQL(ctx, conn, "/fake/path")
+	_, err = svc.executeDeploySQL(ctx, conn, pgmi.FileScanResult{DeploySQL: "SELCT INVALID SYNTAX;"})
 	if err == nil {
 		t.Fatal("Expected error for invalid SQL")
 	}
 	if !errors.Is(err, pgmi.ErrExecutionFailed) {
 		t.Errorf("Expected ErrExecutionFailed sentinel, got: %v", err)
-	}
-}
-
-func TestExecuteDeploySQL_ReadError_Internal(t *testing.T) {
-	fs := &mockFileScanner{readErr: pgmi.ErrDeploySQLNotFound}
-	svc := NewDeploymentService(
-		func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) { return &mockConnector{}, nil },
-		&mockApprover{},
-		&mockLogger{},
-		&mockSessionPreparer{},
-		fs,
-		&mockDatabaseManager{},
-	)
-
-	_, err := svc.executeDeploySQL(context.Background(), nil, "/nonexistent")
-	if err == nil {
-		t.Fatal("Expected error for missing deploy.sql")
-	}
-	if !errors.Is(err, pgmi.ErrDeploySQLNotFound) {
-		t.Errorf("Expected ErrDeploySQLNotFound sentinel, got: %v", err)
 	}
 }

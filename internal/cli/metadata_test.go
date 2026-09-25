@@ -398,7 +398,9 @@ func TestMetadataScaffold_Write_SkipsTestFiles(t *testing.T) {
 	}
 }
 
-func TestMetadataPlan_SkipsNonSQLFiles(t *testing.T) {
+// pgmi_plan_view holds every loaded file, not just SQL; deploy.sql filters on
+// is_sql_file. The offline plan lists the same rows and marks the non-SQL ones.
+func TestMetadataPlan_FlagsNonSQLFiles(t *testing.T) {
 	resetMetadataFlags()
 	projectPath := createTestProject(t, map[string]string{
 		"deploy.sql":         "SELECT 1;",
@@ -413,10 +415,12 @@ func TestMetadataPlan_SkipsNonSQLFiles(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
+	if len(result.Plan) != 4 {
+		t.Fatalf("plan has %d rows, want 4 (deploy.sql is never loaded): %+v", len(result.Plan), result.Plan)
+	}
 	for _, entry := range result.Plan {
-		ext := filepath.Ext(entry.Path)
-		if ext != "" && ext != ".sql" {
-			t.Errorf("non-SQL file %q should not appear in plan", entry.Path)
+		if want := filepath.Ext(entry.Path) == ".sql"; entry.IsSQLFile != want {
+			t.Errorf("%s: isSqlFile = %v, want %v", entry.Path, entry.IsSQLFile, want)
 		}
 	}
 }

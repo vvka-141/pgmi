@@ -11,7 +11,7 @@ import (
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/params"
@@ -138,7 +138,7 @@ func TestSessionVariableSystem(t *testing.T) {
 			testDB := createTestDatabase(t, connStr)
 			defer dropTestDatabase(t, connStr, testDB)
 
-			mfs := filesystem.NewMemoryFileSystem("/test/project")
+			mfs := fakefs.NewMemoryFileSystem("/test/project")
 			mfs.AddFile("deploy.sql", tt.deploySQL)
 
 			for path, content := range tt.files {

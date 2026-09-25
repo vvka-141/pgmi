@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,9 +63,10 @@ Exit non-zero on any failure.`,
 
 var metadataPlanCmd = &cobra.Command{
 	Use:   "plan <project_path>",
-	Short: "Show files in execution order from sortKeys",
-	Long: `Show every SQL file with its id, sortKeys, and idempotent flag, ordered
-the way pgmi_plan_view would order them at deploy time.
+	Short: "Show the rows pgmi_plan_view will hold, in order",
+	Long: `Show, without a database, the rows pgmi_plan_view will hold at deploy time:
+every loaded non-test file once per sort key (its path when it has none), in
+execution order. Non-SQL files are listed and marked, as the view includes them.
 
   pgmi metadata plan ./project
   pgmi metadata plan ./project --json
@@ -222,99 +224,88 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 func runMetadataValidate(cmd *cobra.Command, args []string) error {
 	projectPath := args[0]
 	verbose := getVerboseFlag(cmd)
+	out := cmd.OutOrStdout()
 
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Project path: %s\n", projectPath)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] JSON output: %v\n", validateJSON)
 	}
 
-	if !validateJSON {
-		fmt.Fprintln(os.Stderr, "Scanning and validating SQL files...")
-		fmt.Fprintln(os.Stderr, "Validating metadata graph...")
-	}
-
 	result, err := validateProject(projectPath)
 	if err != nil {
-		return fmt.Errorf("validation failed: %w", err)
+		err = fmt.Errorf("validation failed: %w", err)
+		if validateJSON {
+			printMetadataJSONFailure(out, map[string]any{"validationPassed": false}, err)
+		}
+		return err
 	}
 
 	if validateJSON {
-		jsonBytes, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
+		if err := printJSON(out, result); err != nil {
+			return err
 		}
-		fmt.Println(string(jsonBytes))
 	} else {
-		fmt.Fprintf(os.Stderr, "\nValidation Summary:\n")
-		fmt.Fprintf(os.Stderr, "  Total files: %d\n", result.TotalFiles)
-		fmt.Fprintf(os.Stderr, "  Files with metadata: %d\n", result.FilesWithMetadata)
-		fmt.Fprintf(os.Stderr, "  Files without metadata: %d\n", result.FilesWithoutMetadata)
-		fmt.Fprintln(os.Stderr)
-
-		if len(result.DuplicateIDs) > 0 {
-			fmt.Fprintln(os.Stderr, "Error: Duplicate IDs detected:")
-			for _, dup := range result.DuplicateIDs {
-				fmt.Fprintln(os.Stderr, "  "+dup)
-			}
-			fmt.Fprintln(os.Stderr)
-		}
-
-		if result.ValidationPassed {
-			fmt.Fprintln(os.Stderr, "Metadata validation passed.")
+		fmt.Fprintf(out, "Total files: %d\n", result.TotalFiles)
+		fmt.Fprintf(out, "Files with metadata: %d\n", result.FilesWithMetadata)
+		fmt.Fprintf(out, "Files without metadata: %d\n", result.FilesWithoutMetadata)
+		for _, dup := range result.DuplicateIDs {
+			fmt.Fprintln(out, "Duplicate id: "+dup)
 		}
 	}
 
 	if !result.ValidationPassed {
-		return fmt.Errorf("metadata validation failed")
+		return fmt.Errorf("metadata validation failed: %d duplicate id(s): %w", len(result.DuplicateIDs), pgmi.ErrInvalidConfig)
 	}
-
 	return nil
 }
 
-// runMetadataPlan shows execution plan based on metadata
+// runMetadataPlan prints the rows pgmi_plan_view will hold, in execution order.
+// The listing is the command's output, so it goes to stdout.
 func runMetadataPlan(cmd *cobra.Command, args []string) error {
 	projectPath := args[0]
 	verbose := getVerboseFlag(cmd)
+	out := cmd.OutOrStdout()
 
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Project path: %s\n", projectPath)
 		fmt.Fprintf(os.Stderr, "[VERBOSE] JSON output: %v\n", planJSON)
 	}
 
-	if !planJSON {
-		fmt.Fprintln(os.Stderr, "Scanning SQL files and analyzing dependencies...")
-	}
-
 	result, err := planProject(projectPath)
 	if err != nil {
-		return fmt.Errorf("failed to scan directory: %w", err)
+		err = fmt.Errorf("failed to scan directory: %w", err)
+		if planJSON {
+			printMetadataJSONFailure(out, map[string]any{}, err)
+		}
+		return err
 	}
-	plan := result.Plan
 
-	// Output plan
 	if planJSON {
-		jsonBytes, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(jsonBytes))
-	} else {
-		// Human-readable output
-		fmt.Fprintf(os.Stderr, "\nMetadata Summary (%d files):\n\n", len(plan))
-
-		for i, entry := range plan {
-			fmt.Fprintf(os.Stderr, "%d. %s\n", i+1, entry.Path)
-			fmt.Fprintf(os.Stderr, "   ID: %s\n", entry.ID)
-			if entry.Description != "" {
-				fmt.Fprintf(os.Stderr, "   Description: %s\n", entry.Description)
-			}
-			fmt.Fprintf(os.Stderr, "   Idempotent: %v\n", entry.Idempotent)
-			fmt.Fprintf(os.Stderr, "   Sort Keys: %v\n", entry.SortKeys)
-			fmt.Fprintln(os.Stderr)
-		}
-
-		fmt.Fprintln(os.Stderr, "Note: Actual execution order is determined by sort keys during deployment.")
+		return printJSON(out, result)
 	}
-
+	for _, e := range result.Plan {
+		note := ""
+		if !e.IsSQLFile {
+			note = "  (not SQL)"
+		}
+		fmt.Fprintf(out, "%4d  %-28s %s%s\n", e.ExecutionOrder, e.SortKey, e.Path, note)
+	}
 	return nil
+}
+
+func printJSON(w io.Writer, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+	fmt.Fprintln(w, string(b))
+	return nil
+}
+
+// printMetadataJSONFailure keeps --json a contract on failure too, as deploy
+// --json does: a caller parsing stdout gets an envelope, not nothing.
+func printMetadataJSONFailure(w io.Writer, fields map[string]any, err error) {
+	fields["error"] = err.Error()
+	fields["exitCode"] = pgmi.ExitCodeForError(err)
+	_ = printJSON(w, fields)
 }

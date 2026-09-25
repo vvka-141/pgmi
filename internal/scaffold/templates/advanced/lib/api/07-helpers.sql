@@ -156,8 +156,7 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS tr_mcp_route_uri_regexp ON api.mcp_route;
-CREATE TRIGGER tr_mcp_route_uri_regexp
+CREATE OR REPLACE TRIGGER tr_mcp_route_uri_regexp
     BEFORE INSERT OR UPDATE OF uri_template ON api.mcp_route
     FOR EACH ROW EXECUTE FUNCTION internal.sync_mcp_uri_regexp();
 
@@ -306,10 +305,14 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                        -- RFC 9110 §12.5.1: qvalue 0 means "not acceptable".
                        -- Treating it as acceptance turned an explicit refusal
                        -- into a 200 of exactly the type the client rejected.
-                       COALESCE(
-                           NULLIF(btrim(substring(lower(raw_range) FROM ';[[:space:]]*q=([0-9.]+)')), '')::numeric,
-                           1
-                       ) AS qvalue
+                       -- A q outside the RFC 9110 12.4.2 grammar is ignored
+                       -- (read as 1): casting it raised 22P02 outside any
+                       -- handler, so the request got no HTTP response at all.
+                       COALESCE((
+                           SELECT q::numeric
+                           FROM (SELECT substring(lower(raw_range) FROM ';[[:space:]]*q=([^;[:space:]]*)') AS q) qv
+                           WHERE q ~ '^(0(\.[0-9]{0,3})?|1(\.0{0,3})?)$'
+                       ), 1) AS qvalue
             ) r
             CROSS JOIN unnest(p_produces) AS produced
             WHERE r.qvalue > 0
@@ -966,7 +969,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
             'id', request_id,
             'error', jsonb_strip_nulls(jsonb_build_object(
                 'code', code,
-                'message', message,
+                'message', COALESCE(message, 'Error'),
                 'data', data
             ))
         )

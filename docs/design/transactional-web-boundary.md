@@ -6,11 +6,16 @@ weight: 20
 
 # The transactional web boundary
 
-> **Status: DESIGN — partially implemented.**
+> **Status: IMPLEMENTED.** All eight layers are in code in
+> `internal/scaffold/templates/advanced/lib/api/`. Layer 4 checks the top level
+> of a declared request body and the type or allowed values of a declared query
+> parameter; deeper constraints stay with the handler (see
+> [Known residue](#known-residue)).
 > This record states the thesis the advanced template's API framework exists to serve,
-> the single architectural law that follows from it, and the target shape. It is the
-> reference for epic PGMI-298 and the standing answer to design questions about
-> route matching, contract publication, and request canonicalization.
+> the single architectural law that follows from it, and the shape that implements it.
+> It records the delivery of epic PGMI-298 and is the standing answer to design
+> questions about route matching, contract publication, and request canonicalization.
+> Read it before changing how routes are matched.
 
 ## Thesis
 
@@ -98,39 +103,74 @@ Three corollaries, each of which is independently violable:
 | **Nothing enforced undeclared** | behavior invisible to clients; the spec understates reality |
 | **Nothing declared unenforced** | the published contract lies |
 
-### The law explains the existing bug cluster
+### The law explained the bug cluster
 
 These were filed independently, across separate reviews, as unrelated defects. Under the
-law they are one defect class:
+law they are one defect class, and each was closed by restoring the law rather than by a
+local patch:
 
-| ticket | violation |
-|---|---|
-| PGMI-277 | OpenAPI declares `bearerAuth`; gateway never reads `Authorization` — **declared, unenforced** |
-| PGMI-268 | `requiresAuth` accepts any well-formed `x-user-id` without resolving a user — **declared, unenforced** |
-| PGMI-293 | MCP `outputSchema` advertised; nothing obliges the handler to return `structuredContent` — **declared, unenforced** |
-| PGMI-290 | OPTIONS always 405; CORS preflight can never succeed — **behavior undeclared** |
-| query parameters | read via `api.query_params()`, absent from the spec entirely — **enforced, undeclared** |
-| `pathParams` | hand-synced to the regex's capture-group count (`08-registration.sql:227`) — **declared twice** |
-| `address_regexp` | serves matching *and* OpenAPI path generation — **one field, two contracts** |
+| ticket | violation | resolution |
+|---|---|---|
+| PGMI-277 | OpenAPI declared `bearerAuth`; gateway never read `Authorization` — **declared, unenforced** | the spec advertises `apiKeyAuth` on `x-user-id`, the header the gateway reads |
+| PGMI-268 | `requiresAuth` accepted any well-formed `x-user-id` without resolving a user — **declared, unenforced** | `rest_invoke` gates on `api.current_user_id()`, a resolved active user |
+| PGMI-293 | MCP `outputSchema` advertised; nothing obliged the handler to return `structuredContent` — **declared, unenforced** | the conformance harness fails the deploy when a tool declaring `outputSchema` returns none |
+| PGMI-290 | OPTIONS always 405; CORS preflight could never succeed — **behavior undeclared** | OPTIONS on a matched path answers 204 with `Allow`, before identity |
+| query parameters | read via `api.query_params()`, absent from the spec entirely — **enforced, undeclared** | declared with the `query` key, enforced as 400, published as `in: query` |
+| path parameter names | a hand-written name array kept in sync with the regex's capture-group count — **declared twice** | removed; names come from the declared `path` |
+| `address_regexp` | served matching *and* OpenAPI path generation — **one field, two contracts** | `canonical_path` carries identity; `address_regexp` only matches |
 
 A framework whose contract and behavior can disagree is not a contract. The law is what
 makes the disagreement impossible to express.
 
+### The law is tested, in both directions
+
+`lib/__test__/test_contract_conformance.sql` walks the registry, so a route or tool
+added later is covered without editing the test:
+
+- **Declared ⇒ enforced.** `requiresAuth` refuses both no identity and an identity that
+  resolves to no user; every header security scheme the spec advertises is one the
+  gateway reads; `produces` and `outputSchema` hold for every successful GET and for
+  every MCP tool that declares an output schema; required query parameters are refused
+  when absent; `readOnly` and isolation floors are refused in a transaction that does
+  not meet them.
+- **Enforced ⇒ declared.** The MCP listings equal the MCP registry; every request header
+  the gateway maps into the session is either an advertised security scheme or named as a
+  trust-boundary header (one a trusted proxy sets and a client must never send, so
+  publishing it would invite forgery).
+
+`lib/__test__/test_openapi_agreement.sql` covers the REST side of "enforced ⇒ declared":
+every registered route is published and every published path has a route behind it;
+every published operation, parameterized paths included (sent as the route's probe),
+resolves to a handler; and every published path answers OPTIONS.
+
 ## The shape
 
-Eight layers, each with exactly one job. Every defect above is a layer doing another
+Eight layers, each with exactly one job. Every defect above was a layer doing another
 layer's job.
 
 ```
  1. Ingress            raw request, as spelled by the client
  2. Canonicalize       normalize -> exactly one identity
- 3. Resolve            identity -> handler, provably unambiguous
- 4. Enforce contract   auth, negotiation, input schema, preconditions
+ 3. Resolve            identity -> handler, unambiguous by registration-time proof
+ 4. Enforce contract   auth, query contract, negotiation, preconditions
  5. Open transaction   declared isolation, declared read-only
  6. Execute            four-phase handler body
  7. Shape response     status, headers, ETag, problem+json
  8. Publish            OpenAPI / MCP / registry, derived from the declaration
 ```
+
+Where each layer lives:
+
+| layer | implementation |
+|---|---|
+| 1. Ingress | `api.rest_invoke(method, url, headers, content)` in `09-gateways.sql` |
+| 2. Canonicalize | `api.canonical_path(api.url_path(url))` (`07-helpers.sql`), applied once at the top of `rest_invoke` |
+| 3. Resolve | `address_regexp` match in `rest_invoke`; non-overlap proven at registration in `api.create_or_replace_rest_handler` (`08-registration.sql`) |
+| 4. Enforce contract | `rest_invoke`: 401 on no resolved user, 400 on the query contract, 428 on isolation floor and read-only, 415/406 on negotiation |
+| 5. Open transaction | the client gateway resolves `api.rest_route_policy` before `BEGIN`; `rest_invoke` only reads and fails closed |
+| 6. Execute | the registered handler function |
+| 7. Shape response | `internal.finalize_response_headers`, `api.problem_response` |
+| 8. Publish | `api.openapi_document()` from `canonical_path` and `query_contract` (`11-openapi.sql`); MCP listings from `api.mcp_route` |
 
 **Layer 2 is the funnel.** All spelling tolerance lives here and nowhere else. A route
 author must never hand-write slash or query tolerance into a pattern — that is the
@@ -151,11 +191,31 @@ normalizations. Those three are deliberate pgmi tolerance decisions: defensible,
 consistent with mainstream frameworks, and *not* justifiable by citing the RFC. Anyone
 who checks the citation will find it false and may "correct" the behavior away.
 
-**Layer 3 is the identity.** Exact by construction, and *provably* unambiguous: route
-resolution must never depend on registration order.
+**Layer 3 is the identity.** Exact by construction. Route resolution must not depend on
+registration order; the registration-time proof below is what removes that dependence
+for every pair of routes it can detect.
 
 **Layer 8 is derived, never authored.** The spec is a projection of the declaration, not
 a parallel artifact to be kept in sync.
+
+### Why the matcher is not stricter
+
+The funnel is liberal and the identity is exact. Strictness belongs to the identity, and
+it is expressed as a proof over identities, not as a restriction on how patterns may be
+spelled.
+
+A real prefix-catch-all bug (`^/hello` swallowing `/helloworld`) was once fixed by
+requiring every route regex to be anchored `^...$`. The bug was real; the instrument was
+wrong. Anchoring is a syntactic proxy for a semantic property: it outlawed legitimate
+spelling tolerance as collateral, and it still accepted `^/users/.*$` and
+`^/users/([0-9]+)$` sitting on top of each other. The anchoring guard was replaced by
+the self-consistency and non-overlap proof below.
+
+This requirement has been lost more than once, each time by a contributor re-deriving a
+strict matcher from first principles. Before tightening route matching, check that the
+tightening is a proof about identities and does not reject a valid spelling of a path.
+`lib/__test__/test_route_spelling.sql` is the guard: if it goes red, the funnel has been
+narrowed.
 
 ### Route declaration: identity is declared, matching is derived
 
@@ -165,32 +225,45 @@ The minimum a handler declares is its canonical identity:
 'path', '/users/{id}'
 ```
 
-From that the framework derives the matcher, the parameter names, and the OpenAPI path.
+From that the framework derives the matcher (`api.path_template_to_regex`, each
+`{param}` becoming one `([^/]+)` segment), the parameter names, and the OpenAPI path.
 The author writes no regex, keeps nothing in sync, and gets full spelling tolerance from
-layer 2 for free. This is **simpler than the status quo**, which requires a hand-written
-anchored regex *plus* a parallel `pathParams` array *plus* keeping their arity aligned.
+layer 2 for free. This is the taught default.
 
 An advanced author may additionally supply a matcher:
 
 ```sql
-'path', '/orders/{id}/confirm',
-'uri',  '^/orders/([0-9a-f-]{36})/(?:confirm|accept)$'
+'path',    '/orders/{id}/confirm',
+'uri',     '^/orders/([0-9a-f-]{36})/(?:confirm|accept)$',
+'example', '/orders/6f1c2a4e-0b7d-4c55-9a1e-3d2b8f7e6a10/confirm'
 ```
 
-Registration then proves two things at deploy time:
+A `uri` given without `path` still registers: its canonical path is derived from the
+regex, and each capture group is published as `{p1}`, `{p2}`, …. Declaring `path` next
+to it is how such a route gets real parameter names.
 
-1. **Self-consistency** — the route's own canonical path matches its own regex.
-2. **Non-overlap** — no other route's canonical path matches this regex.
+Registration proves two things at deploy time:
+
+1. **Self-consistency** — the route's identity matches its own regex. A canonical path
+   with no parameters must match the regex itself. A route with parameters and a
+   hand-written `uri` must declare an `example` URL, and the regex must match it. A
+   `path`-only declaration is self-consistent by construction.
+2. **Non-overlap** — no other route whose methods intersect accepts this route's probe,
+   and this route accepts no other route's probe.
+
+Both need a concrete URL per route, its *probe*, stored as `api.rest_route.probe_path`:
+the declared `example` when there is one, else the canonical path when it has no
+parameters, else — for a `path`-only declaration — the path with each `{param}` filled
+in (its derived regex accepts any segment). A hand-written `uri` with capture groups
+must declare an `example`, since no probe can be derived from an arbitrary regex;
+registration rejects it otherwise, and rejects any `example` its regex does not match.
+`lib/__test__/test_route_anchoring.sql` repeats the pairwise check over every route the
+project ships.
 
 Self-consistency is a precondition for non-overlap being meaningful: without it, a route
 could declare an identity its own matcher rejects, and the overlap test would compare
-against a fiction. Together they are strictly stronger than the current syntactic
-`^...$` check, which catches neither — it accepts `^/users/.*$` and `^/users/([0-9]+)$`
-sitting on top of each other.
-
-Once non-overlap is proven, `ORDER BY sequence_number DESC` stops being load-bearing.
-Routing becomes order-independent, which is the actual fix for the class of bug PGMI-214
-was reaching for.
+against a fiction. Together they are strictly stronger than the old syntactic `^...$`
+check, which caught neither.
 
 ### What stays regex-only
 
@@ -203,8 +276,9 @@ The escape hatch earns its keep. These are not expressible as a path template:
 - case-insensitive matching
 
 Known and accepted cost: alternation and optional segments correspond to *several*
-OpenAPI paths. Such a route declares multiple canonical paths or accepts a lossy spec.
-This is inherent to the expressiveness, not to this design — it is true today, silently.
+OpenAPI paths, and a route publishes exactly one canonical path. Such a route either
+accepts a lossy spec or is registered as one route per path. This is inherent to the
+expressiveness, not to this design.
 
 ### Query strings are declared, not matched
 
@@ -214,12 +288,17 @@ considering `%20` vs `+` and repeated keys. Layer 2 therefore strips the query b
 matching, and query contracts are declared structurally:
 
 ```sql
-'query', '[{"name":"format","required":true}]'
+'query', jsonb_build_array(
+    jsonb_build_object('name', 'format', 'required', true))
 ```
 
-Order-insensitive and encoding-safe by construction, enforced at layer 4, and projected
-to OpenAPI `in: query` parameters at layer 8. Variant selection stays handler-side via
-`api.query_params()`, which is where every mainstream framework puts it.
+Each entry is `{name, required?, allowEmptyValue?, schema?, description?}`, stored as
+`api.rest_route.query_contract`. Order-insensitive and encoding-safe by construction:
+`rest_invoke` parses the query and answers 400 when a required parameter is absent or a
+present one has only empty values without `allowEmptyValue`, before the transaction
+checks. `api.openapi_document()` publishes each entry as an `in: query` parameter and
+adds a 400 response. Variant selection stays handler-side via `api.query_params()` /
+`api.query_params_multi()`, which is where every mainstream framework puts it.
 
 ## Decisions taken
 
@@ -233,19 +312,42 @@ to OpenAPI `in: query` parameters at layer 8. Variant selection stays handler-si
 | Percent-encoding | unreserved characters decoded, hex digits uppercased, before match | RFC 3986 §6.2.2.1–2. Also a security boundary: encoded dot-segments must not survive into layer 3. Reserved characters stay encoded — decoding `%2F` would forge a segment boundary. |
 | Dot-segments | removed before match | RFC 3986 §6.2.2.3. Normalizing *after* an auth decision is a bypass. |
 | Empty path | normalized to `/` | RFC 3986 §6.2.3 (scheme-based, for `http`). |
+| Route declaration | `path` is the default; `uri` is the escape hatch | Identity is declared once; matcher, names and OpenAPI path are derived. |
 | Route regex | retained as an advanced escape hatch | Full regex is a genuine differentiator over path-DSL frameworks; the fix is to stop it doing layer 8's job, not to remove it. |
 | Anchoring guard | replaced by semantic proof | `^...$` is a syntactic proxy for a semantic property, and it outlawed legitimate tolerance as collateral. |
+| OPTIONS | 204 with `Allow` on any matched path, before identity | A CORS preflight carries no credentials by definition and needs a 2xx. |
+| Wrong method | 405 with `Allow` listing only methods the caller may call; 401 when the caller may call none | An anonymous caller must not enumerate the methods of an authenticated resource. |
+| OpenAPI document | filtered by caller; ETag carries the caller class (`anon` / `auth`) | A 304 must never hand an authenticated copy to an anonymous caller. |
+
+## Known residue
+
+The eight layers are in place. These are the places where the law still holds only by
+convention or only for the cases the proof can see:
+
+- **Schemas are checked at the top level only.** `rest_invoke` checks a POST, PUT or
+  PATCH body against the route's `inputSchema` with the same function the MCP gateway
+  uses for tool arguments (`internal.json_schema_errors`): the root type, required keys,
+  and the JSON type of each top-level property. A declared query parameter's `schema` is
+  checked for `integer`, `number`, `boolean` and `enum`. Nested schemas, formats, ranges
+  and patterns are published but checked only by the handler's validate phase.
+- **Non-overlap is proven on probes, not on regex intersection.** Registration tries each
+  route's probe against the other, and a cross probe that fills each variable segment
+  with the other route's fixed word, so `/a/{x}/c` and `/a/b/{y}` are refused on
+  `/a/b/c`. A hand-written `uri` whose regex does not follow its canonical path can
+  still escape both, and `ORDER BY sequence_number DESC` (later registration wins)
+  then decides.
 
 ## Non-goals
 
 - **Routing on query parameters.** Structurally brittle; declared and enforced instead.
 - **A path DSL replacing regex.** The template is the default, not the ceiling.
-- **Backward compatibility with hand-written `pathParams`.** No user base to protect;
-  derived names replace it outright.
+- **Backward compatibility with hand-written path parameter names.** No user base to
+  protect; the metadata key was removed outright and names come from the declared `path`.
 
 ## History
 
-The framework drifted from this thesis in one commit, not gradually.
+The framework drifted from this thesis in one commit, not gradually, and was brought back
+to it in two passes.
 
 - **v0.7.0 (2025-12-24)** — `api.url_path()` ships. Query stripping is original design.
 - **v0.10.0 (2026-05-04, `87ebe32a`)** — `rest_invoke` matches on `api.url_path(p_url)`.
@@ -256,6 +358,15 @@ The framework drifted from this thesis in one commit, not gradually.
   drift.
 - **OpenAPI generation** — never drift, but built on `address_regexp`, conflating layers
   3 and 8 and making the identity implicit.
+- **2026-07-28 (PGMI-299..302)** — `api.canonical_path()` becomes layer 2; the `path`
+  declaration and `canonical_path` column give identity its own field and retire the
+  hand-written parameter-name array; the anchoring guard is replaced by the
+  self-consistency and non-overlap proof; the spelling suite pins the funnel.
+- **2026-09-24 (PGMI-380, 289, 290, 293, 304, 305)** — parameterized routes join the
+  overlap proof through `probe_path`; OPTIONS preflight and caller-filtered 405 and
+  OpenAPI; MCP `outputSchema` obliges `structuredContent`; the query-string contract is
+  declared, enforced and published; the conformance harness tests the law in both
+  directions.
 
 ## See also
 

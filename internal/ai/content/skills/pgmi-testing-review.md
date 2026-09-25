@@ -209,12 +209,15 @@ against its response body. Re-query the table.
 
 ### Transactional Isolation
 
-**Pattern**: `CALL pgmi_test()` wraps each test directory in savepoints with automatic rollback — no manual `BEGIN`/`ROLLBACK` needed.
+**Pattern**: `CALL pgmi_test()` wraps each test directory in savepoints with automatic rollback — no manual `ROLLBACK` needed. It does need an explicit top-level `BEGIN`: the macro expands to `SAVEPOINT`, which fails with 25P01 outside a transaction block.
 
 ```sql
 -- In deploy.sql
+BEGIN;
+-- migrations ...
 CALL pgmi_test();
 -- All tests run within savepoints, test data rolled back after execution
+COMMIT;
 ```
 
 ### Test Data Management
@@ -407,10 +410,10 @@ func TestDeployer(t *testing.T) {
 
 ### Test Helpers
 
-Test helpers in pgmi are colocated in `internal/testing/` or as `*_test.go` files within packages.
+Test helpers in pgmi are colocated in `internal/testhelpers/` or as `*_test.go` files within packages.
 
 ```go
-// internal/testing/helpers.go (pattern example)
+// internal/testhelpers/helpers.go (pattern example)
 package testing
 
 import (
@@ -570,29 +573,25 @@ func TestDeployBasicTemplate(t *testing.T) {
 
 ### HTTP Integration Tests
 
+Go through the gateway, as a client does, rather than calling the handler
+function directly: that exercises routing, auth and content negotiation too.
+The advanced template ships `GET /hello`:
+
 ```sql
 -- __test__/test_http_routes.sql
 DO $$
 DECLARE
-    v_response JSON;
+    v_response api.http_response;
 BEGIN
-    -- Test GET /api/users/:id
-    v_response := api.get_user('550e8400-e29b-41d4-a716-446655440000'::UUID);
+    v_response := api.rest_invoke('GET', '/hello?name=Developer');
 
-    IF (v_response->>'status')::INT != 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: Expected 200 OK, got %', v_response->>'status';
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: GET /hello expected 200, got %', (v_response).status_code;
     END IF;
-
-    RAISE NOTICE 'PASS: GET /api/users/:id';
-
-    -- Test POST /api/users
-    v_response := api.create_user('test@example.com', 'Test User');
-
-    IF (v_response->>'status')::INT != 201 THEN
-        RAISE EXCEPTION 'TEST FAILED: Expected 201 Created, got %', v_response->>'status';
+    IF api.content_json((v_response).content)->>'message' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: GET /hello returned no message: %',
+            api.content_json((v_response).content);
     END IF;
-
-    RAISE NOTICE 'PASS: POST /api/users';
 END $$;
 ```
 
@@ -756,7 +755,7 @@ go tool cover -html=coverage.out
 ### Test Organization
 - [ ] Tests colocated with implementation (`*_test.go`)?
 - [ ] Integration tests use `*_integration_test.go` suffix?
-- [ ] Shared test infrastructure in `internal/testing/`?
+- [ ] Shared test infrastructure in `internal/testhelpers/`?
 - [ ] Test naming clear and descriptive?
 
 ---

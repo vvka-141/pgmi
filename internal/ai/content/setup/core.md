@@ -107,8 +107,10 @@ test directory is the fixture for that directory.
 `deploy.sql` runs them with the preprocessor macro:
 
 ```sql
+BEGIN;                         -- required: the macro expands to SAVEPOINT
 CALL pgmi_test();              -- run all tests
 CALL pgmi_test('.*/api/.*');   -- filter by POSIX regex
+COMMIT;
 ```
 
 Each test runs inside a savepoint, so **a test's own writes roll back
@@ -159,7 +161,7 @@ The following apply **only** in an advanced-template project (gated behind its
 `<pgmi-meta>` markers and `lib/api/` tree) — ignore them in a basic project:
 
 - REST/RPC/MCP request routing through the `api.handler` registry.
-- The four-schema layout and `owner → admin → api → customer` role hierarchy.
+- The five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects, and the `owner → admin → api → customer` role hierarchy.
 - Row-level security on membership tables.
 - Schema/handler design conventions for the HTTP and MCP surfaces.
 
@@ -176,6 +178,7 @@ pgmi ai skill pgmi-philosophy       # why pgmi refuses orchestration flags
 pgmi ai skill pgmi-metadata-system  # <pgmi-meta> blocks, sortKeys, execution ordering
 pgmi ai skill pgmi-test-architecture # __test__/ dirs, fixture naming, isolation
 pgmi ai skill pgmi-testing-review   # writing and debugging tests
+pgmi ai skill pgmi-debug-deploy     # a failed deploy: exit code to cause to fix
 pgmi ai skill postgresql-patterns   # EXECUTE, format(), composite types, dynamic SQL
 pgmi ai skill pgmi-templates        # template internals, basic and advanced
 pgmi ai skill pgmi-api-architecture # advanced: REST/RPC/MCP design

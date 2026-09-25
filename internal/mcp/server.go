@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -70,9 +72,22 @@ func (s *Server) Register(t Tool) {
 // bufio.Reader.ReadString, not bufio.Scanner: Scanner caps a line at 64 KiB by
 // default and reports the overflow as end-of-input, which would end the session
 // on a large *valid* frame — a worse failure than the one being fixed.
-func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+//
+// Each tools/call runs in its own goroutine under a per-request context, so a
+// long deploy does not hold up ping (which the spec requires to be answered
+// promptly) and notifications/cancelled can stop it. Serve waits for in-flight
+// calls before it returns.
+func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (err error) {
 	rd := bufio.NewReader(in)
-	enc := json.NewEncoder(out)
+	ss := &session{enc: json.NewEncoder(out), inflight: map[string]context.CancelCauseFunc{}}
+	callCtx, cancelCalls := context.WithCancel(ctx)
+	defer func() {
+		ss.wg.Wait()
+		cancelCalls()
+		if err == nil {
+			err = ss.asyncErr
+		}
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -104,7 +119,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			}
 			// Per-message, per JSON-RPC 2.0: report the parse error with a null
 			// id and keep reading. The next newline is a known-good boundary.
-			if writeErr := s.write(enc, nil, nil, &rpcError{
+			if writeErr := ss.write(nil, nil, &rpcError{
 				Code:    codeParseError,
 				Message: "parse error: " + err.Error(),
 			}); writeErr != nil {
@@ -114,6 +129,17 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 				return nil
 			}
 			continue
+		}
+
+		if req.Method == "tools/call" && req.JSONRPC == "2.0" && !req.isNotification() && req.hasWellFormedID() {
+			ss.startCall(callCtx, s, req)
+			if atEOF {
+				return nil
+			}
+			continue
+		}
+		if req.Method == "notifications/cancelled" {
+			ss.cancel(req.Params)
 		}
 
 		resp, isNotification := s.dispatch(ctx, req)
@@ -126,7 +152,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			if !req.hasWellFormedID() {
 				id = nil
 			}
-			if err := s.write(enc, id, resp.Result, resp.Error); err != nil {
+			if err := ss.write(id, resp.Result, resp.Error); err != nil {
 				return err
 			}
 		}
@@ -136,12 +162,73 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 }
 
-func (s *Server) write(enc *json.Encoder, id json.RawMessage, result any, rpcErr *rpcError) error {
+var errClientCancelled = errors.New("cancelled by the client")
+
+// session is the per-connection state of Serve: responses written from
+// concurrent tool calls, and the cancel function of each call in flight.
+type session struct {
+	wmu      sync.Mutex
+	enc      *json.Encoder
+	asyncErr error
+
+	mu       sync.Mutex
+	inflight map[string]context.CancelCauseFunc
+	wg       sync.WaitGroup
+}
+
+func (ss *session) write(id json.RawMessage, result any, rpcErr *rpcError) error {
+	ss.wmu.Lock()
+	defer ss.wmu.Unlock()
 	resp := rpcResponse{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr}
-	if err := enc.Encode(resp); err != nil {
+	if err := ss.enc.Encode(resp); err != nil {
 		return fmt.Errorf("write response: %w", err)
 	}
 	return nil
+}
+
+func (ss *session) startCall(ctx context.Context, s *Server, req rpcRequest) {
+	key := string(bytes.TrimSpace(req.ID))
+	reqCtx, cancel := context.WithCancelCause(ctx)
+	ss.mu.Lock()
+	ss.inflight[key] = cancel
+	ss.mu.Unlock()
+
+	ss.wg.Go(func() {
+		resp := s.handleToolsCall(reqCtx, req.Params)
+
+		ss.mu.Lock()
+		delete(ss.inflight, key)
+		ss.mu.Unlock()
+		cancelled := errors.Is(context.Cause(reqCtx), errClientCancelled)
+		cancel(nil)
+
+		// The spec: a receiver SHOULD NOT respond to a cancelled request.
+		if cancelled {
+			return
+		}
+		if err := ss.write(req.ID, resp.Result, resp.Error); err != nil {
+			ss.wmu.Lock()
+			if ss.asyncErr == nil {
+				ss.asyncErr = err
+			}
+			ss.wmu.Unlock()
+		}
+	})
+}
+
+func (ss *session) cancel(params json.RawMessage) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return
+	}
+	ss.mu.Lock()
+	cancel := ss.inflight[string(bytes.TrimSpace(p.RequestID))]
+	ss.mu.Unlock()
+	if cancel != nil {
+		cancel(errClientCancelled)
+	}
 }
 
 // dispatch routes a request to its handler. The second return reports whether

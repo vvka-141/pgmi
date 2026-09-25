@@ -6,7 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/params"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func acquireSchemaConn(t *testing.T) (*pgxpool.Conn, func()) {
@@ -99,5 +100,31 @@ func TestSchema_IsIdempotentWithinASession(t *testing.T) {
 	}
 	if !ok {
 		t.Error("_pgmi_source_metadata should exist after a re-run")
+	}
+}
+
+// Go decides which __test__ files become tests; SQL decides is_sql_file for
+// everything else. Two definitions in two languages must give one answer.
+func TestIsSQLFile_GoAndSQLAgree(t *testing.T) {
+	conn, cleanup := acquireSchemaConn(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := params.CreateSchema(ctx, conn); err != nil {
+		t.Fatalf("CreateSchema: %v", err)
+	}
+
+	exts := []string{".md", ".json", ".sqlx", ".SQL", ".PgSql", "", ".sql.bak", ".txt"}
+	for ext := range pgmi.SQLExtensions {
+		exts = append(exts, ext)
+	}
+	for _, ext := range exts {
+		var sqlSays bool
+		if err := conn.QueryRow(ctx, `SELECT pg_temp.pgmi_is_sql_file($1)`, "./f"+ext).Scan(&sqlSays); err != nil {
+			t.Fatalf("pgmi_is_sql_file(%q): %v", ext, err)
+		}
+		if goSays := pgmi.IsSQLExtension(ext); goSays != sqlSays {
+			t.Errorf("extension %q: Go says %v, SQL says %v", ext, goSays, sqlSays)
+		}
 	}
 }

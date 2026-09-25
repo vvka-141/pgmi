@@ -81,8 +81,6 @@ COMMENT ON FUNCTION membership.eq_hash_safe(text, text) IS
 -- RLS Policies
 -- ============================================================================
 
-ALTER TABLE membership.api_key ENABLE ROW LEVEL SECURITY;
-
 -- Table owner bypasses RLS, so SECURITY DEFINER functions (create_api_key,
 -- revoke_api_key, etc.) work without explicit owner policies. This policy scopes
 -- direct SELECT only; it does NOT constrain the SECURITY DEFINER bodies below,
@@ -90,16 +88,11 @@ ALTER TABLE membership.api_key ENABLE ROW LEVEL SECURITY;
 -- Customer-role callers only need SELECT on keys within their visible orgs —
 -- mutations go through the SECURITY DEFINER functions, not direct DML.
 DO $$
-DECLARE
-    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
-    DROP POLICY IF EXISTS api_key_customer_select ON membership.api_key;
-
-    EXECUTE format($policy$
-        CREATE POLICY api_key_customer_select ON membership.api_key
-            FOR SELECT TO %I
-            USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))
-    $policy$, v_customer_role);
+    PERFORM core.ensure_rls('membership.api_key');
+    PERFORM core.ensure_policy('membership.api_key', 'api_key_customer_select', format(
+        $policy$FOR SELECT TO %I USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))$policy$,
+        pg_temp.deployment_setting('database_customer_role')));
 END $$;
 
 -- ============================================================================

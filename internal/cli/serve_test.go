@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -364,5 +365,44 @@ func TestServeDeployRejectsBadTimeout(t *testing.T) {
 	}
 	if !strings.Contains(resultText(t, result), "invalid timeout") {
 		t.Errorf("unexpected error: %s", resultText(t, result))
+	}
+}
+
+// MCP 2025-11-25 (SEP-1303): an argument that fails validation is a tool
+// execution error the model can read and correct, not a protocol error.
+func TestServeBadArgumentIsAToolError(t *testing.T) {
+	result, isErr := callTool(t, "ai_skill", map[string]any{"name": 5})
+	if !isErr {
+		t.Fatalf("a wrong-type argument must be an isError result, got: %s", resultText(t, result))
+	}
+}
+
+// MCP 2025-11-25 (SEP-986): tool names are 1-128 characters of
+// A-Z a-z 0-9 _ - . and nothing else.
+func TestServeToolNamesFollowTheSpec(t *testing.T) {
+	valid := regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+	srv := buildMCPServer()
+	var out strings.Builder
+	if err := srv.Serve(context.Background(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`), &out); err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Result.Tools) == 0 {
+		t.Fatal("tools/list returned no tools")
+	}
+	for _, tool := range resp.Result.Tools {
+		if !valid.MatchString(tool.Name) {
+			t.Errorf("tool name %q breaks the 2025-11-25 naming rule", tool.Name)
+		}
 	}
 }

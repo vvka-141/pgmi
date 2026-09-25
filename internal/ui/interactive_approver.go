@@ -30,7 +30,7 @@ type InteractiveApprover struct {
 	output  io.Writer
 }
 
-func NewInteractiveApprover(verbose bool) pgmi.Approver {
+func NewInteractiveApprover(verbose bool) *InteractiveApprover {
 	return &InteractiveApprover{
 		verbose: verbose,
 		input:   os.Stdin,

@@ -20,22 +20,24 @@ SET LOCAL lock_timeout = '250ms';
 -- strong lock: a plain DROP INDEX takes ACCESS EXCLUSIVE on the table. Defined
 -- here, called from the tail -- pg_temp objects belong to the session, so they
 -- outlive the COMMIT below.
-CREATE FUNCTION pg_temp.reap_invalid_index(p_index text, p_table regclass)
+-- The table comes from the index itself: a caller passing the wrong table
+-- would lock one table and drop an index on another, and the re-check below
+-- would run under the wrong lock.
+CREATE FUNCTION pg_temp.reap_invalid_index(p_index text)
 RETURNS boolean AS $fn$
 DECLARE
     v_index oid := to_regclass(p_index);
+    v_table regclass;
 BEGIN
-    IF v_index IS NULL THEN
-        RETURN false;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = v_index AND NOT indisvalid) THEN
+    SELECT indrelid INTO v_table FROM pg_index WHERE indexrelid = v_index AND NOT indisvalid;
+    IF v_table IS NULL THEN
         RETURN false;
     END IF;
 
     -- Bound the wait: this is the one ACCESS EXCLUSIVE request in the tail, and
     -- a busy table must not be able to rebuild the queue phase 1 avoided.
     SET LOCAL lock_timeout = '250ms';
-    EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', p_table);
+    EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', v_table);
 
     -- Re-check while holding it. An index being built by a CONCURRENTLY in
     -- another session is also not yet indisvalid, and may have become valid since the
@@ -94,7 +96,7 @@ BEGIN
         (SELECT count(*) FROM pg_temp.pgmi_plan_view);
 END $$;
 
-SELECT pg_temp.reap_invalid_index('idx_orders_customer', 'orders');
+SELECT pg_temp.reap_invalid_index('idx_orders_customer');
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_customer ON orders (customer_id);
 
@@ -112,7 +114,7 @@ COMMIT;
 ALTER TABLE orders VALIDATE CONSTRAINT orders_amount_nonneg;
 
 -- A second concurrent index, proving phases interleave freely.
-SELECT pg_temp.reap_invalid_index('idx_orders_status', 'orders');
+SELECT pg_temp.reap_invalid_index('idx_orders_status');
 
 -- Deliberate error: column does not exist.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_status ON orders (nonexistent_column);

@@ -15,17 +15,21 @@ table, not a tutorial — find your row, do the check, fix, redeploy.
 
 ```bash
 pgmi deploy ./project -d mydb; echo "exit=$?"
-pgmi deploy ./project -d mydb --json      # same failure, machine-readable
+pgmi deploy ./project -d mydb --json 2>/dev/null   # machine-readable, no NOTICE stream
 ```
 
-The `--json` failure envelope carries what you need without re-reading the console:
+In an agent loop use `--json 2>/dev/null`: stdout carries only the result, and
+the NOTICE stream on stderr (tens to hundreds of lines) never reaches your
+context. The `--json` failure envelope carries what you need:
 
 ```json
 { "status": "failed", "exitCode": 13, "sqlstate": "42601",
-  "script": "deploy.sql", "line": 16, "column": 1, "sourceLine": "SELEC 1;",
-  "scriptExpanded": true, "failedFile": "./migrations/002_data.sql" }
+  "failedFile": "./migrations/002_data.sql",
+  "script": "./migrations/002_data.sql", "line": 4, "column": 1, "sourceLine": "SELEC 1;" }
 ```
 
+For an error inside a project file, `script`/`line`/`column` point into that
+file. For an error in deploy.sql itself `script` is `deploy.sql`, and
 `scriptExpanded: true` means `line` refers to the script **after** `pgmi_test()`
 macro expansion, not to the file on disk — the numbers legitimately differ.
 
@@ -40,7 +44,7 @@ macro expansion, not to the file on disk — the numbers legitimately differ.
 | **14** | `deploy.sql` not found | You pointed at the wrong directory. `deploy.sql` must sit at the **root** of the path you pass. |
 | **15** | Concurrent deploy detected | Another pgmi run holds the advisory lock on this database. Wait, or find it: `SELECT * FROM pg_locks WHERE locktype = 'advisory'`. |
 | **16** | Timed out | Exceeded `--timeout` (default 3m). Either the deploy is genuinely slow (raise it) or it is **blocked on a lock** — check `pg_stat_activity` for `wait_event_type = 'Lock'`. |
-| **130** | Interrupted (Ctrl-C) | The transaction rolled back. Nothing was committed. |
+| **130** | Interrupted (Ctrl-C) | The open transaction rolled back. If the interrupt came in the **atomic head**, nothing was committed; in the tail, earlier autocommitted units stay applied (see `executionMode` / `unitsCommitted` below). |
 
 ## Exit 13: SQL execution failed
 
@@ -66,6 +70,8 @@ Then read the SQLSTATE:
 | `25001` … `cannot be executed from a function` | Same statements, but reached through `EXECUTE` — a plan loop inside a `DO` block | Same SQLSTATE, different fix: no transaction state helps. Write the statement at top level in the tail, not through the loop. |
 | `25P01` … `SAVEPOINT can only be used in transaction blocks` | Your `CALL pgmi_test()` is not inside an **explicit** transaction | The macro expands to `SAVEPOINT`, and PostgreSQL refuses it in the implicit block of a multi-statement query. `SAVEPOINT` is nowhere in your file — pgmi put it there. Wrap the call: `BEGIN;` … `CALL pgmi_test();` … `COMMIT;` |
 | `40001` / `40P01` | Serialization failure / deadlock | Transient. Retry the whole transaction from a fresh snapshot — never with a savepoint. |
+| `42704` … `unrecognized configuration parameter "pgmi.x"` | A required parameter was not passed | `current_setting('pgmi.x')` without the `, true` second argument raises this when `--param x=…` is missing. Pass the parameter, or use `current_setting('pgmi.x', true)` with a default. |
+| `P0002` … `pgmi: no tests were discovered` / `no tests matched the requested pattern` | `CALL pgmi_test()` found nothing to run | The pattern matched no file under `__test__/`, or the project has no tests. Patterns match project-relative paths such as `./__test__/test_users.sql`. |
 | `P0001` | `RAISE EXCEPTION` | **Your own code, or a failing test.** The message is yours. Read it. A `missing required parameter` or `unknown parameter` lands here, not on exit 10 — the template raised it after pgmi connected. Add the `--param` it names. |
 
 ### The failure is a test
@@ -78,11 +84,12 @@ redeploy.
 
 ### "Which file failed?"
 
-`pgmi_test_generate()` wraps each test/fixture step with per-file attribution,
-so `failedFile` populates automatically for test failures. The scaffolded deploy
-loops do the same for migrations (`RAISE EXCEPTION 'Failed in %: %'`). If your
-own custom loop does not attribute failures, add the wrapper — see the
-`pgmi-sql` skill.
+`failedFile` populates automatically. For migrations pgmi matches the text
+PostgreSQL was executing against the loaded files, and `script`/`line`/`column`
+point into the file for parse and analysis errors. For tests,
+`pgmi_test_generate()` attributes each step. If `failedFile` is missing, a
+handler in deploy.sql re-raised with `RAISE EXCEPTION`: drop it, or re-raise
+with a bare `RAISE;` (see the `pgmi-sql` skill).
 
 ### Dollar-quote closed early
 

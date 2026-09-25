@@ -28,14 +28,25 @@ CREATE TABLE IF NOT EXISTS api.rest_route (
 
     route_name text,
     auto_log boolean NOT NULL DEFAULT true,
-    canonical_path text NOT NULL DEFAULT ''
+    canonical_path text NOT NULL DEFAULT '',
+    query_contract jsonb NOT NULL DEFAULT '[]'
 );
 
-ALTER TABLE api.rest_route
-    ADD COLUMN IF NOT EXISTS canonical_path text NOT NULL DEFAULT '';
-
-ALTER TABLE api.rest_route
-    DROP COLUMN IF EXISTS path_param_names;
+DO $$
+BEGIN
+    IF NOT pg_temp.has_column('api.rest_route', 'canonical_path') THEN
+        ALTER TABLE api.rest_route ADD COLUMN canonical_path text NOT NULL DEFAULT '';
+    END IF;
+    IF pg_temp.has_column('api.rest_route', 'path_param_names') THEN
+        ALTER TABLE api.rest_route DROP COLUMN path_param_names;
+    END IF;
+    IF NOT pg_temp.has_column('api.rest_route', 'probe_path') THEN
+        ALTER TABLE api.rest_route ADD COLUMN probe_path text NOT NULL DEFAULT '';
+    END IF;
+    IF NOT pg_temp.has_column('api.rest_route', 'query_contract') THEN
+        ALTER TABLE api.rest_route ADD COLUMN query_contract jsonb NOT NULL DEFAULT '[]';
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_rest_route_lookup
     ON api.rest_route(sequence_number DESC);
@@ -56,6 +67,9 @@ COMMENT ON TABLE api.rest_route IS
 
 COMMENT ON COLUMN api.rest_route.sequence_number IS
     'Auto-incrementing priority. Higher values (later registration) match first.';
+
+COMMENT ON COLUMN api.rest_route.query_contract IS
+    'Declared query parameters, from the query metadata key: [{name, required, allowEmptyValue, schema, description}]. api.rest_invoke rejects a request missing a required one, or sending an empty value where allowEmptyValue is not true, and the OpenAPI document publishes them as in: query.';
 
 COMMENT ON COLUMN api.rest_route.canonical_path IS
     'OpenAPI path template (e.g. /users/{id}). Declared via the path metadata key, or derived from address_regexp for uri-only registrations. The single source of truth for the OpenAPI document path string and parameter names.';

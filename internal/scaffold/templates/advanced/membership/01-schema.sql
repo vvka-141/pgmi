@@ -178,6 +178,7 @@ DO $$ BEGIN RAISE DEBUG 'membership: Applied seed data (superuser role)'; END $$
 -- Views
 -- ============================================================================
 
+SELECT core.ensure_view('membership.vw_user_roles', $view$
 CREATE OR REPLACE VIEW membership.vw_user_roles
 WITH (security_invoker = true) AS
 SELECT
@@ -186,11 +187,13 @@ SELECT
     r.object_id AS role_object_id,
     ur.assigned_at
 FROM membership.user_role ur
-JOIN membership.role r ON r.object_id = ur.role_object_id;
+JOIN membership.role r ON r.object_id = ur.role_object_id
+$view$);
 
 COMMENT ON VIEW membership.vw_user_roles IS
     'Joins user_role with role to expose role names. Security-invoker: inherits caller RLS.';
 
+SELECT core.ensure_view('membership.vw_users', $view$
 CREATE OR REPLACE VIEW membership.vw_users
 WITH (security_invoker = true) AS
 SELECT
@@ -205,11 +208,13 @@ SELECT
 FROM membership."user" u
 LEFT JOIN membership.user_role ur ON ur.user_object_id = u.object_id
 LEFT JOIN membership.role r ON r.object_id = ur.role_object_id
-GROUP BY u.object_id;
+GROUP BY u.object_id
+$view$);
 
 COMMENT ON VIEW membership.vw_users IS
     'Users with aggregated role names. Roles array is empty (not NULL) when user has no roles.';
 
+SELECT core.ensure_view('membership.vw_user_identities', $view$
 CREATE OR REPLACE VIEW membership.vw_user_identities
 WITH (security_invoker = true) AS
 SELECT
@@ -221,11 +226,13 @@ SELECT
     u.email,
     u.display_name
 FROM membership.user_identity ui
-JOIN membership."user" u ON u.object_id = ui.user_object_id;
+JOIN membership."user" u ON u.object_id = ui.user_object_id
+$view$);
 
 COMMENT ON VIEW membership.vw_user_identities IS
     'User identities joined with user profile. Shows which providers are linked to each account.';
 
+SELECT core.ensure_view('membership.vw_organization_members', $view$
 CREATE OR REPLACE VIEW membership.vw_organization_members
 WITH (security_invoker = true) AS
 SELECT
@@ -242,7 +249,8 @@ SELECT
     o.slug AS organization_slug
 FROM membership.organization_member om
 JOIN membership."user" u ON u.object_id = om.user_id
-JOIN membership.organization o ON o.object_id = om.organization_id;
+JOIN membership.organization o ON o.object_id = om.organization_id
+$view$);
 
 COMMENT ON VIEW membership.vw_organization_members IS
     'Organization members enriched with user profile and org details. Used for admin dashboards and member listing.';
@@ -303,7 +311,12 @@ DECLARE
     v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
 BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA membership TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA membership TO %I', v_api_role);
+    -- SELECT only: no RLS policy lets the api role write these tables, so a
+    -- write grant was a latent hole a future permissive policy would open.
+    -- REVOKE as well as GRANT, because roles outlive the database and a
+    -- dropped GRANT never converges on an existing cluster.
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA membership FROM %I', v_api_role);
+    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA membership TO %I', v_api_role);
     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA membership TO %I', v_customer_role);
     EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_admin_role);
     EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA membership TO %I', v_api_role);

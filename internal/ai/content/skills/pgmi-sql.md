@@ -305,12 +305,16 @@ END $$;
 The `pgmi_test()` call is a **preprocessor macro** expanded by Go before SQL reaches PostgreSQL. Use `CALL` syntax:
 
 ```sql
+BEGIN;  -- required, see below
+
 -- Run all tests
 CALL pgmi_test();
 
 -- Run tests matching pattern (POSIX regex)
 CALL pgmi_test('.*/integration/.*');
 CALL pgmi_test('.*_critical\.sql$');
+
+COMMIT;
 ```
 
 **It must sit inside an explicit `BEGIN ... COMMIT`.** The macro expands to
@@ -628,8 +632,8 @@ BEGIN
             v_executed := v_executed + 1;
 
         EXCEPTION WHEN others THEN
-            RAISE WARNING 'Failed to process %: %', v_file.path, SQLERRM;
-            -- Continue or re-raise based on policy
+            RAISE WARNING 'Failed to process %', v_file.path;
+            RAISE;  -- swallowing it would commit a partial deploy that exits 0
         END;
     END LOOP;
 
@@ -687,7 +691,7 @@ Standard keys for handler registration (all camelCase):
 -- REST handlers
 jsonb_build_object(
     'id', '<uuid>',
-    'uri', '^/path$',
+    'path', '/path/{id}',
     'httpMethod', '^GET$',
     'name', 'handler_name',
     'description', 'Handler description',
@@ -883,9 +887,10 @@ BEGIN
     LOOP
         BEGIN
             EXECUTE v_file.content;
-        EXCEPTION WHEN others THEN
-            RAISE WARNING 'Failed to execute %: %', v_file.path, SQLERRM;
-            -- Continue or re-raise based on policy
+        EXCEPTION WHEN undefined_object THEN
+            -- Continue only past a failure you named and expect. WHEN OTHERS
+            -- here would commit a partial deploy that exits 0.
+            RAISE WARNING 'Skipping %: %', v_file.path, SQLERRM;
         END;
     END LOOP;
 END $$;
@@ -911,6 +916,9 @@ END $$;
 ```
 
 **Pattern 2: Detailed Error Context**
+
+No handler: pgmi names the failing file and line from the original error (see
+"Errors in deploy.sql" below). If you add context, re-raise with a bare `RAISE;`:
 ```sql
 DO $$
 DECLARE
@@ -920,8 +928,8 @@ BEGIN
         BEGIN
             EXECUTE v_file.content;
         EXCEPTION WHEN others THEN
-            RAISE EXCEPTION 'Failed to execute %: % (SQLSTATE: %)',
-                v_file.path, SQLERRM, SQLSTATE;
+            RAISE WARNING 'while executing %', v_file.path;
+            RAISE;
         END;
     END LOOP;
 END $$;
@@ -965,27 +973,27 @@ Generic PostgreSQL error handling (`GET STACKED DIAGNOSTICS`, SQLSTATE classes,
 `EXCEPTION` blocks) is assumed knowledge — consult
 https://www.postgresql.org/docs/current/errcodes-appendix.html when you need a code.
 
-What is pgmi-specific is **attribution**: pgmi executes your files, so a bare
-error tells the operator nothing about *which* file failed. Wrap execution and
-name the file:
+What is pgmi-specific is **attribution**. pgmi names the failing file by
+matching the text PostgreSQL was executing against the loaded files, and adds
+the line and column for parse and analysis errors (`failedFile`, `script`,
+`line`, `column` in `--json`). That works only if the original error reaches
+pgmi, so do not wrap `EXECUTE` in a handler that re-raises:
 
 ```sql
 FOR v_file IN SELECT p.path, p.content FROM pg_temp.pgmi_plan_view p
     JOIN pg_temp.pgmi_source_view s ON s.path = p.path
     WHERE s.is_sql_file ORDER BY p.execution_order
 LOOP
-    BEGIN
-        EXECUTE v_file.content;
-    EXCEPTION WHEN OTHERS THEN
-        RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM
-            USING ERRCODE = SQLSTATE,          -- keep the class; do not flatten it
-                  DETAIL   = COALESCE(PG_EXCEPTION_DETAIL, '');
-    END;
+    EXECUTE v_file.content;
 END LOOP;
 ```
 
-Preserve `ERRCODE`: pgmi maps SQLSTATE to an exit code, and a caller (or a retry
-loop) cannot classify a failure you have rewritten into a generic error.
+If you must catch, re-raise with a bare `RAISE;`, which keeps SQLSTATE, DETAIL
+and position. `RAISE EXCEPTION '...'` discards the position and, without
+`USING ERRCODE = SQLSTATE`, flattens the SQLSTATE to `P0001`. Every SQL failure
+exits 13 whatever its SQLSTATE; the SQLSTATE reaches a caller only in `--json`
+(`sqlstate`), and a flattened one leaves CI and any retry loop unable to tell a
+retryable `40001` from a bug.
 
 For diagnosing a failed deploy from its exit code, load the `pgmi-debug-deploy`
 skill.

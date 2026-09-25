@@ -45,7 +45,6 @@ func newTestDeployer(t *testing.T) pgmi.Deployer {
 		&forceApprover{},
 		logger,
 		sessionManager,
-		fileScanner,
 		dbManager,
 	)
 }

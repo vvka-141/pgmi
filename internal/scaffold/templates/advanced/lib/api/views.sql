@@ -17,6 +17,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing API views'; END $$;
 -- Handler Analysis View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_handler_info', $view$
 CREATE OR REPLACE VIEW api.vw_handler_info AS
 SELECT
     h.object_id,
@@ -66,7 +67,8 @@ SELECT
     h.min_transaction_isolation,
     h.read_only
 
-FROM api.handler h;
+FROM api.handler h
+$view$);
 
 COMMENT ON VIEW api.vw_handler_info IS
     'Power-user analysis view for handlers. Includes lifecycle age, health checks (function_exists, definition_drifted), and route bindings.';
@@ -75,6 +77,7 @@ COMMENT ON VIEW api.vw_handler_info IS
 -- Handler Statistics View (GROUPING SETS)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_handler_stats', $view$
 CREATE OR REPLACE VIEW api.vw_handler_stats AS
 SELECT
     handler_type,
@@ -103,7 +106,8 @@ GROUP BY GROUPING SETS (
     (handler_type, volatility),
     (handler_type, language_name),
     (handler_type, requires_auth)
-);
+)
+$view$);
 
 COMMENT ON VIEW api.vw_handler_stats IS
     'Multi-dimensional handler statistics using GROUPING SETS. Use _grp_* columns to identify aggregation level (1=aggregated, 0=specific value).';
@@ -112,6 +116,7 @@ COMMENT ON VIEW api.vw_handler_stats IS
 -- Handler Summary Dashboard View (single row)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_handler_summary', $view$
 CREATE OR REPLACE VIEW api.vw_handler_summary AS
 SELECT
     count(*) AS total_handlers,
@@ -129,7 +134,8 @@ SELECT
     count(DISTINCT owner_name) AS owner_count,
     min(created_at) AS oldest_handler_at,
     max(created_at) AS newest_handler_at
-FROM api.handler;
+FROM api.handler
+$view$);
 
 COMMENT ON VIEW api.vw_handler_summary IS
     'Single-row dashboard showing handler counts by type, volatility, security model, and other characteristics.';
@@ -150,6 +156,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing route views'; END $$;
 -- Unified Route Analysis View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_route_info', $view$
 CREATE OR REPLACE VIEW api.vw_route_info AS
 -- REST routes
 SELECT
@@ -204,7 +211,8 @@ SELECT
     h.created_at,
     now() - h.created_at
 FROM api.mcp_route r
-JOIN api.handler h ON h.object_id = r.handler_object_id;
+JOIN api.handler h ON h.object_id = r.handler_object_id
+$view$);
 
 COMMENT ON VIEW api.vw_route_info IS
     'Unified route view across all protocols. Shows pattern, handler, auth requirements, and age.';
@@ -213,6 +221,7 @@ COMMENT ON VIEW api.vw_route_info IS
 -- Route Statistics View (GROUPING SETS)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_route_stats', $view$
 CREATE OR REPLACE VIEW api.vw_route_stats AS
 WITH route_base AS (
     SELECT route_type, requires_auth, auto_log, volatility
@@ -237,7 +246,8 @@ GROUP BY GROUPING SETS (
     (volatility),
     (route_type, requires_auth),
     (route_type, volatility)
-);
+)
+$view$);
 
 COMMENT ON VIEW api.vw_route_stats IS
     'Multi-dimensional route statistics using GROUPING SETS. Use _grp_* columns to identify aggregation level.';
@@ -246,6 +256,7 @@ COMMENT ON VIEW api.vw_route_stats IS
 -- Route Summary Dashboard View (single row)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_route_summary', $view$
 CREATE OR REPLACE VIEW api.vw_route_summary AS
 SELECT
     count(*) AS total_routes,
@@ -256,7 +267,8 @@ SELECT
     count(*) FILTER (WHERE auto_log) AS auto_log_count,
     min(created_at) AS oldest_route_at,
     max(created_at) AS newest_route_at
-FROM api.vw_route_info;
+FROM api.vw_route_info
+$view$);
 
 COMMENT ON VIEW api.vw_route_summary IS
     'Single-row dashboard showing route counts by protocol type and configuration.';
@@ -277,6 +289,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing exchange views'; END $$;
 -- REST Exchange Analysis View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_rest_exchange_info', $view$
 CREATE OR REPLACE VIEW api.vw_rest_exchange_info AS
 SELECT
     e.sequence_number,
@@ -307,7 +320,8 @@ SELECT
     ) AS replay_sql
 
 FROM api.rest_exchange e
-LEFT JOIN api.handler h ON h.object_id = e.handler_object_id;
+LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
+$view$);
 
 COMMENT ON VIEW api.vw_rest_exchange_info IS
     'REST exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
@@ -316,6 +330,7 @@ COMMENT ON VIEW api.vw_rest_exchange_info IS
 -- RPC Exchange Analysis View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_rpc_exchange_info', $view$
 CREATE OR REPLACE VIEW api.vw_rpc_exchange_info AS
 SELECT
     e.sequence_number,
@@ -345,7 +360,8 @@ SELECT
 
 FROM api.rpc_exchange e
 LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
-LEFT JOIN api.rpc_route r ON r.handler_object_id = e.handler_object_id;
+LEFT JOIN api.rpc_route r ON r.handler_object_id = e.handler_object_id
+$view$);
 
 COMMENT ON VIEW api.vw_rpc_exchange_info IS
     'RPC exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
@@ -354,6 +370,7 @@ COMMENT ON VIEW api.vw_rpc_exchange_info IS
 -- MCP Exchange Analysis View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_mcp_exchange_info', $view$
 CREATE OR REPLACE VIEW api.vw_mcp_exchange_info AS
 SELECT
     e.sequence_number,
@@ -395,7 +412,8 @@ SELECT
     END AS replay_sql
 
 FROM api.mcp_exchange e
-LEFT JOIN api.handler h ON h.object_id = e.handler_object_id;
+LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
+$view$);
 
 COMMENT ON VIEW api.vw_mcp_exchange_info IS
     'MCP exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
@@ -404,6 +422,7 @@ COMMENT ON VIEW api.vw_mcp_exchange_info IS
 -- Exchange Statistics View (GROUPING SETS)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_exchange_stats', $view$
 CREATE OR REPLACE VIEW api.vw_exchange_stats AS
 WITH exchange_base AS (
     SELECT 'rest'::text AS protocol,
@@ -442,7 +461,8 @@ GROUP BY GROUPING SETS (
     (protocol, is_error),
     (protocol, is_pending),
     (protocol, status_code)
-);
+)
+$view$);
 
 COMMENT ON VIEW api.vw_exchange_stats IS
     'Multi-dimensional exchange statistics using GROUPING SETS. Use _grp_* columns to identify aggregation level.';
@@ -451,6 +471,7 @@ COMMENT ON VIEW api.vw_exchange_stats IS
 -- Exchange Summary Dashboard View (single row)
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_exchange_summary', $view$
 CREATE OR REPLACE VIEW api.vw_exchange_summary AS
 WITH
     rest_stats AS (
@@ -488,7 +509,8 @@ SELECT
     (SELECT avg_duration FROM rest_stats) AS rest_avg_duration,
     (SELECT avg_duration FROM rpc_stats) AS rpc_avg_duration,
     (SELECT avg_duration FROM mcp_stats) AS mcp_avg_duration,
-    LEAST((SELECT oldest_pending FROM rest_stats), (SELECT oldest_pending FROM rpc_stats)) AS oldest_pending_at;
+    LEAST((SELECT oldest_pending FROM rest_stats), (SELECT oldest_pending FROM rpc_stats)) AS oldest_pending_at
+$view$);
 
 COMMENT ON VIEW api.vw_exchange_summary IS
     'Single-row dashboard showing exchange counts, pending/error counts, and average durations by protocol.';

@@ -45,7 +45,7 @@ pgmi's scaffolding system provides project templates that demonstrate different 
 | **Tracking** | None (stateless) | UUID-based in `internal.deployment_script_execution_log` |
 | **Metadata** | Optional/absent | Required `<pgmi-meta>` blocks |
 | **Dependencies** | Implicit (directory structure) | Implicit via sort key layering |
-| **Schemas** | `public` (default) | Five-schema (common/api/core/internal/membership) |
+| **Schemas** | `public` (default) | Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects |
 | **Role Hierarchy** | None | Four-tier (owner → admin → api → customer) |
 | **HTTP Framework** | No | Yes (routing, handlers, queuing) |
 | **Idempotency** | Manual (user-written) | Metadata-driven (`idempotent` flag) |
@@ -98,13 +98,13 @@ advanced/
 ├── README.md                           # Comprehensive guide
 ├── ARCHITECTURE.md                     # Architecture documentation
 ├── api/
+│   ├── admin.sql                       # Admin endpoints
 │   ├── examples.sql                    # Example API handlers
-│   └── __test__/
-│       ├── _setup.sql                  # API test fixture
-│       └── test_authenticated_api.sql  # Authentication tests
+│   └── __test__/                       # API tests (fixture + 3 test files)
 ├── lib/                                # Reusable library code
 │   ├── README.md                       # Library documentation
 │   ├── api/                            # Multi-protocol API framework
+│   │   ├── 00-transaction-isolation.sql # Per-route transaction policy contract
 │   │   ├── 01-types.sql                # Core types
 │   │   ├── 02-handler-registry.sql     # Handler metadata storage
 │   │   ├── 03-rest-routes.sql          # REST route definitions
@@ -115,6 +115,8 @@ advanced/
 │   │   ├── 08-registration.sql         # Handler registration functions
 │   │   ├── 09-gateways.sql             # Protocol gateway functions
 │   │   ├── 10-mcp-protocol.sql         # MCP protocol handler
+│   │   ├── 11-openapi.sql              # OpenAPI 3.1 document at GET /openapi.json
+│   │   ├── 12-maintenance.sql          # Exchange retention (BRIN indexes, purge)
 │   │   └── views.sql                   # API views
 │   ├── core/
 │   │   ├── foundation.sql              # Domain schema setup
@@ -123,13 +125,7 @@ advanced/
 │   │   ├── cast.sql                    # Safe type casting (`?>` operator, try_cast overloads)
 │   │   ├── encoding.sql                # Bytea encoding domains (utf8/latin1/win1252) and converters
 │   │   └── text.sql                    # Text utilities with inline tests
-│   └── __test__/                       # Library tests
-│       ├── test_api_protocols.sql      # REST/RPC/MCP protocol tests
-│       ├── test_auth_enforcement.sql   # Authentication tests
-│       ├── test_error_handling.sql     # Error mapping tests
-│       ├── test_handler_lifecycle.sql  # Handler registration tests
-│       ├── test_mcp_protocol.sql       # MCP protocol tests
-│       └── test_migrations_tracking.sql # Deployment tracking tests
+│   └── __test__/                       # Library tests (22 files, listed in lib/README.md)
 ├── membership/                         # Membership domain
 │   ├── 01-schema.sql                   # Membership schema
 │   ├── 02-views.sql                    # Membership views
@@ -137,12 +133,8 @@ advanced/
 │   ├── 04-claims.sql                   # Claims handling
 │   ├── 05-current-user.sql             # Current user context
 │   ├── 06-rls.sql                      # Row-level security
-│   └── __test__/
-│       ├── _setup.sql                  # Membership test fixture
-│       ├── test_account_linking.sql    # Account linking tests
-│       ├── test_default_org.sql        # Default org tests
-│       ├── test_invite_flow.sql        # Invite flow tests
-│       └── test_user_upsert.sql        # User upsert tests
+│   ├── 08-api-keys.sql                 # API key credentials
+│   └── __test__/                       # Membership tests (fixture + 7 test files)
 ├── tools/
 │   ├── mcp-gateway.py                  # MCP gateway tool
 │   └── requirements.txt                # Python dependencies
@@ -153,7 +145,7 @@ advanced/
 **Key Features:**
 - Metadata-driven execution (UNNEST sort key ordering)
 - UUID-based script tracking (survives renames)
-- Five-schema architecture (common, api, core, internal, membership)
+- Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects
 - Four-tier role hierarchy (owner → admin → api → customer)
 - Multi-protocol API framework (REST, JSON-RPC, MCP)
 - Authentication enforcement via handler metadata
@@ -191,7 +183,7 @@ internal/scaffold/templates/my-template/
 ```
 
 **Required Files:**
-- `deploy.sql` - Must exist. Orchestrates deployment by populating `pg_temp.pgmi_plan_view`.
+- `deploy.sql` - Must exist. Orchestrates deployment by reading `pg_temp.pgmi_plan_view`, which pgmi creates before deploy.sql runs.
 
 **Recommended Files:**
 - `README.md` - User guide explaining template purpose, parameter contracts, usage examples.
@@ -237,14 +229,14 @@ This template requires the following parameters:
 # Non-secret params on the command line; secrets via a params file
 # (admin_password etc. — never as command-line --param; argv leaks to ps/CI logs).
 pgmi deploy . \
-  --param database_owner=myapp_owner \
-  --params-file secrets.env
+  --param database_owner_role=myapp_owner \
+  --params-file secrets.env   # env=prod, database_admin_password=...
 ```
 ```
 
 **Parameter Validation:**
-- Currently: No automatic validation (user gets runtime SQL errors if missing)
-- Roadmap: Template-level parameter contracts with CLI validation
+- pgmi itself does not validate parameters; the template's deploy.sql does
+- The advanced template declares its parameters in `session.xml`. Its deploy.sql fails with `Missing required parameters: ...` or `Unknown parameters: ...` before any schema work
 
 **Best Practice:**
 - Use `COALESCE(current_setting('pgmi.key', true), 'default')` for optional params
@@ -330,7 +322,7 @@ cmd := exec.Command("pgmi", "deploy", tmpDir, ...)
 ```
 
 **Validation Checklist:**
-- [ ] deploy.sql populates `pg_temp.pgmi_plan_view` successfully
+- [ ] deploy.sql reads `pg_temp.pgmi_plan_view` and executes the expected files
 - [ ] Deployment completes without errors
 - [ ] Idempotent redeployment succeeds
 - [ ] Test files execute correctly (if applicable)
@@ -341,18 +333,21 @@ cmd := exec.Command("pgmi", "deploy", tmpDir, ...)
 **Update `internal/cli/templates.go:getTemplateDescriptions()`:**
 
 ```go
-func getTemplateDescriptions() map[string]TemplateDescription {
-    return map[string]TemplateDescription{
+func getTemplateDescriptions() map[string]templateDescription {
+    return map[string]templateDescription{
         // ... existing templates ...
         "my-template": {
-            Name:        "my-template",
-            Description: "Brief one-line description",
-            BestFor:     "Specific use cases this template serves",
+            Short: "Brief one-line description",
+            Long:  "A paragraph explaining what the template contains",
+            Structure: []string{
+                "├── deploy.sql",
+                "└── README.md",
+            },
             Features: []string{
                 "Key feature 1",
                 "Key feature 2",
-                "Key feature 3",
             },
+            BestFor: "Specific use cases this template serves",
         },
     }
 }
@@ -554,16 +549,18 @@ See `internal/scaffold/templates/advanced/deploy.sql` for usage in the execution
 
 ## Advanced Template Architecture
 
-### Four-Schema Design
+### Schema Design
 
-The advanced template organizes code into four schemas by concern:
+The advanced template has five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects:
 
 | Schema | Purpose | Ownership | Example Contents |
 |--------|---------|-----------|------------------|
 | **common** | Cross-cutting primitives (casting, encoding, text) | Database Owner | `try_cast()`, `slugify()`, `common.utf8` domain |
-| **internal** | Infrastructure, deployment & test tracking | Database Owner | `deployment_script_execution_log`, `unittest_script`, `generate_test_script()` |
+| **internal** | Deployment tracking | Database Owner | `deployment_script`, `deployment_script_content`, `deployment_script_execution_log` |
 | **core** | Domain business logic | Database Owner | Your application tables, domain functions |
 | **api** | External interface (HTTP routes, public API) | Database Owner | `handler` registry, protocol-specific route tables (`rest_route`, `rpc_route`, `mcp_route`), request handlers |
+| **membership** | User identity, organizations, invitations, access control | Database Owner | Users, organizations, API keys, RLS policies |
+| **extensions** | Extension objects, kept out of the application schemas | Database Owner | `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` |
 
 **Rationale:**
 - **Separation of concerns:** Clear boundaries between infrastructure, utilities, domain, and interface
@@ -571,39 +568,43 @@ The advanced template organizes code into four schemas by concern:
 - **Testability:** Utils have inline tests; API has integration tests
 - **Maintainability:** Changes to domain logic don't affect routing infrastructure
 
-**Privileges:**
+**Privileges** (abridged from `deploy.sql`):
 ```sql
--- Admin: Full access to all schemas
-GRANT ALL ON SCHEMA common, internal, core, api TO <database>_admin;
+REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
+GRANT USAGE ON SCHEMA common TO <database>_admin, <database>_api, <database>_customer;
+GRANT USAGE ON SCHEMA api TO <database>_api, <database>_customer;
+GRANT USAGE ON SCHEMA core TO <database>_api;
+GRANT USAGE ON SCHEMA membership TO <database>_admin, <database>_api, <database>_customer;
 
--- API: Read-only + execute specific functions
-GRANT USAGE ON SCHEMA common, api TO <database>_api;
-GRANT SELECT ON ALL TABLES IN SCHEMA api TO <database>_api;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO <database>_api;
+REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA api FROM PUBLIC;
+GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO <database>_admin, <database>_api;
 ```
 
-### Three-Tier Role Hierarchy
+### Four-Tier Role Hierarchy
 
 | Role | Type | Purpose | Used By | Privileges |
 |------|------|---------|---------|------------|
 | **`<database>_owner`** | NOLOGIN | Object ownership | Nobody (only OWNED BY) | Owns all schemas, tables, functions |
-| **`<database>_admin`** | LOGIN | Deployment & migrations | pgmi deploy, DBA tasks | Full CRUD on all schemas |
-| **`<database>_api`** | LOGIN | Application connections | Application servers | EXECUTE api.*, SELECT read-only tables |
+| **`<database>_admin`** | LOGIN | Deployment & migrations | pgmi deploy, DBA tasks | Member of owner and api |
+| **`<database>_api`** | NOLOGIN | Permission bundle for the trusted gateway | Granted to login roles | EXECUTE api.* |
+| **`<database>_customer`** | NOLOGIN | RLS-restricted end-user access | The gateway, acting for a user | Explicit grants only; does not inherit api |
 
 **Security Model:**
 ```sql
 -- Owner never logs in (prevents direct manipulation)
 CREATE ROLE myapp_owner NOLOGIN;
 
--- Admin for deployments
-CREATE ROLE myapp_admin LOGIN PASSWORD '${database_admin_password}';
-GRANT myapp_owner TO myapp_admin; -- Can act as owner
-
 -- API is a NOLOGIN group role (a permission bundle); no password.
--- The admin LOGIN role is GRANTed membership to inherit it.
 CREATE ROLE myapp_api NOLOGIN;
-GRANT USAGE ON SCHEMA api TO myapp_api;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA api TO myapp_api;
+
+-- Admin for deployments; inherits owner and api
+CREATE ROLE myapp_admin LOGIN PASSWORD '${database_admin_password}' CONNECTION LIMIT 10;
+GRANT myapp_owner TO myapp_admin;
+GRANT myapp_api TO myapp_admin;
+
+-- Customer is NOLOGIN: identity comes from a setting any session can set,
+-- so only the gateway may act as it.
+CREATE ROLE myapp_customer NOLOGIN;
 ```
 
 **Why NOLOGIN owner?**
@@ -633,7 +634,7 @@ The advanced template includes a built-in multi-protocol framework (REST, JSON-R
    SELECT api.create_or_replace_rest_handler(
        jsonb_build_object(
            'id',         'e1000001-0001-4000-8000-000000000001'::uuid,
-           'uri',        '^/hello$',                  -- query string is stripped before match
+           'path',       '/hello',                    -- canonical path; the matcher is derived
            'httpMethod', '^GET$',
            'name',       'hello_world',
            'requiresAuth', false
@@ -970,6 +971,7 @@ go build -o pgmi.exe ./cmd/pgmi
 # Advanced template requires these — pass via a params file, not on the
 # command line (argv leaks to ps, shell history, and CI logs):
 #   secrets.env:
+#     env=prod
 #     database_admin_password=...
 pgmi deploy . --params-file secrets.env
 ```

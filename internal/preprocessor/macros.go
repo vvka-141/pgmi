@@ -17,24 +17,12 @@ type MacroCall struct {
 }
 
 // MacroDetector detects pgmi macro calls in SQL.
-type MacroDetector interface {
-	// Detect finds macro calls. The `sql` argument is the original text
-	// (used to extract Pattern/Callback substrings). The `mask` argument is
-	// a length-preserved redacted copy where comment/string bytes are
-	// replaced with spaces (see CommentStripper.RedactForMacros) — the
-	// regex runs over mask so it cannot match inside literals or comments.
-	// Byte offsets in the returned MacroCall are positions in `sql`.
-	Detect(sql string, mask string) []MacroCall
-}
-
-// macroDetector implements MacroDetector using regex.
-type macroDetector struct {
+type MacroDetector struct {
 	pattern *regexp.Regexp
 }
 
-// NewMacroDetector creates a new MacroDetector instance.
-// The detector expects comment-stripped SQL input.
-func NewMacroDetector() MacroDetector {
+// NewMacroDetector creates a MacroDetector.
+func NewMacroDetector() *MacroDetector {
 	// Pattern matches CALL pgmi_test() syntax only:
 	// - Word boundary (not preceded by alphanumeric or underscore)
 	// - CALL prefix (required)
@@ -47,13 +35,16 @@ func NewMacroDetector() MacroDetector {
 	pattern := regexp.MustCompile(
 		`(?i)(?:^|[^a-zA-Z0-9_])CALL\s+(?:pg_temp\.)?pgmi_test\s*\(\s*(?:'([^']*)'|NULL)?(?:\s*,\s*'([^']*)')?\s*\)\s*;?`,
 	)
-	return &macroDetector{pattern: pattern}
+	return &MacroDetector{pattern: pattern}
 }
 
-// Detect finds all pgmi macro calls. See interface doc for the two-argument
-// contract. For legacy callers that have already masked their input, pass the
-// same string for both arguments.
-func (d *macroDetector) Detect(sql string, mask string) []MacroCall {
+// Detect finds macro calls. The `sql` argument is the original text
+// (used to extract Pattern/Callback substrings). The `mask` argument is
+// a length-preserved redacted copy where comment/string bytes are
+// replaced with spaces (see CommentStripper.RedactForMacros) — the
+// regex runs over mask so it cannot match inside literals or comments.
+// Byte offsets in the returned MacroCall are positions in `sql`.
+func (d *MacroDetector) Detect(sql string, mask string) []MacroCall {
 	if mask == "" {
 		mask = sql
 	}
@@ -120,7 +111,7 @@ func (d *macroDetector) Detect(sql string, mask string) []MacroCall {
 }
 
 // calculatePosition returns the 1-based line and column for a byte offset.
-func (d *macroDetector) calculatePosition(sql string, offset int) (line, column int) {
+func (d *MacroDetector) calculatePosition(sql string, offset int) (line, column int) {
 	line = 1
 	column = 1
 

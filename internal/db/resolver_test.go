@@ -431,6 +431,26 @@ func TestResolveConnectionParams_DatabaseURL(t *testing.T) {
 			wantHost:    "pghost",
 			wantMaintDB: "postgres",
 		},
+		{
+			name:  "PGMI_CONNECTION_STRING beats DATABASE_URL",
+			flags: &GranularConnFlags{},
+			envVars: &EnvVars{
+				PGMI_CONNECTION_STRING: "postgresql://user@pgmihost:5433/pgmidb",
+				DATABASE_URL:           "postgresql://user@urlhost:5432/urldb",
+			},
+			wantHost:     "pgmihost",
+			wantDatabase: "pgmidb",
+			wantMaintDB:  "pgmidb",
+		},
+		{
+			name:  "granular flags override PGMI_CONNECTION_STRING without conflict",
+			flags: &GranularConnFlags{Host: "flaghost", Port: 5471},
+			envVars: &EnvVars{
+				PGMI_CONNECTION_STRING: "postgresql://user:secret@envhost:5433/envdb",
+			},
+			wantHost:    "flaghost",
+			wantMaintDB: "postgres",
+		},
 	}
 
 	for _, tt := range tests {

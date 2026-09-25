@@ -405,3 +405,25 @@ func TestBuildFileTree_EmptyDirectory(t *testing.T) {
 		t.Error("Expected some output for empty directory")
 	}
 }
+
+// After a template fix, the user must be able to tell whether their project's
+// files predate it. pgmi init records the version and template as the first
+// line of deploy.sql.
+func TestCreateProject_RecordsVersionAndTemplateInDeploySQL(t *testing.T) {
+	for _, tmpl := range []string{"basic", "advanced"} {
+		t.Run(tmpl, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "p")
+			if err := NewScaffolder(false).WithVersion("1.2.3").CreateProject("p", tmpl, dir); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(dir, "deploy.sql"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ScaffoldedLine("1.2.3", tmpl) + "\n"
+			if !strings.HasPrefix(string(body), want) {
+				t.Errorf("deploy.sql starts %q, want %q", strings.SplitN(string(body), "\n", 2)[0], want)
+			}
+		})
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -41,18 +42,32 @@ type connectionFlags struct {
 	sslRootCert    string
 }
 
+func (f connectionFlags) granular() *db.GranularConnFlags {
+	return &db.GranularConnFlags{
+		Host:     f.host,
+		Port:     f.port,
+		Username: f.username,
+		Database: f.database,
+		SSLMode:  f.sslMode,
+	}
+}
+
+// envConnectionSource names the environment variable the connection string
+// came from, or "" when flags or pgmi.yaml supplied the connection.
+func envConnectionSource(f connectionFlags) string {
+	_, source := db.SelectConnectionString(f.connection, f.granular(), db.LoadFromEnvironment())
+	if source == "--connection" {
+		return ""
+	}
+	return source
+}
+
 // resolveConnectionFromFlags resolves connection configuration from flags and project config.
 func resolveConnectionFromFlags(
 	flags connectionFlags,
 	projectCfg *config.ProjectConfig,
 ) (*pgmi.ConnectionConfig, string, error) {
-	granularFlags := &db.GranularConnFlags{
-		Host:     flags.host,
-		Port:     flags.port,
-		Username: flags.username,
-		Database: flags.database,
-		SSLMode:  flags.sslMode,
-	}
+	granularFlags := flags.granular()
 
 	azureFlags := &db.AzureFlags{
 		Enabled:  flags.azure,
@@ -76,7 +91,7 @@ func resolveConnectionFromFlags(
 		SSLRootCert: flags.sslRootCert,
 	}
 
-	connConfig, maintenanceDB, err := resolveConnection(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, projectCfg)
+	connConfig, maintenanceDB, err := db.ResolveConnectionParams(flags.connection, granularFlags, azureFlags, awsFlags, googleFlags, certFlags, db.LoadFromEnvironment(), projectCfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -96,10 +111,18 @@ func loadMergedParameters(
 	cliParamPairs []string,
 	verbose bool,
 ) (map[string]string, error) {
+	// Keys are merged lowercased: the session stores them lowercased, so
+	// `Env` from pgmi.yaml and `env` from --param are one parameter and the
+	// later source must win, not collide on the session table's primary key.
 	parameters := make(map[string]string)
+	put := func(src map[string]string) {
+		for k, v := range src {
+			parameters[strings.ToLower(k)] = v
+		}
+	}
 
 	if projectCfg != nil {
-		maps.Copy(parameters, projectCfg.Params)
+		put(projectCfg.Params)
 	}
 
 	if len(paramsFiles) > 0 {
@@ -108,17 +131,19 @@ func loadMergedParameters(
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(parameters, fileParams)
+		put(fileParams)
 	}
 
-	cliParams, err := params.ParseKeyValuePairs(cliParamPairs)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid parameter format: %w", pgmi.ErrInvalidConfig, err)
+	for _, pair := range cliParamPairs {
+		kv, err := params.ParseKeyValuePairs([]string{pair})
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid parameter format: %w", pgmi.ErrInvalidConfig, err)
+		}
+		put(kv)
 	}
-	maps.Copy(parameters, cliParams)
 
-	if verbose && len(cliParams) > 0 {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParams))
+	if verbose && len(cliParamPairs) > 0 {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParamPairs))
 	}
 
 	return parameters, nil
@@ -283,7 +308,7 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 		maps.Copy(parameters, fileParams)
 
 		if verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameters from file (total: %d)\n", len(fileParams), len(parameters))
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameter(s) from file (total: %d)\n", len(fileParams), len(parameters))
 		}
 	}
 

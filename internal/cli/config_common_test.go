@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,10 +339,30 @@ func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadMergedParameters() error: %v", err)
 	}
+	// Positive control: the capture works and verbose output was produced, so
+	// the absence checks below are not trivially satisfied by an empty buffer.
+	if !strings.Contains(output, "Loaded 2 parameter(s)") {
+		t.Fatalf("expected verbose parameter output, got:\n%s", output)
+	}
 	for _, s := range []string{"SENTINEL_APIKEY", "SENTINEL_OTHER"} {
 		if strings.Contains(output, s) {
 			t.Errorf("verbose param output must not contain value %q, got:\n%s", s, output)
 		}
+	}
+}
+
+// The session stores keys lowercased, so keys differing only in case are one
+// parameter: the later source wins instead of a 23505 on the session table
+// (PGMI-382).
+func TestLoadMergedParameters_CaseInsensitivePrecedence(t *testing.T) {
+	cfg := &config.ProjectConfig{Params: map[string]string{"DB_Url": "yaml"}}
+	got, err := loadMergedParameters(cfg, nil, []string{"db_url=cli", "Env=a", "env=b"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"db_url": "cli", "env": "b"}
+	if !maps.Equal(got, want) {
+		t.Errorf("merged = %v, want %v", got, want)
 	}
 }
 

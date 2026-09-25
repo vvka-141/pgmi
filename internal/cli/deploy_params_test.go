@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 )
 
 // TestLoadParamsFromFiles tests the params file loading with filesystem abstraction
@@ -172,7 +172,7 @@ DB_SSL=require`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create in-memory filesystem
-			mfs := filesystem.NewMemoryFileSystem("/")
+			mfs := fakefs.NewMemoryFileSystem("/")
 
 			// Add all files to the filesystem
 			for path, content := range tt.files {
@@ -196,7 +196,7 @@ DB_SSL=require`,
 
 // TestLoadParamsFromFiles_Verbose tests verbose output behavior
 func TestLoadParamsFromFiles_Verbose(t *testing.T) {
-	mfs := filesystem.NewMemoryFileSystem("/")
+	mfs := fakefs.NewMemoryFileSystem("/")
 	mfs.AddFile("/test/config.env", "KEY=value")
 
 	// Test that verbose mode doesn't cause errors
@@ -209,7 +209,7 @@ func TestLoadParamsFromFiles_Verbose(t *testing.T) {
 
 // TestLoadParamsFromFiles_EmptyList tests behavior with no params files
 func TestLoadParamsFromFiles_EmptyList(t *testing.T) {
-	mfs := filesystem.NewMemoryFileSystem("/")
+	mfs := fakefs.NewMemoryFileSystem("/")
 
 	result, err := loadParamsFromFiles(mfs, []string{}, false)
 

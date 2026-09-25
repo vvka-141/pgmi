@@ -88,10 +88,26 @@ func TestShowBanner_SuppressedByEnv(t *testing.T) {
 	}
 }
 
-func TestShowBanner_DefaultWhenUnset(t *testing.T) {
-	t.Setenv("PGMI_NO_BANNER", "")
-	// In test context, stdout is not a TTY, so showBanner returns false
-	// regardless — but the env check comes first, so unsetting and testing
-	// the TTY path would require mocking. The env suppression is the
-	// documented contract we're verifying here.
+func TestShowBanner_OnlyOnATerminalWithoutOptOut(t *testing.T) {
+	orig := isInteractive
+	t.Cleanup(func() { isInteractive = orig })
+
+	for _, tt := range []struct {
+		name        string
+		interactive bool
+		noBanner    string
+		want        bool
+	}{
+		{"terminal, no opt-out", true, "", true},
+		{"terminal, PGMI_NO_BANNER", true, "1", false},
+		{"no terminal", false, "", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isInteractive = func() bool { return tt.interactive }
+			t.Setenv("PGMI_NO_BANNER", tt.noBanner)
+			if got := showBanner(); got != tt.want {
+				t.Errorf("showBanner() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

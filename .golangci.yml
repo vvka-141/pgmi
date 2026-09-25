@@ -32,11 +32,6 @@ issues:
       linters:
         - errcheck
 
-    # Ignore unused in test files - mock types may be for future use
-    - path: _test\.go
-      linters:
-        - unused
-
     # Ignore benchmark files completely
     - path: _bench_test\.go
       linters:

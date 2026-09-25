@@ -42,8 +42,15 @@ the transaction-first workflow, and when *not* to choose this template.
 
 Register a handler once — `api.create_or_replace_rest_handler` (or its
 `rpc`/`mcp` sibling) — and the registry derives every surface from that single
-registration: REST routing by URL regex, JSON-RPC by method name, MCP tools,
+registration: REST routing by declared path, JSON-RPC by method name, MCP tools,
 resources, and prompts for AI agents, and a live OpenAPI 3.1 document.
+
+The rule behind it is "one declaration, many derivations": nothing the gateway
+enforces is left out of the published contract, and nothing published goes
+unenforced. Routing is liberal about how a client spells a path and exact about
+which resource it names. The
+[design record](../design/transactional-web-boundary.md) explains why, and is
+the page to read before changing how routes are matched.
 
 ![One registration flows into the api.handler registry and out to REST routes, JSON-RPC methods, MCP tools, and the OpenAPI document](../diagrams/d11-one-registry-many-protocols.drawio.svg)
 
@@ -54,9 +61,19 @@ resources, and prompts for AI agents, and a live OpenAPI 3.1 document.
   was already making — the caching makes client-side routing *safe*, not
   merely fast.
   [Generate typed clients](clients/_index.md) from it in any language.
-- **MCP tool discovery is auth-aware**: `api.mcp_list_tools` hides
-  `requires_auth` tools from an unauthenticated session, so an agent's visible
-  capability set is scoped to its identity.
+- **Discovery is auth-aware on every surface**: `api.mcp_list_tools` and the
+  other MCP listings hide `requires_auth` entries from an unauthenticated
+  session, and so does `/openapi.json`. The document is public but filtered:
+  anyone can fetch it, and only an authenticated caller sees the
+  authenticated routes. Its ETag carries the caller class, so an
+  authenticated copy never revalidates for an anonymous caller. `/docs`
+  renders whatever `/openapi.json` returns, through a version-pinned script
+  with a subresource-integrity hash.
+- **The router does not enumerate for strangers**: `OPTIONS` on a matched path
+  answers `204` with `Allow` before any identity check, because a CORS
+  preflight carries no credentials. Any other wrong method gets `405` with
+  `Allow` only if the caller could call some route on that path; an anonymous
+  caller probing an authenticated resource gets `401`.
 - Handlers follow a defensive four-phase discipline (materialize → validate →
   probe → execute) with RFC 9457 problem responses — see the scaffolded
   `api/examples.sql` for working handlers of every protocol.
@@ -163,3 +180,4 @@ Then pick the page that matches your intent:
 | Authenticate machine callers | [API keys](API-KEYS.md) |
 | Generate a typed client | [Client guides](clients/_index.md) |
 | Version the API surface | [Design: API versioning](../design/api-versioning.md) |
+| Change routing, OpenAPI, or handler metadata | [Design: the transactional web boundary](../design/transactional-web-boundary.md) |

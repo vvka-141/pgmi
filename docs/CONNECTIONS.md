@@ -135,12 +135,27 @@ pgmi deploy . --google \
 
 ## Connection string formats
 
-pgmi accepts two connection string formats:
+pgmi accepts three connection string formats:
 
 **PostgreSQL URI:**
 ```
 postgresql://user:pass@host:5432/dbname?sslmode=require
 ```
+
+A URI may list several hosts, as libpq allows, for example a primary and a
+standby. pgmi passes the list through unchanged:
+```
+postgresql://user:pass@db1:5432,db2:5432/dbname?target_session_attrs=read-write
+```
+An IPv6 address inside a host list is not supported.
+
+**libpq keyword/value**, as psql and the PostgreSQL docs write it:
+```
+host=myhost port=5432 dbname=mydb user=user sslmode=require
+```
+Quote a value containing spaces with single quotes, and escape a quote or
+backslash inside it with `\`: `password='a b\'c'`. `host` and `port` may be
+lists (`host=db1,db2 port=5432,5433`).
 
 **ADO.NET:**
 ```

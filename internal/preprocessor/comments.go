@@ -5,44 +5,18 @@ import (
 	"unicode"
 )
 
-// CommentStripper removes SQL comments while preserving string literals.
-type CommentStripper interface {
-	// Strip removes SQL comments. String literals (single-quoted and
-	// dollar-quoted) are preserved verbatim.
-	Strip(sql string) string
-
-	// RedactForMacros returns a length-preserved mask of the input where
-	// bytes inside comments, string literals, and quoted identifiers are
-	// replaced with ASCII spaces. All other bytes stay at their original
-	// positions.
-	//
-	// The macro detector runs on this mask so tokens like
-	// "CALL pgmi_test();" that appear inside single-quoted or
-	// dollar-quoted literals, quoted identifiers, or comments are invisible
-	// to it. Byte offsets returned by the detector are directly usable
-	// against the ORIGINAL SQL because the mask preserves length.
-	RedactForMacros(sql string) string
-
-	// BlockComments returns the byte span of every top-level /* ... */ comment,
-	// delimiters included, in source order. Nested comments belong to their
-	// outermost span, and a /* inside a string literal, dollar-quoted body or
-	// quoted identifier is not a comment at all — the same state machine Strip
-	// uses decides, so nothing can disagree with it.
-	BlockComments(sql string) []CommentSpan
-}
-
 // CommentSpan locates one block comment in the original SQL: Start is the
 // offset of its '/', End the offset just past its closing '/'.
 type CommentSpan struct {
 	Start, End int
 }
 
-// commentStripper implements CommentStripper using a state machine.
-type commentStripper struct{}
+// CommentStripper locates SQL comments and literals without parsing SQL.
+type CommentStripper struct{}
 
-// NewCommentStripper creates a new CommentStripper instance.
-func NewCommentStripper() CommentStripper {
-	return &commentStripper{}
+// NewCommentStripper creates a CommentStripper.
+func NewCommentStripper() *CommentStripper {
+	return &CommentStripper{}
 }
 
 // parserState represents the current state of the parser.
@@ -57,38 +31,33 @@ const (
 	stateQuotedIdentifier
 )
 
-// Strip removes SQL comments and returns the stripped SQL.
-// Handles:
-// - Single-line comments: -- to end of line
-// - Block comments: /* */ with PostgreSQL nesting support
-// - Single-quoted strings: '...' with doubled-apostrophe and E'...' escapes
-// - Dollar-quoted strings: $$...$$ and $tag$...$tag$
-// - Quoted identifiers: "..." with doubled-quote escape
-func (c *commentStripper) Strip(sql string) string {
-	return c.scan(sql, false, nil)
+// RedactForMacros returns a length-preserved mask of the input where
+// bytes inside comments, string literals, and quoted identifiers are
+// replaced with ASCII spaces. All other bytes stay at their original
+// positions.
+//
+// The macro detector runs on this mask so tokens like
+// "CALL pgmi_test();" that appear inside single-quoted or
+// dollar-quoted literals, quoted identifiers, or comments are invisible
+// to it. Byte offsets returned by the detector are directly usable
+// against the ORIGINAL SQL because the mask preserves length.
+func (c *CommentStripper) RedactForMacros(sql string) string {
+	return c.scan(sql, nil)
 }
 
-// RedactForMacros returns a byte-for-byte length-preserved copy of the input
-// with comment and string-literal bytes replaced by ASCII spaces. See the
-// CommentStripper interface doc for why this matters.
-func (c *commentStripper) RedactForMacros(sql string) string {
-	return c.scan(sql, true, nil)
-}
-
-// BlockComments walks the SQL with the same state machine as Strip and reports
-// where each top-level block comment begins and ends.
-func (c *commentStripper) BlockComments(sql string) []CommentSpan {
+// BlockComments returns the byte span of every top-level /* ... */ comment,
+// delimiters included, in source order. Nested comments belong to their
+// outermost span, and a /* inside a string literal, dollar-quoted body or
+// quoted identifier is not a comment at all — the same state machine
+// RedactForMacros uses decides, so nothing can disagree with it.
+func (c *CommentStripper) BlockComments(sql string) []CommentSpan {
 	var spans []CommentSpan
-	c.scan(sql, false, &spans)
+	c.scan(sql, &spans)
 	return spans
 }
 
-// scan walks the SQL with the same state machine used by Strip. When
-// lengthPreserve is false (Strip), comment bytes are dropped and string
-// literals are written verbatim. When lengthPreserve is true
-// (RedactForMacros), comments and string-literal bodies are replaced with
-// spaces byte-for-byte so positions in the output align with positions in
-// the input.
+// scan replaces comments and string-literal bodies with spaces byte-for-byte,
+// so positions in the output align with positions in the input.
 //
 // All comparisons are ASCII ('$', the escaped single quote, '"', '\\', '/', '*', '-', '\n', '\r');
 // multi-byte UTF-8 continuation bytes flow through the default branches
@@ -96,7 +65,7 @@ func (c *commentStripper) BlockComments(sql string) []CommentSpan {
 // comment, or an identifier — they never affect state transitions).
 // spans, when non-nil, collects the byte span of every top-level block
 // comment as the walk discovers them.
-func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]CommentSpan) string {
+func (c *CommentStripper) scan(sql string, spans *[]CommentSpan) string {
 	if len(sql) == 0 {
 		return ""
 	}
@@ -104,7 +73,6 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 	var result strings.Builder
 	result.Grow(len(sql))
 
-	// writeSpaces emits n ASCII spaces (used only in length-preserve mode).
 	writeSpaces := func(n int) {
 		for range n {
 			result.WriteByte(' ')
@@ -117,7 +85,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 	escapeString := false
 
 	runes := []rune(sql)
-	// Byte widths of each rune — needed so length-preserving mode writes the
+	// Byte widths of each rune — needed so the mask writes the
 	// correct number of placeholder spaces for multi-byte runes.
 	runeBytes := make([]int, len(runes))
 	// byteAt[idx] is the byte offset of runes[idx]; the walk advances i by 1 or
@@ -145,17 +113,13 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 		case stateNormal:
 			if r == '-' && next == '-' {
 				state = stateLineComment
-				if lengthPreserve {
-					writeSpaces(rw + nextW)
-				}
+				writeSpaces(rw + nextW)
 				i += 2
 			} else if r == '/' && next == '*' {
 				state = stateBlockComment
 				blockDepth = 1
 				commentStart = bytePos
-				if lengthPreserve {
-					writeSpaces(rw + nextW)
-				}
+				writeSpaces(rw + nextW)
 				i += 2
 			} else if r == '\'' {
 				state = stateSingleQuote
@@ -193,24 +157,18 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 				state = stateNormal
 				i += 2
 			} else {
-				if lengthPreserve {
-					writeSpaces(rw)
-				}
+				writeSpaces(rw)
 				i++
 			}
 
 		case stateBlockComment:
 			if r == '/' && next == '*' {
 				blockDepth++
-				if lengthPreserve {
-					writeSpaces(rw + nextW)
-				}
+				writeSpaces(rw + nextW)
 				i += 2
 			} else if r == '*' && next == '/' {
 				blockDepth--
-				if lengthPreserve {
-					writeSpaces(rw + nextW)
-				}
+				writeSpaces(rw + nextW)
 				i += 2
 				if blockDepth == 0 {
 					state = stateNormal
@@ -219,9 +177,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 					}
 				}
 			} else {
-				if lengthPreserve {
-					writeSpaces(rw)
-				}
+				writeSpaces(rw)
 				i++
 			}
 
@@ -229,12 +185,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 			if escapeString && r == '\\' && i+1 < len(runes) {
 				// Only in E'...' does a backslash escape the next character, so
 				// an escaped apostrophe must not be read as the closing quote.
-				if lengthPreserve {
-					writeSpaces(rw + nextW)
-				} else {
-					result.WriteRune(r)
-					result.WriteRune(next)
-				}
+				writeSpaces(rw + nextW)
 				i += 2
 			} else if r == '\'' {
 				if next == '\'' {
@@ -250,11 +201,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 					i++
 				}
 			} else {
-				if lengthPreserve {
-					writeSpaces(rw)
-				} else {
-					result.WriteRune(r)
-				}
+				writeSpaces(rw)
 				i++
 			}
 
@@ -270,11 +217,7 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 					i++
 				}
 			} else {
-				if lengthPreserve {
-					writeSpaces(rw)
-				} else {
-					result.WriteRune(r)
-				}
+				writeSpaces(rw)
 				i++
 			}
 
@@ -285,19 +228,14 @@ func (c *commentStripper) scan(sql string, lengthPreserve bool, spans *[]Comment
 				state = stateNormal
 				dollarTag = ""
 			} else {
-				if lengthPreserve {
-					writeSpaces(rw)
-				} else {
-					result.WriteRune(r)
-				}
+				writeSpaces(rw)
 				i++
 			}
 		}
 	}
 
-	// An unterminated /* runs to EOF. Strip drops those bytes and
-	// RedactForMacros blanks them, so BlockComments must report the span or the
-	// three disagree about the same input — the divergence that let a third
+	// An unterminated /* runs to EOF. RedactForMacros blanks those bytes, so
+	// BlockComments must report the span or the two disagree about the same input — the divergence that let a third
 	// scanner in internal/metadata drift unnoticed.
 	if spans != nil && state == stateBlockComment {
 		*spans = append(*spans, CommentSpan{Start: commentStart, End: len(sql)})
@@ -340,7 +278,7 @@ func runeByteLen(r rune) int {
 
 // extractDollarTag extracts a dollar-quote tag starting at position i.
 // Returns the full tag (e.g., "$$" or "$tag$") or empty string if not a valid tag.
-func (c *commentStripper) extractDollarTag(runes []rune, i int) string {
+func (c *CommentStripper) extractDollarTag(runes []rune, i int) string {
 	if i >= len(runes) || runes[i] != '$' {
 		return ""
 	}
@@ -368,7 +306,7 @@ func (c *commentStripper) extractDollarTag(runes []rune, i int) string {
 }
 
 // matchesDollarTag checks if the runes starting at position i match the given dollar tag.
-func (c *commentStripper) matchesDollarTag(runes []rune, i int, tag string) bool {
+func (c *CommentStripper) matchesDollarTag(runes []rune, i int, tag string) bool {
 	tagRunes := []rune(tag)
 	if i+len(tagRunes) > len(runes) {
 		return false

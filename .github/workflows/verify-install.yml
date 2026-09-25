@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: '17 4 * * *'
   workflow_dispatch:
+    inputs:
+      expected_tag:
+        description: 'Tag that must be the latest release (e.g. v0.12.2); empty checks whatever is latest'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,13 +39,45 @@ jobs:
         if: github.event_name == 'workflow_run'
         run: sleep 600
 
+      # Every channel below is compared against releases/latest, so a release
+      # left as a draft or prerelease, or cut from an older commit than the
+      # current latest, would pass here with every channel still serving the
+      # old version. After a Release run the tag it built must BE latest.
       - id: latest
         env:
           GH_TOKEN: ${{ github.token }}
+          INTENDED: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.expected_tag }}
         run: |
           tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)"
           echo "latest release: $tag"
+          if [ -n "$INTENDED" ] && [ "$tag" != "$INTENDED" ]; then
+            echo "::error::releases/latest is $tag but the release just published is $INTENDED (left as a draft or prerelease, or cut from an older commit?)"
+            exit 1
+          fi
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  assets:
+    name: Release assets and checksums
+    needs: expected
+    runs-on: ubuntu-latest
+    steps:
+      # The install jobs exercise only their runner's arch; the other archives
+      # the installers can fetch are checked here against checksums.txt.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.expected.outputs.version }}
+        run: |
+          gh release download "v$VERSION" --repo "${{ github.repository }}" --dir assets
+          cd assets
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            [ -f "pgmi_${VERSION}_${target}.tar.gz" ] || { echo "::error::missing pgmi_${VERSION}_${target}.tar.gz"; exit 1; }
+          done
+          for target in windows_amd64 windows_arm64; do
+            [ -f "pgmi_${VERSION}_${target}.zip" ] || { echo "::error::missing pgmi_${VERSION}_${target}.zip"; exit 1; }
+          done
+          grep -E "pgmi_${VERSION}_(linux|darwin|windows)_(amd64|arm64)\.(tar\.gz|zip)$" checksums.txt > archives.sha256
+          [ "$(wc -l < archives.sha256)" -eq 6 ] || { echo "::error::checksums.txt does not list all six archives"; cat checksums.txt; exit 1; }
+          sha256sum -c archives.sha256
 
   linux:
     name: ${{ matrix.channel }}
@@ -51,9 +88,8 @@ jobs:
       matrix:
         channel: [install.sh, install.sh without sudo, apt, go install]
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         if: matrix.channel == 'go install'
         with:
           go-version: '1.26'

@@ -42,8 +42,10 @@ the DML. This is the handler→kernel contract (`pgmi-handler-patterns`).
   directory and ordered by path.
 
 Prefer `pgmi metadata scaffold` / `validate` / `plan` over hand-authoring the
-block, and run `pgmi metadata plan` to confirm both files appear in execution
-order before deploying.
+block. `scaffold` writes a `<key>generated/…</key>` sort key, which sorts by
+path and can put `api/x.sql` before `core/x.sql`: replace it with the `005/…`
+keys shown below. Then run `pgmi metadata plan` to confirm the kernel file runs
+before the handler file.
 
 ---
 
@@ -101,7 +103,7 @@ dollar-quoted with `$body$`, with a single `request` parameter.
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', '<uuid>', 'name', 'list_products',
-        'uri', '^/products(\?.*)?$', 'httpMethod', '^GET$',
+        'path', '/products', 'httpMethod', '^GET$',
         'requiresAuth', false,                      -- defaults to TRUE; set false for public
         'outputSchema', jsonb_build_object(         -- REQUIRED on every REST handler
             'type', 'object',
@@ -125,7 +127,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', '<uuid>', 'name', 'create_product',
-        'uri', '^/products(\?.*)?$', 'httpMethod', '^POST$',
+        'path', '/products', 'httpMethod', '^POST$',
         'requiresAuth', true,
         'inputSchema', jsonb_build_object(
             'type', 'object',
@@ -183,19 +185,59 @@ END;
 `SELECT … WHERE deleted_at IS NULL` to 404 a missing resource — is shown in
 `pgmi-handler-patterns`; this create has nothing to probe.)
 
+### Declaring the route
+
+Declare the route's canonical path with `path`:
+
+```sql
+'path', '/orgs/{orgId}/users/{userId}'
+```
+
+Registration derives the matcher (each `{param}` matches one path segment), the
+parameter names, and the OpenAPI path with a required `in: path` parameter per
+name. Write the path exactly as clients should see it: no `^`/`$`, no trailing
+`/`, no `(\?.*)?`. The gateway canonicalizes every request before matching, so
+`/orgs/7/users/42/`, `//orgs/7/users/42` and `/orgs/7/users/42?x=1` all reach
+this route already. Query parameters are declared with `query`, not matched.
+
+**Escape hatch: `uri`.** When one segment per parameter is not enough
+(constrained values, alternation, a greedy multi-segment tail), add a POSIX
+regex in `uri` next to `path`. Registration then holds you to three rules, and
+fails the deploy when one is broken:
+
+1. **Self-consistent with the path.** A `path` without parameters must itself
+   match the `uri`.
+2. **An `example` for capture groups.** A route with parameters and a `uri`
+   must declare an `example` URL, and the `uri` must match it:
+
+   ```sql
+   'path',    '/reports/{month}',
+   'uri',     '^/reports/([0-9]{4}-[0-9]{2})$',
+   'example', '/reports/2026-09'
+   ```
+
+3. **No overlap.** The `example` (or the parameter-free path) is the route's
+   probe. No other route with an intersecting `httpMethod` may match it, and
+   this route's `uri` may not match another route's probe.
+
+A `uri` with no `path` still registers, but its parameters are published as
+`{p1}`, `{p2}`, …; declare `path` alongside it to name them. Do not use `uri`
+to tolerate spellings — that is the gateway's job, and a hand-written
+tolerance pattern is the one thing the design forbids.
+
 ### Metadata defaults that bite
 
 | Key | Default | Note |
 |-----|---------|------|
 | `requiresAuth` | **`true`** | Omit it and the endpoint is authenticated (401 unless an active user resolves). |
 | `autoLog` | **`true`** | Request logging. |
+| `query` | — (none) | Declared query parameters: `'query', jsonb_build_array(jsonb_build_object('name', 'format', 'required', true, 'schema', jsonb_build_object('type', 'string')))`. The gateway answers 400 naming a missing required parameter, or one sent empty (`?format=`) unless `allowEmptyValue` is `true`, before your handler runs. `/openapi.json` lists each as `in: query`. A value is also checked against the `schema` type (`integer`, `number`, `boolean`) and `enum`; formats and ranges stay in your handler. |
 | `httpMethod` | `^(GET\|POST\|PUT\|DELETE\|PATCH)$` | POSIX regex; anchor your own (`^POST$`). |
 | `name` | — | `api.<name>`; `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` (≤49 chars). |
 | `outputSchema` | — | **Required on every REST handler** — the OpenAPI test fails the deploy (`REST handlers without output schema: …`) if any handler omits it. |
-| `inputSchema` | — | JSON Schema for the request body (declare it on write endpoints). Validated at registration; empty `{}` is rejected. |
+| `inputSchema` | — | JSON Schema for the request body (declare it on write endpoints). Validated at registration; empty `{}` is rejected. On POST/PUT/PATCH the gateway answers 400 for a body with the wrong root type, a missing required key or a wrong-typed top-level property. |
 | `minTransactionIsolation` | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The client gateway resolves it via `api.rest_route_policy` and opens the transaction at `max(floor, requested)`; a proxy that skips the lookup gets 428 (`pgmi.transaction_isolation_too_weak`). |
 | `readOnly` | `false` | Route only reads: the client gateway opens the transaction `READ ONLY` (`SERIALIZABLE READ ONLY` opens `DEFERRABLE`, which never hits 40001). A read-write transaction is rejected 428 (`pgmi.transaction_read_only_required`). OpenAPI advertises `x-pgmi-read-only` + derived `x-pgmi-replica-safe`. |
-| `pathParams` | — (positional) | Names for the `uri`'s capture groups, in order: `'pathParams', jsonb_build_array('orgId', 'userId')` turns `^/orgs/([^/]+)/users/(\d+)$` into `/orgs/{orgId}/users/{userId}` in the OpenAPI document, with a required `in: path` parameter for each. Omit it and they are named `{p1}`, `{p2}`, …. Declaring the wrong number of names is rejected at registration. |
 
 ---
 
@@ -244,7 +286,7 @@ BEGIN
         RAISE EXCEPTION 'expected 201, got %', (v_resp).status_code;
     END IF;
     v_body := api.content_json((v_resp).content);
-    IF v_body->>'name' <> 'Widget' THEN
+    IF v_body->>'name' IS DISTINCT FROM 'Widget' THEN
         RAISE EXCEPTION 'name mismatch: %', v_body;
     END IF;
 
@@ -254,7 +296,7 @@ BEGIN
         RAISE EXCEPTION 'expected 422, got %', (v_resp).status_code;
     END IF;
     v_body := api.content_json((v_resp).content);
-    IF v_body->'invalid-params'->0->>'name' <> 'price' THEN
+    IF v_body->'invalid-params'->0->>'name' IS DISTINCT FROM 'price' THEN
         RAISE EXCEPTION 'expected invalid-params for price, got %', v_body;
     END IF;
     IF v_body->>'detail' ~* 'PL/pgSQL|SQLSTATE|CONTEXT' THEN
@@ -292,7 +334,7 @@ leak `PL/pgSQL|SQLSTATE|CONTEXT`.
 Deploy the project (target a non-management DB):
 
 ```bash
-pgmi deploy . --connection "postgresql://user@host/postgres" -d mydb --overwrite --force
+pgmi deploy . --connection "postgresql://user@host/postgres" -d mydb --param env=dev --overwrite --force
 ```
 
 A green run ends with the `DONE` banner and exit 0; a failing test exits 13. The

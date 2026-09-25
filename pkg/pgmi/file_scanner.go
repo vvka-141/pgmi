@@ -16,5 +16,6 @@ type FileScanner interface {
 
 // FileScanResult contains the results of scanning a directory.
 type FileScanResult struct {
-	Files []FileMetadata
+	Files     []FileMetadata
+	DeploySQL string
 }

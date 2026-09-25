@@ -39,7 +39,10 @@ parameter plus three lines of SQL implements it — with semantics the project
 controls, not semantics a tool guessed:
 
 ```sql
--- deploy.sql runs inside one transaction; abort it to preview.
+-- Place this before deploy.sql's first top-level COMMIT. Everything up to
+-- that COMMIT runs as one transaction, and RAISE EXCEPTION rolls it all back.
+-- Statements after it autocommit one by one, and this block cannot undo them.
+-- The scaffolded templates COMMIT after the test gate, so put it above that.
 DO $$
 BEGIN
     IF COALESCE(current_setting('pgmi.preview', true), 'false') = 'true' THEN
@@ -49,7 +52,7 @@ END $$;
 ```
 
 ```bash
-pgmi deploy . -d mydb --param preview=true   # everything runs, nothing commits
+pgmi deploy . -d mydb --param preview=true   # runs up to the check, commits nothing
 ```
 
 A built-in `--dry-run` would have to choose one meaning (parse only? execute

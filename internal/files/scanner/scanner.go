@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -81,12 +82,16 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 			return fmt.Errorf("error walking path: %w", err)
 		}
 
-		// Skip directories
+		relPath := file.RelativePath()
+
 		if file.Info().IsDir() {
+			// Not descending at all: an unreadable file under .git or
+			// node_modules must not fail a deploy that never loads it.
+			if isExcludedPath(relPath) {
+				return fs.SkipDir
+			}
 			return nil
 		}
-
-		relPath := file.RelativePath()
 
 		if isExcludedPath(relPath) {
 			return nil
@@ -179,10 +184,6 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 		directory = unixPath[:lastSlash+1]
 	}
 
-	// Calculate depth (number of directory segments after ./)
-	// e.g., "./" = 0, "./migrations/" = 1, "./__test__/auth/" = 2
-	depth := max(strings.Count(directory, "/")-1, 0)
-
 	// Extract filename and extension
 	filename := info.Name()
 	extension := filepath.Ext(filename)
@@ -200,10 +201,10 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	// time. Fail early with the offending path — pgmi projects are text/source
 	// trees.
 	if bytes.IndexByte(content, 0) >= 0 {
-		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text, so move this file outside the project path or into a hidden directory", unixPath)
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text, so move this file outside the project path or into a hidden directory: %w", unixPath, pgmi.ErrInvalidConfig)
 	}
 	if !utf8.Valid(content) {
-		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text", unixPath)
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text: %w", unixPath, pgmi.ErrInvalidConfig)
 	}
 
 	var scriptMetadata *pgmi.ScriptMetadata
@@ -232,15 +233,11 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 
 	return pgmi.FileMetadata{
 		Path:        unixPath,
-		Name:        filename,
 		Directory:   directory,
 		Extension:   extension,
-		Depth:       depth,
 		Content:     string(content),
-		SizeBytes:   info.Size(),
 		Checksum:    checksumNormalized,
 		ChecksumRaw: checksumRaw,
-		ModifiedAt:  info.ModTime(),
 		Metadata:    scriptMetadata,
 	}, nil
 }

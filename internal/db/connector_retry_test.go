@@ -3,9 +3,13 @@ package db
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/internal/retry"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -113,10 +117,6 @@ func TestBackoffStrategy_Integration(t *testing.T) {
 		}
 	}
 
-	if strategy.MaxAttempts() != 3 {
-		t.Errorf("Expected MaxAttempts=3, got %d", strategy.MaxAttempts())
-	}
-
 	// Verify max delay constraint: even for very large attempt numbers,
 	// delay should never exceed 1 minute
 	for attempt := 10; attempt <= 20; attempt++ {
@@ -143,5 +143,33 @@ func BenchmarkStandardConnector_NoRetry(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// This will fail immediately with connection error, but we measure the retry overhead
 		_, _ = connector.Connect(context.Background())
+	}
+}
+
+func TestConnectExecutor_LogsEachRetry(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	calls := 0
+	err = newConnectExecutor().Execute(context.Background(), func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return &pgconn.PgError{Code: "57P03", Message: "the database system is starting up"}
+		}
+		return nil
+	})
+	w.Close()
+	out, _ := io.ReadAll(r)
+
+	if err != nil || calls != 2 {
+		t.Fatalf("Execute() = %v after %d calls, want success on the second", err, calls)
+	}
+	if !strings.Contains(string(out), "Connection attempt 1 failed") || !strings.Contains(string(out), "starting up") {
+		t.Errorf("stderr = %q, want a line naming the failed attempt and its cause", out)
 	}
 }

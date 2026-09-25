@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 

@@ -317,6 +317,8 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/api/.*');
 
 **`pgmi_test()` macro** - Run tests with automatic savepoints (preprocessor macro):
 ```sql
+BEGIN;  -- required: the macro expands to SAVEPOINT (25P01 without it)
+
 -- Run all tests
 CALL pgmi_test();
 

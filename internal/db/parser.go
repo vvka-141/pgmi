@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,11 +11,12 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// ParseConnectionString parses a PostgreSQL connection string in either
-// PostgreSQL URI format or ADO.NET format and returns a ConnectionConfig.
+// ParseConnectionString parses a PostgreSQL connection string and returns a
+// ConnectionConfig.
 //
 // Supported formats:
 //   - PostgreSQL URI: postgresql://user:pass@localhost:5432/dbname?sslmode=disable
+//   - libpq keyword/value: host=localhost port=5432 dbname=dbname user=user
 //   - ADO.NET: Host=localhost;Port=5432;Database=dbname;Username=user;Password=pass
 func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
 	if connStr == "" {
@@ -26,17 +28,20 @@ func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
 		return parsePostgreSQLURI(connStr)
 	}
 
-	// Try ADO.NET format
-	if strings.Contains(connStr, "=") && strings.Contains(connStr, ";") {
+	if strings.Contains(connStr, "=") && hasUnquotedSemicolon(connStr) {
 		return parseADONET(connStr)
 	}
+	if strings.Contains(connStr, "=") {
+		return parseKeywordValue(connStr)
+	}
 
-	return nil, fmt.Errorf("unrecognized connection string format")
+	return nil, fmt.Errorf("unrecognized connection string format: use postgresql://user@host:5432/dbname, host=... dbname=..., or Host=...;Database=...")
 }
 
 // parsePostgreSQLURI parses a PostgreSQL URI format connection string.
 // Format: postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
 func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
+	connStr, hostList := liftHostList(connStr)
 	u, err := url.Parse(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid PostgreSQL URI: %w", err)
@@ -51,11 +56,14 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		AdditionalParams: make(map[string]string),
 	}
 
-	// Parse host and port
-	if u.Hostname() != "" {
+	// Parse host and port. A multi-host list (h1:5432,h2:5433) is kept whole
+	// and passed through; taking it apart lost every host but one.
+	if hostList != "" {
+		config.Host = hostList
+	} else if u.Hostname() != "" {
 		config.Host = u.Hostname()
 	}
-	if u.Port() != "" {
+	if hostList == "" && u.Port() != "" {
 		port, err := strconv.Atoi(u.Port())
 		if err != nil {
 			return nil, fmt.Errorf("invalid port: %w", err)
@@ -88,6 +96,17 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		value := values[0]
 
 		switch strings.ToLower(key) {
+		case "host":
+			config.Host = value
+		case "port":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port: %w", err)
+			}
+			if err := validatePort(port); err != nil {
+				return nil, err
+			}
+			config.Port = port
 		case "sslmode":
 			config.SSLMode = value
 		case "sslcert":
@@ -253,8 +272,16 @@ func splitADONETPairs(s string) []adoPair {
 func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 	u := &url.URL{
 		Scheme: "postgresql",
-		Host:   fmt.Sprintf("%s:%d", config.Host, config.Port),
 		Path:   "/" + config.Database,
+	}
+	query := url.Values{}
+	if strings.HasPrefix(config.Host, "/") {
+		query.Set("host", config.Host)
+		query.Set("port", strconv.Itoa(config.Port))
+	} else if strings.Contains(config.Host, ",") {
+		u.Host = config.Host
+	} else {
+		u.Host = net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	}
 
 	if config.Username != "" {
@@ -265,7 +292,6 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 		}
 	}
 
-	query := url.Values{}
 	if config.SSLMode != "" {
 		query.Set("sslmode", config.SSLMode)
 	}
@@ -294,4 +320,27 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+// liftHostList swaps a comma-separated host list out of a URI's authority for
+// a placeholder, because url.Parse rejects one (with IPv6 members especially),
+// and returns the list so the caller can keep it verbatim.
+func liftHostList(connStr string) (string, string) {
+	schemeEnd := strings.Index(connStr, "://")
+	if schemeEnd < 0 {
+		return connStr, ""
+	}
+	start := schemeEnd + 3
+	end := len(connStr)
+	if i := strings.IndexAny(connStr[start:], "/?"); i >= 0 {
+		end = start + i
+	}
+	if at := strings.LastIndex(connStr[start:end], "@"); at >= 0 {
+		start += at + 1
+	}
+	hosts := connStr[start:end]
+	if !strings.Contains(hosts, ",") {
+		return connStr, ""
+	}
+	return connStr[:start] + "multihost.invalid" + connStr[end:], hosts
 }

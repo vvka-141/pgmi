@@ -43,8 +43,8 @@ fails domain parsing — use `'"req-1"'::jsonb` or `'42'::jsonb`.
 
 Handler registration metadata accepts the following optional fields:
 
-- **`inputSchema`** — JSON Schema (`api.json_schema` domain) describing arguments. Rejected if empty `{}` or malformed.
-- **`outputSchema`** — JSON Schema describing results. For MCP tools, surfaces in `tools/list` and enables spec-compliant `structuredContent` emission (see below). For REST/RPC, triggers `$schema` merge when `responseHeaders.x-include-schema='true'` — REST merges into body (wrapping arrays/scalars as `{data, $schema}`), RPC merges into `result.$schema` (never top-level, to keep JSON-RPC 2.0 compliant).
+- **`inputSchema`** — JSON Schema (`api.json_schema` domain) describing arguments. MCP requires a root `"type": "object"`; registration rejects anything else. Before your handler runs, the gateway checks the call against it: every `required` key present and each top-level property of its declared `type`. A violation comes back as an `isError` result naming the argument, which the model can correct. Nested schemas are not checked; validate those in the handler.
+- **`outputSchema`** — JSON Schema describing results; root `"type": "object"` required. For MCP tools, surfaces in `tools/list` and enables spec-compliant `structuredContent` emission (see below). For REST/RPC, triggers `$schema` merge when `responseHeaders.x-include-schema='true'` — REST merges into body (wrapping arrays/scalars as `{data, $schema}`), RPC merges into `result.$schema` (never top-level, to keep JSON-RPC 2.0 compliant).
 - **`responseHeaders`** (jsonb) — arbitrary headers merged into the wire response (keys lowercased). The key `x-include-schema` is a directive, not a header; it controls `$schema` merge and is stripped before the response reaches the client.
 - **`tags`** (MCP only, `text[]`) — surfaces in `tools/list` under `_meta.tags` (MCP spec extension slot). `mcp_list_tools(p_tags)` filters by overlap; NULL or empty array = no filter.
 
@@ -85,6 +85,13 @@ END;
 `api.mcp_tool_result(content, request_id, is_error, structured_content)` — when
 a `structured_content` jsonb is passed, MCP clients that support outputSchema can
 validate the structured payload directly instead of re-parsing the text content.
+
+Declaring `outputSchema` obliges the handler to pass `structured_content` on
+every successful result. MCP says a tool with an `outputSchema` returns content
+that conforms to it, and the reference SDKs reject a result that omits
+`structuredContent`. The failure appears in the client, not at registration,
+which cannot see what the body returns. Pin it with a test that calls the tool
+and checks `result.structuredContent`. Error results are exempt.
 
 Handler names are validated against `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` at
 registration. Names over 49 chars are rejected to prevent PostgreSQL 63-byte
@@ -251,9 +258,11 @@ SELECT api.create_or_replace_mcp_handler(
 ```
 
 If `requiresAuth` is true and the context's `user_id` does not resolve to an active
-user — missing, malformed, unknown, or deactivated — the gateway returns:
+user — missing, malformed, unknown, or deactivated — the gateway answers exactly as
+it does for a name that does not exist, so an anonymous caller cannot probe for
+protected tools (they are already hidden from its `tools/list`):
 ```json
-{"jsonrpc": "2.0", "id": "...", "error": {"code": -32001, "message": "Authentication required"}}
+{"jsonrpc": "2.0", "id": "...", "error": {"code": -32602, "message": "Tool not found: my_tool (or it requires authentication)"}}
 ```
 
 ## Testing
@@ -298,7 +307,7 @@ BEGIN
             'type', 'tool',
             'name', 'test_tool',
             'description', 'Test',
-            'inputSchema', '{}'::jsonb,
+            'inputSchema', '{"type":"object"}'::jsonb,
             'requiresAuth', false
         ),
         $body$

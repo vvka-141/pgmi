@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -24,6 +25,9 @@ type DeployResult struct {
 	ExecutionUnits int
 	UnitsCommitted int
 	ExecutionMode  string
+	// Created is true when this deploy created a database that did not exist,
+	// which is also what a mistyped -d looks like.
+	Created bool
 }
 
 type maintenanceDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
@@ -35,7 +39,6 @@ type DeploymentService struct {
 	approver         pgmi.Approver
 	logger           pgmi.Logger
 	sessionManager   pgmi.SessionPreparer
-	fileScanner      pgmi.FileScanner
 	dbManager        pgmi.DatabaseManager
 	mgmtConnector    maintenanceDBConnFunc
 	lastResult       *DeployResult
@@ -56,7 +59,6 @@ func NewDeploymentService(
 	approver pgmi.Approver,
 	logger pgmi.Logger,
 	sessionManager pgmi.SessionPreparer,
-	fileScanner pgmi.FileScanner,
 	dbManager pgmi.DatabaseManager,
 ) *DeploymentService {
 	if connectorFactory == nil {
@@ -71,9 +73,6 @@ func NewDeploymentService(
 	if sessionManager == nil {
 		panic("sessionManager cannot be nil")
 	}
-	if fileScanner == nil {
-		panic("fileScanner cannot be nil")
-	}
 	if dbManager == nil {
 		panic("dbManager cannot be nil")
 	}
@@ -83,7 +82,6 @@ func NewDeploymentService(
 		approver:         approver,
 		logger:           logger,
 		sessionManager:   sessionManager,
-		fileScanner:      fileScanner,
 		dbManager:        dbManager,
 	}
 	svc.mgmtConnector = svc.defaultMgmtConnector
@@ -141,6 +139,9 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	if _, _, err := contract.Load(config.Compat); err != nil {
 		return err
 	}
+	if err := loader.ValidateParameters(config.Parameters); err != nil {
+		return err
+	}
 
 	// Handle overwrite workflow if requested (drop and recreate database)
 	if config.Overwrite {
@@ -168,7 +169,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	s.lastResult.FilesLoaded = session.FilesLoaded
 
 	s.logger.Info("Executing deploy.sql")
-	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), config.SourcePath)
+	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), scanResult)
 	s.lastResult.TestMacros = macroCount
 	return err
 }
@@ -186,7 +187,7 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	// Parse connection string
 	connConfig, err := db.ParseConnectionString(config.ConnectionString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection string: %w", err)
+		return nil, fmt.Errorf("failed to parse connection string: %w: %w", err, pgmi.ErrInvalidConfig)
 	}
 
 	// Set application name if not already set
@@ -205,24 +206,18 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	return connConfig, nil
 }
 
-// executeDeploySQL reads, preprocesses, and executes the deploy.sql file.
+// executeDeploySQL preprocesses and executes deploy.sql, read and validated
+// by ScanProject before anything touched the server.
 // Preprocessing expands CALL pgmi_test() macros by querying pgmi_test_plan() from SQL.
 // Returns the number of test macros expanded and any error.
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
-	sourcePath string,
+	scan pgmi.FileScanResult,
 ) (int, error) {
-	s.logger.Verbose("Reading deploy.sql")
-
-	deploySQL, err := s.fileScanner.ReadDeploySQL(sourcePath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read deploy.sql: %w", err)
-	}
-
 	// Preprocess: expand CALL pgmi_test() macros by querying pgmi_test_plan() from SQL
 	pipeline := preprocessor.NewPipeline()
-	result, err := pipeline.Process(ctx, conn, deploySQL)
+	result, err := pipeline.Process(ctx, conn, scan.DeploySQL)
 	if err != nil {
 		return 0, fmt.Errorf("failed to preprocess deploy.sql: %w", err)
 	}
@@ -257,7 +252,7 @@ func (s *DeploymentService) executeDeploySQL(
 			} else {
 				s.lastResult.ExecutionMode = "psql"
 			}
-			scriptErr := pgmi.NewScriptError(err, "deploy.sql", unit, result.MacroCount > 0)
+			scriptErr := &pgmi.ScriptError{Err: err, Name: "deploy.sql", Script: unit, Expanded: result.MacroCount > 0, Files: scan.Files}
 			return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
 		}
 	}
@@ -306,6 +301,9 @@ func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBC
 		// preserve, so it takes the server defaults as PostgreSQL intends.
 		if err := s.dbManager.Create(ctx, dbConn, dbName, nil); err != nil {
 			return false, classifyCreateFailure(err)
+		}
+		if s.lastResult != nil {
+			s.lastResult.Created = true
 		}
 		return false, nil
 	}

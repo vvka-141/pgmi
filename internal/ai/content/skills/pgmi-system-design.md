@@ -276,7 +276,7 @@ With design complete, implementation is straightforward:
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'transfer-funds-handler',
-        'uri', '^/transfers$',
+        'path', '/transfers',
         'httpMethod', '^POST$',
         'name', 'transfer_funds',
         'requiresAuth', true

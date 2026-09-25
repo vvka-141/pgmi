@@ -87,15 +87,16 @@ func (g *GranularConnFlags) IsEmpty() bool {
 // EnvVars represents PostgreSQL standard environment variables.
 // See: https://www.postgresql.org/docs/current/libpq-envars.html
 type EnvVars struct {
-	PGHOST            string // PostgreSQL server host
-	PGPORT            string // PostgreSQL server port
-	PGUSER            string // PostgreSQL username
-	PGPASSWORD        string // PostgreSQL password (discouraged, use .pgpass instead)
-	PGDATABASE        string // Default database name
-	PGSSLMODE         string // SSL mode
-	PGAPPNAME         string // application_name reported in pg_stat_activity
-	PGCONNECT_TIMEOUT string // Connection timeout in seconds (libpq convention)
-	DATABASE_URL      string // Full connection string (Heroku/Rails convention)
+	PGHOST                 string // PostgreSQL server host
+	PGPORT                 string // PostgreSQL server port
+	PGUSER                 string // PostgreSQL username
+	PGPASSWORD             string // PostgreSQL password (discouraged, use .pgpass instead)
+	PGDATABASE             string // Default database name
+	PGSSLMODE              string // SSL mode
+	PGAPPNAME              string // application_name reported in pg_stat_activity
+	PGCONNECT_TIMEOUT      string // Connection timeout in seconds (libpq convention)
+	DATABASE_URL           string // Full connection string (Heroku/Rails convention)
+	PGMI_CONNECTION_STRING string
 
 	// Azure Entra ID environment variables (Azure SDK standard names)
 	AZURE_TENANT_ID     string // Azure AD tenant/directory ID
@@ -117,33 +118,34 @@ type EnvVars struct {
 // This follows standard PostgreSQL client behavior and Azure/AWS SDK conventions.
 func LoadFromEnvironment() *EnvVars {
 	return &EnvVars{
-		PGHOST:              os.Getenv("PGHOST"),
-		PGPORT:              os.Getenv("PGPORT"),
-		PGUSER:              os.Getenv("PGUSER"),
-		PGPASSWORD:          os.Getenv("PGPASSWORD"),
-		PGDATABASE:          os.Getenv("PGDATABASE"),
-		PGSSLMODE:           os.Getenv("PGSSLMODE"),
-		PGAPPNAME:           os.Getenv("PGAPPNAME"),
-		PGCONNECT_TIMEOUT:   os.Getenv("PGCONNECT_TIMEOUT"),
-		DATABASE_URL:        os.Getenv("DATABASE_URL"),
-		AZURE_TENANT_ID:     os.Getenv("AZURE_TENANT_ID"),
-		AZURE_CLIENT_ID:     os.Getenv("AZURE_CLIENT_ID"),
-		AZURE_CLIENT_SECRET: os.Getenv("AZURE_CLIENT_SECRET"),
-		AWS_REGION:          os.Getenv("AWS_REGION"),
-		AWS_DEFAULT_REGION:  os.Getenv("AWS_DEFAULT_REGION"),
-		PGSSLCERT:           os.Getenv("PGSSLCERT"),
-		PGSSLKEY:            os.Getenv("PGSSLKEY"),
-		PGSSLROOTCERT:       os.Getenv("PGSSLROOTCERT"),
-		PGSSLPASSWORD:       os.Getenv("PGSSLPASSWORD"),
+		PGHOST:                 os.Getenv("PGHOST"),
+		PGPORT:                 os.Getenv("PGPORT"),
+		PGUSER:                 os.Getenv("PGUSER"),
+		PGPASSWORD:             os.Getenv("PGPASSWORD"),
+		PGDATABASE:             os.Getenv("PGDATABASE"),
+		PGSSLMODE:              os.Getenv("PGSSLMODE"),
+		PGAPPNAME:              os.Getenv("PGAPPNAME"),
+		PGCONNECT_TIMEOUT:      os.Getenv("PGCONNECT_TIMEOUT"),
+		DATABASE_URL:           os.Getenv("DATABASE_URL"),
+		PGMI_CONNECTION_STRING: os.Getenv("PGMI_CONNECTION_STRING"),
+		AZURE_TENANT_ID:        os.Getenv("AZURE_TENANT_ID"),
+		AZURE_CLIENT_ID:        os.Getenv("AZURE_CLIENT_ID"),
+		AZURE_CLIENT_SECRET:    os.Getenv("AZURE_CLIENT_SECRET"),
+		AWS_REGION:             os.Getenv("AWS_REGION"),
+		AWS_DEFAULT_REGION:     os.Getenv("AWS_DEFAULT_REGION"),
+		PGSSLCERT:              os.Getenv("PGSSLCERT"),
+		PGSSLKEY:               os.Getenv("PGSSLKEY"),
+		PGSSLROOTCERT:          os.Getenv("PGSSLROOTCERT"),
+		PGSSLPASSWORD:          os.Getenv("PGSSLPASSWORD"),
 	}
 }
 
 // ResolveConnectionParams resolves connection parameters using PostgreSQL-standard precedence:
 //
 // 1. Connection string flag (--connection) - if provided, parse and use directly
-// 2. Granular flags (-h, -p, -U, -d) - if any provided, build config from flags
-// 3. Environment variables (PGHOST, PGPORT, etc.) - fallback if no flags
-// 4. DATABASE_URL environment variable - fallback if no granular params
+// 2. Granular flags (-h, -p, -U, --sslmode) - if any provided, build config from flags
+// 3. PGMI_CONNECTION_STRING, then DATABASE_URL - only when no granular flag is given
+// 4. Environment variables (PGHOST, PGPORT, etc.), then pgmi.yaml
 // 5. Defaults (localhost:5432, prefer SSL)
 //
 // Cloud Authentication:
@@ -218,14 +220,12 @@ func ResolveConnectionParams(
 	var maintenanceDB string
 	var err error
 
-	// Path 1: Connection string provided via --connection flag
-	if connStringFlag != "" {
-		config, maintenanceDB, err = resolveFromConnectionString(connStringFlag, envVars)
-	} else if granularFlags.IsEmpty() && envVars.DATABASE_URL != "" {
-		// Path 2: DATABASE_URL environment variable (if no granular flags)
-		config, maintenanceDB, err = resolveFromConnectionString(envVars.DATABASE_URL, envVars)
+	if connStr, source := SelectConnectionString(connStringFlag, granularFlags, envVars); connStr != "" {
+		config, maintenanceDB, err = resolveFromConnectionString(connStr, envVars)
+		if err != nil && source != "--connection" {
+			err = fmt.Errorf("%s: %w", source, err)
+		}
 	} else {
-		// Path 3: Granular flags + environment variables with precedence
 		config, maintenanceDB, err = resolveFromGranularParams(granularFlags, envVars, projectConfig)
 	}
 
@@ -242,6 +242,27 @@ func ResolveConnectionParams(
 	applyCertParams(config, certFlags, envVars, projectConfig)
 
 	return config, maintenanceDB, nil
+}
+
+// SelectConnectionString returns the connection string the resolver uses and
+// where it came from: the --connection flag, else PGMI_CONNECTION_STRING, else
+// DATABASE_URL. An environment string is ignored whenever -h/-p/-U/--sslmode is
+// given, rather than merged: merging would send its credentials to the flag's
+// host.
+func SelectConnectionString(connStringFlag string, granularFlags *GranularConnFlags, envVars *EnvVars) (connStr, source string) {
+	if connStringFlag != "" {
+		return connStringFlag, "--connection"
+	}
+	if envVars == nil || (granularFlags != nil && !granularFlags.IsEmpty()) {
+		return "", ""
+	}
+	if envVars.PGMI_CONNECTION_STRING != "" {
+		return envVars.PGMI_CONNECTION_STRING, "PGMI_CONNECTION_STRING"
+	}
+	if envVars.DATABASE_URL != "" {
+		return envVars.DATABASE_URL, "DATABASE_URL"
+	}
+	return "", ""
 }
 
 // applyAzureAuth sets Azure Entra ID authentication on the config if credentials are available.

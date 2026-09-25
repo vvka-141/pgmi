@@ -243,6 +243,58 @@ func TestLocateError_MultibyteCharactersDoNotSkewTheLine(t *testing.T) {
 	}
 }
 
+// An error inside an EXECUTEd file is attributed by the file's text, not by
+// how deploy.sql words its re-raise (PGMI-376). The PgError shapes are what
+// PostgreSQL 17 returns for EXECUTE: a parse error carries InternalQuery and
+// InternalPosition, a runtime error only the `SQL statement "..."` context.
+func TestFailedFile_AttributedByExecutedText(t *testing.T) {
+	migration := "CREATE TABLE a(x int);\n\n\nSELEC 1;\n"
+	files := []pgmi.FileMetadata{
+		{Path: "./migrations/001.sql", Content: "CREATE TABLE z(x int);\n"},
+		{Path: "./migrations/002.sql", Content: migration},
+	}
+	attach := func(pgErr *pgconn.PgError) error {
+		err := pgmi.NewScriptError(pgErr, "deploy.sql", "DO $$ ... $$;", false)
+		err.(*pgmi.ScriptError).Files = files
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+	}
+
+	t.Run("parse error resolves to a line in the file", func(t *testing.T) {
+		err := attach(&pgconn.PgError{
+			Code: "42601", Message: `syntax error at or near "SELEC"`,
+			InternalQuery: migration, InternalPosition: 26,
+			Where: "PL/pgSQL function inline_code_block line 1 at EXECUTE",
+		})
+		d := pgmi.NewErrorDetail(err)
+		if d.FailedFile != "./migrations/002.sql" || d.Script != "./migrations/002.sql" || d.Line != 4 || d.Column != 1 {
+			t.Fatalf("want ./migrations/002.sql line 4 column 1, got %+v", d)
+		}
+		if out := pgmi.FormatError(err); !strings.Contains(out, "LOCATION: ./migrations/002.sql line 4, column 1") {
+			t.Errorf("FormatError does not locate the file line:\n%s", out)
+		}
+	})
+
+	t.Run("runtime error names the file from the statement context", func(t *testing.T) {
+		err := attach(&pgconn.PgError{
+			Code: "22012", Message: "division by zero",
+			Where: "SQL statement \"" + migration + "\"\nPL/pgSQL function inline_code_block line 1 at EXECUTE",
+		})
+		if got := pgmi.FailedFile(err); got != "./migrations/002.sql" {
+			t.Fatalf("FailedFile = %q", got)
+		}
+		if out := pgmi.FormatError(err); !strings.Contains(out, "LOCATION: ./migrations/002.sql") {
+			t.Errorf("FormatError does not name the file:\n%s", out)
+		}
+	})
+
+	t.Run("message convention still works without matching text", func(t *testing.T) {
+		err := attach(&pgconn.PgError{Code: "P0001", Message: "Failed in ./x.sql: boom"})
+		if got := pgmi.FailedFile(err); got != "./x.sql" {
+			t.Fatalf("FailedFile = %q", got)
+		}
+	})
+}
+
 func TestFormatError_IncludesLocationAndPointsAtTheOffendingLine(t *testing.T) {
 	err := pgmi.NewScriptError(
 		&pgconn.PgError{

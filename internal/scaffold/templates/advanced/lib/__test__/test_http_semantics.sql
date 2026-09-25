@@ -282,3 +282,137 @@ $body$
 
     RAISE NOTICE '  ✓ unparseable RPC bodies return -32700 without dispatching';
 END $$;
+
+
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_vary text;
+BEGIN
+    RAISE NOTICE '→ Testing malformed input and header handling at the gateway';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-5379-4000-8000-000000000001',
+            'uri', '^/gateway-probe$',
+            'httpMethod', '^GET$',
+            'name', 'gateway_probe',
+            'produces', jsonb_build_array('application/json'),
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN ROW(200, extensions.hstore('vary', 'Accept-Language'), convert_to('{}', 'UTF8'))::api.http_response;
+END;
+$body$
+    );
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-5379-4000-8000-000000000002',
+            'uri', '^/decode-probe$',
+            'httpMethod', '^GET$',
+            'name', 'decode_probe',
+            'requiresAuth', false
+        ),
+        $body$
+BEGIN
+    RETURN api.json_response(200, jsonb_build_object('v', api.url_decode('%FF')));
+END;
+$body$
+    );
+
+    -- RFC 9110 12.4.2: a q-value outside the grammar is the client's mistake,
+    -- not a reason to abort the transaction without any HTTP response.
+    v_response := api.rest_invoke('GET', '/gateway-probe',
+        extensions.hstore('accept', 'application/json;q=.'), NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: a malformed Accept q-value must still be answered, got %', (v_response).status_code;
+    END IF;
+
+    -- Invalid percent-encoding (22021) is a data exception like any other in class 22.
+    v_response := api.rest_invoke('GET', '/decode-probe', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 400 THEN
+        RAISE EXCEPTION 'TEST FAILED: invalid percent-encoding must be 400, got %', (v_response).status_code;
+    END IF;
+
+    -- RFC 9110 5.1: field names are case-insensitive. A canonical-case Accept
+    -- used to be ignored, so an unacceptable type was served anyway.
+    v_response := api.rest_invoke('GET', '/gateway-probe',
+        extensions.hstore('Accept', 'text/html'), NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 406 THEN
+        RAISE EXCEPTION 'TEST FAILED: a canonical-case Accept header must be honoured (406), got %', (v_response).status_code;
+    END IF;
+
+    -- RFC 9111 4.1: the handler's own Vary members must survive the gateway's.
+    v_response := api.rest_invoke('GET', '/gateway-probe', ''::extensions.hstore, NULL::bytea);
+    v_vary := (v_response).headers->'vary';
+    IF COALESCE(v_vary, '') NOT LIKE '%accept-language%' OR COALESCE(v_vary, '') NOT LIKE '%x-user-id%' THEN
+        RAISE EXCEPTION 'TEST FAILED: Vary must union handler and gateway members, got %', v_vary;
+    END IF;
+
+    RAISE NOTICE '  ✓ bad q-values answered, class 22 is 400, header names case-insensitive, Vary unioned';
+END $$;
+
+-- A CORS preflight carries no credentials and needs a 2xx, so OPTIONS on a
+-- matched path answers 204 with Allow before identity is resolved. Every other
+-- method answers only from the routes its caller may call: an anonymous
+-- caller must not learn the methods of an authenticated resource from a 405.
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_subject  text := 'test|http-semantics-options';
+    v_headers  extensions.hstore := extensions.hstore('x-user-id', 'test|http-semantics-options');
+BEGIN
+    RAISE NOTICE '→ Testing OPTIONS preflight and the anonymous 405';
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-5004-4000-8000-000000000001',
+            'uri', '^/private-probe$',
+            'httpMethod', '^GET$',
+            'name', 'private_probe',
+            'requiresAuth', true
+        ),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
+    );
+
+    PERFORM set_config('auth.idp_subject', '', true);
+    v_response := api.rest_invoke('OPTIONS', '/private-probe', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 204 THEN
+        RAISE EXCEPTION 'TEST FAILED: OPTIONS on a matched path must be 204 without credentials, got %',
+            (v_response).status_code;
+    END IF;
+    IF coalesce((v_response).headers->'allow', '') !~ 'GET' OR coalesce((v_response).headers->'allow', '') !~ 'OPTIONS' THEN
+        RAISE EXCEPTION 'TEST FAILED: OPTIONS must advertise GET and OPTIONS, got %',
+            coalesce((v_response).headers->'allow', '<none>');
+    END IF;
+
+    v_response := api.rest_invoke('OPTIONS', '/no-such-resource', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 404 THEN
+        RAISE EXCEPTION 'TEST FAILED: OPTIONS on an unmatched path must stay 404, got %', (v_response).status_code;
+    END IF;
+
+    v_response := api.rest_invoke('POST', '/private-probe', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
+        RAISE EXCEPTION 'TEST FAILED: an anonymous wrong method on an authenticated resource must be 401, got %',
+            (v_response).status_code;
+    END IF;
+    IF (v_response).headers ? 'allow' THEN
+        RAISE EXCEPTION 'TEST FAILED: the anonymous answer must not list methods, got Allow: %',
+            (v_response).headers->'allow';
+    END IF;
+
+    PERFORM membership.upsert_user('test', 'http-semantics-options', 'http-semantics-options@example.com');
+    PERFORM set_config('auth.idp_subject', v_subject, true);
+    v_response := api.rest_invoke('POST', '/private-probe', v_headers, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 405 THEN
+        RAISE EXCEPTION 'TEST FAILED: an authenticated wrong method must be 405, got %', (v_response).status_code;
+    END IF;
+    IF coalesce((v_response).headers->'allow', '') !~ 'GET' THEN
+        RAISE EXCEPTION 'TEST FAILED: the authenticated 405 must list GET, got %',
+            coalesce((v_response).headers->'allow', '<none>');
+    END IF;
+    PERFORM set_config('auth.idp_subject', '', true);
+
+    RAISE NOTICE '  ✓ OPTIONS answers pre-auth; an anonymous 405 reveals nothing';
+END $$;

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,7 +47,7 @@ by deploy.sql, not by pgmi.
 Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
 string. Cloud auth: --azure, --aws, --google (no password needed).
 
-Parameter precedence: --param > --params-file (later wins) > pgmi.yaml > env.
+Parameter precedence: --param > --params-file (later wins) > pgmi.yaml.
 
 Exit codes:
   0   success
@@ -75,6 +77,7 @@ var deployFlags deployFlagValues
 // wizard produces — cannot be reached from a test at all.
 var (
 	isInteractive       = tui.IsInteractive
+	canPrompt           = tui.CanPrompt
 	runConnectionWizard = runDeployWizard
 )
 
@@ -86,7 +89,7 @@ func init() {
 
 	// Connection string flag (mutually exclusive with granular flags)
 	deployCmd.Flags().StringVar(&deployFlags.connection, "connection", "",
-		"PostgreSQL connection string (URI or ADO.NET format).\n"+
+		"PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET.\n"+
 			"Its database is the maintenance database for CREATE DATABASE, and also the\n"+
 			"deploy target unless -d says otherwise. It outranks pgmi.yaml's\n"+
 			"connection.database, so a string ending in /postgres deploys into postgres.\n"+
@@ -95,13 +98,13 @@ func init() {
 			"Example: postgresql://user:pass@localhost:5432/postgres")
 
 	// Granular connection flags (PostgreSQL standard)
-	// Precedence: flag > environment variable > default
+	// Precedence: flag > environment variable > pgmi.yaml > default
 	deployCmd.Flags().StringVarP(&deployFlags.host, "host", "h", "",
 		"PostgreSQL server host\n"+
-			"Precedence: --host > $PGHOST > localhost")
+			"Precedence: --host > $PGHOST > pgmi.yaml > localhost")
 	deployCmd.Flags().IntVarP(&deployFlags.port, "port", "p", 0,
 		"PostgreSQL server port\n"+
-			"Precedence: --port > $PGPORT > 5432")
+			"Precedence: --port > $PGPORT > pgmi.yaml > 5432")
 	deployCmd.Flags().StringVarP(&deployFlags.username, "username", "U", "",
 		"PostgreSQL user (default: $PGUSER or current OS user)")
 	deployCmd.Flags().StringVarP(&deployFlags.database, "database", "d", "",
@@ -212,6 +215,10 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *co
 	maintenanceDB := determineMaintenanceDB(deployFlags.database, connConfig.Database, resolvedMaintenanceDB)
 	connConfig.Database = targetDB
 
+	if source := envConnectionSource(deployFlags.connectionFlags); source != "" && !deployFlags.jsonOutput {
+		fmt.Fprintf(os.Stderr, "connection: from %s (%s)\n", source, net.JoinHostPort(connConfig.Host, strconv.Itoa(connConfig.Port)))
+	}
+
 	if verbose {
 		logConnectionVerbose(connConfig, maintenanceDB, true)
 	}
@@ -279,12 +286,20 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		applyWizardConfig(wizardConfig)
 	}
 
+	if source := envConnectionSource(deployFlags.connectionFlags); source != "" {
+		defer func() {
+			if errors.Is(err, pgmi.ErrConnectionFailed) || errors.Is(err, pgmi.ErrInvalidConfig) {
+				err = fmt.Errorf("%w\n(connection from %s)", err, source)
+			}
+		}()
+	}
+
 	config, err := buildDeploymentConfig(cmd, sourcePath, projectCfg, verbose)
 	if err != nil {
 		return err
 	}
 
-	approver := selectApprover(deployFlags.force, isInteractive(), verbose)
+	approver := selectApprover(deployFlags.force, canPrompt(), verbose)
 
 	logger := logging.NewConsoleLogger(verbose)
 	fileScanner := scanner.NewScanner(checksum.New())
@@ -305,7 +320,6 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		approver,
 		logger,
 		sessionManager,
-		fileScanner,
 		dbManager,
 	)
 
@@ -337,7 +351,7 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 	if verbose {
 		deployStart := time.Now()
 		origHandler := db.NoticeHandler
-		db.NoticeHandler = func(message, detail, hint string) {
+		db.NoticeHandler = func(_, message, detail, hint string) {
 			prefix := fmt.Sprintf("[%.2fs] ", time.Since(deployStart).Seconds())
 			fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
 			if detail != "" {
@@ -398,11 +412,7 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 		target = "?"
 	}
 	if deployErr == nil {
-		parts := fmt.Sprintf("%d files loaded", result.FilesLoaded)
-		if result.TestMacros > 0 {
-			parts += fmt.Sprintf(", %d test macro(s) expanded", result.TestMacros)
-		}
-		fmt.Fprintf(os.Stderr, "%s %s: %s in %s\n", ui.SuccessIcon(), target, parts, d)
+		fmt.Fprintf(os.Stderr, "%s %s: %d files loaded in %s\n", ui.SuccessIcon(), target, result.FilesLoaded, d)
 	} else {
 		msg := fmt.Sprintf("failed after %s", d)
 		if result.ExecutionMode == "psql" {
@@ -414,6 +424,17 @@ func printDeploySummary(result *services.DeployResult, deployErr error) {
 }
 
 func printDeployJSON(result *services.DeployResult, deployErr error) {
+	jsonBytes, err := json.MarshalIndent(deployResultFields(result, deployErr), "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "json marshal error: %v\n", err)
+		return
+	}
+	fmt.Println(string(jsonBytes))
+}
+
+// deployResultFields is the machine-readable deploy result, shared by
+// `deploy --json` and the MCP deploy tool so the two cannot drift.
+func deployResultFields(result *services.DeployResult, deployErr error) map[string]any {
 	out := map[string]any{
 		"status":   "success",
 		"exitCode": 0,
@@ -423,6 +444,7 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 		out["testMacros"] = result.TestMacros
 		out["durationMs"] = result.Duration.Milliseconds()
 		out["database"] = result.Database
+		out["created"] = result.Created
 		if result.ExecutionUnits > 0 {
 			out["executionUnits"] = result.ExecutionUnits
 			out["unitsCommitted"] = result.UnitsCommitted
@@ -454,12 +476,7 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 			out["scriptExpanded"] = d.ScriptExpanded
 		}
 	}
-	jsonBytes, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "json marshal error: %v\n", err)
-		return
-	}
-	fmt.Println(string(jsonBytes))
+	return out
 }
 
 // needsConnectionWizard checks if we have enough connection info to proceed.

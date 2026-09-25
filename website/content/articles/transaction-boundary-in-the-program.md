@@ -138,7 +138,7 @@ COMMIT;                                   -- and only here are the locks release
 
 SET lock_timeout = '3s';                  -- phase 2: psql mode from here
 
-SELECT pg_temp.reap_invalid_index('idx_orders_customer', 'orders');  -- see below
+SELECT pg_temp.reap_invalid_index('idx_orders_customer');  -- see below
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_customer ON orders (customer_id);
 
 BEGIN;                                    -- phase 3: a phase that must be atomic says so
@@ -287,10 +287,10 @@ autocommitted statement of its own, it would have no useful effect at all:
 
 ```sql
 SET LOCAL lock_timeout = '250ms';
-EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', p_table);
+EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', v_table);
 
 -- Re-check while holding it. An index being built by a CONCURRENTLY in another
--- session is also indisvalid, and may have become valid since the probe above.
+-- session is also not yet valid, and may have become valid since the probe above.
 IF EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = v_index AND NOT indisvalid) THEN
     EXECUTE format('DROP INDEX %s', v_index::regclass);
 END IF;

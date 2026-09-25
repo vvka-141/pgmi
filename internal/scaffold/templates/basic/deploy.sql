@@ -23,11 +23,12 @@ BEGIN
     FROM pg_temp.pgmi_source_view
     WHERE path = './project.json';
 
-    RAISE NOTICE '[%] Deploying % v% (% file(s) in project)',
+    RAISE NOTICE '[%] Deploying % v% (% migration file(s))',
         v_env,
         v_config ->> 'app_name',
         v_config ->> 'version',
-        (SELECT count(*) FROM pg_temp.pgmi_source_view);
+        (SELECT count(*) FROM pg_temp.pgmi_source_view
+         WHERE directory = './migrations/' AND is_sql_file);
 
     -- ── Execution model ──────────────────────────────────────────────────
     -- By DEFAULT every migration re-runs on every deploy. That is safe only
@@ -38,7 +39,9 @@ BEGIN
     -- If you would rather have apply-once semantics — a file runs once, ever,
     -- like Flyway or Sqitch — uncomment the three lines marked (A), (B), (C).
     -- That is the whole feature. It is 3 lines of your SQL, not a framework:
-    -- you own it, you can read it, and you can delete it.
+    -- you own it, you can read it, and you can delete it. A fuller version,
+    -- which also fails the deploy when an applied file is edited, runs in CI:
+    -- https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking
     --
     -- Trade-off: with tracking on, editing an already-applied migration does
     -- nothing (it is skipped). The stored checksum tells you it changed —
@@ -59,24 +62,10 @@ BEGIN
     )
     LOOP
         RAISE DEBUG 'Executing: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-            -- (C) INSERT INTO _migration (path, checksum) VALUES (v_file.path, v_file.pgmi_checksum);
-        EXCEPTION WHEN OTHERS THEN
-            -- Keep the original SQLSTATE and DETAIL: a bare RAISE EXCEPTION rewrites
-            -- them to P0001 and an empty detail, so a caller cannot classify the
-            -- failure (e.g. a retryable 40001 vs a permanent constraint violation).
-            DECLARE
-                v_sqlstate text;
-                v_detail   text;
-            BEGIN
-                GET STACKED DIAGNOSTICS
-                    v_sqlstate = RETURNED_SQLSTATE,
-                    v_detail   = PG_EXCEPTION_DETAIL;
-                RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM
-                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
-            END;
-        END;
+        -- No exception handler: an error reaches pgmi untouched, which names the
+        -- failing file and line and keeps the original SQLSTATE.
+        EXECUTE v_file.content;
+        -- (C) INSERT INTO _migration (path, checksum) VALUES (v_file.path, v_file.pgmi_checksum);
     END LOOP;
 
     -- Environment-aware seeding: only in non-production

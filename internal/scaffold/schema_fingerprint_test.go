@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 )
 
 // fingerprintQuery summarises every catalog object a deploy could create in the

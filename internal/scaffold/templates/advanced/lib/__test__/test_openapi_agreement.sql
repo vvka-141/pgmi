@@ -23,6 +23,12 @@ DECLARE
     v_routes       int;
     v_operations   int;
 BEGIN
+    -- The document is filtered by caller; completeness is a claim about what
+    -- an authenticated caller sees.
+    PERFORM membership.upsert_user('test', 'openapi-agreement', 'openapi-agreement@example.com');
+    PERFORM set_config('auth.user_id', 'test|openapi-agreement', true);
+    PERFORM set_config('auth.idp_subject', 'test|openapi-agreement', true);
+
     -- Arm 1: every registered REST route is published, and nothing is
     -- published that is not registered. A route missing from the document is
     -- an endpoint clients cannot discover; a path in the document with no
@@ -61,6 +67,9 @@ BEGIN
             v_operations, v_routes;
     END IF;
 
+    PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
+
     RAISE NOTICE '  + every registered route is published, and every published path is registered';
 END $$;
 
@@ -70,39 +79,62 @@ DECLARE
     v_method   text;
     v_status   int;
     v_checked  int := 0;
+    v_ops      text[];
+    v_response api.http_response;
 BEGIN
     -- Arm 2: a published path, sent to the router, must reach a handler.
     -- 404 means no route matched and 405 means the documented verb is not
     -- accepted; both make the document a lie. 401/403 are fine -- the route
     -- matched and the gateway enforced auth, which is the point of /me.
     --
-    -- Only paths WITHOUT {variables}: a concrete value for a variable has to
-    -- satisfy that route's own capture group, and this test ships to users
-    -- whose routes may capture (\d+) or a slug. Guessing a substitution would
-    -- fail their deploy for a route that is perfectly correct. Parameterized
-    -- paths are covered by arm 1 plus the capture-group and in:path parameter
-    -- checks above.
-    FOR v_path, v_method IN
-        SELECT p.key, upper(op.key)
-        FROM jsonb_each(api.openapi_document()->'paths') p,
-             jsonb_each(p.value) op
-        WHERE op.key IN ('get', 'post', 'put', 'patch', 'delete')
-          AND p.key NOT LIKE '%{%'
-        ORDER BY p.key, op.key
+    -- A path with {variables} is sent as the route's probe URL, which
+    -- registration derived from its own capture groups or its declared
+    -- example, so the substituted value satisfies that route and no other.
+    --
+    -- The operations are read as an authenticated caller, so auth-gated routes
+    -- are covered too, and then sent anonymously, so no admin handler runs.
+    PERFORM set_config('auth.user_id', 'test|openapi-agreement', true);
+    PERFORM set_config('auth.idp_subject', 'test|openapi-agreement', true);
+    SELECT array_agg(upper(op.key) || ' ' || COALESCE(NULLIF(r.probe_path, ''), p.key) ORDER BY p.key, op.key)
+    INTO v_ops
+    FROM jsonb_each(api.openapi_document()->'paths') p
+    CROSS JOIN LATERAL jsonb_each(p.value) op
+    LEFT JOIN LATERAL (
+        SELECT rr.probe_path FROM api.rest_route rr
+        WHERE rr.canonical_path = p.key ORDER BY rr.sequence_number DESC LIMIT 1) r ON true
+    WHERE op.key IN ('get', 'post', 'put', 'patch', 'delete');
+    PERFORM set_config('auth.user_id', '', true);
+    PERFORM set_config('auth.idp_subject', '', true);
+
+    FOR v_method, v_path IN
+        SELECT split_part(o, ' ', 1), split_part(o, ' ', 2) FROM unnest(v_ops) AS o
     LOOP
-        v_status := (api.rest_invoke(v_method, v_path)).status_code;
+        v_response := api.rest_invoke(v_method, v_path);
+        v_status := (v_response).status_code;
         v_checked := v_checked + 1;
 
-        IF v_status IN (404, 405) THEN
+        -- A handler may answer 404 for a probe value that names no row; only
+        -- the router's own 404 means the path did not resolve.
+        IF v_status = 405 OR (v_status = 404
+               AND coalesce(api.content_json((v_response).content)->>'detail', '') LIKE 'No route matches%') THEN
             RAISE EXCEPTION 'OpenAPI publishes % % but the gateway answers % -- the document describes a route that does not resolve',
                 v_method, v_path, v_status;
         END IF;
     END LOOP;
 
     IF v_checked = 0 THEN
-        RAISE EXCEPTION 'no unparameterized paths were exercised -- the round-trip check ran on nothing';
+        RAISE EXCEPTION 'no published operations were exercised -- the round-trip check ran on nothing';
     END IF;
 
-    RAISE NOTICE '  + all % published unparameterized operation(s) resolve to a handler', v_checked;
+    -- OPTIONS answers every published path, before identity, so a CORS
+    -- preflight to any documented operation can succeed.
+    FOR v_path IN SELECT DISTINCT split_part(o, ' ', 2) FROM unnest(v_ops) AS o LOOP
+        v_status := (api.rest_invoke('OPTIONS', v_path)).status_code;
+        IF v_status IS DISTINCT FROM 204 AND v_status NOT BETWEEN 200 AND 299 THEN
+            RAISE EXCEPTION 'OpenAPI publishes % but OPTIONS on it answers %', v_path, v_status;
+        END IF;
+    END LOOP;
+
+    RAISE NOTICE '  + all % published operation(s) resolve to a handler, and every path answers OPTIONS', v_checked;
     RAISE NOTICE '✓ OpenAPI-to-router agreement tests passed';
 END $$;

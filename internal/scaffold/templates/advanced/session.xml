@@ -7,5 +7,5 @@
     <parameter key="database_admin_password" description="Database admin password"/>
     <parameter key="database_api_role" description="API group role (NOLOGIN, permission bundle)" />
     <parameter key="database_customer_role" description="Customer role (NOLOGIN, RLS-restricted)" />
-    <parameter key="env" description="Deployment environment"/>
+    <parameter key="env" description="Deployment environment (required; env=dev defaults role passwords to postgres for local use)"/>
 </session>

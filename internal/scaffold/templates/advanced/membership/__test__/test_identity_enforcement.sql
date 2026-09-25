@@ -150,6 +150,15 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: an expired key still resolves an identity';
     END IF;
 
+    -- A key scheduled for later is not live yet: validate_api_key refuses it,
+    -- and the identity path must agree.
+    UPDATE membership.api_key SET expires_at = NULL, activated_at = now() + interval '1 day'
+    WHERE key_id = v_key.out_key_id;
+
+    IF api.current_user_id() IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a key that is not active yet resolves an identity';
+    END IF;
+
     RAISE NOTICE '  ✓ keys are org-scoped, and disabled or expired keys resolve nothing';
 END $$;
 

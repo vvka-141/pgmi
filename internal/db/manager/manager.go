@@ -24,7 +24,7 @@ const (
 type Manager struct{}
 
 // New creates a new DatabaseManager instance.
-func New() pgmi.DatabaseManager {
+func New() *Manager {
 	return &Manager{}
 }
 
@@ -71,6 +71,26 @@ func (m *Manager) Settings(ctx context.Context, conn pgmi.DBConnection, dbName s
 		return nil, fmt.Errorf("failed to read settings of database %q: %w", dbName, err)
 	}
 	s.PreserveLocale = s.Encoding != def.Encoding || s.Collate != def.Collate || s.CType != def.CType
+
+	const aclQ = `
+		SELECT d.datacl IS NOT NULL, coalesce(g.grantees, '{}'), coalesce(g.privileges, '{}'), coalesce(g.grantable, '{}')
+		FROM pg_database d
+		CROSS JOIN LATERAL (
+			SELECT array_agg(coalesce(pg_get_userbyid(nullif(a.grantee, 0)), '') ORDER BY a.grantee, a.privilege_type) AS grantees,
+			       array_agg(a.privilege_type ORDER BY a.grantee, a.privilege_type) AS privileges,
+			       array_agg(a.is_grantable ORDER BY a.grantee, a.privilege_type) AS grantable
+			FROM aclexplode(d.datacl) a
+			WHERE a.grantee <> d.datdba
+		) g
+		WHERE d.datname = $1`
+	var grantees, privileges []string
+	var grantable []bool
+	if err := conn.QueryRow(ctx, aclQ, dbName).Scan(&s.CustomACL, &grantees, &privileges, &grantable); err != nil {
+		return nil, fmt.Errorf("failed to read the ACL of database %q: %w", dbName, err)
+	}
+	for i := range privileges {
+		s.Grants = append(s.Grants, pgmi.DatabaseGrant{Grantee: grantees[i], Privilege: privileges[i], Grantable: grantable[i]})
+	}
 	return &s, nil
 }
 
@@ -126,6 +146,25 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 		comment := fmt.Sprintf("COMMENT ON DATABASE %s IS %s", ident, quoteLiteral(*settings.Comment))
 		if _, err := pooledConn.Exec(ctx, comment); err != nil {
 			return fmt.Errorf("failed to restore the comment on database %q: %w", dbName, err)
+		}
+	}
+	if settings.CustomACL {
+		stmts := []string{"REVOKE ALL ON DATABASE " + ident + " FROM PUBLIC"}
+		for _, g := range settings.Grants {
+			grantee := "PUBLIC"
+			if g.Grantee != "" {
+				grantee = pgx.Identifier{g.Grantee}.Sanitize()
+			}
+			stmt := fmt.Sprintf("GRANT %s ON DATABASE %s TO %s", g.Privilege, ident, grantee)
+			if g.Grantable {
+				stmt += " WITH GRANT OPTION"
+			}
+			stmts = append(stmts, stmt)
+		}
+		for _, stmt := range stmts {
+			if _, err := pooledConn.Exec(ctx, stmt); err != nil {
+				return fmt.Errorf("failed to restore the privileges on database %q: %w", dbName, err)
+			}
 		}
 	}
 	return nil

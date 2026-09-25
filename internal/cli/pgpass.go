@@ -17,7 +17,11 @@ func pgpassPath() string {
 		return custom
 	}
 	if runtime.GOOS == "windows" {
-		return filepath.Join(os.Getenv("APPDATA"), "postgresql", "pgpass.conf")
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return ""
+		}
+		return filepath.Join(appData, "postgresql", "pgpass.conf")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -53,7 +57,7 @@ func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
 func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 	path := pgpassPath()
 	if path == "" {
-		return fmt.Errorf("cannot determine home directory")
+		return fmt.Errorf("cannot determine where the password file goes; set PGPASSFILE")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

@@ -176,11 +176,18 @@ Result: deploys to `prod_db`.
 # comments and blank lines are ignored
 
 plain=value
-  spaced  =  trimmed        # whitespace around key and value is stripped
-quoted="has spaces"         # surrounding " or ' are removed
-literal=a=b                 # only the FIRST = splits; the value keeps the rest
-hash=value#notacomment      # # is only a comment at the start of a line
+# whitespace around key and value is stripped
+  spaced  =  trimmed
+# surrounding " or ' are removed
+quoted="has spaces"
+# only the FIRST = splits; the value keeps the rest
+literal=a=b
+# # is only a comment at the start of a line
+hash=value#notacomment
 ```
+
+A comment must be on its own line. Text after a value, such as
+`key=value  # note`, becomes part of the value.
 
 A key becomes the session variable `pgmi.<key>`, so it must be a PostgreSQL
 simple identifier: **a letter or underscore first**, then letters, digits or
@@ -278,11 +285,11 @@ connection:
   port: 5432
   sslmode: prefer
 
-params:
-  env: dev
-
 timeout: 5m
 ```
+
+`env` is required and deliberately absent: pass `--param env=dev` for a local
+database, or put `env` and `database_admin_password` in a params file.
 
 ## Common Patterns
 

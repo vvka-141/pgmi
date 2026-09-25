@@ -36,12 +36,25 @@ type DatabaseSettings struct {
 	// Comment is shobj_description, absent when the database has none.
 	Comment *string
 
+	// CustomACL is set when pg_database.datacl is non-NULL, i.e. someone ran
+	// GRANT or REVOKE on the database. Grants then lists every non-owner entry;
+	// recreating revokes PUBLIC's defaults and re-grants exactly these.
+	CustomACL bool
+	Grants    []DatabaseGrant
+
 	// PreserveLocale is set when the encoding or locale differs from the server
 	// default, so recreating has to name them — which in turn forces TEMPLATE
 	// template0. When false a plain CREATE DATABASE reproduces the database and
 	// keeps inheriting whatever a site installed in template1, so naming them
 	// anyway would quietly discard it.
 	PreserveLocale bool
+}
+
+// DatabaseGrant is one entry of a database ACL. Grantee "" is PUBLIC.
+type DatabaseGrant struct {
+	Grantee   string
+	Privilege string
+	Grantable bool
 }
 
 type DatabaseManager interface {

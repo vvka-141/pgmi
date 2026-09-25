@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -56,7 +55,7 @@ func showBanner() bool {
 	if os.Getenv("PGMI_NO_BANNER") != "" {
 		return false
 	}
-	return tui.IsInteractive()
+	return isInteractive()
 }
 
 // Execute runs the root command and wraps Cobra routing errors (e.g.

@@ -14,6 +14,8 @@ aliases:
 
 The advanced template serves an OpenAPI 3.1 specification at `GET /openapi.json` and an interactive explorer at `GET /docs`. Use these to generate typed clients in any language.
 
+The document lists only the routes the caller may call. Fetched anonymously, it omits every route registered with `requiresAuth` (the default). To generate a client for the whole API, fetch the spec with the identity header your auth proxy sets, for example `-H "x-user-id: <subject>"`.
+
 The spec is not hand-written — it is derived live from the same handler
 registry that routes REST, RPC, and MCP, so it can never drift from the
 deployed surface:

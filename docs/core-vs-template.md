@@ -20,11 +20,11 @@ The session contract consists of:
 |-------|---------|
 | Internal tables | `_pgmi_parameter`, `_pgmi_source`, `_pgmi_source_metadata`, `_pgmi_test_directory`, `_pgmi_test_source` |
 | Public views | `pgmi_source_view`, `pgmi_parameter_view`, `pgmi_plan_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view` |
-| Functions | `pgmi_test_plan(pattern)`, `pgmi_test_generate(pattern, callback)`, `pgmi_register_file(...)`, `pgmi_test_callback(event)` |
+| Functions | `pgmi_test_plan(p_pattern)`, `pgmi_test_generate(p_pattern, p_callback)`, `pgmi_register_file(...)`, `pgmi_test_callback(event)` |
 | Preprocessor macro | `CALL pgmi_test()` — expanded by Go before SQL reaches PostgreSQL |
 | Types | `pgmi_test_event` composite type for test lifecycle callbacks |
 
-The execution contract — atomic head, then psql tail — is also pgmi core: the binary decides how to send your SQL to PostgreSQL, and that behavior is versioned alongside the session API.
+The execution contract — atomic head, then psql tail — is also pgmi core: the binary decides how to send your SQL to PostgreSQL. That behavior follows the binary version, not `--compat`.
 
 ### The basic template
 
@@ -42,7 +42,7 @@ Nothing in either template is upgraded, migrated, or overwritten when you upgrad
 
 ## What happens on upgrade
 
-**Core session API** — versioned and backward-compatible. The `--compat` flag lets your `deploy.sql` request a specific API version (see [API versioning design](design/api-versioning.md)). Views keep their column names and semantics across releases.
+**Core session API** — versioned and backward-compatible. The `--compat` flag lets your `deploy.sql` request a specific API version (see [API versioning design](design/api-versioning.md)). Within a contract version, views and functions keep their names and columns. Behavior (plan ordering, which files load, the execution contract) follows the binary version, so pin the binary too.
 
 **Your project SQL** — untouched. pgmi never reads, diffs, or modifies your `deploy.sql` or any file it discovers. The binary loads files into temp tables and hands control to your SQL.
 

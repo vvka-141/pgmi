@@ -16,6 +16,8 @@ var planViewQuery = regexp.MustCompile(`(?s)SELECT[^;]{0,400}?pgmi_plan_view[^;]
 // up a neighbouring backup and so needs no is_sql_file guard.
 var exactPathFilter = regexp.MustCompile(`path\s*=\s*'`)
 
+var selectStar = regexp.MustCompile(`(?i)SELECT\s+(?:\w+\.)?\*`)
+
 // TestEmbeddedPlanViewExamplesFilterSQLFiles keeps the agent-facing corpus from
 // teaching a loop that executes non-SQL. pgmi_plan_view carries every loaded
 // file, so an unguarded loop runs README.md, and — worse, because it fails
@@ -38,7 +40,7 @@ func TestEmbeddedPlanViewExamplesFilterSQLFiles(t *testing.T) {
 			q := text[m[0]:m[1]]
 
 			// Diagnostic listings and single-file lookups are not execute-all loops.
-			if !strings.Contains(q, "content") || exactPathFilter.MatchString(q) {
+			if !(strings.Contains(q, "content") || selectStar.MatchString(q)) || exactPathFilter.MatchString(q) {
 				continue
 			}
 			if strings.Contains(q, "is_sql_file") {

@@ -284,13 +284,8 @@ func (l *Loader) insertFiles(ctx context.Context, conn *pgxpool.Conn, files []pg
 // This eliminates the need for users to call pgmi_init_params() in deploy.sql.
 // Parameters are immediately accessible via current_setting('pgmi.key').
 func (l *Loader) LoadParametersIntoSession(ctx context.Context, conn *pgxpool.Conn, params map[string]string) error {
-	for key, value := range params {
-		if err := validateParameterKey(key); err != nil {
-			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
-		}
-		if err := validateParameterValue(key, value); err != nil {
-			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
-		}
+	if err := ValidateParameters(params); err != nil {
+		return err
 	}
 
 	if err := l.insertParams(ctx, conn, params); err != nil {
@@ -401,6 +396,25 @@ func (l *Loader) insertMetadata(ctx context.Context, conn *pgxpool.Conn, files [
 // simple identifiers separated by dots") and exit 1, instead of being named
 // here and exiting 10 like every other malformed key.
 var keyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
+
+// ValidateParameters checks every key and value without a connection, so a
+// deploy rejects them before it creates or drops anything.
+func ValidateParameters(params map[string]string) error {
+	seen := make(map[string]string, len(params))
+	for key, value := range params {
+		if other, dup := seen[strings.ToLower(key)]; dup {
+			return fmt.Errorf("%w: parameters %q and %q differ only in case; the session stores keys lowercased, so pass one", pgmi.ErrInvalidConfig, other, key)
+		}
+		seen[strings.ToLower(key)] = key
+		if err := validateParameterKey(key); err != nil {
+			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
+		}
+		if err := validateParameterValue(key, value); err != nil {
+			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
+		}
+	}
+	return nil
+}
 
 func validateParameterKey(key string) error {
 	if !keyPattern.MatchString(key) {

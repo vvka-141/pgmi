@@ -19,6 +19,7 @@ func defaultPager() string {
 }
 
 func resolvePager(pgmiPager, pager string) string {
+	pgmiPager, pager = strings.TrimSpace(pgmiPager), strings.TrimSpace(pager)
 	if pgmiPager != "" {
 		return pgmiPager
 	}

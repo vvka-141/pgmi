@@ -32,7 +32,12 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 --   1. METADATA (jsonb): Routing and behavior configuration.
 --      The router uses this to match incoming HTTP requests to this handler:
 --        - id:           Stable UUID — survives redeploys without breaking references
---        - uri:          POSIX regex matched against the request URL path
+--        - path:         The route's canonical path, e.g. /users/{id}. The matcher,
+--                        parameter names and OpenAPI path are derived from it; the
+--                        gateway canonicalizes each request (trailing slash, duplicate
+--                        slashes, percent-encoding, dot-segments) before matching.
+--                        A POSIX regex in 'uri' is the escape hatch for patterns a
+--                        path cannot express (see lib/api/08-registration.sql).
 --        - httpMethod:   POSIX regex matched against the HTTP method (default: any)
 --        - name:         Becomes the PostgreSQL function name (api.<name>)
 --        - description:  Human-readable — shown in pgAdmin and introspection views
@@ -65,7 +70,7 @@ DO $$ BEGIN RAISE DEBUG '-> Installing example handlers'; END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0001-4000-8000-000000000001',
-        'uri', '^/hello$',
+        'path', '/hello',
         'httpMethod', '^GET$',
         'name', 'hello_world',
         'description', 'Simple hello world endpoint',
@@ -102,9 +107,10 @@ DECLARE
     v_response api.http_response;
 BEGIN
     v_response := api.rest_invoke('GET', '/hello?name=Developer');
-    RAISE DEBUG '  -> GET /hello?name=Developer  status=%, body=%',
-        (v_response).status_code,
-        api.content_json((v_response).content);
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'GET /hello: expected 200, got %: %',
+            (v_response).status_code, api.content_json((v_response).content);
+    END IF;
 END $$;
 
 -- ============================================================================
@@ -114,7 +120,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0002-4000-8000-000000000001',
-        'uri', '^/echo$',
+        'path', '/echo',
         'httpMethod', '^POST$',
         'name', 'echo',
         'description', 'Echo back the request body',
@@ -150,11 +156,13 @@ BEGIN
     v_response := api.rest_invoke('POST', '/echo', ''::extensions.hstore,
         '{"greeting": "hello from examples.sql"}'::jsonb);
     -- 401 here is the correct answer, not a broken example: /echo keeps the
-    -- secure default and this probe carries no identity. Send it an
-    -- Authorization header or set auth.idp_subject to reach the handler.
-    RAISE DEBUG '  -> POST /echo  status=% (401 without identity, by design), body=%',
-        (v_response).status_code,
-        api.content_json((v_response).content);
+    -- secure default and this probe carries no identity. Send it the
+    -- x-user-id header your auth proxy sets after verifying the caller, or set
+    -- auth.idp_subject, to reach the handler.
+    IF (v_response).status_code IS DISTINCT FROM 401 THEN
+        RAISE EXCEPTION 'POST /echo without identity: expected 401, got %: %',
+            (v_response).status_code, api.content_json((v_response).content);
+    END IF;
 END $$;
 
 -- ============================================================================
@@ -164,7 +172,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0003-4000-8000-000000000001',
-        'uri', '^/health$',
+        'path', '/health',
         'httpMethod', '^GET$',
         'name', 'health_check',
         'description', 'Kubernetes liveness probe endpoint',
@@ -194,9 +202,10 @@ DECLARE
     v_response api.http_response;
 BEGIN
     v_response := api.rest_invoke('GET', '/health');
-    RAISE DEBUG '  -> GET /health  status=%, body=%',
-        (v_response).status_code,
-        api.content_json((v_response).content);
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'GET /health: expected 200, got %: %',
+            (v_response).status_code, api.content_json((v_response).content);
+    END IF;
 END $$;
 
 -- ============================================================================
@@ -206,7 +215,7 @@ END $$;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0004-4000-8000-000000000001',
-        'uri', '^/me$',
+        'path', '/me',
         'httpMethod', '^GET$',
         'name', 'get_current_user',
         'description', 'Get authenticated user profile from membership schema',
@@ -216,7 +225,7 @@ SELECT api.create_or_replace_rest_handler(
             'properties', jsonb_build_object(
                 'userId', jsonb_build_object('type', 'string'),
                 'email', jsonb_build_object('type', 'string', 'format', 'email'),
-                'displayName', jsonb_build_object('type', 'string'),
+                'displayName', jsonb_build_object('type', jsonb_build_array('string', 'null')),
                 'emailVerified', jsonb_build_object('type', 'boolean'),
                 'memberOrgIds', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid')),
                 'ownerOrgIds', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'string', 'format', 'uuid'))
@@ -255,7 +264,7 @@ END;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000001-0005-4000-8000-000000000001',
-        'uri', '^/organizations$',
+        'path', '/organizations',
         'httpMethod', '^GET$',
         'name', 'list_organizations',
         'description', 'List organizations the authenticated user belongs to (RLS-filtered)',

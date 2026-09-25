@@ -9,28 +9,18 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// PostgreSQL error codes for transient conditions.
-// See: https://www.postgresql.org/docs/current/errcodes-appendix.html
+// SQLSTATEs a server sends while refusing a new connection that a later attempt
+// can succeed past. Class 08 is matched by prefix in isTransientPgError.
 //
-// Classes 08 (Connection Exception), 53 (Insufficient Resources), and
-// 57 (Operator Intervention) are matched by prefix in isTransientPgError.
-// Constants are needed for codes outside those classes, and for the two
-// class-57 members the prefix has to exclude.
+// Only connection establishment is retried. Statement-level conditions such as
+// serialization failures, deadlocks and lock timeouts never reach this code,
+// and retrying them is deploy.sql's decision, not pgmi's.
 const (
-	// Class 40 - Transaction Rollback
-	pgCodeSerializationFailure = "40001"
-	pgCodeDeadlockDetected     = "40P01"
-
-	// Class 55 - Object Not In Prerequisite State
-	pgCodeLockNotAvailable = "55P03"
-
-	// Class 57 members that are decisions, not weather. Both sit inside the
-	// prefix-matched class and have to be named to be excluded from it.
-	pgCodeQueryCanceled   = "57014"
-	pgCodeDatabaseDropped = "57P04"
+	pgCodeTooManyConnections = "53300"
+	pgCodeCannotConnectNow   = "57P03"
 )
 
-// PostgreSQLErrorClassifier implements ErrorClassifier for PostgreSQL-specific errors.
+// PostgreSQLErrorClassifier decides whether a failed connection attempt is worth repeating.
 type PostgreSQLErrorClassifier struct{}
 
 // NewPostgreSQLErrorClassifier creates a new PostgreSQL error classifier.
@@ -65,43 +55,9 @@ func (c *PostgreSQLErrorClassifier) IsTransient(err error) bool {
 
 // isTransientPgError checks PostgreSQL error codes for transient conditions.
 func (c *PostgreSQLErrorClassifier) isTransientPgError(pgErr *pgconn.PgError) bool {
-	// PostgreSQL error codes: https://www.postgresql.org/docs/current/errcodes-appendix.html
-	code := pgErr.Code
-
-	// Class 08 - Connection Exception
-	if strings.HasPrefix(code, "08") {
-		return true
-	}
-
-	// Class 53 - Insufficient Resources
-	if strings.HasPrefix(code, "53") {
-		return true
-	}
-
-	// Class 57 - Operator Intervention. Most of the class is the server going
-	// away underneath us (admin shutdown, crash shutdown, still starting up),
-	// which is worth another attempt. Two members are not:
-	//
-	//   57014 query_canceled  — someone asked for this: statement_timeout,
-	//                           pg_cancel_backend, or the client itself.
-	//   57P04 database_dropped — the database is gone; no attempt brings it back.
-	//
-	// Retrying either spends the whole backoff budget to arrive at the same
-	// answer, and in the 57014 case does it against an explicit instruction to
-	// stop.
-	if strings.HasPrefix(code, "57") {
-		return code != pgCodeQueryCanceled && code != pgCodeDatabaseDropped
-	}
-
-	// Individual codes from classes not covered by prefix
-	switch code {
-	case pgCodeSerializationFailure, pgCodeDeadlockDetected: // Class 40
-		return true
-	case pgCodeLockNotAvailable: // Class 55
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(pgErr.Code, "08") ||
+		pgErr.Code == pgCodeTooManyConnections ||
+		pgErr.Code == pgCodeCannotConnectNow
 }
 
 // isNetworkError checks for network-level errors.

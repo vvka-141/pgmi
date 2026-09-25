@@ -16,8 +16,10 @@ pgmi init myproject --template basic
 
 # Deploy to database. Tests are not a separate command: deploy.sql calls
 # CALL pgmi_test(), so they run inside the same transaction and a failing
-# test rolls the whole deployment back.
-pgmi deploy ./myproject --connection "postgresql://user:pass@host/db"
+# test rolls the whole deployment back. pgmi reads the connection string from
+# PGMI_CONNECTION_STRING or DATABASE_URL, which keeps the password out of argv.
+export PGMI_CONNECTION_STRING="postgresql://user:pass@host/db"
+pgmi deploy ./myproject
 ```
 
 There is no `--test`, `--skip-tests`, or `--dry-run` flag, and no parameter pgmi
@@ -223,7 +225,7 @@ Run deploy.sql against a target database.
 
 ```
 Connection:
-  --connection STRING    PostgreSQL connection string (URI or ADO.NET)
+  --connection STRING    PostgreSQL connection string (URI, host=... dbname=..., or ADO.NET)
   --host STRING          Server host ($PGHOST, default: localhost)
   -p, --port INT         Server port ($PGPORT, default: 5432)
   -U, --username STRING  PostgreSQL user ($PGUSER or OS user)
@@ -278,8 +280,14 @@ Workflow:
   skill <name>           Print skill content
   client [lang]          API client guidance (typescript, python, go, csharp, rust)
   contract               Session API contract (views, functions)
-  setup [--assistant X]  Write guidance (claude, agents, --all)
-  check                  Report if guidance is current
+  setup                  Write guidance files for an assistant
+    --assistant X        claude, agents, codex, opencode, codex-skills, antigravity,
+                         cursor, copilot, windsurf, cline, gemini
+    --all                Every supported assistant
+    --global             Write to ~/.claude/ instead of the project
+    --dry-run            Print planned changes, write nothing
+    --force              Overwrite a hand-edited file
+  check [--assistant X]  Report if guidance is current (--global checks ~/.claude/)
 ```
 
 ### pgmi info \[path\]
@@ -324,8 +332,10 @@ stderr; the server exits cleanly on EOF or SIGINT.
 
 ## Common Questions
 
-**"Why no `--dry-run`?"** — deploy.sql controls transactions. Use `--param preview=true` in your SQL,
-then `RAISE EXCEPTION 'preview: rolling back'` to abort. You control what "dry run" means.
+**"Why no `--dry-run`?"** — deploy.sql controls transactions. Pass `--param preview=true`, and in deploy.sql
+check it and `RAISE EXCEPTION 'preview: rolling back'` before the first top-level `COMMIT`. Everything up to
+that `COMMIT` is one transaction and rolls back. Statements after it autocommit, and the exception cannot undo
+them. The scaffolded templates `COMMIT` after the test gate. You control what "dry run" means.
 
 **"Why no `--rollback`?"** — Rollback strategy belongs in deploy.sql. pgmi doesn't know whether you
 want a full rollback, partial undo, or compensating migrations — your SQL decides.

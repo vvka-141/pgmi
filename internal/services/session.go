@@ -205,11 +205,17 @@ func (sm *SessionManager) ScanProject(sourcePath string) (pgmi.FileScanResult, e
 		return pgmi.FileScanResult{}, fmt.Errorf("failed to validate deploy.sql: %w", err)
 	}
 
+	deploySQL, err := sm.fileScanner.ReadDeploySQL(sourcePath)
+	if err != nil {
+		return pgmi.FileScanResult{}, fmt.Errorf("%w: %w", err, pgmi.ErrInvalidConfig)
+	}
+
 	// Scan all files (excluding deploy.sql)
 	scanResult, err := sm.fileScanner.ScanDirectory(sourcePath)
 	if err != nil {
 		return pgmi.FileScanResult{}, fmt.Errorf("failed to scan directory \"%s\": %w", sourcePath, err)
 	}
+	scanResult.DeploySQL = deploySQL
 
 	if err := validateNoDuplicateScriptIDs(scanResult.Files); err != nil {
 		return pgmi.FileScanResult{}, err
@@ -306,7 +312,7 @@ func (sm *SessionManager) prepareSessionTables(
 		return fmt.Errorf("failed to load parameters: %w", err)
 	}
 	if len(parameters) > 0 {
-		sm.logger.Info("Loaded %d parameters", len(parameters))
+		sm.logger.Info("Loaded %d parameter(s)", len(parameters))
 	}
 
 	sm.logger.Verbose("Applying API contract")

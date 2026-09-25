@@ -79,9 +79,10 @@ Test files often manipulate schema and data for testing purposes. If executed as
 
 ### 2. Transactional Safety
 
-**ALL tests run inside a single transaction with automatic ROLLBACK**:
+**Tests run inside savepoints within deploy.sql's own transaction**:
 ```
-BEGIN;
+BEGIN;                         -- yours, in deploy.sql
+    -- migrations ...
     SAVEPOINT test_1;
     -- Execute test 1
     ROLLBACK TO SAVEPOINT test_1;
@@ -89,34 +90,27 @@ BEGIN;
     SAVEPOINT test_2;
     -- Execute test 2
     ROLLBACK TO SAVEPOINT test_2;
-ROLLBACK;
+COMMIT;                        -- migrations commit; test data is already gone
 ```
 
 **Guarantees**:
-- ✅ Tests have ZERO side effects - no schema changes, no data persistence
+- ✅ Test data and test schema changes roll back (sequence advances and external effects do not)
 - ✅ Savepoints provide isolation between individual tests
-- ✅ Rollback at end ensures clean state
+- ✅ A failing test aborts the transaction, so the migrations do not commit either
 
 **Pattern**:
 ```sql
--- CALL pgmi_test() macro generates this structure
-BEGIN;  -- Outer transaction
-
-FOR v_test IN (SELECT * FROM pg_temp.pgmi_test_source_view ORDER BY path)
-LOOP
-    SAVEPOINT before_test;
-    BEGIN
-        -- Execute test
-        EXECUTE v_test.content;
-    EXCEPTION WHEN OTHERS THEN
-        -- Test failed, rollback this test
-        ROLLBACK TO SAVEPOINT before_test;
-        RAISE;  -- Re-raise error (fail-fast)
-    END;
-    ROLLBACK TO SAVEPOINT before_test;  -- Clean up even on success
-END LOOP;
-
-ROLLBACK;  -- Cleanup entire transaction
+-- The pgmi_test macro expands to top-level SQL like this (callback calls left
+-- out), inside deploy.sql's own BEGIN ... COMMIT
+SAVEPOINT __pgmi_d1__;                -- fixture boundary
+-- ./__test__/_setup.sql runs here
+SAVEPOINT __pgmi_t2__;                -- test boundary
+-- ./__test__/test_a.sql runs here
+ROLLBACK TO SAVEPOINT __pgmi_t2__;    -- undo the test
+ROLLBACK TO SAVEPOINT __pgmi_d1__;    -- undo the fixture
+RELEASE SAVEPOINT __pgmi_d1__;
+-- A failing test raises and aborts the transaction, so nothing commits.
+-- On success, deploy.sql's COMMIT applies the migrations.
 ```
 
 ### 3. Test Execution Flow
@@ -142,11 +136,11 @@ pgmi deploy . -d test_db  (with pgmi_test() in deploy.sql)
 │  └─ ROLLBACK TO SAVEPOINT (automatic cleanup)
 
 └─ Execute in Transaction
-   ├─ BEGIN;
+   ├─ BEGIN; (deploy.sql's own)
    ├─ SAVEPOINT before each _setup.sql
    ├─ Tests run within savepoint context
    ├─ ROLLBACK TO SAVEPOINT after tests complete
-   └─ ROLLBACK; (cleanup entire transaction)
+   └─ COMMIT; (deploy.sql's own: migrations apply, test data is already gone)
 ```
 
 ## Test Helper Functions
@@ -155,6 +149,8 @@ pgmi deploy . -d test_db  (with pgmi_test() in deploy.sql)
 
 **`pgmi_test()` Preprocessor Macro** - Execute tests (expanded by Go before sending to PostgreSQL):
 ```sql
+BEGIN;  -- required: the macro expands to SAVEPOINT (25P01 without it)
+
 -- Run all tests
 CALL pgmi_test();
 
@@ -520,8 +516,10 @@ COMMIT;
 Pass a pattern to `CALL pgmi_test()` to filter tests:
 
 ```sql
+BEGIN;
 -- Run only auth tests (automatically includes required _setup.sql fixtures)
 CALL pgmi_test('.*/auth/.*');
+COMMIT;
 ```
 
 An empty plan aborts the deploy with `no_data_found` — both a pattern that
@@ -535,6 +533,8 @@ and sees the pattern your guard would not.
 
 ```sql
 -- deploy.sql
+BEGIN;
+
 DO $$
 DECLARE v_file RECORD;
 BEGIN
@@ -561,6 +561,8 @@ END $$;
 
 -- Phase 3: Run tests (preprocessor macro handles savepoint isolation)
 CALL pgmi_test();
+
+COMMIT;
 ```
 
 ## Template Compliance
@@ -684,8 +686,11 @@ END $$;
 **Run Tests**:
 Tests are executed via the `CALL pgmi_test()` macro in deploy.sql:
 ```sql
--- In deploy.sql, call the pgmi_test() preprocessor macro
-CALL pgmi_test('\./users/');
+-- In deploy.sql. Patterns match project-relative paths such as
+-- ./__test__/test_users.sql; a pattern that matches nothing aborts the deploy.
+BEGIN;
+CALL pgmi_test('.*/test_users');
+COMMIT;
 ```
 
 Then deploy:

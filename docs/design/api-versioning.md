@@ -12,15 +12,15 @@ weight: 10
 ## Overview
 
 Introduce versioned API contracts for pgmi's session-scoped interface (temp tables, views, functions). This enables:
-- Stable deploy.sql scripts that don't break on pgmi upgrades
+- Stable view and function names and columns for deploy.sql across pgmi upgrades
 - DevOps pipelines pinned to specific API versions
 - Internal refactoring freedom for pgmi maintainers
 
 ## Motivation
 
-Currently, deploy.sql scripts directly reference internal tables like `pg_temp.pgmi_source`. If pgmi changes the table structure, all user deploy.sql scripts break. By introducing versioned views as the public API, pgmi can evolve internally while maintaining backward compatibility.
+Before this change, deploy.sql scripts referenced internal tables like `pg_temp.pgmi_source` directly. If pgmi changes the table structure, all user deploy.sql scripts break. By introducing versioned views as the public API, pgmi can evolve internally while maintaining backward compatibility.
 
-**Use case:** A CI/CD pipeline uses `pgmi deploy --compat=1`. Even when pgmi 2.0 ships with breaking internal changes, the pipeline continues working because pgmi provides the v1 API contract.
+**Use case:** A CI/CD pipeline uses `pgmi deploy --compat=1`. When a later pgmi changes its internal tables, the pipeline's queries still resolve because pgmi provides the v1 names and columns. `--compat` does not pin behavior: plan ordering, which files load, and how deploy.sql is sent follow the binary version.
 
 ---
 
@@ -32,7 +32,7 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 | View naming | `pgmi_*_view` suffix | Explicit, consistent with existing `pgmi_plan_view` |
 | Internal table naming | `_pgmi_*` underscore prefix | Convention: underscore = internal |
 | Default version | Latest stable | New users get best experience |
-| Deprecation policy | 100% backward compatible | No version removal, old versions always work |
+| Deprecation policy | Names and columns stay backward compatible | No version removal; behavior follows the binary version |
 | File naming | `api-v1.sql`, `api-v2.sql` | Major versions only, no semver in filenames |
 | `pgmi_plan_view` location | Moves to `api-v1.sql` | It's part of the public API, references internal tables |
 | Macro code generation | SQL function returns replacement code | Go calls `pgmi_test_generate()`, replaces macro with result |
@@ -78,8 +78,9 @@ Currently, deploy.sql scripts directly reference internal tables like `pg_temp.p
 
 ```
 internal/params/
-  schema.sql          # Internal tables (_pgmi_*), always executes first
-  api-v1.sql          # V1 views and public functions
+  schema.sql          # Internal tables (_pgmi_*) and most functions, always executes first
+internal/contract/
+  api-v1.sql          # V1 views and pgmi_test_generate
   api-v2.sql          # Future: V2 contract (when needed)
 ```
 
@@ -106,14 +107,14 @@ internal/params/
 
 **Note:** `pgmi_plan_view` is moved from `schema.sql` to `api-v1.sql`. It references internal tables (`_pgmi_source`, `_pgmi_source_metadata`) but exposes a stable interface. The view contains execution ordering logic (UNNEST sort_keys, ROW_NUMBER, etc.).
 
-### V1 API Functions (in `api-v1.sql`)
+### V1 API Functions
 
-Functions that are part of the v1 contract:
-- `pgmi_test_plan(pattern)`
+Functions that are part of the v1 contract. Only `pgmi_test_generate` lives in `api-v1.sql`; the others are defined in `schema.sql`:
+- `pgmi_test_plan(p_pattern)`
 - `pgmi_is_sql_file(filename)`
-- `pgmi_persist_test_plan(schema, pattern)`
-- `pgmi_test_callback(event)` - default callback
-- `pgmi_test_generate(pattern, callback)` - generates macro replacement code
+- `pgmi_persist_test_plan(target_schema, p_pattern)`
+- `pgmi_test_callback(e)` - default callback
+- `pgmi_test_generate(p_pattern, p_callback)` - generates macro replacement code
 
 **Note:** Parameter functions (`pgmi_declare_param`, `pgmi_get_param`) were removed. Parameters are accessed via `current_setting('pgmi.key', true)`. Templates handle declaration, validation, and defaults.
 
@@ -232,7 +233,7 @@ Called by Go preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
-> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and test content is wrapped in separate DO blocks using EXECUTE. See `internal/contract/api-v1.sql` for the working implementation.
+> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through `SELECT pg_temp.pgmi_run_test_source(path)`. See `internal/contract/api-v1.sql` for the working implementation.
 
 ### Updated Go Preprocessor Flow
 

@@ -653,10 +653,166 @@ BEGIN
     RAISE NOTICE '  + valid string/number ids still accepted and echoed';
 END $$;
 
+-- ============================================================================
+-- Error objects, NULL handler results, definition shape, argument checks
+-- ============================================================================
+DO $$
+DECLARE
+    v_env jsonb;
+    v_rejected boolean;
+    v_bad jsonb;
+BEGIN
+    RAISE NOTICE '-> Testing MCP request and definition validation';
+
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f3780000-0000-4000-8000-000000000001', 'type', 'tool', 'name', 'pgmi378_needs_n',
+        'description', 'needs n', 'requiresAuth', false,
+        'inputSchema', '{"type":"object","properties":{"n":{"type":"integer"},"d":{"type":"string"}},"required":["n"]}'::jsonb),
+        $b$BEGIN
+            PERFORM ((request).arguments->>'d')::date;
+            RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id);
+        END;$b$);
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f3780000-0000-4000-8000-000000000002', 'type', 'tool', 'name', 'pgmi378_returns_null',
+        'description', 'returns null', 'requiresAuth', false, 'inputSchema', '{"type":"object"}'::jsonb),
+        $b$BEGIN RETURN NULL; END;$b$);
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f3780000-0000-4000-8000-000000000003', 'type', 'prompt', 'name', 'pgmi378_prompt',
+        'description', 'needs topic', 'requiresAuth', false,
+        'arguments', '[{"name":"topic","required":true}]'::jsonb),
+        $b$BEGIN
+            RETURN api.mcp_prompt_result(jsonb_build_array(jsonb_build_object('role', 'user',
+                'content', api.mcp_text((request).arguments->>'topic'))), (request).request_id);
+        END;$b$);
+
+    -- 1. Every error object carries a message, even without params.
+    v_env := (api.mcp_handle_request('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}'::jsonb)).envelope;
+    IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32602 OR v_env->'error'->>'message' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: tools/call without name must be -32602 with a message, got %', v_env;
+    END IF;
+    v_env := (api.mcp_handle_request('{"jsonrpc":"2.0","id":2,"method":"resources/read","params":[]}'::jsonb)).envelope;
+    IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: non-object params must be -32602, got %', v_env;
+    END IF;
+    IF (api.mcp_error(-32603, NULL, '1'::jsonb)).envelope->'error'->>'message' IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: api.mcp_error dropped the message';
+    END IF;
+
+    -- 2. A NULL handler result is answered, not treated as a notification.
+    v_env := (api.mcp_call_tool('pgmi378_returns_null', '{}'::jsonb, NULL, '3'::jsonb)).envelope;
+    IF v_env IS NULL OR (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true OR v_env->'id' IS DISTINCT FROM '3'::jsonb THEN
+        RAISE EXCEPTION 'TEST FAILED: NULL handler result must be an isError result for id 3, got %', v_env;
+    END IF;
+
+    -- 3. Definitions must have MCP's required shape.
+    FOREACH v_bad IN ARRAY ARRAY[
+        '{"type":"tool","inputSchema":true}',
+        '{"type":"tool","inputSchema":{"type":"string"}}',
+        '{"type":"tool","inputSchema":{"type":"object"},"outputSchema":{"type":"array"}}',
+        '{"type":"prompt","arguments":{"name":"x"}}',
+        '{"type":"prompt","arguments":[{"required":true}]}'
+    ]::jsonb[] LOOP
+        v_rejected := false;
+        BEGIN
+            PERFORM api.create_or_replace_mcp_handler(
+                v_bad || jsonb_build_object('id', 'f3780000-0000-4000-8000-000000000009', 'name', 'pgmi378_bad', 'description', 'bad'),
+                $b$BEGIN RETURN NULL; END;$b$);
+        EXCEPTION WHEN invalid_parameter_value OR check_violation THEN
+            v_rejected := true;
+        END;
+        IF v_rejected IS DISTINCT FROM true THEN
+            RAISE EXCEPTION 'TEST FAILED: registration accepted a malformed definition %', v_bad;
+        END IF;
+    END LOOP;
+
+    -- 4. Tool arguments are validated, and the handler's own message reaches the model.
+    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{}'::jsonb, NULL, '4'::jsonb)).envelope;
+    IF (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true
+       OR COALESCE(v_env->'result'->'content'->0->>'text', '') NOT LIKE '%n is required%' THEN
+        RAISE EXCEPTION 'TEST FAILED: missing required argument must be a named isError result, got %', v_env;
+    END IF;
+    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{"n":"x"}'::jsonb, NULL, '5'::jsonb)).envelope;
+    IF COALESCE(v_env->'result'->'content'->0->>'text', '') NOT LIKE '%n must be integer%' THEN
+        RAISE EXCEPTION 'TEST FAILED: wrongly typed argument must be named, got %', v_env;
+    END IF;
+    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{"n":1,"d":"yesterday-ish"}'::jsonb, NULL, '6'::jsonb)).envelope;
+    IF v_env->'result'->'content'->0->>'text' IS DISTINCT FROM 'A submitted date or time is malformed' THEN
+        RAISE EXCEPTION 'TEST FAILED: bad input must reach the model as its class message, got %', v_env;
+    END IF;
+
+    -- 5. prompts/get enforces required arguments.
+    v_env := (api.mcp_get_prompt('pgmi378_prompt', '{}'::jsonb, NULL, '7'::jsonb)).envelope;
+    IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32602 OR COALESCE(v_env->'error'->>'message', '') NOT LIKE '%topic%' THEN
+        RAISE EXCEPTION 'TEST FAILED: missing required prompt argument must be -32602 naming it, got %', v_env;
+    END IF;
+
+    RAISE NOTICE '  + MCP errors, NULL results, definitions and arguments are validated';
+END $$;
+
 DO $$
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '===============================================================';
     RAISE NOTICE '+ ALL MCP PROTOCOL TESTS PASSED';
     RAISE NOTICE '===============================================================';
+END $$;
+
+-- A tool that declares outputSchema must return structuredContent that fits
+-- it: reference-SDK clients validate the result against the advertised schema
+-- and reject one without it. Registration cannot see the body, so this is the
+-- round trip that pins the pattern.
+DO $$
+DECLARE
+    v_envelope jsonb;
+    v_schema   jsonb := jsonb_build_object(
+        'type', 'object',
+        'properties', jsonb_build_object('n', jsonb_build_object('type', 'integer')),
+        'required', jsonb_build_array('n'));
+    v_listed   jsonb;
+    v_missing  text;
+BEGIN
+    RAISE NOTICE '-> Testing outputSchema and structuredContent round trip';
+
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-0293-4000-8000-000000000001',
+            'type', 'tool', 'name', 'declares_output',
+            'description', 'Returns a count',
+            'outputSchema', v_schema,
+            'requiresAuth', false),
+        $body$
+DECLARE
+    v_structured jsonb := jsonb_build_object('n', 42);
+BEGIN
+    RETURN api.mcp_tool_result(
+        jsonb_build_array(api.mcp_text(v_structured::text)),
+        (request).request_id, false, v_structured);
+END;
+        $body$);
+
+    SELECT t->'outputSchema' INTO v_listed
+    FROM jsonb_array_elements(api.mcp_list_tools()->'tools') t
+    WHERE t->>'name' = 'declares_output';
+    IF v_listed IS DISTINCT FROM v_schema THEN
+        RAISE EXCEPTION 'TEST FAILED: tools/list must advertise the declared outputSchema, got %', v_listed;
+    END IF;
+
+    v_envelope := (api.mcp_handle_request(
+        '{"jsonrpc":"2.0","id":"os1","method":"tools/call","params":{"name":"declares_output","arguments":{}}}'::jsonb)).envelope;
+
+    IF jsonb_typeof(v_envelope->'result'->'structuredContent') IS DISTINCT FROM 'object' THEN
+        RAISE EXCEPTION 'TEST FAILED: a tool with outputSchema must return structuredContent, got %', v_envelope;
+    END IF;
+    SELECT string_agg(k, ', ') INTO v_missing
+    FROM jsonb_array_elements_text(v_schema->'required') AS k
+    WHERE NOT (v_envelope->'result'->'structuredContent') ? k;
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: structuredContent lacks required key(s) %', v_missing;
+    END IF;
+    IF jsonb_typeof(v_envelope->'result'->'structuredContent'->'n') IS DISTINCT FROM 'number' THEN
+        RAISE EXCEPTION 'TEST FAILED: structuredContent.n must be a number, got %',
+            v_envelope->'result'->'structuredContent'->'n';
+    END IF;
+
+    RAISE NOTICE '  + outputSchema is advertised and the success result carries conforming structuredContent';
 END $$;

@@ -35,16 +35,24 @@ don't need to repeat them on every command.
 | | **Re-run every deploy** (default) | **Apply once** (uncomment `(A)`, `(B)`, `(C)`) |
 |---|---|---|
 | What runs | Every migration, every time | Only migrations not yet recorded in `_migration` |
-| Requires | Migrations to be **idempotent** (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`) | Nothing — a migration may be a one-shot `INSERT` |
+| Requires | Migrations that are safe to **re-run** (`CREATE OR REPLACE FUNCTION`, `CREATE TABLE IF NOT EXISTS`) | Nothing — a migration may be a one-shot `INSERT` |
 | Ledger | None. Nothing to drift from reality | `_migration` (path, checksum, applied_at) |
 | Editing an applied migration | Takes effect on the next deploy | **Does nothing** — the file is skipped. The stored checksum shows it changed |
 | Feels like | `psql -f` over a directory | Flyway / Sqitch |
 
 **Which do you want?**
 
-Start with the default. It is simpler, and "every file is idempotent" is a
-property you can actually check by reading the file — unlike "this ledger
-matches what is really in the database", which you cannot.
+Start with the default. It is simpler, and there is no ledger to drift from
+the database.
+
+Know what it does not give you. `IF NOT EXISTS` checks that a name exists, not
+that the object matches the file. `CREATE TABLE IF NOT EXISTS` over an older
+version of the table skips it, missing columns and all. `CREATE INDEX
+CONCURRENTLY IF NOT EXISTS` skips an index a failed build left invalid, and
+reports success. So a file that re-runs cleanly can still leave the database
+different from what the file says. When a migration changes the shape of
+something that already exists, write the change itself and assert the result
+in a test.
 
 Switch to apply-once when a migration genuinely cannot be re-run: a data
 backfill, a one-shot `INSERT`, an `ALTER TABLE` that is not conditional. That is

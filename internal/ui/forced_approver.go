@@ -36,8 +36,8 @@ type ForcedApprover struct {
 	showSkull bool
 }
 
-func NewForcedApprover(verbose bool) pgmi.Approver {
-	interactive := tui.IsInteractive()
+func NewForcedApprover(verbose bool) *ForcedApprover {
+	interactive := tui.CanPrompt()
 	return &ForcedApprover{
 		verbose:     verbose,
 		output:      os.Stderr,

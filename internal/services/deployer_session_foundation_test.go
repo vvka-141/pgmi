@@ -10,8 +10,8 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/params"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
-	"github.com/vvka-141/pgmi/internal/testing/fixtures"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
+	"github.com/vvka-141/pgmi/internal/testhelpers/fixtures"
 )
 
 //go:embed testdata/session_foundation_test.sql

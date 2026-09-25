@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -113,14 +114,12 @@ func TestManager_Create_WithSpecialCharsInName(t *testing.T) {
 				t.Fatal("Expected SQL to be executed")
 			}
 
-			// SQL should start with CREATE DATABASE
-			if len(executedSQL) < 16 || executedSQL[:15] != "CREATE DATABASE" {
-				t.Errorf("Expected CREATE DATABASE statement, got: %s", executedSQL)
+			// The whole statement, not a prefix: a prefix check passes with no
+			// quoting at all.
+			want := "CREATE DATABASE " + pgx.Identifier{tc.dbName}.Sanitize()
+			if executedSQL != want {
+				t.Errorf("executed %q, want %q", executedSQL, want)
 			}
-
-			// SQL should properly quote the database name (using pgx.Identifier.Sanitize())
-			// This prevents SQL injection
-			t.Logf("Executed SQL: %s", executedSQL)
 		})
 	}
 }
@@ -175,10 +174,11 @@ func TestManager_Create_SQLInjectionAttempt(t *testing.T) {
 			t.Logf("Malicious input: %s", tc.dbName)
 			t.Logf("Sanitized SQL: %s", executedSQL)
 
-			// The SQL should NOT contain the raw malicious string
-			// (it should be properly quoted/escaped)
-			if executedSQL == "CREATE DATABASE "+tc.dbName {
-				t.Error("Database name was not properly sanitized!")
+			// Exactly one quoted identifier: anything else lets the input end the
+			// statement or smuggle a second one.
+			want := "CREATE DATABASE " + pgx.Identifier{tc.dbName}.Sanitize()
+			if executedSQL != want {
+				t.Errorf("executed %q, want %q", executedSQL, want)
 			}
 		})
 	}
@@ -214,9 +214,9 @@ func TestManager_TerminateConnections_NoActiveConnections(t *testing.T) {
 		t.Errorf("Expected args [testdb], got %v", executedArgs)
 	}
 
-	// Verify SQL contains pg_terminate_backend
-	if len(executedSQL) < 20 {
-		t.Errorf("Unexpected SQL: %s", executedSQL)
+	// The name travels as a bind parameter, never inside the SQL text.
+	if !strings.Contains(executedSQL, "pg_terminate_backend") || !strings.Contains(executedSQL, "$1") || strings.Contains(executedSQL, "testdb") {
+		t.Errorf("expected a parameterised pg_terminate_backend query, got: %s", executedSQL)
 	}
 }
 

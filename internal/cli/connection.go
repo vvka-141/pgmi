@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vvka-141/pgmi/internal/config"
-	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -25,46 +23,6 @@ func hasEnvConnectionSource() bool {
 		return true
 	}
 	return os.Getenv("PGHOST") != "" && os.Getenv("PGDATABASE") != ""
-}
-
-// resolveConnection consolidates connection resolution logic for both deploy and test commands.
-// It handles connection string flags, granular flags, Azure/AWS/Google flags, and environment variables.
-//
-// Returns:
-//   - ConnectionConfig with all parameters resolved
-//   - Maintenance database name (for CREATE DATABASE operations)
-//   - Error if configuration is invalid or conflicting
-func resolveConnection(
-	connStringFlag string,
-	granularFlags *db.GranularConnFlags,
-	azureFlags *db.AzureFlags,
-	awsFlags *db.AWSFlags,
-	googleFlags *db.GoogleFlags,
-	certFlags *db.CertFlags,
-	projectConfig *config.ProjectConfig,
-) (*pgmi.ConnectionConfig, string, error) {
-	connString := connStringFlag
-	if connString == "" {
-		connString = connectionStringFromEnv()
-	}
-
-	envVars := db.LoadFromEnvironment()
-
-	connConfig, maintenanceDB, err := db.ResolveConnectionParams(
-		connString,
-		granularFlags,
-		azureFlags,
-		awsFlags,
-		googleFlags,
-		certFlags,
-		envVars,
-		projectConfig,
-	)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return connConfig, maintenanceDB, nil
 }
 
 // resolveTargetDatabase resolves the deployment target: the -d/--database flag
@@ -89,7 +47,8 @@ func resolveTargetDatabase(flagDatabase, connConfigDatabase string, verbose bool
 			"Provide via:\n"+
 			"  1. --database/-d flag: pgmi deploy . -d mydb\n"+
 			"  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n"+
-			"  3. Environment variable: export PGDATABASE=mydb",
+			"  3. pgmi.yaml: connection.database: mydb\n"+
+			"  4. Environment variable: export PGDATABASE=mydb, or a database in PGMI_CONNECTION_STRING / DATABASE_URL",
 			pgmi.ErrInvalidConfig)
 	}
 

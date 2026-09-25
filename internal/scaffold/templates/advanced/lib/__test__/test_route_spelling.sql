@@ -118,6 +118,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-3002-4000-8000-000000000001',
             'uri', '^/spell/([0-9]+)$',
+            'example', '/spell/42',
             'httpMethod', '^GET$',
             'name', 'spell_param_probe',
             'description', 'Parameterized spelling probe',

@@ -17,6 +17,80 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
+## v0.13.0 — 2026-09-25
+
+**The advanced template's API now enforces the contract it publishes, and an advanced-template deploy can no longer fall back to the password `postgres` without being told to.** If you scaffolded the advanced template, read Upgrading: several changes stop a deploy that used to pass, on purpose.
+
+The advanced template publishes an OpenAPI document for every route it serves. Until now that document promised more than the gateway checked: request bodies, query parameters and authentication schemes were described but not all enforced, and a route could be reachable at an address two routes both claimed. Every declared element is now checked by the gateway before your handler runs, and a new test in the template fails the deploy if any declaration goes unenforced, for routes you add too.
+
+### What you can do now
+
+Declare a query parameter once, and pgmi enforces it and publishes it:
+
+```sql
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'e1000001-0001-4000-8000-000000000001',
+        'path', '/reports',
+        'httpMethod', '^GET$',
+        'name', 'list_reports',
+        'outputSchema', jsonb_build_object('type', 'object'),
+        'query', jsonb_build_array(
+            jsonb_build_object('name', 'format', 'required', true,
+                'schema', jsonb_build_object('type', 'string', 'enum', jsonb_build_array('json', 'csv'))))),
+    $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+```
+
+`GET /reports?format=pdf` now answers `400` naming the parameter before your handler runs, and `/openapi.json` lists `format` as a required `in: query` parameter. Request bodies get the same treatment against the route's `inputSchema`.
+
+Connection strings in the form psql uses also work now:
+
+```bash
+PGMI_CONNECTION_STRING="host=db1 port=5432 dbname=app user=deploy" pgmi deploy . -d app
+```
+
+### Upgrading
+
+- **Advanced-template projects** — the template is your code, so take the changes into your project from a fresh copy:
+
+  ```bash
+  pgmi init /tmp/pgmi-0.13.0 --template advanced
+  diff -ru /tmp/pgmi-0.13.0/lib lib
+  diff -ru /tmp/pgmi-0.13.0/membership membership
+  diff -u /tmp/pgmi-0.13.0/deploy.sql deploy.sql
+  diff -u /tmp/pgmi-0.13.0/pgmi.yaml pgmi.yaml
+  ```
+
+  Then, before redeploying:
+  - **Pass `env` on every deploy.** A missing `env` used to mean `dev`, and `dev` fills missing passwords with `postgres`. With `env: dev` committed in `pgmi.yaml`, a production deploy whose params file forgot the admin password created an admin login with password `postgres` and exited 0. `env` now has no default. Use `--param env=dev` locally, and put `env` and `database_admin_password` in a params file everywhere else. Remove `env: dev` from your committed `pgmi.yaml`.
+  - **Every SQL file needs a `<pgmi-meta>` header with a sort key.** A file without one ran before the framework and failed with an unrelated error such as `type "core.entity_id" does not exist`. The deploy now stops and names it. Give your files a sort key of `005/...` or later.
+  - **Request bodies and query values are checked before your handler.** A `POST`, `PUT` or `PATCH` body that does not match the route's `inputSchema` at the top level, or a query value of the wrong type, now gets `400` from the gateway. If a handler relied on receiving such a request, relax the declaration.
+  - **Two routes that can claim one address no longer both register**, for example `/shops/{shop}/orders` beside `/shops/main/{section}`. Make one of them more specific.
+  - **`/openapi.json` shows each caller only the routes it may call**, so fetch it with the identity header when you generate a client. Its `ETag` values changed format.
+  - **MCP callers without identity** get `-32602` "not found … (or it requires authentication)" for a protected tool, resource or prompt, instead of `-32001`.
+- **`pgmi_parameter_view`** now has only `key` and `value`. The `type`, `required`, `default_value` and `description` columns were always empty. If your `deploy.sql` selects them, drop them. Parameter checks belong in your SQL, as the advanced template's `session.xml` shows.
+- **`pgmi metadata plan`** prints to stdout, uses camelCase keys, lists the same rows as `pgmi_plan_view`, and exits 10 with a JSON error on invalid metadata.
+- **`pgmi serve`** speaks MCP 2025-11-25, and still negotiates down for older clients.
+- **Everything else:** no action needed. The session API contract is still v1; the parameter view change above is the only change to it.
+
+### Also in this release
+
+- **Redeploys no longer block your application.** An unchanged redeploy of the advanced template used to take exclusive locks on the tables and views your API reads, so every request waited for the whole deploy. It now changes a policy, column or view only when it differs, and waits at most 5 seconds for any lock it still needs.
+- **Failures name the file and line** that failed, taken from the text PostgreSQL was running, instead of the line inside `deploy.sql` that ran it.
+- **Problems are caught before pgmi connects**: an unreadable `deploy.sql`, an invalid parameter name, two parameters differing only in case, or a project file that is binary or over 10 MiB now exit 10 without touching the server.
+- **`pgmi deploy --json` reports `"created"`**, true when the deploy created the target database, which on a routine deploy usually means a mistyped `-d`. The security guide explains why production deploy roles should not have `CREATEDB`.
+- **Connection strings**: IPv6 and Unix-socket hosts, and URIs listing several hosts such as a primary and a standby, no longer break when pgmi rebuilds the string. A connection string in `PGMI_CONNECTION_STRING` or `DATABASE_URL` no longer blocks `-h`, `-p` or `-U`, and pgmi says which source it used.
+- **Connection retries** now say so on stderr instead of stalling silently, and only failures to connect are retried.
+- **A green advanced-template deploy says what happened in about 130 lines**, not 665.
+- **`pgmi serve`** answers ping while a deploy runs, stops a deploy when the client cancels it, and returns the deploy's warnings.
+- **`pgmi init` records the pgmi version and template** as the first line of `deploy.sql`, and `pgmi info` shows it, so after a template fix you can tell whether your project predates it.
+- **`--overwrite` keeps the database's grants** as well as its encoding and settings.
+- On Windows, with `APPDATA` unset, the password saved by the connection wizard could land in the working directory. It no longer does.
+- **`/docs` loads a version-pinned API explorer** with an integrity hash, instead of whatever the CDN served that day, and `OPTIONS` preflight requests now succeed.
+- **New example: apply-once tracking** — migrations that run once each, with a check that fails the deploy when an applied migration is edited. It runs in CI with the other examples.
+- **Release artifacts carry build provenance.** Check an archive with `gh attestation verify <archive> -R vvka-141/pgmi`.
+- Many documentation corrections, including claims about `--compat`, idempotence and checksums that did not match the code.
+
 ## v0.12.1 — 2026-09-24
 
 **A security release for the advanced template: three ways one user could end up signed in as another are closed, and credentials no longer land in the request logs.** If you scaffolded the advanced template, read Upgrading — the template is your code, so a new pgmi binary changes nothing until you take the fixes into your project.

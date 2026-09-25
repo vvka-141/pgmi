@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 

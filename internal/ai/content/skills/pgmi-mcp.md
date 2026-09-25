@@ -208,6 +208,14 @@ END;
 );
 ```
 
+**Declaring `outputSchema` is a promise the body must keep.** A tool that
+declares it must pass the matching object as `structured_content`:
+`api.mcp_tool_result(content, request_id, false, v_structured)`. Reference-SDK
+clients validate `structuredContent` against the advertised schema and reject a
+result that omits it, so the failure shows up in the client, not in your
+deploy. Registration cannot check this; only a test that calls the tool can.
+Error results (`is_error => true`, `api.mcp_tool_error`) are exempt.
+
 ### Resource Registration
 
 ```sql
@@ -365,7 +373,9 @@ END IF;
 
 -- Then enforces auth if required:
 IF v_handler.requires_auth AND current_setting('auth.user_id', true) IS NULL THEN
-    RETURN api.mcp_error(-32001, 'Authentication required: user_id missing from context', p_request_id);
+    -- Same answer as an unknown name: an anonymous caller must not learn that a
+    -- protected tool exists (tools/list already hides it).
+    RETURN api.mcp_error(-32602, 'Tool not found: ' || p_name || ' (or it requires authentication)', p_request_id);
 END IF;
 ```
 
@@ -497,7 +507,6 @@ RETURN api.problem_response(404, 'Not Found', 'Tool not found');
 | -32601 | Method not found |
 | -32602 | Invalid params |
 | -32603 | Internal error |
-| -32001 | Authentication required (custom) |
 
 ### Exception Handling in Gateways
 
@@ -548,7 +557,7 @@ BEGIN
             'type', 'tool',
             'name', 'test_tool',
             'description', 'Test',
-            'inputSchema', '{}'::jsonb,
+            'inputSchema', '{"type":"object"}'::jsonb,
             'requiresAuth', false  -- For framework tests
         ),
         $body$
@@ -566,11 +575,11 @@ END;
     v_envelope := (v_response).envelope;
 
     -- Verify JSON-RPC 2.0 structure
-    IF v_envelope->>'jsonrpc' != '2.0' THEN
+    IF v_envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
         RAISE EXCEPTION 'Missing jsonrpc 2.0';
     END IF;
 
-    IF v_envelope->>'id' != 'test-req-1' THEN
+    IF v_envelope->>'id' IS DISTINCT FROM 'test-req-1' THEN
         RAISE EXCEPTION 'request_id not preserved';
     END IF;
 

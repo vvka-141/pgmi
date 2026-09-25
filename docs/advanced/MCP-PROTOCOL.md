@@ -56,9 +56,8 @@ JSON-RPC methods.
 | -32700 | Parse error (invalid JSON) |
 | -32600 | Invalid Request (missing jsonrpc, method; transaction-policy shortfalls carry `data.code`) |
 | -32601 | Method not found |
-| -32602 | Invalid params (including unknown tool/resource/prompt names) |
+| -32602 | Invalid params, including unknown names and protected names asked for without a resolved identity |
 | -32603 | Internal error |
-| -32001 | Authentication required (custom) |
 
 ### Example Error Response
 

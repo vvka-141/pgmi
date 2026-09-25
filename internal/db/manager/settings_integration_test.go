@@ -7,7 +7,7 @@ import (
 
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -121,5 +121,62 @@ func TestManager_SettingsFlagsOnlyARealLocaleDifference(t *testing.T) {
 	}
 	if absent != nil {
 		t.Errorf("settings reported for an absent database: %+v", *absent)
+	}
+}
+
+// --overwrite drops and recreates the database. A database that had PUBLIC's
+// default CONNECT/TEMPORARY revoked came back open to every role (PGMI-382).
+func TestManager_CreatePreservesDatabaseACL(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	const dbName = "pgmi_itest_dbacl"
+	const reader = "pgmi_itest_dbacl_reader"
+
+	admin := testhelpers.GetTestPool(t, connString, "postgres")
+	defer admin.Close()
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	datacl := func() string {
+		t.Helper()
+		var acl *string
+		if err := admin.QueryRow(ctx, "SELECT datacl::text FROM pg_database WHERE datname = $1", dbName).Scan(&acl); err != nil {
+			t.Fatalf("read datacl: %v", err)
+		}
+		if acl == nil {
+			return "<default>"
+		}
+		return *acl
+	}
+
+	exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+	exec(fmt.Sprintf("DROP ROLE IF EXISTS %s", reader))
+	exec(fmt.Sprintf("CREATE ROLE %s", reader))
+	t.Cleanup(func() {
+		_, _ = admin.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+		_, _ = admin.Exec(ctx, fmt.Sprintf("DROP ROLE IF EXISTS %s", reader))
+	})
+	exec(fmt.Sprintf("CREATE DATABASE %s", dbName))
+	exec(fmt.Sprintf("REVOKE ALL ON DATABASE %s FROM PUBLIC", dbName))
+	exec(fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s WITH GRANT OPTION", dbName, reader))
+	before := datacl()
+
+	mgr := manager.New()
+	conn := db.NewPoolAdapter(admin)
+	settings, err := mgr.Settings(ctx, conn, dbName)
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	exec(fmt.Sprintf("DROP DATABASE %s", dbName))
+	if err := mgr.Create(ctx, conn, dbName, settings); err != nil {
+		t.Fatalf("create with settings: %v", err)
+	}
+
+	if after := datacl(); after != before {
+		t.Errorf("datacl after recreate = %s, want %s", after, before)
 	}
 }

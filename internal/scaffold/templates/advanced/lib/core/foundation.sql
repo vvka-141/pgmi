@@ -33,6 +33,86 @@ DO $$ BEGIN
 END $$;
 
 -- ============================================================================
+-- core.ensure_rls / core.ensure_policy - RLS DDL that converges
+-- ============================================================================
+-- ALTER TABLE ... ENABLE ROW LEVEL SECURITY and DROP/CREATE POLICY take ACCESS
+-- EXCLUSIVE, which queues every reader of the table behind the deploy. Running
+-- them on every redeploy blocked the application for the whole deploy even
+-- when nothing had changed. These run the DDL only when the table or policy
+-- differs from what is requested: a policy carries the md5 of its requested
+-- definition as its comment, so an unchanged policy is left alone.
+
+CREATE OR REPLACE FUNCTION core.ensure_rls(p_table regclass, p_force boolean DEFAULT false)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = p_table) THEN
+        EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', p_table);
+    END IF;
+    IF p_force AND NOT (SELECT relforcerowsecurity FROM pg_class WHERE oid = p_table) THEN
+        EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', p_table);
+    END IF;
+END;
+$$;
+
+-- Views get the same treatment, but their comments are for people, so the
+-- fingerprint lives in a table. It records the requested statement and the
+-- definition PostgreSQL stored, so a view edited by hand is replaced too.
+CREATE TABLE IF NOT EXISTS internal.view_fingerprint (
+    view_name   text PRIMARY KEY,
+    statement_md5 text NOT NULL,
+    stored_definition text NOT NULL
+);
+
+-- p_statement is the complete CREATE OR REPLACE VIEW statement for p_view.
+-- Returns true when it ran DDL.
+CREATE OR REPLACE FUNCTION core.ensure_view(p_view text, p_statement text)
+RETURNS boolean
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF to_regclass(p_view) IS NOT NULL AND EXISTS (
+        SELECT 1 FROM internal.view_fingerprint f
+        WHERE f.view_name = p_view
+          AND f.statement_md5 = md5(p_statement)
+          AND f.stored_definition = pg_get_viewdef(to_regclass(p_view))
+    ) THEN
+        RETURN false;
+    END IF;
+
+    EXECUTE p_statement;
+    INSERT INTO internal.view_fingerprint (view_name, statement_md5, stored_definition)
+    VALUES (p_view, md5(p_statement), pg_get_viewdef(to_regclass(p_view)))
+    ON CONFLICT (view_name) DO UPDATE
+        SET statement_md5 = EXCLUDED.statement_md5,
+            stored_definition = EXCLUDED.stored_definition;
+    RETURN true;
+END;
+$$;
+
+-- p_definition is everything after `CREATE POLICY name ON table`, e.g.
+-- 'FOR SELECT TO app_customer USING (true)'. Returns true when it ran DDL.
+CREATE OR REPLACE FUNCTION core.ensure_policy(p_table regclass, p_name text, p_definition text)
+RETURNS boolean
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_fingerprint text := 'pgmi:' || md5(p_definition);
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_policy
+        WHERE polrelid = p_table AND polname = p_name
+          AND obj_description(oid, 'pg_policy') = v_fingerprint
+    ) THEN
+        RETURN false;
+    END IF;
+
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', p_name, p_table);
+    EXECUTE format('CREATE POLICY %I ON %s %s', p_name, p_table, p_definition);
+    EXECUTE format('COMMENT ON POLICY %I ON %s IS %L', p_name, p_table, v_fingerprint);
+    RETURN true;
+END;
+$$;
+
+-- ============================================================================
 -- core.apply_org_rls(regclass) - canonical multi-tenant RLS for domain tables
 -- ============================================================================
 -- One call installs the standard org-scoped ENABLE + FORCE RLS policy set on a
@@ -78,28 +158,23 @@ BEGIN
         ), format('apply_org_rls: %s declares p_has_created_by but lacks created_by_user_id', p_table);
     END IF;
 
-    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', p_table);
-    EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', p_table);
+    PERFORM core.ensure_rls(p_table, p_force => true);
 
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_select', p_table);
-    EXECUTE format('CREATE POLICY %I ON %s FOR SELECT USING (%s)',
-        v_rel || '_select', p_table, v_scope);
+    PERFORM core.ensure_policy(p_table, v_rel || '_select',
+        format('FOR SELECT USING (%s)', v_scope));
 
     v_insert_check := v_scope;
     IF p_has_created_by THEN
         v_insert_check := v_insert_check || ' AND created_by_user_id = (SELECT api.current_user_id())';
     END IF;
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_insert', p_table);
-    EXECUTE format('CREATE POLICY %I ON %s FOR INSERT WITH CHECK (%s)',
-        v_rel || '_insert', p_table, v_insert_check);
+    PERFORM core.ensure_policy(p_table, v_rel || '_insert',
+        format('FOR INSERT WITH CHECK (%s)', v_insert_check));
 
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_update', p_table);
-    EXECUTE format('CREATE POLICY %I ON %s FOR UPDATE USING (%s) WITH CHECK (%s)',
-        v_rel || '_update', p_table, v_scope, v_scope);
+    PERFORM core.ensure_policy(p_table, v_rel || '_update',
+        format('FOR UPDATE USING (%s) WITH CHECK (%s)', v_scope, v_scope));
 
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %s', v_rel || '_delete', p_table);
-    EXECUTE format('CREATE POLICY %I ON %s FOR DELETE USING (%s)',
-        v_rel || '_delete', p_table, v_scope);
+    PERFORM core.ensure_policy(p_table, v_rel || '_delete',
+        format('FOR DELETE USING (%s)', v_scope));
 END;
 $$;
 

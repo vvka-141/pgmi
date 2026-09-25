@@ -8,7 +8,7 @@ import (
 )
 
 func PromptContinue(message string) bool {
-	if !IsInteractive() {
+	if !CanPrompt() {
 		return true
 	}
 	return promptContinueFromStdin(message)

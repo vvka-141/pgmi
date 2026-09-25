@@ -349,6 +349,10 @@ BEGIN
     -- request through the discovery filter.
     PERFORM internal.apply_mcp_auth_context(p_context);
 
+    IF v_method IN ('tools/call', 'resources/read', 'prompts/get') AND jsonb_typeof(v_params) IS DISTINCT FROM 'object' THEN
+        RETURN api.mcp_error(-32602, format('Invalid params: %s requires a params object', v_method), v_id);
+    END IF;
+
     -- Route to appropriate handler based on method
     CASE v_method
         WHEN 'initialize' THEN

@@ -171,6 +171,34 @@ $$;
 -- REST Gateway
 -- ============================================================================
 
+-- Vary members of both lists, lowercased and deduplicated in first-seen
+-- order; '*' from the handler wins, since it already varies on everything.
+CREATE OR REPLACE FUNCTION internal.vary_union(p_handler text, p_gateway text)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE WHEN btrim(COALESCE(p_handler, '')) = '*' THEN '*' ELSE (
+        SELECT string_agg(member, ', ' ORDER BY first_seen)
+        FROM (
+            SELECT lower(btrim(m)) AS member, min(ord) AS first_seen
+            FROM unnest(string_to_array(p_gateway || ',' || COALESCE(p_handler, ''), ',')) WITH ORDINALITY AS t(m, ord)
+            WHERE btrim(m) <> ''
+            GROUP BY lower(btrim(m))
+        ) members
+    ) END
+$$;
+
+-- HTTP field names are case-insensitive (RFC 9110 5.1); the gateways read
+-- lowercase keys, so a transport passing X-User-Id or Content-Type (Go's
+-- http.Header does) would lose auth and skip content negotiation.
+CREATE OR REPLACE FUNCTION internal.lowercase_header_keys(p_headers extensions.hstore)
+RETURNS extensions.hstore
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE((
+        SELECT extensions.hstore(array_agg(lower(key)), array_agg(value))
+        FROM extensions.each(p_headers)
+    ), ''::extensions.hstore)
+$$;
+
 -- Response-header finalization shared by the REST and RPC gateways: merges
 -- handler-registered headers (keys lowercased for HTTP case-insensitive
 -- semantics; the x-include-schema directive controls $schema injection and
@@ -191,7 +219,7 @@ CREATE OR REPLACE FUNCTION internal.finalize_response_headers(
     p_extra extensions.hstore
 ) RETURNS extensions.hstore
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
-    WITH merged AS (
+    WITH handler AS (
         -- Lowercase the handler's OWN headers too, not just the registered ones.
         -- HTTP header names are case-insensitive, but hstore keys are not, and the
         -- content-type guard below is a case-sensitive `?`. A handler returning
@@ -207,7 +235,10 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
                 SELECT extensions.hstore(array_agg(lower(key)), array_agg(value))
                 FROM jsonb_each_text(p_registered)
                 WHERE lower(key) <> 'x-include-schema'
-            ), ''::extensions.hstore)
+            ), ''::extensions.hstore) AS hh
+    ),
+    merged AS (
+        SELECT hh
             || extensions.hstore(ARRAY[
                 'content-length', COALESCE(octet_length((p_response).content), 0)::text,
                 'x-execution-time-ms', p_execution_ms::text,
@@ -219,8 +250,12 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
             -- never engages: without Vary, a heuristically-caching intermediary
             -- may store one user's GET /me and replay it to another. Only
             -- PostgreSQL knows this, so the fronting proxy cannot add it.
-            || extensions.hstore('vary', 'accept, x-api-version, accept-version, x-user-id')
+            -- A union, not an overwrite: a handler's own Vary (say
+            -- accept-language) must survive, or a shared cache serves one
+            -- language to everyone.
+            || extensions.hstore('vary', internal.vary_union(hh->'vary', 'accept, x-api-version, accept-version, x-user-id'))
             || COALESCE(p_extra, ''::extensions.hstore) AS h
+        FROM handler
     )
     -- hstore(k, v) constructor, not a '=>' literal: the value's embedded
     -- space is a syntax error under hstore's unquoted-literal parsing.
@@ -291,6 +326,18 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT (p_request.route_id, internal.without_credentials(p_request.headers), p_request.content)::api.rpc_request;
 $$;
 
+-- The MCP context carries identity and may carry a token; the exchange log
+-- keeps who called, not what they authenticated with.
+CREATE OR REPLACE FUNCTION internal.loggable(p_request api.mcp_request)
+RETURNS api.mcp_request
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT (p_request.arguments, p_request.uri,
+            (SELECT jsonb_object_agg(c.key, c.value)
+             FROM jsonb_each(p_request.context) AS c
+             WHERE lower(c.key) !~ '(token|authorization|password|secret|api_?key|cookie|credential)'),
+            p_request.request_id)::api.mcp_request;
+$$;
+
 CREATE OR REPLACE FUNCTION internal.loggable(p_response api.http_response)
 RETURNS api.http_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -320,6 +367,11 @@ DECLARE
     v_match_method text;
     v_is_head boolean;
     v_allow text;
+    v_path_known boolean;
+    v_query_params jsonb;
+    v_query_violation text;
+    v_body jsonb;
+    v_body_violation text;
     v_auth_extra extensions.hstore;
 BEGIN
     v_start_time := clock_timestamp();
@@ -336,7 +388,7 @@ BEGIN
 
     p_method := upper(trim(p_method));
     p_url := trim(p_url);
-    p_headers := COALESCE(p_headers, ''::extensions.hstore);
+    p_headers := internal.lowercase_header_keys(p_headers);
 
     v_version := COALESCE(
         p_headers->'x-api-version',
@@ -356,8 +408,8 @@ BEGIN
     v_match_method := CASE WHEN v_is_head THEN 'GET' ELSE p_method END;
 
     SELECT h.handler_exec_sql, h.object_id, h.response_headers, h.accepts, h.produces, h.requires_auth,
-           h.output_json_schema, h.min_transaction_isolation, h.read_only,
-           r.route_name, r.auto_log
+           h.output_json_schema, h.input_json_schema, h.min_transaction_isolation, h.read_only,
+           r.route_name, r.auto_log, r.query_contract
     INTO v_route
     FROM api.rest_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
@@ -373,8 +425,20 @@ BEGIN
         -- returned 404. RFC 9110 §15.5.6 reserves 405 for the former and makes
         -- the Allow header mandatory. The proxy in front cannot synthesize this:
         -- it has no route table.
+        --
+        -- OPTIONS answers before identity is resolved: a CORS preflight carries
+        -- no credentials by definition, and it needs a 2xx. Every other method
+        -- sees only the routes its caller may call, so an anonymous caller
+        -- cannot enumerate the methods of an authenticated resource.
+        IF p_method <> 'OPTIONS' THEN
+            PERFORM internal.setup_auth_session(p_headers);
+        END IF;
+
         SELECT string_agg(DISTINCT upper(m.method), ', ' ORDER BY upper(m.method))
-        INTO v_allow
+                   FILTER (WHERE p_method = 'OPTIONS' OR NOT h.requires_auth
+                                 OR (SELECT api.current_user_id()) IS NOT NULL),
+               count(*) > 0
+        INTO v_allow, v_path_known
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
         CROSS JOIN LATERAL unnest(api.openapi_methods(r.method_regexp)) AS m(method)
@@ -382,16 +446,33 @@ BEGIN
           AND v_version ~ r.version_regexp;
 
         IF v_allow IS NOT NULL THEN
-            RAISE DEBUG 'rest_invoke: path matched but method % not allowed', p_method;
-            -- HEAD is served wherever GET is, so advertise it alongside.
+            -- HEAD is served wherever GET is, and OPTIONS wherever a route matches.
             IF v_allow ~ 'GET' AND v_allow !~ 'HEAD' THEN
                 v_allow := v_allow || ', HEAD';
             END IF;
+            v_allow := v_allow || ', OPTIONS';
+
+            IF p_method = 'OPTIONS' THEN
+                RETURN internal.finalize_error(
+                    (204, ''::extensions.hstore, NULL)::api.http_response,
+                    v_start_time,
+                    extensions.hstore('allow', v_allow));
+            END IF;
+
+            RAISE DEBUG 'rest_invoke: path matched but method % not allowed', p_method;
             RETURN internal.finalize_error(
                 api.problem_response(405, 'Method Not Allowed',
                     format('%s is not allowed on %s. Allowed: %s', p_method, v_path, v_allow)),
                 v_start_time,
                 extensions.hstore('allow', v_allow));
+        END IF;
+
+        IF v_path_known THEN
+            RAISE DEBUG 'rest_invoke: path matches only routes the caller cannot see';
+            RETURN internal.finalize_error(
+                api.problem_response(401, 'Unauthorized', 'Authentication required'),
+                v_start_time,
+                extensions.hstore('www-authenticate', api.www_authenticate_challenge()));
         END IF;
 
         RAISE DEBUG 'rest_invoke: No route matched';
@@ -424,6 +505,53 @@ BEGIN
             api.problem_response(401, 'Unauthorized', 'Authentication required'),
             v_start_time,
             extensions.hstore('www-authenticate', api.www_authenticate_challenge()));
+    END IF;
+
+    -- The declared query contract is checked before the isolation and
+    -- read-only checks, so a malformed request is a 400 whatever transaction
+    -- it arrived in. Parsed, not matched: parameter order and repetition do
+    -- not matter.
+    IF jsonb_array_length(v_route.query_contract) > 0 THEN
+        v_query_params := api.query_params_multi(p_url);
+        SELECT string_agg(
+                   CASE WHEN v_query_params ? (c.q->>'name')
+                        THEN format('query parameter "%s" must not be empty', c.q->>'name')
+                        ELSE format('query parameter "%s" is required', c.q->>'name') END,
+                   '; ' ORDER BY c.ord)
+        INTO v_query_violation
+        FROM jsonb_array_elements(v_route.query_contract) WITH ORDINALITY AS c(q, ord)
+        WHERE (COALESCE((c.q->>'required')::boolean, false) AND NOT v_query_params ? (c.q->>'name'))
+           OR (v_query_params ? (c.q->>'name')
+               AND NOT COALESCE((c.q->>'allowEmptyValue')::boolean, false)
+               AND NOT EXISTS (
+                   SELECT 1 FROM jsonb_array_elements_text(v_query_params->(c.q->>'name')) AS v(value)
+                   WHERE v.value <> ''));
+
+        -- Declared value shapes: integer, number, boolean and enum. Empty
+        -- values were judged above; formats and ranges stay the handler's.
+        IF v_query_violation IS NULL THEN
+            SELECT string_agg(
+                       format('query parameter "%s" must be %s, got "%s"', c.q->>'name',
+                              CASE WHEN c.q->'schema' ? 'enum'
+                                   THEN 'one of ' || (SELECT string_agg(e, ', ') FROM jsonb_array_elements_text(c.q->'schema'->'enum') e)
+                                   ELSE 'a' || CASE WHEN c.q->'schema'->>'type' = 'integer' THEN 'n ' ELSE ' ' END || (c.q->'schema'->>'type') END,
+                              v.value),
+                       '; ' ORDER BY c.ord)
+            INTO v_query_violation
+            FROM jsonb_array_elements(v_route.query_contract) WITH ORDINALITY AS c(q, ord)
+            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(v_query_params->(c.q->>'name'), '[]')) AS v(value)
+            WHERE v.value <> ''
+              AND ((jsonb_typeof(c.q->'schema'->'enum') = 'array'
+                    AND NOT (c.q->'schema'->'enum') @> to_jsonb(v.value))
+                OR (c.q->'schema'->>'type' = 'integer' AND v.value !~ '^-?[0-9]+$')
+                OR (c.q->'schema'->>'type' = 'number' AND v.value !~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$')
+                OR (c.q->'schema'->>'type' = 'boolean' AND v.value NOT IN ('true', 'false')));
+        END IF;
+        IF v_query_violation IS NOT NULL THEN
+            RETURN internal.finalize_error(
+                api.problem_response(400, 'Bad Request', v_query_violation),
+                v_start_time, v_auth_extra);
+        END IF;
     END IF;
 
     -- Enforce the route's transaction isolation floor. The gateway can only READ
@@ -473,6 +601,26 @@ BEGIN
             'Not Acceptable',
             format('Supported content types: %s', array_to_string(v_route.produces, ', '))
         ), v_start_time, v_auth_extra);
+    END IF;
+
+    -- The declared inputSchema is checked here, as it is for MCP tool
+    -- arguments, for the methods whose body the spec publishes it for. Only
+    -- the top level: required keys and property types. The rest is the
+    -- handler's to check.
+    IF v_route.input_json_schema IS NOT NULL AND v_match_method IN ('POST', 'PUT', 'PATCH') THEN
+        BEGIN
+            v_body := COALESCE(api.content_json(NULLIF(p_content, ''::bytea)), 'null'::jsonb);
+        EXCEPTION WHEN invalid_text_representation OR character_not_in_repertoire OR untranslatable_character THEN
+            RETURN internal.finalize_error(
+                api.problem_response(400, 'Bad Request', 'The request body is not valid JSON'),
+                v_start_time, v_auth_extra);
+        END;
+        v_body_violation := internal.json_schema_errors(v_route.input_json_schema::jsonb, v_body);
+        IF v_body_violation IS NOT NULL THEN
+            RETURN internal.finalize_error(
+                api.problem_response(400, 'Bad Request', 'Invalid request body: ' || v_body_violation),
+                v_start_time, v_auth_extra);
+        END IF;
     END IF;
 
     v_request := (p_method, p_url, p_headers, p_content)::api.rest_request;
@@ -597,7 +745,12 @@ BEGIN
                     v_status := 428; v_title := 'Precondition Required';
                     v_client_detail := 'Route requires a read-write transaction but the current transaction is READ ONLY';
                 END IF;
-            ELSE              v_status := 500; v_title := 'Internal Server Error'; v_client_detail := 'An internal error occurred';
+            ELSE
+                IF left(v_sqlstate, 2) = '22' THEN
+                    v_status := 400; v_title := 'Bad Request'; v_client_detail := 'A submitted value is invalid';
+                ELSE
+                    v_status := 500; v_title := 'Internal Server Error'; v_client_detail := 'An internal error occurred';
+                END IF;
         END CASE;
 
         -- Logged copy keeps SQLSTATE + truncated SQLERRM. Full SQLERRM may
@@ -732,7 +885,7 @@ DECLARE
     v_iso_shortfall text;
 BEGIN
     v_start_time := clock_timestamp();
-    p_headers := COALESCE(p_headers, ''::extensions.hstore);
+    p_headers := internal.lowercase_header_keys(p_headers);
     RAISE DEBUG 'rpc_invoke: route_id=%', p_route_id;
 
     -- JSON-RPC 2.0: an unparseable body is -32700 Parse error, and the handler
@@ -906,7 +1059,12 @@ BEGIN
                     v_status := 428; v_rpc_code := -32600;
                     v_client_msg := 'Route requires a read-write transaction but the current transaction is READ ONLY';
                 END IF;
-            ELSE              v_status := 500; v_rpc_code := -32603; v_client_msg := 'Internal error';
+            ELSE
+                IF left(v_sqlstate, 2) = '22' THEN
+                    v_status := 400; v_rpc_code := -32602; v_client_msg := 'A submitted value is invalid';
+                ELSE
+                    v_status := 500; v_rpc_code := -32603; v_client_msg := 'Internal error';
+                END IF;
         END CASE;
 
         -- Logged copy keeps SQLSTATE + truncated SQLERRM (see rest_invoke for
@@ -957,7 +1115,42 @@ COMMENT ON FUNCTION api.rpc_invoke(uuid, extensions.hstore, bytea) IS
 -- standardizes not-found to -32602 (SEP-2164,
 -- https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164).
 -- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
--- methods (the dispatcher ELSE branch). Auth failures keep -32001.
+-- methods (the dispatcher ELSE branch). A protected name asked for without a
+-- resolved identity gets the same -32602, so it cannot be probed for.
+
+DROP FUNCTION IF EXISTS internal.mcp_argument_errors(jsonb, jsonb);
+
+-- The problems a declared JSON Schema finds in a value, checked by both the
+-- MCP tool gateway (arguments) and the REST gateway (request bodies): a root
+-- that is not the declared type, missing required keys, and top-level
+-- properties of the wrong JSON type. NULL when there are none. Not a full
+-- JSON Schema validator: nested schemas, formats and ranges are the handler's.
+CREATE OR REPLACE FUNCTION internal.json_schema_errors(p_schema jsonb, p_arguments jsonb)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT string_agg(problem, '; ' ORDER BY problem)
+    FROM (
+        SELECT format('the body must be a JSON %s', p_schema->>'type') AS problem
+        WHERE jsonb_typeof(p_schema->'type') = 'string'
+          AND jsonb_typeof(p_arguments) IS DISTINCT FROM p_schema->>'type'
+        UNION ALL
+        SELECT format('%s is required', k) AS problem
+        FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(p_schema->'required') = 'array' THEN p_schema->'required' ELSE '[]' END) k
+        WHERE jsonb_typeof(p_arguments) = 'object' AND NOT p_arguments ? k
+        UNION ALL
+        SELECT format('%s must be %s', p.key, p.value->>'type')
+        FROM jsonb_each(CASE WHEN jsonb_typeof(p_schema->'properties') = 'object' THEN p_schema->'properties' ELSE '{}' END) p
+        WHERE jsonb_typeof(p_arguments) = 'object' AND p_arguments ? p.key
+          AND jsonb_typeof(p.value->'type') = 'string'
+          AND NOT CASE p.value->>'type'
+                WHEN 'integer' THEN jsonb_typeof(p_arguments->p.key) = 'number'
+                                AND (p_arguments->>p.key)::numeric = trunc((p_arguments->>p.key)::numeric)
+                WHEN 'number'  THEN jsonb_typeof(p_arguments->p.key) = 'number'
+                ELSE jsonb_typeof(p_arguments->p.key) = p.value->>'type'
+              END
+    ) problems
+$$;
 
 -- Shared invocation path for the three MCP entry points. Route lookup and
 -- request shape differ per type; everything security-relevant — auth context,
@@ -977,15 +1170,29 @@ DECLARE
     v_response api.mcp_response;
     v_handler record;
     v_iso_shortfall text;
+    v_invalid text;
 BEGIN
     RAISE DEBUG 'mcp_dispatch: % %', p_mcp_type, p_name_or_uri;
+
+    IF p_name_or_uri IS NULL OR p_name_or_uri = '' THEN
+        RETURN api.mcp_error(-32602,
+            format('Invalid params: %s', CASE WHEN p_mcp_type = 'resource' THEN 'params.uri (string) is required'
+                                             ELSE 'params.name (string) is required' END),
+            p_request_id);
+    END IF;
+    IF p_mcp_type <> 'resource' AND jsonb_typeof(p_arguments) IS DISTINCT FROM 'object' THEN
+        RETURN api.mcp_error(-32602, 'Invalid params: params.arguments must be an object', p_request_id);
+    END IF;
+
+    PERFORM internal.apply_mcp_auth_context(p_context);
 
     IF p_mcp_type = 'resource' THEN
         -- Deterministic precedence when more than one template matches: most
         -- specific (longest template) first, mcp_name as a stable tiebreak.
         -- Without this, the chosen handler (and its requires_auth) would be
         -- nondeterministic.
-        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.min_transaction_isolation, h.read_only
+        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.min_transaction_isolation, h.read_only,
+               r.input_schema, r.arguments
         INTO v_handler
         FROM api.handler h
         JOIN api.mcp_route r ON r.handler_object_id = h.object_id
@@ -995,27 +1202,27 @@ BEGIN
         ORDER BY length(r.uri_template) DESC, r.mcp_name
         LIMIT 1;
     ELSE
-        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.min_transaction_isolation, h.read_only
+        SELECT h.handler_exec_sql, h.object_id, h.requires_auth, r.mcp_name, h.min_transaction_isolation, h.read_only,
+               r.input_schema, r.arguments
         INTO v_handler
         FROM api.handler h
         JOIN api.mcp_route r ON r.handler_object_id = h.object_id
         WHERE r.mcp_name = p_name_or_uri AND r.mcp_type = p_mcp_type AND h.deleted_at IS NULL;
     END IF;
 
-    IF v_handler.handler_exec_sql IS NULL THEN
-        RAISE DEBUG 'mcp_dispatch: % not found', p_mcp_type;
-        RETURN api.mcp_error(-32602, initcap(p_mcp_type) || ' not found: ' || p_name_or_uri, p_request_id);
+    -- Resolved user, not header shape -- see rest_invoke. An anonymous caller
+    -- gets one answer whether the name is unknown or protected: tools/list
+    -- already hides auth-required entries from it, and a distinct code would
+    -- confirm that a hidden name exists. The message still says what to try.
+    IF v_handler.handler_exec_sql IS NULL OR (v_handler.requires_auth AND api.current_user_id() IS NULL) THEN
+        RAISE DEBUG 'mcp_dispatch: % not found or not visible', p_mcp_type;
+        RETURN api.mcp_error(-32602,
+            initcap(p_mcp_type) || ' not found: ' || p_name_or_uri
+                || CASE WHEN api.current_user_id() IS NULL THEN ' (or it requires authentication)' ELSE '' END,
+            p_request_id);
     END IF;
 
     RAISE DEBUG 'mcp_dispatch: Matched %', v_handler.mcp_name;
-
-    PERFORM internal.apply_mcp_auth_context(p_context);
-
-    -- Resolved user, not header shape -- see rest_invoke.
-    IF v_handler.requires_auth AND api.current_user_id() IS NULL THEN
-        RAISE DEBUG 'mcp_dispatch: Auth required but no user resolved';
-        RETURN api.mcp_error(-32001, 'Authentication required: no user resolved from context', p_request_id);
-    END IF;
 
     -- Enforce the route's transaction isolation floor (see rest_invoke).
     v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.min_transaction_isolation);
@@ -1039,6 +1246,24 @@ BEGIN
         );
     END IF;
 
+    -- Tool arguments are checked against the declared inputSchema before the
+    -- handler runs: required keys present, top-level property types right.
+    -- The spec says servers MUST validate tool inputs; the failure is an
+    -- isError result the model can read and act on, not a protocol error.
+    IF p_mcp_type = 'tool' THEN
+        v_invalid := internal.json_schema_errors(v_handler.input_schema, p_arguments);
+        IF v_invalid IS NOT NULL THEN
+            RETURN api.mcp_tool_error('Invalid arguments: ' || v_invalid, p_request_id);
+        END IF;
+    ELSIF p_mcp_type = 'prompt' THEN
+        SELECT string_agg(a->>'name', ', ' ORDER BY a->>'name') INTO v_invalid
+        FROM jsonb_array_elements(COALESCE(v_handler.arguments, '[]'::jsonb)) a
+        WHERE COALESCE((a->>'required')::boolean, false) AND NOT p_arguments ? (a->>'name');
+        IF v_invalid IS NOT NULL THEN
+            RETURN api.mcp_error(-32602, 'Invalid params: missing required argument(s): ' || v_invalid, p_request_id);
+        END IF;
+    END IF;
+
     v_request := CASE WHEN p_mcp_type = 'resource'
         THEN (NULL, p_name_or_uri, p_context, p_request_id)::api.mcp_request
         ELSE (p_arguments, NULL, p_context, p_request_id)::api.mcp_request
@@ -1048,10 +1273,19 @@ BEGIN
         RAISE DEBUG 'mcp_dispatch: Invoking handler %', v_handler.object_id;
         EXECUTE v_handler.handler_exec_sql INTO v_response USING v_request;
 
+        -- A NULL envelope reads as a notification to the gateway, so the
+        -- request would never be answered (JSON-RPC 2.0 section 4).
+        IF (v_response).envelope IS NULL THEN
+            v_response := CASE WHEN p_mcp_type = 'tool'
+                THEN api.mcp_tool_error('Tool handler returned no result', p_request_id)
+                ELSE api.mcp_error(-32603, 'Handler returned no result', p_request_id)
+            END;
+        END IF;
+
         -- Exchange logging is a write; skip in a READ ONLY transaction (see rest_invoke).
         IF NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
+            VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, internal.loggable(v_request), v_response);
         END IF;
 
         RETURN v_response;
@@ -1078,12 +1312,27 @@ BEGIN
         END;
         IF NOT internal.transaction_is_read_only() THEN
             INSERT INTO api.mcp_exchange (handler_object_id, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
+            VALUES (v_handler.object_id, p_mcp_type, v_handler.mcp_name, internal.loggable(v_request), v_response);
         END IF;
 
-        RETURN CASE WHEN p_mcp_type = 'tool'
-            THEN api.mcp_tool_error('Tool execution failed', p_request_id)
-            ELSE api.mcp_error(-32603, 'Internal error', p_request_id)
+        -- Bad input and constraint violations are the caller's to fix, so the
+        -- model gets the same class message REST sends; SQLERRM never leaves
+        -- the database, a handler's own RAISE text included.
+        RETURN CASE
+            WHEN p_mcp_type <> 'tool' THEN api.mcp_error(-32603, 'Internal error', p_request_id)
+            ELSE api.mcp_tool_error(CASE SQLSTATE
+                WHEN '23505' THEN 'Resource already exists'
+                WHEN '23514' THEN 'A submitted value violates a constraint'
+                WHEN '23502' THEN 'A required value is missing'
+                WHEN '23503' THEN 'References a resource that does not exist'
+                WHEN '22P02' THEN 'A submitted value is malformed'
+                WHEN '22023' THEN 'A submitted parameter value is invalid'
+                WHEN '22001' THEN 'A submitted value is too long'
+                WHEN '22003' THEN 'A submitted number is out of range'
+                WHEN '22007' THEN 'A submitted date or time is malformed'
+                WHEN '22008' THEN 'A submitted date or time is out of range'
+                ELSE CASE WHEN left(SQLSTATE, 2) = '22' THEN 'A submitted value is invalid' ELSE 'Tool execution failed' END
+            END, p_request_id)
         END;
     END;
 END;
@@ -1404,8 +1653,8 @@ AS $$
         p_url,
         p_requested_isolation,
         COALESCE(
-            COALESCE(p_headers, ''::extensions.hstore)->'x-api-version',
-            COALESCE(p_headers, ''::extensions.hstore)->'accept-version',
+            internal.lowercase_header_keys(p_headers)->'x-api-version',
+            internal.lowercase_header_keys(p_headers)->'accept-version',
             ''
         )
     );

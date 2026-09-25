@@ -68,7 +68,7 @@ WALK_ENV="$work/env.sh" bash -e readme.sh 2>&1 | tee "$logs/readme.log" \
     || fail "the README 'See it work' blocks failed (output above)"
 # shellcheck disable=SC1091
 source "$work/env.sh"
-grep -q "Test suite completed" "$logs/readme.log" || fail "README deploy did not complete its test suite"
+grep -q "Test suite passed" "$logs/readme.log" || fail "README deploy did not complete its test suite"
 grep -q "demo_db: 7 files loaded" "$logs/readme.log" || fail "README deploy summary line missing"
 
 step "README: failure demo"
@@ -101,7 +101,7 @@ grep -q "database: myapp" myapp/pgmi.yaml || fail "no pgmi.yaml block after 'Upd
 cat myapp/pgmi.yaml
 cd myapp
 expect_exit 0 "$logs/deploy.log" pgmi deploy . --overwrite --force
-grep -q "Test suite completed" "$logs/deploy.log" || fail "Quickstart deploy did not complete its test suite"
+grep -q "Test suite passed" "$logs/deploy.log" || fail "Quickstart deploy did not complete its test suite"
 [ "$(sql myapp "SELECT count(*) FROM get_user('admin@example.com')")" = 1 ] \
     || fail "get_user('admin@example.com') did not return the seeded admin"
 

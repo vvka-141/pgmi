@@ -207,10 +207,11 @@ func TestConsoleLogger_ConcurrentSafety(t *testing.T) {
 }
 
 func TestNullLogger_DiscardsAllMessages(t *testing.T) {
-	// Capture stdout to verify nothing is written
-	old := os.Stdout
+	// Both streams: the console logger writes to stderr, so capturing stdout
+	// alone would pass even if NullLogger logged like it.
+	oldOut, oldErr := os.Stdout, os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stdout, os.Stderr = w, w
 
 	logger := NewNullLogger()
 	logger.Verbose("verbose")
@@ -218,7 +219,7 @@ func TestNullLogger_DiscardsAllMessages(t *testing.T) {
 	logger.Error("error")
 
 	w.Close()
-	os.Stdout = old
+	os.Stdout, os.Stderr = oldOut, oldErr
 
 	var buf bytes.Buffer
 	io.Copy(&buf, r)

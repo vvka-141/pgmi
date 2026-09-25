@@ -9,18 +9,16 @@ import "encoding/json"
 // tools/list and tools/call are unchanged across these; structuredContent is
 // additive in 2025-06-18 and ignored by older clients.
 //
-// This stops one revision short of the advanced template's SQL surface, which
-// negotiates 2025-11-25. That revision changes the tool surface — tool-name
-// format constraints (SEP-986) and validation failures as tool execution errors
-// (SEP-1303) — and this server has no conformance test for either. Negotiation
-// makes the gap safe: a client asking for 2025-11-25 is answered with our
-// newest and decides whether to continue. Claiming a revision we have not
-// verified would be worse than answering with an older one.
-var SupportedVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+// 2025-11-25 is the revision the advanced template's SQL surface also speaks.
+// Its two tool-surface rules are tested in internal/cli: tool names fit
+// SEP-986's character set, and a bad argument is a tool execution error, not a
+// protocol error (SEP-1303). 2026-07-28 drops the initialize handshake; a
+// client that speaks it falls back to initialize when server/discover fails.
+var SupportedVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 
 // ProtocolVersion is the newest revision this server speaks — what it answers
 // with when the client asks for something it does not know.
-const ProtocolVersion = "2025-06-18"
+const ProtocolVersion = "2025-11-25"
 
 // negotiateVersion implements the spec's rule: echo the client's version when we
 // support it, otherwise answer with our latest. An unknown version is not an

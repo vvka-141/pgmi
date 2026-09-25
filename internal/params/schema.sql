@@ -13,7 +13,7 @@
 --   deploy.sql ──► queries views ──► EXECUTE content
 --
 -- OBJECT INDEX (search: "§" + name):
---   §_pgmi_parameter       - CLI parameters with type validation
+--   §_pgmi_parameter       - CLI parameters (key, value)
 --   §_pgmi_source          - Project files (non-test)
 --   §_pgmi_source_metadata - Parsed <pgmi-meta> XML blocks
 --   §_pgmi_test_directory  - Test directory hierarchy
@@ -61,15 +61,7 @@ CREATE TEMP TABLE pg_temp._pgmi_parameter
 (
 	"key" TEXT PRIMARY KEY,
 	"value" TEXT,
-	"type" TEXT NOT NULL DEFAULT 'text',
-	"required" BOOLEAN NOT NULL DEFAULT false,
-	"default_value" TEXT,
-	"description" TEXT,
-	CONSTRAINT chk_key_format CHECK("key" ~ '^\w+$'),
-	CONSTRAINT chk_type_valid CHECK("type" IN (
-		'text', 'int', 'integer', 'bigint', 'numeric',
-		'boolean', 'bool', 'uuid', 'timestamp', 'timestamptz', 'name'
-	))
+	CONSTRAINT chk_key_format CHECK("key" ~ '^\w+$')
 );
 
 GRANT SELECT ON TABLE pg_temp._pgmi_parameter TO PUBLIC;
@@ -244,7 +236,7 @@ RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
     CASE e.event
         WHEN 'suite_start'    THEN RAISE NOTICE '[pgmi] Test suite started';
-        WHEN 'suite_end'      THEN RAISE NOTICE '[pgmi] Test suite completed (% steps)', e.ordinal;
+        WHEN 'suite_end'      THEN RAISE NOTICE '[pgmi] Test suite passed';
         WHEN 'fixture_start'  THEN RAISE NOTICE '[pgmi] Fixture: %', e.path;
         WHEN 'fixture_end'    THEN NULL; -- silent
         WHEN 'test_start'     THEN RAISE NOTICE '[pgmi] Test: %', e.path;

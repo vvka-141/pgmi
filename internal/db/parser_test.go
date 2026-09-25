@@ -1,8 +1,12 @@
 package db
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -319,6 +323,29 @@ func TestBuildConnectionString(t *testing.T) {
 	compareConfigs(t, parsed, config)
 }
 
+func TestBuildConnectionString_HostForms(t *testing.T) {
+	for _, host := range []string{"::1", "2001:db8::5", "/var/run/postgresql", "db.example.com"} {
+		t.Run(host, func(t *testing.T) {
+			config := &pgmi.ConnectionConfig{Host: host, Port: 5471, Database: "mydb", Username: "user"}
+			connStr := BuildConnectionString(config)
+
+			parsed, err := ParseConnectionString(connStr)
+			if err != nil {
+				t.Fatalf("round trip of %q: %v", connStr, err)
+			}
+			compareConfigs(t, parsed, config)
+
+			pgxCfg, err := pgx.ParseConfig(connStr)
+			if err != nil {
+				t.Fatalf("pgx rejects %q: %v", connStr, err)
+			}
+			if pgxCfg.Host != host || pgxCfg.Port != 5471 {
+				t.Errorf("pgx dials %s port %d from %q, want %s port 5471", pgxCfg.Host, pgxCfg.Port, connStr, host)
+			}
+		})
+	}
+}
+
 func TestBuildConnectionString_WithCertParams(t *testing.T) {
 	config := &pgmi.ConnectionConfig{
 		Host:        "localhost",
@@ -377,5 +404,84 @@ func compareConfigs(t *testing.T, got, want *pgmi.ConnectionConfig) {
 	}
 	if got.SSLPassword != want.SSLPassword {
 		t.Errorf("SSLPassword = %v, want %v", got.SSLPassword, want.SSLPassword)
+	}
+}
+
+// A primary/standby pair is written as one URI listing both hosts. pgmi parses
+// and rebuilds the connection string, and used to turn
+// h1:5432,h2:5433 into the invalid [h1:5432,h2]:5433.
+func TestConnectionString_MultiHostRoundTrip(t *testing.T) {
+	for _, in := range []string{
+		"postgresql://u:p@db1:5432,db2:5433/app?target_session_attrs=read-write",
+		"postgresql://u@db1,db2:5433/app",
+	} {
+		c, err := ParseConnectionString(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		out := BuildConnectionString(c)
+		cfg, err := pgconn.ParseConfig(out)
+		if err != nil {
+			t.Fatalf("%s rebuilt as %s, which pgx rejects: %v", in, out, err)
+		}
+		want, _ := pgconn.ParseConfig(in)
+		got := []string{fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)}
+		for _, fb := range cfg.Fallbacks {
+			got = append(got, fmt.Sprintf("%s:%d", fb.Host, fb.Port))
+		}
+		exp := []string{fmt.Sprintf("%s:%d", want.Host, want.Port)}
+		for _, fb := range want.Fallbacks {
+			exp = append(exp, fmt.Sprintf("%s:%d", fb.Host, fb.Port))
+		}
+		if strings.Join(got, ",") != strings.Join(exp, ",") {
+			t.Errorf("%s rebuilt as %s: hosts %v, want %v", in, out, got, exp)
+		}
+	}
+}
+
+// The libpq keyword/value form is what psql, the PostgreSQL docs and many
+// hosting dashboards hand out. It was rejected as "unrecognized".
+func TestParseConnectionString_KeywordValue(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want pgmi.ConnectionConfig
+	}{
+		{"plain", "host=db1 port=5433 dbname=app user=me password=secret sslmode=require",
+			pgmi.ConnectionConfig{Host: "db1", Port: 5433, Database: "app", Username: "me", Password: "secret", SSLMode: "require"}},
+		{"spaces around equals and defaults", "host = db1   dbname = app",
+			pgmi.ConnectionConfig{Host: "db1", Port: 5432, Database: "app"}},
+		{"quoted value with space, quote and semicolon", `host=db1 password='a b\'c;d' dbname=app`,
+			pgmi.ConnectionConfig{Host: "db1", Port: 5432, Database: "app", Password: "a b'c;d"}},
+		{"host list with one port", "host=db1,db2 port=5433 dbname=app",
+			pgmi.ConnectionConfig{Host: "db1:5433,db2:5433", Port: 5432, Database: "app"}},
+		{"host list with a port each", "host=db1,db2 port=5432,5433 dbname=app",
+			pgmi.ConnectionConfig{Host: "db1:5432,db2:5433", Port: 5432, Database: "app"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseConnectionString(tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Host != tt.want.Host || got.Port != tt.want.Port || got.Database != tt.want.Database ||
+				got.Username != tt.want.Username || got.Password != tt.want.Password || got.SSLMode != tt.want.SSLMode {
+				t.Errorf("got host=%q port=%d db=%q user=%q pass=%q ssl=%q", got.Host, got.Port, got.Database, got.Username, got.Password, got.SSLMode)
+			}
+			if _, err := pgconn.ParseConfig(BuildConnectionString(got)); err != nil {
+				t.Errorf("rebuilt string is not accepted by pgx: %v", err)
+			}
+		})
+	}
+
+	for _, bad := range []string{"host=db1 dbname", "host=db1 password='unterminated", "host=a,b,c port=1,2"} {
+		if _, err := ParseConnectionString(bad); err == nil {
+			t.Errorf("%q must be rejected", bad)
+		}
+	}
+
+	ado, err := ParseConnectionString("Host=db1;Database=app;Username=me")
+	if err != nil || ado.Host != "db1" || ado.Database != "app" {
+		t.Errorf("ADO.NET form must still parse: %+v, %v", ado, err)
 	}
 }

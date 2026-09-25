@@ -78,7 +78,7 @@ Invoke-Gate "build" { go build -o pgmi.exe ./cmd/pgmi }
 
 Write-Host ""
 Write-Host "Not covered here — the tag workflow runs these:"
-Write-Host "  * the five end-to-end example gates (.github/workflows/examples.yml)"
+Write-Host "  * the six end-to-end example gates (.github/workflows/examples.yml)"
 Write-Host "  * the full snapshot build — archives, .deb, checksums for all 6 targets"
 Write-Host "    (.github/workflows/snapshot.yml; goreleaser check here only reads the config)"
 Write-Host "  * the race detector (needs CGO)"

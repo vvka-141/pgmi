@@ -77,7 +77,7 @@ func GetContract() Contract {
 			},
 			{
 				Name:    "pgmi_parameter_view",
-				Columns: []string{"key", "value", "type", "required", "default_value", "description"},
+				Columns: []string{"key", "value"},
 				Note:    "key is lower-cased on load, matching the session variable it mirrors: --param apiVersion=2 is stored as 'apiversion'. WHERE key = 'apiVersion' returns no row, silently, while current_setting('pgmi.apiVersion', true) still works because GUC names are case-insensitive. Compare lower-cased.",
 			},
 			{

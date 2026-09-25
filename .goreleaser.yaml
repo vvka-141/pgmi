@@ -119,6 +119,8 @@ release:
 
     Verify the download: `sha256sum -c checksums.txt`
 
+    Verify it was built by this repository's release workflow: `gh attestation verify <archive> -R vvka-141/pgmi`
+
     </details>
 
     <details>

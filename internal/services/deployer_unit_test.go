@@ -19,13 +19,12 @@ func validDeps() (
 	pgmi.Approver,
 	pgmi.Logger,
 	pgmi.SessionPreparer,
-	pgmi.FileScanner,
 	pgmi.DatabaseManager,
 ) {
 	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return &mockConnector{}, nil
 	}
-	return connFactory, &mockApprover{}, &mockLogger{}, &mockSessionPreparer{}, &mockFileScanner{}, &mockDatabaseManager{}
+	return connFactory, &mockApprover{}, &mockLogger{}, &mockSessionPreparer{}, &mockDatabaseManager{}
 }
 
 func validConfig() pgmi.DeploymentConfig {
@@ -42,7 +41,7 @@ func newTestService(
 	sessPreparer *mockSessionPreparer,
 	mgmtConn maintenanceDBConnFunc,
 ) *DeploymentService {
-	cf, _, lg, _, fs, _ := validDeps()
+	cf, _, lg, _, _ := validDeps()
 	if approver == nil {
 		approver = &mockApprover{}
 	}
@@ -52,7 +51,7 @@ func newTestService(
 	if dbMgr == nil {
 		dbMgr = &mockDatabaseManager{}
 	}
-	svc := NewDeploymentService(cf, approver, lg, sessPreparer, fs, dbMgr)
+	svc := NewDeploymentService(cf, approver, lg, sessPreparer, dbMgr)
 	if mgmtConn != nil {
 		svc.mgmtConnector = mgmtConn
 	}
@@ -87,18 +86,17 @@ func missingTargetMgmtConn(targetDB string, dialed *[]string) maintenanceDBConnF
 }
 
 func TestNewDeploymentService_NilDeps(t *testing.T) {
-	cf, ap, lg, sm, fs, dm := validDeps()
+	cf, ap, lg, sm, dm := validDeps()
 
 	tests := []struct {
 		name string
 		fn   func()
 	}{
-		{"nil connectorFactory", func() { NewDeploymentService(nil, ap, lg, sm, fs, dm) }},
-		{"nil approver", func() { NewDeploymentService(cf, nil, lg, sm, fs, dm) }},
-		{"nil logger", func() { NewDeploymentService(cf, ap, nil, sm, fs, dm) }},
-		{"nil sessionManager", func() { NewDeploymentService(cf, ap, lg, nil, fs, dm) }},
-		{"nil fileScanner", func() { NewDeploymentService(cf, ap, lg, sm, nil, dm) }},
-		{"nil dbManager", func() { NewDeploymentService(cf, ap, lg, sm, fs, nil) }},
+		{"nil connectorFactory", func() { NewDeploymentService(nil, ap, lg, sm, dm) }},
+		{"nil approver", func() { NewDeploymentService(cf, nil, lg, sm, dm) }},
+		{"nil logger", func() { NewDeploymentService(cf, ap, nil, sm, dm) }},
+		{"nil sessionManager", func() { NewDeploymentService(cf, ap, lg, nil, dm) }},
+		{"nil dbManager", func() { NewDeploymentService(cf, ap, lg, sm, nil) }},
 	}
 
 	for _, tt := range tests {
@@ -114,8 +112,8 @@ func TestNewDeploymentService_NilDeps(t *testing.T) {
 }
 
 func TestDeploy_InvalidConfig(t *testing.T) {
-	cf, ap, lg, sm, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
+	cf, ap, lg, sm, dm := validDeps()
+	svc := NewDeploymentService(cf, ap, lg, sm, dm)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -141,8 +139,8 @@ func TestDeploy_InvalidConfig(t *testing.T) {
 }
 
 func TestDeploy_InvalidConnectionString(t *testing.T) {
-	cf, ap, lg, sm, fs, dm := validDeps()
-	svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
+	cf, ap, lg, sm, dm := validDeps()
+	svc := NewDeploymentService(cf, ap, lg, sm, dm)
 
 	err := svc.Deploy(context.Background(), pgmi.DeploymentConfig{
 		SourcePath:       "/src",
@@ -150,17 +148,38 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 		ConnectionString: "not-a-valid-connection-string",
 	})
 
-	if err == nil {
-		t.Fatal("Expected error for invalid connection string")
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+}
+
+// A parameter key PostgreSQL cannot use as a GUC name is known to be wrong
+// without a server, so --overwrite must not drop anything first (PGMI-372).
+func TestDeploy_InvalidParameterKey_FailsBeforeConnecting(t *testing.T) {
+	for _, key := range []string{"api-key", "1abc"} {
+		t.Run(key, func(t *testing.T) {
+			svc := newTestService(nil, nil, nil, func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+				t.Fatal("connected to the server before validating parameters")
+				return nil, noop, nil
+			})
+			cfg := validConfig()
+			cfg.Overwrite, cfg.Force = true, true
+			cfg.Parameters = map[string]string{key: "v"}
+
+			err := svc.Deploy(context.Background(), cfg)
+			if !errors.Is(err, pgmi.ErrInvalidConfig) {
+				t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+			}
+		})
 	}
 }
 
 func TestDeploy_MissingDeploySQL_FailsBeforeConnecting(t *testing.T) {
 	for _, overwrite := range []bool{false, true} {
 		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {
-			cf, ap, lg, _, fs, dm := validDeps()
+			cf, ap, lg, _, dm := validDeps()
 			sm := &mockSessionPreparer{scanErr: fmt.Errorf("%w in /src", pgmi.ErrDeploySQLNotFound)}
-			svc := NewDeploymentService(cf, ap, lg, sm, fs, dm)
+			svc := NewDeploymentService(cf, ap, lg, sm, dm)
 
 			connected := false
 			svc.mgmtConnector = func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
@@ -387,23 +406,6 @@ func TestDeploy_PrepareSessionFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "session prep failed") {
 		t.Fatalf("Expected session prep error, got: %v", err)
-	}
-}
-
-// Session preparation runs before deploy.sql is read, so a scanner read error
-// is never reached: the session-prep error surfaces first.
-func TestDeploy_SessionPrepPrecedesDeploySQLRead(t *testing.T) {
-	dbMgr := &mockDatabaseManager{existsResult: true}
-	fileScanner := &mockFileScanner{readErr: fmt.Errorf("deploy.sql not found: %w", pgmi.ErrDeploySQLNotFound)}
-	sessPreparer := &mockSessionPreparer{err: errMockStop}
-	cf, _, lg, _, _, _ := validDeps()
-	svc := NewDeploymentService(cf, &mockApprover{}, lg, sessPreparer, fileScanner, dbMgr)
-	svc.mgmtConnector = successfulMgmtConn()
-
-	err := svc.Deploy(context.Background(), validConfig())
-
-	if !errors.Is(err, errMockStop) {
-		t.Fatalf("Expected errMockStop (session prep comes first), got: %v", err)
 	}
 }
 

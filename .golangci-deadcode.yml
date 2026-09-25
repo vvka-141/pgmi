@@ -1,0 +1,14 @@
+# Production-only pass for `unused`. The main config lints with tests: true, so a
+# symbol whose only caller is a test counts as used there and dead code hides.
+run:
+  timeout: 15m
+  tests: false
+
+linters:
+  disable-all: true
+  enable:
+    - unused
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

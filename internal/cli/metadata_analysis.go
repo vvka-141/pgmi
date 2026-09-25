@@ -11,89 +11,82 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// MetadataPlanEntry is one file in execution-order plan output.
+// MetadataPlanEntry is one row of the plan: a file at one of its sort keys.
 type MetadataPlanEntry struct {
-	Path        string   `json:"path"`
-	ID          string   `json:"id"`
-	Idempotent  bool     `json:"idempotent"`
-	SortKeys    []string `json:"sort_keys"`
-	Description string   `json:"description"`
+	ExecutionOrder int    `json:"executionOrder"`
+	Path           string `json:"path"`
+	SortKey        string `json:"sortKey"`
+	ID             string `json:"id"`
+	Idempotent     bool   `json:"idempotent"`
+	Description    string `json:"description"`
+	IsSQLFile      bool   `json:"isSqlFile"`
 }
 
 // MetadataPlanResult is the structured result of analyzing a project's plan.
 type MetadataPlanResult struct {
-	TotalFiles int                 `json:"total_files"`
+	TotalFiles int                 `json:"totalFiles"`
 	Plan       []MetadataPlanEntry `json:"plan"`
 }
 
 // MetadataValidateResult is the structured result of validating a project's metadata.
 type MetadataValidateResult struct {
-	TotalFiles           int      `json:"total_files"`
-	FilesWithMetadata    int      `json:"files_with_metadata"`
-	FilesWithoutMetadata int      `json:"files_without_metadata"`
-	ValidationPassed     bool     `json:"validation_passed"`
-	DuplicateIDs         []string `json:"duplicate_ids"`
+	TotalFiles           int      `json:"totalFiles"`
+	FilesWithMetadata    int      `json:"filesWithMetadata"`
+	FilesWithoutMetadata int      `json:"filesWithoutMetadata"`
+	ValidationPassed     bool     `json:"validationPassed"`
+	DuplicateIDs         []string `json:"duplicateIds"`
 }
 
-// planProject scans a project and returns its files ordered to approximate
-// deployment execution order (smallest sort key, then path).
+// planProject computes, without a database, the rows pgmi_plan_view will hold:
+// every loaded non-test file once per sort key (its path when it has none),
+// numbered in sort_key, path order under COLLATE "C" — Go's byte order.
 func planProject(projectPath string) (MetadataPlanResult, error) {
 	scanResult, err := scanner.NewScanner(checksum.New()).ScanDirectory(projectPath)
 	if err != nil {
 		return MetadataPlanResult{}, err
 	}
 
-	plan := make([]MetadataPlanEntry, 0, len(scanResult.Files))
+	files := 0
+	var plan []MetadataPlanEntry
 	for _, file := range scanResult.Files {
-		if !pgmi.IsSQLExtension(file.Extension) || pgmi.IsTestPath(file.Path) {
+		if pgmi.IsTestPath(file.Path) {
 			continue
 		}
-		if file.Metadata == nil {
-			plan = append(plan, MetadataPlanEntry{
-				Path: file.Path,
-				ID:   metadata.GenerateFallbackID(file.Path).String(),
-				// The full path, not the base name: pgmi_plan_view falls back
-				// to ARRAY[s.path]. With the base name this command reported
-				// the opposite order from the deploy whenever unmetadata'd
-				// files sat in different directories — ./a/002.sql before
-				// ./b/001.sql at runtime, after it here.
-				Idempotent:  true,
-				SortKeys:    []string{file.Path},
-				Description: "No metadata (fallback)",
-			})
-			continue
+		files++
+		base := MetadataPlanEntry{
+			Path:       file.Path,
+			ID:         metadata.GenerateFallbackID(file.Path).String(),
+			Idempotent: true,
+			IsSQLFile:  pgmi.IsSQLExtension(file.Extension),
 		}
-		plan = append(plan, MetadataPlanEntry{
-			Path:        file.Path,
-			ID:          file.Metadata.ID.String(),
-			Idempotent:  file.Metadata.Idempotent,
-			SortKeys:    file.Metadata.SortKeys,
-			Description: file.Metadata.Description,
-		})
+		keys := []string{file.Path}
+		if m := file.Metadata; m != nil {
+			base.ID, base.Idempotent, base.Description = m.ID.String(), m.Idempotent, m.Description
+			if len(m.SortKeys) > 0 {
+				keys = m.SortKeys
+			}
+		}
+		for _, k := range keys {
+			e := base
+			e.SortKey = k
+			plan = append(plan, e)
+		}
 	}
 
 	slices.SortStableFunc(plan, func(a, b MetadataPlanEntry) int {
-		ka, kb := minSortKey(a), minSortKey(b)
-		if n := cmp.Compare(ka, kb); n != 0 {
+		if n := cmp.Compare(a.SortKey, b.SortKey); n != 0 {
 			return n
 		}
 		return cmp.Compare(a.Path, b.Path)
 	})
-
-	return MetadataPlanResult{TotalFiles: len(plan), Plan: plan}, nil
-}
-
-func minSortKey(e MetadataPlanEntry) string {
-	if len(e.SortKeys) == 0 {
-		return e.Path
+	for i := range plan {
+		plan[i].ExecutionOrder = i + 1
 	}
-	m := e.SortKeys[0]
-	for _, k := range e.SortKeys[1:] {
-		if k < m {
-			m = k
-		}
+	if plan == nil {
+		plan = []MetadataPlanEntry{}
 	}
-	return m
+
+	return MetadataPlanResult{TotalFiles: files, Plan: plan}, nil
 }
 
 // validateProject scans a project, checks for duplicate metadata IDs, and

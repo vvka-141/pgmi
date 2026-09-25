@@ -73,7 +73,8 @@ func TestInitializeNegotiatesProtocolVersion(t *testing.T) {
 		requested string
 		want      string
 	}{
-		{"supported version is echoed back", "2025-06-18", "2025-06-18"},
+		{"supported version is echoed back", "2025-11-25", "2025-11-25"},
+		{"previous supported version is echoed back", "2025-06-18", "2025-06-18"},
 		{"older supported version is echoed back", "2024-11-05", "2024-11-05"},
 		{"unknown version falls back to our latest", "1.0.0", ProtocolVersion},
 		{"absent version falls back to our latest", "", ProtocolVersion},
@@ -413,6 +414,83 @@ func TestContextCancellationUnblocksRead(t *testing.T) {
 	}
 }
 
+// lineWriter hands each response frame to a channel as it is written.
+type lineWriter struct{ frames chan string }
+
+func (w lineWriter) Write(p []byte) (int, error) {
+	w.frames <- string(p)
+	return len(p), nil
+}
+
+func slowTool(started chan<- struct{}, stopped chan<- error) Tool {
+	return Tool{
+		Name: "slow",
+		Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+			close(started)
+			select {
+			case <-ctx.Done():
+				stopped <- ctx.Err()
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Second):
+				stopped <- nil
+				return "done", nil
+			}
+		},
+	}
+}
+
+// A deploy can run for minutes. The spec requires ping to be answered promptly
+// and says cancellation SHOULD stop the work; a sequential loop did neither and
+// a "cancelled" deploy went on to commit (PGMI-373).
+func TestServe_PingAndCancelDuringSlowToolCall(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan error, 1)
+	s := NewServer("pgmi", "v")
+	s.Register(slowTool(started, stopped))
+
+	pr, pw := io.Pipe()
+	out := lineWriter{frames: make(chan string, 10)}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(context.Background(), pr, out) }()
+
+	send := func(line string) {
+		if _, err := pw.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	send(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow"}}`)
+	<-started
+
+	send(`{"jsonrpc":"2.0","id":8,"method":"ping"}`)
+	select {
+	case frame := <-out.frames:
+		if !strings.Contains(frame, `"id":8`) {
+			t.Fatalf("first frame is not the ping response: %s", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ping was not answered within 1s while a tool call was running")
+	}
+
+	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"user"}}`)
+	select {
+	case err := <-stopped:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("tool context ended with %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notifications/cancelled did not cancel the tool call")
+	}
+
+	_ = pw.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	select {
+	case frame := <-out.frames:
+		t.Errorf("a cancelled request must not be answered, got %s", frame)
+	default:
+	}
+}
+
 func mustRemarshal(t *testing.T, from any, to any) {
 	t.Helper()
 	b, err := json.Marshal(from)
@@ -667,6 +745,11 @@ func TestToolsCallHandlerPanicIsErrorResult(t *testing.T) {
 
 	if len(resp) != 2 {
 		t.Fatalf("expected 2 responses — the session must survive the panic — got %d", len(resp))
+	}
+	// Tool calls run concurrently, so the ping may be answered first; clients
+	// match responses by id.
+	if string(resp[0].ID) != "1" {
+		resp[0], resp[1] = resp[1], resp[0]
 	}
 
 	var res callToolResult

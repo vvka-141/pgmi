@@ -6,18 +6,16 @@ import (
 
 func TestGeneratedSkillSetConformance(t *testing.T) {
 	stamp := Stamp{Version: "1.0.0", Source: ModulePath}
-	files, err := GenerateSetup("claude", stamp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	errs := ValidateSkillSet(files)
-	for _, e := range errs {
-		t.Errorf("conformance violation: %s", e)
-	}
-
-	if len(errs) > 0 {
-		t.Fatalf("%d conformance violation(s)", len(errs))
+	for _, assistant := range []string{"claude", "codex-skills", "antigravity"} {
+		t.Run(assistant, func(t *testing.T) {
+			files, err := GenerateSetup(assistant, stamp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range ValidateSkillSet(files) {
+				t.Errorf("conformance violation: %s", e)
+			}
+		})
 	}
 }
 

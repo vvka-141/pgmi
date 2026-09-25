@@ -174,6 +174,14 @@ func TestResolveConnection_WithEnvironment(t *testing.T) {
 			wantErr:        false,
 		},
 		{
+			name:           "granular flags win over environment string without conflict",
+			connStringFlag: "",
+			envConnString:  "postgresql://user@envhost:5433/envdb",
+			granularFlags:  &db.GranularConnFlags{Host: "127.0.0.1", Port: 5471},
+			wantHost:       "127.0.0.1",
+			wantErr:        false,
+		},
+		{
 			name:           "use defaults when neither flag nor env provided",
 			connStringFlag: "",
 			envConnString:  "",
@@ -192,15 +200,15 @@ func TestResolveConnection_WithEnvironment(t *testing.T) {
 				os.Unsetenv("PGMI_CONNECTION_STRING")
 			}
 
-			connConfig, _, err := resolveConnection(tt.connStringFlag, tt.granularFlags, nil, nil, nil, nil, nil)
+			connConfig, _, err := db.ResolveConnectionParams(tt.connStringFlag, tt.granularFlags, nil, nil, nil, nil, db.LoadFromEnvironment(), nil)
 
 			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ResolveConnectionParams() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
 			if !tt.wantErr && connConfig.Host != tt.wantHost {
-				t.Errorf("resolveConnection() host = %v, want %v", connConfig.Host, tt.wantHost)
+				t.Errorf("ResolveConnectionParams() host = %v, want %v", connConfig.Host, tt.wantHost)
 			}
 		})
 	}
@@ -268,28 +276,28 @@ func TestResolveConnection_GranularFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			connConfig, _, err := resolveConnection("", tt.granularFlags, nil, nil, nil, nil, nil)
+			connConfig, _, err := db.ResolveConnectionParams("", tt.granularFlags, nil, nil, nil, nil, db.LoadFromEnvironment(), nil)
 
 			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveConnection() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ResolveConnectionParams() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
 			if !tt.wantErr {
 				if connConfig.Host != tt.wantHost {
-					t.Errorf("resolveConnection() host = %v, want %v", connConfig.Host, tt.wantHost)
+					t.Errorf("ResolveConnectionParams() host = %v, want %v", connConfig.Host, tt.wantHost)
 				}
 				if tt.wantPort != 0 && connConfig.Port != tt.wantPort {
-					t.Errorf("resolveConnection() port = %v, want %v", connConfig.Port, tt.wantPort)
+					t.Errorf("ResolveConnectionParams() port = %v, want %v", connConfig.Port, tt.wantPort)
 				}
 				if tt.wantUsername != "" && connConfig.Username != tt.wantUsername {
-					t.Errorf("resolveConnection() username = %v, want %v", connConfig.Username, tt.wantUsername)
+					t.Errorf("ResolveConnectionParams() username = %v, want %v", connConfig.Username, tt.wantUsername)
 				}
 				if tt.wantDatabase != "" && connConfig.Database != tt.wantDatabase {
-					t.Errorf("resolveConnection() database = %v, want %v", connConfig.Database, tt.wantDatabase)
+					t.Errorf("ResolveConnectionParams() database = %v, want %v", connConfig.Database, tt.wantDatabase)
 				}
 				if tt.wantSSLMode != "" && connConfig.SSLMode != tt.wantSSLMode {
-					t.Errorf("resolveConnection() sslmode = %v, want %v", connConfig.SSLMode, tt.wantSSLMode)
+					t.Errorf("ResolveConnectionParams() sslmode = %v, want %v", connConfig.SSLMode, tt.wantSSLMode)
 				}
 			}
 		})

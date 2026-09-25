@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/scaffold"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -284,7 +284,7 @@ func TestAdvancedTemplate_MCPSerializationFailureRetryContract(t *testing.T) {
 func deployAdvancedTemplate(t *testing.T, connString, testDB string) {
 	t.Helper()
 
-	efs := filesystem.NewEmbedFileSystem(scaffold.GetTemplatesFS(), "templates/advanced")
+	efs := fakefs.NewEmbedFileSystem(scaffold.GetTemplatesFS(), "templates/advanced")
 	deployer := testhelpers.NewTestDeployerWithFS(t, efs)
 
 	err := deployer.Deploy(context.Background(), pgmi.DeploymentConfig{

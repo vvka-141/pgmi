@@ -51,9 +51,9 @@ floor.
 
 The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
 
-1. **`CREATEROLE`** — the advanced template creates `database_admin`, `database_api`, `database_customer` roles. Verify that the provider's deployment role can create them.
+1. **`CREATEROLE`** — the advanced template creates the `<db>_owner`, `<db>_admin`, `<db>_api` and `<db>_customer` roles. Verify that the provider's deployment role can create them.
 2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. Extension availability and the role allowed to install each one vary by provider and service tier.
-3. **`CREATE SCHEMA`** — the template lays out its `core` / `api` / `membership` / `extensions` schemas.
+3. **`CREATE SCHEMA`** — the template creates five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects.
 
 Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
@@ -142,12 +142,7 @@ BEGIN
     )
     LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-        EXCEPTION WHEN OTHERS THEN
-            -- Capture context before re-raising
-            RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
-        END;
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 
@@ -403,41 +398,16 @@ Usage:
 pgmi deploy . -d mydb --param rollback=true
 ```
 
-### Exception blocks for error context
+### Which file failed
 
-Use PL/pgSQL exception blocks to capture which file failed and provide diagnostic context:
+pgmi names the failing file (and, for syntax errors, the line) without an
+exception block, as long as the original error reaches it. A handler that
+re-raises with `RAISE EXCEPTION` replaces that error; if you catch, re-raise
+with a bare `RAISE;`. See [Which file failed?](DEPLOY-GUIDE.md#which-file-failed).
 
-```sql
--- deploy.sql with error context
-BEGIN;
-
-DO $$
-DECLARE
-    v_file RECORD;
-    v_current_path TEXT;
-BEGIN
-    FOR v_file IN (
-        SELECT p.path, p.content
-        FROM pg_temp.pgmi_plan_view p
-        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file
-        ORDER BY p.execution_order
-    )
-    LOOP
-        v_current_path := v_file.path;
-        RAISE NOTICE 'Running: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-        EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION 'Migration failed on %: %', v_current_path, SQLERRM;
-        END;
-    END LOOP;
-END $$;
-
-COMMIT;
-```
-
-**Note:** This is all-or-nothing — if any migration fails, the entire transaction rolls back. The exception block provides clear context about which file caused the failure. For true partial progress, see [Committing in phases](#committing-in-phases).
+**Note:** a deploy without top-level `COMMIT` is all-or-nothing — if any
+migration fails, the entire transaction rolls back. For true partial progress,
+see [Committing in phases](#committing-in-phases).
 
 **Important:** PL/pgSQL does not support direct SAVEPOINT commands. If you need savepoint-based isolation (like the test framework provides), use top-level SQL outside of DO blocks, or use `BEGIN...EXCEPTION...END` blocks which create implicit savepoints for error recovery.
 
@@ -611,6 +581,10 @@ checksum-verified binary; use a direct connection from the CI secret store; pin
 the session contract with `--compat 1`; and use `--force` only to bypass an
 interactive confirmation. Provider authentication examples are in
 [Connections](CONNECTIONS.md).
+
+Give the production deploy role no `CREATEDB`. pgmi creates a missing target
+database, so a mistyped `-d` would otherwise deploy into a new, empty database
+and exit 0. See [Security](SECURITY.md#required-permissions).
 
 ## Deployment gates
 

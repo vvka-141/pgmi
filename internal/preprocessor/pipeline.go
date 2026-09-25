@@ -8,12 +8,7 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vvka-141/pgmi/internal/testgen"
 )
-
-// (buildStrippedToOriginalMap was removed together with Strip's usage for
-// macro detection. RedactForMacros returns a length-preserved mask so macro
-// offsets are directly usable against the original SQL.)
 
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
@@ -26,8 +21,8 @@ type testGenerateFunc func(ctx context.Context, conn *pgxpool.Conn, pattern stri
 
 // Pipeline preprocesses SQL by expanding macros.
 type Pipeline struct {
-	commentStripper CommentStripper
-	macroDetector   MacroDetector
+	commentStripper *CommentStripper
+	macroDetector   *MacroDetector
 	testGenerateFn  testGenerateFunc
 }
 
@@ -71,7 +66,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 	expandedSQL := sql
 
 	for _, macro := range sortedMacros {
-		if err := testgen.ValidateCallbackName(macro.Callback); err != nil {
+		if err := validateCallbackName(macro.Callback); err != nil {
 			return nil, err
 		}
 

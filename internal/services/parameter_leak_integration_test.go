@@ -78,8 +78,8 @@ BEGIN
 END $$;
 `
 
-	svc := newServiceWithReadContent(deploySQL)
-	_, err = svc.executeDeploySQL(ctx, conn, "/fake/deploy.sql")
+	svc := newExecService()
+	_, err = svc.executeDeploySQL(ctx, conn, pgmi.FileScanResult{DeploySQL: deploySQL})
 	if err == nil {
 		t.Fatal("deploy succeeded; it must fail for this to exercise the error path")
 	}

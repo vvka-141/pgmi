@@ -103,7 +103,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create scaffolder
-	scaffolder := scaffold.NewScaffolder(verbose)
+	v, _, _ := resolveVersionInfo()
+	scaffolder := scaffold.NewScaffolder(verbose).WithVersion(v)
 
 	// Create project
 	if err := scaffolder.CreateProject(projectName, selectedTemplate, targetPath); err != nil {

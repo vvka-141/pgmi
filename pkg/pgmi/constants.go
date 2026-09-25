@@ -46,8 +46,9 @@ const (
 	// DefaultRetryMaxDelay is the default maximum delay between retry attempts.
 	DefaultRetryMaxDelay = 1 * time.Minute
 
-	// DefaultRetryMaxAttempts is the default maximum number of retry attempts.
-	DefaultRetryMaxAttempts = 3
+	// DefaultConnectRetries is how many times a failed connection is retried
+	// after the first attempt, so up to four attempts in all.
+	DefaultConnectRetries = 3
 
 	// DefaultMaintenanceDB is the default database to connect to for maintenance operations.
 	DefaultMaintenanceDB = "postgres"

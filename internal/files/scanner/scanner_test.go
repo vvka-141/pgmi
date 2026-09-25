@@ -3,17 +3,18 @@ package scanner
 import (
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/checksum"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-func newTestScanner() (*Scanner, *filesystem.MemoryFileSystem) {
-	fs := filesystem.NewMemoryFileSystem("/project")
+func newTestScanner() (*Scanner, *fakefs.MemoryFileSystem) {
+	fs := fakefs.NewMemoryFileSystem("/project")
 	return NewScannerWithFS(checksum.New(), fs), fs
 }
 
@@ -144,7 +145,7 @@ func TestNewScanner_NilCalculator(t *testing.T) {
 
 func TestNewScannerWithFS_NilArgs(t *testing.T) {
 	calc := checksum.New()
-	fs := filesystem.NewMemoryFileSystem("/")
+	fs := fakefs.NewMemoryFileSystem("/")
 
 	tests := []struct {
 		name string
@@ -183,7 +184,7 @@ func TestScanDirectory(t *testing.T) {
 	}
 
 	for _, f := range result.Files {
-		if strings.ToLower(f.Name) == "deploy.sql" {
+		if strings.EqualFold(path.Base(f.Path), "deploy.sql") {
 			t.Error("deploy.sql should be excluded")
 		}
 		if !strings.HasPrefix(f.Path, "./") {
@@ -213,17 +214,21 @@ func TestScanDirectory_NestedDirectories(t *testing.T) {
 		t.Fatalf("ScanDirectory failed: %v", err)
 	}
 
-	depthByName := map[string]int{}
+	dirByPath := map[string]string{}
 	for _, f := range result.Files {
-		depthByName[f.Name] = f.Depth
+		dirByPath[f.Path] = f.Directory
 	}
 
-	expected := map[string]int{"root.sql": 0, "a.sql": 1, "b.sql": 2}
-	for name, wantDepth := range expected {
-		if got, ok := depthByName[name]; !ok {
-			t.Errorf("File %s not found", name)
-		} else if got != wantDepth {
-			t.Errorf("File %s: depth=%d, want %d", name, got, wantDepth)
+	expected := map[string]string{
+		"./root.sql":            "./",
+		"./level1/a.sql":        "./level1/",
+		"./level1/level2/b.sql": "./level1/level2/",
+	}
+	for p, wantDir := range expected {
+		if got, ok := dirByPath[p]; !ok {
+			t.Errorf("File %s not found", p)
+		} else if got != wantDir {
+			t.Errorf("File %s: directory=%q, want %q", p, got, wantDir)
 		}
 	}
 }

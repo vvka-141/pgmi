@@ -462,7 +462,7 @@ END;
 END $$;
 
 -- ============================================================================
--- Test: the same discovery auth filter on resources, templates, and prompts
+-- Test: the same discovery auth filter on resources, templates, prompts, and OpenAPI
 -- ============================================================================
 -- api.mcp_list_{tools,resources,resource_templates,prompts} all carry the same
 -- predicate — NOT requires_auth OR current_user_id() IS NOT NULL — but only
@@ -527,6 +527,13 @@ BEGIN
 END;
         $body$);
 
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'e3000011-0004-4000-8000-000000000001',
+            'uri', '^/secret-catalog$', 'httpMethod', '^GET$',
+            'name', 'auth_only_route', 'requiresAuth', true),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+
     FOR v_state IN
         SELECT * FROM (VALUES
             -- The middle state is the one worth keeping: a well-formed subject
@@ -552,7 +559,10 @@ END;
                 ('resources/templates/list',
                  api.mcp_list_resource_templates()->'resourceTemplates',  'auth_only_template'),
                 ('prompts/list',
-                 api.mcp_list_prompts()->'prompts',                       'auth_only_prompt')
+                 api.mcp_list_prompts()->'prompts',                       'auth_only_prompt'),
+                ('/openapi.json',
+                 (SELECT coalesce(jsonb_agg(jsonb_build_object('name', k)), '[]'::jsonb)
+                    FROM jsonb_object_keys(api.openapi_document()->'paths') AS k), '/secret-catalog')
             ) AS t(surface, listing, entry_name)
         LOOP
             IF (v_surface.listing @> jsonb_build_array(
@@ -568,7 +578,7 @@ END;
     PERFORM set_config('auth.user_id', '', true);
     PERFORM set_config('auth.idp_subject', '', true);
 
-    RAISE NOTICE '  + resources, resource templates and prompts all hide auth-required entries';
+    RAISE NOTICE '  + resources, resource templates, prompts and the OpenAPI document all hide auth-required entries';
     RAISE NOTICE '✓ MCP discovery auth filter tests passed';
 END $$;
 

@@ -37,7 +37,7 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--connection` | `$PGMI_CONNECTION_STRING` or `$DATABASE_URL` | Full connection string (PostgreSQL URI or ADO.NET). Mutually exclusive with granular flags. |
+| `--connection` | `$PGMI_CONNECTION_STRING` or `$DATABASE_URL` | Full connection string: PostgreSQL URI, libpq keyword/value (`host=... dbname=...`), or ADO.NET. The flag is mutually exclusive with granular flags; the environment variables are ignored whenever `-h`, `-p`, `-U` or `--sslmode` is given. |
 | `--host` | `$PGHOST` or `localhost` | PostgreSQL server host |
 | `-p, --port` | `$PGPORT` or `5432` | PostgreSQL server port |
 | `-U, --username` | `$PGUSER` or OS user | PostgreSQL user |
@@ -72,12 +72,13 @@ returned cleanly.
 | `status` | `success` or `failed` |
 | `exitCode` | See [Exit Codes](#exit-codes) |
 | `filesLoaded`, `testMacros`, `durationMs`, `database` | Run summary |
+| `created` | `true` when this deploy created the target database. On a routine deploy that usually means a mistyped `-d` |
 | `executionUnits`, `unitsCommitted` | Present once deploy.sql execution begins. `executionUnits` is the total count; `unitsCommitted` is how many completed before the failure (equals `executionUnits` on success) |
 | `executionMode` | `"atomic"` (head failure — nothing applied, rolled back) or `"psql"` (tail failure — earlier units already committed). Present only on failure. Derived from the unit ordinal at failure time, not from whether the script contains a COMMIT |
 | `error` | Failure message. Note the key is `error`, not `message` |
 | `sqlstate` | PostgreSQL error code |
 | `detail`, `hint`, `where` | PostgreSQL diagnostics, when the server supplied them |
-| `failedFile` | Project file that raised the error |
+| `failedFile` | Project file that raised the error, found by the text PostgreSQL was executing (or a `Failed in <path>:` message). Absent when a handler in deploy.sql re-raised with `RAISE EXCEPTION` and a different message |
 | `script`, `sourceLine` | The script pgmi executed, and the offending line from it |
 | `line`, `column`, `scriptExpanded` | Present only when PostgreSQL reported a position (syntax errors always do). `scriptExpanded: true` means `line` refers to the macro-expanded script, not the file on disk |
 
@@ -86,6 +87,7 @@ returned cleanly.
   "status": "failed",
   "exitCode": 13,
   "database": "postgres",
+  "created": false,
   "durationMs": 1165,
   "filesLoaded": 0,
   "testMacros": 0,
@@ -127,6 +129,7 @@ pgmi deploy . -d myapp
 
 **What it does NOT control:**
 - CLI flags and behavior (CLI versioning is separate)
+- How the views and the execution contract behave (plan ordering, which files load, the atomic head and psql tail). That follows the binary version, so pin the binary too
 - Internal tables (`_pgmi_*`) — these are implementation details
 
 **Error handling:**
@@ -332,6 +335,8 @@ pgmi info [path] [flags]
 
 Inspects a pgmi project directory and reports file counts by directory, template type, deploy.sql presence, test coverage, and metadata usage.
 
+It also shows which pgmi version and template created the project, read from the first line `pgmi init` writes into `deploy.sql` (`-- Scaffolded by pgmi 0.12.2 from the advanced template.`). Use it to tell whether a project's template files predate a fix. pgmi never changes your files based on it.
+
 | Flag | Description |
 |------|-------------|
 | `--json` | Emit structured JSON to stdout |
@@ -372,7 +377,7 @@ Use `pgmi templates list` to see all available templates with descriptions.
 | Template | Purpose |
 |----------|---------|
 | `basic` | Low-ceremony, production-capable for small systems. Linear `migrations/` with `deploy.sql`. Runs on any provider. |
-| `advanced` | Full reference app. 4-schema architecture, role hierarchy, metadata-driven deployment. PostgreSQL 15+; needs a role with `CREATEROLE` + `CREATE EXTENSION` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
+| `advanced` | Full reference app. Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects, role hierarchy, metadata-driven deployment. PostgreSQL 15+; needs a role with `CREATEROLE` + `CREATE EXTENSION` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
 
 ### Examples
 
@@ -465,11 +470,21 @@ pgmi metadata validate ./myproject --json
 
 ### pgmi metadata plan
 
-Show the execution plan derived from metadata sort keys.
+Show, without a database, the rows `pgmi_plan_view` will hold at deploy time:
+every loaded non-test file once per sort key (its path when it has none), in
+execution order. Non-SQL files are included and marked (`isSqlFile: false` in
+`--json`), as they are in the view. The listing goes to stdout.
 
 ```bash
 pgmi metadata plan <project_path> [flags]
 ```
+
+`--json` prints `{"totalFiles", "plan": [{"executionOrder", "path", "sortKey",
+"id", "idempotent", "description", "isSqlFile"}]}`. `metadata validate --json`
+prints `totalFiles`, `filesWithMetadata`, `filesWithoutMetadata`,
+`validationPassed` and `duplicateIds`. Both exit 10 on invalid metadata or
+duplicate ids and, with `--json`, still print an envelope carrying `error` and
+`exitCode`.
 
 | Flag | Description |
 |------|-------------|
@@ -542,13 +557,19 @@ diagnostics to stderr. It exits cleanly on EOF or SIGINT.
 
 **Failure handling.** A tool that fails — including one that panics — answers
 with `isError: true` and the session continues; a panic also carries its stack in
-`structuredContent`. A *malformed* message is different: the server replies with
-a `-32700` parse error and `"id": null`, then ends the session, because the
-JSON stream cannot be resynchronised after a syntax error. A client that sends a
-truncated frame must restart the server.
+`structuredContent`. A malformed message gets a `-32700` parse error with
+`"id": null`, and the server keeps reading from the next line.
+
+**Concurrency and cancellation.** Each `tools/call` runs on its own, so `ping`
+is answered while a deploy runs, and `notifications/cancelled` stops the call
+(a cancelled deploy rolls back; no response is sent for it, per the spec). Only
+one `deploy` runs at a time; a second one gets `isError` until the first ends.
+The `deploy` result carries the same fields as `pgmi deploy --json`, plus
+`notices`: the first 50, every `WARNING`, and the last 150, each as
+`{severity, message}`.
 
 **Protocol version.** `initialize` negotiates: the server echoes the client's
-requested version when it speaks it (`2025-06-18`, `2025-03-26`, `2024-11-05`),
+requested version when it speaks it (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`),
 otherwise answers with its newest. An unsupported request is not an error — the
 client decides whether the answer is acceptable.
 
@@ -792,6 +813,8 @@ pgmi uses the [`jackc/pgx`](https://github.com/jackc/pgx) driver (Go-native, no 
 CLI flags  >  environment variables  >  pgmi.yaml  >  built-in defaults
 ```
 
+When the connection comes from `PGMI_CONNECTION_STRING` or `DATABASE_URL`, deploy says so on stderr (`connection: from PGMI_CONNECTION_STRING (host:port)`) and names the variable in connection and configuration errors. Any granular flag (`-h`, `-p`, `-U`, `--sslmode`) makes pgmi ignore both variables rather than merge them, so a password in `DATABASE_URL` is never sent to the host named by `-h`.
+
 ---
 
 ## Exit Codes
@@ -843,7 +866,7 @@ Completion covers commands, flags, template names (for `init --template`), SSL m
 |-------|-------|----------|
 | `connection refused` | PostgreSQL not running or wrong port | Check `pg_isready -h <host> -p <port>` |
 | `password authentication failed` | Wrong credentials | Verify username/password, check `pg_hba.conf` |
-| `database "X" does not exist` | Database not created | Create with `createdb X` or use `--overwrite` for fresh setup |
+| `database "X" does not exist` | Wrong target name | pgmi creates a missing target database itself when the role has `CREATEDB`. Check the `-d` name and the connection string |
 | `SSL connection required` | Server requires SSL | Add `?sslmode=require` to connection string |
 | `no pg_hba.conf entry` | Client IP not allowed | Add entry to `pg_hba.conf` or use SSH tunnel |
 
@@ -888,14 +911,12 @@ was created, dropped, or modified.
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `deploy.sql not found` | Missing orchestrator | Run `pgmi init` or create deploy.sql manually |
-| `no SQL files found` | Empty project | Add `.sql` files to your project directory |
 
 ### Debugging Tips
 
 1. **Add `--verbose`** to see DEBUG-level PostgreSQL notices
-2. **Check the file path** in error messages — it tells you which file failed
-3. **Run deploy.sql manually** with `psql -f deploy.sql` to isolate issues
-4. **Use `RAISE NOTICE`** in your SQL to trace execution flow
+2. **Check the file path** in error messages — pgmi names the failing file and line (see [Which file failed?](DEPLOY-GUIDE.md#which-file-failed))
+3. **Use `RAISE NOTICE`** in your SQL to trace execution flow
 
 ---
 

@@ -114,11 +114,17 @@ func ExitCodeForError(err error) int {
 // Script is the preprocessed text: when deploy.sql contains pgmi_test() macros,
 // it is not byte-for-byte the file on disk, and Expanded records that so the
 // user is never handed a line number that silently disagrees with their editor.
+//
+// Files are the project files deploy.sql could have EXECUTEd. An error raised
+// inside one carries that file's text, as InternalQuery for parse and analysis
+// errors or as the `SQL statement "..."` context line for runtime errors, so
+// the failing file is found by its content rather than by message wording.
 type ScriptError struct {
 	Err      error
 	Name     string
 	Script   string
 	Expanded bool
+	Files    []FileMetadata
 }
 
 func (e *ScriptError) Error() string { return e.Err.Error() }
@@ -130,6 +136,29 @@ func NewScriptError(err error, name, script string, expanded bool) error {
 		return nil
 	}
 	return &ScriptError{Err: err, Name: name, Script: script, Expanded: expanded}
+}
+
+// failedFile returns the project file whose text PostgreSQL was executing
+// when pgErr was raised, or nil.
+func (e *ScriptError) failedFile(pgErr *pgconn.PgError) *FileMetadata {
+	if pgErr.InternalQuery != "" {
+		for i := range e.Files {
+			if e.Files[i].Content == pgErr.InternalQuery {
+				return &e.Files[i]
+			}
+		}
+	}
+	var best *FileMetadata
+	for i := range e.Files {
+		c := e.Files[i].Content
+		if strings.TrimSpace(c) == "" || (best != nil && len(c) <= len(best.Content)) {
+			continue
+		}
+		if strings.Contains(pgErr.Where, `SQL statement "`+c+`"`) {
+			best = &e.Files[i]
+		}
+	}
+	return best
 }
 
 // SQLLocation is a PostgreSQL error position resolved against the executed script.
@@ -156,8 +185,20 @@ func LocateError(err error) *SQLLocation {
 	}
 
 	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Position <= 0 {
+	if !errors.As(err, &pgErr) {
 		return nil
+	}
+
+	if pgErr.Position <= 0 {
+		f := scriptErr.failedFile(pgErr)
+		if f == nil || pgErr.InternalPosition <= 0 || f.Content != pgErr.InternalQuery {
+			return nil
+		}
+		line, column, sourceLine, ok := resolvePosition(f.Content, int(pgErr.InternalPosition))
+		if !ok {
+			return nil
+		}
+		return &SQLLocation{Script: f.Path, Line: line, Column: column, SourceLine: sourceLine}
 	}
 
 	line, column, sourceLine, ok := resolvePosition(scriptErr.Script, int(pgErr.Position))
@@ -243,6 +284,8 @@ func FormatError(err error) string {
 			fmt.Fprintf(&b, "\n%s%s", prefix, loc.SourceLine)
 			fmt.Fprintf(&b, "\n%s^", strings.Repeat(" ", utf8.RuneCountInString(prefix)+loc.Column-1))
 		}
+	} else if f := FailedFile(err); f != "" {
+		fmt.Fprintf(&b, "\nLOCATION: %s", f)
 	}
 
 	return redactPasswords(b.String())
@@ -271,9 +314,30 @@ type ErrorDetail struct {
 	ScriptExpanded bool   `json:"scriptExpanded,omitempty"`
 }
 
-// failedFilePattern extracts the file path from the scaffolded templates'
-// per-file failure attribution: RAISE EXCEPTION 'Failed in %: %', path, err.
+// failedFilePattern extracts the file path from a handler that re-raises as
+// RAISE EXCEPTION 'Failed in %: %', path, SQLERRM. Such a handler discards the
+// text PostgreSQL was executing, so the message is the only attribution left.
 var failedFilePattern = regexp.MustCompile(`Failed in (\S+\.sql)`)
+
+// FailedFile names the project file an error was raised in: by the file text
+// PostgreSQL reports, else by the `Failed in <path>:` message convention.
+// Returns "" when neither identifies one.
+func FailedFile(err error) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return ""
+	}
+	var scriptErr *ScriptError
+	if errors.As(err, &scriptErr) {
+		if f := scriptErr.failedFile(pgErr); f != nil {
+			return f.Path
+		}
+	}
+	if m := failedFilePattern.FindStringSubmatch(pgErr.Message); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // NewErrorDetail extracts structured diagnostics from an error chain.
 // Returns nil for a nil error.
@@ -291,9 +355,7 @@ func NewErrorDetail(err error) *ErrorDetail {
 		d.Detail = redactPasswords(pgErr.Detail)
 		d.Hint = redactPasswords(pgErr.Hint)
 		d.Where = redactPasswords(pgErr.Where)
-		if m := failedFilePattern.FindStringSubmatch(pgErr.Message); m != nil {
-			d.FailedFile = m[1]
-		}
+		d.FailedFile = FailedFile(err)
 	}
 	if loc := LocateError(err); loc != nil {
 		d.Script = loc.Script

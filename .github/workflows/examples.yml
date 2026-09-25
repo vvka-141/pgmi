@@ -25,9 +25,8 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5434/postgres
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -72,9 +71,8 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5435/postgres
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -137,9 +135,8 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5437/postgres
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -181,9 +178,8 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5436/postgres
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -284,9 +280,8 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5438/postgres
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -311,9 +306,8 @@ jobs:
     name: Docs — README and Quickstart walkthrough
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -322,3 +316,69 @@ jobs:
 
       - name: Run the documented first-run path verbatim
         run: scripts/verify-walkthrough.sh ./pgmi
+
+  example-apply-once:
+    name: Example — apply-once tracking
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5439/postgres
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: First deploy applies both migrations
+        working-directory: examples/apply-once-tracking/project
+        run: ../../../pgmi deploy . -d apply_once_demo --force
+
+      # Both migrations fail if run twice (CREATE TABLE, INSERT of fixed keys),
+      # so a successful redeploy is itself the proof that neither re-ran.
+      - name: Redeploy runs nothing
+        working-directory: examples/apply-once-tracking/project
+        run: ../../../pgmi deploy . -d apply_once_demo --force
+
+      - name: Verify — two rows, two ledger entries
+        run: |
+          got=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5439 -U postgres -d apply_once_demo -tAc \
+            "SELECT (SELECT count(*) FROM app.customer) || '/' || (SELECT count(*) FROM app.migration_log)")
+          test "$got" = "2/2" || { echo "expected 2 customers and 2 ledger rows, got $got"; exit 1; }
+
+      - name: Reformatting an applied migration is not drift
+        working-directory: examples/apply-once-tracking/project
+        run: |
+          cp ../break-it/reformatted/001_customer.sql migrations/
+          ../../../pgmi deploy . -d apply_once_demo --force
+          git checkout -- migrations/001_customer.sql
+
+      - name: Editing an applied migration fails the deploy
+        working-directory: examples/apply-once-tracking/project
+        run: |
+          cp ../break-it/edited/001_customer.sql migrations/
+          set +e
+          ../../../pgmi deploy . -d apply_once_demo --force
+          code=$?
+          set -e
+          git checkout -- migrations/001_customer.sql
+          test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
+
+      - name: Verify — the edited migration never ran
+        run: |
+          cols=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5439 -U postgres -d apply_once_demo -tAc \
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'customer' AND column_name = 'email'")
+          test "$cols" = "0" || { echo "the rejected migration added its column"; exit 1; }

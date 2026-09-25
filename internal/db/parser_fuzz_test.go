@@ -12,6 +12,8 @@ func FuzzParseConnectionString(f *testing.F) {
 	f.Add("postgres://localhost:5432/db")
 	f.Add("Host=localhost;Port=5432;Database=db;Username=user;Password=pass")
 	f.Add("Host=localhost;Database=db")
+	f.Add("host=localhost port=5432 dbname=db user=me")
+	f.Add(`host=db1,db2 port=5432,5433 password='a b\'c;d'`)
 	f.Add("Server=localhost;Port=5432;Database=db;User ID=user;Password=pass")
 	f.Add("postgresql://user:p@ss%20w0rd@localhost:5432/db?sslmode=require")
 	f.Add("postgresql://user@localhost:5432/db?application_name=pgmi")

@@ -200,6 +200,17 @@ func TestPgpassPath_RespectsEnvVar(t *testing.T) {
 	}
 }
 
+func TestPgpassPath_NoAppDataOnWindowsIsNotARelativePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("APPDATA only locates the file on Windows")
+	}
+	t.Setenv("PGPASSFILE", "")
+	t.Setenv("APPDATA", "")
+	if got := pgpassPath(); got != "" {
+		t.Errorf("pgpassPath() = %q, want empty rather than a path relative to the working directory", got)
+	}
+}
+
 func TestPgpassPath_DefaultWhenNoEnv(t *testing.T) {
 	t.Setenv("PGPASSFILE", "")
 	got := pgpassPath()

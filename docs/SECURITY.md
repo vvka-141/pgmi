@@ -25,13 +25,21 @@ machines, ending at row-level security:
 
 | Operation | Minimum Privilege |
 |-----------|------------------|
-| `pgmi deploy` (existing database) | `CONNECT` on the target database, plus `CREATE` on `pg_temp` (granted by default to all roles) |
+| `pgmi deploy` (existing database) | `CONNECT` and `TEMPORARY` on the target database (both granted to `PUBLIC` by default) |
 | `pgmi deploy` (new database) | additionally `CREATEDB` and `CONNECT` on the maintenance database |
-| `pgmi deploy --overwrite` | additionally `CONNECT` on the maintenance database |
+| `pgmi deploy --overwrite` | additionally `CONNECT` on the maintenance database, ownership of the target database (to drop it), and `CREATEDB` (to recreate it) |
 | DDL in migrations | Depends on your SQL — typically schema owner or `CREATE` on target schema |
 | Advanced template role setup | `CREATEROLE` + `CREATE EXTENSION` (initial setup only — no superuser) |
 
 pgmi itself only needs to: connect, create temp tables (automatic for any role), set session variables, and execute your deploy.sql. The actual permissions depend on what your SQL does.
+
+**Keep `CREATEDB` away from the production deploy role.** pgmi creates a
+missing target database, so with `CREATEDB` a mistyped `-d prodd` creates an
+empty `prodd`, deploys into it and exits 0, leaving the real database
+untouched. Without it, the same typo fails with "database does not exist".
+Grant `CREATEDB` only where creating databases is intended, such as
+development and CI. Pipelines that keep it can check `"created"` in
+`pgmi deploy --json` output.
 
 **Deploying to an existing database touches only that database.** pgmi connects
 to the target first and reaches for a maintenance database (`postgres` by
@@ -205,6 +213,7 @@ jobs:
 
       - name: Deploy database
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
           API_KEY: ${{ secrets.API_KEY }}
         run: |
@@ -215,7 +224,6 @@ jobs:
           EOF
 
           pgmi deploy ./migrations \
-            --connection "${{ secrets.DATABASE_URL }}" \
             -d myapp \
             --params-file "$RUNNER_TEMP/params.env"
 
@@ -236,7 +244,6 @@ deploy:
       EOF
 
       pgmi deploy ./migrations \
-        --connection "$DATABASE_URL" \
         -d myapp \
         --params-file /tmp/params.env
 

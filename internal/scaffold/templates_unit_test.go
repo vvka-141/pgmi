@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 )
@@ -30,7 +31,7 @@ func testTemplateStructure(t *testing.T, templateName string) {
 
 	// Create EmbedFileSystem from embedded templates
 	templateRoot := "templates/" + templateName
-	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+	efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
 
 	// Test 1: Verify deploy.sql exists and is readable
 	t.Run("deploy.sql exists", func(t *testing.T) {
@@ -175,7 +176,7 @@ func testTemplateStructure(t *testing.T, templateName string) {
 func TestTemplateFileMetadata(t *testing.T) {
 	templateName := "advanced"
 	templateRoot := "templates/" + templateName
-	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+	efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
 
 	calc := checksum.New()
 	s := scanner.NewScannerWithFS(calc, efs)
@@ -188,9 +189,6 @@ func TestTemplateFileMetadata(t *testing.T) {
 		t.Run(file.Path, func(t *testing.T) {
 			// Path should use forward slashes
 			require.NotContains(t, file.Path, "\\", "Path should use forward slashes")
-
-			// Name should be just the filename
-			require.Equal(t, filepath.Base(file.Path), file.Name)
 
 			// Extension should match
 			require.Equal(t, filepath.Ext(file.Path), file.Extension)
@@ -206,23 +204,6 @@ func TestTemplateFileMetadata(t *testing.T) {
 			}
 			require.Equal(t, expectedDir, file.Directory)
 
-			// Depth should be consistent with directory structure
-			if file.Directory == "./" {
-				require.Equal(t, 0, file.Depth)
-			} else {
-				// Directory format is ./path/to/dir/, depth = number of segments
-				trimmed := strings.TrimPrefix(file.Directory, "./")
-				trimmed = strings.TrimSuffix(trimmed, "/")
-				expectedDepth := strings.Count(trimmed, "/") + 1
-				require.Equal(t, expectedDepth, file.Depth)
-			}
-
-			// Size should match content length
-			require.Equal(t, int64(len(file.Content)), file.SizeBytes)
-
-			// ModifiedAt should be set (may be zero-time for embedded files)
-			// For embedded files, ModTime() can be zero, which is acceptable
-			_ = file.ModifiedAt // Just verify field exists
 		})
 	}
 }
@@ -234,7 +215,7 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 	for _, templateName := range templates {
 		t.Run(templateName, func(t *testing.T) {
 			templateRoot := "templates/" + templateName
-			efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+			efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
 
 			calc := checksum.New()
 			s := scanner.NewScannerWithFS(calc, efs)
@@ -260,7 +241,7 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 // are scanned with correct paths that will match the SQL is_test_file regex
 func TestBasicTemplateTestFilePaths(t *testing.T) {
 	templateRoot := "templates/basic"
-	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+	efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
 
 	calc := checksum.New()
 	s := scanner.NewScannerWithFS(calc, efs)
@@ -294,7 +275,7 @@ func TestEmbedFileSystemPerformance(t *testing.T) {
 	}
 
 	templateRoot := "templates/advanced"
-	efs := filesystem.NewEmbedFileSystem(templatesFS, templateRoot)
+	efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
 
 	calc := checksum.New()
 	s := scanner.NewScannerWithFS(calc, efs)

@@ -27,9 +27,6 @@ var blockComments = preprocessor.NewCommentStripper().BlockComments
 // metaElementRegex detects the presence of <pgmi-meta tags
 var metaElementRegex = regexp.MustCompile(`<\s*pgmi-meta[\s>]`)
 
-// oldMetaElementRegex detects old format <pgmi:meta with namespace
-var oldMetaElementRegex = regexp.MustCompile(`<\s*pgmi:meta[\s>]`)
-
 // Extract parses PGMI metadata from the first block comment in SQL file content.
 // It searches for /* ... */ comments containing <pgmi-meta> XML elements.
 //
@@ -64,19 +61,6 @@ func Extract(content string, filePath string) (*Metadata, error) {
 	for _, span := range spans {
 		// Trim the /* */ delimiters and the whitespace the old regex ate.
 		commentContent := strings.TrimSpace(content[span.Start+2 : span.End-2])
-
-		// Check for old format first (backward compatibility detection)
-		if oldMetaElementRegex.MatchString(commentContent) {
-			return nil, &MetadataError{
-				FilePath: filePath,
-				Message:  "Found old metadata format with namespace",
-				Hint: "The metadata format changed to remove XML namespaces.\n\n" +
-					"Migration required:\n" +
-					"  OLD: <pgmi:meta xmlns:pgmi=\"https://pgmi.com/pgmi-metadata/v1\" ...>\n" +
-					"  NEW: <pgmi-meta id=\"...\" idempotent=\"...\" sortKey=\"...\">\n\n" +
-					"Remove the xmlns:pgmi attribute and change <pgmi:meta> to <pgmi-meta>.",
-			}
-		}
 
 		// Check if this comment contains <pgmi-meta>
 		if metaElementRegex.MatchString(commentContent) {

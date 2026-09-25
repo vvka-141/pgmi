@@ -64,10 +64,21 @@ CREATE TABLE IF NOT EXISTS api.handler (
 
 -- Evolution path: keep columns when DROP DOMAIN CASCADE removed them during
 -- api.json_schema rebuild (see lib/api/01-types.sql).
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_json_schema  api.json_schema;
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_json_schema api.json_schema;
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS input_xml_schema   api.xml_schema;
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS output_xml_schema  api.xml_schema;
+DO $$
+BEGIN
+    IF NOT pg_temp.has_column('api.handler', 'input_json_schema') THEN
+        ALTER TABLE api.handler ADD COLUMN input_json_schema api.json_schema;
+    END IF;
+    IF NOT pg_temp.has_column('api.handler', 'output_json_schema') THEN
+        ALTER TABLE api.handler ADD COLUMN output_json_schema api.json_schema;
+    END IF;
+    IF NOT pg_temp.has_column('api.handler', 'input_xml_schema') THEN
+        ALTER TABLE api.handler ADD COLUMN input_xml_schema api.xml_schema;
+    END IF;
+    IF NOT pg_temp.has_column('api.handler', 'output_xml_schema') THEN
+        ALTER TABLE api.handler ADD COLUMN output_xml_schema api.xml_schema;
+    END IF;
+END $$;
 
 -- The column is a FLOOR, not an exact requirement, and the name now says so.
 -- Rename in place on databases deployed before that: ADD COLUMN IF NOT EXISTS
@@ -85,14 +96,20 @@ BEGIN
     END IF;
 END $$;
 
--- Additive isolation floor; NULL on existing rows keeps them working.
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS min_transaction_isolation text
-    CONSTRAINT handler_min_transaction_isolation_check
-    CHECK (min_transaction_isolation IS NULL
-           OR min_transaction_isolation IN ('read committed', 'repeatable read', 'serializable'));
-
--- Additive read-only policy; false on existing rows keeps them working.
-ALTER TABLE api.handler ADD COLUMN IF NOT EXISTS read_only boolean NOT NULL DEFAULT false;
+DO $$
+BEGIN
+    -- Additive isolation floor; NULL on existing rows keeps them working.
+    IF NOT pg_temp.has_column('api.handler', 'min_transaction_isolation') THEN
+        ALTER TABLE api.handler ADD COLUMN min_transaction_isolation text
+            CONSTRAINT handler_min_transaction_isolation_check
+            CHECK (min_transaction_isolation IS NULL
+                   OR min_transaction_isolation IN ('read committed', 'repeatable read', 'serializable'));
+    END IF;
+    -- Additive read-only policy; false on existing rows keeps them working.
+    IF NOT pg_temp.has_column('api.handler', 'read_only') THEN
+        ALTER TABLE api.handler ADD COLUMN read_only boolean NOT NULL DEFAULT false;
+    END IF;
+END $$;
 
 DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('api.handler'); END $$;
 

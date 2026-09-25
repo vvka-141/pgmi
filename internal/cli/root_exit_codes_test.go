@@ -12,8 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -155,6 +154,26 @@ func TestDeployCmd_MissingDeploySQL_ExitCode14(t *testing.T) {
 	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitDeploySQLMissing {
 		t.Errorf("exit code %d, want %d (deploy.sql not found) — a missing project file must be "+
 			"reported before the connection is attempted: %v", got, pgmi.ExitDeploySQLMissing, err)
+	}
+}
+
+// A connection taken from the environment is invisible on the command line, so
+// a failure must name where it came from (PGMI-371).
+func TestDeployCmd_EnvConnectionFailureNamesItsSource(t *testing.T) {
+	resetDeployFlags()
+	clearPGEnv(t)
+	t.Setenv("PGMI_CONNECTION_STRING", "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=2")
+
+	deployFlags.database = "app"
+	deployFlags.force = true
+	deployFlags.timeout = 10 * time.Second
+
+	err := runDeploy(deployCmd, []string{deployProjectDir(t)})
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConnectionError {
+		t.Fatalf("exit code %d, want %d: %v", got, pgmi.ExitConnectionError, err)
+	}
+	if !strings.Contains(err.Error(), "(connection from PGMI_CONNECTION_STRING)") {
+		t.Errorf("error does not name the environment source:\n%v", err)
 	}
 }
 

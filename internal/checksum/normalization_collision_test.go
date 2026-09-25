@@ -6,7 +6,7 @@ import "testing"
 // re-runs, so two different files sharing one is not a cosmetic bug: the second
 // file silently never executes.
 //
-// Two collisions existed. removeComments had no state for quoted identifiers,
+// Two collisions existed. scan had no state for quoted identifiers,
 // and did not know that a backslash escapes inside E'...', so in both cases a
 // -- inside a literal or identifier started a "comment" that ate the rest of
 // the line — including the part that differed.
@@ -44,7 +44,7 @@ func TestNormalizationDistinguishesStatementsThatDiffer(t *testing.T) {
 			if c.CalculateNormalized([]byte(tt.a)) == c.CalculateNormalized([]byte(tt.b)) {
 				t.Errorf("different statements share a normalized checksum:\n  %s\n  %s\n"+
 					"normalized to %q and %q",
-					tt.a, tt.b, c.removeComments(tt.a), c.removeComments(tt.b))
+					tt.a, tt.b, c.scan(tt.a, false), c.scan(tt.b, false))
 			}
 		})
 	}
@@ -68,7 +68,7 @@ func TestNormalizationStillIgnoresCommentsAndLayout(t *testing.T) {
 		if c.CalculateNormalized([]byte(pair[0])) != c.CalculateNormalized([]byte(pair[1])) {
 			t.Errorf("a comment or layout edit changed the checksum:\n  %q\n  %q\n"+
 				"normalized to %q and %q",
-				pair[0], pair[1], c.removeComments(pair[0]), c.removeComments(pair[1]))
+				pair[0], pair[1], c.scan(pair[0], false), c.scan(pair[1], false))
 		}
 	}
 }

@@ -125,7 +125,7 @@ myapp/
 
 ### What you gain
 
-- **Transaction control**: You decide transaction boundaries. Want all-or-nothing? Use `BEGIN...COMMIT`. Want error context per file? Use exception blocks:
+- **Transaction control**: You decide transaction boundaries. Want all-or-nothing? Use `BEGIN...COMMIT`. Want to know which file failed? pgmi names it (and the line, for syntax errors) without an exception block:
   ```sql
   FOR v_file IN (
       SELECT p.path, p.content
@@ -135,11 +135,7 @@ myapp/
       ORDER BY p.execution_order
   )
   LOOP
-      BEGIN
-          EXECUTE v_file.content;
-      EXCEPTION WHEN OTHERS THEN
-          RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
-      END;
+      EXECUTE v_file.content;
   END LOOP;
   ```
   See [Production Guide](PRODUCTION.md#deployment-strategies) for transaction strategy options.
@@ -399,42 +395,12 @@ See [Metadata Guide](METADATA.md) for details.
 
 ### Option 3: Custom tracking table
 
-Implement your own, like Flyway does:
-```sql
--- In deploy.sql
-CREATE TABLE IF NOT EXISTS migration_history (
-    id SERIAL PRIMARY KEY,
-    filename TEXT NOT NULL UNIQUE,
-    checksum TEXT NOT NULL,
-    applied_at TIMESTAMPTZ DEFAULT now()
-);
-
-BEGIN;
-
-DO $$
-DECLARE
-    v_file RECORD;
-BEGIN
-    FOR v_file IN (
-        SELECT p.path, p.content, p.checksum
-        FROM pg_temp.pgmi_plan_view p
-        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
-        ORDER BY p.execution_order
-    )
-    LOOP
-        IF NOT EXISTS (SELECT 1 FROM migration_history WHERE filename = v_file.path) THEN
-            RAISE NOTICE 'Executing: %', v_file.path;
-            EXECUTE v_file.content;
-            INSERT INTO migration_history (filename, checksum) VALUES (v_file.path, v_file.checksum);
-        ELSE
-            RAISE NOTICE 'Skipping (already applied): %', v_file.path;
-        END IF;
-    END LOOP;
-END $$;
-
-COMMIT;
-```
+Keep a ledger of applied files in your own table and skip what it lists, the
+way Flyway does. [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) is a runnable version,
+exercised in CI on every change. Each migration runs once. Editing an applied
+migration fails the deploy with exit 13 before anything runs. Reformatting one
+is not treated as a change. Its README explains which of pgmi's two checksums
+it tracks, and why.
 
 ## Next steps
 

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -77,6 +81,46 @@ func TestNewSessionManager_NilDeps(t *testing.T) {
 				}
 			}()
 			tt.fn()
+		})
+	}
+}
+
+// Content that can never load must be rejected while scanning, before Deploy
+// creates or drops a database (PGMI-372).
+func TestScanProject_UnloadableContentIsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		deploySQL []byte
+		extra     map[string][]byte
+		want      string
+	}{
+		{"deploy.sql not UTF-8", []byte("SELECT 1; -- \xff\xff"), nil, "deploy.sql is not valid UTF-8"},
+		{"NUL byte in a project file", []byte("SELECT 1;"), map[string][]byte{"x.pyc": {0x42, 0x00, 0x0d}}, "contains a NUL byte"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), tt.deploySQL, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range tt.extra {
+				if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+				t.Fatal("scanning must not create a connector")
+				return nil, nil
+			}
+			sm := NewSessionManager(connFactory, scanner.NewScanner(checksum.New()), &mockFileLoader{}, &mockLogger{})
+
+			_, err := sm.ScanProject(dir)
+			if !errors.Is(err, pgmi.ErrInvalidConfig) {
+				t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q does not mention %q", err, tt.want)
+			}
 		})
 	}
 }

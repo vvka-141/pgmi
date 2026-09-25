@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/db"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -490,7 +490,7 @@ func TestDeploy_SessionPreparationIsSilent(t *testing.T) {
 	var notices []string
 
 	orig := db.NoticeHandler
-	db.NoticeHandler = func(message, _, _ string) {
+	db.NoticeHandler = func(_, message, _, _ string) {
 		mu.Lock()
 		notices = append(notices, message)
 		mu.Unlock()

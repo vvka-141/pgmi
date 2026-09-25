@@ -196,7 +196,7 @@ ALTER TABLE users ADD COLUMN email TEXT;
 **Use for:**
 - `ALTER TABLE ADD COLUMN`
 - Data migrations
-- Destructive operations (`DROP`, `TRUNCATE`)
+- Destructive operations (`DROP`, `TRUNCATE`). Not because a second run fails (`DROP ... IF EXISTS` does not), but because it destroys data written since the first
 - Non-idempotent `INSERT` statements
 
 ### How Tracking Works
@@ -204,16 +204,17 @@ ALTER TABLE users ADD COLUMN email TEXT;
 The advanced template maintains an execution log:
 ```sql
 internal.deployment_script_execution_log
-├── script_id (UUID)
-├── path
+├── deployment_script_object_id (UUID)
+├── deployment_script_content_checksum
+├── file_path
 ├── idempotent
-├── checksum
+├── sort_key
 └── executed_at
 ```
 
 On each deployment:
-- **Idempotent scripts**: Always execute, log updated
-- **Non-idempotent scripts**: Skip if already logged, show `[SKIP]` notice
+- **Idempotent scripts**: Always execute; each run adds a log row
+- **Non-idempotent scripts**: Skipped once a run under `idempotent="false"` is logged. No per-file notice; the closing `[pgmi] Deployment complete: N executed, M skipped` line counts them
 
 ---
 

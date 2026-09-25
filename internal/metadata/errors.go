@@ -10,12 +10,10 @@ import (
 )
 
 // MetadataError represents a structured error with context and helpful hints.
-// It includes file path, optional line/column numbers, and actionable suggestions.
+// It includes file path, an optional line number, and actionable suggestions.
 type MetadataError struct {
 	FilePath string // Path to the file with the error
 	Line     int    // Line number (0 if unknown)
-	Column   int    // Column number (0 if unknown)
-	Field    string // Field name (e.g., "id", "sortKey") if applicable
 	Message  string // Primary error message
 	Hint     string // Actionable suggestion for fixing
 }
@@ -24,20 +22,12 @@ type MetadataError struct {
 func (e *MetadataError) Error() string {
 	var location string
 	if e.Line > 0 {
-		if e.Column > 0 {
-			location = fmt.Sprintf("%s (line %d, col %d)", e.FilePath, e.Line, e.Column)
-		} else {
-			location = fmt.Sprintf("%s (line %d)", e.FilePath, e.Line)
-		}
+		location = fmt.Sprintf("%s (line %d)", e.FilePath, e.Line)
 	} else {
 		location = e.FilePath
 	}
 
 	msg := fmt.Sprintf("metadata error in %s: %s", location, e.Message)
-
-	if e.Field != "" {
-		msg = fmt.Sprintf("metadata error in %s [field: %s]: %s", location, e.Field, e.Message)
-	}
 
 	if e.Hint != "" {
 		msg += "\n\nHint: " + e.Hint
@@ -95,7 +85,7 @@ func formatValidationErrors(result ValidationResult, filePath string) error {
 	// first line named internal/metadata/schema.xsd, a path inside pgmi's own
 	// repository that nobody deploying a project can open.
 	msg.WriteString("\nSee metadata format documentation:\n")
-	msg.WriteString("  Reference: docs/METADATA.md, or run `pgmi ai skill pgmi-metadata-system`\n")
+	msg.WriteString("  Reference: run `pgmi ai skill pgmi-metadata-system`\n")
 	msg.WriteString("  Generate template: pgmi metadata scaffold <path>\n")
 
 	// ErrInvalidConfig so this exits 10 like every other project error caught

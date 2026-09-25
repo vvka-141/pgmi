@@ -20,7 +20,13 @@
 Authorization: Bearer <token>
 ```
 
-Handlers with `requires_auth = true` reject unauthenticated requests. The token is validated by the gateway and mapped to an `auth.idp_subject` session variable.
+The bearer token goes to your auth proxy or API gateway, not to PostgreSQL. The
+proxy verifies it and forwards the caller's identity as
+`X-User-Id: <provider>|<subject>`; the database resolves identity from that
+header alone, so handlers with `requires_auth = true` answer 401 to a request
+that arrives without it. The template does copy `Authorization` into the
+`auth.token` session variable, but nothing in it reads or verifies that value:
+it is there for a handler of yours that wants to.
 
 ### Response Envelope
 
@@ -52,6 +58,8 @@ GET /openapi.json
 ```
 
 This is the **single source of truth** for available endpoints, request/response schemas, and auth requirements. Always fetch it from the running deployment rather than hardcoding endpoints.
+
+The spec lists only what the caller may call. Fetched without identity, it omits every authenticated route, and most routes are authenticated. Fetch it with the identity header the auth proxy sets (`x-user-id`) before generating a client.
 
 ## Language-Specific Guidance
 

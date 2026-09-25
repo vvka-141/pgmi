@@ -66,6 +66,6 @@ func BenchmarkRemoveComments(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		calculator.removeComments(content)
+		calculator.scan(content, false)
 	}
 }

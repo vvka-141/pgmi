@@ -25,17 +25,10 @@ type TokenBasedConnector struct {
 // NewTokenBasedConnector creates a connector that uses a TokenProvider for authentication.
 // providerName is used in error/warning messages (e.g., "AWS IAM", "Azure").
 func NewTokenBasedConnector(config *pgmi.ConnectionConfig, tokenProvider TokenProvider, providerName string) *TokenBasedConnector {
-	classifier := retry.NewPostgreSQLErrorClassifier()
-	strategy := retry.NewExponentialBackoff(pgmi.DefaultRetryMaxAttempts,
-		retry.WithInitialDelay(pgmi.DefaultRetryInitialDelay),
-		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
-	)
-	executor := retry.NewExecutor(classifier, strategy)
-
 	return &TokenBasedConnector{
 		config:        config,
 		tokenProvider: tokenProvider,
-		retryExecutor: executor,
+		retryExecutor: newConnectExecutor(),
 		providerName:  providerName,
 	}
 }

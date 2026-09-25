@@ -17,18 +17,15 @@ func TestResolveVersionInfo_LdflagsOverride(t *testing.T) {
 }
 
 func TestResolveVersionInfo_DevFallback(t *testing.T) {
-	origV, origC, origD := version, commit, date
-	defer func() { version, commit, date = origV, origC, origD }()
+	origV, origC, origD, origRead := version, commit, date, readBuildInfo
+	defer func() { version, commit, date, readBuildInfo = origV, origC, origD, origRead }()
 
 	version, commit, date = "dev", "unknown", "unknown"
-	v, c, d := resolveVersionInfo()
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
 
-	if v == "" {
-		t.Error("version should not be empty")
+	if v, c, d := resolveVersionInfo(); v != "dev" || c != "unknown" || d != "unknown" {
+		t.Errorf("without ldflags or build info want dev/unknown/unknown, got %s/%s/%s", v, c, d)
 	}
-	// In a test binary, ReadBuildInfo returns test module info.
-	// We just verify it doesn't panic and returns something.
-	t.Logf("resolved: version=%s commit=%s date=%s", v, c, d)
 }
 
 func TestResolveVersionInfo_GoInstallMatchesReleaseFormat(t *testing.T) {

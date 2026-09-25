@@ -162,6 +162,13 @@ func TestLoadParametersIntoSession_InvalidKey(t *testing.T) {
 	}
 }
 
+func TestValidateParameters_CaseOnlyCollisionIsInvalidConfig(t *testing.T) {
+	err := ValidateParameters(map[string]string{"Env": "a", "env": "b"})
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+}
+
 func TestNewLoader(t *testing.T) {
 	l := NewLoader()
 	if l == nil {
@@ -179,7 +186,10 @@ func TestInsertTestFiles_Empty(t *testing.T) {
 	}
 }
 
-func TestLoadFilesIntoSession_SeparatesTestFiles(t *testing.T) {
+// These three exercise pgmi.IsTestPath, the classification the loader uses to
+// split files between _pgmi_source and _pgmi_test_source; the split itself
+// runs against a database in loader_internal_integration_test.go.
+func TestIsTestPath_SeparatesTestFiles(t *testing.T) {
 	files := []pgmi.FileMetadata{
 		{Path: "./migrations/001.sql", Content: "CREATE TABLE t();"},
 		{Path: "./__test__/test_a.sql", Content: "SELECT 1;"},
@@ -350,7 +360,7 @@ func TestValidateParameterKey_Comprehensive(t *testing.T) {
 	}
 }
 
-func TestLoadFilesIntoSession_OnlyTestFilesCount(t *testing.T) {
+func TestIsTestPath_OnlyTestFiles(t *testing.T) {
 	files := []pgmi.FileMetadata{
 		{Path: "./__test__/test_a.sql", Content: "SELECT 1;"},
 		{Path: "./__test__/test_b.sql", Content: "SELECT 2;"},
@@ -502,7 +512,7 @@ func TestFindParentTestDirectory_GappedHierarchy(t *testing.T) {
 	}
 }
 
-func TestLoadFilesIntoSession_NonSQLTestFilesIdentified(t *testing.T) {
+func TestIsTestPath_NonSQLTestFiles(t *testing.T) {
 	files := []pgmi.FileMetadata{
 		{Path: "./__test__/test_a.sql", Extension: ".sql", Content: "SELECT 1;"},
 		{Path: "./__test__/README.md", Extension: ".md", Content: "# tests"},

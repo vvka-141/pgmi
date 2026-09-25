@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestCommentStripper_Strip_LineComments(t *testing.T) {
+func TestRedactForMacros_LineComments(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -16,41 +16,41 @@ func TestCommentStripper_Strip_LineComments(t *testing.T) {
 		{
 			name:     "Simple line comment",
 			input:    "SELECT 1; -- comment",
-			expected: "SELECT 1; ",
+			expected: "SELECT 1;           ",
 		},
 		{
 			name:     "Line comment at start",
 			input:    "-- comment\nSELECT 1;",
-			expected: "\nSELECT 1;",
+			expected: "          \nSELECT 1;",
 		},
 		{
 			name:     "Multiple line comments",
 			input:    "-- first\nSELECT 1; -- second\n-- third",
-			expected: "\nSELECT 1; \n",
+			expected: "        \nSELECT 1;          \n        ",
 		},
 		{
 			name:     "Line comment only",
 			input:    "-- just a comment",
-			expected: "",
+			expected: "                 ",
 		},
 		{
 			name:     "Empty line comment",
 			input:    "--\nSELECT 1;",
-			expected: "\nSELECT 1;",
+			expected: "  \nSELECT 1;",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_BlockComments(t *testing.T) {
+func TestRedactForMacros_BlockComments(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -61,46 +61,46 @@ func TestCommentStripper_Strip_BlockComments(t *testing.T) {
 		{
 			name:     "Simple block comment",
 			input:    "SELECT /* comment */ 1;",
-			expected: "SELECT  1;",
+			expected: "SELECT               1;",
 		},
 		{
 			name:     "Block comment at start",
 			input:    "/* comment */SELECT 1;",
-			expected: "SELECT 1;",
+			expected: "             SELECT 1;",
 		},
 		{
 			name:     "Block comment at end",
 			input:    "SELECT 1;/* comment */",
-			expected: "SELECT 1;",
+			expected: "SELECT 1;             ",
 		},
 		{
 			name:     "Multi-line block comment",
 			input:    "SELECT /* line1\nline2\nline3 */ 1;",
-			expected: "SELECT  1;",
+			expected: "SELECT                         1;",
 		},
 		{
 			name:     "Multiple block comments",
 			input:    "/* c1 */SELECT/* c2 */ 1;/* c3 */",
-			expected: "SELECT 1;",
+			expected: "        SELECT         1;        ",
 		},
 		{
 			name:     "Block comment only",
 			input:    "/* just a comment */",
-			expected: "",
+			expected: "                    ",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_NestedBlockComments(t *testing.T) {
+func TestRedactForMacros_NestedBlockComments(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -111,31 +111,31 @@ func TestCommentStripper_Strip_NestedBlockComments(t *testing.T) {
 		{
 			name:     "Single level nested",
 			input:    "SELECT /* outer /* inner */ outer */ 1;",
-			expected: "SELECT  1;",
+			expected: "SELECT                               1;",
 		},
 		{
 			name:     "Double nested",
 			input:    "/* a /* b /* c */ b */ a */SELECT 1;",
-			expected: "SELECT 1;",
+			expected: "                           SELECT 1;",
 		},
 		{
 			name:     "Nested only",
 			input:    "/* /* nested */ */",
-			expected: "",
+			expected: "                  ",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_SingleQuoteStrings(t *testing.T) {
+func TestRedactForMacros_SingleQuoteStrings(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -146,46 +146,46 @@ func TestCommentStripper_Strip_SingleQuoteStrings(t *testing.T) {
 		{
 			name:     "Line comment syntax in string",
 			input:    "SELECT '--not comment';",
-			expected: "SELECT '--not comment';",
+			expected: "SELECT '             ';",
 		},
 		{
 			name:     "Block comment syntax in string",
 			input:    "SELECT '/* not comment */';",
-			expected: "SELECT '/* not comment */';",
+			expected: "SELECT '                 ';",
 		},
 		{
 			name:     "Escaped quote",
 			input:    "SELECT 'it''s escaped';",
-			expected: "SELECT 'it''s escaped';",
+			expected: "SELECT '  ''         ';",
 		},
 		{
 			name:     "Escaped quote with comment syntax",
 			input:    "SELECT 'it''s -- not a comment';",
-			expected: "SELECT 'it''s -- not a comment';",
+			expected: "SELECT '  ''                  ';",
 		},
 		{
 			name:     "Multiple strings",
 			input:    "SELECT 'a', '--b', 'c';",
-			expected: "SELECT 'a', '--b', 'c';",
+			expected: "SELECT ' ', '   ', ' ';",
 		},
 		{
 			name:     "String followed by real comment",
 			input:    "SELECT 'value'; -- comment",
-			expected: "SELECT 'value'; ",
+			expected: "SELECT '     ';           ",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
+func TestRedactForMacros_DollarQuoteStrings(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -196,37 +196,37 @@ func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
 		{
 			name:     "Simple dollar quote",
 			input:    "SELECT $$--not comment$$;",
-			expected: "SELECT $$--not comment$$;",
+			expected: "SELECT $$             $$;",
 		},
 		{
 			name:     "Dollar quote with block comment syntax",
 			input:    "SELECT $$/* not comment */$$;",
-			expected: "SELECT $$/* not comment */$$;",
+			expected: "SELECT $$                 $$;",
 		},
 		{
 			name:     "Tagged dollar quote",
 			input:    "SELECT $tag$--not comment$tag$;",
-			expected: "SELECT $tag$--not comment$tag$;",
+			expected: "SELECT $tag$             $tag$;",
 		},
 		{
 			name:     "Tagged dollar quote with block syntax",
 			input:    "SELECT $x$/*nope*/$x$;",
-			expected: "SELECT $x$/*nope*/$x$;",
+			expected: "SELECT $x$        $x$;",
 		},
 		{
 			name:     "Different tags nested",
 			input:    "SELECT $a$ content $b$ inner $b$ more $a$;",
-			expected: "SELECT $a$ content $b$ inner $b$ more $a$;",
+			expected: "SELECT $a$                            $a$;",
 		},
 		{
 			name:     "Dollar quote followed by comment",
 			input:    "$$body$$ -- comment",
-			expected: "$$body$$ ",
+			expected: "$$    $$           ",
 		},
 		{
 			name:     "Function body with dollar quote",
 			input:    "CREATE FUNCTION f() AS $$ SELECT '--'; $$ LANGUAGE sql;",
-			expected: "CREATE FUNCTION f() AS $$ SELECT '--'; $$ LANGUAGE sql;",
+			expected: "CREATE FUNCTION f() AS $$              $$ LANGUAGE sql;",
 		},
 		{
 			name:     "Numeric tag is not a valid dollar-quote",
@@ -236,26 +236,26 @@ func TestCommentStripper_Strip_DollarQuoteStrings(t *testing.T) {
 		{
 			name:     "Digit-initial tag not treated as dollar-quote",
 			input:    "SELECT $1$content$1$;",
-			expected: "SELECT $1$content$1$;",
+			expected: "SELECT $1$content$   ",
 		},
 		{
 			name:     "Digit-initial tag with comment inside is stripped",
 			input:    "SELECT $1$--comment$1$;",
-			expected: "SELECT $1$",
+			expected: "SELECT $1$             ",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_MixedScenarios(t *testing.T) {
+func TestRedactForMacros_MixedScenarios(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -266,22 +266,22 @@ func TestCommentStripper_Strip_MixedScenarios(t *testing.T) {
 		{
 			name:     "String and line comment",
 			input:    "SELECT 'a'; -- comment\nSELECT 'b';",
-			expected: "SELECT 'a'; \nSELECT 'b';",
+			expected: "SELECT ' ';           \nSELECT ' ';",
 		},
 		{
 			name:     "Block and line comment",
 			input:    "/* block */ SELECT 1; -- line",
-			expected: " SELECT 1; ",
+			expected: "            SELECT 1;        ",
 		},
 		{
 			name:     "Complex real-world",
 			input:    "-- Header comment\n/* Description */\nCREATE TABLE t (\n  id INT, -- ID column\n  name TEXT /* name */\n);",
-			expected: "\n\nCREATE TABLE t (\n  id INT, \n  name TEXT \n);",
+			expected: "                 \n                 \nCREATE TABLE t (\n  id INT,             \n  name TEXT           \n);",
 		},
 		{
 			name:     "Dollar quote inside block comment",
 			input:    "/* $$not string$$ */SELECT 1;",
-			expected: "SELECT 1;",
+			expected: "                    SELECT 1;",
 		},
 		{
 			name:     "No comments",
@@ -297,15 +297,15 @@ func TestCommentStripper_Strip_MixedScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
+func TestRedactForMacros_EdgeCases(t *testing.T) {
 	stripper := NewCommentStripper()
 
 	tests := []struct {
@@ -331,12 +331,12 @@ func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
 		{
 			name:     "Unclosed string",
 			input:    "SELECT 'unclosed",
-			expected: "SELECT 'unclosed",
+			expected: "SELECT '        ",
 		},
 		{
 			name:     "Unclosed dollar quote",
 			input:    "SELECT $$unclosed",
-			expected: "SELECT $$unclosed",
+			expected: "SELECT $$        ",
 		},
 		{
 			name:     "Almost dollar quote",
@@ -346,15 +346,15 @@ func TestCommentStripper_Strip_EdgeCases(t *testing.T) {
 		{
 			name:     "Windows line endings",
 			input:    "SELECT 1; -- comment\r\nSELECT 2;",
-			expected: "SELECT 1; \r\nSELECT 2;",
+			expected: "SELECT 1;           \r\nSELECT 2;",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripper.Strip(tt.input)
+			result := stripper.RedactForMacros(tt.input)
 			if result != tt.expected {
-				t.Errorf("Strip() = %q, expected %q", result, tt.expected)
+				t.Errorf("RedactForMacros() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
@@ -389,7 +389,7 @@ func TestRedactForMacros_PreservesByteLength(t *testing.T) {
 	}
 }
 
-func BenchmarkCommentStripper_Strip(b *testing.B) {
+func BenchmarkRedactForMacros(b *testing.B) {
 	stripper := NewCommentStripper()
 	input := `-- Header comment
 /* Multi-line
@@ -407,11 +407,11 @@ $$ LANGUAGE sql;
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		stripper.Strip(input)
+		stripper.RedactForMacros(input)
 	}
 }
 
-func BenchmarkCommentStripper_Strip_LargeInput(b *testing.B) {
+func BenchmarkRedactForMacros_LargeInput(b *testing.B) {
 	stripper := NewCommentStripper()
 
 	// Generate a large SQL input
@@ -419,6 +419,6 @@ func BenchmarkCommentStripper_Strip_LargeInput(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		stripper.Strip(input)
+		stripper.RedactForMacros(input)
 	}
 }

@@ -51,8 +51,9 @@ The server reads JSON-RPC from stdin and writes responses to stdout; all
 diagnostics go to stderr. It exits cleanly on EOF or SIGINT.
 
 A failing tool answers with isError and the session continues. A malformed
-message gets a -32700 parse error with a null id and ends the session: the
-JSON stream cannot be resynchronised after a syntax error.`,
+message gets a -32700 parse error with a null id and the session continues.
+Tool calls run concurrently: ping is answered during a deploy, and
+notifications/cancelled stops it. One deploy runs at a time.`,
 	Args:          usageArgs(cobra.NoArgs),
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -151,7 +152,7 @@ func buildMCPServer() *mcp.Server {
 
 	s.Register(mcp.Tool{
 		Name:        "metadata_plan",
-		Description: "Scan an advanced-template project and return its files in approximate deployment execution order. Filesystem-only, no database.",
+		Description: "Return, without a database, the rows pgmi_plan_view will hold at deploy time: each file once per sort key, in execution order.",
 		InputSchema: objectSchema(map[string]any{
 			"path": stringProp("Path to the pgmi project directory"),
 		}, "path"),
@@ -219,7 +220,7 @@ func buildMCPServer() *mcp.Server {
 			if !scaffold.IsValidTemplate(tmpl) {
 				return nil, fmt.Errorf("%w: unknown template: %s", pgmi.ErrUsage, tmpl)
 			}
-			if err := scaffold.NewScaffolder(false).CreateProject(a.Name, tmpl, a.Path); err != nil {
+			if err := scaffold.NewScaffolder(false).WithVersion(scaffoldVersion()).CreateProject(a.Name, tmpl, a.Path); err != nil {
 				return nil, err
 			}
 			return map[string]any{"created": true, "path": a.Path, "template": tmpl}, nil
@@ -233,7 +234,7 @@ func buildMCPServer() *mcp.Server {
 			"overwrite=true DROPS the target database: it additionally requires confirmDatabaseName to equal database.",
 		InputSchema: objectSchema(map[string]any{
 			"path":       stringProp("Path to the pgmi project directory (contains deploy.sql)"),
-			"connection": stringProp("PostgreSQL connection string (URI or ADO.NET)"),
+			"connection": stringProp("PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET"),
 			"database":   stringProp("Target database name"),
 			"overwrite":  boolProp("Drop and recreate the target database before deploying (destructive)"),
 			"confirmDatabaseName": stringProp(
@@ -254,36 +255,57 @@ func buildMCPServer() *mcp.Server {
 	return s
 }
 
-// noticeBuffer captures the RAISE NOTICE stream of a deploy for the MCP tool
-// result while still forwarding to stderr for the human operator. Bounded:
-// keeps the last max lines and counts the rest as truncated.
-type noticeBuffer struct {
-	mu    sync.Mutex
-	max   int
-	lines []string
-	total int
+type notice struct {
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
-func (b *noticeBuffer) add(message, detail, hint string) {
+// noticeBuffer captures the notice stream of a deploy for the MCP tool result
+// while still forwarding to stderr for the human operator. Bounded: it keeps
+// the first head and last tail notices, and every WARNING in between, because
+// a long deploy's warnings (a defaulted password, a skipped step) sit in the
+// middle and are what the agent most needs to see.
+type noticeBuffer struct {
+	mu       sync.Mutex
+	head     int
+	tail     int
+	first    []notice
+	warnings []notice
+	last     []notice
+	total    int
+}
+
+func newNoticeBuffer() *noticeBuffer { return &noticeBuffer{head: 50, tail: 150} }
+
+func (b *noticeBuffer) add(severity, message, detail, hint string) {
 	b.mu.Lock()
 	b.total++
-	b.lines = append(b.lines, message)
-	if len(b.lines) > b.max {
-		b.lines = b.lines[1:]
+	n := notice{Severity: severity, Message: message}
+	switch {
+	case len(b.first) < b.head:
+		b.first = append(b.first, n)
+	default:
+		b.last = append(b.last, n)
+		if len(b.last) > b.tail {
+			if b.last[0].Severity == "WARNING" {
+				b.warnings = append(b.warnings, b.last[0])
+			}
+			b.last = b.last[1:]
+		}
 	}
 	b.mu.Unlock()
-	db.DefaultNoticeHandler(message, detail, hint)
+	db.DefaultNoticeHandler(severity, message, detail, hint)
 }
 
 func (b *noticeBuffer) fields() map[string]any {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lines := slices.Clone(b.lines)
-	if lines == nil {
-		lines = []string{}
+	kept := slices.Concat(b.first, b.warnings, b.last)
+	if kept == nil {
+		kept = []notice{}
 	}
-	f := map[string]any{"notices": lines}
-	if truncated := b.total - len(b.lines); truncated > 0 {
+	f := map[string]any{"notices": kept}
+	if truncated := b.total - len(kept); truncated > 0 {
 		f["noticesTruncated"] = truncated
 	}
 	return f
@@ -338,27 +360,29 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 
-	// Capture the notice stream for the tool result; the stdio loop is
-	// sequential, so swapping the package-level handler is race-free
-	notices := &noticeBuffer{max: 200}
+	// The notice handler is package-level, so one deploy at a time; tool calls
+	// otherwise run concurrently, which is what lets ping and cancellation
+	// reach the server while a deploy runs.
+	if !mcpDeployMu.TryLock() {
+		return nil, errors.New("another deploy is already running in this pgmi serve session; wait for its result, or cancel it")
+	}
+	defer mcpDeployMu.Unlock()
+
+	notices := newNoticeBuffer()
 	origHandler := db.NoticeHandler
 	db.NoticeHandler = notices.add
 	defer func() { db.NoticeHandler = origHandler }()
 
 	result, err := runMCPDeploy(ctx, cfg)
-	if err != nil {
-		return nil, &mcp.FieldsError{Err: err, Fields: notices.fields()}
-	}
-	out := map[string]any{
-		"status":      "success",
-		"filesLoaded": result.FilesLoaded,
-		"testMacros":  result.TestMacros,
-		"durationMs":  result.Duration.Milliseconds(),
-		"database":    result.Database,
-	}
+	out := deployResultFields(result, err)
 	maps.Copy(out, notices.fields())
+	if err != nil {
+		return nil, &mcp.FieldsError{Err: err, Fields: out}
+	}
 	return out, nil
 }
+
+var mcpDeployMu sync.Mutex
 
 // confirmOverwrite gates the destructive path on an exact echo-back of the target
 // database name. An agent that hallucinated the name cannot also hallucinate the
@@ -389,15 +413,13 @@ func runMCPDeploy(ctx context.Context, cfg pgmi.DeploymentConfig) (*services.Dep
 	fileLoader := loader.NewLoader()
 	dbManager := manager.New()
 	sessionManager := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
-	deployer := services.NewDeploymentService(db.NewConnector, autoApprover{}, logger, sessionManager, fileScanner, dbManager)
+	deployer := services.NewDeploymentService(db.NewConnector, autoApprover{}, logger, sessionManager, dbManager)
 
 	ctx, cancel := deadlineContext(ctx, cfg.Timeout)
 	defer cancel()
 
-	if err := deployer.Deploy(ctx, cfg); err != nil {
-		return nil, err
-	}
-	return deployer.LastResult(), nil
+	err := deployer.Deploy(ctx, cfg)
+	return deployer.LastResult(), err
 }
 
 // autoApprover approves destructive operations without prompting. The MCP
@@ -505,25 +527,27 @@ func templatesOutputSchema() map[string]any {
 
 func metadataPlanOutputSchema() map[string]any {
 	return withErrorVariant(objectSchema(map[string]any{
-		"total_files": intProp("Files scanned"),
+		"totalFiles": intProp("Loaded non-test files"),
 		"plan": arrayOf(objectSchema(map[string]any{
-			"path":        stringProp("Project-relative file path"),
-			"id":          stringProp("<pgmi-meta> id; empty when the file has no metadata"),
-			"idempotent":  boolProp("Whether the script is safe to re-run"),
-			"sort_keys":   arrayOf(stringProp("Sort key"), "Sort keys from <pgmi-meta>; empty means path order"),
-			"description": stringProp("<pgmi-meta> description"),
-		}, "path", "idempotent"), "Files in approximate deployment execution order"),
-	}, "total_files", "plan"))
+			"executionOrder": intProp("pgmi_plan_view.execution_order"),
+			"path":           stringProp("Project-relative file path"),
+			"sortKey":        stringProp("The sort key of this row; the path when the file has none"),
+			"id":             stringProp("<pgmi-meta> id, or the path-derived fallback id"),
+			"idempotent":     boolProp("Whether the script is safe to re-run"),
+			"description":    stringProp("<pgmi-meta> description"),
+			"isSqlFile":      boolProp("pgmi_source_view.is_sql_file"),
+		}, "executionOrder", "path", "sortKey"), "The rows of pgmi_plan_view, one per file per sort key, in execution order"),
+	}, "totalFiles", "plan"))
 }
 
 func metadataValidateOutputSchema() map[string]any {
 	return withErrorVariant(objectSchema(map[string]any{
-		"total_files":            intProp("Files scanned"),
-		"files_with_metadata":    intProp("Files carrying a <pgmi-meta> block"),
-		"files_without_metadata": intProp("Files with no metadata (ordered by path)"),
-		"validation_passed":      boolProp("True when every block parses and ids are unique"),
-		"duplicate_ids":          arrayOf(stringProp("Duplicated <pgmi-meta> id"), "Ids claimed by more than one file"),
-	}, "total_files", "validation_passed"))
+		"totalFiles":           intProp("Files scanned"),
+		"filesWithMetadata":    intProp("Files carrying a <pgmi-meta> block"),
+		"filesWithoutMetadata": intProp("Files with no metadata (ordered by path)"),
+		"validationPassed":     boolProp("True when every block parses and ids are unique"),
+		"duplicateIds":         arrayOf(stringProp("Duplicated <pgmi-meta> id"), "Ids claimed by more than one file"),
+	}, "totalFiles", "validationPassed"))
 }
 
 func initOutputSchema() map[string]any {
@@ -536,12 +560,24 @@ func initOutputSchema() map[string]any {
 
 func deployOutputSchema() map[string]any {
 	return withErrorVariant(objectSchema(map[string]any{
-		"status":           stringProp("\"success\" — a failure is returned as an MCP error result"),
-		"filesLoaded":      intProp("Project files loaded into the session"),
-		"testMacros":       intProp("pgmi_test() macros expanded in deploy.sql"),
-		"durationMs":       intProp("Deployment wall time in milliseconds"),
-		"database":         stringProp("Target database"),
-		"notices":          arrayOf(stringProp("RAISE NOTICE line"), "The deploy's notice stream"),
-		"noticesTruncated": intProp("Notices dropped before the retained tail; absent when none were"),
-	}, "status", "filesLoaded", "database"))
+		"status":         stringProp("\"success\" — a failure is returned as an MCP error result"),
+		"exitCode":       intProp("The exit code `pgmi deploy` would have returned"),
+		"filesLoaded":    intProp("Project files loaded into the session"),
+		"testMacros":     intProp("pgmi_test() macros expanded in deploy.sql"),
+		"durationMs":     intProp("Deployment wall time in milliseconds"),
+		"database":       stringProp("Target database"),
+		"created":        boolProp("True when this deploy created the database; on a routine deploy it usually means a mistyped database name"),
+		"executionUnits": intProp("Units deploy.sql split into at its first top-level COMMIT"),
+		"unitsCommitted": intProp("Units that committed"),
+		"notices": arrayOf(objectSchema(map[string]any{
+			"severity": stringProp("NOTICE, WARNING, INFO, ..."),
+			"message":  stringProp("The notice text"),
+		}, "severity", "message"), "The deploy's notice stream: the first 50, every WARNING, and the last 150"),
+		"noticesTruncated": intProp("Notices dropped from the middle of the stream; absent when none were"),
+	}, "status", "exitCode", "filesLoaded", "database"))
+}
+
+func scaffoldVersion() string {
+	v, _, _ := resolveVersionInfo()
+	return v
 }

@@ -31,7 +31,8 @@ type Directory interface {
 
 	// Walk traverses the directory tree, calling the provided function for each file and directory
 	// The function receives the file/directory and any error encountered
-	// If the function returns an error, walking stops
+	// If the function returns an error, walking stops; returning fs.SkipDir for
+	// a directory skips its contents instead
 	Walk(fn func(File, error) error) error
 }
 

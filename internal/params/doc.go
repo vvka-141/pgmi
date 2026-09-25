@@ -15,7 +15,7 @@
 // # Example Usage
 //
 //	// Create utility functions in pg_temp schema
-//	if err := params.CreateSchema(ctx, pool); err != nil {
+//	if err := params.CreateSchema(ctx, conn); err != nil { // conn is a *pgxpool.Conn
 //	    return fmt.Errorf("failed to create schema: %w", err)
 //	}
 //

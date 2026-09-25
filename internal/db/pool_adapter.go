@@ -18,7 +18,7 @@ type PoolAdapter struct {
 }
 
 // NewPoolAdapter creates a new PoolAdapter wrapping the given pool.
-func NewPoolAdapter(pool *pgxpool.Pool) pgmi.DBConnection {
+func NewPoolAdapter(pool *pgxpool.Pool) *PoolAdapter {
 	return &PoolAdapter{pool: pool}
 }
 

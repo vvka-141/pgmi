@@ -48,9 +48,9 @@ func TestMetadataPlanFallbackOrderMatchesPlanView(t *testing.T) {
 	}
 
 	for _, e := range result.Plan {
-		if len(e.SortKeys) != 1 || e.SortKeys[0] != e.Path {
-			t.Errorf("%s: fallback sort key is %v, want [%s] to match pgmi_plan_view's ARRAY[s.path]",
-				e.Path, e.SortKeys, e.Path)
+		if e.SortKey != e.Path {
+			t.Errorf("%s: fallback sort key is %q, want %q to match pgmi_plan_view's ARRAY[s.path]",
+				e.Path, e.SortKey, e.Path)
 		}
 	}
 }

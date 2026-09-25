@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 const DefaultMaxFileSize int64 = 10 * 1024 * 1024 // 10 MiB
@@ -47,9 +49,9 @@ func (f *osFile) ReadContent() ([]byte, error) {
 		return nil, fmt.Errorf("refusing to read symlink %s (symlinks are rejected by the scanner to avoid path-escape)", f.relPath)
 	}
 
-	cap := maxFileSize()
-	if linkInfo.Size() > cap {
-		return nil, fmt.Errorf("file %s is %d bytes, exceeds %d-byte cap (override via PGMI_MAX_FILE_SIZE)", f.relPath, linkInfo.Size(), cap)
+	limit := maxFileSize()
+	if linkInfo.Size() > limit {
+		return nil, fmt.Errorf("file %s is %d bytes, exceeds %d-byte limit (override via PGMI_MAX_FILE_SIZE): %w", f.relPath, linkInfo.Size(), limit, pgmi.ErrInvalidConfig)
 	}
 
 	file, err := os.Open(f.absPath)
@@ -60,12 +62,12 @@ func (f *osFile) ReadContent() ([]byte, error) {
 
 	// +1 so ReadAll reads one extra byte if the file grew between Lstat and Open;
 	// we then detect that and return an explicit error instead of silently truncating.
-	data, err := io.ReadAll(io.LimitReader(file, cap+1))
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", f.relPath, err)
 	}
-	if int64(len(data)) > cap {
-		return nil, fmt.Errorf("file %s grew past the %d-byte cap during read (override via PGMI_MAX_FILE_SIZE)", f.relPath, cap)
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file %s grew past the %d-byte limit during read (override via PGMI_MAX_FILE_SIZE)", f.relPath, limit)
 	}
 	return data, nil
 }

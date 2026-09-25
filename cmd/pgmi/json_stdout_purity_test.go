@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 )
 
 // `pgmi deploy --json | jq` only works if stdout carries the envelope and

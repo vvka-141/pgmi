@@ -84,14 +84,27 @@ BEGIN
             h.min_transaction_isolation,
             h.read_only,
             h.input_json_schema,
-            h.output_json_schema
+            h.output_json_schema,
+            r.query_contract
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id
         WHERE h.deleted_at IS NULL
+          AND (NOT h.requires_auth OR (SELECT api.current_user_id()) IS NOT NULL)
         ORDER BY r.sequence_number
     LOOP
         v_path := v_route.canonical_path;
-        v_parameters := api.openapi_path_parameters(v_route.canonical_path);
+        v_parameters := api.openapi_path_parameters(v_route.canonical_path)
+            || COALESCE((
+                SELECT jsonb_agg(
+                    jsonb_strip_nulls(jsonb_build_object(
+                        'name', c.q->>'name',
+                        'in', 'query',
+                        'required', COALESCE((c.q->>'required')::boolean, false),
+                        'allowEmptyValue', CASE WHEN (c.q->>'allowEmptyValue')::boolean THEN true END,
+                        'description', c.q->>'description',
+                        'schema', COALESCE(c.q->'schema', '{"type":"string"}'::jsonb)))
+                    ORDER BY c.ord)
+                FROM jsonb_array_elements(v_route.query_contract) WITH ORDINALITY AS c(q, ord)), '[]'::jsonb);
         v_methods := api.openapi_methods(v_route.method_regexp);
         v_path_item := COALESCE(v_paths->v_path, '{}'::jsonb);
 
@@ -120,6 +133,11 @@ BEGIN
             IF v_route.requires_auth THEN
                 v_responses := v_responses || jsonb_build_object(
                     '401', jsonb_build_object('description', 'Unauthorized'));
+            END IF;
+
+            IF jsonb_array_length(v_route.query_contract) > 0 THEN
+                v_responses := v_responses || jsonb_build_object(
+                    '400', jsonb_build_object('description', 'Bad Request'));
             END IF;
 
             IF v_route.min_transaction_isolation IS NOT NULL THEN
@@ -226,7 +244,12 @@ SELECT api.create_or_replace_rest_handler(
     ),
     $body$
 DECLARE
-    v_etag text := '"' || api.catalog_version() || '"';
+    -- The document depends on the caller only through whether they are
+    -- authenticated, so two validator classes suffice. If the filter in
+    -- api.openapi_document() ever becomes per-user, this must become per-user
+    -- too, or a 304 hands one caller's cached document to another.
+    v_etag text := '"' || api.catalog_version() || '-'
+                || CASE WHEN api.current_user_id() IS NULL THEN 'anon' ELSE 'auth' END || '"';
     v_inm  text := api.header((request).headers, 'If-None-Match');
     v_resp api.http_response;
 BEGIN
@@ -292,7 +315,14 @@ BEGIN
         || '</head>'
         || '<body>'
         || '<script id="api-reference" data-url="/openapi.json"></script>'
-        || '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>'
+        -- Pinned with SRI: this script runs in the API's own origin, so an
+        -- unpinned @latest would execute whatever the CDN served that day.
+        -- The cost is deliberate: the pin receives no upstream fixes, and a
+        -- version bump must regenerate the hash, e.g.
+        --   curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+        || '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.71.0/dist/browser/standalone.js"'
+        || ' integrity="sha384-I7aSmSxf06vl5HT10vzNOAryO+PFCAVHIGwhZerHn6yM/O0642381S3kw9o7fFQd"'
+        || ' crossorigin="anonymous"></script>'
         || '</body>'
         || '</html>';
 

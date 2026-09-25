@@ -31,7 +31,7 @@ There is no built-in `schema_version` table. pgmi does not track migrations, bec
 
 **Basic template, default:** every deployment re-runs every file. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Nothing to drift.
 
-**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and you have Flyway's semantics. The template README compares both models side by side.
+**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and each migration runs once per path, with its checksum stored. That is all it does. It does not order by version, and it does not stop on a checksum mismatch: whether a changed file should warn, fail or be ignored is an `IF` you write in `deploy.sql`. The template README compares both models side by side, and [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) runs the apply-once model with drift detection in CI.
 
 **Advanced template:** a fuller PL/pgSQL tracking system recording script UUIDs, checksums, and execution history. More capable, and more code you own.
 
@@ -48,22 +48,16 @@ execution failed: ERROR: relation "users" does not exist (SQLSTATE 42P01)
 ```
 
 pgmi surfaces PostgreSQL's `DETAIL`, `HINT`, and `WHERE` fields when the server
-sends them (see `pkg/pgmi/errors.go` `FormatError`). What it can't tell you is
-*which project file* the failing statement came from: pgmi doesn't parse SQL,
-track line numbers, or maintain source maps.
+sends them, and names the project file the error came from by matching the
+text PostgreSQL was executing against the files it loaded. For parse and
+analysis errors (syntax, unknown column) PostgreSQL also reports a position, so
+pgmi prints the line and column in that file. Runtime errors (a constraint
+violation, division by zero) carry no position: you get the file, not the line.
 
-**Mitigation:** Wrap execution in exception blocks in deploy.sql to enrich the
-error with the failing file path:
-
-```sql
-BEGIN
-    EXECUTE v_file.content;
-EXCEPTION WHEN OTHERS THEN
-    RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
-END;
-```
-
-See [deploy.sql guide](DEPLOY-GUIDE.md#error-context-with-exception-blocks) for the full pattern.
+The limit is an exception handler in deploy.sql that re-raises with
+`RAISE EXCEPTION`: that builds a new error and discards the text and position.
+Let the error propagate, or re-raise with a bare `RAISE;`. See
+[deploy.sql guide](DEPLOY-GUIDE.md#which-file-failed).
 
 ---
 
@@ -100,17 +94,17 @@ See [deploy.sql guide](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-
 
 ---
 
-## No structured test output
+## No built-in test report format
 
-pgmi tests produce NOTICE messages:
+By default, pgmi tests produce NOTICE messages:
 
 ```
 NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
 ```
 
-There is no JUnit XML, TAP protocol, JSON report, pass/fail summary, or timing information. The test either succeeds (continues) or fails (`RAISE EXCEPTION` aborts the transaction).
+The default reporter has no JUnit XML, TAP, JSON report, or timing information. A test either succeeds (the suite continues) or fails (`RAISE EXCEPTION` aborts the transaction), and a full run ends with `[pgmi] Test suite passed`.
 
-**The callback mechanism** (`CALL pgmi_test('pattern', 'pg_temp.my_callback')`) is extensible — you can write a PL/pgSQL function that receives test events and produces structured output. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
+Structured output is a callback you write or copy. `CALL pgmi_test('pattern', 'pg_temp.my_callback')` hands every test event to a PL/pgSQL function, which can emit any format. `examples/tap-reporter/` is a working TAP 14 reporter. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
 
 ---
 
@@ -137,7 +131,8 @@ pgmi loads all project files into Go memory, then batch-inserts them into Postgr
 - A 100 MB project uses ~100 MB Go memory + wire transfer time + PostgreSQL storage for temp tables
 - PostgreSQL temp tables use local buffers (`temp_buffers`, default 8 MB) and automatically spill to disk when data exceeds the buffer — there is no inherent RAM limitation on temp table size
 - Files are loaded as text and assumed to be UTF-8
-- Binary files are loaded but not useful (pgmi won't corrupt them, but PL/pgSQL can't process binary data meaningfully)
+- A file with a NUL byte or invalid UTF-8 fails the deploy before pgmi connects, naming the file
+- Each file is capped at 10 MiB; set `PGMI_MAX_FILE_SIZE` (bytes) to change the cap
 
 **Practical thresholds:**
 
@@ -178,11 +173,11 @@ The advanced template's `deploy.sql` is several hundred lines of PL/pgSQL that
 handles:
 
 - XML parameter declaration and validation
-- Database role setup (owner, writer, reader, deployer)
+- Database role setup (owner, admin, api, customer)
 - Migration tracking with UUID-based idempotency
 - Audit logging to `internal.deployment_script_execution_log`
 - Test execution gating
-- 4-schema architecture setup
+- Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects
 
 If it breaks, you debug PL/pgSQL exception handling, not framework configuration. You own this code — pgmi scaffolds it, but you maintain it.
 

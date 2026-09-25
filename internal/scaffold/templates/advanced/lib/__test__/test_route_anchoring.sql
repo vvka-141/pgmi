@@ -223,6 +223,60 @@ $body$
 END $$;
 
 
+-- Parameterised routes take part in the overlap proof: the pair that used to
+-- register silently is refused, a uri with capture groups needs an example,
+-- and parameterised routes that cannot catch each other still register.
+DO $$
+DECLARE
+    v_raised boolean;
+BEGIN
+    RAISE NOTICE '→ Testing overlap between parameterised routes';
+
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'ffffffff-3380-4000-8000-000000000001', 'uri', '^/overlap-users/([0-9]+)$',
+        'example', '/overlap-users/5', 'httpMethod', '^GET$', 'name', 'overlap_users_by_id',
+        'requiresAuth', false),
+        $body$BEGIN RETURN api.json_response(200, '{}'::jsonb); END;$body$);
+
+    v_raised := false;
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+            'id', 'ffffffff-3380-4000-8000-000000000002', 'uri', '^/overlap-users/.*$',
+            'httpMethod', '^GET$', 'name', 'overlap_users_any'),
+            $body$BEGIN RETURN api.json_response(200, '{}'::jsonb); END;$body$);
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+    IF v_raised IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'a catch-all registered over a parameterised route on the same method';
+    END IF;
+
+    v_raised := false;
+    BEGIN
+        PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+            'id', 'ffffffff-3380-4000-8000-000000000003', 'uri', '^/overlap-orders/([0-9]+)$',
+            'httpMethod', '^GET$', 'name', 'overlap_orders_no_example', 'requiresAuth', false),
+            $body$BEGIN RETURN api.json_response(200, '{}'::jsonb); END;$body$);
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+    IF v_raised IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'a uri with capture groups registered without an example';
+    END IF;
+
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'ffffffff-3380-4000-8000-000000000004', 'path', '/overlap-teams/{teamId}',
+        'httpMethod', '^GET$', 'name', 'overlap_team', 'requiresAuth', false),
+        $body$BEGIN RETURN api.json_response(200, '{}'::jsonb); END;$body$);
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'ffffffff-3380-4000-8000-000000000005', 'path', '/overlap-teams/{teamId}/members',
+        'httpMethod', '^GET$', 'name', 'overlap_team_members', 'requiresAuth', false),
+        $body$BEGIN RETURN api.json_response(200, '{}'::jsonb); END;$body$);
+
+    RAISE NOTICE '  ✓ parameterised routes are proven non-overlapping';
+END $$;
+
+
 -- List and create on one path is the most basic REST shape: two routes whose
 -- regexes catch each other's path but whose methods never intersect. The
 -- deploy-time check below must accept them, as registration already does.
@@ -264,29 +318,19 @@ DECLARE
     v_overlap record;
     v_bad text;
 BEGIN
-    RAISE NOTICE '→ Testing no route''s canonical path matches another route''s regex';
+    RAISE NOTICE '→ Testing no route''s probe URL matches another route''s regex';
 
     SELECT string_agg(
         format('%s (%s) caught by %s (%s)',
-            r1.route_name, r1_path, r2.route_name, r2.address_regexp),
+            r1.route_name, r1.probe_path, r2.route_name, r2.address_regexp),
         '; '
     )
     INTO v_bad
-    FROM (
-        SELECT r.route_name, r.address_regexp, r.handler_object_id, r.method_regexp,
-               r.canonical_path AS opath
-        FROM api.rest_route r
-    ) r1
+    FROM api.rest_route r1
     CROSS JOIN api.rest_route r2
-    CROSS JOIN LATERAL (
-        SELECT CASE
-            WHEN r1.opath NOT LIKE '%{%' THEN r1.opath
-            ELSE NULL
-        END AS test_path
-    ) paths(r1_path)
     WHERE r1.handler_object_id IS DISTINCT FROM r2.handler_object_id
-      AND paths.r1_path IS NOT NULL
-      AND paths.r1_path ~ r2.address_regexp
+      AND r1.probe_path IS DISTINCT FROM ''
+      AND r1.probe_path ~ r2.address_regexp
       AND EXISTS (
           SELECT 1
           FROM unnest(ARRAY['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS']) AS m(method)

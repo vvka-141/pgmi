@@ -5,10 +5,9 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/scaffold"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -22,7 +21,7 @@ func TestTemplateTransactionPolicy(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 	ctx := context.Background()
 
-	efs := filesystem.NewEmbedFileSystem(scaffold.GetTemplatesFS(), "templates/advanced")
+	efs := fakefs.NewEmbedFileSystem(scaffold.GetTemplatesFS(), "templates/advanced")
 	testDB := "pgmi_test_tx_policy"
 	deployer := testhelpers.NewTestDeployerWithFS(t, efs)
 

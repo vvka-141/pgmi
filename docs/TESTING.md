@@ -138,8 +138,8 @@ Dev seed: admin user ready (admin@example.com id=1)
 [pgmi] Test: ./__test__/test_user_crud.sql
 [pgmi] Test: ./__test__/test_user_table.sql
 PASS: "user" accepts an insert and reads it back
-[pgmi] Test suite completed (4 steps)
-✓ myapp: 8 files loaded, 1 test macro(s) expanded in 6.07s
+[pgmi] Test suite passed
+✓ myapp: 8 files loaded in 6.07s
 ```
 
 ### Step 4: Check your database
@@ -175,7 +175,7 @@ migrations/
 └── __test__/
     ├── _setup.sql            ← Inserts test data (the fixture)
     ├── test_insert.sql       ← Tests inserting a new user
-    └── test_count.sql        ← Tests counting users
+    └── test_user_count.sql   ← Tests counting users
 ```
 
 **`_setup.sql`** — the fixture:
@@ -205,7 +205,7 @@ BEGIN
 END $$;
 ```
 
-**`test_count.sql`**:
+**`test_user_count.sql`**:
 
 ```sql
 DO $$
@@ -234,7 +234,7 @@ PASS: insert works (3 users after insert)
 PASS: fixture provides exactly 2 users
 ```
 
-Both tests pass. `test_count.sql` sees exactly 2 users even though `test_insert.sql` added a third. The savepoint rollback erased Charlie before running `test_count.sql`.
+Both tests pass. `test_user_count.sql` sees exactly 2 users even though `test_insert.sql` added a third. The savepoint rollback erased Charlie before running `test_user_count.sql`.
 
 **This is the core guarantee: every test starts from the exact fixture state, no matter what.**
 
@@ -249,28 +249,27 @@ Here's the structure pgmi generates for the example above. Understanding this is
 ```
 BEGIN;                                  ← outer transaction
 
-    SAVEPOINT sp_setup_root;            ← fixture boundary (top-level SQL)
-    DO $$ ... _setup.sql content ... $$ ← fixture runs via EXECUTE
+    SAVEPOINT __pgmi_d1__;                         ← fixture boundary (top-level SQL)
+    SELECT pg_temp.pgmi_run_test_source('…/_setup.sql');
 
-        SAVEPOINT sp_test_1;            ← test boundary (top-level SQL)
-        DO $$ ... test_insert.sql ... $$ ← test runs via EXECUTE
-        ROLLBACK TO sp_test_1;          ← undo test_insert.sql changes
+        SAVEPOINT __pgmi_t2__;                     ← test boundary, one per directory
+        SELECT pg_temp.pgmi_run_test_source('…/test_insert.sql');
+        ROLLBACK TO SAVEPOINT __pgmi_t2__;         ← undo test_insert.sql changes
 
-        SAVEPOINT sp_test_2;            ← test boundary (top-level SQL)
-        DO $$ ... test_count.sql ... $$ ← test runs via EXECUTE
-        ROLLBACK TO sp_test_2;          ← undo test_count.sql changes
+        SELECT pg_temp.pgmi_run_test_source('…/test_user_count.sql');
+        ROLLBACK TO SAVEPOINT __pgmi_t2__;         ← undo test_user_count.sql changes
 
-    ROLLBACK TO sp_setup_root;          ← undo fixture (Alice, Bob gone)
-    RELEASE SAVEPOINT sp_setup_root;    ← clean up savepoint
+    ROLLBACK TO SAVEPOINT __pgmi_d1__;             ← undo fixture (Alice, Bob gone)
+    RELEASE SAVEPOINT __pgmi_d1__;                 ← clean up savepoint
 
 COMMIT;                                 ← migrations persist, test data gone
 ```
 
-The `ROLLBACK TO sp_test_1` after `test_insert.sql` is what erases Charlie. The database state returns to exactly what `_setup.sql` created. Then `test_count.sql` runs against that clean state.
+The `ROLLBACK TO SAVEPOINT __pgmi_t2__` after `test_insert.sql` is what erases Charlie. The database state returns to exactly what `_setup.sql` created. Then `test_user_count.sql` runs against that clean state.
 
-The `ROLLBACK TO sp_setup_root` at the end erases even the fixture data.
+The `ROLLBACK TO SAVEPOINT __pgmi_d1__` at the end erases even the fixture data.
 
-**Key implementation detail:** The SAVEPOINT commands are generated as **top-level SQL statements**, not inside PL/pgSQL blocks. PostgreSQL's PL/pgSQL does not support savepoints directly — you cannot use `EXECUTE 'SAVEPOINT ...'` inside a DO block. pgmi's `pgmi_test_generate()` function produces inline SQL where savepoints are at the top level, with test content wrapped in separate DO blocks that use EXECUTE.
+**Key implementation detail:** The SAVEPOINT commands are generated as **top-level SQL statements**, not inside PL/pgSQL blocks. PostgreSQL's PL/pgSQL does not support savepoints directly — you cannot use `EXECUTE 'SAVEPOINT ...'` inside a DO block. pgmi's `pgmi_test_generate()` function produces inline SQL where savepoints are at the top level, and each fixture or test runs through `SELECT pg_temp.pgmi_run_test_source(path)`.
 
 **PostgreSQL's transactional savepoints do all the work.** pgmi just generates the right savepoint structure. No cleanup scripts. No teardown hooks. No manual state management.
 
@@ -574,15 +573,15 @@ The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreS
 1.  BEGIN;
 2.  <contents of 001_initial.sql>       ← EXECUTE v_file.content
 3.  <contents of 002_add_email.sql>     ← EXECUTE v_file.content
-4.  SAVEPOINT sp_setup_root;            ┐
-5.  <_setup.sql contents>               │
-6.  SAVEPOINT sp_test_1;                │
-7.  <test_insert.sql contents>          │  expanded from
-8.  ROLLBACK TO sp_test_1;              │  pgmi_test()
-9.  SAVEPOINT sp_test_2;                │
-10. <test_count.sql contents>           │
-11. ROLLBACK TO sp_test_2;              │
-12. ROLLBACK TO sp_setup_root;          ┘
+4.  SAVEPOINT __pgmi_d1__;             ┐
+5.  <_setup.sql contents>              │
+6.  SAVEPOINT __pgmi_t2__;             │
+7.  <test_insert.sql contents>         │  expanded from
+8.  ROLLBACK TO SAVEPOINT __pgmi_t2__; │  pgmi_test()
+9.  (same savepoint, reused)           │
+10. <test_user_count.sql contents>     │
+11. ROLLBACK TO SAVEPOINT __pgmi_t2__; │
+12. ROLLBACK TO SAVEPOINT __pgmi_d1__; ┘
 13. COMMIT;
 ```
 

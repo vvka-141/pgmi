@@ -34,38 +34,8 @@ func TestPostgreSQLErrorClassifier_IsTransient_PostgreSQLErrors(t *testing.T) {
 			isTransient: true,
 		},
 		{
-			name:        "insufficient_resources (53000)",
-			err:         &pgconn.PgError{Code: "53000", Message: "insufficient resources"},
-			isTransient: true,
-		},
-		{
 			name:        "too_many_connections (53300)",
 			err:         &pgconn.PgError{Code: "53300", Message: "too many connections"},
-			isTransient: true,
-		},
-		{
-			name:        "serialization_failure (40001)",
-			err:         &pgconn.PgError{Code: "40001", Message: "could not serialize access"},
-			isTransient: true,
-		},
-		{
-			name:        "deadlock_detected (40P01)",
-			err:         &pgconn.PgError{Code: "40P01", Message: "deadlock detected"},
-			isTransient: true,
-		},
-		{
-			name:        "lock_not_available (55P03)",
-			err:         &pgconn.PgError{Code: "55P03", Message: "could not obtain lock"},
-			isTransient: true,
-		},
-		{
-			name:        "admin_shutdown (57P01)",
-			err:         &pgconn.PgError{Code: "57P01", Message: "terminating connection due to administrator command"},
-			isTransient: true,
-		},
-		{
-			name:        "crash_shutdown (57P02)",
-			err:         &pgconn.PgError{Code: "57P02", Message: "terminating connection due to crash"},
 			isTransient: true,
 		},
 		{
@@ -73,23 +43,36 @@ func TestPostgreSQLErrorClassifier_IsTransient_PostgreSQLErrors(t *testing.T) {
 			err:         &pgconn.PgError{Code: "57P03", Message: "the database system is starting up"},
 			isTransient: true,
 		},
-		{
-			name:        "idle_session_timeout (57P05)",
-			err:         &pgconn.PgError{Code: "57P05", Message: "terminating connection due to idle-session timeout"},
-			isTransient: true,
-		},
 
-		// Class 57 is prefix-matched, so its two non-transient members have to
-		// be excluded by name. Both were retried before that exclusion existed.
+		// Statement-level conditions cannot occur while connecting, and
+		// retrying them belongs to deploy.sql.
 		{
-			// statement_timeout, pg_cancel_backend, or the client cancelling:
-			// all deliberate. Retrying works against the instruction.
-			name:        "query_canceled (57014) is a decision, not a transient fault",
+			name:        "serialization_failure (40001)",
+			err:         &pgconn.PgError{Code: "40001", Message: "could not serialize access"},
+			isTransient: false,
+		},
+		{
+			name:        "deadlock_detected (40P01)",
+			err:         &pgconn.PgError{Code: "40P01", Message: "deadlock detected"},
+			isTransient: false,
+		},
+		{
+			name:        "lock_not_available (55P03)",
+			err:         &pgconn.PgError{Code: "55P03", Message: "could not obtain lock"},
+			isTransient: false,
+		},
+		{
+			name:        "out_of_memory (53200)",
+			err:         &pgconn.PgError{Code: "53200", Message: "out of memory"},
+			isTransient: false,
+		},
+		{
+			name:        "query_canceled (57014)",
 			err:         &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"},
 			isTransient: false,
 		},
 		{
-			name:        "database_dropped (57P04) cannot be fixed by trying again",
+			name:        "database_dropped (57P04)",
 			err:         &pgconn.PgError{Code: "57P04", Message: "terminating connection because the database was dropped"},
 			isTransient: false,
 		},

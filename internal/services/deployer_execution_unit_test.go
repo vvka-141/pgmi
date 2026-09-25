@@ -21,7 +21,7 @@ func TestDeploy_SessionPrepErrorPropagates(t *testing.T) {
 		err:     fmt.Errorf("session prep reached"),
 	}
 
-	svc := NewDeploymentService(connFactory, &mockApprover{}, &mockLogger{}, sessPreparer, &mockFileScanner{}, dbMgr)
+	svc := NewDeploymentService(connFactory, &mockApprover{}, &mockLogger{}, sessPreparer, dbMgr)
 	svc.mgmtConnector = successfulMgmtConn()
 
 	err := svc.Deploy(context.Background(), validConfig())

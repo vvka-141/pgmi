@@ -29,25 +29,30 @@ const (
 //
 // Returns ModeInteractive otherwise.
 func DetectMode() Mode {
-	// Check environment overrides first
-	if os.Getenv("PGMI_NON_INTERACTIVE") == "1" {
+	if envNonInteractive() || !isTerminal(os.Stdin) {
 		return ModeNonInteractive
 	}
-	if os.Getenv("CI") != "" {
+	// The TUI wizards render to stdout.
+	if !isTerminal(os.Stdout) {
 		return ModeNonInteractive
 	}
-
-	// Check if stdin is a terminal
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return ModeNonInteractive
-	}
-
-	// Check if stdout is a terminal (important for TUI rendering)
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		return ModeNonInteractive
-	}
-
 	return ModeInteractive
+}
+
+// CanPrompt reports whether a human can answer a prompt written to stderr:
+// stdin and stderr are terminals. stdout may be piped, so
+// `pgmi deploy --overwrite --force | tee log` still gets its Ctrl-C window and
+// `--overwrite --json | jq` can still ask for confirmation.
+func CanPrompt() bool {
+	return !envNonInteractive() && isTerminal(os.Stdin) && isTerminal(os.Stderr)
+}
+
+// isTerminal is a seam: under `go test` no descriptor is a terminal, so
+// without it every test could only ever observe the non-interactive branch.
+var isTerminal = func(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
+
+func envNonInteractive() bool {
+	return os.Getenv("PGMI_NON_INTERACTIVE") == "1" || os.Getenv("CI") != ""
 }
 
 // IsInteractive is a convenience function that returns true if running in interactive mode.

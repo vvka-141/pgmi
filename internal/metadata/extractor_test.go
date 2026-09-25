@@ -130,39 +130,6 @@ func TestExtract_MultipleMetadataBlocks(t *testing.T) {
 	}
 }
 
-// TestExtract_OldFormatDetection tests backward compatibility detection
-func TestExtract_OldFormatDetection(t *testing.T) {
-	content := `/*
-<pgmi:meta
-    id="550e8400-e29b-41d4-a716-446655440000"
-    idempotent="true"
-    xmlns:pgmi="https://pgmi.com/pgmi-metadata/v1">
-  <description>Old format</description>
-  <sortKeys><key>001</key></sortKeys>
-</pgmi:meta>
-*/
-`
-
-	_, err := Extract(content, "oldformat.sql")
-	if err == nil {
-		t.Fatal("Expected error for old format")
-	}
-
-	var metaErr *MetadataError
-	if !errors.As(err, &metaErr) {
-		t.Errorf("Expected MetadataError, got: %T", err)
-	}
-
-	if !strings.Contains(err.Error(), "old metadata format") {
-		t.Errorf("Expected 'old metadata format' in error, got: %v", err)
-	}
-
-	if !strings.Contains(metaErr.Hint, "pgmi:meta") {
-		t.Error("Expected hint to mention old format")
-	}
-}
-
-// TestExtract_MetadataTooLarge tests size limit enforcement
 func TestExtract_MetadataTooLarge(t *testing.T) {
 	// Create metadata block exceeding MaxMetadataSize
 	largeDescription := strings.Repeat("x", MaxMetadataSize)

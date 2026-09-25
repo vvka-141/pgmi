@@ -133,3 +133,36 @@ BEGIN
 
     RAISE NOTICE '  ✓ encoding types survive redeploy and keep their casts';
 END $$;
+
+-- core.ensure_view skips an unchanged view, so a redeploy does not take
+-- ACCESS EXCLUSIVE on it. Skipping must not hide a change: a new statement,
+-- or a view someone replaced by hand, is replaced again.
+DO $$
+DECLARE
+    v_stmt text := 'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n';
+BEGIN
+    RAISE NOTICE '→ Testing view convergence';
+
+    IF NOT core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+        RAISE EXCEPTION 'TEST FAILED: a missing view must be created';
+    END IF;
+    IF core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+        RAISE EXCEPTION 'TEST FAILED: an unchanged view must be left alone';
+    END IF;
+
+    EXECUTE 'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 2 AS n';
+    IF NOT core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+        RAISE EXCEPTION 'TEST FAILED: a view replaced by hand must be converged back';
+    END IF;
+    IF (SELECT n FROM public.ensure_view_probe) IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: the converged view must carry the requested definition';
+    END IF;
+
+    IF NOT core.ensure_view('public.ensure_view_probe',
+            'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n, 3 AS m') THEN
+        RAISE EXCEPTION 'TEST FAILED: a changed statement must replace the view';
+    END IF;
+
+    DROP VIEW public.ensure_view_probe;
+    RAISE NOTICE '  ✓ unchanged views are skipped; changed or hand-edited ones are replaced';
+END $$;

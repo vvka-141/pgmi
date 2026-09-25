@@ -28,6 +28,10 @@ Four phases, read top to bottom as they execute (`project/deploy.sql`):
 The session's temp views (`pgmi_plan_view`, `pgmi_source_view`) survive the
 head's `COMMIT` — phase 2 prints their counts to prove it.
 
+`--timeout` (default 3m) covers the tail too. A concurrent build that outlives
+it is cancelled, pgmi exits 16, and the index is left `INVALID` until the next
+run reaps it. Raise `--timeout` for large tables.
+
 All of it is asserted in CI (`example-lock-safe` job): both indexes end up
 `VALID`, the constraint ends up validated, and a second deploy over the same
 database succeeds (the tail is idempotent by construction).

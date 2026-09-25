@@ -14,7 +14,12 @@ import (
 var (
 	planViewLoop    = regexp.MustCompile(`(?s)SELECT[^;]{0,400}?pgmi_plan_view[^;]{0,400}?(?:LOOP|\)\s*$)`)
 	exactPathFilter = regexp.MustCompile(`path\s*=\s*'`)
+	selectStar      = regexp.MustCompile(`(?i)SELECT\s+(?:\w+\.)?\*`)
 )
+
+func pullsContent(q string) bool {
+	return strings.Contains(q, "content") || selectStar.MatchString(q)
+}
 
 // execution-order-policy asserts its whole plan against a reviewed manifest
 // before executing, so an unexpected file — .bak, README.md, anything — fails
@@ -53,7 +58,7 @@ func TestExamplePlanViewLoopsFilterSQLFiles(t *testing.T) {
 
 		for _, m := range planViewLoop.FindAllStringIndex(text, -1) {
 			q := text[m[0]:m[1]]
-			if !strings.Contains(q, "content") || exactPathFilter.MatchString(q) {
+			if !pullsContent(q) || exactPathFilter.MatchString(q) {
 				continue
 			}
 			if strings.Contains(q, "is_sql_file") {

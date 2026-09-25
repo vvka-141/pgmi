@@ -23,11 +23,12 @@ BEGIN
     FROM pg_temp.pgmi_source_view
     WHERE path = './project.json';
 
-    RAISE NOTICE '[%] Deploying % v% (% file(s) in project)',
+    RAISE NOTICE '[%] Deploying % v% (% migration file(s))',
         v_env,
         v_config ->> 'app_name',
         v_config ->> 'version',
-        (SELECT count(*) FROM pg_temp.pgmi_source_view);
+        (SELECT count(*) FROM pg_temp.pgmi_source_view
+         WHERE directory = './migrations/' AND is_sql_file);
 
     -- Execute migration files in path order
     FOR v_file IN (
@@ -38,23 +39,9 @@ BEGIN
     )
     LOOP
         RAISE DEBUG 'Executing: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-        EXCEPTION WHEN OTHERS THEN
-            -- Keep the original SQLSTATE and DETAIL: a bare RAISE EXCEPTION rewrites
-            -- them to P0001 and an empty detail, so a caller cannot classify the
-            -- failure (e.g. a retryable 40001 vs a permanent constraint violation).
-            DECLARE
-                v_sqlstate text;
-                v_detail   text;
-            BEGIN
-                GET STACKED DIAGNOSTICS
-                    v_sqlstate = RETURNED_SQLSTATE,
-                    v_detail   = PG_EXCEPTION_DETAIL;
-                RAISE EXCEPTION 'Failed in %: %', v_file.path, SQLERRM
-                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
-            END;
-        END;
+        -- No exception handler: an error reaches pgmi untouched, which names the
+        -- failing file and line and keeps the original SQLSTATE.
+        EXECUTE v_file.content;
     END LOOP;
 
     -- Environment-aware seeding: only in non-production

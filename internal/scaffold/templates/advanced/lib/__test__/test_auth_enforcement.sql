@@ -284,11 +284,18 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Protected MCP without context should return JSON-RPC error';
     END IF;
 
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected MCP auth error should have code -32001, got %', (v_mcp_response).envelope->'error'->>'code';
+    -- An anonymous caller must not learn that a protected name exists: the
+    -- answer is exactly what an unknown name gets.
+    IF (v_mcp_response).envelope->'error'
+       IS DISTINCT FROM ((api.mcp_call_tool('test_no_such_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb)).envelope->'error'
+                         || jsonb_build_object('message', replace(
+                                (api.mcp_call_tool('test_no_such_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb)).envelope->'error'->>'message',
+                                'test_no_such_tool', 'test_protected_tool'))) THEN
+        RAISE EXCEPTION 'TEST FAILED: a protected tool must answer an anonymous caller exactly like an unknown one, got %',
+            (v_mcp_response).envelope->'error';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Protected tool returns JSON-RPC error -32001 without context.user_id';
+    RAISE NOTICE '  ✓ MCP: a protected tool is indistinguishable from an unknown one without context.user_id';
 
     -- ========================================================================
     -- Test: MCP protected tool accepts authenticated requests
@@ -364,14 +371,14 @@ END;
     END IF;
     RAISE NOTICE '  ✓ RPC: malformed x-user-id (no pipe) rejected with -32001';
 
-    -- MCP: malformed user_id (no pipe) → -32001
+    -- MCP: malformed user_id (no pipe) → the anonymous not-found answer, -32602
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool', '{}'::jsonb, '{"user_id": "alice"}'::jsonb, '"req-malformed"'::jsonb
     );
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: malformed MCP user_id should return -32001, got %', (v_mcp_response).envelope->'error';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: malformed MCP user_id should get the not-found answer (-32602), got %', (v_mcp_response).envelope->'error';
     END IF;
-    RAISE NOTICE '  ✓ MCP: malformed user_id (no pipe) rejected with -32001';
+    RAISE NOTICE '  ✓ MCP: malformed user_id (no pipe) rejected (-32602)';
 
     -- MCP: identity must not leak across calls. Call 1 authenticates; call 2
     -- omits context and must NOT inherit call 1's identity (proves GUC reset).
@@ -385,8 +392,8 @@ END;
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool', '{}'::jsonb, NULL, '"req-leak-2"'::jsonb
     );
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: identity leaked into a no-context MCP call (expected -32001), got %', (v_mcp_response).envelope->'error';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: identity leaked into a no-context MCP call (expected -32602), got %', (v_mcp_response).envelope->'error';
     END IF;
     RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
@@ -542,10 +549,10 @@ END;
         'test_protected_tool', '{}'::jsonb,
         '{"user_id": "google|nobody-12345"}'::jsonb, '"forged-2"'::jsonb
     );
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: forged MCP identity should return -32001, got %', (v_mcp_response).envelope->'error';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
+        RAISE EXCEPTION 'TEST FAILED: forged MCP identity should get the not-found answer (-32602), got %', (v_mcp_response).envelope->'error';
     END IF;
-    RAISE NOTICE '  ✓ MCP: forged well-formed identity rejected with -32001';
+    RAISE NOTICE '  ✓ MCP: forged well-formed identity rejected (-32602)';
 
     -- Discovery must agree with invocation: an unresolvable identity must not
     -- see a tool it would then be refused.

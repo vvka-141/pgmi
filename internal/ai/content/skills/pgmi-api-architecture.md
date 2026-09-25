@@ -117,7 +117,7 @@ This means:
 |-----------|------|-----|-----|
 | Success | 200/201/204 | 200 | 200 + result object |
 | Not found | 404 | 404 (via -32601) | 200 + error object (-32601) |
-| Auth required | **401** | **401** (via -32001) | 200 + error object (-32001) |
+| Auth required | **401** | **401** (via -32001) | 200 + error object (-32602, same as not found) |
 | Bad request | 400 | 400 (via -32600/-32602) | 200 + error object (-32602) |
 | Server error | 500 | 500 (via -32603) | 200 + error object (-32603) |
 
@@ -232,6 +232,85 @@ api.mcp_call_tool(name, arguments, context, request_id) → api.mcp_response
 api.mcp_read_resource(uri, context, request_id) → api.mcp_response
 api.mcp_get_prompt(name, arguments, context, request_id) → api.mcp_response
 ```
+
+---
+
+## The Law: One Declaration, Many Derivations
+
+The REST framework is a boundary where an HTTP request becomes a database
+transaction, with nothing in between. One law governs it:
+
+> **One declaration. Many derivations.**
+> Nothing declared twice. Nothing enforced undeclared. Nothing declared unenforced.
+
+A handler declares its contract once, in its registration metadata. The router,
+the OpenAPI document, the MCP descriptor, auth enforcement, the transaction
+policy and the test probes are all derived from it. When reviewing or adding a
+feature, check both directions:
+
+- **Declared ⇒ enforced.** A key the spec publishes (`requiresAuth`, a security
+  scheme, `produces`, `outputSchema`, `query`, `readOnly`,
+  `minTransactionIsolation`) must change what the gateway does. Otherwise the
+  published contract lies.
+- **Enforced ⇒ declared.** Anything the gateway checks must appear in the
+  declaration and the spec. Otherwise clients meet behavior they were never
+  told about.
+
+`lib/__test__/test_contract_conformance.sql` and `test_openapi_agreement.sql`
+test both directions over the whole registry. A new declaration key needs an arm
+there.
+
+### Eight layers, one job each
+
+```
+ 1. Ingress            api.rest_invoke(method, url, headers, content)
+ 2. Canonicalize       api.canonical_path(api.url_path(url)): one identity
+ 3. Resolve            identity -> handler; non-overlap proven at registration
+ 4. Enforce contract   401 auth, 400 query contract, 428 policy, 415/406 negotiation
+ 5. Open transaction   client gateway resolves api.rest_route_policy before BEGIN
+ 6. Execute            four-phase handler body
+ 7. Shape response     status, headers, ETag, problem+json
+ 8. Publish            OpenAPI / MCP listings, derived from the registry
+```
+
+A defect is almost always one layer doing another layer's job: tolerance
+hand-written into a route regex (layer 2 leaking into 3), or a spec path
+generated from the matcher (layer 3 doing layer 8's work).
+
+### Route matching: liberal at the funnel, exact at the identity
+
+- **Accept every valid spelling of a path at the funnel.** Layer 2 reduces
+  `/users/42/`, `//users/42`, `/users/./42` and `/us%65rs/42` to `/users/42`
+  before any route is consulted. Route authors never write slash, encoding or
+  query tolerance (`(\?.*)?$`, `/?$`) into a pattern.
+- **Identity is exact.** Each route declares one canonical path. Registration
+  proves the path matches the route's own matcher (self-consistency) and that no
+  route with an intersecting method accepts another's probe URL (non-overlap).
+  Path case is preserved.
+- **Do not make the matcher stricter by restricting how patterns are spelled.**
+  Requiring anchored `^...$` regexes was tried and rejected: it outlawed valid
+  spellings, and it still accepted `^/users/.*$` shadowing `^/users/([0-9]+)$`.
+  This requirement has been lost repeatedly by contributors re-deriving a strict
+  matcher from first principles. Strictness belongs in the proof over identities.
+  `lib/__test__/test_route_spelling.sql` goes red when the funnel is narrowed.
+
+Layer 2 does two kinds of work. Keep them apart when writing docs or comments,
+because a false RFC citation invites someone to "correct" the behavior away:
+
+| RFC 3986 mandates | pgmi policy (not RFC) |
+|---|---|
+| uppercase percent-triplet hex (§6.2.2.1); path case preserved | strip a trailing `/` except at root |
+| decode percent-encoded unreserved characters only (§6.2.2.2) | collapse duplicate slashes |
+| remove dot-segments (§6.2.2.3, §5.2.4) | insert a missing leading `/` |
+| empty path becomes `/` (§6.2.3) | |
+
+The query string is stripped before matching and declared with the `query`
+metadata key: order-insensitive, enforced as 400, published as `in: query`.
+
+Declare a route with `'path', '/users/{id}'`; the matcher, parameter names and
+OpenAPI path are derived. A hand-written `uri` regex is the escape hatch (see
+`pgmi-endpoint-quickstart`). The full design record is
+`docs/design/transactional-web-boundary.md` in the pgmi repository.
 
 ---
 
@@ -423,7 +502,7 @@ RETURN api.jsonrpc_error(-32001, 'Auth required', id);  -- Returns HTTP 401
 RETURN api.problem_response(401, 'Unauthorized', ...);
 
 -- ✅ CORRECT: MCP error pattern (JSON-RPC 2.0)
-RETURN api.mcp_error(-32001, 'user_id missing from context', p_request_id);
+RETURN api.mcp_error(-32602, 'Tool not found: my_tool (or it requires authentication)', p_request_id);
 ```
 
 ### ❌ Checking Headers for MCP Authentication

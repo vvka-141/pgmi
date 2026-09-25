@@ -11,8 +11,8 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
-	"github.com/vvka-141/pgmi/internal/testing/fixtures"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
+	"github.com/vvka-141/pgmi/internal/testhelpers/fixtures"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 

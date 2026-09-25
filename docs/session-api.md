@@ -15,7 +15,13 @@ weight: 160
 When you run `pgmi deploy ./myproject`, pgmi connects, prepares the session objects shown in the diagram above (with `--verbose` it also runs `SET client_min_messages = 'debug'`, enabling `RAISE DEBUG` output), and then executes your `deploy.sql` — which queries the views and runs files directly:
 
 ```sql
-FOR v_file IN (SELECT * FROM pgmi_plan_view ORDER BY execution_order)
+FOR v_file IN (
+    SELECT p.content
+    FROM pg_temp.pgmi_plan_view p
+    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+    WHERE s.is_sql_file
+    ORDER BY p.execution_order
+)
 LOOP
     EXECUTE v_file.content;
 END LOOP;
@@ -156,6 +162,7 @@ END $$;
 
 - Track against `pgmi_checksum` (or `pgmi_plan_view.checksum`) when you want reformatting, re-indentation, and comment edits to be free — a touched-up file won't re-execute.
 - Track against `pgmi_source_view.checksum` when you need byte-exact provenance — any edit, including a comment, triggers re-execution.
+- Track data files (`.json`, `.csv`, `.xml`) against `pgmi_source_view.checksum`. The normalization is SQL-aware: it collapses whitespace inside JSON strings and strips anything after `--` in a CSV line, so a real data change can leave `pgmi_checksum` unchanged.
 
 **Honest cost:** a change that touches *only* comments is invisible to `pgmi_checksum`. If your comments carry operational meaning (e.g., planner hints via `pg_hint_plan`, or `<pgmi-meta>` blocks that don't affect the normalized body), the normalized checksum won't catch the edit.
 
@@ -194,10 +201,12 @@ For iterating over parameters or building dynamic logic:
 |--------|------|-------------|
 | `key` | text | Parameter name, **always lower-cased on load** — `--param apiVersion=2` is stored as `apiversion` |
 | `value` | text | Parameter value (always text, cast as needed) |
-| `type` | text | Declared type hint (`text`, `int`, `boolean`, etc.) |
-| `required` | boolean | Whether parameter was marked required |
-| `default_value` | text | Default value if not provided |
-| `description` | text | Human-readable description |
+
+pgmi passes parameters through as text and checks nothing else. Types,
+defaults, required parameters and descriptions belong to your `deploy.sql`.
+The advanced template shows one way: it declares its parameters in
+`session.xml`, and its `deploy.sql` rejects unknown ones and fails on
+missing ones before any schema work.
 
 **Compare lower-cased.** `key` mirrors the session variable pgmi set, and
 PostgreSQL's GUC namespace is case-insensitive — so the two access methods
@@ -216,7 +225,7 @@ variable does not, which trades a visible mismatch for an invisible one.
 
 ```sql
 -- List all parameters
-SELECT key, value, description FROM pg_temp.pgmi_parameter_view;
+SELECT key, value FROM pg_temp.pgmi_parameter_view;
 
 -- Iterate over parameters dynamically.
 -- Redact secret-like keys by default — values may be passwords, tokens, etc.
@@ -306,13 +315,13 @@ BEGIN
 END $$;
 ```
 
-**With explicit transaction boundaries:**
+**With a subtransaction per phase** (a PL/pgSQL `BEGIN ... EXCEPTION ... END` block is a subtransaction inside the deploy transaction, not a transaction of its own):
 
 ```sql
 DO $$
 DECLARE v_file RECORD;
 BEGIN
-    -- Phase 1: Schema changes in one transaction
+    -- Phase 1: Schema changes in one subtransaction
     BEGIN
         FOR v_file IN (
             SELECT p.path, p.content
@@ -324,7 +333,8 @@ BEGIN
             EXECUTE v_file.content;
         END LOOP;
     EXCEPTION WHEN OTHERS THEN
-        RAISE EXCEPTION 'Schema phase failed: %', SQLERRM;
+        RAISE WARNING 'Schema phase failed';
+        RAISE;
     END;
 
     -- Phase 2: Migrations
@@ -405,7 +415,7 @@ See [Metadata Guide](METADATA.md) for syntax and usage patterns.
 
 #### pgmi_test_source_view
 
-**Test file content from `__test__/` or `__tests__/` directories.**
+**Test file content from `__test__/` or `__tests__/` directories.** Only SQL files load here. Other files in those directories are dropped without a warning.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -473,7 +483,7 @@ CALL pgmi_test('.*/auth/.*', 'pg_temp.my_custom_callback');
 - Includes ancestor `_setup.sql` files needed by matching tests
 - Calls `pgmi_test_generate()` internally to produce inline SQL
 
-#### pgmi_test_plan(pattern) Function
+#### pgmi_test_plan(p_pattern) Function
 
 **Returns the test execution plan as a table (for introspection).**
 
@@ -499,11 +509,11 @@ SELECT * FROM pg_temp.pgmi_test_plan('.*/auth/.*');
 - `NOTICE: [pgmi] Test suite started`
 - `NOTICE: [pgmi] Fixture: ./path/to/_setup.sql`
 - `NOTICE: [pgmi] Test: ./path/to/test_example.sql`
-- `NOTICE: [pgmi] Test suite completed (N steps)`
+- `NOTICE: [pgmi] Test suite passed`
 
 With `--verbose`, DEBUG messages show rollback and teardown events (`[pgmi] Rollback: ...`, `[pgmi] Teardown: ...`).
 
-#### pgmi_test_generate(pattern, callback) Function
+#### pgmi_test_generate(p_pattern, p_callback) Function
 
 **Generates the SQL code for `pgmi_test()` macro expansion.**
 
@@ -517,17 +527,17 @@ SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'pg_temp.my_callback');
 
 **Critical implementation detail:** The generated SQL uses **top-level SAVEPOINT commands**, not PL/pgSQL savepoints. PostgreSQL's PL/pgSQL does not support `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`, or `RELEASE SAVEPOINT` commands directly — they must be issued as top-level SQL statements.
 
-The generated structure looks like:
+The generated structure, with the callback calls left out:
 ```sql
-SAVEPOINT __pgmi_d1__;              -- Directory savepoint (top-level SQL)
-DO $$ ... EXECUTE fixture ... $$;   -- Fixture content via EXECUTE
-SAVEPOINT __pgmi_t2__;              -- Per-directory test savepoint (top-level SQL)
-DO $$ ... EXECUTE test ... $$;      -- Test content via EXECUTE
-ROLLBACK TO SAVEPOINT __pgmi_t2__;  -- Undoes test side effects
-DO $$ ... EXECUTE test2 ... $$;     -- Next test in same directory
-ROLLBACK TO SAVEPOINT __pgmi_t2__;  -- Undoes test2 side effects
-ROLLBACK TO SAVEPOINT __pgmi_d1__;  -- Teardown: undoes fixture
-RELEASE SAVEPOINT __pgmi_d1__;      -- Clean up savepoint
+SAVEPOINT __pgmi_d1__;                                    -- Directory savepoint (top-level SQL)
+SELECT pg_temp.pgmi_run_test_source('./__test__/_setup.sql');  -- Fixture
+SAVEPOINT __pgmi_t2__;                                    -- Per-directory test savepoint (top-level SQL)
+SELECT pg_temp.pgmi_run_test_source('./__test__/test_a.sql');  -- Test
+ROLLBACK TO SAVEPOINT __pgmi_t2__;                        -- Undoes test side effects
+SELECT pg_temp.pgmi_run_test_source('./__test__/test_b.sql');  -- Next test in same directory
+ROLLBACK TO SAVEPOINT __pgmi_t2__;                        -- Undoes test_b side effects
+ROLLBACK TO SAVEPOINT __pgmi_d1__;                        -- Teardown: undoes fixture
+RELEASE SAVEPOINT __pgmi_d1__;                            -- Clean up savepoint
 ```
 
 This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, not inside a DO block.
@@ -571,7 +581,7 @@ END $$;
 
 The default callback (`pgmi_test_callback`) emits NOTICE for fixtures and tests, DEBUG for rollback and teardown. You can call it from your custom callback for events you don't want to handle specially.
 
-#### pgmi_persist_test_plan(schema, pattern) Function
+#### pgmi_persist_test_plan(target_schema, p_pattern) Function
 
 **Exports the test plan to a permanent table for external tooling.**
 
@@ -583,8 +593,8 @@ SELECT pg_temp.pgmi_persist_test_plan('public', NULL);
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `schema` | text | Target schema for the snapshot table |
-| `pattern` | text | Optional POSIX regex filter (NULL = all tests) |
+| `target_schema` | text | Target schema for the snapshot table |
+| `p_pattern` | text | Optional POSIX regex filter (NULL = all tests) |
 
 This is useful for CI/CD pipelines that need to inspect the test plan before running, or for generating test reports.
 
@@ -796,10 +806,6 @@ These tables are the underlying storage for the session API. Users should use th
 |--------|------|-------------|
 | `key` | text | Parameter name |
 | `value` | text | Parameter value |
-| `type` | text | Declared type hint |
-| `required` | boolean | Whether parameter is required |
-| `default_value` | text | Default if not provided |
-| `description` | text | Human-readable description |
 
 ### pg_temp._pgmi_source_metadata
 
@@ -851,7 +857,7 @@ ORDER BY execution_order;
 ### See What Parameters Are Available
 
 ```sql
-SELECT key, value, type, required, default_value, description
+SELECT key, value
 FROM pg_temp.pgmi_parameter_view;
 ```
 

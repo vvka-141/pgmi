@@ -31,10 +31,10 @@ const (
 
 // NoticeHandler is called for each PostgreSQL NOTICE/WARNING during execution.
 // Replaceable to support timing prefixes in verbose mode.
-var NoticeHandler func(message, detail, hint string) = DefaultNoticeHandler
+var NoticeHandler func(severity, message, detail, hint string) = DefaultNoticeHandler
 
 // DefaultNoticeHandler prints notices to stderr without decoration.
-func DefaultNoticeHandler(message, detail, hint string) {
+func DefaultNoticeHandler(_, message, detail, hint string) {
 	fmt.Fprintln(os.Stderr, message)
 	if detail != "" {
 		fmt.Fprintf(os.Stderr, "DETAIL: %s\n", detail)
@@ -49,7 +49,7 @@ func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MinConns = DefaultMinConns
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		NoticeHandler(notice.Message, notice.Detail, notice.Hint)
+		NoticeHandler(notice.Severity, notice.Message, notice.Detail, notice.Hint)
 	}
 }
 
@@ -61,21 +61,25 @@ type StandardConnector struct {
 }
 
 // NewStandardConnector creates a new StandardConnector with the given configuration.
-// Retry behavior uses pgmi defaults: DefaultRetryMaxAttempts attempts,
-// exponential backoff starting at DefaultRetryInitialDelay, max DefaultRetryMaxDelay.
 func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
-	classifier := retry.NewPostgreSQLErrorClassifier()
-	strategy := retry.NewExponentialBackoff(pgmi.DefaultRetryMaxAttempts,
+	return &StandardConnector{
+		config:        config,
+		retryExecutor: newConnectExecutor(),
+	}
+}
+
+// newConnectExecutor retries connection establishment with pgmi's defaults and
+// says so on stderr, so a slow connect is visible rather than a silent stall.
+func newConnectExecutor() *retry.Executor {
+	strategy := retry.NewExponentialBackoff(pgmi.DefaultConnectRetries,
 		retry.WithInitialDelay(pgmi.DefaultRetryInitialDelay),
 		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
 	)
-
-	executor := retry.NewExecutor(classifier, strategy)
-
-	return &StandardConnector{
-		config:        config,
-		retryExecutor: executor,
-	}
+	return retry.NewExecutor(retry.NewPostgreSQLErrorClassifier(), strategy).
+		WithOnRetry(func(attempt int, err error, delay time.Duration) {
+			fmt.Fprintf(os.Stderr, "Connection attempt %d failed: %v; retrying in %s\n",
+				attempt+1, err, delay.Round(time.Millisecond))
+		})
 }
 
 // Connect establishes a connection pool using standard authentication with automatic retry.

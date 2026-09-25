@@ -15,7 +15,7 @@ import (
 // preprocessor.BlockComments, and this one shipped two collisions.
 //
 // preprocessor.BlockComments is the authority. For inputs with no -- comments,
-// removeComments must blank exactly those spans and touch nothing else.
+// scan must blank exactly those spans and touch nothing else.
 func TestCommentDetectionAgreesWithPreprocessor(t *testing.T) {
 	c := New()
 	spansOf := preprocessor.NewCommentStripper().BlockComments
@@ -53,7 +53,7 @@ func TestCommentDetectionAgreesWithPreprocessor(t *testing.T) {
 			}
 			want.WriteString(sql[prev:])
 
-			if got := c.removeComments(sql); got != want.String() {
+			if got := c.scan(sql, false); got != want.String() {
 				t.Errorf("scanners disagree on what is a comment:\n  input        %q\n"+
 					"  checksum     %q\n  preprocessor %q", sql, got, want.String())
 			}

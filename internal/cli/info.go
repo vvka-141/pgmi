@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"bufio"
 	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
@@ -46,6 +49,7 @@ type projectInfo struct {
 	SQLFiles     int            `json:"sqlFiles"`
 	TestFiles    int            `json:"testFiles"`
 	MetadataWith int            `json:"metadataWith"`
+	Scaffolded   string         `json:"scaffolded,omitempty"`
 	Directories  map[string]int `json:"directories"`
 }
 
@@ -84,6 +88,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 
 	// Detect template type
 	info.Template = detectTemplate(sourcePath)
+	info.Scaffolded = scaffoldedFrom(sourcePath)
 
 	// Scan files
 	scanResult, err := s.ScanDirectory(sourcePath)
@@ -123,6 +128,24 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+var scaffoldedPattern = regexp.MustCompile(`^-- Scaffolded by pgmi (\S+) from the (\S+) template\.`)
+
+// scaffoldedFrom reads the line pgmi init writes at the top of deploy.sql, so
+// a user can tell which pgmi version and template a project started from.
+func scaffoldedFrom(sourcePath string) string {
+	f, err := os.Open(filepath.Join(sourcePath, "deploy.sql"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	line, _ := bufio.NewReader(f).ReadString('\n')
+	m := scaffoldedPattern.FindStringSubmatch(strings.TrimRight(line, "\r\n"))
+	if m == nil {
+		return ""
+	}
+	return fmt.Sprintf("pgmi %s, %s template", m[1], m[2])
+}
+
 func detectTemplate(sourcePath string) string {
 	if _, err := os.Stat(filepath.Join(sourcePath, "lib", "api")); err == nil {
 		return "advanced"
@@ -139,6 +162,9 @@ func printProjectInfo(info projectInfo) {
 
 	fmt.Fprintf(w, "%s %s\n", ui.Bold("Project:"), info.Path)
 	fmt.Fprintf(w, "%s %s\n", ui.Bold("Template:"), info.Template)
+	if info.Scaffolded != "" {
+		fmt.Fprintf(w, "%s %s\n", ui.Bold("Scaffolded by:"), info.Scaffolded)
+	}
 
 	deploySQLStatus := ui.FailIcon() + " missing"
 	if info.DeploySQL {

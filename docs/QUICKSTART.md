@@ -16,7 +16,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 5. Verify the deployment
 
 **What you need:**
-- PostgreSQL running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
+- PostgreSQL 11 or newer (15 or newer for the advanced template) running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
 
 No Go toolchain required — the quickstart installs a prebuilt binary. (Installing from source with `go install` is an optional alternative; see Step 1.)
@@ -48,8 +48,8 @@ pgmi creates the `demo_db` database, loads the project into a session, and your 
 [pgmi] Test suite started
 [pgmi] Fixture: ./__test__/_setup.sql
 [pgmi] Test: ./__test__/test_user_crud.sql
-[pgmi] Test suite completed (3 steps)
-✓ demo_db: 7 files loaded, 1 test macro(s) expanded in 0.91s
+[pgmi] Test suite passed
+✓ demo_db: 7 files loaded in 0.91s
 ```
 
 Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/__test__/test_user_crud.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
@@ -312,7 +312,7 @@ What this does:
 
 **Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
 
-> **CI/CD:** pin the pgmi session API with `--compat 1` so a pgmi upgrade can't change your deploy's behavior, and drop `--overwrite` for incremental deploys:
+> **CI/CD:** pin the session API's names and columns with `--compat 1`, pin the pgmi binary version for behavior, and drop `--overwrite` for incremental deploys:
 > ```bash
 > pgmi deploy . -d myapp --compat 1 --force
 > ```
@@ -325,7 +325,7 @@ Dev seed: admin user ready (admin@example.com id=1)
 [pgmi] Test suite started
 [pgmi] Fixture: ./__test__/_setup.sql
 [pgmi] Test: ./__test__/test_user_crud.sql
-[pgmi] Test suite completed (3 steps)
+[pgmi] Test suite passed
 
   ___   ___  _  _ ___
  |   \ / _ \| \| | __|
@@ -401,6 +401,8 @@ psql -h localhost -U postgres -d myapp -c "\dt"
 
 You should see both the `user` and `order` tables. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
 
+Now watch a test gate the deploy. Add `RAISE EXCEPTION 'forced failure';` inside the DO block in `__test__/test_user_crud.sql`, then run `pgmi deploy . --force`. pgmi exits with code `13`, and the transaction that held this run's migrations rolls back. Remove the line before you continue.
+
 > **Where the atomic boundary is.** The generated `deploy.sql` has a `COMMIT` after the test gate (line 99). Everything you add *above* it shares the test-gated transaction; anything *below* it autocommits statement by statement. If you need `CREATE INDEX CONCURRENTLY` or another command that cannot run inside a transaction, put it after the `COMMIT`. See [the execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full rules.
 
 ---
@@ -430,7 +432,7 @@ pgmi provides two templates for `pgmi init`. Start with **basic** when you want 
 | **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
 | **Script tracking** | None by default; a 3-line opt-in `_migration` ledger ships commented in `deploy.sql` | UUID-based tracking in `internal.deployment_script_execution_log` |
 | **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
-| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, utils, api), `membership/`, `tools/` |
+| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, common, api), `membership/`, `tools/` |
 | **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |
 | **MCP integration** | None | Full MCP server for AI assistants |
 

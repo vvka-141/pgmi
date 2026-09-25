@@ -64,9 +64,10 @@ END $$;
 
 
 
+-- env has no default. A deploy that does not say which environment it targets
+-- must not be treated as dev, because dev fills missing passwords.
 UPDATE pg_temp.deployment_parameter
 SET value = CASE key
-    WHEN 'env' THEN 'dev'
     WHEN 'database_owner_role' THEN current_database()::text || '_owner'
     WHEN 'database_admin_role' THEN current_database()::text || '_admin'
     WHEN 'database_api_role' THEN current_database()::text || '_api'
@@ -81,8 +82,8 @@ WHERE value IS NULL
   AND key ~ 'password$'
   AND EXISTS (SELECT 1 FROM pg_temp.deployment_parameter WHERE key = 'env' AND value = 'dev');
 
--- The dev defaults above (env=dev, role passwords -> 'postgres') are a local
--- convenience, never a production posture. Announce them loudly so a real
+-- The dev defaults above (role passwords -> 'postgres' when env=dev is given)
+-- are a local convenience, never a production posture. Announce them loudly so a real
 -- deployment can never silently ship with weak default credentials.
 DO $$
 DECLARE
@@ -97,7 +98,7 @@ BEGIN
     WHERE key ~ 'password$' AND value = 'postgres';
 
     IF v_env = 'dev' AND v_defaulted_pw IS NOT NULL THEN
-        RAISE WARNING 'pgmi: env=dev — role password(s) defaulted to ''postgres'' (%). This is for local/disposable databases only. For any shared or production deploy, pass --param env=<non-dev> and explicit *_password values.', v_defaulted_pw;
+        RAISE WARNING 'pgmi: env=dev — role password(s) defaulted to ''postgres'' (%). This is for local/disposable databases only. For any shared or production deploy, set env to something else and pass explicit *_password values in a params file.', v_defaulted_pw;
     END IF;
 END $$;
 
@@ -132,6 +133,26 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Every SQL file states its own place in the plan. Without sortKeys pgmi
+-- orders a file by its path, and './' sorts before the framework's '003/'
+-- and '004/' keys, so a forgotten header ran the file before the tables and
+-- types it uses existed. Stop before anything runs and name the files.
+DO $$
+DECLARE
+    v_untagged text;
+BEGIN
+    SELECT string_agg(DISTINCT p.path, ', ' ORDER BY p.path)
+    INTO v_untagged
+    FROM pg_temp.pgmi_plan_view p
+    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+    WHERE s.is_sql_file AND p.sort_key = p.path;
+
+    IF v_untagged IS NOT NULL THEN
+        RAISE EXCEPTION 'SQL file(s) without a place in the plan: %', v_untagged
+            USING HINT = 'Add a <pgmi-meta> block with <sortKeys><key>005/...</key></sortKeys> (or later) at the top of each file. See README "Extending the Framework".';
+    END IF;
+END $$;
+
 
 CREATE FUNCTION pg_temp.deployment_setting(p_key text, p_required boolean DEFAULT true)
 RETURNS TEXT LANGUAGE plpgsql AS $$
@@ -145,6 +166,35 @@ BEGIN
     END IF;
     RETURN v_value;
 END;
+$$;
+
+-- The framework under ./lib/ narrates every object it installs and every
+-- assertion it checks: several hundred NOTICE lines, 'already exists, skipping'
+-- included, on every green deploy. Those files and tests run at WARNING, so a
+-- green run shows your own files' NOTICEs and one line per framework file.
+-- Only a session at the default NOTICE level is quieted: --verbose (DEBUG)
+-- still sees everything.
+CREATE FUNCTION pg_temp.quiet_framework(p_path text)
+RETURNS void LANGUAGE sql AS $$
+    SELECT set_config('client_min_messages', 'warning', true)
+    WHERE p_path LIKE './lib/%' AND current_setting('client_min_messages') = 'notice'
+$$;
+
+CREATE FUNCTION pg_temp.unquiet_framework(p_path text)
+RETURNS void LANGUAGE sql AS $$
+    SELECT set_config('client_min_messages', 'notice', true)
+    WHERE p_path LIKE './lib/%' AND current_setting('client_min_messages') = 'warning'
+$$;
+
+-- ALTER TABLE takes ACCESS EXCLUSIVE before it looks at IF [NOT] EXISTS, so an
+-- evolution-path ADD/DROP COLUMN guarded only by IF NOT EXISTS locks the table
+-- on every redeploy. Check the catalog first and run the ALTER only when needed.
+CREATE FUNCTION pg_temp.has_column(p_table regclass, p_column text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = p_table AND attname = p_column AND attnum > 0 AND NOT attisdropped
+    )
 $$;
 
 -- ============================================================================
@@ -426,24 +476,12 @@ BEGIN
         VALUES (v_script.checksum, v_script.content) ON CONFLICT DO NOTHING;
 
         RAISE NOTICE '[pgmi] Executing: %', v_script.path;
-        BEGIN
-            EXECUTE v_script.content;
-        EXCEPTION WHEN OTHERS THEN
-            -- Preserve the original SQLSTATE and DETAIL. A bare RAISE EXCEPTION
-            -- re-raises as P0001 and drops both, so an upstream classifier can no
-            -- longer tell a retryable 40001/40P01 from a permanent failure — the
-            -- exact signal the retry contract depends on.
-            DECLARE
-                v_sqlstate text;
-                v_detail   text;
-            BEGIN
-                GET STACKED DIAGNOSTICS
-                    v_sqlstate = RETURNED_SQLSTATE,
-                    v_detail   = PG_EXCEPTION_DETAIL;
-                RAISE EXCEPTION '[pgmi] Script failed: % - %', v_script.path, SQLERRM
-                    USING ERRCODE = v_sqlstate, DETAIL = v_detail;
-            END;
-        END;
+        -- No exception handler: an error reaches pgmi untouched, which names the
+        -- failing file and line and keeps the original SQLSTATE the retry
+        -- contract depends on.
+        PERFORM pg_temp.quiet_framework(v_script.path);
+        EXECUTE v_script.content;
+        PERFORM pg_temp.unquiet_framework(v_script.path);
 
         INSERT INTO internal.deployment_script_execution_log(
             deployment_script_object_id, deployment_script_content_checksum,
@@ -468,10 +506,15 @@ RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
     CASE e.event
         WHEN 'suite_start' THEN RAISE NOTICE '[pgmi] Test suite started';
-        WHEN 'suite_end' THEN RAISE NOTICE '[pgmi] Test suite completed (% steps)', e.ordinal;
-        WHEN 'fixture_start' THEN RAISE NOTICE '[pgmi] Fixture: %', e.path;
-        WHEN 'test_start' THEN RAISE NOTICE '[pgmi] Test: %', e.path;
-        WHEN 'test_end' THEN NULL;
+        WHEN 'suite_end' THEN RAISE NOTICE '[pgmi] Test suite passed';
+        WHEN 'fixture_start' THEN
+            RAISE NOTICE '[pgmi] Fixture: %', e.path;
+            PERFORM pg_temp.quiet_framework(e.path);
+        WHEN 'fixture_end' THEN PERFORM pg_temp.unquiet_framework(e.path);
+        WHEN 'test_start' THEN
+            RAISE NOTICE '[pgmi] Test: %', e.path;
+            PERFORM pg_temp.quiet_framework(e.path);
+        WHEN 'test_end' THEN PERFORM pg_temp.unquiet_framework(e.path);
         WHEN 'teardown_start' THEN RAISE DEBUG '[pgmi] Teardown: %', e.directory;
         ELSE NULL;
     END CASE;
@@ -488,6 +531,9 @@ END $$;
 BEGIN;
     SELECT pg_advisory_xact_lock(hashtext('pgmi_deploy_' || current_database()));
     DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
+    -- A table lock the deploy cannot get within 5s fails it (55P03) instead of
+    -- queueing every application query behind it for the rest of the deploy.
+    SET LOCAL lock_timeout = '5s';
     SELECT pg_temp.deploy();
     SELECT pg_temp.apply_entity_standards_all();
     DO $privs$

@@ -29,7 +29,7 @@ Four things are excluded:
 | Excluded | Why |
 |---|---|
 | The root `deploy.sql` | pgmi executes it; it never appears in `pgmi_source_view`. Nested ones (`examples/deploy.sql`) load normally. |
-| `__test__/` and `__tests__/` | Loaded into `pgmi_test_source_view` instead, so a deployment loop can never execute a test file by accident. |
+| `__test__/` and `__tests__/` | SQL files there load into `pgmi_test_source_view` instead, so a deployment loop can never execute a test file by accident. Non-SQL files there are dropped without a warning and appear in neither view. |
 | Hidden files and directories (any name starting with `.`) | `.git`, `.venv`, `.idea`, `.env` — tooling and secrets, not project content. |
 | `node_modules/` and `__pycache__/` | Dependency and build caches. |
 
@@ -37,6 +37,9 @@ Everything else is read as **text**. A binary file inside the project path
 (and outside the exclusions above) fails the deploy before any connection is
 made, naming the file — move it out of the project path or into a hidden
 directory.
+
+Each file is capped at 10 MiB. A larger file fails the deploy the same way.
+Set `PGMI_MAX_FILE_SIZE` to a byte count to change the cap.
 
 Discovery decides what enters the session; it never decides what runs. Your
 `deploy.sql` still selects and orders everything it executes.
@@ -106,9 +109,21 @@ pgmi deploy . -d myapp --param env=production
 
 ---
 
-## Error context with exception blocks
+## Which file failed?
 
-Wrap each file execution in an exception block to see which file failed:
+pgmi names the failing file itself. It matches the text PostgreSQL was
+executing (`EXECUTE v_file.content`) against the project files it loaded, and
+reports it as `LOCATION:` on stderr and `failedFile` in `--json`. For parse and
+analysis errors it adds the line and column in that file:
+
+```
+pgmi: error: execution failed: ERROR: syntax error at or near "SELEC" (SQLSTATE 42601)
+LOCATION: ./migrations/004_orders.sql line 4, column 1
+LINE 4: SELEC 1;
+        ^
+```
+
+So the loop needs no exception handler:
 
 ```sql
 DO $$
@@ -122,16 +137,17 @@ BEGIN
         ORDER BY p.execution_order
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-        EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
-        END;
+        EXECUTE v_file.content;
     END LOOP;
 END $$;
 ```
 
-The transaction still rolls back entirely on failure — the exception block is for diagnostics, not partial commits.
+If you catch errors for your own reasons, re-raise with a bare `RAISE;`. It
+rethrows the original error with its SQLSTATE, DETAIL and position intact.
+`RAISE EXCEPTION '...'` builds a new error: the SQLSTATE becomes `P0001` unless
+you pass `USING ERRCODE = SQLSTATE`, and the position is lost either way. In
+that case pgmi still finds the file when the message contains
+`Failed in <path>:`.
 
 ---
 
@@ -325,10 +341,13 @@ For large or complex CSV files (quoted fields, escaping), use PostgreSQL's `COPY
 
 ## Checksum-based change detection
 
-Skip files that haven't changed since the last deployment. This example tracks
-`pgmi_checksum` (the normalized checksum — comments stripped, case-folded,
-whitespace collapsed) so that reformatting or adding comments won't force a
-re-load. Swap to `checksum` if you need byte-exact change detection.
+Skip files that haven't changed since the last deployment. This example loads
+data files, so it tracks `checksum`, the raw SHA-256. Do not use
+`pgmi_checksum` for data. Its normalization is SQL-aware: it collapses
+whitespace inside JSON strings and strips anything after `--` in a CSV line,
+so a real data change can leave it unchanged and the file is skipped.
+`pgmi_checksum` fits SQL files, where reformatting and comment edits should not
+force a re-run.
 
 > **Column name warning:** `pgmi_source_view.checksum` is the raw SHA-256;
 > `pgmi_plan_view.checksum` is the normalized one. Same column name, different
@@ -345,13 +364,13 @@ DO $$
 DECLARE v_file RECORD;
 BEGIN
     FOR v_file IN (
-        SELECT path, content, pgmi_checksum
+        SELECT path, content, checksum
         FROM pg_temp.pgmi_source_view
         WHERE directory = './data/' AND extension = '.json'
     ) LOOP
         IF EXISTS (
             SELECT 1 FROM loaded_data_file
-            WHERE path = v_file.path AND checksum = v_file.pgmi_checksum
+            WHERE path = v_file.path AND checksum = v_file.checksum
         ) THEN
             RAISE NOTICE 'Skipping (unchanged): %', v_file.path;
             CONTINUE;
@@ -360,7 +379,7 @@ BEGIN
         -- Process file content here
 
         INSERT INTO loaded_data_file (path, checksum)
-        VALUES (v_file.path, v_file.pgmi_checksum)
+        VALUES (v_file.path, v_file.checksum)
         ON CONFLICT (path) DO UPDATE
             SET checksum = EXCLUDED.checksum, loaded_at = now();
     END LOOP;
@@ -551,6 +570,11 @@ an in-flight `CREATE INDEX CONCURRENTLY` in another session is also `INVALID`
 until it finishes, and a blanket sweep would drop it out from under them.
 `REINDEX INDEX CONCURRENTLY` is the other supported recovery.
 
+`--timeout` (default 3m) covers the whole deploy, tail included. A concurrent
+build that outlives it is cancelled: pgmi exits 16 and leaves the index
+`INVALID`. Raise `--timeout` for large tables; the reap step above cleans up
+on the next run.
+
 A head that ends its implicit transaction with a bare `COMMIT` (no `BEGIN`)
 works too — PostgreSQL prints a harmless "there is no transaction in progress"
 warning and commits the work — but write the `BEGIN` for clarity.
@@ -672,11 +696,7 @@ BEGIN
         ORDER BY path
     ) LOOP
         RAISE NOTICE 'Executing: %', v_file.path;
-        BEGIN
-            EXECUTE v_file.content;
-        EXCEPTION WHEN OTHERS THEN
-            RAISE EXCEPTION 'Failed on %: %', v_file.path, SQLERRM;
-        END;
+        EXECUTE v_file.content;
     END LOOP;
 
     -- Load environment-specific config

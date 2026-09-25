@@ -267,6 +267,7 @@ BEGIN
         jsonb_build_object(
             'id', 'ffffffff-0b11-4000-8000-000000000003',
             'uri', '^/things/([^/]+)/parts/([^/]+)$',
+            'example', '/things/t1/parts/p1',
             'httpMethod', '^GET$',
             'name', 'positional_param_openapi_test',
             'requiresAuth', false,
@@ -424,7 +425,7 @@ BEGIN
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /openapi.json returned %', (v_response).status_code;
     END IF;
-    IF v_etag IS NULL OR v_etag !~ '^"[0-9a-f]{64}"$' THEN
+    IF v_etag IS NULL OR v_etag !~ '^"[0-9a-f]{64}-anon"$' THEN
         RAISE EXCEPTION 'TEST FAILED: /openapi.json must return a strong quoted ETag, got %', v_etag;
     END IF;
     IF api.header((v_response).headers, 'Cache-Control') IS DISTINCT FROM 'no-cache' THEN
@@ -460,10 +461,11 @@ BEGIN
 
     RAISE NOTICE '  + A stale If-None-Match returns the full document';
 
-    -- Every response carries the catalog version, and it matches the ETag.
+    -- Every response carries the catalog version, and the ETag is that version
+    -- plus the caller class.
     v_response := api.rest_invoke('GET', '/openapi.json');
     v_version := api.header((v_response).headers, 'x-pgmi-catalog-version');
-    IF v_version IS NULL OR '"' || v_version || '"' IS DISTINCT FROM v_etag THEN
+    IF v_version IS NULL OR '"' || v_version || '-anon"' IS DISTINCT FROM v_etag THEN
         RAISE EXCEPTION 'TEST FAILED: x-pgmi-catalog-version (%) must match the ETag (%)',
             v_version, v_etag;
     END IF;
@@ -550,4 +552,48 @@ BEGIN
 
     RAISE NOTICE '  + GET /docs returns HTML with Scalar API reference';
     RAISE NOTICE '✓ API explorer tests passed';
+END $$;
+
+-- The document is filtered by caller, and the 304 is decided inside the
+-- handler, where Vary cannot help: a validator obtained while authenticated
+-- must not revalidate an anonymous request, or the anonymous caller keeps the
+-- authenticated document, admin routes included.
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_etag     text;
+    v_html     text;
+BEGIN
+    RAISE NOTICE '→ Testing that the OpenAPI validator carries the caller class';
+
+    PERFORM membership.upsert_user('test', 'openapi-etag', 'openapi-etag@example.com');
+    PERFORM set_config('auth.idp_subject', 'test|openapi-etag', true);
+    v_response := api.rest_invoke('GET', '/openapi.json',
+        extensions.hstore('x-user-id', 'test|openapi-etag'), NULL::bytea);
+    v_etag := (v_response).headers->'etag';
+    IF v_etag IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: /openapi.json must carry an ETag';
+    END IF;
+
+    PERFORM set_config('auth.idp_subject', '', true);
+    v_response := api.rest_invoke('GET', '/openapi.json',
+        extensions.hstore('if-none-match', v_etag), NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: an authenticated ETag must not revalidate an anonymous request, got %',
+            (v_response).status_code;
+    END IF;
+
+    v_response := api.rest_invoke('GET', '/openapi.json',
+        extensions.hstore('if-none-match', (v_response).headers->'etag'), NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 304 THEN
+        RAISE EXCEPTION 'TEST FAILED: an anonymous ETag must still revalidate an anonymous request, got %',
+            (v_response).status_code;
+    END IF;
+
+    v_html := convert_from((api.rest_invoke('GET', '/docs')).content, 'UTF8');
+    IF v_html !~ 'api-reference@[0-9]+\.[0-9]+\.[0-9]+/' OR v_html !~ 'integrity="sha384-' THEN
+        RAISE EXCEPTION 'TEST FAILED: /docs must load a version-pinned script with SRI';
+    END IF;
+
+    RAISE NOTICE '  + The validator separates anonymous and authenticated documents; /docs is pinned';
 END $$;

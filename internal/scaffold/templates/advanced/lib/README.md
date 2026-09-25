@@ -33,6 +33,9 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 | `08-registration.sql` | Handler registration + name validation + random dollar-quote |
 | `09-gateways.sql` | Gateway functions (`rest_invoke`, `rpc_invoke`, `mcp_call_tool`, `mcp_list_tools`, …) |
 | `10-mcp-protocol.sql` | MCP protocol layer (`mcp_initialize`, `mcp_ping`, `mcp_handle_request`) |
+| `11-openapi.sql` | OpenAPI 3.1 generator over the handler registry, served at `GET /openapi.json` |
+| `12-maintenance.sql` | Exchange retention: BRIN indexes on `enqueued_at` and a batch purge procedure |
+| `views.sql` | Analysis and summary views over handlers, routes and exchanges |
 
 **Key Types:**
 - `api.rest_request` / `api.rpc_request` / `api.mcp_request` — protocol-specific request composites
@@ -42,7 +45,7 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 - `api.xml_schema` — XSD document domain
 
 **Key Functions:**
-- `api.rest_invoke(method, url, headers, content)` — execute REST request; strips query string before regex match
+- `api.rest_invoke(method, url, headers, content)` — execute REST request; canonicalizes the path, matches the declared routes, enforces the declared query contract
 - `api.rpc_invoke(route_id, headers, content)` — execute JSON-RPC request
 - `api.mcp_call_tool(name, args, context, request_id jsonb)` — execute MCP tool; exceptions return `result.isError=true`
 - `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` — tool discovery; hides `requires_auth` tools from unauthenticated sessions; tags live under `_meta.tags`
@@ -123,14 +126,30 @@ Tests for the framework itself (not your application).
 
 | File | Tests |
 |------|-------|
+| `test_analytics_views.sql` | Handler, route and exchange analysis views |
 | `test_api_protocols.sql` | REST/RPC/MCP gateway functions |
 | `test_auth_enforcement.sql` | Authentication requirements |
 | `test_entity_standards.sql` | Entity standards reconcile (`created_at`/`deleted_at` injection, sweep + inline call) |
 | `test_error_handling.sql` | Error classification and HTTP status mapping |
+| `test_exchange_redaction.sql` | Exchange logs never store credentials |
 | `test_handler_lifecycle.sql` | Handler registration, name validation, query-string routing |
+| `test_contract_conformance.sql` | Every declared contract element (auth, security scheme, produces, outputSchema, query, transaction policy) is enforced; MCP listings match the registry |
+| `test_http_semantics.sql` | Status-code classes, mandatory headers, content negotiation |
+| `test_maintenance.sql` | Exchange retention: purge procedure and admin endpoint |
 | `test_mcp_protocol.sql` | MCP `initialize` / `ping` / dispatcher + JSON-RPC 2.0 compliance |
 | `test_migrations_tracking.sql` | Deployment script tracking |
+| `test_openapi.sql` | OpenAPI 3.1 generator |
+| `test_openapi_agreement.sql` | OpenAPI document agrees with the router |
+| `test_query_contract.sql` | Declared query parameters are enforced (400) and published (`in: query`) |
+| `test_redeploy_safety.sql` | Redeploy safety and logging suppression |
+| `test_rls_helper.sql` | `core.apply_org_rls()` multi-tenant RLS helper |
+| `test_role_privilege_separation.sql` | Customer role cannot reach gateway or registration functions |
+| `test_route_anchoring.sql` | Routes do not catch each other's traffic |
+| `test_route_spelling.sql` | Every valid spelling of a path reaches the right handler |
 | `test_schema_and_tags.sql` | `api.json_schema` domain, `$schema` injection, `_meta.tags`, auth hiding |
+| `test_soft_delete_views.sql` | Soft-delete filtering through views |
+| `test_transaction_isolation.sql` | Per-route isolation floor enforcement |
+| `test_transaction_policy.sql` | Read-only routes and resolve-then-open |
 
 ## Extension Points
 

@@ -189,23 +189,15 @@ func (a AuthMethod) String() string {
 type FileMetadata struct {
 	// Path information (Unix forward slashes)
 	Path      string // Relative path from source root: "migrations/001_users.sql"
-	Name      string // Filename only: "001_users.sql"
 	Directory string // Parent directory: "migrations" or "" for root
 	Extension string // File extension: ".sql"
-	Depth     int    // Nesting level (0 = root, 1 = first subdir, etc.)
 
 	// Content
 	Content string // Full unmodified file content
 
-	// Size
-	SizeBytes int64 // File size in bytes
-
 	// Checksums
 	Checksum    string // SHA-256 of NORMALIZED content (for idempotent tracking)
 	ChecksumRaw string // SHA-256 of RAW content (for exact change detection)
-
-	// Timestamps (using modified_at per MVP spec)
-	ModifiedAt time.Time // Last modification time
 
 	// Metadata (optional, only for files with valid <pgmi-meta> blocks)
 	// If nil, the file has no metadata and will use a deterministic fallback UUID.

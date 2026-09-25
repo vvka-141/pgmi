@@ -137,6 +137,8 @@ Execution plan:
 
 ### Layer-Based (Recommended)
 
+For a project of your own:
+
 ```
 00-bootstrap/0000   # Bootstrap: roles, schemas, extensions
 10-common/0010       # Layer 1: Utility functions
@@ -146,6 +148,11 @@ Execution plan:
 40-api/0010         # Layer 4: API endpoints
 50-seed/0000        # Layer 5: Reference data seeding
 ```
+
+**Not in the advanced template.** Keys compare as text (`COLLATE "C"`), so
+`00-bootstrap/…` sorts *before* the template's `001/…` schema band and runs
+against schemas that do not exist yet. In the advanced template use its bands:
+application code goes in `005/…` or later.
 
 ### Date-Based (for migrations)
 
@@ -215,9 +222,12 @@ ALTER TABLE "user" ADD COLUMN email TEXT;
 ### Tracking Behavior
 
 ```sql
--- Advanced template's deploy.sql checks execution log
-INSERT INTO internal.deployment_script_execution_log(...)
-ON CONFLICT (script_id) DO UPDATE SET ...;
+-- Advanced template's deploy.sql appends one row per execution (append-only;
+-- there is no upsert)
+INSERT INTO internal.deployment_script_execution_log(
+    deployment_script_object_id, deployment_script_content_checksum,
+    xact_id, file_path, idempotent, sort_key
+) VALUES (...);
 
 -- Execute based on idempotency flag
 IF v_exec_log.idempotent OR v_exec_log.executed_at = v_now THEN
@@ -400,16 +410,11 @@ Hint: Each script must have a unique identifier.
 
 **Example Error**:
 ```
-metadata error: duplicate script ID found
-
-ID: 550e8400-e29b-41d4-a716-446655440000
-Files:
-  - ./migrations/001_users.sql
-  - ./setup/users_setup.sql
-
-Hint: Each script must have a globally unique identifier.
-  Generate new UUID for one of these files.
+pgmi: error: file scanning failed: duplicate <pgmi-meta id> across files; each script must have a unique id:
+  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql: invalid configuration
 ```
+
+The deploy exits 10 before connecting. Give one of the files a new UUID.
 
 ### Error Message Format
 
@@ -531,7 +536,6 @@ $$ LANGUAGE plpgsql;
 
 ### Compatibility
 
-- Old format `<pgmi:meta xmlns:pgmi="...">` rejected with migration guidance
 - Fallback UUID changes if file path changes (use explicit metadata for stability)
 
 ### Testing

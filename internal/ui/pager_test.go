@@ -31,6 +31,8 @@ func TestResolvePager(t *testing.T) {
 		{"PGMI_PAGER wins over default", "cat", "", "cat"},
 		{"PAGER used when PGMI_PAGER empty", "", "less -R", "less -R"},
 		{"default when both empty", "", "", defaultPager()},
+		{"whitespace-only PGMI_PAGER falls through", "  ", "less", "less"},
+		{"whitespace-only everywhere falls back to default", " ", "\t", defaultPager()},
 	}
 
 	for _, tt := range tests {

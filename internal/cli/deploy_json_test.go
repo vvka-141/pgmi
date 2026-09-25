@@ -80,6 +80,7 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 			"testMacros":  float64(1),
 			"durationMs":  float64(1165),
 			"database":    "myapp",
+			"created":     false,
 		}
 		for k, v := range want {
 			if env[k] != v {
@@ -370,4 +371,15 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("closing read end: %v", err)
 	}
 	return out
+}
+
+// The success line reports what pgmi knows, files loaded. "N test macro(s)
+// expanded" read as "N tests ran" and stayed at 1 however many tests there
+// were (PGMI-386).
+func TestDeploySummary_SuccessWording(t *testing.T) {
+	out := captureStderr(t, func() { printDeploySummary(sampleResult, nil) })
+	want := fmt.Sprintf("%s: %d files loaded in ", sampleResult.Database, sampleResult.FilesLoaded)
+	if !strings.Contains(out, want) || strings.Contains(out, "macro") {
+		t.Errorf("summary = %q, want it to contain %q and no macro count", out, want)
+	}
 }

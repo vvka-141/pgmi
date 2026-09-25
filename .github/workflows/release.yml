@@ -15,11 +15,11 @@ jobs:
     name: Pre-release verification
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -35,10 +35,17 @@ jobs:
           fi
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
         with:
           version: v1.64.8
           install-mode: goinstall
+
+      - name: dead code (production only)
+        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        with:
+          version: v1.64.8
+          install-mode: goinstall
+          args: -c .golangci-deadcode.yml
 
       # PGMI_REQUIRE_DB: a release must never be cut off a run whose integration
       # tests all skipped because Docker was unreachable.
@@ -65,10 +72,10 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
       - name: Validate GoReleaser config
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: v2.18.2
           args: check
 
       # The release page leads with this narrative. Fail here, before anything is
@@ -95,12 +102,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26'
 
@@ -122,12 +132,21 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: v2.18.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+
+      # checksums.txt is published unsigned, so matching a download against it
+      # proves nothing if the release assets themselves were replaced. The
+      # attestation binds every artifact's digest to this workflow run:
+      #   gh attestation verify <archive> -R vvka-141/pgmi
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: dist/checksums.txt

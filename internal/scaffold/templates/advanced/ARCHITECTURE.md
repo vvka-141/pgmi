@@ -57,7 +57,7 @@ If your transactions are well-tested:
 
 ## Layered Schema Architecture
 
-The template uses a three-layer design within the four-schema structure:
+The template has five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects. Within them it uses a three-layer design:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

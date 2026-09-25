@@ -11,20 +11,24 @@
 </pgmi-meta>
 */
 
+SELECT core.ensure_view('membership.vw_active_users', $view$
 CREATE OR REPLACE VIEW membership.vw_active_users
 WITH (security_invoker = true) AS
 SELECT object_id, email, display_name, email_verified, created_at, updated_at
 FROM membership."user"
-WHERE is_active = true;
+WHERE is_active = true
+$view$);
 
 COMMENT ON VIEW membership.vw_active_users IS
     'Active users only. Excludes soft-deleted accounts.';
 
+SELECT core.ensure_view('membership.vw_active_organizations', $view$
 CREATE OR REPLACE VIEW membership.vw_active_organizations
 WITH (security_invoker = true) AS
 SELECT object_id, name, slug, owner_user_id, is_personal, created_at, updated_at
 FROM membership.organization
-WHERE is_active = true;
+WHERE is_active = true
+$view$);
 
 COMMENT ON VIEW membership.vw_active_organizations IS
     'Active organizations only. Excludes soft-deleted organizations.';
@@ -32,6 +36,7 @@ COMMENT ON VIEW membership.vw_active_organizations IS
 -- membership.vw_user_owned_organizations lives in 05-current-user.sql: it is
 -- scoped to api.current_user_id(), which is not defined until that file.
 
+SELECT core.ensure_view('membership.vw_user_memberships', $view$
 CREATE OR REPLACE VIEW membership.vw_user_memberships
 WITH (security_invoker = true) AS
 SELECT
@@ -47,23 +52,28 @@ SELECT
     o.is_personal
 FROM membership.organization_member om
 JOIN membership.organization o ON o.object_id = om.organization_id
-WHERE o.is_active = true;
+WHERE o.is_active = true
+$view$);
 
 COMMENT ON VIEW membership.vw_user_memberships IS
     'All memberships (active + pending) with joined org details. Base view for vw_active_memberships and vw_pending_invitations.';
 
+SELECT core.ensure_view('membership.vw_active_memberships', $view$
 CREATE OR REPLACE VIEW membership.vw_active_memberships
 WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
-WHERE status = 'active';
+WHERE status = 'active'
+$view$);
 
 COMMENT ON VIEW membership.vw_active_memberships IS
     'Active memberships only. Filters vw_user_memberships to status = active.';
 
+SELECT core.ensure_view('membership.vw_pending_invitations', $view$
 CREATE OR REPLACE VIEW membership.vw_pending_invitations
 WITH (security_invoker = true) AS
 SELECT * FROM membership.vw_user_memberships
-WHERE status = 'pending';
+WHERE status = 'pending'
+$view$);
 
 COMMENT ON VIEW membership.vw_pending_invitations IS
     'Pending invitations only. Filters vw_user_memberships to status = pending.';

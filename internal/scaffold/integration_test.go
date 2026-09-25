@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/db"
-	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/scaffold"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -41,7 +41,7 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 
 	templateRoot := "templates/" + templateName
 	embedFS := scaffold.GetTemplatesFS()
-	efs := filesystem.NewEmbedFileSystem(embedFS, templateRoot)
+	efs := fakefs.NewEmbedFileSystem(embedFS, templateRoot)
 
 	t.Logf("Testing %s template deployment from embedded FS...", templateName)
 
@@ -76,6 +76,11 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	t.Logf("✓ First deployment completed successfully")
 
 	assertTestsExecuted(t, templateName, notices())
+	// A green run is read by humans and agents alike; the advanced template's
+	// framework used to print ~650 NOTICE lines per deploy (PGMI-386).
+	if n := len(notices()); !testing.Verbose() && n > 150 {
+		t.Errorf("%s deploy printed %d NOTICE lines, want <= 150", templateName, n)
+	}
 
 	// Fingerprint the schema before redeploying. Asserting only that the second
 	// deploy SUCCEEDS misses the failure that matters: DDL which accumulates
@@ -124,7 +129,7 @@ func captureNotices(t *testing.T) func() []string {
 	)
 
 	orig := db.NoticeHandler
-	db.NoticeHandler = func(message, _, _ string) {
+	db.NoticeHandler = func(_, message, _, _ string) {
 		mu.Lock()
 		got = append(got, message)
 		mu.Unlock()
@@ -151,7 +156,11 @@ func assertTestsExecuted(t *testing.T, templateName string, notices []string) {
 		}
 	}
 
-	if want := minExecutedTests[templateName]; count < want {
+	want, ok := minExecutedTests[templateName]
+	if !ok {
+		t.Fatalf("no test floor for template %q: add it to minExecutedTests, or this check silently passes with a floor of 0", templateName)
+	}
+	if count < want {
 		t.Fatalf("%s deploy ran %d test(s), want >= %d", templateName, count, want)
 	}
 	t.Logf("✓ %s template ran %d test(s)", templateName, count)

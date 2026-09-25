@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	pgmitesting "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -22,8 +22,8 @@ import (
 // unfixed code. Both assertions here run on the aborted connection itself and
 // are therefore timing-independent.
 func TestReleaseDeployLock_ReleasesLockOnAbortedTransaction(t *testing.T) {
-	pgmitesting.SkipIfShort(t)
-	connString := pgmitesting.GetTestConnectionString(t)
+	testhelpers.SkipIfShort(t)
+	connString := testhelpers.GetTestConnectionString(t)
 
 	ctx := context.Background()
 
@@ -83,8 +83,8 @@ func TestReleaseDeployLock_ReleasesLockOnAbortedTransaction(t *testing.T) {
 // The rollback must not fire on a healthy connection: a bare ROLLBACK outside a
 // transaction raises a warning, and deploy notices are user-facing output.
 func TestReleaseDeployLock_IdleConnectionStaysSilent(t *testing.T) {
-	pgmitesting.SkipIfShort(t)
-	connString := pgmitesting.GetTestConnectionString(t)
+	testhelpers.SkipIfShort(t)
+	connString := testhelpers.GetTestConnectionString(t)
 
 	ctx := context.Background()
 

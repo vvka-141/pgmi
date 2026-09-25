@@ -15,7 +15,7 @@ Key facts:
 - [Quickstart](https://vvka-141.github.io/pgmi/docs/quickstart/): first deployment, including a five-minute Docker path
 - [What pgmi gives you, and what you own](https://vvka-141.github.io/pgmi/docs/core-vs-template/): the boundary between pgmi core (the binary and its session contract) and the scaffolded project code that becomes yours on init
 - [Why pgmi](https://vvka-141.github.io/pgmi/docs/why-pgmi/): when the approach fits, comparison with Flyway/Liquibase/Sqitch/Atlas
-- [Highlights](https://vvka-141.github.io/pgmi/docs/highlights/): nine capabilities with no direct equivalent in other tools — each with an honest competitor line and a link to the implementing code; includes "what this page deliberately doesn't claim"
+- [Highlights](https://vvka-141.github.io/pgmi/docs/highlights/): ten capabilities with no direct equivalent in other tools — each with an honest competitor line and a link to the implementing code; includes "what this page deliberately doesn't claim"
 - [deploy.sql guide](https://vvka-141.github.io/pgmi/docs/deploy-guide/): authoring patterns — ordering, environment branching, data ingestion, multi-phase
 - [Session API](https://vvka-141.github.io/pgmi/docs/session-api/): views, columns, functions reference
 - [Testing](https://vvka-141.github.io/pgmi/docs/testing/): test directories, fixtures, savepoint isolation, gated deployments
@@ -24,7 +24,7 @@ Key facts:
 - [Connections](https://vvka-141.github.io/pgmi/docs/connections/): cloud auth (Azure Entra ID, AWS IAM, Google Cloud SQL IAM), SSL, poolers
 - [Security](https://vvka-141.github.io/pgmi/docs/security/): secrets handling and CI/CD patterns
 - [Production guide](https://vvka-141.github.io/pgmi/docs/production/): compatibility matrix, rollback, monitoring
-- [pgmi serve](https://vvka-141.github.io/pgmi/docs/cli/#pgmi-serve): core CLI MCP server over stdio; exposes pgmi project-inspection commands to coding agents
+- [pgmi serve](https://vvka-141.github.io/pgmi/docs/cli/#pgmi-serve): core CLI MCP server over stdio; exposes pgmi's commands, including `init` and `deploy`, to coding agents as tools
 - [Advanced template overview](https://vvka-141.github.io/pgmi/docs/advanced/): the scaffolded application stack (REST/RPC/MCP framework, membership, API keys, transaction policy) and the basic/advanced boundary
 - [Advanced-template MCP gateway](https://vvka-141.github.io/pgmi/docs/mcp/): optional scaffolded application subsystem; exposes your deployed PostgreSQL application's tools, resources, and prompts over HTTP
 - [Run the MCP gateway](https://vvka-141.github.io/pgmi/docs/advanced/mcp-gateway/): deploy, start, connect an AI client, transaction policy, production notes

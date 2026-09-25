@@ -39,6 +39,64 @@ $$;
 COMMENT ON FUNCTION internal.validate_handler_name(text) IS
     'Rejects handler names that risk PostgreSQL identifier truncation (>49 chars) or break format(%I) quoting. ASCII-only.';
 
+-- validate_handler_name guards one way two names become one function: truncation.
+-- This guards the other: RPC and MCP fold '.' and '-' to '_', so "reports.run",
+-- "reports-run" and "reports_run" all become rpc_reports_run. Without it the
+-- second registration replaced the first handler's body, then failed on
+-- api.handler's unique handler_func with a message naming neither method.
+CREATE OR REPLACE FUNCTION internal.assert_function_name_free(
+    p_id uuid,
+    p_schema text,
+    p_function_name text,
+    p_request_type text,
+    p_name text
+) RETURNS void
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_owner_id uuid;
+    v_owner_name text;
+BEGIN
+    SELECT h.object_id, COALESCE(rr.method_name, mr.mcp_name)
+    INTO v_owner_id, v_owner_name
+    FROM api.handler h
+    LEFT JOIN api.rpc_route rr ON rr.handler_object_id = h.object_id
+    LEFT JOIN api.mcp_route mr ON mr.handler_object_id = h.object_id
+    WHERE h.handler_func = to_regprocedure(format('%I.%I(%s)', p_schema, p_function_name, p_request_type))
+      AND h.object_id <> p_id
+    LIMIT 1;
+
+    IF v_owner_id IS NOT NULL THEN
+        RAISE EXCEPTION '"%" and "%" (handler %) both become function %.%', p_name, v_owner_name, v_owner_id, p_schema, p_function_name
+            USING ERRCODE = 'unique_violation',
+                  HINT = 'Dots and hyphens in a name become underscores in its function name. Rename one of the two.';
+    END IF;
+END;
+$$;
+
+-- ============================================================================
+-- Shared: Cross Probe for Route Overlap
+-- ============================================================================
+-- A concrete path both canonical paths could describe: each segment takes a
+-- fixed word from whichever path has one there, else a placeholder. NULL when
+-- the segment counts differ or both paths fix different words at one
+-- position, since then no single path can reach both.
+
+CREATE OR REPLACE FUNCTION internal.cross_probe(p_a text, p_b text)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    WITH a AS (SELECT s, i FROM unnest(string_to_array(p_a, '/')) WITH ORDINALITY AS t(s, i)),
+         b AS (SELECT s, i FROM unnest(string_to_array(p_b, '/')) WITH ORDINALITY AS t(s, i)),
+         pair AS (
+             SELECT a.i, a.s AS sa, b.s AS sb,
+                    a.s !~ '[{}]' AS fixed_a, b.s !~ '[{}]' AS fixed_b
+             FROM a JOIN b USING (i))
+    SELECT CASE
+        WHEN (SELECT count(*) FROM a) IS DISTINCT FROM (SELECT count(*) FROM b) THEN NULL
+        WHEN EXISTS (SELECT 1 FROM pair WHERE fixed_a AND fixed_b AND sa IS DISTINCT FROM sb) THEN NULL
+        ELSE (SELECT string_agg(CASE WHEN fixed_a THEN sa WHEN fixed_b THEN sb ELSE 'p' END, '/' ORDER BY i) FROM pair)
+    END
+$$;
+
 -- ============================================================================
 -- Shared: Random Dollar-Quote Boundary
 -- ============================================================================
@@ -188,13 +246,42 @@ DECLARE
     v_canonical_path text;
     v_existing_handler uuid;
     v_example text;
+    v_probe text;
     v_overlap_msg text;
+    v_query jsonb;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
         RAISE EXCEPTION 'REST handler metadata requires "id" (uuid)';
     END IF;
 
+    -- The query string is declared, not matched: ?a=1&b=2 and ?b=2&a=1 are one
+    -- request, so a regex over the raw string would be order- and
+    -- encoding-sensitive. The declaration drives enforcement and the spec.
+    v_query := COALESCE(p_metadata->'query', '[]'::jsonb);
+    IF jsonb_typeof(v_query) IS DISTINCT FROM 'array' OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_query) q
+        WHERE jsonb_typeof(q) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(q->'name') IS DISTINCT FROM 'string'
+           OR (q ? 'required' AND jsonb_typeof(q->'required') IS DISTINCT FROM 'boolean')
+           OR (q ? 'allowEmptyValue' AND jsonb_typeof(q->'allowEmptyValue') IS DISTINCT FROM 'boolean')
+           OR (q ? 'schema' AND jsonb_typeof(q->'schema') IS DISTINCT FROM 'object'))
+    THEN
+        RAISE EXCEPTION 'REST handler %: query must be an array of {name, required?, allowEmptyValue?, schema?, description?}',
+            COALESCE(p_metadata->>'name', v_id::text)
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF (SELECT count(*) IS DISTINCT FROM count(DISTINCT q->>'name') FROM jsonb_array_elements(v_query) q) THEN
+        RAISE EXCEPTION 'REST handler %: query declares a parameter name twice',
+            COALESCE(p_metadata->>'name', v_id::text)
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    -- Matching is liberal at the funnel and exact at the identity: rest_invoke
+    -- canonicalizes every valid spelling of a path before matching, and the
+    -- checks below prove each route's identity against every other route.
+    -- Requiring anchored regexes instead was tried and rejected: it outlawed
+    -- valid spellings and still let /users/.* shadow /users/([0-9]+).
     v_path := p_metadata->>'path';
     v_uri  := p_metadata->>'uri';
 
@@ -247,6 +334,24 @@ BEGIN
         RAISE EXCEPTION
             'Route % self-consistency failure: example "%" does not match uri regex "%"',
             COALESCE(p_metadata->>'name', v_id::text), v_example, v_uri
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    -- The non-overlap proof needs one concrete URL per route. A parameterised
+    -- route used to have none, so it was skipped: ^/users/([0-9]+)$ (public)
+    -- and ^/users/.*$ (requiresAuth) both registered, and /users/5 went to
+    -- whichever matched first, silently changing the first route's auth.
+    -- A path-only declaration derives its probe (its regex accepts any
+    -- segment); a hand-written uri with capture groups has to supply one.
+    v_probe := CASE
+        WHEN v_example IS NOT NULL THEN v_example
+        WHEN v_canonical_path NOT LIKE '%{%' THEN v_canonical_path
+        WHEN v_path IS NOT NULL AND NOT p_metadata ? 'uri' THEN regexp_replace(v_path, '\{[^}]+\}', 'p', 'g')
+    END;
+    IF v_probe IS NULL THEN
+        RAISE EXCEPTION
+            'Route % has capture groups in its uri; provide an "example" URL it matches, so overlap with other routes can be checked',
+            COALESCE(p_metadata->>'name', v_id::text)
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
@@ -310,6 +415,10 @@ BEGIN
                   HINT = 'Handler names become function names (api.<name>): two handlers cannot share one. Rename this handler, or reuse the existing handler''s id to replace it.';
     END IF;
 
+    -- One probe per route misses a pair like /shops/{shop}/orders and
+    -- /shops/main/{section}: each probe matches only its own route, yet
+    -- /shops/main/orders matches both. The cross probe fills each variable
+    -- segment with the other route's fixed word at that position.
     SELECT string_agg(
         format('%s overlaps %s',
             COALESCE(v_name, v_id::text),
@@ -318,12 +427,11 @@ BEGIN
     )
     INTO v_overlap_msg
     FROM api.rest_route r
+    LEFT JOIN LATERAL (SELECT internal.cross_probe(v_canonical_path, r.canonical_path) AS path) x ON true
     WHERE r.handler_object_id <> v_id
-      AND (
-          (v_canonical_path NOT LIKE '%{%' AND v_canonical_path ~ r.address_regexp)
-          OR
-          (r.canonical_path NOT LIKE '%{%' AND r.canonical_path <> '' AND r.canonical_path ~ v_uri)
-      )
+      AND (v_probe ~ r.address_regexp
+           OR (r.probe_path <> '' AND r.probe_path ~ v_uri)
+           OR (x.path IS NOT NULL AND x.path ~ v_uri AND x.path ~ r.address_regexp))
       AND EXISTS (
           SELECT 1
           FROM unnest(ARRAY['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS']) AS m(method)
@@ -408,9 +516,11 @@ $%s$ LANGUAGE plpgsql$sql$,
         input_json_schema = EXCLUDED.input_json_schema,
         output_json_schema = EXCLUDED.output_json_schema;
 
-    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log, canonical_path)
-    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log, v_canonical_path)
+    INSERT INTO api.rest_route (handler_object_id, address_regexp, method_regexp, version_regexp, route_name, auto_log, canonical_path, probe_path, query_contract)
+    VALUES (v_id, v_uri, v_http_method, v_version, v_name, v_auto_log, v_canonical_path, v_probe, v_query)
     ON CONFLICT (handler_object_id) DO UPDATE SET
+        probe_path = EXCLUDED.probe_path,
+        query_contract = EXCLUDED.query_contract,
         address_regexp = EXCLUDED.address_regexp,
         method_regexp = EXCLUDED.method_regexp,
         version_regexp = EXCLUDED.version_regexp,
@@ -527,6 +637,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_function_schema, v_function_name, v_boundary, p_handler_body, v_boundary
     );
 
+    PERFORM internal.assert_function_name_free(v_id, v_function_schema, v_function_name, 'api.rpc_request', v_method_name);
     PERFORM internal.drop_renamed_handler(v_id, v_function_schema, v_function_name, 'api.rpc_request');
     EXECUTE v_function_sql;
 
@@ -677,6 +788,28 @@ BEGIN
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
     v_uri_template := p_metadata->>'uriTemplate';
 
+    -- MCP requires a root {"type": "object"} for both schemas and a
+    -- [{name, description?, required?}] list for prompt arguments; a
+    -- validating client rejects the whole tools/list or prompts/list otherwise.
+    IF v_type = 'tool' AND (v_input_schema::jsonb)->>'type' IS DISTINCT FROM 'object' THEN
+        RAISE EXCEPTION 'MCP tool "%": inputSchema must be a JSON Schema with "type": "object"', v_name
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF v_output_schema IS NOT NULL AND (v_output_schema::jsonb)->>'type' IS DISTINCT FROM 'object' THEN
+        RAISE EXCEPTION 'MCP handler "%": outputSchema must be a JSON Schema with "type": "object"', v_name
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF v_type = 'prompt' AND p_metadata->'arguments' IS NOT NULL AND (
+        jsonb_typeof(p_metadata->'arguments') IS DISTINCT FROM 'array' OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(p_metadata->'arguments') a
+            WHERE jsonb_typeof(a) IS DISTINCT FROM 'object'
+               OR jsonb_typeof(a->'name') IS DISTINCT FROM 'string'
+               OR (a ? 'required' AND jsonb_typeof(a->'required') IS DISTINCT FROM 'boolean')))
+    THEN
+        RAISE EXCEPTION 'MCP prompt "%": arguments must be an array of {name, description?, required?}', v_name
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
     IF v_type = 'resource' AND v_uri_template IS NULL THEN
         RAISE EXCEPTION 'MCP resource "%" requires "uriTemplate"', v_name
             USING ERRCODE = 'invalid_parameter_value';
@@ -708,6 +841,7 @@ $%s$ LANGUAGE plpgsql$sql$,
         v_function_schema, v_function_name, v_boundary, p_handler_body, v_boundary
     );
 
+    PERFORM internal.assert_function_name_free(v_id, v_function_schema, v_function_name, 'api.mcp_request', v_name);
     PERFORM internal.drop_renamed_handler(v_id, v_function_schema, v_function_name, 'api.mcp_request');
     EXECUTE v_function_sql;
 

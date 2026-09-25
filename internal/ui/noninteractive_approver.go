@@ -17,7 +17,7 @@ import (
 // is a missing flag.
 type NonInteractiveApprover struct{}
 
-func NewNonInteractiveApprover() pgmi.Approver {
+func NewNonInteractiveApprover() *NonInteractiveApprover {
 	return &NonInteractiveApprover{}
 }
 

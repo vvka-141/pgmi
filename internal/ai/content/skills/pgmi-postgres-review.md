@@ -417,7 +417,8 @@ BEGIN
     RETURN 0; -- Success
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE EXCEPTION 'Migration failed: % (SQLSTATE: %)', SQLERRM, SQLSTATE;
+        RAISE WARNING 'Migration failed: %', p_path;
+        RAISE;
 END;
 $$ LANGUAGE plpgsql;
 ```
@@ -897,7 +898,8 @@ EXCEPTION
     WHEN unique_violation THEN
         RAISE WARNING 'Duplicate key detected: %', SQLERRM;
     WHEN OTHERS THEN
-        RAISE EXCEPTION 'Unexpected error: % (SQLSTATE: %)', SQLERRM, SQLSTATE;
+        RAISE WARNING 'Unexpected error: % (SQLSTATE: %)', SQLERRM, SQLSTATE;
+        RAISE;  -- bare RAISE keeps SQLSTATE, DETAIL and position
 END;
 ```
 
@@ -988,7 +990,7 @@ jsonb_build_object(
 jsonb_build_object(
     'httpMethod', '^GET$',       -- Correct
     'autoLog', false,             -- Correct
-    'inputSchema', '{}'::jsonb    -- Correct
+    'inputSchema', '{"type":"object"}'::jsonb    -- Correct
 )
 ```
 

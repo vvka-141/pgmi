@@ -75,8 +75,10 @@ api.mcp_success(result jsonb, request_id jsonb) RETURNS api.mcp_response
 -- Generic JSON-RPC error
 api.mcp_error(code integer, message text, request_id jsonb) RETURNS api.mcp_response
 
--- Convenience wrappers (use -32603 Internal Error)
+-- Tool error: a successful tool result with isError = true, not a JSON-RPC error
 api.mcp_tool_error(message text, request_id jsonb) RETURNS api.mcp_response
+
+-- Convenience wrappers (use -32603 Internal Error)
 api.mcp_resource_error(message text, request_id jsonb) RETURNS api.mcp_response
 api.mcp_prompt_error(message text, request_id jsonb) RETURNS api.mcp_response
 ```

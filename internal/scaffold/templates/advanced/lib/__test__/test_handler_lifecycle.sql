@@ -503,3 +503,63 @@ BEGIN
     RAISE NOTICE '  + A colliding MCP name is refused with an attributable error';
     RAISE NOTICE '✓ MCP name-collision tests passed';
 END $$;
+
+-- RPC and MCP fold '.' and '-' to '_' when deriving the function name, so two
+-- distinct names can claim one function. The raw-name guards above cannot see
+-- that; the second registration used to replace the first handler's body and
+-- then fail on handler_func with a message naming neither.
+DO $$
+DECLARE
+    v_case    record;
+    v_message text;
+BEGIN
+    RAISE NOTICE '-> Testing folded-name collisions for RPC and MCP';
+
+    PERFORM api.create_or_replace_rpc_handler(
+        jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000001',
+            'methodName', 'reports.run', 'requiresAuth', false),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'rpc-first')); END; $body$);
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000003',
+            'type', 'tool', 'name', 'fold.probe', 'description', 'first', 'requiresAuth', false),
+        $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('mcp-first'::text), (request).request_id); END; $body$);
+
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('rpc', 'reports-run', 'reports.run', 'api.rpc_reports_run(api.rpc_request)',       'rpc-first'),
+            ('mcp', 'fold-probe',  'fold.probe',  'api.mcp_tool_fold_probe(api.mcp_request)',   'mcp-first')
+        ) AS c(kind, second_name, first_name, fn, first_marker)
+    LOOP
+        v_message := NULL;
+        BEGIN
+            IF v_case.kind = 'rpc' THEN
+                PERFORM api.create_or_replace_rpc_handler(
+                    jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000002',
+                        'methodName', v_case.second_name, 'requiresAuth', false),
+                    $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'second')); END; $body$);
+            ELSE
+                PERFORM api.create_or_replace_mcp_handler(
+                    jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000004',
+                        'type', 'tool', 'name', v_case.second_name, 'description', 'second', 'requiresAuth', false),
+                    $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('second'::text), (request).request_id); END; $body$);
+            END IF;
+            RAISE EXCEPTION 'TEST FAILED: % "%" and "%" must not share one function', v_case.kind, v_case.first_name, v_case.second_name;
+        EXCEPTION WHEN unique_violation THEN
+            GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+        END;
+
+        IF coalesce(v_message, '') NOT LIKE '%"' || v_case.first_name || '"%'
+           OR coalesce(v_message, '') NOT LIKE '%"' || v_case.second_name || '"%' THEN
+            RAISE EXCEPTION 'TEST FAILED: % collision must name both "%" and "%", got: %',
+                v_case.kind, v_case.first_name, v_case.second_name, v_message;
+        END IF;
+
+        IF coalesce((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure(v_case.fn)), '')
+           NOT LIKE '%' || v_case.first_marker || '%' THEN
+            RAISE EXCEPTION 'TEST FAILED: the refused % registration replaced the body of %', v_case.kind, v_case.fn;
+        END IF;
+    END LOOP;
+
+    RAISE NOTICE '  + Folded-name collisions are refused before the incumbent is touched';
+    RAISE NOTICE '✓ Folded-name collision tests passed';
+END $$;

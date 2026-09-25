@@ -10,12 +10,13 @@ connection:
 
 # Parameters passed to deploy.sql
 # See session.xml for all declared parameters and their descriptions.
-# With env=dev, role names default to <database>_owner/admin/api/customer
-# and passwords default to 'postgres'.
-params:
-  env: dev                    # dev = safe defaults, prod = require explicit passwords
-
-  # Non-dev deployments need database_admin_password. It is a secret: pass it
-  # with --params-file (kept out of version control), never in this file.
+# env is required and deliberately not set here, so a committed file can never
+# make a production deploy look like dev. Pass it per deploy:
+#   local:  pgmi deploy . -d mydb --param env=dev
+#           (role passwords default to 'postgres': disposable databases only)
+#   shared: put env and database_admin_password in a params file kept out of
+#           version control, and pass it with --params-file
+# params:
+#   some_setting: value
 
 timeout: 5m                   # Deployment timeout

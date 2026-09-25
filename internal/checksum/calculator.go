@@ -83,23 +83,17 @@ const (
 	csQuotedIdentifier
 )
 
-// removeComments removes SQL comments while preserving string literals.
+// scan removes SQL comments while preserving string literals.
 // Handles single-quoted strings (doubled-apostrophe and E” backslash escapes),
 // dollar-quoted strings ($$...$$, $tag$...$tag$), quoted identifiers, and
 // nested block comments (/* /* */ */).
 //
 // A comment becomes one space rather than nothing: deleting it outright would
 // normalize a/*x*/b to ab, which collides with the different statement `ab`.
-// That is why this does not simply call the preprocessor's Strip, whose
-// contract is to remove comment bytes entirely.
-func (c SHA256) removeComments(content string) string {
-	return c.scan(content, false)
-}
-
-// scan is that removal, optionally folding case as it goes. Folding belongs
-// here, not in a second pass, because only this scan knows which bytes are
-// outside a literal. SQL ignores case for keywords and unquoted identifiers
-// alone: "Users" and "users" are different tables, and 'Production' and
+//
+// It optionally folds case as it goes. Folding belongs here, not in a second
+// pass, because only this scan knows which bytes are outside a literal. SQL
+// ignores case for keywords and unquoted identifiers alone: "Users" and "users" are different tables, and 'Production' and
 // 'production' are different data. Folding those made two scripts that deploy
 // differently share one checksum, so a change gated on it was skipped.
 func (c SHA256) scan(content string, foldCase bool) string {

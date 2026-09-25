@@ -363,7 +363,8 @@ object's keys are **camelCase**. The ones that bite if you get them wrong:
 | `name` | yes | — | Becomes function `api.<name>`. Must match `^[a-zA-Z][a-zA-Z0-9_.-]{0,48}$` (ASCII, ≤49 chars, leading letter). |
 | `requiresAuth` | no | **`true`** | Omitting it makes the endpoint **authenticated** — 401 without resolved identity. Set `false` for a public endpoint. |
 | `autoLog` | no | **`true`** | Request logging. |
-| `inputSchema` / `outputSchema` | no | — | JSON Schema, validated **at registration time**; an empty `{}` is rejected (needs a real keyword like `type`/`properties`/`required`). |
+| `query` | no | — (none) | Declared query parameters `[{name, required?, allowEmptyValue?, schema?, description?}]`. Enforced by the gateway (400 naming the parameter) and published as `in: query`. Declare what the handler reads with `api.query_params()`. |
+| `inputSchema` / `outputSchema` | no | — | JSON Schema, validated **at registration time**; an empty `{}` is rejected (needs a real keyword like `type`/`properties`/`required`). The gateway checks a POST/PUT/PATCH body's top level against `inputSchema` (root type, required keys, property types) and answers 400 before the handler runs; deeper rules are the handler's. |
 | `minTransactionIsolation` | no | — (no floor) | Isolation floor (`read committed` / `repeatable read` / `serializable`). The client gateway resolves it (`api.rest_route_policy` et al.) and opens the transaction at `max(floor, requested)`; the SQL gateway validates fail-closed — a proxy that skips the lookup gets 428 (REST) / `-32600` (RPC/MCP) with `pgmi.transaction_isolation_too_weak`. |
 | `readOnly` | no | `false` | Route only reads. The client gateway opens the transaction `READ ONLY` (an accidental write in the handler is a hard error; `SERIALIZABLE READ ONLY` opens `DEFERRABLE` and never needs a retry). Dispatch in a read-write transaction is rejected with `pgmi.transaction_read_only_required`. |
 
@@ -378,7 +379,7 @@ dollar-quoted with `$body$`, never the `CREATE FUNCTION` header or a trailing
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'c1000090-0002-4000-8000-000000000001',
-        'uri', '^/orders(\?.*)?$',
+        'path', '/orders',
         'httpMethod', '^POST$',
         'name', 'create_order',
         'description', 'Create a new order',

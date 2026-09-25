@@ -110,6 +110,7 @@ CREATE INDEX IF NOT EXISTS ix_mcp_exchange_name
 COMMENT ON TABLE api.mcp_exchange IS
     'MCP protocol exchanges (tools, resources, prompts). Always complete - no pending state.';
 
+SELECT core.ensure_view('api.inbound_queue_with_protocol', $view$
 CREATE OR REPLACE VIEW api.inbound_queue_with_protocol AS
 SELECT
     CASE tableoid
@@ -122,7 +123,8 @@ SELECT
     object_id,
     enqueued_at,
     handler_object_id
-FROM api.inbound_queue;
+FROM api.inbound_queue
+$view$);
 
 COMMENT ON VIEW api.inbound_queue_with_protocol IS
     'Queue view with protocol discrimination using tableoid. Use this when protocol filtering is needed.';

@@ -27,10 +27,10 @@ func TestAdvancedDeploySQLWiresTheEntityStandardsSweep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read advanced deploy.sql: %v", err)
 	}
-	// Comments first: deploy.sql's header documents "CALL pgmi_test()" dozens
+	// Comments and literals masked first: deploy.sql's header documents "CALL pgmi_test()" dozens
 	// of lines above the real call, and matching that instead of the statement
 	// made this test report an ordering violation that does not exist.
-	deploySQL := preprocessor.NewCommentStripper().Strip(string(body))
+	deploySQL := preprocessor.NewCommentStripper().RedactForMacros(string(body))
 
 	const sweep = "pg_temp.apply_entity_standards_all()"
 	sweepAt := strings.Index(deploySQL, sweep)

@@ -94,15 +94,7 @@ func TestForcedApprover_ContextCancellation(t *testing.T) {
 }
 
 func TestForcedApprover_NewForcedApprover(t *testing.T) {
-	approver := NewForcedApprover(true)
-	if approver == nil {
-		t.Fatal("Expected non-nil approver")
-	}
-
-	fa, ok := approver.(*ForcedApprover)
-	if !ok {
-		t.Fatal("Expected *ForcedApprover type")
-	}
+	fa := NewForcedApprover(true)
 	if !fa.verbose {
 		t.Error("Expected verbose=true")
 	}
@@ -266,15 +258,7 @@ func TestInteractiveApprover_InputWithWhitespace(t *testing.T) {
 }
 
 func TestNewInteractiveApprover(t *testing.T) {
-	approver := NewInteractiveApprover(false)
-	if approver == nil {
-		t.Fatal("Expected non-nil approver")
-	}
-
-	ia, ok := approver.(*InteractiveApprover)
-	if !ok {
-		t.Fatal("Expected *InteractiveApprover type")
-	}
+	ia := NewInteractiveApprover(false)
 	if ia.verbose {
 		t.Error("Expected verbose=false")
 	}

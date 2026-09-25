@@ -35,7 +35,8 @@ func GetAdvancedLibReadme() (string, error) {
 
 // Scaffolder handles project initialization from templates
 type Scaffolder struct {
-	verbose bool
+	verbose     bool
+	pgmiVersion string
 }
 
 // NewScaffolder creates a new Scaffolder instance
@@ -43,6 +44,19 @@ func NewScaffolder(verbose bool) *Scaffolder {
 	return &Scaffolder{
 		verbose: verbose,
 	}
+}
+
+// WithVersion records the pgmi version that scaffolds the project. It is
+// written into deploy.sql so a user can tell, after a template fix, whether
+// their files predate it.
+func (s *Scaffolder) WithVersion(v string) *Scaffolder {
+	s.pgmiVersion = v
+	return s
+}
+
+// ScaffoldedLine is the first line pgmi init writes into deploy.sql.
+func ScaffoldedLine(version, templateName string) string {
+	return fmt.Sprintf("-- Scaffolded by pgmi %s from the %s template.", version, templateName)
 }
 
 // CreateProject creates a new project from a template
@@ -70,7 +84,7 @@ func (s *Scaffolder) CreateProject(projectName, templateName, targetPath string)
 	s.logVerbose("Creating project '%s' at %s with template '%s'", projectName, targetPath, templateName)
 
 	// Copy template files
-	if err := s.copyTemplateFiles(templatePath, targetPath, projectName); err != nil {
+	if err := s.copyTemplateFiles(templatePath, targetPath, projectName, templateName); err != nil {
 		return fmt.Errorf("failed to copy template files: %w", err)
 	}
 
@@ -79,7 +93,7 @@ func (s *Scaffolder) CreateProject(projectName, templateName, targetPath string)
 }
 
 // copyTemplateFiles recursively copies files from embedded template to target directory
-func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName string) error {
+func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, templateName string) error {
 	return fs.WalkDir(templatesFS, templatePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -112,6 +126,13 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName str
 
 		// Process template variables
 		processedContent := s.processTemplate(string(content), projectName, relPath)
+		if relPath == "deploy.sql" {
+			version := s.pgmiVersion
+			if version == "" {
+				version = "dev"
+			}
+			processedContent = ScaffoldedLine(version, templateName) + "\n" + processedContent
+		}
 
 		// Skip pgmi-managed files that already exist (e.g. pgmi.yaml from pgmi config)
 		if ManagedFiles[filepath.Base(targetFilePath)] {

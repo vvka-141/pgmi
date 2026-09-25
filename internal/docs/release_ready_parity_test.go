@@ -69,7 +69,7 @@ func TestReleaseReadyParityWithMakefile(t *testing.T) {
 
 	// The example count has been wrong in two places already this release.
 	if strings.Contains(script, "three end-to-end") || strings.Contains(target, "three end-to-end") {
-		t.Error(`the example-gate count says "three"; examples.yml runs five`)
+		t.Error(`the example-gate count says "three"; examples.yml runs six`)
 	}
 }
 

@@ -81,17 +81,19 @@ func handleREST(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Build headers hstore for PostgreSQL
-    headers := map[string]string{
-        "x-user-id": userID,
-        "content-type": r.Header.Get("Content-Type"),
+    // Forward every request header; identity comes from the gateway, never
+    // from the client, so drop any x-user-id the client sent before setting it.
+    headers := map[string]string{}
+    for name, values := range r.Header {
+        headers[strings.ToLower(name)] = strings.Join(values, ", ")
     }
+    headers["x-user-id"] = userID
 
-    // Call PostgreSQL handler
+    // RequestURI keeps the query string; URL.Path would drop it.
     var response HTTPResponse
     err := db.QueryRow(ctx,
         "SELECT * FROM api.rest_invoke($1, $2, $3, $4)",
-        r.Method, r.URL.Path, headers, body,
+        r.Method, r.URL.RequestURI(), headers, body,
     ).Scan(&response.Status, &response.Headers, &response.Body)
 
     // Gateway responsibility: sanitize errors
@@ -101,6 +103,11 @@ func handleREST(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    // Copy every response header: Allow on 405, WWW-Authenticate on 401,
+    // Content-Type, Cache-Control, ETag and Vary all come from PostgreSQL.
+    for name, value := range response.Headers {
+        w.Header().Set(name, value)
+    }
     w.WriteHeader(response.Status)
     w.Write(response.Body)
 }
@@ -120,7 +127,7 @@ myproject/
 ├── api/                      # YOUR API HANDLERS
 │   └── examples.sql          # Starting point - modify/replace this
 ├── __test__/                 # YOUR TESTS
-├── tools/                    # MCP stdio gateway (mcp-gateway.py, requirements.txt)
+├── tools/                    # MCP HTTP gateway (mcp-gateway.py, requirements.txt)
 ├── deploy.sql                # Deployment orchestrator (includes infrastructure bootstrap)
 ├── session.xml               # Parameter declarations consumed by deploy.sql
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
@@ -153,21 +160,31 @@ This template is a working reference system, not a framework you must keep whole
 
 ### 1. Deploy
 
-Role passwords are required (see [Parameters](#parameters)). Pass them via a
-params file, **never as command-line `--param`** — values on the command line
-leak to the process list (`ps`), shell history, and CI logs. Use strong,
-generated values; the names below are placeholders.
+Every deploy says which environment it targets with `env`. There is no default.
+
+On a local, disposable database, `env=dev` is enough: missing role passwords
+default to `postgres`, with a warning.
 
 ```bash
-# Write the secrets file (add it to .gitignore), deploy, then remove it.
+pgmi deploy . --database myapp_dev --param env=dev
+```
+
+Anywhere else, set `env` to something other than `dev` and pass the admin
+password in a params file, **never as command-line `--param`**. Values on the
+command line leak to the process list (`ps`), shell history, and CI logs. Use
+strong, generated values; the names below are placeholders.
+
+```bash
+# Write the params file (*.params is gitignored), deploy, then remove it.
 umask 077
-cat > secrets.env <<'EOF'
+cat > prod.params <<'EOF'
+env=prod
 database_admin_password=CHANGE_ME
 EOF
 
-pgmi deploy . --database myapp_dev --params-file secrets.env
+pgmi deploy . --database myapp --params-file prod.params
 
-rm -f secrets.env
+rm -f prod.params
 ```
 
 In CI, generate `secrets.env` from your pipeline's secret store. See the
@@ -197,7 +214,7 @@ Edit `api/examples.sql` or create a new file in `api/`:
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'YOUR-HANDLER-UUID',
-        'uri', '^/my-endpoint$',
+        'path', '/my-endpoint',
         'httpMethod', '^GET$',
         'name', 'my_endpoint',
         'description', 'My custom endpoint',
@@ -374,12 +391,12 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`) an
 
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
-| `database_admin_password` | - | **Yes** | Admin role password |
+| `env` | - | **Yes** | Environment name. `dev` defaults missing passwords to `postgres` |
+| `database_admin_password` | `postgres` when `env=dev` | **Yes**, unless `env=dev` | Admin role password |
 | `database_owner_role` | `<dbname>_owner` | No | Owner role (NOLOGIN) |
 | `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN, full access) |
 | `database_api_role` | `<dbname>_api` | No | API group role (NOLOGIN, permission bundle) |
 | `database_customer_role` | `<dbname>_customer` | No | Customer role (NOLOGIN, RLS-restricted) |
-| `env` | `development` | No | Environment name |
 
 Pass the required password parameters via `--params-file` (or a CI/CD-generated
 seeding file), never as command-line `--param` — see [Deploy](#1-deploy).
@@ -438,7 +455,20 @@ myproject/
     └── my_tables.sql
 ```
 
-Your files execute after framework files (use sortKeys `005/xxx` or higher).
+Every SQL file needs a `<pgmi-meta>` block giving its place in the plan, with a
+sort key of `005/...` or later so it runs after the framework:
+
+```sql
+/*
+<pgmi-meta id="<a new uuid>" idempotent="true">
+  <sortKeys><key>005/010</key></sortKeys>
+</pgmi-meta>
+*/
+CREATE TABLE IF NOT EXISTS core.my_table (...);
+```
+
+A file without one would sort by its path, ahead of the framework, so
+`deploy.sql` stops before running anything and names it.
 
 ## Working with an AI assistant
 
@@ -471,11 +501,24 @@ CALL pgmi_test('.*/api/.*');
 
 ## Troubleshooting
 
-### "Required parameter missing"
-Provide the required password parameters via a params file (see [Deploy](#1-deploy)) — not on the command line:
+### "Missing required parameters"
+Every deploy needs `env`, and every deploy with an `env` other than `dev` needs
+`database_admin_password`. Pass them in a params file (see [Deploy](#1-deploy)),
+not on the command line:
 ```bash
-pgmi deploy . -d mydb --params-file secrets.env
+pgmi deploy . -d mydb --params-file prod.params
 ```
+
+### "canceling statement due to lock timeout" (55P03)
+`deploy.sql` sets `lock_timeout = '5s'`: a deploy that needs a table lock held
+by a long-running application transaction fails instead of queueing every
+query behind it. Retry when the load drops. An unchanged redeploy takes no
+ACCESS EXCLUSIVE lock on tables: RLS goes through `core.ensure_rls` /
+`core.ensure_policy`, which run DDL only when the policy changed, and
+evolution-path `ALTER TABLE`s check `pg_temp.has_column` first, and views go
+through `core.ensure_view`, which replaces a view only when its statement
+changed. `CREATE OR REPLACE VIEW` locks the view exclusively even when the
+definition is identical, so wrap your own views the same way.
 
 ### Script execution order issues
 Check your `<sortKeys>` - lower values execute first.

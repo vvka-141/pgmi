@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/params"
-	testhelpers "github.com/vvka-141/pgmi/internal/testing"
+	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 

@@ -96,6 +96,7 @@ AS $$
             WHERE k.key_id = ui.idp_subject_id
               AND k.status = 'active'
               AND k.deleted_at IS NULL
+              AND (k.activated_at IS NULL OR k.activated_at <= now())
               AND (k.expires_at IS NULL OR k.expires_at > now())
           ));
 $$;
@@ -156,6 +157,7 @@ AS $$
       AND k.key_id = api.parse_idp_subject_id(api.current_idp_subject())
       AND k.status = 'active'
       AND k.deleted_at IS NULL
+      AND (k.activated_at IS NULL OR k.activated_at <= now())
       AND (k.expires_at IS NULL OR k.expires_at > now());
 $$;
 
@@ -208,6 +210,7 @@ COMMENT ON FUNCTION api.current_owner_org_ids() IS
 -- Current User View
 -- ============================================================================
 
+SELECT core.ensure_view('api.vw_current_user', $view$
 CREATE OR REPLACE VIEW api.vw_current_user
 WITH (security_invoker = true) AS
 SELECT
@@ -218,7 +221,8 @@ SELECT
     api.current_member_org_ids() AS member_org_ids,
     api.current_owner_org_ids() AS owner_org_ids
 FROM membership."user" u
-WHERE u.object_id = api.current_user_id();
+WHERE u.object_id = api.current_user_id()
+$view$);
 
 COMMENT ON VIEW api.vw_current_user IS
     'Current session user profile with org memberships. Reads the auth.idp_subject session variable.';
@@ -265,6 +269,7 @@ DO $$ BEGIN RAISE NOTICE '  ✓ current user context installed'; END $$;
 -- Defined here rather than in 02-views.sql because they depend on
 -- api.current_user_id().
 
+SELECT core.ensure_view('membership.vw_user_owned_organizations', $view$
 CREATE OR REPLACE VIEW membership.vw_user_owned_organizations
 WITH (security_invoker = true) AS
 SELECT o.object_id, o.name, o.slug, o.owner_user_id, o.is_personal, o.created_at
@@ -272,7 +277,8 @@ FROM membership.organization o
 WHERE o.is_active = true
   -- The name promises ownership and the body filtered only is_active, so the
   -- view returned every active organization to every caller.
-  AND o.owner_user_id = (SELECT api.current_user_id());
+  AND o.owner_user_id = (SELECT api.current_user_id())
+$view$);
 
 COMMENT ON VIEW membership.vw_user_owned_organizations IS
     'Organizations owned by the current user. Active organizations only.';

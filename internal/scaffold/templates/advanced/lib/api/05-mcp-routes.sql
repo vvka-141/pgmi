@@ -45,8 +45,15 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     )
 );
 
-ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
-ALTER TABLE api.mcp_route ADD COLUMN IF NOT EXISTS uri_regexp text;
+DO $$
+BEGIN
+    IF NOT pg_temp.has_column('api.mcp_route', 'tags') THEN
+        ALTER TABLE api.mcp_route ADD COLUMN tags text[] NOT NULL DEFAULT '{}';
+    END IF;
+    IF NOT pg_temp.has_column('api.mcp_route', 'uri_regexp') THEN
+        ALTER TABLE api.mcp_route ADD COLUMN uri_regexp text;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
 -- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.

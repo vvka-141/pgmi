@@ -100,7 +100,7 @@ exchange auto-logging and JIT user provisioning are suppressed. A
 never-provisioned identity resolves only after a read-write request has
 provisioned it.
 
-Source: `lib/api/09-gateways.sql` — `api.rest_invoke`, `api.rpc_invoke`, `api.mcp_invoke`.
+Source: `lib/api/09-gateways.sql` — `api.rest_invoke`, `api.rpc_invoke`, and `internal.mcp_dispatch` behind `api.mcp_call_tool`, `api.mcp_read_resource` and `api.mcp_get_prompt`.
 
 ## Replica routing
 
