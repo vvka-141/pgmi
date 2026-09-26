@@ -8,14 +8,14 @@ import (
 
 // The CI guide's copy-paste recipes pin a release. The pin sat at v0.11.0 for
 // a release that changed the execution contract, so a pipeline built from the
-// guide ran today's deploy.sql patterns on a binary that predates them. Every
-// release section in RELEASES.md must be matched by the guide's pin.
+// guide ran today's deploy.sql patterns on a binary that predates them. The
+// guide must pin the newest dated release; an undated draft is not out yet.
 func TestCICDGuidePinsNewestRelease(t *testing.T) {
 	releases, err := os.ReadFile("../../RELEASES.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	newest := regexp.MustCompile(`(?m)^## (v\d+\.\d+\.\d+)`).FindSubmatch(releases)
+	newest := regexp.MustCompile(`(?m)^## (v\d+\.\d+\.\d+) — \d{4}-\d{2}-\d{2}`).FindSubmatch(releases)
 	if newest == nil {
 		t.Fatal("no release heading in RELEASES.md")
 	}
