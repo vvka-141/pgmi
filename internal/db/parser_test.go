@@ -2,6 +2,8 @@ package db
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -413,7 +415,6 @@ func compareConfigs(t *testing.T, got, want *pgmi.ConnectionConfig) {
 func TestConnectionString_MultiHostRoundTrip(t *testing.T) {
 	for _, in := range []string{
 		"postgresql://u:p@db1:5432,db2:5433/app?target_session_attrs=read-write",
-		"postgresql://u@db1,db2:5433/app",
 	} {
 		c, err := ParseConnectionString(in)
 		if err != nil {
@@ -436,6 +437,82 @@ func TestConnectionString_MultiHostRoundTrip(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(exp, ",") {
 			t.Errorf("%s rebuilt as %s: hosts %v, want %v", in, out, got, exp)
 		}
+	}
+}
+
+// A host list without per-host ports takes the port from ?port=, port=, PGPORT
+// or -p. pgmi dropped it and dialed 5432 on every host, so a deploy could land
+// on a different cluster. A host that names no port in a list that otherwise
+// does gets the default port, as in libpq (pgx alone would borrow the next
+// host's).
+func TestConnectionString_HostListKeepsPort(t *testing.T) {
+	dialed := func(t *testing.T, connStr string) string {
+		t.Helper()
+		cfg, err := pgconn.ParseConfig(connStr)
+		if err != nil {
+			t.Fatalf("pgx rejects %s: %v", connStr, err)
+		}
+		got := []string{net.JoinHostPort(cfg.Host, strconv.Itoa(int(cfg.Port)))}
+		for _, fb := range cfg.Fallbacks {
+			if hp := net.JoinHostPort(fb.Host, strconv.Itoa(int(fb.Port))); hp != got[len(got)-1] {
+				got = append(got, hp)
+			}
+		}
+		return strings.Join(got, ",")
+	}
+
+	for _, tt := range []struct{ in, want string }{
+		{"postgresql://u@127.0.0.1,localhost/postgres?port=5440", "127.0.0.1:5440,localhost:5440"},
+		{"postgresql://u@db1,db2:5433/app", "db1:5432,db2:5433"},
+		{"postgresql://u@[::1]:5432,[::2]:5433/app", "[::1]:5432,[::2]:5433"},
+		{"host=db1,db2 port=6000 dbname=app", "db1:6000,db2:6000"},
+		{"host=::1,::2 port=5432,5433 dbname=app", "[::1]:5432,[::2]:5433"},
+		{"host=/tmp,db2 port=5433 dbname=app", "/tmp:5433,db2:5433"},
+	} {
+		c, err := ParseConnectionString(tt.in)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.in, err)
+		}
+		if got := dialed(t, BuildConnectionString(c)); got != tt.want {
+			t.Errorf("%s dials %s, want %s", tt.in, got, tt.want)
+		}
+	}
+
+	fromFlags := &pgmi.ConnectionConfig{Host: "db1,db2", Port: 6000, Database: "app", Username: "u", Password: "p w'd"}
+	out := BuildConnectionString(fromFlags)
+	if got := dialed(t, out); got != "db1:6000,db2:6000" {
+		t.Errorf("-h db1,db2 -p 6000 dials %s, want db1:6000,db2:6000", got)
+	}
+	back, err := ParseConnectionString(out)
+	if err != nil {
+		t.Fatalf("rebuilt %s does not parse: %v", out, err)
+	}
+	if got := dialed(t, BuildConnectionString(back)); got != "db1:6000,db2:6000" || back.Password != "p w'd" || back.Database != "app" {
+		t.Errorf("second round trip: dials %s, password %q, db %q", got, back.Password, back.Database)
+	}
+}
+
+func TestDialTargets(t *testing.T) {
+	for _, tt := range []struct {
+		host string
+		want string
+	}{
+		{"db1", "db1:6000"},
+		{"::1", "[::1]:6000"},
+		{"db1,db2:5433", "db1:6000,db2:5433"},
+		{"[::1]:5432,/tmp", "[::1]:5432,/tmp:6000"},
+	} {
+		if got := DialTargets(&pgmi.ConnectionConfig{Host: tt.host, Port: 6000}); got != tt.want {
+			t.Errorf("DialTargets(%q) = %s, want %s", tt.host, got, tt.want)
+		}
+	}
+}
+
+// pgx has no hostaddr; treating it as host dialed the IP and verified the
+// certificate against it instead of the name.
+func TestParseConnectionString_RejectsHostaddr(t *testing.T) {
+	if _, err := ParseConnectionString("host=db hostaddr=10.0.0.1 dbname=app"); err == nil {
+		t.Fatal("hostaddr must be rejected")
 	}
 }
 

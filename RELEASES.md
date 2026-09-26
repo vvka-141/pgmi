@@ -17,6 +17,14 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
+<!-- DRAFT -->
+## v0.13.1 — unreleased
+
+### Fixed
+
+- **A connection string listing several hosts connected on port 5432, whatever port you gave.** `postgresql://…@db1,db2/app?port=6000`, `host=db1,db2 port=6000`, `PGHOST=db1,db2 PGPORT=6000` and `-h db1,db2 -p 6000` all dialed 5432 on every host, so a deploy could reach a different cluster listening there. Each host now gets its own port or the one you set, as in libpq; a host with no port in a list that names others gets the default port. IPv6 and socket-directory members of a list now work too.
+- **`hostaddr` is rejected** with exit 10. pgx does not support it, and pgmi treated it as `host`, so the TLS certificate was checked against the IP instead of the name.
+
 ## v0.13.0 — 2026-09-25
 
 **The advanced template's API now enforces the contract it publishes, and an advanced-template deploy can no longer fall back to the password `postgres` without being told to.** If you scaffolded the advanced template, read Upgrading: several changes stop a deploy that used to pass, on purpose.

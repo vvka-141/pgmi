@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -29,8 +30,10 @@ func parseKeywordValue(connStr string) (*pgmi.ConnectionConfig, error) {
 	var hosts, ports []string
 	for _, kv := range pairs {
 		switch kv.key {
-		case "host", "hostaddr":
+		case "host":
 			hosts = strings.Split(kv.value, ",")
+		case "hostaddr":
+			return nil, fmt.Errorf("hostaddr is not supported: put the address in host")
 		case "port":
 			ports = strings.Split(kv.value, ",")
 		case "dbname":
@@ -87,8 +90,8 @@ func parseKeywordValue(connStr string) (*pgmi.ConnectionConfig, error) {
 	return config, nil
 }
 
-// joinHostList turns libpq's parallel host and port lists into the URI host
-// list pgmi passes through (h1:5432,h2:5433). One port applies to every host.
+// joinHostList turns libpq's parallel host and port lists into pgmi's host
+// list (h1:5432,[::1]:5433). One port applies to every host.
 func joinHostList(hosts, ports []string) (string, error) {
 	if len(hosts) == 0 {
 		hosts = []string{"localhost"}
@@ -108,7 +111,7 @@ func joinHostList(hosts, ports []string) (string, error) {
 		if port == "" {
 			parts[i] = h
 		} else {
-			parts[i] = h + ":" + port
+			parts[i] = net.JoinHostPort(h, port)
 		}
 	}
 	return strings.Join(parts, ","), nil

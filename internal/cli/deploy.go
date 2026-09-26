@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -216,7 +214,7 @@ func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *co
 	connConfig.Database = targetDB
 
 	if source := envConnectionSource(deployFlags.connectionFlags); source != "" && !deployFlags.jsonOutput {
-		fmt.Fprintf(os.Stderr, "connection: from %s (%s)\n", source, net.JoinHostPort(connConfig.Host, strconv.Itoa(connConfig.Port)))
+		fmt.Fprintf(os.Stderr, "connection: from %s (%s)\n", source, db.DialTargets(connConfig))
 	}
 
 	if verbose {

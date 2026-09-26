@@ -267,9 +267,13 @@ func splitADONETPairs(s string) []adoPair {
 	return pairs
 }
 
-// BuildConnectionString converts a ConnectionConfig back to a PostgreSQL URI format.
-// This is useful for creating connection strings for pgx.
+// BuildConnectionString converts a ConnectionConfig back to a connection
+// string pgx accepts: a URI for one host, the keyword/value form for a host
+// list, since a URI cannot carry a port for hosts that do not name one.
 func BuildConnectionString(config *pgmi.ConnectionConfig) string {
+	if strings.Contains(config.Host, ",") {
+		return buildKeywordValue(config)
+	}
 	u := &url.URL{
 		Scheme: "postgresql",
 		Path:   "/" + config.Database,
@@ -278,8 +282,6 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 	if strings.HasPrefix(config.Host, "/") {
 		query.Set("host", config.Host)
 		query.Set("port", strconv.Itoa(config.Port))
-	} else if strings.Contains(config.Host, ",") {
-		u.Host = config.Host
 	} else {
 		u.Host = net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	}
@@ -343,4 +345,79 @@ func liftHostList(connStr string) (string, string) {
 		return connStr, ""
 	}
 	return connStr[:start] + "multihost.invalid" + connStr[end:], hosts
+}
+
+func buildKeywordValue(config *pgmi.ConnectionConfig) string {
+	members := strings.Split(config.Host, ",")
+	hosts := make([]string, len(members))
+	ports := make([]string, len(members))
+	for i, m := range members {
+		hosts[i], ports[i] = splitHostMember(m, config.Port)
+	}
+	pairs := [][2]string{
+		{"host", strings.Join(hosts, ",")},
+		{"port", strings.Join(ports, ",")},
+		{"dbname", config.Database},
+		{"user", config.Username},
+		{"password", config.Password},
+		{"sslmode", config.SSLMode},
+		{"sslcert", config.SSLCert},
+		{"sslkey", config.SSLKey},
+		{"sslrootcert", config.SSLRootCert},
+		{"sslpassword", config.SSLPassword},
+		{"application_name", config.AppName},
+	}
+	if config.ConnectTimeout > 0 {
+		pairs = append(pairs, [2]string{"connect_timeout", strconv.Itoa(int(config.ConnectTimeout.Seconds()))})
+	}
+	for key, value := range config.AdditionalParams {
+		pairs = append(pairs, [2]string{key, value})
+	}
+	var b strings.Builder
+	for _, kv := range pairs {
+		if kv[1] == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(kv[0])
+		b.WriteString("='")
+		b.WriteString(strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(kv[1]))
+		b.WriteByte('\'')
+	}
+	return b.String()
+}
+
+// DialTargets lists every host:port pgmi will try, for messages.
+func DialTargets(config *pgmi.ConnectionConfig) string {
+	members := strings.Split(config.Host, ",")
+	for i, m := range members {
+		members[i] = net.JoinHostPort(splitHostMember(m, config.Port))
+	}
+	return strings.Join(members, ",")
+}
+
+// splitHostMember splits one entry of a host list into host and port, using
+// defaultPort when the entry names none: db1, db1:5433, [::1]:5433, ::1,
+// /var/run/postgresql, /var/run/postgresql:5433.
+func splitHostMember(member string, defaultPort int) (string, string) {
+	port := strconv.Itoa(defaultPort)
+	if strings.HasPrefix(member, "[") {
+		if end := strings.Index(member, "]"); end > 0 {
+			if p, ok := strings.CutPrefix(member[end+1:], ":"); ok && p != "" {
+				port = p
+			}
+			return member[1:end], port
+		}
+	}
+	if strings.Count(member, ":") > 1 && !strings.HasPrefix(member, "/") {
+		return member, port
+	}
+	if i := strings.LastIndex(member, ":"); i >= 0 {
+		if _, err := strconv.Atoi(member[i+1:]); err == nil {
+			return member[:i], member[i+1:]
+		}
+	}
+	return member, port
 }

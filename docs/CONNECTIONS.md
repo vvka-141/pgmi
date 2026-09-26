@@ -143,11 +143,12 @@ postgresql://user:pass@host:5432/dbname?sslmode=require
 ```
 
 A URI may list several hosts, as libpq allows, for example a primary and a
-standby. pgmi passes the list through unchanged:
+standby:
 ```
 postgresql://user:pass@db1:5432,db2:5432/dbname?target_session_attrs=read-write
 ```
-An IPv6 address inside a host list is not supported.
+As in libpq, a host without its own port uses `?port=` (or `PGPORT`, `-p`),
+else 5432. IPv6 members are bracketed: `[::1]:5432,[::2]:5433`.
 
 **libpq keyword/value**, as psql and the PostgreSQL docs write it:
 ```
@@ -155,7 +156,8 @@ host=myhost port=5432 dbname=mydb user=user sslmode=require
 ```
 Quote a value containing spaces with single quotes, and escape a quote or
 backslash inside it with `\`: `password='a b\'c'`. `host` and `port` may be
-lists (`host=db1,db2 port=5432,5433`).
+lists (`host=db1,db2 port=5432,5433`). `hostaddr` is rejected: pgx, which
+pgmi connects through, does not support it, so put the address in `host`.
 
 **ADO.NET:**
 ```
