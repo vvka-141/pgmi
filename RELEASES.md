@@ -17,13 +17,22 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
-<!-- DRAFT -->
-## v0.13.1 — unreleased
+## v0.13.1 — 2026-10-31
+
+**If your connection string lists several hosts, pgmi now connects to the port you asked for.** Before this release it dialed 5432 on every listed host, so a deploy could land on a different PostgreSQL cluster. This release also updates dependencies that had known vulnerabilities.
+
+### Upgrading
+
+No action needed. One connection string that used to be accepted is now refused: `hostaddr` exits with code 10 (see below). Session API contract unchanged (v1).
 
 ### Fixed
 
 - **A connection string listing several hosts connected on port 5432, whatever port you gave.** `postgresql://…@db1,db2/app?port=6000`, `host=db1,db2 port=6000`, `PGHOST=db1,db2 PGPORT=6000` and `-h db1,db2 -p 6000` all dialed 5432 on every host, so a deploy could reach a different cluster listening there. Each host now gets its own port or the one you set, as in libpq; a host with no port in a list that names others gets the default port. IPv6 and socket-directory members of a list now work too.
 - **`hostaddr` is rejected** with exit 10. pgx does not support it, and pgmi treated it as `host`, so the TLS certificate was checked against the IP instead of the name.
+
+### Security
+
+- **`golang.org/x/net` updated to v0.60.0**, fixing five vulnerabilities that govulncheck reported as reachable from pgmi (GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6617). The Azure, Google Cloud SQL and other dependencies are updated too.
 
 ## v0.13.0 — 2026-09-25
 
