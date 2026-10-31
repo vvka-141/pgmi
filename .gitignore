@@ -56,28 +56,9 @@ go.work.sum
 # env file
 .env
 
-# Claude Code artifacts (proprietary - keep locally only)
-.claude/
-
-# Other coding-assistant artifacts (keep locally only)
-.agents/
-.codex/
-
-# Coding-assistant instructions (proprietary - keep locally only)
-# Root-anchored: unanchored names would also silently hide any CLAUDE.md/
-# AGENTS.md added under templates or embedded content
-/CLAUDE.md
-/AGENTS.md
-
-# Private assets (code reviews, design docs, change requests)
-.private/
-
 # Editor/IDE
 # .idea/
 # .vscode/
-
-# Content and articles (local drafts, not tracked)
-/content/
 
 # Test scaffolds (pgmi init output during development)
 test_*/

@@ -20,7 +20,7 @@ var planViewSweepPending = map[string]int{}
 // enforces this for embedded content, internal/docs for examples/; this covers
 // the prose corpus.
 func TestDocsPlanViewLoopsFilterSQLFiles(t *testing.T) {
-	// AGENTS.md and CLAUDE.md are gitignored (.gitignore:69-70), so they are
+	// AGENTS.md and CLAUDE.md are local-only (never committed), so they are
 	// absent on a fresh clone and in CI. Scan them when present — they are the
 	// guidance an agent reads in a working copy — but never require them, or
 	// this test fails everywhere the repo is checked out clean.
