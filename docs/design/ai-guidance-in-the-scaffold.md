@@ -99,9 +99,10 @@ scaffolded project against a real PostgreSQL in the test suite.
 
 ## Sources: credited, never copied
 
-Recipes draw on Dimitri Fontaine's *The Art of PostgreSQL* and adapt its ideas
-to pgmi's templates: the membership schema, the three-layer architecture, the
-test idiom. The templates ship under MIT, so anything in a recipe is something
+Some recipes draw on ideas from Dimitri Fontaine's *The Art of PostgreSQL* and
+apply them inside pgmi's own designs (the membership schema, the three-layer
+architecture, the test idiom), which are pgmi's and not taken from the book.
+The templates ship under MIT, so anything in a recipe is something
 every user may copy and redistribute. Only pgmi's own text and code can be
 licensed that way.
 
