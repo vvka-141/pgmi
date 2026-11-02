@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>card</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { width: 1200px; height: 630px; background: #10160f; overflow: hidden;
+         font-family: "Liberation Sans", Arial, Helvetica, sans-serif; color: #f5efe6; }
+  .card { position: relative; box-sizing: border-box; width: 1200px; height: 630px; padding: 72px 80px 64px; display: flex; flex-direction: column; }
+  .kicker { color: #6fdcc0; font-weight: 700; font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .title { margin-top: 30px; font-weight: 700; line-height: 1.12; max-width: 900px; }
+  .claim { margin-top: 34px; font-size: 34px; line-height: 1.38; color: #d9d3c9; max-width: 960px; }
+  .claim code { font-family: "Liberation Mono", monospace; color: #f0a35e; font-size: 0.95em; }
+  .foot { margin-top: auto; display: flex; justify-content: space-between; align-items: flex-end; font-size: 22px; }
+  .author { color: #f5efe6; font-weight: 700; }
+  .url { color: #9a978f; }
+  .rule { position: absolute; left: 80px; top: 0; width: 120px; height: 8px; background: #b8540b; }
+  .mark { position: absolute; right: 72px; top: 56px; width: 110px; }
+</style></head>
+<body>
+<div class="card">
+  <div class="rule"></div>
+  <img class="mark" src="postgresql-elephant.svg" alt="">
+  <div class="kicker">pgmi · article</div>
+  <div class="title" id="title"></div>
+  <div class="claim" id="claim"></div>
+  <div class="foot"><span class="author">Alexey Evlampiev</span><span class="url">vvka-141.github.io/pgmi</span></div>
+</div>
+<script>
+const cards = {
+  "ai-agents-write-postgresql-like-python": ["AI agents write PostgreSQL like Python",
+    "The Python habits agents carry into PL/pgSQL — and the handler discipline that contains them."],
+  "deployment-is-a-postgresql-program": ["Your Deployment Is a PostgreSQL Program",
+    "Invert the control flow and deployment policy becomes SQL the project owns."],
+  "desired-state-reference-data-postgresql": ["From Seed Scripts to Desired‑State Reference Data in PostgreSQL",
+    "Version the catalog that should exist — not the procedure that inserts it."],
+  "lock-queue-fast-is-not-safe": ["Your ALTER TABLE Is Fast. The Queue Behind It Is Not.",
+    "The damage is done by waiting, not by working."],
+  "migration-numbers-distributed-counter": ["Your Migration Numbers Are a Distributed Counter Without Coordination",
+    "What migration-number collisions reveal about identity, ordering, and enforcement."],
+  "request-becomes-a-transaction": ["The Request Becomes a Transaction",
+    "A transactional API has two halves: a network edge and a transactional operation."],
+  "test-every-branch-before-commit": ["Scenario-Tree Testing in PostgreSQL: Every Authored Branch, Shared History, Before COMMIT",
+    "Let the walk decide whether your deployment commits."],
+  "test-postgresql-migrations-before-commit": ["Test PostgreSQL migrations before COMMIT",
+    "Test a migration after it applies but before it commits — and let <code>COMMIT</code> depend on the checks."],
+  "transaction-boundary-in-the-program": ["Your Transaction Boundary Belongs in the Program, Not the Filename",
+    "A phased schema change spans transactional and non‑transactional work."]
+};
+const slug = location.hash.slice(1);
+const [t, c] = cards[slug];
+const el = document.getElementById("title");
+el.textContent = t;
+el.style.fontSize = (t.length <= 40 ? 76 : t.length <= 70 ? 62 : 54) + "px";
+const cl = document.getElementById("claim");
+cl.innerHTML = c;
+if (cl.textContent.length > 90) cl.style.fontSize = "30px";
+document.title = slug;
+</script>
+</body></html>

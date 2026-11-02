@@ -4,6 +4,7 @@ date: 2026-07-15
 author: "Alexey Evlampiev"
 description: "Field notes from a production review of an AI-written PostgreSQL backend: exception blocks as control flow, casts that turn bad requests into 500s, races on state-advancing updates — and the four-phase handler discipline that contained them."
 weight: 10
+images: ["cards/ai-agents-write-postgresql-like-python.png"]
 ---
 
 # AI agents write PostgreSQL like Python

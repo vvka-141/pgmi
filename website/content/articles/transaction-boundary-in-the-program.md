@@ -4,6 +4,7 @@ date: 2026-08-01
 author: "Alexey Evlampiev"
 description: "How migration tools represent non-transactional execution — and how pgmi keeps a phased deployment's transaction boundaries inside deploy.sql."
 weight: 5
+images: ["cards/transaction-boundary-in-the-program.png"]
 ---
 
 # Your Transaction Boundary Belongs in the Program, Not the Filename

@@ -4,6 +4,7 @@ date: 2026-08-26
 author: "Alexey Evlampiev"
 description: "Every migration tool is a program that executes your SQL. Invert the control flow and deployment policy becomes SQL the project owns."
 weight: 1
+images: ["cards/deployment-is-a-postgresql-program.png"]
 ---
 
 # Your Deployment Is a PostgreSQL Program

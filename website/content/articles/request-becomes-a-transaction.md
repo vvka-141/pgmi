@@ -4,6 +4,7 @@ date: 2026-08-21
 author: "Alexey Evlampiev"
 description: "A transactional API has two halves: a network edge and a transactional operation. Keep the first at that edge; give the second to PostgreSQL, where its authority already lives — and every declared outcome of every operation becomes provable in the same transaction."
 weight: 3
+images: ["cards/request-becomes-a-transaction.png"]
 ---
 
 # The Request Becomes a Transaction

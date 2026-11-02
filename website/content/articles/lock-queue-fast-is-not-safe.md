@@ -4,6 +4,7 @@ date: 2026-08-01
 author: "Alexey Evlampiev"
 description: "How a PostgreSQL lock queue turns a six-millisecond schema change into a sixteen-second outage, and the two moves that bound the damage."
 weight: 4
+images: ["cards/lock-queue-fast-is-not-safe.png"]
 ---
 
 # Your ALTER TABLE Is Fast. The Queue Behind It Is Not.

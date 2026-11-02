@@ -4,6 +4,7 @@ date: 2026-07-31
 author: "Alexey Evlampiev"
 description: "Why migration-number collisions are identity, ordering, and enforcement problems — and how pgmi lets SQL validate the exact plan before execution."
 weight: 6
+images: ["cards/migration-numbers-distributed-counter.png"]
 ---
 
 # Your Migration Numbers Are a Distributed Counter Without Coordination

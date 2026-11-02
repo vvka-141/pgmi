@@ -39,3 +39,18 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 </style>
 {{- end }}
+{{- if and (eq .Section "articles") .IsPage }}
+{{- $ld := dict
+    "@context" "https://schema.org"
+    "@type" "TechArticle"
+    "headline" .Title
+    "description" .Description
+    "datePublished" (.Date.Format "2006-01-02")
+    "url" .Permalink
+    "mainEntityOfPage" .Permalink
+    "author" (dict "@type" "Person" "name" (.Params.author | default site.Params.author.name))
+    "publisher" (dict "@type" "Organization" "name" "pgmi" "url" site.BaseURL)
+}}
+{{- with .Params.images }}{{ $ld = merge $ld (dict "image" (absURL (index . 0))) }}{{ end }}
+<script type="application/ld+json">{{ $ld | jsonify | safeJS }}</script>
+{{- end }}

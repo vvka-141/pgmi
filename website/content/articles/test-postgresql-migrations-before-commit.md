@@ -4,6 +4,7 @@ date: 2026-07-11
 author: "Alexey Evlampiev"
 description: "PostgreSQL's transactional DDL lets you run assertions against the migrated schema inside the deployment transaction — so a failing check means the deployment never happened."
 weight: 20
+images: ["cards/test-postgresql-migrations-before-commit.png"]
 ---
 
 # Test PostgreSQL migrations before COMMIT
