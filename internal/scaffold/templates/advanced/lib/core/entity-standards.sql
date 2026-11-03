@@ -18,7 +18,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing entity table standards'; END $$;
 CREATE OR REPLACE FUNCTION pg_temp.apply_entity_table_standards(p_table regclass)
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = pg_catalog, core
+SET search_path = pg_catalog, core, common
 AS $$
 DECLARE
     v_oid       oid := p_table;
@@ -89,7 +89,7 @@ $$;
 CREATE OR REPLACE FUNCTION pg_temp.entity_standard_tables()
 RETURNS SETOF regclass
 LANGUAGE sql STABLE
-SET search_path = pg_catalog, core
+SET search_path = pg_catalog, core, common
 AS $$
     SELECT c.oid::regclass
     FROM pg_class c
@@ -108,7 +108,7 @@ $$;
 CREATE OR REPLACE FUNCTION pg_temp.apply_entity_standards_all()
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = pg_catalog, core
+SET search_path = pg_catalog, core, common
 AS $$
 DECLARE
     v_tbl regclass;

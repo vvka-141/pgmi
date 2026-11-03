@@ -23,7 +23,7 @@ type TemplateInfo struct {
 // DefaultTemplates returns the available template information.
 func DefaultTemplates() []TemplateInfo {
 	return []TemplateInfo{
-		{Name: "basic", Description: "Linear migrations, minimal structure"},
+		{Name: "basic", Description: "Two layers: run-once tables, re-run views and functions"},
 		{Name: "advanced", Description: "Metadata-driven deployment, REST/RPC/MCP handler registry"},
 	}
 }

@@ -17,11 +17,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1001-4000-8000-000000000001',
-            'uri', '^/test-hello$',
+            'path', '/test-hello',
             'httpMethod', '^GET$',
             'name', 'test_hello',
             'description', 'Test hello endpoint',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 DECLARE
@@ -38,11 +38,11 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1002-4000-8000-000000000001',
-            'uri', '^/test-echo$',
+            'path', '/test-echo',
             'httpMethod', '^POST$',
             'name', 'test_echo',
             'description', 'Test echo endpoint',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -58,12 +58,12 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1003-4000-8000-000000000001',
-            'uri', '^/test-health$',
+            'path', '/test-health',
             'httpMethod', '^GET$',
             'name', 'test_health',
             'description', 'Test health endpoint',
             'autoLog', false,
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -170,11 +170,11 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-1004-4000-8000-000000000001',
-            'uri', '^/test-bare-headers$',
+            'path', '/test-bare-headers',
             'httpMethod', '^GET$',
             'name', 'test_bare_headers',
             'description', 'Returns a response with no headers at all',
-            'requiresAuth', false,
+            'access', 'public',
             'responseHeaders', jsonb_build_object(
                 'X-Custom-Header', 'custom-value',
                 'x-include-schema', 'false'
@@ -230,7 +230,7 @@ BEGIN
             'id', 'ffffffff-2001-4000-8000-000000000001',
             'methodName', 'test.sum',
             'description', 'Test sum method',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 DECLARE
@@ -254,7 +254,7 @@ END;
             'id', 'ffffffff-2002-4000-8000-000000000001',
             'methodName', 'test.time',
             'description', 'Test time method',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -352,7 +352,7 @@ BEGIN
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-3001-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_tool',
             'description', 'Test tool for protocol validation',
             'inputSchema', jsonb_build_object(
@@ -360,7 +360,7 @@ BEGIN
                 'properties', jsonb_build_object(),
                 'required', jsonb_build_array()
             ),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -380,7 +380,7 @@ END;
             'description', 'Test resource',
             'uriTemplate', 'test:///{id}',
             'mimeType', 'application/json',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -405,7 +405,7 @@ END;
             'arguments', jsonb_build_array(
                 jsonb_build_object('name', 'input', 'description', 'Test input', 'required', true)
             ),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -622,11 +622,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-4001-4000-8000-000000000001',
-            'uri', '^/test-registry$',
+            'path', '/test-registry',
             'httpMethod', '^GET$',
             'name', 'test_registry_rest',
             'description', 'Registry test REST',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -640,7 +640,7 @@ END;
             'id', 'ffffffff-4002-4000-8000-000000000001',
             'methodName', 'test.registry',
             'description', 'Registry test RPC',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -652,11 +652,11 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-4003-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_registry_tool',
             'description', 'Registry test MCP tool',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -673,15 +673,15 @@ END;
     SELECT COUNT(*) INTO v_rpc_count FROM api.handler WHERE handler_type = 'rpc';
     SELECT COUNT(*) INTO v_mcp_count FROM api.handler WHERE handler_type IN ('mcp_tool', 'mcp_resource', 'mcp_prompt');
 
-    IF v_rest_count = 0 THEN
+    IF (v_rest_count = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: No REST handlers in registry';
     END IF;
 
-    IF v_rpc_count = 0 THEN
+    IF (v_rpc_count = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: No RPC handlers in registry';
     END IF;
 
-    IF v_mcp_count = 0 THEN
+    IF (v_mcp_count = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: No MCP handlers in registry';
     END IF;
 

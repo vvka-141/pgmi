@@ -42,7 +42,6 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 1. [Advanced template overview](advanced/_index.md) — The application stack and the basic/advanced boundary
 2. [Script metadata](METADATA.md) — Script tracking with `<pgmi-meta>`
 3. [MCP gateway](advanced/MCP.md) — Expose your deployed application to AI assistants
-4. [API keys](advanced/API-KEYS.md) — Authenticate callers of your generated APIs
 
 ---
 
@@ -53,7 +52,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 | Which view should I use? | `pgmi_plan_view` for deployment, `pgmi_source_view` for introspection — see [Session API](session-api.md#which-view-should-i-use) |
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [Session API](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [Testing](TESTING.md) |
-| What's the difference between templates? | Basic = small, explicit migration scaffold. Advanced = ~19k lines of tested SQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Quickstart](QUICKSTART.md#choosing-a-template) and the [capability tour](advanced/_index.md) |
+| What's the difference between templates? | Basic = two layers: run-once tables, and views and functions re-run on every deploy, behind a test gate. Advanced = a full, tested PostgreSQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Quickstart](QUICKSTART.md#choosing-a-template) and the [capability tour](advanced/_index.md) |
 | How do I filter which files run? | Join `pgmi_plan_view` to `pgmi_source_view`, require `is_sql_file`, then add your path filter — see [Session API](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI reference](CLI.md#exit-codes) |
 
@@ -87,11 +86,10 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 - **[CI/CD](CICD.md)** — Deploy from GitHub Actions and other pipelines
 - **[Production](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 
-### Advanced template (~19k lines you own)
+### Advanced template (code you own)
 These pages document application code scaffolded by `pgmi init --template advanced` — a complete PostgreSQL application stack, not a pgmi core feature. The generated SQL and gateways become code you own, modify, or delete. Start at the [capability tour](advanced/_index.md).
 
 - **[MCP gateway](advanced/MCP.md)** — Expose your deployed application's tools, resources, and prompts to AI assistants over HTTP
-- **[API keys](advanced/API-KEYS.md)** — API key authentication for callers of your generated REST/RPC/MCP APIs
 - **[Client guides](advanced/clients/_index.md)** — Generate typed clients from your deployment's OpenAPI contract
 - **[Transaction policy](advanced/TRANSACTION-POLICY.md)** — Per-route isolation floor, read-only declaration, DEFERRABLE derivation, fail-closed enforcement, replica-safe hint
 - **[MCP gateway](advanced/MCP-GATEWAY.md)** — Gateway internals: routing, auth, transaction lifecycle, OpenAPI generation
@@ -103,7 +101,8 @@ These pages document application code scaffolded by `pgmi init --template advanc
 ### AI Integration
 ```bash
 pgmi ai                    # Overview for AI assistants
-pgmi ai skills             # List embedded skills
-pgmi ai skill pgmi-sql     # Load SQL conventions
+pgmi ai contract           # Session API contract (views/functions)
 ```
+
+A scaffolded project carries its own skills in `.agents/skills/`.
 See [CLI.md#pgmi-ai](CLI.md#pgmi-ai) for details.

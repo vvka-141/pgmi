@@ -3,7 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"maps"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/filesystem"
+	"github.com/vvka-141/pgmi/internal/files/loader"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -103,14 +103,18 @@ func resolveConnectionFromFlags(
 	return connConfig, maintenanceDB, nil
 }
 
+// paramSources are the parameter inputs beyond pgmi.yaml. stdin is nil where
+// it is not the user's to give (pgmi serve speaks MCP on it).
+type paramSources struct {
+	environ []string
+	stdin   io.Reader
+	files   []string
+	pairs   []string
+}
+
 // loadMergedParameters loads and merges parameters from all sources.
-// Priority (highest to lowest): CLI params > params files > pgmi.yaml
-func loadMergedParameters(
-	projectCfg *config.ProjectConfig,
-	paramsFiles []string,
-	cliParamPairs []string,
-	verbose bool,
-) (map[string]string, error) {
+// Priority (highest to lowest): --param > params files > PGMI_PARAM_* > pgmi.yaml
+func loadMergedParameters(projectCfg *config.ProjectConfig, src paramSources, verbose bool) (map[string]string, error) {
 	// Keys are merged lowercased: the session stores them lowercased, so
 	// `Env` from pgmi.yaml and `env` from --param are one parameter and the
 	// later source must win, not collide on the session table's primary key.
@@ -122,19 +126,33 @@ func loadMergedParameters(
 	}
 
 	if projectCfg != nil {
+		if err := loader.CheckCaseCollisions(projectCfg.Params); err != nil {
+			return nil, fmt.Errorf("pgmi.yaml params: %w", err)
+		}
 		put(projectCfg.Params)
 	}
 
-	if len(paramsFiles) > 0 {
-		fsProvider := filesystem.NewOSFileSystem()
-		fileParams, err := loadParamsFromFiles(fsProvider, paramsFiles, verbose)
+	envParams, err := params.FromEnviron(src.environ)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
+	}
+	if err := loader.CheckCaseCollisions(envParams); err != nil {
+		return nil, fmt.Errorf("%s* environment variables: %w", params.EnvPrefix, err)
+	}
+	put(envParams)
+	if verbose && len(envParams) > 0 {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameter(s) from %s* environment variables\n", len(envParams), params.EnvPrefix)
+	}
+
+	if len(src.files) > 0 {
+		fileParams, err := loadParamsFromFiles(filesystem.NewOSFileSystem(), src.stdin, src.files, verbose)
 		if err != nil {
 			return nil, err
 		}
 		put(fileParams)
 	}
 
-	for _, pair := range cliParamPairs {
+	for _, pair := range src.pairs {
 		kv, err := params.ParseKeyValuePairs([]string{pair})
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid parameter format: %w", pgmi.ErrInvalidConfig, err)
@@ -142,20 +160,20 @@ func loadMergedParameters(
 		put(kv)
 	}
 
-	if verbose && len(cliParamPairs) > 0 {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(cliParamPairs))
+	if verbose && len(src.pairs) > 0 {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] CLI parameters override %d value(s)\n", len(src.pairs))
 	}
 
 	return parameters, nil
 }
 
-// resolveEffectiveTimeout returns the effective timeout, preferring pgmi.yaml if flag wasn't set.
+// resolveEffectiveTimeout returns the effective timeout, preferring pgmi.yaml unless the caller set one explicitly.
 func resolveEffectiveTimeout(
-	cmd *cobra.Command,
+	explicit bool,
 	projectCfg *config.ProjectConfig,
 	flagTimeout time.Duration,
 ) (time.Duration, error) {
-	if projectCfg != nil && projectCfg.Timeout != "" && !cmd.Flags().Changed("timeout") {
+	if projectCfg != nil && projectCfg.Timeout != "" && !explicit {
 		parsed, err := time.ParseDuration(projectCfg.Timeout)
 		if err != nil {
 			// ErrInvalidConfig so a bad value in pgmi.yaml exits 10, like every
@@ -199,6 +217,12 @@ func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
 		}
 	}
 
+	return loadProjectYAML(sourcePath)
+}
+
+// loadProjectYAML loads sourcePath/pgmi.yaml without touching the process
+// environment. Returns nil config if pgmi.yaml does not exist (not an error).
+func loadProjectYAML(sourcePath string) (*config.ProjectConfig, error) {
 	projectCfg, err := config.Load(sourcePath)
 	if err != nil {
 		if errors.Is(err, config.ErrConfigNotFound) {
@@ -286,16 +310,25 @@ func authMethodToString(m pgmi.AuthMethod) string {
 }
 
 // loadParamsFromFiles loads parameters from multiple .env files using the provided filesystem.
-// Later files override earlier ones. Returns merged parameters map.
-func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles []string, verbose bool) (map[string]string, error) {
+// "-" reads stdin, once. Later files override earlier ones.
+func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, stdin io.Reader, paramsFiles []string, verbose bool) (map[string]string, error) {
 	parameters := make(map[string]string)
 
+	stdinUses := 0
+	for _, f := range paramsFiles {
+		if f == "-" {
+			stdinUses++
+		}
+	}
+	if stdinUses > 1 {
+		return nil, fmt.Errorf("%w: --params-file - (stdin) given %d times; stdin can be read once", pgmi.ErrInvalidConfig, stdinUses)
+	}
 	for _, paramsFile := range paramsFiles {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Loading parameters from file: %s\n", paramsFile)
 		}
 
-		fileContent, err := fsProvider.ReadFile(paramsFile)
+		fileContent, err := readParamsFile(fsProvider, stdin, paramsFile)
 		if err != nil {
 			return nil, fmt.Errorf("%w: failed to read params file '%s': %w\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value", pgmi.ErrInvalidConfig, paramsFile, err)
 		}
@@ -305,7 +338,12 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 			return nil, fmt.Errorf("%w: failed to parse params file '%s': %w\n\nTip: Verify the file format (KEY=VALUE)", pgmi.ErrInvalidConfig, paramsFile, err)
 		}
 
-		maps.Copy(parameters, fileParams)
+		if err := loader.CheckCaseCollisions(fileParams); err != nil {
+			return nil, fmt.Errorf("params file '%s': %w", paramsFile, err)
+		}
+		for k, v := range fileParams {
+			parameters[strings.ToLower(k)] = v
+		}
 
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Loaded %d parameter(s) from file (total: %d)\n", len(fileParams), len(parameters))
@@ -313,6 +351,16 @@ func loadParamsFromFiles(fsProvider filesystem.FileSystemProvider, paramsFiles [
 	}
 
 	return parameters, nil
+}
+
+func readParamsFile(fsProvider filesystem.FileSystemProvider, stdin io.Reader, path string) ([]byte, error) {
+	if path != "-" {
+		return fsProvider.ReadFile(path)
+	}
+	if stdin == nil {
+		return nil, errors.New("stdin is not available here")
+	}
+	return io.ReadAll(stdin)
 }
 
 func validateSSLMode(mode string) error {

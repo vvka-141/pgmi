@@ -46,6 +46,7 @@ func TestMetadataCommands_FailuresExit10WithJSONEnvelope(t *testing.T) {
 		{"validate duplicate ids", duplicate, []string{"metadata", "validate", "--json"}},
 		{"validate malformed id", malformed, []string{"metadata", "validate", "--json"}},
 		{"plan malformed id", malformed, []string{"metadata", "plan", "--json"}},
+		{"plan duplicate ids", duplicate, []string{"metadata", "plan", "--json"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := createTestProject(t, tt.files)
@@ -57,8 +58,8 @@ func TestMetadataCommands_FailuresExit10WithJSONEnvelope(t *testing.T) {
 			if jerr := json.Unmarshal([]byte(out), &envelope); jerr != nil {
 				t.Fatalf("stdout is not a JSON envelope: %v\n%s", jerr, out)
 			}
-			if tt.name != "validate duplicate ids" && envelope["error"] == nil {
-				t.Errorf("envelope has no error field: %s", out)
+			if envelope["error"] == nil || envelope["exitCode"] != float64(pgmi.ExitConfigError) {
+				t.Errorf("envelope lacks error/exitCode: %s", out)
 			}
 		})
 	}

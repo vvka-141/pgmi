@@ -44,19 +44,19 @@ func TestTemplateTransactionPolicy(t *testing.T) {
 
 	pool := testhelpers.GetTestPool(t, connString, testDB)
 
-	register := func(id, uri, name, meta, body string) {
+	register := func(id, path, name, meta, body string) {
 		t.Helper()
-		full := `{"id":"` + id + `","uri":"^` + uri + `$","httpMethod":"^GET$","name":"` + name +
-			`","requiresAuth":false` + meta + `}`
+		full := `{"id":"` + id + `","path":"` + path + `","httpMethod":"^GET$","name":"` + name +
+			`","access":"public"` + meta + `}`
 		if _, err := pool.Exec(ctx, "SELECT api.create_or_replace_rest_handler($1::jsonb, $2)", full, body); err != nil {
 			t.Fatalf("register handler %s: %v", name, err)
 		}
 	}
 	okBody := "BEGIN\n RETURN api.json_response(200, jsonb_build_object('ok', true));\nEND;"
 	register("eeeeeeee-7501-4000-8000-000000000001", "/ro-report", "ro_report",
-		`,"readOnly":true,"minTransactionIsolation":"repeatable read"`, okBody)
+		`,"readOnly":true,"autoLog":false,"minTransactionIsolation":"repeatable read"`, okBody)
 	register("eeeeeeee-7502-4000-8000-000000000001", "/ro-ser", "ro_ser",
-		`,"readOnly":true,"minTransactionIsolation":"serializable"`, okBody)
+		`,"readOnly":true,"autoLog":false,"minTransactionIsolation":"serializable"`, okBody)
 
 	// A read-only-declared handler that writes: the READ ONLY transaction must
 	// turn the write into a hard error (25006), surfaced sanitized.
@@ -64,7 +64,7 @@ func TestTemplateTransactionPolicy(t *testing.T) {
 		t.Fatalf("create probe table: %v", err)
 	}
 	register("eeeeeeee-7503-4000-8000-000000000001", "/ro-writer", "ro_writer",
-		`,"readOnly":true`,
+		`,"readOnly":true,"autoLog":false`,
 		"BEGIN\n INSERT INTO public.policy_probe VALUES (1);\n RETURN api.json_response(200, jsonb_build_object('ok', true));\nEND;")
 
 	// The same write with NO read-only declaration. Dispatched inside a READ

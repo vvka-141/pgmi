@@ -19,16 +19,21 @@ import (
 // DeployResult contains statistics from a completed deployment.
 type DeployResult struct {
 	FilesLoaded    int
+	Ignored        []pgmi.IgnoredPath
 	TestMacros     int
 	Duration       time.Duration
 	Database       string
 	ExecutionUnits int
 	UnitsCommitted int
+	FailedUnit     int
 	ExecutionMode  string
+	ServerVersion  string
 	// Created is true when this deploy created a database that did not exist,
 	// which is also what a mistyped -d looks like.
 	Created bool
 }
+
+const overwriteRecreateTimeout = 60 * time.Second
 
 type maintenanceDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
 
@@ -100,7 +105,7 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 	pool, err := connector.Connect(ctx)
 	if err != nil {
 		closeConnector(connector)
-		return nil, nil, fmt.Errorf("failed to connect to maintenance database: %w", err)
+		return nil, nil, fmt.Errorf("connect to %q: %w", dbName, err)
 	}
 
 	dbConn := db.NewPoolAdapter(pool)
@@ -130,7 +135,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// database behind.
 	scanResult, err := s.sessionManager.ScanProject(config.SourcePath)
 	if err != nil {
-		return fmt.Errorf("file scanning failed: %w", err)
+		return err
 	}
 
 	// --compat is resolved entirely offline, so rejecting it here keeps
@@ -151,7 +156,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	} else {
 		// If not overwriting, ensure database exists (create if missing)
 		if err := s.ensureDatabaseExists(ctx, connConfig, config); err != nil {
-			return fmt.Errorf("failed to ensure database exists: %w", err)
+			return err
 		}
 	}
 
@@ -167,6 +172,8 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	defer session.Close()
 
 	s.lastResult.FilesLoaded = session.FilesLoaded
+	s.lastResult.Ignored = session.Ignored
+	s.lastResult.ServerVersion = session.Conn().Conn().PgConn().ParameterStatus("server_version")
 
 	s.logger.Info("Executing deploy.sql")
 	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), scanResult)
@@ -244,28 +251,42 @@ func (s *DeploymentService) executeDeploySQL(
 	if len(units) > 1 {
 		s.logger.Verbose("deploy.sql splits into %d execution units at the first top-level transaction terminator", len(units))
 	}
+	committed := 0
 	for i, unit := range units {
 		if _, err := conn.Exec(ctx, unit); err != nil {
-			s.lastResult.UnitsCommitted = i
-			if i == 0 {
-				s.lastResult.ExecutionMode = "atomic"
-			} else {
-				s.lastResult.ExecutionMode = "psql"
+			s.lastResult.UnitsCommitted = committed
+			s.lastResult.FailedUnit = i + 1
+			s.lastResult.ExecutionMode = executionMode(committed)
+			scriptErr := &pgmi.ScriptError{
+				Err: err, Name: "deploy.sql", Script: unit, Expanded: result.MacroCount > 0, Files: scan.Files,
+				Source: scan.DeploySQL, OriginalLine: result.Lines.OriginalLine, Tail: i > 0,
 			}
-			scriptErr := &pgmi.ScriptError{Err: err, Name: "deploy.sql", Script: unit, Expanded: result.MacroCount > 0, Files: scan.Files}
 			return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
 		}
+		if conn.Conn().PgConn().TxStatus() == 'I' {
+			committed = i + 1
+		}
 	}
-	s.lastResult.UnitsCommitted = len(units)
+	s.lastResult.UnitsCommitted = committed
 
 	// Session cleanup rolls back whatever is still open, so a script ending
 	// inside BEGIN ... without its COMMIT applied nothing from that block.
-	if status := conn.Conn().PgConn().TxStatus(); status != 'I' {
-		s.lastResult.UnitsCommitted = len(units) - 1
+	if committed < len(units) {
+		s.lastResult.FailedUnit = len(units)
+		s.lastResult.ExecutionMode = executionMode(committed)
 		return result.MacroCount, fmt.Errorf("%w: deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT", pgmi.ErrExecutionFailed)
 	}
 
 	return result.MacroCount, nil
+}
+
+// executionMode names what a failure left behind: "atomic" when nothing
+// committed, "psql" when earlier units did.
+func executionMode(committed int) string {
+	if committed == 0 {
+		return "atomic"
+	}
+	return "psql"
 }
 
 func validateOverwriteTarget(targetDB, maintenanceDB string) error {
@@ -285,7 +306,11 @@ func (s *DeploymentService) connectMaintenance(ctx context.Context, connConfig *
 		mgmtDB = pgmi.DefaultMaintenanceDB
 	}
 	s.logger.Verbose("Connecting to maintenance database %q", mgmtDB)
-	return s.mgmtConnector(ctx, connConfig, mgmtDB)
+	conn, cleanup, err := s.mgmtConnector(ctx, connConfig, mgmtDB)
+	if err != nil {
+		return nil, nil, fmt.Errorf("maintenance database: %w", err)
+	}
+	return conn, cleanup, nil
 }
 
 // createIfMissing checks whether the database exists and creates it if not.
@@ -357,18 +382,37 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 			settings.Encoding, settings.Collate)
 	}
 
+	running, err := s.dbManager.DeployInProgress(ctx, dbConn, config.DatabaseName)
+	if err != nil {
+		return err
+	}
+	if running {
+		return fmt.Errorf("%w: another pgmi deployment is running against %q; --overwrite would end it",
+			pgmi.ErrConcurrentDeploy, config.DatabaseName)
+	}
+
 	s.logger.Verbose("Terminating connections to %q", config.DatabaseName)
 	if err := s.dbManager.TerminateConnections(ctx, dbConn, config.DatabaseName); err != nil {
 		return err // manager.TerminateConnections already names the database
 	}
 
+	// DROP and CREATE DATABASE each refuse a transaction block, so the pair
+	// cannot be made atomic. Instead the window is made uninterruptible: a
+	// cancel arriving after the drop would otherwise leave the database gone,
+	// or back without its owner, ACL and options.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	recreateCtx, cancelRecreate := context.WithTimeout(context.WithoutCancel(ctx), overwriteRecreateTimeout)
+	defer cancelRecreate()
+
 	s.logger.Verbose("DROP DATABASE %q", config.DatabaseName)
-	if err := s.dbManager.Drop(ctx, dbConn, config.DatabaseName); err != nil {
+	if err := s.dbManager.Drop(recreateCtx, dbConn, config.DatabaseName); err != nil {
 		return err // manager.Drop already names the database
 	}
 
 	s.logger.Verbose("CREATE DATABASE %q", config.DatabaseName)
-	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName, settings); err != nil {
+	if err := s.dbManager.Create(recreateCtx, dbConn, config.DatabaseName, settings); err != nil {
 		return classifyCreateFailure(err)
 	}
 

@@ -1,0 +1,7 @@
+# Demo code from pgmi. Do not copy this file into the project as is. Read it,
+# then write your own gateway that fits this project.
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+# ID token signature checks (RSA/EC via JWKS); the standard library has no
+# public-key crypto. Pulls in cryptography.
+PyJWT[crypto]==2.15.1

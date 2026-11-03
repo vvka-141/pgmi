@@ -329,3 +329,102 @@ func TestDeployCmd_OverwriteWithoutForceIsExit12WhenNonInteractive(t *testing.T)
 		t.Errorf("the error does not name the fix: %v", err)
 	}
 }
+
+// Each cause of a refused deploy has its own exit code, so a pipeline can tell
+// a broken project (10) from an unreachable server (11) from broken SQL (13).
+func TestDeployCmd_ExitCodesByCause(t *testing.T) {
+	offline := func(t *testing.T, dir string, connection string) error {
+		t.Helper()
+		resetDeployFlags()
+		clearPGEnv(t)
+		deployFlags.connection = connection
+		deployFlags.database = "app"
+		deployFlags.force = true
+		deployFlags.timeout = 5 * time.Second
+		done := make(chan error, 1)
+		go func() { done <- runDeploy(deployCmd, []string{dir}) }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(20 * time.Second):
+			t.Fatal("the deploy did not return within 20s")
+			return nil
+		}
+	}
+	unreachable := "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=1"
+	project := func(t *testing.T, deploySQL []byte) string {
+		dir := t.TempDir()
+		if deploySQL != nil {
+			if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), deploySQL, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T) (dir, connection string)
+		want  int
+	}{
+		{"deploy.sql is a directory", func(t *testing.T) (string, string) {
+			dir := project(t, nil)
+			if err := os.Mkdir(filepath.Join(dir, "deploy.sql"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return dir, unreachable
+		}, pgmi.ExitConfigError},
+		{"deploy.sql holds a NUL byte", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT 1;\x00\n")), unreachable
+		}, pgmi.ExitConfigError},
+		{"deploy.sql is not UTF-8", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT '\xff';\n")), unreachable
+		}, pgmi.ExitConfigError},
+		{"a bad sslmode in the connection string", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT 1;\n")), "postgresql://nobody@127.0.0.1:1/postgres?sslmode=bogus"
+		}, pgmi.ExitConfigError},
+		{"a named pipe in the project", func(t *testing.T) (string, string) {
+			dir := project(t, []byte("SELECT 1;\n"))
+			if err := mkfifo(filepath.Join(dir, "pipe.sql")); err != nil {
+				t.Skipf("no named pipes here: %v", err)
+			}
+			return dir, unreachable
+		}, pgmi.ExitConfigError},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir, connection := c.setup(t)
+			err := offline(t, dir, connection)
+			if got := pgmi.ExitCodeForError(err); got != c.want {
+				t.Errorf("exit code %d, want %d: %v", got, c.want, err)
+			}
+		})
+	}
+
+	t.Run("a pgmi_test macro the server refuses", func(t *testing.T) {
+		connString := testhelpers.RequireDatabase(t)
+		for name, tc := range map[string]struct {
+			sql  string
+			want int
+		}{
+			"bad pattern":       {"BEGIN;\nCALL pgmi_test('[');\nCOMMIT;\n", pgmi.ExitExecutionFailed},
+			"bad callback name": {"BEGIN;\nCALL pgmi_test('.*', 'not a name!');\nCOMMIT;\n", pgmi.ExitConfigError},
+		} {
+			t.Run(name, func(t *testing.T) {
+				const db = "pgmi_cli_exit_macro"
+				defer testhelpers.CleanupTestDB(t, connString, db)
+				resetDeployFlags()
+				clearPGEnv(t)
+				deployFlags.connection = connString
+				deployFlags.database = db
+				deployFlags.overwrite = true
+				deployFlags.force = true
+				deployFlags.timeout = 60 * time.Second
+				err := runDeploy(deployCmd, []string{project(t, []byte(tc.sql))})
+				if got := pgmi.ExitCodeForError(err); got != tc.want {
+					t.Errorf("exit code %d, want %d: %v", got, tc.want, err)
+				}
+			})
+		}
+	})
+}

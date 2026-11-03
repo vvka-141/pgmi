@@ -21,11 +21,10 @@ BEGIN
     RAISE DEBUG '→ Testing authenticated API (multi-user perspectives)';
 
     -- ════════════════════════════════════════════════════════════════════
-    -- Alice's perspective (owner of Acme Corp + personal org)
+    -- Alice's perspective (owner of Acme Corp)
     -- ════════════════════════════════════════════════════════════════════
 
-    PERFORM set_config('auth.idp_subject', v_alice_subject, true);
-    v_headers := ('x-user-id=>' || v_alice_subject)::extensions.hstore;
+    v_headers := pg_temp.test_session_headers(v_alice_subject);
 
     -- GET /me — Alice sees her own profile
     v_response := api.rest_invoke('GET', '/me', v_headers, NULL::bytea);
@@ -42,23 +41,22 @@ BEGIN
 
     RAISE DEBUG '  ✓ Alice GET /me → correct profile';
 
-    -- GET /organizations — Alice sees personal org + Acme Corp (2 orgs)
+    -- GET /organizations — Alice sees Acme Corp only: signing in creates none
     v_response := api.rest_invoke('GET', '/organizations', v_headers, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'TEST FAILED: Alice should see 2 orgs, got %',
-            jsonb_array_length(v_body->'organizations');
+    IF v_body->'organizations'->0->>'id' IS DISTINCT FROM v_acme_org_id::text
+       OR jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: Alice should see Acme Corp only, got %', v_body;
     END IF;
 
-    RAISE DEBUG '  ✓ Alice GET /organizations → 2 orgs (personal + Acme Corp)';
+    RAISE DEBUG '  ✓ Alice GET /organizations → Acme Corp';
 
     -- ════════════════════════════════════════════════════════════════════
-    -- Bob's perspective (member of Acme Corp + personal org)
+    -- Bob's perspective (member of Acme Corp)
     -- ════════════════════════════════════════════════════════════════════
 
-    PERFORM set_config('auth.idp_subject', v_bob_subject, true);
-    v_headers := ('x-user-id=>' || v_bob_subject)::extensions.hstore;
+    v_headers := pg_temp.test_session_headers(v_bob_subject);
 
     -- GET /me — Bob sees his own profile (not Alice's)
     v_response := api.rest_invoke('GET', '/me', v_headers, NULL::bytea);
@@ -70,16 +68,16 @@ BEGIN
 
     RAISE DEBUG '  ✓ Bob GET /me → correct profile (not Alice)';
 
-    -- GET /organizations — Bob also sees 2 orgs (personal + Acme Corp)
+    -- GET /organizations — Bob sees Acme Corp, where he is a member
     v_response := api.rest_invoke('GET', '/organizations', v_headers, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'TEST FAILED: Bob should see 2 orgs, got %',
-            jsonb_array_length(v_body->'organizations');
+    IF v_body->'organizations'->0->>'id' IS DISTINCT FROM v_acme_org_id::text
+       OR jsonb_array_length(v_body->'organizations') IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: Bob should see Acme Corp only, got %', v_body;
     END IF;
 
-    RAISE DEBUG '  ✓ Bob GET /organizations → 2 orgs (personal + Acme Corp)';
+    RAISE DEBUG '  ✓ Bob GET /organizations → Acme Corp';
 
     -- ════════════════════════════════════════════════════════════════════
     -- Unauthenticated — 401 on protected endpoints

@@ -8,28 +8,31 @@ weight: 110
 
 pgmi handles sensitive parameters (passwords, API keys, tokens) as part of database deployments. This guide covers pgmi's security model, known threat vectors, and recommended practices for CI/CD pipelines.
 
-> **API keys**: the advanced template ships a machine-to-machine API key subsystem (`membership.api_key`, SHA-256-hashed, hash-safe compare, SECURITY DEFINER lifecycle). See [API keys](./advanced/API-KEYS.md).
-
 ## Runtime security stack (advanced template)
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
 This page covers pgmi core's deployment-time security. Projects scaffolded
 from the [advanced template](advanced/_index.md) additionally layer a runtime
-defense for the APIs they serve — one identity pipeline for humans and
-machines, ending at row-level security:
+defense for the APIs they serve. The database resolves every caller from
+opaque handles: a login session the transport opened after an OIDC sign-in, an
+organization session per browser tab, or a connection a person approved for an
+MCP client. No identity or organization is taken from a header. One access
+decision serves REST, RPC and MCP, and forced row-level security ends the
+chain. What the transport must do is in the
+[login transport contract](advanced/LOGIN-TRANSPORT.md):
 
-![The layered security stack: identity providers and API keys converge on the auth.idp_subject session GUC, resolve through membership, and end at row-level security](diagrams/d13-security-stack.drawio.svg)
+![The layered security stack: identity providers sign people in to login sessions, the session handles resolve through membership into the request context, and row-level security ends the chain](diagrams/d13-security-stack.drawio.svg)
 
 ## Required Permissions
 
 | Operation | Minimum Privilege |
 |-----------|------------------|
-| `pgmi deploy` (existing database) | `CONNECT` and `TEMPORARY` on the target database (both granted to `PUBLIC` by default) |
+| `pgmi deploy` (existing database) | `CONNECT` and `TEMPORARY` on the target database (both granted to `PUBLIC` by default; the advanced template revokes them from `PUBLIC`, so a deploy role that is neither superuser nor the database owner needs them granted) |
 | `pgmi deploy` (new database) | additionally `CREATEDB` and `CONNECT` on the maintenance database |
 | `pgmi deploy --overwrite` | additionally `CONNECT` on the maintenance database, ownership of the target database (to drop it), and `CREATEDB` (to recreate it) |
 | DDL in migrations | Depends on your SQL — typically schema owner or `CREATE` on target schema |
-| Advanced template role setup | `CREATEROLE` + `CREATE EXTENSION` (initial setup only — no superuser) |
+| Advanced template role setup | `CREATEROLE` + `CREATEDB`, with `createrole_self_grant = 'set, inherit'` on the role (no superuser) |
 
 pgmi itself only needs to: connect, create temp tables (automatic for any role), set session variables, and execute your deploy.sql. The actual permissions depend on what your SQL does.
 
@@ -112,21 +115,22 @@ This guarantee covers only pgmi core. Your `deploy.sql` and template SQL run wit
 pgmi deploy . --param api_key=sk-live-abc123
 ```
 
-**Mitigation:** Use `--params-file` instead of `--param` for secrets:
+**Mitigation:** Pass secrets through a `PGMI_PARAM_*` environment variable, stdin, or a params file, never `--param`:
 
 ```bash
-pgmi deploy . --params-file /tmp/secrets.env
+export PGMI_PARAM_API_KEY="$API_KEY"          # becomes current_setting('pgmi.api_key')
+pgmi deploy . -d mydb
 ```
 
-The file contents are read into memory and never logged. See [Pipeline Patterns](#pipeline-patterns) below.
+A process's environment is readable only by the same user and root (`/proc/<pid>/environ`); its arguments are readable by everyone. Values are read into memory and never logged. See [Pipeline Patterns](#pipeline-patterns) below.
 
 ### PostgreSQL Server Logs
 
 **Risk: Medium** — depends on server configuration.
 
-pgmi sets session variables using `set_config($1, $2, false)`. If the PostgreSQL server has `log_statement = 'all'`, the resolved parameter values will appear in server logs. This is PostgreSQL's behavior, not pgmi's.
+pgmi sets session variables with `set_config($1, $2, false)`, sending each value as a bind parameter. PostgreSQL writes bind parameter values to its log, in full by default, whenever it logs the statement: under `log_statement = 'all'`, under `log_min_duration_statement` / `log_min_duration_sample` (including `0`, which logs every statement), and through auto_explain. This is PostgreSQL's behavior, not pgmi's.
 
-**Mitigation:** For pgmi's `set_config()` calls, `log_statement = 'ddl'` is sufficient — `set_config` is a function call, not DDL, so it won't appear in the log. If you must use `'all'`, ensure server logs are treated as sensitive and access-controlled.
+**Mitigation:** Set `log_parameter_max_length = 0` (and `auto_explain.log_parameter_max_length = 0` if auto_explain is loaded) on servers that receive secrets. Statements are still logged, without their parameter values. `log_statement = 'ddl'` alone does not cover the duration logs. Otherwise treat server logs as sensitive and access-controlled.
 
 > **Role passwords are a sharper case.** `CREATE/ALTER ROLE … PASSWORD '…'` is **DDL**, so the cleartext password is written to the server log under `log_statement = 'ddl'` *or* `'all'` — `--params-file` does not change this (the value is in the SQL regardless of how it reached pgmi). The advanced template sets role passwords this way. For role-password deployments:
 > - Set `log_statement = 'none'` for the deployment window, or wrap the role DDL in `SET LOCAL log_statement = 'none';` (changing `log_statement` is itself superuser-gated, or needs a `GRANT SET ON PARAMETER log_statement` to the deploy role on PostgreSQL 15+).
@@ -161,94 +165,55 @@ Parameters are accessible via `current_setting('pgmi.key')` and `SHOW ALL` withi
 pgmi deploy . --param secret=hunter2
 ```
 
-**Mitigation:** Use `--params-file`, or prefix commands with a space (most shells skip history for space-prefixed commands).
+**Mitigation:** Use a `PGMI_PARAM_*` variable, stdin or `--params-file`, or prefix commands with a space (most shells skip history for space-prefixed commands).
 
 ## Pipeline Patterns
 
-### Recommended: `--params-file` with Environment Variables
+### Recommended: `PGMI_PARAM_*` environment variables
 
-```bash
-# Secrets injected by pipeline (GitHub Actions, GitLab CI, Azure DevOps, etc.)
-# Write to a temp file, deploy, clean up
-
-cat > "$RUNNER_TEMP/params.env" <<EOF
-db_admin_password=$DB_ADMIN_PASSWORD
-api_key=$API_KEY
-environment=production
-EOF
-
-pgmi deploy ./migrations -d myapp --params-file "$RUNNER_TEMP/params.env"
-rm -f "$RUNNER_TEMP/params.env"
-```
-
-This avoids process list exposure entirely. The file exists only for the duration of the deployment.
-
-### Exception: Direct `--param` only in fully isolated ephemeral containers
-
-`--params-file` is the default for secrets. Passing them inline with `--param` is a
-**deliberate risk-acceptance**, justified only when process-list exposure is provably
-moot — and even then, prefer a file when it costs nothing:
-
-```bash
-pgmi deploy ./migrations -d myapp \
-  --param "db_admin_password=$DB_ADMIN_PASSWORD" \
-  --param "api_key=$API_KEY"
-```
-
-Acceptable **only** when all of these hold:
-- The container runs a single process
-- No other users share the host
-- The container is destroyed after the pipeline completes
-
-If in doubt, use `--params-file`. Never use a hardcoded secret literal on the command line.
-
-### GitHub Actions Example
+Every environment variable named `PGMI_PARAM_<NAME>` becomes parameter `<name>`, read with `current_setting('pgmi.<name>', true)` like any other. Map secrets straight from the CI secret store; nothing touches disk, nothing reaches argv:
 
 ```yaml
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Deploy database
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
-          API_KEY: ${{ secrets.API_KEY }}
-        run: |
-          cat > "$RUNNER_TEMP/params.env" <<EOF
-          db_admin_password=$DB_ADMIN_PASSWORD
-          api_key=$API_KEY
-          environment=production
-          EOF
-
-          pgmi deploy ./migrations \
-            -d myapp \
-            --params-file "$RUNNER_TEMP/params.env"
-
-          rm -f "$RUNNER_TEMP/params.env"
+- name: Deploy database
+  env:
+    PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
+    PGMI_PARAM_DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
+    PGMI_PARAM_API_KEY: ${{ secrets.API_KEY }}
+  run: pgmi deploy ./migrations -d myapp --param env=prod --force
 ```
 
-### GitLab CI Example
+- **Only the prefix is read.** CI tokens, cloud credentials and the rest of the runner's environment never reach the session.
+- **An empty value is refused (exit 10).** GitHub Actions expands a missing or misspelled secret to an empty string, and `current_setting` would hand deploy.sql `''`, which passes an `IS NULL` check. pgmi names the variable and stops instead.
+- **pgmi does not decide what is required.** An unset variable is a missing parameter; deploy.sql's own required-parameter check raises, with your message. Secrets get no defaults.
+- Precedence: `pgmi.yaml` < `PGMI_PARAM_*` < `--params-file` < `--param`.
+- A project `.env` may set `PGMI_PARAM_*` for local work; real environment variables win over it.
 
-```yaml
-deploy:
-  stage: deploy
-  script:
-    - |
-      cat > /tmp/params.env <<EOF
-      db_admin_password=$DB_ADMIN_PASSWORD
-      api_key=$API_KEY
-      environment=production
-      EOF
+### Stdin: `--params-file -`
 
-      pgmi deploy ./migrations \
-        -d myapp \
-        --params-file /tmp/params.env
+For a secret manager that prints `KEY=VALUE` lines, pipe it in. Nothing is written to disk:
 
-      rm -f /tmp/params.env
+```bash
+./fetch-secrets | pgmi deploy ./migrations -d myapp --params-file - --force
 ```
+
+`-` can appear once among the `--params-file` values and keeps its position in the "later file wins" order. With stdin taken by the parameters, an `--overwrite` confirmation cannot be answered, so pass `--force`. On Linux and macOS, process substitution works too: `--params-file <(./fetch-secrets)`.
+
+### Fallback: a params file
+
+When the values must come from a file, create it private and remove it on every exit path. A plain `rm` after `pgmi deploy` never runs when the deploy fails, because CI shells run with `-e`:
+
+```bash
+params=$(mktemp)
+trap 'rm -f "$params"' EXIT
+printf 'db_admin_password=%s\napi_key=%s\n' "$DB_ADMIN_PASSWORD" "$API_KEY" > "$params"
+pgmi deploy ./migrations -d myapp --params-file "$params"
+```
+
+`mktemp` creates the file readable only by you; a fixed path such as `/tmp/params.env` survives the job on a shared runner.
+
+### Never: secrets in `--param`
+
+`--param db_admin_password=$DB_ADMIN_PASSWORD` puts the expanded value in argv, visible in `ps` to every user on the host and often in CI logs. Use one of the three patterns above; they cost the same.
 
 ### Azure Entra ID: Eliminating Secrets
 
@@ -257,10 +222,12 @@ Managed Identity eliminates the secret-handling problem entirely — no password
 ```bash
 pgmi deploy . -d mydb \
   --host myserver.postgres.database.azure.com \
-  --azure --sslmode require
+  --azure
 ```
 
-Service Principal still requires `AZURE_CLIENT_SECRET` as an env var. The same `--params-file` patterns from above apply if you need to pass additional secrets.
+With `--azure` or `--aws`, pgmi refuses `sslmode` `disable`, `allow` and `prefer` (exit 10), so the token never travels without TLS. Azure defaults to `verify-full`; AWS defaults to `verify-full` with the RDS CA bundle in `--sslrootcert`, otherwise `require`. See [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication).
+
+Service Principal still requires `AZURE_CLIENT_SECRET` as an env var. Pass any additional secrets with the [pipeline patterns](#pipeline-patterns) above.
 
 ## PostgreSQL Server Hardening
 
@@ -268,8 +235,9 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 
 | Setting | Recommended Value | Reason |
 |---------|-------------------|--------|
-| `log_statement` | `'ddl'` or `'none'` | Prevents parameter values from appearing in server logs via `set_config()` calls |
-| `log_min_duration_statement` | `-1` or a high value | Prevents slow query logs from capturing parameter-setting statements |
+| `log_parameter_max_length` | `0` | Keeps bind parameter values, which carry pgmi's parameters, out of every statement log |
+| `auto_explain.log_parameter_max_length` | `0` | The same for auto_explain, if loaded |
+| `log_statement` | `'ddl'` or `'none'` | `'all'` logs every statement; role-password DDL needs `'none'` (above) |
 | `ssl` | `on` | Encrypts parameter values in transit between pgmi and PostgreSQL |
 
 ## Summary
@@ -278,9 +246,10 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 |--------|------|----------------|-------------|
 | SQL injection (pgmi internals) | None | Parameterized queries | Review your own SQL for injection |
 | pgmi core log leakage | None | Core CLI logs counts only | Redact secrets in your own `RAISE NOTICE`/audit logging |
-| Process list (`/proc`) | Medium | `--params-file` available | Use `--params-file` for secrets |
-| PostgreSQL server logs | Medium | Cannot control | `ddl` for pgmi params; `none` or SCRAM for role passwords |
+| Process list (`/proc`) | Medium | `PGMI_PARAM_*`, stdin and `--params-file` available | Never put a secret in `--param` |
+| PostgreSQL server logs | Medium | Cannot control | `log_parameter_max_length = 0`; `none` or SCRAM for role passwords |
 | User SQL printing secrets | User-controlled | Not pgmi's domain | Review deploy scripts |
 | Session variable visibility | Low | Session-scoped | Don't persist session vars |
-| Shell history | Low | `--params-file` available | Use `--params-file` or env files |
+| Shell history | Low | `PGMI_PARAM_*`, stdin and `--params-file` available | Keep secrets out of typed commands |
 | Azure Entra ID (MI) | None | Token-based, no secrets | Use `--azure` with Managed Identity |
+| IAM token sent without TLS | None | Plaintext-capable sslmodes refused with `--azure`/`--aws` | Give AWS the RDS CA bundle for `verify-full` |

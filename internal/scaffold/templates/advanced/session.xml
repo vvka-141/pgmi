@@ -4,8 +4,17 @@
     -->
     <parameter key="database_owner_role" description="Database owner role (NOLOGIN)" />
     <parameter key="database_admin_role" description="Database admin role (LOGIN, full access)" />
-    <parameter key="database_admin_password" description="Database admin password"/>
+    <parameter key="database_admin_password" description="Database admin password. Required, except with env=dev on a new or dev-labelled database, where it defaults to postgres"/>
     <parameter key="database_api_role" description="API group role (NOLOGIN, permission bundle)" />
-    <parameter key="database_customer_role" description="Customer role (NOLOGIN, RLS-restricted)" />
-    <parameter key="env" description="Deployment environment (required; env=dev defaults role passwords to postgres for local use)"/>
+    <parameter key="database_kernel_role" description="Kernel role (NOLOGIN): owns the membership kernels, which work across organizations; no login is ever granted it" />
+    <parameter key="database_jobs_role" description="Background jobs login. The deploy never creates it; when a role of this name exists, every deploy grants it CONNECT, USAGE on schema api and EXECUTE on every api.job_* routine, nothing else. Defaults to &lt;database&gt;_jobs" />
+    <parameter key="platform_operators" description="Platform operators as a JSON array: [{&quot;email&quot;: &quot;...&quot;, &quot;displayName&quot;: &quot;...&quot;, &quot;issuer&quot;: &quot;...&quot;, &quot;subject&quot;: &quot;...&quot;}], issuer and subject optional. Synced every deploy: a person left out loses the status. Defaults to [] (none)"/>
+    <parameter key="oidc_issuers" description="OIDC issuers (iss claim URLs) people may sign in with, as a JSON array of strings. Synced every deploy; an issuer still holding logins cannot be dropped. Defaults to [] (none)"/>
+    <parameter key="platform_mfa_required" description="true: platform permissions need a login session whose amr claim includes mfa (dev impersonation sets it). false turns the check off. Defaults to true"/>
+    <parameter key="exchange_retention_days" description="Days the exchange log (api.exchange) keeps a row: the retention of the purge_exchanges job (api.job_purge_exchanges) and the default of POST /admin/maintenance/purge-exchanges. Defaults to 30"/>
+    <parameter key="api_base_path" description="The path the gateway serves REST under, e.g. /api (the reference gateways' mount). It becomes the OpenAPI servers url, so generated clients and the /docs page call the right paths. / means the root. Defaults to /api"/>
+    <parameter key="www_authenticate" description="The challenge a 401 carries in WWW-Authenticate (RFC 9110 15.5.2), e.g. Bearer realm=&quot;app&quot;. Defaults to Session (the login-session handle)"/>
+    <parameter key="env" description="Deployment environment: dev, test or prod. Required, no default. The first deploy labels the database with it (internal.environment) and every redeploy must name the same label. Only env=dev deploys files under a dev/ folder"/>
+    <parameter key="relabel_environment" description="Change the database's environment label to this value, which must equal env. Refused when the database is new or already carries that label, so it cannot stay switched on. Relabelling to dev does not default passwords. Defaults to empty (no relabel)"/>
+    <parameter key="upgrade" description="true: refuse the deploy unless the database already carries the label env names, so a pipeline never builds a fresh database by mistake. Cannot be combined with relabel_environment. Defaults to false"/>
 </session>

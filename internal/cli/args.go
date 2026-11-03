@@ -58,21 +58,3 @@ Use 'pgmi templates list' to see available templates.`, pgmi.ErrUsage, cmd.UseLi
 	}
 	return nil
 }
-
-// RequireSkillName validates that exactly one skill_name argument is provided.
-func RequireSkillName(cmd *cobra.Command, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf(`%w: missing required argument: <name>
-
-Usage: %s
-
-Example:
-  %s pgmi-sql
-
-Use 'pgmi ai skills' to see available skills.`, pgmi.ErrUsage, cmd.UseLine(), cmd.CommandPath())
-	}
-	if len(args) > 1 {
-		return fmt.Errorf("%w: accepts 1 arg(s), received %d", pgmi.ErrUsage, len(args))
-	}
-	return nil
-}

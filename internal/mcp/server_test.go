@@ -782,3 +782,34 @@ func TestToolsCallHandlerPanicIsErrorResult(t *testing.T) {
 		t.Errorf("the request after the panic was not answered; got id %s", resp[1].ID)
 	}
 }
+
+func TestToolsListCarriesAnnotations(t *testing.T) {
+	s := NewServer("pgmi", "x")
+	tool := echoTool()
+	tool.Annotations = &ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
+	s.Register(tool)
+	var list toolsListResult
+	mustRemarshal(t, s.handleToolsList(), &list)
+	a := list.Tools[0].Annotations
+	if a == nil || !a.ReadOnlyHint || a.DestructiveHint || !a.IdempotentHint || a.OpenWorldHint {
+		t.Errorf("annotations = %+v", a)
+	}
+	var raw map[string]any
+	mustRemarshal(t, list.Tools[0], &raw)
+	if _, ok := raw["annotations"].(map[string]any)["destructiveHint"]; !ok {
+		t.Errorf("destructiveHint must be explicit (the spec defaults it to true): %v", raw["annotations"])
+	}
+}
+
+func TestASummarizedToolKeepsTheTextShort(t *testing.T) {
+	s := NewServer("pgmi", "x")
+	tool := echoTool()
+	tool.Summary = func(any) string { return "done" }
+	s.Register(tool)
+	resp := s.handleToolsCall(context.Background(), json.RawMessage(`{"name":"echo","arguments":{"big":"`+strings.Repeat("x", 5000)+`"}}`))
+	var call callToolResult
+	mustRemarshal(t, resp.Result, &call)
+	if len(call.Content) != 1 || call.Content[0].Text != "done" || call.StructuredContent == nil {
+		t.Errorf("want the summary as text and the value as structuredContent, got %+v", call)
+	}
+}

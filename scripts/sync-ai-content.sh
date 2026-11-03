@@ -1,25 +1,26 @@
 #!/bin/bash
 # sync-ai-content.sh
-# Refreshes the local .claude/skills/ mirror FROM the tracked, embedded skills.
-# internal/ai/content/skills/ is the source of truth (it ships in the binary);
-# .claude/skills/ is gitignored, local-only tooling and must never feed back into it.
+# Refreshes the local .claude/skills/ mirror FROM the skills pgmi scaffolds:
+# internal/scaffold/skills/ (every template) and
+# internal/scaffold/templates/<name>/.agents/skills/ (one template's own).
+# Those tracked trees are the source of truth; .claude/skills/ is gitignored,
+# local-only tooling and must never feed back into them.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-
-SOURCE_DIR="$REPO_ROOT/internal/ai/content/skills"
 TARGET_DIR="$REPO_ROOT/.claude/skills"
 
-echo "Refreshing .claude/skills/ from internal/ai/content/skills/ (tracked -> local)"
+echo "Refreshing .claude/skills/ from the scaffold skill trees (tracked -> local)"
 
 synced=0
-for src in "$SOURCE_DIR"/*.md; do
-    [ -f "$src" ] || continue
-    skill="$(basename "$src" .md)"
+for src in "$REPO_ROOT"/internal/scaffold/skills/*/ "$REPO_ROOT"/internal/scaffold/templates/*/.agents/skills/*/; do
+    [ -f "$src/SKILL.md" ] || continue
+    skill="$(basename "$src")"
+    rm -rf "${TARGET_DIR:?}/$skill"
     mkdir -p "$TARGET_DIR/$skill"
-    cp "$src" "$TARGET_DIR/$skill/SKILL.md"
+    cp -R "$src". "$TARGET_DIR/$skill/"
     echo "  Synced: $skill"
     synced=$((synced + 1))
 done

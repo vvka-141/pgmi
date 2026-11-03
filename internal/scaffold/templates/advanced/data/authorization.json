@@ -1,0 +1,21 @@
+{
+    "permissions": [
+        { "id": "project.read", "description": "See the organization's projects and their documents" },
+        { "id": "project.write", "description": "Create, edit and archive projects and their documents" },
+        { "id": "task.read", "description": "See the organization's tasks" },
+        { "id": "task.write", "description": "Create, edit, assign and complete tasks" },
+        { "id": "members.read", "description": "See the organization's members and their roles" },
+        { "id": "members.manage", "description": "Invite and remove members, grant and revoke roles" },
+        { "id": "access.explore", "description": "Inspect who may call which handler, and why" },
+        { "id": "platform.operate", "description": "Operate the platform: create, suspend and archive organizations", "platform": true }
+    ],
+    "roles": [
+        { "id": "org.owner", "name": "Owner", "sortOrder": 10, "grants": ["*"] },
+        { "id": "org.admin", "name": "Administrator", "sortOrder": 20, "grants": ["*"] },
+        { "id": "org.member", "name": "Member", "sortOrder": 30, "grants": ["project.*", "task.*", "members.read"] },
+        { "id": "org.viewer", "name": "Viewer", "sortOrder": 40, "grants": ["project.read", "task.read", "members.read"] },
+        { "id": "agent.reader", "name": "Agent: reads", "sortOrder": 110, "grants": ["project.read", "task.read", "members.read"] },
+        { "id": "agent.contributor", "name": "Agent: reads and writes work", "sortOrder": 120, "grants": ["project.*", "task.*", "members.read"] },
+        { "id": "agent.delegate", "name": "Agent: everything its person may do", "sortOrder": 130, "grants": ["*"] }
+    ]
+}

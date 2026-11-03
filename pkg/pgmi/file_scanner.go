@@ -18,4 +18,24 @@ type FileScanner interface {
 type FileScanResult struct {
 	Files     []FileMetadata
 	DeploySQL string
+	// Ignored lists each path discovery left out, highest first: an ignored
+	// directory appears once, not file by file.
+	Ignored []IgnoredPath
 }
+
+// IgnoredPath is a project path that discovery did not load, and why.
+type IgnoredPath struct {
+	// Path in ./ form; a directory ends with /.
+	Path string
+	// Rule is IgnoreRuleBuiltIn or IgnoreRulePgmiignore.
+	Rule string
+}
+
+const (
+	IgnoreRuleBuiltIn    = "built-in"
+	IgnoreRulePgmiignore = ".pgmiignore"
+)
+
+// PgmiignoreFile is the gitignore-style file at the project root whose
+// patterns add to the built-in exclusions.
+const PgmiignoreFile = ".pgmiignore"

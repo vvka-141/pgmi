@@ -111,6 +111,34 @@ func RequireDatabase(t *testing.T) string {
 	return GetTestConnectionString(t)
 }
 
+// RequirePostgresImage starts a dedicated container from image, for tests that
+// need a server version other than the shared one. It skips or fails exactly
+// like GetTestConnectionString when Docker is unavailable.
+func RequirePostgresImage(t *testing.T, image string) string {
+	t.Helper()
+
+	SkipIfShort(t)
+	var ctr *testinfra.PostgresContainer
+	conn, msg, fatal := resolveTestConnection("", os.Getenv("PGMI_REQUIRE_DB"), func() (string, error) {
+		var err error
+		ctr, err = testinfra.StartSimplePostgresImage(context.Background(), image)
+		if err != nil {
+			return "", err
+		}
+		return ctr.ConnString, nil
+	})
+	switch {
+	case msg == "":
+		t.Cleanup(func() { ctr.Terminate(context.Background()) }) //nolint:errcheck
+		return conn
+	case fatal:
+		t.Fatal(msg)
+	default:
+		t.Skip(msg)
+	}
+	return ""
+}
+
 // NewTestDeployer creates a Deployer instance configured for testing.
 // Uses the standard connector factory and a force-approving test approver.
 func NewTestDeployer(t *testing.T) pgmi.Deployer {
@@ -128,6 +156,7 @@ func NewTestDeployer(t *testing.T) pgmi.Deployer {
 		fileScanner,
 		fileLoader,
 		logger,
+		"test",
 	)
 
 	return services.NewDeploymentService(
@@ -156,6 +185,7 @@ func NewTestDeployerWithFS(t *testing.T, fsProvider filesystem.FileSystemProvide
 		fileScanner,
 		fileLoader,
 		logger,
+		"test",
 	)
 
 	return services.NewDeploymentService(

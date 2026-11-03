@@ -48,8 +48,12 @@ registrar, validating two agent-only fields:
 - `toolDescription` — LLM-targeted prose used for semantic ranking (distinct
   from the human `description`).
 
+The table goes in a run-once file (`idempotent="false"`), the function in a
+re-run file (`idempotent="true"`) sorted after it: the advanced template's
+`deploy.sql` refuses a file that mixes the two.
+
 ```sql
-CREATE TABLE IF NOT EXISTS api.agent_tool (
+CREATE TABLE api.agent_tool (
     handler_object_id uuid PRIMARY KEY
         REFERENCES api.handler(object_id) ON DELETE CASCADE,
     category          text NOT NULL,
@@ -172,7 +176,7 @@ Model the embedding as a **contract**, not a vendor. Two pieces:
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE DOMAIN embeddings.text_embedding AS extensions.vector(/* model dim */);
 
-CREATE TABLE IF NOT EXISTS embeddings.tool_embedding (
+CREATE TABLE embeddings.tool_embedding (
     handler_object_id uuid PRIMARY KEY,
     embedding         embeddings.text_embedding NOT NULL,
     embedded_at       timestamptz NOT NULL DEFAULT now()

@@ -1,10 +1,24 @@
 -- ============================================================================
 -- Test: Authentication Enforcement
 -- ============================================================================
--- Validates that handlers with requiresAuth (default: true) enforce
--- identity headers/context, while handlers with requiresAuth: false allow
+-- Validates that handlers declared "access": "authenticated" enforce a live
+-- login session (headers) or an approved connection (MCP context), while handlers declared "access": "public" allow
 -- unauthenticated access.
 -- ============================================================================
+
+CREATE FUNCTION pg_temp.auth_test_principal(p_subject text)
+RETURNS uuid LANGUAGE sql AS $$
+    SELECT pg_temp.test_person('test|' || p_subject);
+$$;
+
+-- An MCP context for a person: a connection in an organization they own.
+CREATE FUNCTION pg_temp.auth_test_mcp(p_subject text)
+RETURNS jsonb LANGUAGE sql AS $$
+    SELECT pg_temp.test_mcp_context('test|' || p_subject,
+        coalesce(pg_temp.test_organization('auth-' || p_subject),
+                 (membership.fn_create_organization_with_owner('Auth ' || p_subject, 'auth-' || p_subject,
+                                                               pg_temp.auth_test_principal(p_subject))).object_id));
+$$;
 
 DO $$
 DECLARE
@@ -12,25 +26,27 @@ DECLARE
     v_mcp_response api.mcp_response;
     v_content jsonb;
     v_route_id uuid;
+    v_headers extensions.hstore;
 BEGIN
     RAISE NOTICE '→ Testing Authentication Enforcement';
 
     -- ========================================================================
-    -- Register protected handlers (requiresAuth defaults to true)
+    -- Register protected handlers (access: authenticated)
     -- ========================================================================
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-a001-4000-8000-000000000001',
-            'uri', '^/test-protected-rest$',
+            'path', '/test-protected-rest',
             'httpMethod', '^GET$',
             'name', 'test_protected_rest',
-            'description', 'Protected REST handler'
+            'description', 'Protected REST handler',
+            'access', 'authenticated'
         ),
         $body$
 BEGIN
     RETURN api.json_response(200, jsonb_build_object(
-        'user_id', current_setting('auth.user_id', true)
+        'principalId', api.current_principal_id()
     ));
 END;
         $body$
@@ -40,12 +56,13 @@ END;
         jsonb_build_object(
             'id', 'ffffffff-a002-4000-8000-000000000001',
             'methodName', 'test.protected',
-            'description', 'Protected RPC handler'
+            'description', 'Protected RPC handler',
+            'access', 'authenticated'
         ),
         $body$
 BEGIN
     RETURN api.jsonrpc_success(
-        jsonb_build_object('user_id', current_setting('auth.user_id', true)),
+        jsonb_build_object('principalId', api.current_principal_id()),
         api.content_json((request).content)->'id'
     );
 END;
@@ -55,15 +72,16 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-a003-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_protected_tool',
             'description', 'Protected MCP tool',
+            'access', 'authenticated',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$
 BEGIN
     RETURN api.mcp_tool_result(
-        jsonb_build_array(api.mcp_text('user_id: ' || current_setting('auth.user_id', true))),
+        jsonb_build_array(api.mcp_text('principal: ' || api.current_principal_id())),
         (request).request_id
     );
 END;
@@ -71,17 +89,17 @@ END;
     );
 
     -- ========================================================================
-    -- Register public handlers (requiresAuth: false)
+    -- Register public handlers (access: public)
     -- ========================================================================
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-a004-4000-8000-000000000001',
-            'uri', '^/test-public-rest$',
+            'path', '/test-public-rest',
             'httpMethod', '^GET$',
             'name', 'test_public_rest',
             'description', 'Public REST handler',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -95,7 +113,7 @@ END;
             'id', 'ffffffff-a005-4000-8000-000000000001',
             'methodName', 'test.public',
             'description', 'Public RPC handler',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -110,11 +128,11 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-a006-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_public_tool',
             'description', 'Public MCP tool',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -141,19 +159,17 @@ END;
         RAISE EXCEPTION 'TEST FAILED: 401 response should have title "Unauthorized"';
     END IF;
 
-    RAISE NOTICE '  ✓ REST: Protected handler returns 401 without x-user-id';
+    RAISE NOTICE '  ✓ REST: Protected handler returns 401 without a session';
 
     -- ========================================================================
-    -- requiresAuth gates on a RESOLVED active user, not on header syntax, so
-    -- every positive case below needs a real membership.user row. Provisioning
-    -- them here is the point, not boilerplate: before this, these same requests
-    -- passed with identities that existed nowhere.
+    -- "access": "authenticated" gates on a live login session of an enabled
+    -- person, so every positive case below needs a real person and session.
     -- ========================================================================
 
-    PERFORM membership.upsert_user('test', 'user123', 'authtest-user123@example.com');
-    PERFORM membership.upsert_user('test', 'user456', 'authtest-user456@example.com');
-    PERFORM membership.upsert_user('test', 'user789', 'authtest-user789@example.com');
-    PERFORM membership.upsert_user('test', 'alice',   'authtest-alice@example.com');
+    PERFORM pg_temp.test_login('test', 'user123', 'authtest-user123@example.test', NULL, true);
+    PERFORM pg_temp.test_login('test', 'user456', 'authtest-user456@example.test', NULL, true);
+    PERFORM pg_temp.test_login('test', 'user789', 'authtest-user789@example.test', NULL, true);
+    PERFORM pg_temp.test_login('test', 'alice', 'authtest-alice@example.test', NULL, true);
 
     -- ========================================================================
     -- Test: REST protected handler accepts authenticated requests
@@ -162,7 +178,7 @@ END;
     v_response := api.rest_invoke(
         'GET',
         '/test-protected-rest',
-        'x-user-id=>test|user123'::extensions.hstore,
+        pg_temp.test_session_headers('test|user123'),
         NULL::bytea
     );
 
@@ -171,29 +187,28 @@ END;
     END IF;
 
     v_content := api.content_json((v_response).content);
-    IF v_content->>'user_id' IS DISTINCT FROM 'test|user123' THEN
-        RAISE EXCEPTION 'TEST FAILED: Session variable auth.user_id should be "test|user123", got "%"', v_content->>'user_id';
+    IF v_content->>'principalId' IS DISTINCT FROM pg_temp.auth_test_principal('user123')::text THEN
+        RAISE EXCEPTION 'TEST FAILED: the handler should see user123 as its principal, got "%"', v_content->>'principalId';
     END IF;
 
-    RAISE NOTICE '  ✓ REST: Protected handler returns 200 with x-user-id, session variable set';
+    RAISE NOTICE '  ✓ REST: Protected handler returns 200 with a login session and sees its principal';
 
     -- ========================================================================
-    -- Test: unprefixed user-id header is NOT accepted as auth
-    -- (standardized on x-user-id; no alias fallback)
+    -- Test: an identity header is not a way in: only a session handle is
     -- ========================================================================
 
     v_response := api.rest_invoke(
         'GET',
         '/test-protected-rest',
-        'user-id=>userZZZ'::extensions.hstore,
+        'x-user-id=>test|user123, x-user-email=>authtest-user123@example.test, x-tenant-id=>00000000-0000-0000-0000-000000000001'::extensions.hstore,
         NULL::bytea
     );
 
     IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: user-id alias must NOT satisfy auth gate, expected 401 got %', (v_response).status_code;
+        RAISE EXCEPTION 'TEST FAILED: identity headers must NOT satisfy the auth gate, expected 401 got %', (v_response).status_code;
     END IF;
 
-    RAISE NOTICE '  ✓ REST: user-id header alone is rejected (alias removed)';
+    RAISE NOTICE '  ✓ REST: x-user-id / x-user-email / x-tenant-id are ignored';
 
     -- ========================================================================
     -- Test: REST public handler accepts unauthenticated requests
@@ -235,7 +250,7 @@ END;
 
     v_response := api.rpc_invoke(
         v_route_id,
-        'x-user-id=>test|user456'::extensions.hstore,
+        pg_temp.test_session_headers('test|user456'),
         convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "2"}', 'UTF8')
     );
 
@@ -244,11 +259,11 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Protected RPC with auth should succeed, got error: %', v_content->'error';
     END IF;
 
-    IF v_content->'result'->>'user_id' IS DISTINCT FROM 'test|user456' THEN
-        RAISE EXCEPTION 'TEST FAILED: RPC session variable auth.user_id should be "test|user456"';
+    IF v_content->'result'->>'principalId' IS DISTINCT FROM pg_temp.auth_test_principal('user456')::text THEN
+        RAISE EXCEPTION 'TEST FAILED: the RPC handler should see user456 as its principal';
     END IF;
 
-    RAISE NOTICE '  ✓ RPC: Protected handler succeeds with x-user-id, session variable set';
+    RAISE NOTICE '  ✓ RPC: Protected handler succeeds with a login session and sees its principal';
 
     -- ========================================================================
     -- Test: RPC public handler accepts unauthenticated requests
@@ -272,12 +287,6 @@ END;
     -- Test: MCP protected tool rejects unauthenticated requests
     -- ========================================================================
 
-    -- Reset session auth variables from previous tests
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.user_email', '', true);
-    PERFORM set_config('auth.tenant_id', '', true);
-    PERFORM set_config('auth.token', '', true);
-
     v_mcp_response := api.mcp_call_tool('test_protected_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb);
 
     IF (v_mcp_response).envelope->'error' IS NULL THEN
@@ -295,7 +304,7 @@ END;
             (v_mcp_response).envelope->'error';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: a protected tool is indistinguishable from an unknown one without context.user_id';
+    RAISE NOTICE '  ✓ MCP: a protected tool is indistinguishable from an unknown one without a session';
 
     -- ========================================================================
     -- Test: MCP protected tool accepts authenticated requests
@@ -304,7 +313,7 @@ END;
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool',
         '{}'::jsonb,
-        '{"user_id": "test|user789"}'::jsonb,
+        pg_temp.auth_test_mcp('user789'),
         '"req-2"'::jsonb
     );
 
@@ -314,12 +323,12 @@ END;
 
     IF NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'content') AS c
-        WHERE c->>'text' LIKE '%user789%'
+        WHERE c->>'text' = 'principal: ' || pg_temp.auth_test_principal('user789')
     ) THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP result should contain user_id from context';
+        RAISE EXCEPTION 'TEST FAILED: the MCP handler should see user789 as its principal';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Protected tool succeeds with context.user_id, session variable set';
+    RAISE NOTICE '  ✓ MCP: Protected tool succeeds with context.connection and sees its principal';
 
     -- ========================================================================
     -- Test: MCP public tool accepts unauthenticated requests
@@ -334,56 +343,44 @@ END;
     RAISE NOTICE '  ✓ MCP: Public tool succeeds without auth';
 
     -- ========================================================================
-    -- Hardening: present-but-malformed identities are rejected across
-    -- REST, RPC, and MCP; identity must not leak across successive calls.
+    -- Hardening: a handle that names no session is rejected across REST,
+    -- RPC, and MCP; identity must not leak across successive calls.
     -- ========================================================================
 
-    -- REST: malformed x-user-id (no provider|subject pipe) → 401
     v_response := api.rest_invoke(
         'GET', '/test-protected-rest',
-        'x-user-id=>alice'::extensions.hstore, NULL::bytea
+        'x-login-session=>ls_not-a-session'::extensions.hstore, NULL::bytea
     );
     IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: malformed x-user-id must return 401, got %', (v_response).status_code;
+        RAISE EXCEPTION 'TEST FAILED: an unknown session handle must return 401, got %', (v_response).status_code;
     END IF;
-    RAISE NOTICE '  ✓ REST: malformed x-user-id (no pipe) rejected with 401';
+    RAISE NOTICE '  ✓ REST: unknown session handle rejected with 401';
 
-    -- REST: empty-provider identity (leading pipe) → 401 (provider must be non-empty)
-    v_response := api.rest_invoke(
-        'GET', '/test-protected-rest',
-        'x-user-id=>|alice'::extensions.hstore, NULL::bytea
-    );
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: leading-pipe x-user-id must return 401, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  ✓ REST: empty-provider x-user-id (|subject) rejected with 401';
-
-    -- RPC: malformed x-user-id → -32001
     v_route_id := api.rpc_resolve('test.protected');
     v_response := api.rpc_invoke(
         v_route_id,
-        'x-user-id=>alice'::extensions.hstore,
+        'x-login-session=>ls_not-a-session'::extensions.hstore,
         convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "m"}', 'UTF8')
     );
     v_content := api.content_json((v_response).content);
     IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: malformed RPC x-user-id should return -32001, got %', v_content->'error';
+        RAISE EXCEPTION 'TEST FAILED: an unknown RPC session handle should return -32001, got %', v_content->'error';
     END IF;
-    RAISE NOTICE '  ✓ RPC: malformed x-user-id (no pipe) rejected with -32001';
+    RAISE NOTICE '  ✓ RPC: unknown session handle rejected with -32001';
 
-    -- MCP: malformed user_id (no pipe) → the anonymous not-found answer, -32602
     v_mcp_response := api.mcp_call_tool(
-        'test_protected_tool', '{}'::jsonb, '{"user_id": "alice"}'::jsonb, '"req-malformed"'::jsonb
+        'test_protected_tool', '{}'::jsonb, '{"user_id": "test|user789", "connection": "cn_nope"}'::jsonb, '"req-malformed"'::jsonb
     );
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
-        RAISE EXCEPTION 'TEST FAILED: malformed MCP user_id should get the not-found answer (-32602), got %', (v_mcp_response).envelope->'error';
+    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -31001
+       OR (v_mcp_response).envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.connection_unknown' THEN
+        RAISE EXCEPTION 'TEST FAILED: an MCP context with a user_id and an unknown connection should answer -31001 pgmi.connection_unknown, got %', (v_mcp_response).envelope->'error';
     END IF;
-    RAISE NOTICE '  ✓ MCP: malformed user_id (no pipe) rejected (-32602)';
+    RAISE NOTICE '  ✓ MCP: user_id is ignored and an unknown connection is rejected (-31001 pgmi.connection_unknown)';
 
     -- MCP: identity must not leak across calls. Call 1 authenticates; call 2
     -- omits context and must NOT inherit call 1's identity (proves GUC reset).
     v_mcp_response := api.mcp_call_tool(
-        'test_protected_tool', '{}'::jsonb, '{"user_id": "test|alice"}'::jsonb, '"req-leak-1"'::jsonb
+        'test_protected_tool', '{}'::jsonb, pg_temp.auth_test_mcp('alice'), '"req-leak-1"'::jsonb
     );
     IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: authenticated MCP call should succeed, got %', (v_mcp_response).envelope->'error';
@@ -403,13 +400,11 @@ END;
     -- and must not leak raw SQLERRM to the client.
     -- ========================================================================
 
-    PERFORM set_config('auth.user_id', '', true);
-
-    -- Discovery with a forged, malformed identity (no provider|subject pipe)
-    -- must NOT reveal auth-gated tools, but must still list public ones.
+    -- Discovery with a forged context must NOT reveal auth-gated tools, but
+    -- must still list public ones.
     v_mcp_response := api.mcp_handle_request(
         '{"jsonrpc":"2.0","id":"disc-1","method":"tools/list"}'::jsonb,
-        '{"user_id":"alice"}'::jsonb
+        '{"user_id":"test|alice","organizationId":"forged"}'::jsonb
     );
     IF EXISTS (
         SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
@@ -428,7 +423,7 @@ END;
     -- Identity must not bleed into a later context-less discovery request.
     v_mcp_response := api.mcp_handle_request(
         '{"jsonrpc":"2.0","id":"disc-2","method":"tools/call","params":{"name":"test_protected_tool","arguments":{}}}'::jsonb,
-        '{"user_id":"test|alice"}'::jsonb
+        pg_temp.auth_test_mcp('alice')
     );
     v_mcp_response := api.mcp_handle_request(
         '{"jsonrpc":"2.0","id":"disc-3","method":"tools/list"}'::jsonb,
@@ -447,11 +442,11 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-a007-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_throwing_tool',
             'description', 'Always raises',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -470,124 +465,20 @@ END;
     RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
 
     -- ========================================================================
-    -- The gateway JIT-provisions a membership.user row for a first-time
-    -- authenticated identity, so api.current_user_id() resolves and /me +
-    -- /organizations work without any out-of-band row creation.
+    -- Disabling a person closes their open sessions at once.
     -- ========================================================================
 
-    v_response := api.rest_invoke(
-        'GET', '/me',
-        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
-        NULL::bytea
-    );
+    v_headers := pg_temp.test_session_headers('test|user123');
+    v_response := api.rest_invoke('GET', '/test-protected-rest', v_headers, NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: /me for a freshly-authenticated identity should be 200 (JIT-provisioned), got %', (v_response).status_code;
+        RAISE EXCEPTION 'TEST FAILED: setup: user123 should be served, got %', (v_response).status_code;
     END IF;
-    v_content := api.content_json((v_response).content);
-    IF v_content->>'email' IS DISTINCT FROM 'jit-pgmi33@example.com' THEN
-        RAISE EXCEPTION 'TEST FAILED: /me returned wrong/absent user, got %', v_content;
-    END IF;
-    RAISE NOTICE '  ✓ REST: /me JIT-provisions a first-time identity (200, current_user_id resolves)';
-
-    v_response := api.rest_invoke(
-        'GET', '/organizations',
-        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
-        NULL::bytea
-    );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: /organizations should be 200, got %', (v_response).status_code;
-    END IF;
-    v_content := api.content_json((v_response).content);
-    IF coalesce(jsonb_array_length(v_content->'organizations'), 0) < 1 THEN
-        RAISE EXCEPTION 'TEST FAILED: /organizations should list the auto-created personal org, got %', v_content;
-    END IF;
-    RAISE NOTICE '  ✓ REST: /organizations returns the JIT-provisioned personal org';
-
-    -- Idempotent: a repeat request must not error on duplicate provisioning.
-    v_response := api.rest_invoke(
-        'GET', '/me',
-        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
-        NULL::bytea
-    );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: repeated /me should stay 200 (idempotent provisioning), got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  ✓ REST: JIT provisioning is idempotent across repeated requests';
-
-    -- ========================================================================
-    -- requiresAuth must gate on a resolved ACTIVE user, not on the
-    -- header merely being well formed. Both cases below returned 200/201
-    -- before the fix, because the gate only asked whether the GUC was set.
-    -- ========================================================================
-
-    -- (1) Forged but well-formed identity, no x-user-email so nothing is
-    -- JIT-provisioned: the subject exists nowhere in membership.
-    v_response := api.rest_invoke(
-        'GET', '/test-protected-rest',
-        'x-user-id=>google|nobody-12345'::extensions.hstore,
-        NULL::bytea
-    );
+    PERFORM membership.fn_disable_principal(pg_temp.auth_test_principal('user123'), 'test lockout');
+    v_response := api.rest_invoke('GET', '/test-protected-rest', v_headers, NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: forged well-formed identity must return 401, got % — the auth gate is checking header shape, not a resolved user',
-            (v_response).status_code;
+        RAISE EXCEPTION 'TEST FAILED: a disabled person''s session must return 401, got %', (v_response).status_code;
     END IF;
-    RAISE NOTICE '  ✓ REST: forged well-formed x-user-id (unresolvable subject) rejected with 401';
-
-    -- Same identity over RPC and MCP: all three gates must agree.
-    v_response := api.rpc_invoke(
-        v_route_id,
-        'x-user-id=>google|nobody-12345'::extensions.hstore,
-        convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "forged-1"}', 'UTF8')
-    );
-    v_content := api.content_json((v_response).content);
-    IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
-        RAISE EXCEPTION 'TEST FAILED: forged RPC identity should return -32001, got %', v_content->'error';
-    END IF;
-    RAISE NOTICE '  ✓ RPC: forged well-formed identity rejected with -32001';
-
-    v_mcp_response := api.mcp_call_tool(
-        'test_protected_tool', '{}'::jsonb,
-        '{"user_id": "google|nobody-12345"}'::jsonb, '"forged-2"'::jsonb
-    );
-    IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
-        RAISE EXCEPTION 'TEST FAILED: forged MCP identity should get the not-found answer (-32602), got %', (v_mcp_response).envelope->'error';
-    END IF;
-    RAISE NOTICE '  ✓ MCP: forged well-formed identity rejected (-32602)';
-
-    -- Discovery must agree with invocation: an unresolvable identity must not
-    -- see a tool it would then be refused.
-    v_mcp_response := api.mcp_handle_request(
-        '{"jsonrpc":"2.0","id":"disc-forged","method":"tools/list"}'::jsonb,
-        '{"user_id":"google|nobody-12345"}'::jsonb
-    );
-    IF EXISTS (
-        SELECT 1 FROM jsonb_array_elements((v_mcp_response).envelope->'result'->'tools') AS t
-        WHERE t->>'name' = 'test_protected_tool'
-    ) THEN
-        RAISE EXCEPTION 'TEST FAILED: tools/list exposed an auth-gated tool to an unresolvable identity';
-    END IF;
-    RAISE NOTICE '  ✓ MCP: tools/list hides auth-gated tools from an unresolvable identity';
-
-    -- (2) Deactivation must actually revoke access. jittest|user-pgmi33 was
-    -- provisioned and served 200 above; deactivating it must close the door
-    -- even though the header is unchanged and still well formed.
-    UPDATE membership."user" u
-    SET is_active = false
-    FROM membership.user_identity ui
-    WHERE ui.user_object_id = u.object_id
-      AND ui.idp_provider = 'jittest'
-      AND ui.idp_subject_id = 'user-pgmi33';
-
-    v_response := api.rest_invoke(
-        'GET', '/organizations',
-        'x-user-id=>jittest|user-pgmi33, x-user-email=>jit-pgmi33@example.com'::extensions.hstore,
-        NULL::bytea
-    );
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: deactivated user must return 401, got % — deactivation is not revoking access',
-            (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  ✓ REST: deactivated user is refused with 401 (deactivation revokes access)';
+    RAISE NOTICE '  ✓ REST: a disabled person''s open session is refused with 401';
 
     RAISE NOTICE '✓ Authentication Enforcement tests passed';
 END $$;

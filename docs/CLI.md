@@ -18,7 +18,7 @@ These flags work with every command:
 
 | Flag | Description |
 |------|-------------|
-| `-v, --verbose` | Enable verbose output (also shows PostgreSQL `RAISE DEBUG` messages) |
+| `-v, --verbose` | Enable verbose output (also shows PostgreSQL `RAISE DEBUG` messages from deploy.sql and tests, not from pgmi's own session setup; a `SET client_min_messages` in deploy.sql still wins; for `deploy` lists each ignored path with the rule that excluded it) |
 | `--help` | Show help for any command (`-h` is `--host` on `deploy`, as in psql) |
 
 ---
@@ -33,6 +33,11 @@ pgmi deploy <project_path> [flags]
 
 pgmi connects to PostgreSQL, loads your project files into session temp tables, then runs `deploy.sql` which directly executes your files.
 
+Notices go to stderr. `NOTICE` and `INFO` lines print the bare message; a
+`WARNING` prints as `WARNING:  message`, with the English label whatever
+`lc_messages` is, so CI logs can grep for it. `DETAIL:` and `HINT:` follow as
+in psql. `--verbose` prefixes every line with the elapsed time.
+
 ### Connection Flags
 
 | Flag | Default | Description |
@@ -42,7 +47,7 @@ pgmi connects to PostgreSQL, loads your project files into session temp tables, 
 | `-p, --port` | `$PGPORT` or `5432` | PostgreSQL server port |
 | `-U, --username` | `$PGUSER` or OS user | PostgreSQL user |
 | `-d, --database` | `$PGDATABASE` or from connection string | Target database name |
-| `--sslmode` | `$PGSSLMODE` or `prefer` | SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` |
+| `--sslmode` | `$PGSSLMODE` or `prefer` | SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. With `--azure`/`--aws` only `require` and stronger are accepted, and the default is `verify-full` (AWS: `require` without `--sslrootcert`); see [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication) |
 | `--sslcert` | `$PGSSLCERT` | Path to client SSL certificate file |
 | `--sslkey` | `$PGSSLKEY` | Path to client SSL private key file |
 | `--sslrootcert` | `$PGSSLROOTCERT` | Path to root CA certificate for server verification |
@@ -71,25 +76,48 @@ returned cleanly.
 |-------|-------|
 | `status` | `success` or `failed` |
 | `exitCode` | See [Exit Codes](#exit-codes) |
+| `schemaVersion` | Version of this JSON shape (`1`). Raised when a key is renamed or removed, not when one is added |
+| `pgmiVersion` | The binary, as `pgmi version` prints it |
+| `contractVersion` | Session API version applied (`--compat`, or the latest). `null` when `--compat` names one the binary does not ship |
+| `serverVersion` | PostgreSQL `server_version` of the target. `null` when the deploy failed before connecting |
+| `target` | `{"host", "port", "database"}` — never the user, password or token. `null` when the connection could not be resolved |
+| `startedAt`, `finishedAt` | RFC 3339 UTC timestamps |
 | `filesLoaded`, `testMacros`, `durationMs`, `database` | Run summary |
+| `pathsIgnored` | Paths left out by the built-in exclusions and `.pgmiignore`; an ignored directory counts once ([what gets loaded](DEPLOY-GUIDE.md#what-gets-loaded)) |
+| `ignoredPaths` | Each of those paths as `{path, rule}`, `rule` being `built-in` or `.pgmiignore` |
 | `created` | `true` when this deploy created the target database. On a routine deploy that usually means a mistyped `-d` |
-| `executionUnits`, `unitsCommitted` | Present once deploy.sql execution begins. `executionUnits` is the total count; `unitsCommitted` is how many completed before the failure (equals `executionUnits` on success) |
-| `executionMode` | `"atomic"` (head failure — nothing applied, rolled back) or `"psql"` (tail failure — earlier units already committed). Present only on failure. Derived from the unit ordinal at failure time, not from whether the script contains a COMMIT |
+| `executionUnits`, `unitsCommitted` | Present once deploy.sql execution begins. `executionUnits` is the total count; `unitsCommitted` is how many committed: a unit inside an open `BEGIN` that the failure rolled back does not count (equals `executionUnits` on success) |
+| `executionMode` | `"atomic"` (nothing committed, everything rolled back) or `"psql"` (earlier units already committed). Present only on failure |
 | `error` | Failure message. Note the key is `error`, not `message` |
 | `sqlstate` | PostgreSQL error code |
 | `detail`, `hint`, `where` | PostgreSQL diagnostics, when the server supplied them |
-| `failedFile` | Project file that raised the error, found by the text PostgreSQL was executing (or a `Failed in <path>:` message). Absent when a handler in deploy.sql re-raised with `RAISE EXCEPTION` and a different message |
-| `script`, `sourceLine` | The script pgmi executed, and the offending line from it |
-| `line`, `column`, `scriptExpanded` | Present only when PostgreSQL reported a position (syntax errors always do). `scriptExpanded: true` means `line` refers to the macro-expanded script, not the file on disk |
+| `failedFile` | Project file that raised the error, found by the text PostgreSQL was executing (or a `Failed in <path>:` message). Absent when a handler in deploy.sql re-raised with `RAISE EXCEPTION` and a different message. Only SQL files are considered, so an editor backup such as `#task.sql#` is never named |
+| `failedFileCandidates` | Every SQL file holding the failing text, when more than one does (a copied file); `failedFile` is the first of them |
+| `phase` | `"test"` when the failure is in a test or fixture under `__test__/`, `"deploy"` for any other failure of deploy.sql |
+| `script`, `sourceLine` | The file the failure was placed in (a project or test file, or `deploy.sql`), and the offending line from it. `where` names a project file instead of quoting its text |
+| `line`, `column`, `scriptExpanded` | Present when the failure has a line: always for a parse error; for a runtime error raised in a DO block (a test file, or `deploy.sql` when the failing part holds one DO block), the line inside it, `column` 0. `scriptExpanded: true` means `line` refers to the macro-expanded script, not the file on disk |
+
+The provenance keys (`schemaVersion` through `finishedAt`) are present on every
+run, success or failure. A failed deploy rolls back, so this envelope is often
+the only record of it: keep it as CI output.
 
 ```json
 {
   "status": "failed",
   "exitCode": 13,
+  "schemaVersion": 1,
+  "pgmiVersion": "0.14.0",
+  "contractVersion": "1",
+  "serverVersion": "18.1",
+  "target": {"host": "db.internal", "port": 5432, "database": "postgres"},
+  "startedAt": "2026-10-31T14:02:11.402Z",
+  "finishedAt": "2026-10-31T14:02:12.567Z",
   "database": "postgres",
   "created": false,
   "durationMs": 1165,
   "filesLoaded": 0,
+  "pathsIgnored": 0,
+  "ignoredPaths": [],
   "testMacros": 0,
   "error": "execution failed: ERROR: function this_function_does_not_exist() does not exist (SQLSTATE 42883)",
   "sqlstate": "42883",
@@ -104,13 +132,15 @@ returned cleanly.
 
 #### Understanding `--compat` (API Versioning)
 
-The `--compat` flag pins your deployment to a specific pgmi session API version. This ensures your `deploy.sql` continues working even when pgmi upgrades introduce new features or internal changes.
+The `--compat` flag names the session API version your `deploy.sql` was written against. A binary that does not ship that version refuses the deploy (exit 10) instead of running it against a different one.
+
+**Before pgmi 1.0 the session API may change in a minor release** — a view, column or function added, renamed or removed — without a new contract version. Every such change is listed under **Upgrading** in that release's notes. `--compat` does not freeze columns across pgmi releases; pinning the pgmi binary does.
 
 **Currently supported versions:**
 
 | Version | Status | Notes |
 |---------|--------|-------|
-| `1` | **Current / Latest** | Initial stable API |
+| `1` | **Current / Latest** | Pre-1.0: changes are listed in each release's Upgrading section |
 
 **When to use `--compat`:**
 
@@ -123,7 +153,7 @@ pgmi deploy . -d myapp
 ```
 
 **What the API version controls:**
-- Session views: `pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`, `pg_temp.pgmi_parameter_view`, etc.
+- Session views: `pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`, `pg_temp.pgmi_parameter_view`, `pg_temp.pgmi_runtime_view`, etc.
 - Public functions: `pg_temp.pgmi_test_plan()`, `pg_temp.pgmi_test_generate()`
 - Column names and types in views
 
@@ -143,13 +173,13 @@ FAILED myapp: failed after 0.00s
 pgmi: error: invalid configuration: unsupported API version "99"; supported: [1]
 ```
 
-**Best practice:** Pin `--compat` in CI/CD pipelines for stability. When upgrading pgmi, test with the new default version before updating your pinned version.
+**Best practice:** In CI/CD, pin the pgmi binary and pass `--compat`. Before moving the binary pin, read the Upgrading section of every release in between.
 
 #### API Version Changelog
 
 **Version 1** (Current)
-- Initial stable API release
-- Views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view`
+- Changes within v1 before pgmi 1.0 are listed in the release notes' Upgrading sections
+- Views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, `pgmi_runtime_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view`
 - Functions: `pgmi_test_plan()`, `pgmi_test_generate()`, `pgmi_is_sql_file()`, `pgmi_persist_test_plan()`
 - Preprocessor macro: `CALL pgmi_test()`
 
@@ -209,6 +239,15 @@ Exit code 12, immediately. It used to block on the prompt until `--timeout`
 expired and then report exit 16, which reads as a slow database rather than a
 missing flag.
 
+The recreate keeps the database's encoding, locale and locale provider (libc,
+ICU with its rules, or builtin), owner, connection limit, per-database and
+per-role-in-database settings, comment and privileges. A deploy already running
+against the database is never ended: `--overwrite` refuses with exit 15 before it
+terminates any connection. Once `DROP DATABASE` starts,
+Ctrl-C, `--timeout` and an MCP cancel no longer interrupt it: pgmi finishes the
+drop and the recreate (bounded at 60 seconds), then stops. Cancelling never
+leaves the database missing or recreated without its owner and privileges.
+
 **When to use `--overwrite`:**
 - Local development with disposable databases
 - CI/CD pipelines deploying to **ephemeral test databases** (not production!)
@@ -219,7 +258,9 @@ missing flag.
 | Flag | Description |
 |------|-------------|
 | `--param key=value` | Set a parameter (repeatable). Accessible in SQL via `current_setting('pgmi.key')`. Keys are lower-cased: `--param apiVersion=2` becomes `pgmi.apiversion`, and `pgmi_parameter_view.key` is `apiversion` |
-| `--params-file path` | Load parameters from `.env` file (repeatable, later files override earlier ones) |
+| `--params-file path` | Load parameters from `.env` file (repeatable, later files override earlier ones, `Env` in a later file overrides `env` in an earlier one). Two keys differing only in case inside one file exit 10. `-` reads stdin, at most once |
+
+Environment variables named `PGMI_PARAM_<NAME>` are parameters too: `PGMI_PARAM_DB_PASSWORD=x` becomes `current_setting('pgmi.db_password')`. No other environment variable is read. An empty `PGMI_PARAM_*` value exits 10. Precedence: `--param` > `--params-file` (later wins) > `PGMI_PARAM_*` > `pgmi.yaml`. Secrets belong in the environment, stdin or a params file, never in `--param` — see [Security](SECURITY.md#pipeline-patterns).
 
 ### Azure Entra ID Flags
 
@@ -251,8 +292,8 @@ Passwords are never passed as CLI flags. Use one of:
 # Environment variable
 export PGPASSWORD="your-password"
 
-# Connection string
-pgmi deploy . --connection "postgresql://user:pass@localhost:5432/postgres" -d myapp
+# Connection string without the password (it comes from PGPASSWORD or .pgpass)
+pgmi deploy . --connection "postgresql://user@localhost:5432/postgres" -d myapp
 
 # .pgpass file (PostgreSQL standard)
 # ~/.pgpass format: hostname:port:database:username:password
@@ -267,14 +308,14 @@ pgmi deploy ./myproject -d myapp
 # Recreate database for local development (shows 5-second countdown)
 pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
-# Full connection string
-pgmi deploy ./myproject --connection "postgresql://postgres:secret@db.example.com:5432/postgres" -d myapp
+# Full connection string from the environment (never put the password on argv)
+PGMI_CONNECTION_STRING="postgresql://postgres:${DB_PASSWORD}@db.example.com:5432/postgres" pgmi deploy ./myproject -d myapp
 
 # Pin to specific API version for CI/CD stability
 pgmi deploy ./myproject -d myapp --compat=1
 
 # With parameters
-pgmi deploy ./myproject -d myapp --param env=production --param version=2.1.0
+pgmi deploy ./myproject -d myapp --param env=prod --param version=2.1.0
 
 # Parameters from file + CLI override
 pgmi deploy ./myproject -d myapp \
@@ -290,15 +331,13 @@ pgmi deploy ./myproject -d myapp --verbose
 
 # Azure Entra ID with Managed Identity (no credentials needed)
 pgmi deploy ./myproject -d myapp --azure \
-  --host myserver.postgres.database.azure.com \
-  --sslmode require
+  --host myserver.postgres.database.azure.com
 
 # Azure Entra ID with Service Principal (secret via AZURE_CLIENT_SECRET)
 pgmi deploy ./myproject -d myapp --azure \
   --host myserver.postgres.database.azure.com \
   --azure-tenant-id "your-tenant-id" \
-  --azure-client-id "your-client-id" \
-  --sslmode require
+  --azure-client-id "your-client-id"
 
 # mTLS with client certificate
 pgmi deploy ./myproject -d myapp \
@@ -361,10 +400,10 @@ pgmi info ./myproject --json
 Scaffold a new pgmi project.
 
 ```bash
-pgmi init <target_path> [flags]
+pgmi init [target_path] [flags]
 ```
 
-Creates a ready-to-deploy project structure with `deploy.sql`, directory layout, and README.
+Creates a ready-to-deploy project structure with `deploy.sql`, directory layout, and README. It also writes agent guidance the project owns: `AGENTS.md` (a routing table for AI assistants), `CLAUDE.md` (which imports `AGENTS.md`) and `.agents/skills/` in the [Agent Skills](https://agentskills.io/specification) format. Commit them and edit them as your conventions change; they point to `pgmi ai contract` for facts that change with the pgmi version.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -376,8 +415,8 @@ Use `pgmi templates list` to see all available templates with descriptions.
 
 | Template | Purpose |
 |----------|---------|
-| `basic` | Low-ceremony, production-capable for small systems. Linear `migrations/` with `deploy.sql`. Runs on any provider. |
-| `advanced` | Full reference app. Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects, role hierarchy, metadata-driven deployment. PostgreSQL 15+; needs a role with `CREATEROLE` + `CREATE EXTENSION` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
+| `basic` | Low-ceremony, production-capable for small systems. Two layers: run-once `physical/` tables and re-run `semantic/` views and functions. PostgreSQL 15+, runs on any provider. |
+| `advanced` | Full reference app. Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects, role hierarchy, metadata-driven deployment. PostgreSQL 18+; needs a role with `CREATEROLE` + `CREATEDB` and `createrole_self_grant = 'set, inherit'` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
 
 ### Examples
 
@@ -442,14 +481,28 @@ pgmi metadata scaffold <project_path> [flags]
 |------|---------|-------------|
 | `--write` | | Write metadata to files (without this flag, preview only) |
 | `--idempotent` | `true` | Mark generated scripts as idempotent |
+| `--sort-key` | | Sort-key prefix, e.g. `005/core/`. Without it, the prefix the files with metadata in the same directory share |
+
+Each new block gets a random id and the sort key `<prefix>/<file name>`. The
+prefix decides where the file runs, so it comes from you, not from the path:
+layers do not run in alphabetical order (`core` before `api`), and an advanced
+project's keys belong in its numbered bands. Point the command at one layer's
+directory and name its prefix:
 
 ```bash
 # Preview what would be generated
-pgmi metadata scaffold ./myproject
+pgmi metadata scaffold ./myproject/core --sort-key 005/core/
 
 # Write metadata to files
+pgmi metadata scaffold ./myproject/core --sort-key 005/core/ --write
+pgmi metadata scaffold ./myproject/api --sort-key 006/api/ --write
+
+# New files next to ones that already have metadata take their prefix
 pgmi metadata scaffold ./myproject --write
 ```
+
+A file with no `--sort-key` and no sibling prefix to copy, or whose siblings
+use more than one prefix, stops the command before anything is written (exit 2).
 
 ### pgmi metadata validate
 
@@ -482,9 +535,13 @@ pgmi metadata plan <project_path> [flags]
 `--json` prints `{"totalFiles", "plan": [{"executionOrder", "path", "sortKey",
 "id", "idempotent", "description", "isSqlFile"}]}`. `metadata validate --json`
 prints `totalFiles`, `filesWithMetadata`, `filesWithoutMetadata`,
-`validationPassed` and `duplicateIds`. Both exit 10 on invalid metadata or
-duplicate ids and, with `--json`, still print an envelope carrying `error` and
-`exitCode`.
+`validationPassed`, `duplicateIds` and `warnings`. Both exit 10 on invalid
+metadata or duplicate ids, as `pgmi deploy` does, and with `--json` the output
+then carries `error` and `exitCode`.
+
+`validate` warns, without failing, about a SQL file whose `<pgmi-meta>` sits
+outside a `/* */` block comment. A `-- <pgmi-meta>` line comment is never read,
+so the file has no metadata and the advanced template's deploy refuses it.
 
 | Flag | Description |
 |------|-------------|
@@ -539,12 +596,10 @@ pgmi serve
 ```
 
 The tools map 1:1 to existing CLI commands — `serve` adds no deployment
-semantics. Connection and parameters are passed per tool call and never stored
-in server state. Tools exposed: `deploy`, `init`, `metadata_plan`,
-`metadata_validate`, `templates_list`, `ai_overview`, `ai_skills`, `ai_skill`,
-`ai_contract`.
+semantics. Nothing from one tool call is stored in server state. Tools exposed: `deploy`, `init`, `metadata_plan`,
+`metadata_validate`, `templates_list`, `ai_overview`, `ai_contract`.
 
-![pgmi serve: an MCP client speaks JSON-RPC 2.0 over stdio to the nine CLI tools, which read project files and deploy to PostgreSQL](diagrams/d09-mcp-serve.drawio.svg)
+![pgmi serve: an MCP client speaks JSON-RPC 2.0 over stdio to the seven CLI tools, which read project files and deploy to PostgreSQL](diagrams/d09-mcp-serve.drawio.svg)
 
 Register it with Claude Code:
 
@@ -560,29 +615,68 @@ with `isError: true` and the session continues; a panic also carries its stack i
 `structuredContent`. A malformed message gets a `-32700` parse error with
 `"id": null`, and the server keeps reading from the next line.
 
+**`deploy` resolves like `pgmi deploy`.** Only `path` is required. The
+arguments map to flags — `connection` to `--connection`, `database` to `-d`,
+`timeout` to `--timeout`, `paramsFile` (a path or an array of paths) to
+`--params-file`, `params` to `--param` — and whatever they leave out comes from
+the server's environment (`PGMI_CONNECTION_STRING`, `DATABASE_URL`, `PG*`) and
+then the project's `pgmi.yaml` (`connection`, `params`, `timeout`), in the same
+order as the CLI. Two `params` keys differing only in case exit 10. One
+difference: `serve` does not read the project's `.env`, because it is
+long-lived and loading one project's `.env` into its environment would carry
+those credentials into the next project's deploy. Put the password in the
+server's environment, `.pgpass`, or a params file rather than in tool
+arguments, which end up in transcripts.
+
 **Concurrency and cancellation.** Each `tools/call` runs on its own, so `ping`
 is answered while a deploy runs, and `notifications/cancelled` stops the call
 (a cancelled deploy rolls back; no response is sent for it, per the spec). Only
-one `deploy` runs at a time; a second one gets `isError` until the first ends.
+one `deploy` runs at a time; a second one gets `isError` with exit code 15
+until the first ends.
 The `deploy` result carries the same fields as `pgmi deploy --json`, plus
-`notices`: the first 50, every `WARNING`, and the last 150, each as
-`{severity, message}`.
+`notices`: the first 50, up to 200 `WARNING`s from the middle, and the last
+150, each as `{severity, message}`. `noticesTruncated` counts the rest. The
+severity is PostgreSQL's unlocalized (English) one, whatever `lc_messages` is.
 
-**Protocol version.** `initialize` negotiates: the server echoes the client's
-requested version when it speaks it (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`),
-otherwise answers with its newest. An unsupported request is not an error — the
-client decides whether the answer is acceptable.
+**Protocol version.** `pgmi serve` speaks both MCP eras and picks one per
+request:
+
+- **2026-07-28 (stateless).** A request whose `_meta` names
+  `io.modelcontextprotocol/protocolVersion` is served without a handshake.
+  `server/discover` returns the supported versions (`2026-07-28`), the `tools`
+  capability, `ttlMs`, `cacheScope` and `serverInfo`. A request naming another
+  version gets `-32022` with `data.supported` and `data.requested`. One that
+  omits `io.modelcontextprotocol/clientCapabilities` gets `-32602`. Results
+  carry `resultType: "complete"`: pgmi tools answer in a single round trip,
+  because the request is the transaction boundary, so `pgmi serve` never
+  returns `input_required`, and name the server in
+  `_meta["io.modelcontextprotocol/serverInfo"]`. `initialize` and `ping` belong
+  to the earlier revisions: on a 2026-07-28 request they are `-32601`.
+- **Earlier revisions.** `initialize` negotiates: the server echoes the
+  client's requested version when it speaks it (`2025-11-25`, `2025-06-18`,
+  `2025-03-26`, `2024-11-05`), otherwise answers with its newest. An
+  unsupported request is not an error — the client decides whether the answer
+  is acceptable.
 
 **Structured output.** Tools returning a structured value (`deploy`, `init`,
-`metadata_plan`, `metadata_validate`, `templates_list`, `ai_skills`) declare an
+`metadata_plan`, `metadata_validate`, `templates_list`) declare an
 `outputSchema` in `tools/list` and emit matching `structuredContent`, so a client
-can validate results without parsing text. The three tools that return
-documents — `ai_overview`, `ai_skill`, `ai_contract` — declare no output schema
-because they return text, not typed output.
+can validate results without parsing text. The two tools that return
+documents — `ai_overview`, `ai_contract` — declare no output schema
+because they return text, not typed output. A successful `deploy` answers a
+one-line text summary; its full record (notices, `ignoredPaths`, timings) is
+in `structuredContent`. `verbose: true` means what `-v` means on the CLI:
+`RAISE DEBUG` from deploy.sql and tests reaches the notices.
+
+**Tool annotations.** Every tool declares `readOnlyHint`, `destructiveHint`,
+`idempotentHint` and `openWorldHint`. The `ai_*`, `templates_list` and
+`metadata_*` tools are read-only, so a client need not ask before calling them;
+`deploy` is destructive and reaches a database.
 
 **Destructive deploys need an echo-back.** `deploy` with `overwrite: true` drops
 the target database, and this path auto-approves (there is no TTY to prompt). It
-therefore also requires `confirmDatabaseName` to equal `database` exactly:
+therefore also requires `confirmDatabaseName` to equal the resolved target
+database exactly:
 
 ```json
 {"name": "deploy", "arguments": {
@@ -611,55 +705,13 @@ pgmi ai
 
 Outputs an overview document similar to llms.txt format, explaining:
 - What pgmi is and its philosophy
-- Core concepts (session tables, deploy.sql pattern)
+- Core concepts (session tables, deploy.sql pattern, execution contract)
 - Quick start commands
-- Available skills and when to use them
 - Key SQL conventions
 
-### pgmi ai skills
-
-```bash
-pgmi ai skills
-```
-
-Lists all embedded skills with their scope and description. `scope` tells an
-agent whether a skill applies to any pgmi project (`core`), only to the
-scaffolded advanced template (`advanced-template`), or only to work on pgmi
-itself (`contributor`):
-
-```
-# Available pgmi Skills
-
-Use `pgmi ai skill <name>` to get full skill content.
-
-| Skill | Scope | Description |
-|-------|-------|-------------|
-| `advanced-template` | advanced-template | Advanced template framework API reference (lib/README.md) |
-| `pgmi-api-architecture` | advanced-template | Advanced template: REST/RPC/MCP protocol design and HTTP architecture |
-| `pgmi-debug-deploy` | core | Use when a pgmi deploy fails — map the exit code to what to inspect and how to fix it |
-...
-
-Total: 16 skills
-```
-
-### pgmi ai skill
-
-```bash
-pgmi ai skill <name>
-```
-
-Outputs the full content of a specific skill. Use this to load detailed conventions for a particular domain:
-
-```bash
-# Load SQL conventions
-pgmi ai skill pgmi-sql
-
-# Load architectural rationale
-pgmi ai skill pgmi-philosophy
-
-# Load testing patterns
-pgmi ai skill pgmi-testing-review
-```
+The rest of the agent guidance belongs to the project: `pgmi init` writes
+`AGENTS.md` and skills in `.agents/skills/`, and the advanced template adds
+reference gateways in `gateways/`.
 
 ### pgmi ai contract
 
@@ -668,107 +720,6 @@ pgmi ai contract
 ```
 
 Prints the machine-readable session-API contract as JSON. Agents should query this before writing SQL against pgmi views/functions to avoid hallucinating identifiers. Output includes view names and columns, test function signatures, step types, exit codes, and preprocessor macro forms.
-
-### pgmi ai client
-
-```bash
-pgmi ai client [lang]
-```
-
-Prints guidance for generating a typed API client from a deployment's live
-OpenAPI spec (the advanced template serves it at `GET /openapi.json`). Without a
-language, prints the language-agnostic doctrine (decision tree, invariants,
-anti-copy directive). With a language, adds a transport-core skeleton and the
-recommended generator:
-
-```bash
-pgmi ai client              # doctrine only
-pgmi ai client typescript   # + openapi-typescript
-pgmi ai client python       # + openapi-python-client
-pgmi ai client go           # + oapi-codegen
-pgmi ai client csharp       # + NSwag
-pgmi ai client rust         # + openapi-generator
-```
-
-This covers the **application API** (your deployed handlers). For the **session
-API** (the temp views/functions `deploy.sql` consumes), use `pgmi ai contract`.
-
-### pgmi ai setup
-
-```bash
-pgmi ai setup [--assistant <name> | --all] [--global] [--dry-run] [--force]
-              [--claude-md | --no-claude-md]
-```
-
-Materializes pgmi guidance into a coding assistant's skill directory so the
-assistant learns the execution model before it edits the project. Defaults to
-the Claude skill under `.claude/skills/pgmi/` (project-local, safe to commit).
-
-| Assistant | Local target |
-|-----------|-------------|
-| `claude` (default) | `.claude/skills/pgmi/` |
-| `agents` (aliases: `codex`, `opencode`) | `AGENTS.md` |
-| `codex-skills` | `.codex/skills/pgmi/` |
-| `antigravity` | `.agents/skills/pgmi/` |
-| `cursor` | `.cursor/rules/pgmi.mdc` |
-| `copilot` | `.github/copilot-instructions.md` |
-| `windsurf` | `.windsurf/rules/pgmi.md` |
-| `cline` | `.clinerules/pgmi.md` |
-| `gemini` | `GEMINI.md` |
-
-`--global` writes under your home directory instead of the project (e.g.
-`~/.claude/skills/pgmi/`, `~/.codex/skills/pgmi/`, `~/.gemini/GEMINI.md`).
-
-```bash
-pgmi ai setup                        # detect .claude/, write the Claude skill
-pgmi ai setup --assistant agents     # write AGENTS.md (Codex, opencode, etc.)
-pgmi ai setup --assistant cursor     # write .cursor/rules/pgmi.mdc
-pgmi ai setup --all                  # write one file per distinct target
-pgmi ai setup --global               # write to ~/.claude/skills/pgmi/ instead
-pgmi ai setup --dry-run              # print planned changes, write nothing
-```
-
-The generated skill is self-contained — it teaches the core model even with no
-pgmi binary installed — and points to `pgmi ai skill <name>` for depth. Files
-are stamped; re-running is idempotent and a hand-edited file is not overwritten
-without `--force`. `setup` also offers a one-line managed pointer in the project
-`CLAUDE.md` (`--claude-md` / `--no-claude-md` to decide non-interactively).
-
-In non-interactive contexts (CI), pass `--assistant` explicitly.
-
-### pgmi ai check
-
-```bash
-pgmi ai check [--assistant claude] [--global]
-```
-
-Reports whether the guidance exists and whether it matches this binary's
-version. Exits non-zero when guidance is missing, stale, or hand-edited, so it
-can gate CI:
-
-```bash
-pgmi ai check || pgmi ai setup --assistant claude
-```
-
-### AI Workflow Example
-
-When an AI assistant encounters "use pgmi for my project":
-
-```bash
-# Step 1: Discover AI documentation exists
-pgmi --help | grep ai
-
-# Step 2: Get overview
-pgmi ai
-
-# Step 3: List available skills
-pgmi ai skills
-
-# Step 4: Load relevant skill
-pgmi ai skill pgmi-sql
-
-# Step 5: AI now understands pgmi conventions
-```
 
 ---
 
@@ -793,6 +744,7 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGAPPNAME` | `deploy` | `application_name` reported in `pg_stat_activity` (default: `pgmi`) |
 | `PGCONNECT_TIMEOUT` | `deploy` | Connection timeout in seconds (libpq convention) |
 | `PGPASSFILE` | `deploy` | Path to `.pgpass` (default: `~/.pgpass` or `%APPDATA%\postgresql\pgpass.conf`) |
+| `PGMI_PARAM_<NAME>` | `deploy`, `serve` | Deploy parameter `<name>` (lower-cased); empty value exits 10 |
 | `PGMI_NON_INTERACTIVE` | any | Set to `1` to disable TUI wizards |
 | `CI` | any | Any non-empty value disables TUI wizards |
 | `NO_COLOR` | any | Disables ANSI colors (wizards still run; accessibility signal per https://no-color.org) |
@@ -854,7 +806,7 @@ pgmi completion fish > ~/.config/fish/completions/pgmi.fish
 pgmi completion powershell | Out-String | Invoke-Expression
 ```
 
-Completion covers commands, flags, template names (for `init --template`), SSL mode values, AI skill names (for `ai skill`), and assistant names (for `ai setup` / `ai check`).
+Completion covers commands, flags, template names (for `init --template`), and SSL mode values.
 
 ---
 
@@ -876,7 +828,8 @@ Completion covers commands, flags, template names (for `init --template`), SSL m
 |-------|-------|----------|
 | `relation "X" does not exist` | Table/view not found | Check execution order, ensure dependencies run first |
 | `function "X" does not exist` | Missing function | Run schema files before files that call functions |
-| `permission denied for schema` | Role lacks privileges | Grant the deploy role `CREATE`/`USAGE` on the schema (or `CREATEROLE`/`CREATE EXTENSION` for advanced-template setup) |
+| `permission denied for schema` | Role lacks privileges | Grant the deploy role `CREATE`/`USAGE` on the schema (or `CREATEROLE` + `CREATEDB` for advanced-template setup) |
+| `permission denied to set role "<db>_api"` | A non-superuser `CREATEROLE` role cannot `SET ROLE` to the roles it creates | `ALTER ROLE <deployer> SET createrole_self_grant = 'set, inherit'`, then drop the database and deploy again |
 | `current transaction is aborted` | Earlier error in transaction | Fix the root cause; check `RAISE EXCEPTION` in your SQL |
 | `syntax error at or near` | Invalid SQL | Check the file path in error message, fix syntax |
 | `missing required parameter` (SQLSTATE `P0001`) | Your `deploy.sql` requires a parameter you did not pass | Add `--param key=value`; this is your SQL raising, not a pgmi config error |
@@ -896,6 +849,8 @@ was created, dropped, or modified.
 | `failed to load pgmi.yaml` | Unparseable `pgmi.yaml` | Fix the YAML syntax |
 | `unsupported API version` | Invalid `--compat` value | Use `--compat=1` (currently only v1 supported) |
 | `failed to read/parse params file` | `--params-file` missing or malformed | Check the path and the `KEY=VALUE` format |
+| `environment variable PGMI_PARAM_X is set but empty` | A CI secret mapped to it is missing or misspelled | Fix the secret mapping, or unset the variable |
+| `--params-file - (stdin) given 2 times` | `-` repeated | Read stdin once |
 | `cannot use multiple cloud authentication methods` | More than one of `--azure`/`--aws`/`--google` | Choose one |
 
 > **Parameter errors raised by your SQL are exit 13, not exit 10.** A
@@ -932,7 +887,7 @@ pgmi deploy ./myproject \
   --host db.example.com \
   --username deployer \
   -d myapp_prod \
-  --param env=production \
+  --param env=prod \
   --timeout 15m
 ```
 

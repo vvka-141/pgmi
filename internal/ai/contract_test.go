@@ -18,6 +18,9 @@ import (
 func TestGetContract_Structure(t *testing.T) {
 	c := GetContract()
 
+	if !strings.Contains(c.Stability, "minor release") || !strings.Contains(c.Stability, "Upgrading") {
+		t.Errorf("stability must state the pre-1.0 promise, got %q", c.Stability)
+	}
 	if len(c.Views) == 0 {
 		t.Fatal("expected views")
 	}

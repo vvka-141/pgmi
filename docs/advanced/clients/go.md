@@ -13,7 +13,7 @@ aliases:
 > pgmi deployment CLI.
 
 
-Generate Go types and client code from your deployment's `/openapi.json`.
+Generate Go types and client code from your deployment's `/openapi.json`. Download `openapi.json` with session handles first; see [Client generation](_index.md).
 
 ## oapi-codegen
 
@@ -26,7 +26,7 @@ go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 oapi-codegen -generate types,client \
   -package api \
   -o api/client.gen.go \
-  http://localhost:3000/openapi.json
+  openapi.json
 ```
 
 Usage:
@@ -37,11 +37,18 @@ package main
 import (
     "context"
     "fmt"
+    "net/http"
     "yourproject/api"
 )
 
 func main() {
-    client, _ := api.NewClientWithResponses("http://localhost:3000")
+    client, _ := api.NewClientWithResponses("http://localhost:8080/api",
+        api.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+            req.Header.Set("Cookie", "__Host-session="+loginSession+"; __Host-csrf="+csrfToken)
+            req.Header.Set("X-CSRF-Token", csrfToken)
+            req.Header.Set("x-organization-session", organizationSession)
+            return nil
+        }))
     resp, _ := client.HelloWorldWithResponse(context.Background(), &api.HelloWorldParams{
         Name: ptr("World"),
     })
@@ -53,9 +60,9 @@ func ptr[T any](v T) *T { return &v }
 
 ## go generate
 
-Add a `generate.go` file so `go generate ./...` keeps the client current:
+Keep the downloaded `openapi.json` next to a `generate.go` file, so `go generate ./...` regenerates the client from it:
 
 ```go
-//go:generate oapi-codegen -generate types,client -package api -o client.gen.go http://localhost:3000/openapi.json
+//go:generate oapi-codegen -generate types,client -package api -o client.gen.go openapi.json
 package api
 ```

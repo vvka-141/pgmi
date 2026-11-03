@@ -32,14 +32,6 @@ func TestRequireArgValidators(t *testing.T) {
 			missingMsg: "missing required argument: <template_name>",
 			helpMsg:    "pgmi templates list",
 		},
-		{
-			name:       "RequireSkillName",
-			fn:         RequireSkillName,
-			cmdUse:     "skill <name>",
-			validArg:   "pgmi-sql",
-			missingMsg: "missing required argument: <name>",
-			helpMsg:    "pgmi ai skills",
-		},
 	}
 
 	for _, tt := range tests {

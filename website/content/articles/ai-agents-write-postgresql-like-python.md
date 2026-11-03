@@ -260,9 +260,9 @@ The traditional cost of relying on the law was error ergonomics: a raw constrain
 
 ## Where pgmi comes in
 
-I maintain [pgmi](https://github.com/vvka-141/pgmi), a PostgreSQL-native deployment tool whose advanced project template ships this discipline as working code, because — as the field reviews showed — agents follow the pattern they can see. The template's `common.try_cast` family does the safe casts (regex-guarded pure SQL where a format check suffices, a range check through `numeric` where it doesn't, and a contained exception block only where parsing truly needs one — the helper absorbs the cost so handlers never carry it). `api.problem_response` builds the RFC 9457 responses. The shipped handlers contain zero `EXCEPTION` blocks, and the gateway deliberately lets `40001`/`40P01` propagate with SQLSTATE intact while sanitizing everything else. The doctrine itself ships in the binary as an AI-readable skill — `pgmi ai skill pgmi-handler-patterns` prints it, so a coding agent working in a pgmi project reads the same rules this article just argued for.
+I maintain [pgmi](https://github.com/vvka-141/pgmi), a PostgreSQL-native deployment tool whose advanced project template ships this discipline as working code, because — as the field reviews showed — agents follow the pattern they can see. The template's `common.try_cast` family does the safe casts: regex-guarded pure SQL where a format check suffices, a range check through `numeric` where it doesn't, and `pg_input_is_valid` where PostgreSQL can validate the type itself. Only where parsing truly needs an exception block does the helper contain one, and it absorbs that cost so handlers never carry it. `api.problem_response` builds the RFC 9457 responses. The shipped handlers contain zero `EXCEPTION` blocks, and the gateway deliberately lets `40001`/`40P01` propagate with SQLSTATE intact while sanitizing everything else. The doctrine itself ships with the project as an agent skill: `pgmi init --template advanced` writes it to `.agents/skills/pgmi-handlers/`, so a coding agent working in the project reads the same rules this article just argued for.
 
-None of it requires pgmi to adopt; the template exists so you don't have to build the reference implementation before an agent can imitate it.
+None of it requires adopting pgmi; the template exists so you don't have to build the reference implementation before an agent can imitate it.
 
 ## Takeaway
 
@@ -281,3 +281,7 @@ AI agents don't write bad SQL at random. They port the idioms of exception-drive
 - Validation debate: [Data constraints: database layer or app logic?](https://dev.to/shalvah/data-constraints-database-layer-or-app-logic-3j83) (incl. Dian Fay's "law vs. advice"); [Lobsters discussion](https://lobste.rs/s/4zmaos/how_much_logic_should_i_keep_at_database_vs)
 - Adjacent work: Vibhor Kumar, [Postgres as an execution environment for AI (ORBIT)](https://vibhorkumar.wordpress.com/2026/05/28/postgres-as-an-execution-environment-for-ai-failure-modes-hooks-and-the-orbit-framework/) — the mirror-image problem: Postgres calling *out* to AI services safely, where this article is about AI writing the code that runs *inside* Postgres; Readyset, ["Why LLMs write incorrect SQL"](https://readyset.io/blog/why-llms-write-incorrect-sql-and-what-that-means-for-your-database) (declarative-only prior art)
 - All SQL examples verified on PostgreSQL 18.4; the `pg_input_error_info` output and the integer-overflow behavior additionally verified on 16.x.
+
+---
+
+*Updated November 2026 for pgmi v0.14: the handler rules now ship as a project skill that `pgmi init` writes, instead of being printed by the pgmi binary.*

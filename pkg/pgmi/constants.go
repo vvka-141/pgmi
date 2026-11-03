@@ -29,12 +29,11 @@ const (
 )
 
 // MinimumServerVersionNum is the oldest PostgreSQL pgmi runs on, in
-// server_version_num form (110000 == 11.0). The floor is set by
-// hashtextextended, which the deploy advisory lock needs and which arrived in
-// PostgreSQL 11. Verified: the core suite and the basic template are green on
-// 11. The advanced template needs more — xid8 (13) and security_invoker views
-// (15) — and documents 15+ separately; that floor is the template's, not pgmi's.
-const MinimumServerVersionNum = 110000
+// server_version_num form (150000 == 15.0): the oldest release still supported
+// upstream when this was set, and the one CI tests the core suite and the basic
+// template on. The advanced template's floor is 18, checked by its own
+// deploy.sql; that floor is the template's, not pgmi's.
+const MinimumServerVersionNum = 150000
 
 const (
 	// DefaultForceApprovalCountdown is the countdown duration before force approval proceeds.

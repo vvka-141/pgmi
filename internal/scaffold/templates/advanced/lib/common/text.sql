@@ -3,7 +3,8 @@
     id="0c520c79-0e09-4da8-9ebc-6771a1bf5cb8"
     idempotent="true">
   <description>
-    Text utility functions: is_regexp validation for PostgreSQL regular expressions
+    Text utility functions: is_regexp validation for PostgreSQL regular
+    expressions, like_escape for user text inside LIKE patterns
   </description>
   <sortKeys>
     <key>001/000</key>
@@ -192,3 +193,39 @@ END $$;
 
 COMMENT ON FUNCTION common.semantic_fingerprint(text) IS
     'Generates SHA-256 hash for normalized text content, ensuring consistent lookup for semantic matching';
+
+-- ============================================================================
+-- common.like_escape - match user text literally inside a LIKE pattern
+-- ============================================================================
+-- Example:
+--   WHERE title ILIKE '%' || common.like_escape(p_search) || '%'
+-- Uses LIKE's default escape character, the backslash.
+
+CREATE OR REPLACE FUNCTION common.like_escape(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+    SELECT replace(replace(replace(p_text, '\', '\\'), '%', '\%'), '_', '\_');
+$$;
+
+COMMENT ON FUNCTION common.like_escape(text) IS
+'Escapes \, % and _ with a backslash so the text matches literally inside a LIKE or ILIKE pattern.';
+
+DO $test$
+BEGIN
+    IF common.like_escape('50%_off\x') IS DISTINCT FROM '50\%\_off\\x' THEN
+        RAISE EXCEPTION 'TEST FAILED: like_escape(''50%%_off\x'') = %', common.like_escape('50%_off\x');
+    END IF;
+    IF NOT ('a 50%_off\x deal' LIKE '%' || common.like_escape('50%_off\x') || '%') THEN
+        RAISE EXCEPTION 'TEST FAILED: escaped text must match itself';
+    END IF;
+    IF 'a 50 percent off' LIKE '%' || common.like_escape('50%') || '%'
+       OR 'task1' LIKE common.like_escape('task_')
+       OR 'ab' LIKE common.like_escape('a\b') THEN
+        RAISE EXCEPTION 'TEST FAILED: %%, _ and \ must not act as wildcards or escapes';
+    END IF;
+    IF common.like_escape('') IS DISTINCT FROM '' OR common.like_escape(NULL) IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: like_escape of '''' and NULL';
+    END IF;
+END $test$;

@@ -12,14 +12,25 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// flipProbe renders the probe migration. The id is stable across both versions —
+// flipProbeTable is the probe's structure, in a run-once file of its own: the
+// file contract keeps tables out of re-run files.
+const flipProbeTable = `/*
+<pgmi-meta id="ffffffff-0264-4000-8000-000000000002" idempotent="false">
+  <sortKeys><key>900/000</key></sortKeys>
+</pgmi-meta>
+*/
+CREATE TABLE core.flip_probe (id serial PRIMARY KEY, note text);
+SELECT pg_temp.exempt_from_rls('core.flip_probe', 'test probe');
+`
+
+// flipProbe renders the probe script. The id is stable across both versions —
 // that is the whole point: deploy.sql keys its skip decision on the object id,
 // so the two versions must be the same script wearing a different contract.
 func flipProbe(idempotent bool) string {
-	body := "CREATE TABLE IF NOT EXISTS core.flip_probe (id serial PRIMARY KEY, note text);\n"
+	body := "SELECT count(*) FROM core.flip_probe;\n"
 	if !idempotent {
 		// A one-time backfill: appending, so a second run is visible as a row.
-		body += "INSERT INTO core.flip_probe (note) VALUES ('backfill');\n"
+		body = "INSERT INTO core.flip_probe (note) VALUES ('backfill');\n"
 	}
 	return fmt.Sprintf(`/*
 <pgmi-meta
@@ -27,7 +38,7 @@ func flipProbe(idempotent bool) string {
     idempotent="%t">
   <description>Flip probe: idempotent on the first deploy, a one-time backfill after.</description>
   <sortKeys>
-    <key>900/000</key>
+    <key>900/001</key>
   </sortKeys>
 </pgmi-meta>
 */
@@ -38,7 +49,7 @@ func flipProbe(idempotent bool) string {
 // harness structurally cannot: the behaviour needs three deploys, and a test
 // file gets one.
 //
-// A script that ran as idempotent (CREATE TABLE IF NOT EXISTS), was then edited
+// A script that ran as idempotent, was then edited
 // into a one-time backfill and flipped to idempotent="false", must run exactly
 // once more. Matching the execution log on object_id alone would let its own
 // earlier idempotent rows skip it forever and the backfill would silently never
@@ -51,6 +62,9 @@ func TestAdvancedTemplate_IdempotentToNonIdempotentFlip(t *testing.T) {
 		t.Fatalf("scaffold the advanced template: %v", err)
 	}
 
+	if err := os.WriteFile(filepath.Join(projectPath, "zz_flip_probe_table.sql"), []byte(flipProbeTable), 0644); err != nil {
+		t.Fatalf("write the probe table: %v", err)
+	}
 	probePath := filepath.Join(projectPath, "zz_flip_probe.sql")
 	writeProbe := func(idempotent bool) {
 		t.Helper()

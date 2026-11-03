@@ -13,14 +13,14 @@ aliases:
 > pgmi deployment CLI.
 
 
-Generate TypeScript types and a fetch-based client from your deployment's `/openapi.json`.
+Generate TypeScript types and a fetch-based client from your deployment's `/openapi.json`. Download `openapi.json` with session handles first; see [Client generation](_index.md).
 
 ## openapi-typescript (types only)
 
 Generates TypeScript types from the spec. Pair with `openapi-fetch` for a typed fetch wrapper.
 
 ```bash
-npx openapi-typescript http://localhost:3000/openapi.json -o src/api.d.ts
+npx openapi-typescript openapi.json -o src/api.d.ts
 ```
 
 Use the types with `openapi-fetch`:
@@ -29,7 +29,12 @@ Use the types with `openapi-fetch`:
 import createClient from "openapi-fetch";
 import type { paths } from "./api";
 
-const client = createClient<paths>({ baseUrl: "http://localhost:3000" });
+// The transport's cookie carries the login session; the tab sends its organization session.
+const client = createClient<paths>({
+  baseUrl: "http://localhost:8080/api",
+  credentials: "include",
+  headers: { "x-organization-session": organizationSession },
+});
 
 const { data, error } = await client.GET("/hello", {
   params: { query: { name: "World" } },
@@ -42,7 +47,7 @@ Generates a complete client with models and API classes:
 
 ```bash
 npx @openapitools/openapi-generator-cli generate \
-  -i http://localhost:3000/openapi.json \
+  -i openapi.json \
   -g typescript-fetch \
   -o src/generated
 ```
@@ -53,7 +58,12 @@ Add to your build pipeline so the client stays in sync with the spec:
 
 ```yaml
 # GitHub Actions example
-- run: npx openapi-typescript $API_URL/openapi.json -o src/api.d.ts
+- run: |
+    curl -fsS -H "Cookie: __Host-session=$LOGIN_SESSION" -H "x-organization-session: $ORGANIZATION_SESSION" \
+      -o openapi.json "$API_URL/openapi.json"
+    npx openapi-typescript openapi.json -o src/api.d.ts
   env:
     API_URL: ${{ vars.API_URL }}
+    LOGIN_SESSION: ${{ secrets.LOGIN_SESSION }}
+    ORGANIZATION_SESSION: ${{ secrets.ORGANIZATION_SESSION }}
 ```

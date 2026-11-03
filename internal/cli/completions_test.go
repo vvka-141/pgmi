@@ -101,24 +101,3 @@ func TestCompleteTemplateNames(t *testing.T) {
 		}
 	})
 }
-
-func TestCompleteSkillNames(t *testing.T) {
-	cmd := &cobra.Command{}
-
-	t.Run("returns skill names", func(t *testing.T) {
-		completions, directive := completeSkillNames(cmd, nil, "")
-		if len(completions) == 0 {
-			t.Error("expected at least one skill completion")
-		}
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("expected ShellCompDirectiveNoFileComp, got %v", directive)
-		}
-	})
-
-	t.Run("returns NoFileComp when args already provided", func(t *testing.T) {
-		_, directive := completeSkillNames(cmd, []string{"pgmi-sql"}, "")
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("expected ShellCompDirectiveNoFileComp, got %v", directive)
-		}
-	})
-}

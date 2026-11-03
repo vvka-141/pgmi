@@ -39,7 +39,7 @@ func lockTestManager(t *testing.T, connString, testDB string) (*services.Session
 	connConfig.Database = testDB
 
 	fileScanner := scanner.NewScannerWithFS(checksum.New(), fixtures.StandardMultiLevel())
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, loader.NewLoader(), logging.NewNullLogger())
+	sm := services.NewSessionManager(db.NewConnector, fileScanner, loader.NewLoader(), logging.NewNullLogger(), "test")
 	return sm, connConfig, mustScanProject(t, sm)
 }
 

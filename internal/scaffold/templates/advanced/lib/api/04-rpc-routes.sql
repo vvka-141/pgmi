@@ -1,7 +1,7 @@
 /*
 <pgmi-meta
     id="a7f01000-0004-4000-8000-000000000001"
-    idempotent="true">
+    idempotent="false">
   <description>
     RPC routing: route table for method-name-based routing
   </description>
@@ -17,7 +17,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing RPC routing infrastructure'; END $$;
 -- RPC Route Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS api.rpc_route (
+CREATE TABLE api.rpc_route (
     handler_object_id uuid PRIMARY KEY
         REFERENCES api.handler(object_id) ON DELETE CASCADE,
 
@@ -50,3 +50,5 @@ END $$;
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.rpc_route - method name based routing';
 END $$;
+
+SELECT pg_temp.exempt_from_rls('api.rpc_route', 'the handler registry: framework metadata, written by registration at deploy');

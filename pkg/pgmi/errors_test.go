@@ -170,12 +170,12 @@ func TestLocateError(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "script attached but no position (most runtime errors)",
+			name: "no position, no DO block: deploy.sql without a line",
 			err: pgmi.NewScriptError(
 				&pgconn.PgError{Code: "23505", Message: "duplicate key"},
 				"deploy.sql", script, false,
 			),
-			want: nil,
+			want: &pgmi.SQLLocation{Script: "deploy.sql"},
 		},
 		{
 			name: "position resolves to line, column, and the offending line",
@@ -284,6 +284,18 @@ func TestFailedFile_AttributedByExecutedText(t *testing.T) {
 		}
 		if out := pgmi.FormatError(err); !strings.Contains(out, "LOCATION: ./migrations/002.sql") {
 			t.Errorf("FormatError does not name the file:\n%s", out)
+		}
+	})
+
+	t.Run("human output names the file instead of quoting it", func(t *testing.T) {
+		where := "SQL statement \"" + migration + "\"\nPL/pgSQL function inline_code_block line 1 at EXECUTE"
+		err := attach(&pgconn.PgError{Code: "22012", Message: "division by zero", Where: where})
+		out := pgmi.FormatError(err)
+		if strings.Contains(out, "SELEC 1;") || !strings.Contains(out, "WHERE: SQL statement in ./migrations/002.sql\n") {
+			t.Errorf("WHERE must name the file rather than print its text:\n%s", out)
+		}
+		if d := pgmi.NewErrorDetail(err); d.Where != "SQL statement in ./migrations/002.sql\nPL/pgSQL function inline_code_block line 1 at EXECUTE" {
+			t.Errorf("--json names the file instead of quoting it, got %q", d.Where)
 		}
 	})
 
@@ -551,5 +563,107 @@ func TestExitCodeForError_ConnectTimeoutStaysConnectionError(t *testing.T) {
 	if got := pgmi.ExitCodeForError(connTimeout); got != pgmi.ExitConnectionError {
 		t.Errorf("exit code %d, want %d: a connect timeout is a connection failure",
 			got, pgmi.ExitConnectionError)
+	}
+}
+
+// An editor autosave (#task.sql#) is loaded but never runs; attributing to it
+// sent an agent to edit a file that does not matter. Two SQL files with the
+// same text cannot be told apart, so both are named.
+func TestFailedFile_OnlySQLFilesAndEveryIdenticalCandidate(t *testing.T) {
+	content := "SELEC broken;\n"
+	parseErr := func() *pgconn.PgError {
+		return &pgconn.PgError{
+			Code: "42601", Message: `syntax error at or near "SELEC"`,
+			InternalQuery: content, InternalPosition: 1,
+			Where: "PL/pgSQL function inline_code_block line 1 at EXECUTE",
+		}
+	}
+	attach := func(files []pgmi.FileMetadata, pgErr *pgconn.PgError) error {
+		err := pgmi.NewScriptError(pgErr, "deploy.sql", "DO $$ ... $$;", false)
+		err.(*pgmi.ScriptError).Files = files
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+	}
+
+	t.Run("a non-SQL file with the same text is not blamed", func(t *testing.T) {
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/#task.sql#", Extension: ".sql#", Content: content},
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+		}, parseErr())
+		d := pgmi.NewErrorDetail(err)
+		if d.FailedFile != "./semantic/task.sql" || d.Script != "./semantic/task.sql" {
+			t.Fatalf("want ./semantic/task.sql, got failedFile=%q script=%q", d.FailedFile, d.Script)
+		}
+		if len(d.FailedFileCandidates) != 0 {
+			t.Errorf("one SQL file matched, yet candidates = %v", d.FailedFileCandidates)
+		}
+		if strings.Contains(pgmi.FormatError(err), "#task.sql#") {
+			t.Errorf("FormatError names the autosave:\n%s", pgmi.FormatError(err))
+		}
+	})
+
+	t.Run("two SQL files with the same text are both named", func(t *testing.T) {
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+			{Path: "./semantic/task copy.sql", Extension: ".sql", Content: content},
+		}, parseErr())
+		d := pgmi.NewErrorDetail(err)
+		want := []string{"./semantic/task.sql", "./semantic/task copy.sql"}
+		if fmt.Sprint(d.FailedFileCandidates) != fmt.Sprint(want) {
+			t.Fatalf("candidates = %v, want %v", d.FailedFileCandidates, want)
+		}
+		if out := pgmi.FormatError(err); !strings.Contains(out, "./semantic/task copy.sql") {
+			t.Errorf("FormatError does not name the second candidate:\n%s", out)
+		}
+	})
+
+	t.Run("a runtime error quoted in WHERE skips non-SQL files too", func(t *testing.T) {
+		pgErr := &pgconn.PgError{
+			Code: "P0001", Message: "boom",
+			Where: `PL/pgSQL function inline_code_block line 1 at RAISE` + "\n" +
+				`SQL statement "` + content + `"`,
+		}
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/#task.sql#", Extension: ".sql#", Content: content},
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+		}, pgErr)
+		if got := pgmi.FailedFile(err); got != "./semantic/task.sql" {
+			t.Fatalf("FailedFile = %q, want ./semantic/task.sql", got)
+		}
+	})
+}
+
+func TestFailureRecord_ErrorInDeploySQLItself(t *testing.T) {
+	head := "BEGIN;\n\nDO $$\nDECLARE\n    v int;\nBEGIN\n    v := current_setting('pgmi.owner_role');\nEND $$;\n\nCOMMIT;\n"
+	err := fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, pgmi.NewScriptError(&pgconn.PgError{
+		Code: "42704", Message: `unrecognized configuration parameter "pgmi.owner_role"`,
+		Where: "PL/pgSQL function inline_code_block line 5 at assignment",
+	}, "deploy.sql", head, false))
+	d := pgmi.NewErrorDetail(err)
+	if d.Script != "deploy.sql" || d.Line != 7 || !strings.Contains(d.SourceLine, "current_setting") || d.Phase != "deploy" {
+		t.Errorf("want deploy.sql line 7, phase deploy; got script=%q line=%d source=%q phase=%q", d.Script, d.Line, d.SourceLine, d.Phase)
+	}
+
+	twoBlocks := head + "DO $$ BEGIN PERFORM 1; END $$;\n"
+	err = pgmi.NewScriptError(&pgconn.PgError{Code: "42704", Where: "PL/pgSQL function inline_code_block line 5 at assignment"},
+		"deploy.sql", twoBlocks, false)
+	if d := pgmi.NewErrorDetail(err); d.Script != "deploy.sql" || d.Line != 0 {
+		t.Errorf("two DO blocks: name deploy.sql, guess no line; got script=%q line=%d", d.Script, d.Line)
+	}
+}
+
+func TestFailureRecord_ATestFailureIsMarkedAndLocated(t *testing.T) {
+	test := "DO $$\nBEGIN\n    IF true THEN\n        RAISE EXCEPTION 'TEST FAILED: x';\n    END IF;\nEND $$;\n"
+	files := []pgmi.FileMetadata{{Path: "./semantic/__test__/test_project.sql", Content: test}}
+	scriptErr := pgmi.NewScriptError(&pgconn.PgError{
+		Code: "P0001", Message: "TEST FAILED: x",
+		Where: "PL/pgSQL function inline_code_block line 4 at RAISE\nSQL statement \"" + test + "\"\nPL/pgSQL function inline_code_block line 9 at EXECUTE",
+	}, "deploy.sql", "DO $$ ... $$;", false)
+	scriptErr.(*pgmi.ScriptError).Files = files
+	d := pgmi.NewErrorDetail(fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr))
+	if d.Phase != "test" || d.Script != "./semantic/__test__/test_project.sql" || d.Line != 4 {
+		t.Errorf("want phase test at the RAISE on line 4 of the test file; got phase=%q script=%q line=%d", d.Phase, d.Script, d.Line)
+	}
+	if strings.Contains(d.Where, "TEST FAILED: x';") {
+		t.Errorf("where must name the test file, not inline it: %q", d.Where)
 	}
 }

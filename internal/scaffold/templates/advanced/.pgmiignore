@@ -1,0 +1,12 @@
+# Paths pgmi does not load into the deployment session (.gitignore syntax).
+# Dot-directories, node_modules and __pycache__ are always left out.
+# deploy.sql decides what runs; this file only decides what is loaded.
+
+# Reference gateways in any language
+gateways/
+
+# Build output that is not dot-prefixed
+target/
+bin/
+obj/
+dist/

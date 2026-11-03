@@ -66,6 +66,7 @@ func TestContract_ViewColumnsMatchSchema(t *testing.T) {
 	backingTable := map[string]string{
 		"pgmi_source_view":          "_pgmi_source",
 		"pgmi_parameter_view":       "_pgmi_parameter",
+		"pgmi_runtime_view":         "_pgmi_runtime",
 		"pgmi_test_source_view":     "_pgmi_test_source",
 		"pgmi_test_directory_view":  "_pgmi_test_directory",
 		"pgmi_source_metadata_view": "_pgmi_source_metadata",

@@ -13,7 +13,7 @@ aliases:
 > pgmi deployment CLI.
 
 
-Generate a typed C# client from your deployment's `/openapi.json`.
+Generate a typed C# client from your deployment's `/openapi.json`. Download `openapi.json` with session handles first; see [Client generation](_index.md).
 
 ## NSwag
 
@@ -24,7 +24,7 @@ dotnet tool install -g NSwag.ConsoleCore
 
 # Generate client
 nswag openapi2csclient \
-  /input:http://localhost:3000/openapi.json \
+  /input:openapi.json \
   /output:ApiClient.cs \
   /namespace:MyProject.Api \
   /generateClientClasses:true \
@@ -34,7 +34,10 @@ nswag openapi2csclient \
 Usage:
 
 ```csharp
-using var httpClient = new HttpClient { BaseAddress = new Uri("http://localhost:3000") };
+using var httpClient = new HttpClient { BaseAddress = new Uri("http://localhost:8080/api") };
+httpClient.DefaultRequestHeaders.Add("Cookie", $"__Host-session={loginSession}; __Host-csrf={csrfToken}");
+httpClient.DefaultRequestHeaders.Add("X-CSRF-Token", csrfToken);
+httpClient.DefaultRequestHeaders.Add("x-organization-session", organizationSession);
 var client = new ApiClient(httpClient);
 
 var result = await client.HelloWorldAsync("World");
@@ -47,7 +50,7 @@ Add to your `.csproj` for build-time generation:
 
 ```xml
 <Target Name="GenerateApiClient" BeforeTargets="CoreCompile">
-  <Exec Command="nswag openapi2csclient /input:$(ApiUrl)/openapi.json /output:$(IntermediateOutputPath)ApiClient.cs /namespace:$(RootNamespace).Api" />
+  <Exec Command="nswag openapi2csclient /input:$(MSBuildProjectDirectory)/openapi.json /output:$(IntermediateOutputPath)ApiClient.cs /namespace:$(RootNamespace).Api" />
   <ItemGroup>
     <Compile Include="$(IntermediateOutputPath)ApiClient.cs" />
   </ItemGroup>
@@ -60,5 +63,5 @@ Microsoft's Kiota generates idiomatic clients for multiple languages:
 
 ```bash
 dotnet tool install -g Microsoft.OpenApi.Kiota
-kiota generate -l CSharp -d http://localhost:3000/openapi.json -o ./ApiClient -n MyProject.Api
+kiota generate -l CSharp -d openapi.json -o ./ApiClient -n MyProject.Api
 ```

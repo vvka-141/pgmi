@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -20,23 +18,10 @@ import (
 // file is the same kind of mistake and deserves the same code, which is what a
 // CI script reads to tell "your config is wrong" from "something broke".
 func TestResolveEffectiveTimeout(t *testing.T) {
-	newCmd := func(timeoutChanged bool) *cobra.Command {
-		cmd := &cobra.Command{}
-		cmd.Flags().Duration("timeout", 3*time.Minute, "")
-		if timeoutChanged {
-			// Marks the flag Changed, which is how the real command signals
-			// that --timeout was given explicitly.
-			if err := cmd.Flags().Set("timeout", "45s"); err != nil {
-				t.Fatalf("set timeout flag: %v", err)
-			}
-		}
-		return cmd
-	}
-
 	t.Run("bad duration in pgmi.yaml is invalid configuration", func(t *testing.T) {
 		for _, bad := range []string{"42", "5 fortnights", "later"} {
 			cfg := &config.ProjectConfig{Timeout: bad}
-			_, err := resolveEffectiveTimeout(newCmd(false), cfg, time.Minute)
+			_, err := resolveEffectiveTimeout(false, cfg, time.Minute)
 			if err == nil {
 				t.Fatalf("timeout %q was accepted", bad)
 			}
@@ -55,7 +40,7 @@ func TestResolveEffectiveTimeout(t *testing.T) {
 	})
 
 	t.Run("valid duration in pgmi.yaml is used", func(t *testing.T) {
-		got, err := resolveEffectiveTimeout(newCmd(false), &config.ProjectConfig{Timeout: "90s"}, time.Minute)
+		got, err := resolveEffectiveTimeout(false, &config.ProjectConfig{Timeout: "90s"}, time.Minute)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -65,7 +50,7 @@ func TestResolveEffectiveTimeout(t *testing.T) {
 	})
 
 	t.Run("an explicit --timeout outranks pgmi.yaml, even a bad one", func(t *testing.T) {
-		got, err := resolveEffectiveTimeout(newCmd(true), &config.ProjectConfig{Timeout: "nonsense"}, 45*time.Second)
+		got, err := resolveEffectiveTimeout(true, &config.ProjectConfig{Timeout: "nonsense"}, 45*time.Second)
 		if err != nil {
 			t.Fatalf("the flag was set, so pgmi.yaml should not be parsed at all: %v", err)
 		}
@@ -75,7 +60,7 @@ func TestResolveEffectiveTimeout(t *testing.T) {
 	})
 
 	t.Run("no pgmi.yaml falls back to the flag", func(t *testing.T) {
-		got, err := resolveEffectiveTimeout(newCmd(false), nil, 2*time.Minute)
+		got, err := resolveEffectiveTimeout(false, nil, 2*time.Minute)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

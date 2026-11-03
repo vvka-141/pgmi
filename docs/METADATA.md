@@ -14,7 +14,7 @@ pgmi supports optional XML metadata blocks in SQL files that control deployment 
 
 **You don't need metadata to use pgmi.**
 
-The basic template works perfectly without any metadata. Files execute in lexicographic path order, and pgmi generates deterministic fallback identifiers from file paths.
+A file without a `<pgmi-meta>` block executes in lexicographic path order, and pgmi generates a deterministic fallback identifier from its path. The basic template adds a block only to its run-once files (`idempotent="false"`), for the id its ledger tracks them by.
 
 ```
 myproject/
@@ -206,6 +206,7 @@ The advanced template maintains an execution log:
 internal.deployment_script_execution_log
 ├── deployment_script_object_id (UUID)
 ├── deployment_script_content_checksum
+├── pgmi_checksum
 ├── file_path
 ├── idempotent
 ├── sort_key
@@ -215,6 +216,7 @@ internal.deployment_script_execution_log
 On each deployment:
 - **Idempotent scripts**: Always execute; each run adds a log row
 - **Non-idempotent scripts**: Skipped once a run under `idempotent="false"` is logged. No per-file notice; the closing `[pgmi] Deployment complete: N executed, M skipped` line counts them
+- **Changed non-idempotent scripts**: a run-once script that already ran here and was since edited, moved, re-sorted, flipped to `idempotent="true"` or removed refuses the deploy before any file runs, naming each file. Comment, whitespace and keyword-case edits are not changes (pgmi's normalized checksum)
 
 ---
 
@@ -285,7 +287,7 @@ This file sorts by its path (e.g., `./migrations/001_users.sql`).
 
 ## Multi-Phase Execution
 
-A single script can execute at multiple deployment stages by specifying multiple sort keys.
+A single script can execute at multiple deployment stages by specifying multiple sort keys. Only a re-run script (`idempotent="true"`) can: a run-once script runs once, at one place, and both templates refuse a run-once script with more than one key.
 
 ### Example: Bootstrap + Seed
 
@@ -337,15 +339,21 @@ pgmi provides commands to work with metadata:
 Generate metadata blocks for files that don't have them:
 
 ```bash
-# Preview what would be generated
-pgmi metadata scaffold ./myproject
+# Preview what would be generated for one layer
+pgmi metadata scaffold ./myproject/core --sort-key 005/core/
 
 # Write metadata to files
-pgmi metadata scaffold ./myproject --write
+pgmi metadata scaffold ./myproject/core --sort-key 005/core/ --write
 
 # Generate with idempotent=false default
-pgmi metadata scaffold ./myproject --idempotent=false --write
+pgmi metadata scaffold ./myproject/migrations --sort-key 004/ --idempotent=false --write
 ```
+
+Each block gets a random id and the key `<prefix>/<file name>`. The prefix
+comes from `--sort-key`, or from the prefix the files with metadata in the same
+directory already share; with neither, the command refuses before writing. The
+path cannot supply it: `api/orders.sql` sorts before `core/orders.sql`, but the
+kernel has to run first.
 
 ### Validate Metadata
 
@@ -365,6 +373,9 @@ pgmi metadata validate ./myproject --json
 - UUID format
 - Duplicate IDs across files
 - Empty sort keys
+
+It also warns about a `<pgmi-meta>` outside a `/* */` block comment, such as
+`-- <pgmi-meta ...>`: the parser never reads it, so the file has no metadata.
 
 ### Preview Execution Plan
 
@@ -447,21 +458,20 @@ CREATE TABLE IF NOT EXISTS logs (id SERIAL PRIMARY KEY);
 
 ## Error Messages
 
-`pgmi metadata validate <path>` exits 1 on the first problem it can name.
+`pgmi metadata validate <path>` exits 10 on the first problem it can name.
 A malformed block stops the scan:
 
 ```
 $ pgmi metadata validate ./myproject
-Scanning and validating SQL files...
-Validating metadata graph...
-pgmi: error: validation failed: failed to process file migrations\001_users.sql: metadata error in ./migrations/001_users.sql: invalid PGMI metadata in ./migrations/001_users.sql:
+pgmi: error: validation failed: invalid PGMI metadata in ./migrations/001_users.sql:
   1. id attribute is required and cannot be the nil UUID (00000000-0000-0000-0000-000000000000).
   Each script must have a unique identifier.
   Generate with: uuidgen (Linux/Mac), [guid]::NewGuid() (PowerShell), or https://www.uuidgenerator.net/
 
 See metadata format documentation:
-  Schema: internal/metadata/schema.xsd
+  Format reference: .agents/skills/pgmi-metadata/SKILL.md (scaffolded by pgmi init) or https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md
   Generate template: pgmi metadata scaffold <path>
+: invalid configuration
 ```
 
 Uniqueness is a property of the whole project, so it is checked after every
@@ -469,44 +479,37 @@ file parses — the summary prints first, then the collision:
 
 ```
 $ pgmi metadata validate ./myproject
-Scanning and validating SQL files...
-Validating metadata graph...
-
-Validation Summary:
-  Total files: 2
-  Files with metadata: 2
-  Files without metadata: 0
-
-Error: Duplicate IDs detected:
-  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql
-
-pgmi: error: metadata validation failed
+Total files: 2
+Files with metadata: 2
+Files without metadata: 0
+Duplicate id: 550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql
+pgmi: error: metadata validation failed: 1 duplicate id(s): invalid configuration
 ```
 
 Give one of the two files a new UUID. You do not have to run `validate` to be
 protected: `pgmi deploy` rejects the same collision during file scanning, before
-it connects, with exit 10 rather than 1:
+it connects, with exit 10, and so does `pgmi metadata plan`:
 
 ```
-pgmi: error: file scanning failed: duplicate <pgmi-meta id> across files; each script must have a unique id:
-  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql: invalid configuration
+pgmi: error: duplicate <pgmi-meta id> across files; each script must have a unique id:
+  550e8400-e29b-41d4-a716-446655440000: ./migrations/001_users.sql, ./setup/users_setup.sql
 ```
 
 ---
 
-## Migration from Basic to Advanced
+## Adding metadata to existing files
 
-If you start with the basic template and later need metadata features:
+The basic template's `physical/` files already carry an id and `idempotent="false"`. For a project of your own without `<pgmi-meta>` blocks, or files you move into the advanced template:
 
 1. **Assess need**: Do you actually need idempotency control or path-independent tracking?
 
-2. **Scaffold metadata**:
+2. **Scaffold metadata**, one folder at a time:
    ```bash
-   pgmi metadata scaffold ./myproject --write
+   pgmi metadata scaffold ./myproject/physical --sort-key 005/ --idempotent=false --write
    ```
 
 3. **Review and customize**:
-   - Adjust `idempotent` flags (migrations → false, functions → true)
+   - Adjust `idempotent` flags (tables → false, views and functions → true)
    - Set meaningful sort keys if order matters
    - Add descriptions for documentation
 

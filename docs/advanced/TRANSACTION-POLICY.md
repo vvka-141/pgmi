@@ -18,7 +18,7 @@ Two metadata keys on any REST, RPC, or MCP handler:
 | Key | Values | Default |
 |-----|--------|---------|
 | `minTransactionIsolation` | `read committed`, `repeatable read`, `serializable` | none (behaves as `read committed`) |
-| `readOnly` | `true` / `false` | `false` (read-write) |
+| `readOnly` | `true` / `false` | `false` (read-write); REST and RPC only, and only with `autoLog: false` |
 
 Case- and separator-insensitive: `READ COMMITTED`, `read-committed`, and
 `Read_Committed` all normalize to `read committed`. `read uncommitted` folds
@@ -39,11 +39,15 @@ transaction:
 ```
 api.rest_route_policy(method, url, requested)
 api.rpc_route_policy(method_name, requested)
-api.mcp_request_policy(request, requested)
+api.mcp_request_policy(request, requested, protocol_version, mcp_method, mcp_name)
 ```
 
 Each returns `(transaction_isolation, transaction_read_only,
-transaction_deferrable)`.
+transaction_deferrable, handler_name, input_annotations)`; the last two are
+what the gateway's interceptors select on (`gateways/PROTOCOL.md`,
+"Extension seams"). `api.mcp_request_policy` adds `modern` and `refusal`,
+the answer to send instead of dispatching
+([MCP transport](MCP-PROTOCOL.md#transport-behavior)).
 
 ### Resolution rules
 
@@ -87,7 +91,7 @@ dispatching:
 |----------|----------|
 | REST | `428 Precondition Required` |
 | RPC | HTTP 428 with JSON-RPC error |
-| MCP | `-32600` envelope |
+| MCP | `-32603` envelope, HTTP 200 |
 
 The error carries `pgmi.transaction_isolation_too_weak` or
 `pgmi.transaction_read_only_required`.
@@ -96,9 +100,8 @@ This is what a proxy that skips the policy lookup gets. It is no longer the
 path correct callers travel — it is the safety net.
 
 In a `READ ONLY` transaction, the gateways also skip their own writes:
-exchange auto-logging and JIT user provisioning are suppressed. A
-never-provisioned identity resolves only after a read-write request has
-provisioned it.
+exchange auto-logging is suppressed, and a login session's idle expiry is
+not extended.
 
 Source: `lib/api/09-gateways.sql` — `api.rest_invoke`, `api.rpc_invoke`, and `internal.mcp_dispatch` behind `api.mcp_call_tool`, `api.mcp_read_resource` and `api.mcp_get_prompt`.
 
@@ -150,11 +153,14 @@ re-reads identical data and conflicts forever. Only `ROLLBACK` + a fresh
 
 ### Who retries
 
-**Retry belongs to whoever owns `BEGIN` — the client.** The bundled HTTP
-gateway (`tools/mcp-gateway.py`) retries up to `MCP_MAX_RETRY_ATTEMPTS`
-(default 3) with exponential backoff + jitter, opening a **new transaction per
-attempt**; on exhaustion it answers `409` + `Retry-After` with the machine
-token `pgmi.transaction_retryable`.
+**Retry belongs to whoever owns `BEGIN` — the client.** Every reference
+gateway in `gateways/` retries up to `RETRY_MAX_ATTEMPTS` (default 3) with
+exponential backoff + jitter, opening a **new transaction per attempt**. The
+retry is a decorator on the gateway's database channel
+(`gateways/PROTOCOL.md`, "Extension seams"). On exhaustion it answers with the machine token
+`pgmi.transaction_retryable` and a `Retry-After` header: REST as a `409`
+problem, MCP as the JSON-RPC error `-31000` (HTTP 200) whose
+`data.code` carries the token, so the agent repeats the call unchanged.
 
 An operator-supplied REST/RPC proxy must implement the same loop.
 
@@ -178,7 +184,7 @@ default_transaction_isolation`) — static server-side configuration.
 | Per-route read-only declaration | Yes — `readOnly: true` | Automatic by HTTP method |
 | `DEFERRABLE` derivation | Yes — for `SERIALIZABLE READ ONLY` | No |
 | Replica-safe hint in OpenAPI | Yes — `x-pgmi-replica-safe` | No |
-| Fail-closed DB-side check | Yes — 428 / `-32600` | No |
+| Fail-closed DB-side check | Yes — 428 (REST, RPC `-32600`) / MCP `-32603` | No |
 
 ## Limits
 

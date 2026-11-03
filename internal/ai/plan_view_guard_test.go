@@ -40,7 +40,7 @@ func TestEmbeddedPlanViewExamplesFilterSQLFiles(t *testing.T) {
 			q := text[m[0]:m[1]]
 
 			// Diagnostic listings and single-file lookups are not execute-all loops.
-			if !(strings.Contains(q, "content") || selectStar.MatchString(q)) || exactPathFilter.MatchString(q) {
+			if !strings.Contains(q, "content") && !selectStar.MatchString(q) || exactPathFilter.MatchString(q) {
 				continue
 			}
 			if strings.Contains(q, "is_sql_file") {

@@ -6,7 +6,7 @@ weight: 40
 
 # Design Record: AI Guidance Ships With the Template
 
-> **Status: PROPOSED** — target: the release after v0.13.1.
+> **Status: ACCEPTED** — shipped in v0.14.0.
 
 ## Decision
 
@@ -62,7 +62,29 @@ CLAUDE.md                 @AGENTS.md
   <template skills>/SKILL.md
   postgres-<area>/SKILL.md
   postgres-<area>/references/<recipe>.md
+gateways/                 advanced template only: reference gateways
+  README.md, PROTOCOL.md  (TypeScript, Python, Go, C#, Rust); never deployed
 ```
+
+In the pgmi repository the skills come from two trees. `internal/scaffold/skills/`
+reaches every template: the pgmi skills (workflow, SQL, testing, metadata,
+debugging a deploy, design, the physical and semantic layers) and the
+`postgres-<area>` recipes.
+`internal/scaffold/templates/<name>/.agents/skills/` reaches one template:
+the advanced template adds `pgmi-endpoint`, `pgmi-api-layer` (its layers and
+the API on top), `pgmi-handlers`, `pgmi-api` and `pgmi-mcp`. Skills for pgmi's own contributors (`pgmi-templates`, the review
+skills) are never scaffolded.
+
+Both templates ship the shared skills; the basic template ships no
+template skills of its own. The advanced template's `gateways/` folder holds
+reference gateways, not skills: `AGENTS.md` sends an agent there before it
+builds a client, gateway or service, and `.pgmiignore` keeps it out of the
+deploy. It replaces `pgmi ai client`.
+
+**Workspace root.** Instruction files load only for the folder an agent works
+in. `AGENTS.md` asks the agent to add one line to the workspace root's
+`AGENTS.md` that points at the PostgreSQL project's own `AGENTS.md` and its
+`gateways/`, so a session started at the workspace root still finds them.
 
 The routing table in `AGENTS.md` does not depend on any harness discovering
 `.agents/skills/` on its own. Harnesses that do discover it get implicit
@@ -96,6 +118,17 @@ time, security, ...). Each `SKILL.md` is a short index: "facing X, read
 **Every recipe's SQL runs in CI.** A recipe that has never executed is a recipe
 an agent copies into a broken deploy. The runnable blocks are deployed into a
 scaffolded project against a real PostgreSQL in the test suite.
+
+A runnable block is a fenced block whose info string is
+`sql runnable target=<path>`: the gate (`TestSkillBlocksDeploy`) writes it to
+`<path>` in each template that ships the skill and deploys the project with its
+tests. `kind=tail` appends it to `deploy.sql` after the first top-level `COMMIT`
+instead, for statements that cannot run inside a plan file.
+`requires=<extension>` skips it, with the reason logged, on a server that lacks
+the extension. A block counts only if it provably ran: a target that no part
+of `deploy.sql` executes fails the gate. Shared skills also run on the oldest
+PostgreSQL release CI tests; template skills run on that template's floor.
+Plain `sql` blocks are illustration.
 
 ## Sources: credited, never copied
 
@@ -135,7 +168,7 @@ marked as a quotation, and cited.
 
 ## What is removed
 
-`pgmi ai skills`, `pgmi ai skill`, `pgmi ai setup`, `pgmi ai check`, the
+`pgmi ai skills`, `pgmi ai skill`, `pgmi ai setup`, `pgmi ai check`, `pgmi ai client`, the
 adapter layer, the managed-file stamp, the MCP `ai_skills`/`ai_skill` tools and
 the embedded skill sync list. `pgmi ai` (overview) and `pgmi ai contract` stay.
 
@@ -147,8 +180,24 @@ project with a cold agent, before and after. The measure is defects in the
 result, and whether the agent called `pgmi ai contract` at all. If it does not,
 even with the `AGENTS.md` pointer, `pgmi ai` shrinks further.
 
+Measured for v0.14.0 against v0.13.1, on the same twenty runs (Claude Code
+and Codex, cold, scaffold guidance only): every run deploys into a fresh
+database and passes its own tests (19 of 20 before), and runs with a
+checklist defect fall from seven to none (four of the seven were functions
+left executable by PUBLIC, which the basic template now revokes itself). Agents ran `pgmi ai contract` in 20 of 32
+runs, against none before, so both `pgmi ai` commands stay. Agents started
+at a workspace root found the project's `AGENTS.md` and `gateways/`, and a
+small model completed the three testing tasks on the first attempt.
+
 ## Non-goals
 
 - Keeping scaffolded skills in sync with later pgmi releases. They are project
   source; upgrades change only what the CLI prints.
 - Per-harness tuning of any kind.
+- A skill for running a pgmi project inside the browser on PGlite. It needs
+  a second implementation of pgmi's session contract (the session views, the
+  plan, the test macro) in TypeScript, which pgmi's tests do not hold to the
+  contract and which drifts with every release. The advanced template's
+  roles, login sessions and row-level security protect nothing in a
+  single-user browser database, so the template would have to be cut down to
+  run there. Revisit only if pgmi ships and tests such a runtime itself.

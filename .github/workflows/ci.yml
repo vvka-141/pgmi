@@ -17,15 +17,15 @@ jobs:
           go-version: '1.26'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
 
       - name: dead code (production only)
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
           args: -c .golangci-deadcode.yml
 
@@ -46,10 +46,10 @@ jobs:
         run: go test -race -tags pgmi_testhooks -timeout 10m ./...
 
   # The compatibility table is a claim, and until this job existed nothing
-  # checked it: every test ran against a single PostgreSQL 17 image. Both floors
-  # are covered — 11 for pgmi core and the basic template, 15 for the advanced
-  # template — so a construct that silently raises either one red-lines here
-  # instead of reaching a user.
+  # checked it: every test ran against a single PostgreSQL image. This job
+  # covers the core and basic-template floor (15); the advanced template's
+  # floor is 18, the image the `test` job already runs it on, so a construct
+  # that silently raises either one red-lines instead of reaching a user.
   #
   # Official postgres:N images via `services`, which is both cheaper than
   # testcontainers for a matrix and published per major, so a version is one
@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ['11', '15', '17']
+        pg: ['15']
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -88,14 +88,7 @@ jobs:
             ./internal/services/... ./internal/params/... ./internal/contract/... \
             ./internal/files/... ./internal/cli/... ./internal/preprocessor/... \
             ./internal/db/... ./internal/metadata/...
-          go test -timeout 10m -run 'TestTemplateDeployment/basic' ./internal/scaffold
-
-      # The advanced template is 15+ and says so: it needs xid8 (13) and
-      # security_invoker views (15). Running it on 11 would conflate the two
-      # floors and make the core result unreadable.
-      - name: Advanced template
-        if: matrix.pg != '11'
-        run: go test -timeout 15m ./internal/scaffold
+          go test -timeout 10m -run 'TestTemplateDeployment/basic|TestSkillBlocksDeploy/basic' ./internal/scaffold
 
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,

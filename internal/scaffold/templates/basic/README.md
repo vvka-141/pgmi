@@ -1,6 +1,7 @@
 # {{PROJECT_NAME}}
 
-A PostgreSQL project deployed by pgmi — with environment-aware logic, project data loading, and transactional tests.
+A PostgreSQL project deployed by pgmi, in two layers: tables that run once,
+views and functions that re-run, and tests that gate the commit.
 
 ## Quick Start
 
@@ -15,7 +16,7 @@ pgmi deploy . -d {{PROJECT_NAME}} --overwrite --force
 For an existing database, deploy incrementally (no `--overwrite`):
 
 ```bash
-pgmi deploy . -d {{PROJECT_NAME}} --param env=production
+pgmi deploy . -d {{PROJECT_NAME}} --param env=prod
 ```
 
 Edit `pgmi.yaml` to set connection defaults (host, port, username) so you
@@ -23,82 +24,116 @@ don't need to repeat them on every command.
 
 ## What This Does
 
-1. Reads `project.json` through `pgmi_source_view` (pgmi loads all project files, not just SQL)
-2. Runs migrations in `migrations/` in path order
-3. Seeds an admin user in non-production environments
-4. Runs tests against fixture data, then rolls back test artifacts
+1. Refuses the deploy if a run-once file changed after it ran here (below)
+2. Runs the SQL files in path order: `physical/` first, then `semantic/`
+3. On `env=dev`, creates a `Demo` project through the writer function
+4. Runs the tests, rolls their changes back, and commits only if all pass
 
-## Two execution models
+## Two layers
 
-`deploy.sql` ships with the first one. Switching to the second is three lines.
+| Layer | Folder | Holds | Runs |
+|---|---|---|---|
+| Physical | `physical/` | tables, keys, constraints, indexes | once per database |
+| Semantic | `semantic/` | views (the read surface) and functions (the only writers) | on every deploy |
 
-| | **Re-run every deploy** (default) | **Apply once** (uncomment `(A)`, `(B)`, `(C)`) |
-|---|---|---|
-| What runs | Every migration, every time | Only migrations not yet recorded in `_migration` |
-| Requires | Migrations that are safe to **re-run** (`CREATE OR REPLACE FUNCTION`, `CREATE TABLE IF NOT EXISTS`) | Nothing — a migration may be a one-shot `INSERT` |
-| Ledger | None. Nothing to drift from reality | `_migration` (path, checksum, applied_at) |
-| Editing an applied migration | Takes effect on the next deploy | **Does nothing** — the file is skipped. The stored checksum shows it changed |
-| Feels like | `psql -f` over a directory | Flyway / Sqitch |
+Every rule is stated once. The database refuses invalid rows through
+constraints (`task_open_title_key`: two open tasks of a project never share a
+title). A writer such as `fn_add_task` asks a refusal function
+(`fn_task_problems`) and returns NULL when it refuses: `SELECT *` shows one row
+whose columns are all NULL, so a caller tests `(fn_add_task(...)).task_id IS NULL`,
+not `FOUND`. A caller that wants the reason asks the same function. Reads go through `project_view`, which carries
+each project's task counts and its state.
 
-**Which do you want?**
+```sql
+SELECT * FROM fn_create_project('Launch');
+SELECT * FROM fn_add_task((SELECT project_id FROM project WHERE name = 'Launch'), 'Write the plan');
+SELECT name, open_task_count, state FROM project_view;
+```
 
-Start with the default. It is simpler, and there is no ledger to drift from
-the database.
+## Run-once files
 
-Know what it does not give you. `IF NOT EXISTS` checks that a name exists, not
-that the object matches the file. `CREATE TABLE IF NOT EXISTS` over an older
-version of the table skips it, missing columns and all. `CREATE INDEX
-CONCURRENTLY IF NOT EXISTS` skips an index a failed build left invalid, and
-reports success. So a file that re-runs cleanly can still leave the database
-different from what the file says. When a migration changes the shape of
-something that already exists, write the change itself and assert the result
-in a test.
+A file in `physical/` opens with a header that marks it run-once:
 
-Switch to apply-once when a migration genuinely cannot be re-run: a data
-backfill, a one-shot `INSERT`, an `ALTER TABLE` that is not conditional. That is
-the moment tracking earns its keep.
+```sql
+/*
+<pgmi-meta id="a7ba0c95-d9fc-44f9-8537-de2631a38a8a" idempotent="false">
+  <description>Projects</description>
+</pgmi-meta>
+*/
+CREATE TABLE project (...);
+```
 
-You are not choosing a framework either way. The tracking block is three lines of
-SQL in *your* `deploy.sql` — read it, change it, delete it. If you want a
-checksum mismatch to fail the deploy instead of being ignored, that is your `IF`
-statement to write.
+`deploy.sql` records each run-once file it ran in `deployment.run_once` (its
+id, path and checksum) and skips it afterwards. A file without the header is
+re-run on every deploy, so it must be safe to repeat: `CREATE OR REPLACE`.
+
+**The rule:** once a database that keeps its data ran a run-once file, that
+file is frozen. Edit it, move it, flip it to `idempotent="true"` or delete
+it, and the next deploy fails before anything runs, naming the file:
+
+```
+Run-once file(s) changed after they ran on this database:
+  ./physical/002_task.sql: content edited
+```
+
+Comments, whitespace and keyword case are not edits. To change a table, add
+a new run-once file after it, with a fresh id (`uuidgen`):
+
+```sql
+/*
+<pgmi-meta id="<new uuid>" idempotent="false">
+  <description>Tasks get a due date</description>
+</pgmi-meta>
+*/
+ALTER TABLE task ADD COLUMN due_on date;
+```
+
+While a database may still be thrown away, edit the table's own file instead
+and recreate it with `--overwrite --force`. Write tables in their final form:
+plain `CREATE TABLE` with every column, no `IF NOT EXISTS`.
 
 ## Project Structure
 
 ```
 {{PROJECT_NAME}}/
-├── deploy.sql                  # Orchestrates deployment (env branching, data loading)
+├── deploy.sql                  # The deployment: drift refusal, file loop, seed, test gate
 ├── project.json                # Project metadata (read by deploy.sql, not by pgmi)
 ├── pgmi.yaml                   # Connection and parameter defaults
-├── migrations/
-│   ├── 001_users.sql           # Users table
-│   └── 002_user_crud.sql       # CRUD functions
+├── physical/                   # Run-once: tables, keys, indexes
+│   ├── 001_project.sql
+│   ├── 002_task.sql
+│   └── __test__/               # The constraints refuse what they should
+├── semantic/                   # Re-run: views and writer functions
+│   ├── project.sql
+│   ├── task.sql
+│   └── __test__/               # The writers refuse and accept what they should
 └── __test__/
-    ├── _setup.sql              # Test data (rolled back)
-    └── test_user_crud.sql      # CRUD + project data tests
+    └── test_function_privileges.sql
 ```
+
+## Tests
+
+Every SQL file under a `__test__/` directory is a test; `_setup.sql` is that
+directory's fixture. `CALL pgmi_test()` in `deploy.sql` runs them inside the
+deploy's transaction and rolls their changes back. One failing test fails the
+deploy with exit code 13 and nothing committed.
 
 ## Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| env | development | Environment name; `production` skips dev seeding |
-| admin_email | admin@example.com | Email for initial admin user (non-production only) |
+| env | `dev` (from `pgmi.yaml`) | Required: `dev`, `test` or `prod`. Only `dev` seeds the `Demo` project; a missing or other value refuses the deploy |
 
-Override via CLI: `--param env=production --param admin_email=ops@mycompany.com`
+Override via CLI: `--param env=prod`
 
 ## Working with an AI assistant
 
-```bash
-pgmi ai setup          # writes .claude/skills/pgmi/ — commit it
-```
+`AGENTS.md` tells an assistant which skill to read before each kind of change;
+`CLAUDE.md` imports it for Claude Code. The skills in `.agents/skills/` cover
+the two layers, deploying, testing, SQL and PostgreSQL recipes. They belong to
+this project: commit them, and change them when your conventions change.
 
-The skill teaches an assistant pgmi's conventions (deploy.sql owns the
-transaction, tests run in the same session, `pgmi_source_view` and friends)
-before it edits your SQL. `--assistant cursor|copilot|windsurf|cline` targets
-other tools; `pgmi ai check` reports whether it is current.
-
-To read the same docs yourself, run `pgmi ai`.
+For the session API of the installed pgmi, run `pgmi ai contract`.
 
 ## Learn More
 

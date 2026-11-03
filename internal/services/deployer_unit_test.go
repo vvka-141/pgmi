@@ -257,6 +257,24 @@ func TestDeploy_OverwriteDenied(t *testing.T) {
 	}
 }
 
+func TestDeploy_OverwriteRefusesWhileADeployRuns(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, deployInProgress: true}
+	approver := &mockApprover{approved: true}
+	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if !errors.Is(err, pgmi.ErrConcurrentDeploy) {
+		t.Fatalf("Expected ErrConcurrentDeploy, got: %v", err)
+	}
+	if len(dbMgr.terminated) > 0 || len(dbMgr.dropped) > 0 {
+		t.Errorf("a running deploy was ended: terminated %v, dropped %v", dbMgr.terminated, dbMgr.dropped)
+	}
+}
+
 func TestDeploy_OverwriteTerminateFails(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true, terminateErr: fmt.Errorf("terminate failed")}
 	approver := &mockApprover{approved: true}

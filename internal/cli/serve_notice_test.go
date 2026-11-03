@@ -1,15 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 )
 
-func TestNoticeBuffer_KeepsHeadTailAndEveryWarning(t *testing.T) {
-	b := &noticeBuffer{head: 2, tail: 2}
+func TestNoticeBuffer_KeepsHeadTailAndCappedWarnings(t *testing.T) {
+	b := &noticeBuffer{head: 2, tail: 2, maxWarnings: 1}
 	for i := 1; i <= 10; i++ {
 		severity := "NOTICE"
-		if i == 5 {
+		if i == 5 || i == 6 {
 			severity = "WARNING"
 		}
 		b.add(severity, fmt.Sprintf("line %d", i), "", "")
@@ -39,5 +40,32 @@ func TestNoticeBuffer_NoTruncationMarkerWhenWithinCap(t *testing.T) {
 	}
 	if notices := f["notices"].([]notice); len(notices) != 1 {
 		t.Errorf("notices = %v", notices)
+	}
+}
+
+func TestNoticeBuffer_CapsMiddleWarnings(t *testing.T) {
+	b := newNoticeBuffer()
+	const n = 20000
+	for i := 1; i <= n; i++ {
+		b.add("WARNING", fmt.Sprintf("warning %d", i), "", "")
+	}
+
+	f := b.fields()
+	notices := f["notices"].([]notice)
+	if want := b.head + b.maxWarnings + b.tail; len(notices) != want {
+		t.Fatalf("kept %d notices, want %d", len(notices), want)
+	}
+	if f["noticesTruncated"] != n-len(notices) {
+		t.Errorf("noticesTruncated = %v, want %d", f["noticesTruncated"], n-len(notices))
+	}
+	if notices[0].Message != "warning 1" || notices[len(notices)-1].Message != fmt.Sprintf("warning %d", n) {
+		t.Errorf("first/last = %q / %q", notices[0].Message, notices[len(notices)-1].Message)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 32<<10 {
+		t.Errorf("result is %d bytes, want under 32 KiB", len(raw))
 	}
 }

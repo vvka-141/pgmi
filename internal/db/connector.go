@@ -33,14 +33,26 @@ const (
 // Replaceable to support timing prefixes in verbose mode.
 var NoticeHandler func(severity, message, detail, hint string) = DefaultNoticeHandler
 
-// DefaultNoticeHandler prints notices to stderr without decoration.
-func DefaultNoticeHandler(_, message, detail, hint string) {
-	fmt.Fprintln(os.Stderr, message)
+// DefaultNoticeHandler prints notices to stderr.
+func DefaultNoticeHandler(severity, message, detail, hint string) {
+	WriteNotice(os.Stderr, "", severity, message, detail, hint)
+}
+
+// WriteNotice prints a notice the way psql does, except that NOTICE, INFO,
+// LOG and DEBUG lines carry no severity label: only WARNING and above stand
+// out. Every line starts with linePrefix.
+func WriteNotice(w io.Writer, linePrefix, severity, message, detail, hint string) {
+	switch severity {
+	case "WARNING", "ERROR", "FATAL", "PANIC":
+		fmt.Fprintf(w, "%s%s:  %s\n", linePrefix, severity, message)
+	default:
+		fmt.Fprintf(w, "%s%s\n", linePrefix, message)
+	}
 	if detail != "" {
-		fmt.Fprintf(os.Stderr, "DETAIL: %s\n", detail)
+		fmt.Fprintf(w, "%sDETAIL:  %s\n", linePrefix, detail)
 	}
 	if hint != "" {
-		fmt.Fprintf(os.Stderr, "HINT: %s\n", hint)
+		fmt.Fprintf(w, "%sHINT:  %s\n", linePrefix, hint)
 	}
 }
 
@@ -48,9 +60,11 @@ func configurePool(poolConfig *pgxpool.Config) {
 	poolConfig.MaxConns = DefaultMaxConns
 	poolConfig.MinConns = DefaultMinConns
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
-	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		NoticeHandler(notice.Severity, notice.Message, notice.Detail, notice.Hint)
-	}
+	poolConfig.ConnConfig.OnNotice = forwardNotice
+}
+
+func forwardNotice(_ *pgconn.PgConn, notice *pgconn.Notice) {
+	NoticeHandler(notice.SeverityUnlocalized, notice.Message, notice.Detail, notice.Hint)
 }
 
 // StandardConnector implements the Connector interface for standard
@@ -95,7 +109,7 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
 			pool = nil
-			return fmt.Errorf("failed to parse connection config: %w", err)
+			return fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
 		}
 
 		configurePool(poolConfig)

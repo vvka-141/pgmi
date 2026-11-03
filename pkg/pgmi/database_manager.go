@@ -21,6 +21,12 @@ type DatabaseSettings struct {
 	Collate  string // pg_database.datcollate
 	CType    string // pg_database.datctype
 
+	// LocaleProvider is pg_database.datlocprovider: "c" libc, "i" icu,
+	// "b" builtin. Locale and ICURules are the provider's locale and ICU rules.
+	LocaleProvider string
+	Locale         string
+	ICURules       string
+
 	// Owner is always restorable: DROP DATABASE already requires ownership or
 	// superuser, so whoever got far enough to drop it can name the owner again.
 	Owner string
@@ -42,12 +48,21 @@ type DatabaseSettings struct {
 	CustomACL bool
 	Grants    []DatabaseGrant
 
+	// RoleOptions are the ALTER ROLE ... IN DATABASE ... SET settings.
+	RoleOptions []DatabaseRoleOptions
+
 	// PreserveLocale is set when the encoding or locale differs from the server
 	// default, so recreating has to name them — which in turn forces TEMPLATE
 	// template0. When false a plain CREATE DATABASE reproduces the database and
 	// keeps inheriting whatever a site installed in template1, so naming them
 	// anyway would quietly discard it.
 	PreserveLocale bool
+}
+
+// DatabaseRoleOptions are one role's settings in one database, as "name=value".
+type DatabaseRoleOptions struct {
+	Role    string
+	Options []string
 }
 
 // DatabaseGrant is one entry of a database ACL. Grantee "" is PUBLIC.
@@ -77,4 +92,7 @@ type DatabaseManager interface {
 	// TerminateConnections terminates all connections to the specified database.
 	// This is typically used before dropping a database to ensure no active connections remain.
 	TerminateConnections(ctx context.Context, conn DBConnection, dbName string) error
+
+	// DeployInProgress reports whether a pgmi deploy holds its lock on dbName.
+	DeployInProgress(ctx context.Context, conn DBConnection, dbName string) (bool, error)
 }

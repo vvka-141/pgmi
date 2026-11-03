@@ -23,7 +23,7 @@ var initCmd = &cobra.Command{
   pgmi init ./demo -t basic  Skip the wizard, use the basic template
 
 Templates:
-  basic     Linear migrations, minimal structure
+  basic     Two layers: run-once tables, re-run views and functions
   advanced  Metadata-driven deployment with the api/ membership/ libraries
 
 Target directory must be empty (pgmi.yaml and .env are tolerated).
@@ -86,16 +86,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Determine project name from target path
-	projectName := filepath.Base(targetPath)
-	if projectName == "." || projectName == ".." {
-		cwd, err := os.Getwd()
-		if err == nil {
-			projectName = filepath.Base(cwd)
-		} else {
-			projectName = "project"
-		}
-	}
+	projectName := defaultProjectName(targetPath)
 
 	if !scaffold.IsValidTemplate(selectedTemplate) {
 		templates, _ := scaffold.ListTemplates()
@@ -136,34 +127,39 @@ func runInit(cmd *cobra.Command, args []string) error {
 		dbName = connResult.Config.Database
 	}
 
-	fmt.Fprint(os.Stderr, nextSteps(targetPath, dbName))
+	fmt.Fprint(os.Stderr, nextSteps(targetPath, dbName, selectedTemplate))
 
 	return nil
 }
 
-// nextSteps is what the user reads after a scaffold. `pgmi ai setup` belongs
-// here because it is the only push-discovery surface: without it a fresh project
-// carries no artifact telling an assistant that pgmi exists, and the assistant
-// learns the conventions only by guessing from deploy.sql.
-func nextSteps(targetPath, dbName string) string {
+// nextSteps is what the user reads after a scaffold. It names the agent
+// guidance the scaffold wrote, so the user commits it instead of discarding it.
+func nextSteps(targetPath, dbName, template string) string {
+	deploy := fmt.Sprintf("pgmi deploy %s -d %s", targetPath, dbName)
+	if template == "advanced" {
+		deploy += ` --param env=dev
+
+For a shared database use env=test or env=prod, with the passwords in
+PGMI_PARAM_* environment variables or a --params-file.`
+	}
 	return fmt.Sprintf(`
 Next:
-  pgmi deploy %s -d %s
-  cd %s && pgmi ai setup --assistant claude
+  %s
 
-pgmi ai setup writes .claude/skills/pgmi/ — commit it so an AI assistant reads
-pgmi's conventions before it edits your SQL (swap --assistant for cursor,
-copilot, windsurf, cline). Run "pgmi ai" to read the same docs yourself.
-`, targetPath, dbName, targetPath)
+AGENTS.md and .agents/skills/ tell an AI assistant how this project works;
+commit them, and edit them as your conventions change. Run "pgmi ai" for the
+docs that match this pgmi version.
+`, deploy)
 }
 
 func managedCloudCaveat(template string) string {
 	if template != "advanced" {
 		return ""
 	}
-	return "Managed-cloud note: the advanced template needs CREATEROLE and\n" +
-		"CREATE EXTENSION (uuid-ossp, pgcrypto, pg_trgm, hstore). No superuser\n" +
-		"required — every major provider's admin role covers this. Details:\n" +
+	return "Managed-cloud note: the advanced template needs PostgreSQL 18 or newer and the\n" +
+		"uuid-ossp, pgcrypto, pg_trgm and hstore extensions. No superuser required: deploy\n" +
+		"as a role with CREATEROLE and CREATEDB, after\n" +
+		"ALTER ROLE <deployer> SET createrole_self_grant = 'set, inherit'. Details:\n" +
 		"https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql"
 }
 
@@ -189,4 +185,13 @@ func isInitBlocked(targetPath string) (bool, string) {
 
 	absPath, _ := filepath.Abs(targetPath)
 	return true, fmt.Sprintf("directory \"%s\" is not empty (blocking: %v)\nremove the files or scaffold elsewhere: pgmi init ./new-project", absPath, blocking)
+}
+
+// defaultProjectName names a project after its directory, resolving "." and
+// ".." through the working directory.
+func defaultProjectName(targetPath string) string {
+	if abs, err := filepath.Abs(targetPath); err == nil {
+		return filepath.Base(abs)
+	}
+	return "project"
 }

@@ -74,26 +74,45 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 		return pgmi.FileScanResult{}, fmt.Errorf("failed to open directory: %w: %w", err, pgmi.ErrInvalidConfig)
 	}
 
-	var files []pgmi.FileMetadata
+	ignore, err := s.loadPgmiignore(sourcePath)
+	if err != nil {
+		return pgmi.FileScanResult{}, err
+	}
+
+	var (
+		files   []pgmi.FileMetadata
+		ignored []pgmi.IgnoredPath
+	)
 
 	// Walk the directory tree
 	err = dir.Walk(func(file filesystem.File, err error) error {
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("cannot read %w; exclude it in .pgmiignore or make it readable: %w", err, pgmi.ErrInvalidConfig)
+		}
 		if err != nil {
 			return fmt.Errorf("error walking path: %w", err)
 		}
 
-		relPath := file.RelativePath()
+		relPath := filepath.ToSlash(file.RelativePath())
+		if relPath == "" || relPath == "." {
+			return nil
+		}
+		isDir := file.Info().IsDir()
 
-		if file.Info().IsDir() {
-			// Not descending at all: an unreadable file under .git or
-			// node_modules must not fail a deploy that never loads it.
-			if isExcludedPath(relPath) {
+		if rule := excludedBy(ignore, relPath, isDir); rule != "" {
+			display := "./" + relPath
+			if isDir {
+				display += "/"
+			}
+			ignored = append(ignored, pgmi.IgnoredPath{Path: display, Rule: rule})
+			// Not descending at all: an unreadable file under .git, node_modules
+			// or an ignored folder must not fail a deploy that never loads it.
+			if isDir {
 				return fs.SkipDir
 			}
 			return nil
 		}
-
-		if isExcludedPath(relPath) {
+		if isDir {
 			return nil
 		}
 
@@ -116,8 +135,45 @@ func (s *Scanner) ScanDirectory(sourcePath string) (pgmi.FileScanResult, error) 
 	}
 
 	return pgmi.FileScanResult{
-		Files: files,
+		Files:   files,
+		Ignored: ignored,
 	}, nil
+}
+
+// loadPgmiignore reads the project's .pgmiignore, if any. Its patterns follow
+// .gitignore syntax and add to the built-in exclusions. A pattern set that
+// would hide deploy.sql is refused: without it there is no deployment.
+func (s *Scanner) loadPgmiignore(sourcePath string) (*ignoreMatcher, error) {
+	content, err := s.fsProvider.ReadFile(filepath.Join(sourcePath, pgmi.PgmiignoreFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", pgmi.PgmiignoreFile, err)
+	}
+
+	matcher, err := parseIgnore(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %w", pgmi.ErrInvalidConfig, pgmi.PgmiignoreFile, err)
+	}
+	if matcher.Match("deploy.sql", false) {
+		return nil, fmt.Errorf("%w: %s excludes deploy.sql; pgmi cannot deploy without it. Remove the pattern, or add !deploy.sql after it",
+			pgmi.ErrInvalidConfig, pgmi.PgmiignoreFile)
+	}
+	return matcher, nil
+}
+
+// excludedBy names the rule that keeps relPath out of the session, or "" when
+// the path is loaded. The built-in list wins: it is reported even where a
+// .pgmiignore pattern would also match.
+func excludedBy(ignore *ignoreMatcher, relPath string, isDir bool) string {
+	if isExcludedPath(relPath) {
+		return pgmi.IgnoreRuleBuiltIn
+	}
+	if ignore != nil && ignore.Match(relPath, isDir) {
+		return pgmi.IgnoreRulePgmiignore
+	}
+	return ""
 }
 
 // excludedDirs are directories whose contents are tooling artifacts rather than
@@ -201,10 +257,10 @@ func (s *Scanner) processFile(file filesystem.File) (pgmi.FileMetadata, error) {
 	// time. Fail early with the offending path — pgmi projects are text/source
 	// trees.
 	if bytes.IndexByte(content, 0) >= 0 {
-		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text, so move this file outside the project path or into a hidden directory: %w", unixPath, pgmi.ErrInvalidConfig)
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path: %w", unixPath, pgmi.ErrInvalidConfig)
 	}
 	if !utf8.Valid(content) {
-		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text: %w", unixPath, pgmi.ErrInvalidConfig)
+		return pgmi.FileMetadata{}, fmt.Errorf("file %s is not valid UTF-8; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path: %w", unixPath, pgmi.ErrInvalidConfig)
 	}
 
 	var scriptMetadata *pgmi.ScriptMetadata
@@ -261,7 +317,10 @@ func (s *Scanner) ValidateDeploySQL(sourcePath string) error {
 	}
 
 	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, expected a regular file", deploySQLPath)
+		return fmt.Errorf("%s is a directory, expected a regular file: %w", deploySQLPath, pgmi.ErrInvalidConfig)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file (a named pipe, socket or device): %w", deploySQLPath, pgmi.ErrInvalidConfig)
 	}
 
 	return nil
@@ -278,9 +337,12 @@ func (s *Scanner) ReadDeploySQL(sourcePath string) (string, error) {
 
 	content = bytes.TrimPrefix(content, utf8BOM)
 
+	if i := bytes.IndexByte(content, 0); i >= 0 {
+		return "", fmt.Errorf("deploy.sql contains a NUL byte at offset %d; PostgreSQL cannot take it in a query: %w", i, pgmi.ErrInvalidConfig)
+	}
 	if !utf8.Valid(content) {
 		offset := findInvalidUTF8(content)
-		return "", fmt.Errorf("deploy.sql is not valid UTF-8 (first invalid byte at offset %d); re-save the file as UTF-8 without BOM", offset)
+		return "", fmt.Errorf("deploy.sql is not valid UTF-8 (first invalid byte at offset %d); re-save the file as UTF-8 without BOM: %w", offset, pgmi.ErrInvalidConfig)
 	}
 
 	return string(content), nil

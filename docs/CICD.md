@@ -56,7 +56,7 @@ jobs:
       - name: Deploy
         env:
           PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}   # direct connection
-        run: pgmi deploy . -d "$DB_NAME" --compat 1 --force
+        run: pgmi deploy . -d "$DB_NAME" --compat 1 --force --param env=prod
 ```
 
 Why these choices:
@@ -65,10 +65,13 @@ Why these choices:
   download is integrity-checked against the release `checksums.txt`. Prefer this over
   `go install …@latest`, which recompiles every run and lets a new release silently
   change your deploy.
-- **`--compat 1`** pins the session API: view and function names and columns.
-  It does not pin behavior such as plan ordering, which files load, or how
-  deploy.sql is sent. The binary version pins that, so pin both. Bump `--compat`
-  deliberately after testing the new default. See
+- **The pinned binary pins the session API.** Before pgmi 1.0 the session API
+  may change in a minor release — a view, column or function added, renamed or
+  removed — and every change is listed under **Upgrading** in that release's
+  notes. Read it before you bump `PGMI_VERSION`.
+- **`--compat 1`** makes the deploy fail (exit 10) on a binary that no longer
+  ships contract v1, instead of running against a different one. It does not
+  freeze columns across pgmi releases. See
   [CLI Reference](CLI.md#understanding---compat-api-versioning).
 - **`--force`** skips the interactive confirmation (there is no TTY in CI). It does
   **not** drop your database — that is `--overwrite`, which belongs only on
@@ -80,25 +83,21 @@ Why these choices:
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
-The advanced template sets role passwords at deploy time. Provide them via a params
-file generated from secrets — never as command-line `--param` (argv leaks to the
-process list and CI logs; see the [Security Guide](SECURITY.md)):
+The advanced template sets role passwords at deploy time. Map the secret to a
+`PGMI_PARAM_*` environment variable, which pgmi reads as a parameter. Never pass
+it as a command-line `--param` (argv leaks to the process list and CI logs; see
+the [Security Guide](SECURITY.md#pipeline-patterns)):
 
 ```yaml
       - name: Deploy
         env:
           PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
-          DATABASE_ADMIN_PASSWORD: ${{ secrets.DATABASE_ADMIN_PASSWORD }}
-        run: |
-          umask 077
-          cat > "$RUNNER_TEMP/secrets.env" <<EOF
-          env=prod
-          database_admin_password=$DATABASE_ADMIN_PASSWORD
-          EOF
-          pgmi deploy . -d "$DB_NAME" --compat 1 --force \
-            --params-file "$RUNNER_TEMP/secrets.env"
-          rm -f "$RUNNER_TEMP/secrets.env"
+          PGMI_PARAM_DATABASE_ADMIN_PASSWORD: ${{ secrets.DATABASE_ADMIN_PASSWORD }}
+        run: pgmi deploy . -d "$DB_NAME" --compat 1 --force --param env=prod
 ```
+
+A missing or misspelled secret arrives as an empty string; pgmi refuses it with
+exit 10 and names the variable, so the deploy never runs with an empty password.
 
 ## Pull-request gate without a database
 
@@ -118,9 +117,18 @@ Both exit 10 on invalid metadata or duplicate ids. See
 ## Reading the result
 
 `pgmi deploy --json` prints a JSON envelope to stdout on success and on
-failure: exit code, SQLSTATE, the failing file and line. Branch on the exit
-code; read the envelope for the report. See
-[CLI Reference](CLI.md#--json-envelope).
+failure: exit code, SQLSTATE, the failing file and line, plus the pgmi,
+contract and PostgreSQL versions, the target host, port and database, and
+start and finish times. Branch on the exit code; read the envelope for the
+report. See [CLI Reference](CLI.md#--json-envelope).
+
+**Keep the envelope as a build artifact.** A failed deploy rolls back, so an
+audit table written by deploy.sql records only successes. The envelope is the
+record of the failures. It never contains the user, password or token.
+
+```bash
+pgmi deploy . -d "$DB_NAME" --compat 1 --force --param env=prod --json > deploy-result.json
+```
 
 ## Concurrent deploys and timeouts
 
@@ -145,8 +153,8 @@ anywhere. Alternatives for the install step:
   `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.13.1 bash`
   (verifies the download against `checksums.txt`). The `PGMI_VERSION` prefix must sit on
   `bash`, not `curl`, or the script falls back to the latest release.
-- **Debian/Ubuntu runners (APT, GPG-verified):**
-  `curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash && sudo apt install -y pgmi`.
+- **Debian/Ubuntu runners (.deb):**
+  `gh release download v0.13.1 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.deb' -p checksums.txt && sha256sum --ignore-missing -c checksums.txt && sudo apt install -y ./pgmi_*_linux_amd64.deb`.
 - **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v0.13.1`
   — pin the tag (never `@latest`); note this requires the Go toolchain and compiles
   from source, so it is slower and less reproducible than a release binary.

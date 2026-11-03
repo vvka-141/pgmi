@@ -8,6 +8,8 @@ weight: 120
 
 This guide covers considerations for running pgmi in production environments: performance, rollback strategies, monitoring, and operational patterns.
 
+> **Example layout.** The examples on this page assume SQL files under `migrations/`, `extensions/`, `setup/` and `rollback/`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
+
 ## Connection requirements
 
 pgmi requires a **direct PostgreSQL connection** or a connection pooler in **session mode**.
@@ -30,28 +32,28 @@ The minimum PostgreSQL version depends on which layer you use:
 
 | Layer | Min PostgreSQL | What drives the floor |
 |-------|----------------|-----------------------|
-| pgmi core / CLI | 11+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
-| basic template | 11+ | Plain SQL migrations — no extensions, roles, or version-specific syntax. |
-| advanced template | 15+ | `WITH (security_invoker = true)` views (PostgreSQL 15) underpin the RLS model. Also needs a role that can **create roles, schemas, and extensions** (`CREATEROLE` + `CREATE EXTENSION`) and the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions. **No superuser required.** |
-| API / MCP features | 15+ | Ship inside the advanced template, so they share its floor. |
+| pgmi core / CLI | 15+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
+| basic template | 15+ | Plain SQL tables, views and functions — no extensions, roles, or version-specific syntax. |
+| advanced template | 18+ | `deploy.sql` refuses an older server before any schema work. The template relies on PostgreSQL 18 features: `uuidv7()`, temporal keys (`WITHOUT OVERLAPS`, `PERIOD` foreign keys), virtual generated columns and `RETURNING OLD`. Also needs the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions, and a role with `CREATEROLE` + `CREATEDB` and `createrole_self_grant = 'set, inherit'` set on it, so it can use the roles it creates. **No superuser required** (tested in CI). |
+| API / MCP features | 18+ | Ship inside the advanced template, so they share its floor. |
 
-The 11+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **15+**: `security_invoker` views, which the membership/RLS model relies on, were introduced in PostgreSQL 15.
+The 15+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `The advanced template requires PostgreSQL 18 or newer; this server is PostgreSQL <version>.` and exit code 13, before it creates anything.
 
 Both floors are tested, not asserted. CI runs the core suite and the basic
-template against PostgreSQL 11, 15 and 17, and the advanced template against 15
-and 17, so a construct that raises either floor fails the build. A server below
-11 is refused before any schema work with `invalid configuration: this server
-reports PostgreSQL <version>, and pgmi requires 11 or newer` and exit code 10 —
-`hashtextextended`, which the deploy advisory lock needs, is what sets that
-floor.
+template against PostgreSQL 15, and everything against 18, so a construct that
+raises either floor fails the build. A server below 15 is refused before any
+schema work with `invalid configuration: this server reports PostgreSQL
+<version>, and pgmi requires 15 or newer` and exit code 10. 15 is the oldest
+release PostgreSQL supports once 14 reaches end of life on 2026-11-12; a
+project on an older server stays on pgmi v0.13.
 
 ---
 
 ## Managed cloud PostgreSQL
 
-The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
+The **basic** template works on PostgreSQL 15+; the **advanced** template requires 18+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
 
-1. **`CREATEROLE`** — the advanced template creates the `<db>_owner`, `<db>_admin`, `<db>_api` and `<db>_customer` roles. Verify that the provider's deployment role can create them.
+1. **`CREATEROLE`** — the advanced template creates the `<db>_owner`, `<db>_admin`, `<db>_api` and `<db>_kernel` roles. Verify that the provider's deployment role can create them.
 2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. Extension availability and the role allowed to install each one vary by provider and service tier.
 3. **`CREATE SCHEMA`** — the template creates five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects.
 
@@ -59,22 +61,22 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 
 | Provider | Basic template | Advanced template | Verification |
 |----------|----------------|-------------------|--------------|
-| Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 11, 15, and 17 for core/basic and 15 and 17 for advanced. |
+| Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 15 for core/basic and 18 for everything. |
 | AWS RDS for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | AWS Aurora PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
 | Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Google AlloyDB | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
-| Supabase | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Supabase | Expected | Not supported | No PostgreSQL 18 offering found, and the advanced template refuses older servers. |
 | Neon | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Railway / Render / Fly.io managed PostgreSQL | Expected | Capability-dependent | Not continuously tested against these services. Verify role and extension capabilities. |
 
 `Tested` means the repository exercises the combination in CI. `Expected` means
 the core requirements are standard PostgreSQL features, but the provider is not
 part of continuous integration. `Capability-dependent` means the advanced
-template works only when the actual deploy role can create roles and schemas and
-install all four required extensions. Verify those capabilities on the selected
+template works only when the service offers PostgreSQL 18 and the actual deploy
+role can create roles and schemas and install all four required extensions. Verify those capabilities on the selected
 service and tier before production use.
 
 ---
@@ -496,11 +498,11 @@ END $$;
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
 Deployments scaffolded from the [advanced template](advanced/_index.md) carry
-a layered runtime defense for the APIs they serve — trusted-gateway identity,
-session GUCs that fail closed, JIT-provisioned membership, and row-level
-security:
+a layered runtime defense for the APIs they serve — opaque session handles
+resolved in the database, a request context only the api role can state,
+membership, and row-level security:
 
-![The layered security stack: identity providers and API keys converge on the auth.idp_subject session GUC, resolve through membership, and end at row-level security](diagrams/d13-security-stack.drawio.svg)
+![The layered security stack: identity providers sign people in to login sessions, the session handles resolve through membership into the request context, and row-level security ends the chain](diagrams/d13-security-stack.drawio.svg)
 
 ### Advanced template: built-in tracking
 
@@ -514,18 +516,19 @@ The [advanced template](advanced/_index.md) maintains a persistent execution log
 | `file_path` | File path at execution time |
 | `idempotent` | Whether script was re-runnable |
 | `deployment_script_content_checksum` | Content hash at execution time |
+| `pgmi_checksum` | Normalized content hash (comments, whitespace, keyword case ignored) |
 | `sort_key` | Execution ordering key |
 | `xact_id` | PostgreSQL transaction ID (correlates with WAL) |
 | `executed_at` | Timestamp |
 | `executed_by` | Database role that ran the script |
 
-Non-idempotent scripts are skipped on subsequent deployments. The companion view `internal.vw_deployment_script` provides last execution and execution count per script.
+Non-idempotent scripts are skipped on subsequent deployments. One that was edited, moved, re-sorted or removed after it ran refuses the deploy before any file runs. The advanced template reads this history through `internal.vw_deployment` (one row per deploy: when, login role, environment, scripts run, new and changed) and `internal.vw_deployed_script` (one row per script: path, first and last run, run count, checksum).
 
-### Basic template: stateless
+### Basic template: a run-once ledger
 
 > **Scope: basic template only.** This describes the `deploy.sql` that `pgmi init --template basic` copied into your project, not behaviour of the pgmi binary.
 
-The basic template does not persist execution history. Every deployment re-executes all files (using `CREATE OR REPLACE` / `IF NOT EXISTS` for safety). Implement your own tracking in deploy.sql if needed — see the [Audit logging](#audit-logging) section below.
+The basic template records each run-once file (`<pgmi-meta idempotent="false">`, its `physical/` tables) in `deployment.run_once`: id, path, checksum and when it ran. Those files are skipped afterwards; every other file re-runs on every deploy (`CREATE OR REPLACE`). A run-once file edited, moved, flipped to re-run or removed after it ran refuses the deploy before any file runs. It keeps no per-deploy history; add that in deploy.sql if you need it — see the [Audit logging](#audit-logging) section below.
 
 ### Session transparency
 
@@ -568,7 +571,7 @@ See [Connection Requirements](#connection-requirements) above. Use a direct conn
 
 ```bash
 # Direct connection for deployment (bypasses pooler)
-pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb" pgmi deploy .
 
 # Application traffic goes through pooler
 # postgresql://user:pass@pgbouncer:6432/mydb
@@ -577,8 +580,8 @@ pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
 ## CI/CD
 
 The complete pipeline pattern lives in [CI/CD](CICD.md): install a pinned,
-checksum-verified binary; use a direct connection from the CI secret store; pin
-the session contract with `--compat 1`; and use `--force` only to bypass an
+checksum-verified binary, which also pins the session contract; use a direct
+connection from the CI secret store; pass `--compat 1`; and use `--force` only to bypass an
 interactive confirmation. Provider authentication examples are in
 [Connections](CONNECTIONS.md).
 
@@ -615,16 +618,16 @@ Deploy to multiple databases in sequence:
 ```bash
 for db in db1 db2 db3; do
     echo "Deploying to $db..."
-    pgmi deploy . -d $db --param env=production || exit 1
+    pgmi deploy . -d $db --param env=prod || exit 1
 done
 ```
 
 ### Parallel deployment (with caution)
 
 ```bash
-pgmi deploy . -d db1 --param env=production &
-pgmi deploy . -d db2 --param env=production &
-pgmi deploy . -d db3 --param env=production &
+pgmi deploy . -d db1 --param env=prod &
+pgmi deploy . -d db2 --param env=prod &
+pgmi deploy . -d db3 --param env=prod &
 wait
 ```
 
@@ -657,7 +660,7 @@ Deploy to a standby database, then switch:
 
 ```bash
 # 1. Deploy to blue (standby) with tests gating the commit
-pgmi deploy . -d mydb_blue --param env=production
+pgmi deploy . -d mydb_blue --param env=prod
 
 # 2. If deployment succeeds (tests passed), switch traffic (application config or DNS)
 

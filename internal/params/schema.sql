@@ -7,6 +7,7 @@
 --
 -- DATA FLOW:
 --   CLI flags ──► Go ──► _pgmi_parameter (--param key=value)
+--   Binary version ──► Go ──► _pgmi_runtime (pgmi and contract version)
 --   Project files ──► Go ──► _pgmi_source (via pgmi_register_file)
 --   Test files ──► Go ──► _pgmi_test_directory + _pgmi_test_source
 --   api-v1.sql ──► Creates public views (pgmi_source_view, pgmi_plan_view, etc.)
@@ -14,6 +15,7 @@
 --
 -- OBJECT INDEX (search: "§" + name):
 --   §_pgmi_parameter       - CLI parameters (key, value)
+--   §_pgmi_runtime         - pgmi binary and contract version (one row)
 --   §_pgmi_source          - Project files (non-test)
 --   §_pgmi_source_metadata - Parsed <pgmi-meta> XML blocks
 --   §_pgmi_test_directory  - Test directory hierarchy
@@ -47,6 +49,7 @@ BEGIN
         DROP TABLE IF EXISTS pg_temp._pgmi_source_metadata CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_runtime CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
         DROP TYPE IF EXISTS pg_temp.pgmi_test_event CASCADE;
@@ -65,6 +68,21 @@ CREATE TEMP TABLE pg_temp._pgmi_parameter
 );
 
 GRANT SELECT ON TABLE pg_temp._pgmi_parameter TO PUBLIC;
+
+
+-- §_pgmi_runtime ─────────────────────────────────────────────────────────────
+-- Populated by: Go, one row per session (the binary's version, the applied contract)
+-- Used by: deploy.sql via pgmi_runtime_view
+CREATE TEMP TABLE pg_temp._pgmi_runtime
+(
+    pgmi_version     TEXT NOT NULL,
+    contract_version TEXT NOT NULL,
+    CONSTRAINT chk_pgmi_version_not_empty CHECK (pgmi_version <> ''),
+    CONSTRAINT chk_contract_version_not_empty CHECK (contract_version <> '')
+);
+
+CREATE UNIQUE INDEX ux_pgmi_runtime_one_row ON pg_temp._pgmi_runtime ((true));
+GRANT SELECT ON TABLE pg_temp._pgmi_runtime TO PUBLIC;
 
 
 -- §_pgmi_source ──────────────────────────────────────────────────────────────
@@ -194,18 +212,6 @@ GRANT SELECT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
 COMMENT ON TABLE pg_temp._pgmi_test_source IS
     'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
 
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_run_test_source(p_path text)
-RETURNS void LANGUAGE plpgsql AS $$
-DECLARE
-    v_detail text;
-BEGIN
-    EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = p_path);
-EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-    RAISE EXCEPTION 'Failed in %: %', p_path, SQLERRM
-        USING ERRCODE = SQLSTATE, DETAIL = COALESCE(v_detail, '');
-END;
-$$;
 
 -- §pgmi_test_event ────────────────────────────────────────────────────────────
 -- Composite type passed to test callbacks during pgmi_test() execution

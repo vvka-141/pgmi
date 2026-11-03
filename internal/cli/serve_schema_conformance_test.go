@@ -128,7 +128,7 @@ func publishedSchema(t *testing.T, tool string) map[string]any {
 }
 
 var schemaDeclaringTools = []string{
-	"ai_skills", "templates_list", "metadata_plan", "metadata_validate", "init", "deploy",
+	"templates_list", "metadata_plan", "metadata_validate", "init", "deploy",
 }
 
 // MCP 2025-11-25 (Server/Tools, Output Schema): "Servers MUST provide
@@ -174,8 +174,8 @@ func TestServeErrorResultsConformToDeclaredOutputSchema(t *testing.T) {
 	}
 }
 
-// ai_skills and templates_list cannot be made to fail from outside, so their
-// schemas are checked against the error shape errorResult would produce. Every
+// templates_list cannot be made to fail from outside, so its schema and the
+// others are checked against the error shape errorResult would produce. Every
 // declared schema must admit it — the failure envelope is uniform across tools.
 func TestServeEveryDeclaredSchemaAdmitsTheErrorShape(t *testing.T) {
 	var minimal, withDiagnostics any
@@ -205,7 +205,6 @@ func TestServeSuccessResultsConformToDeclaredOutputSchema(t *testing.T) {
 		args map[string]any
 	}{
 		{"init", map[string]any{"path": projectDir}},
-		{"ai_skills", nil},
 		{"templates_list", nil},
 		{"metadata_plan", map[string]any{"path": projectDir}},
 		{"metadata_validate", map[string]any{"path": projectDir}},

@@ -10,6 +10,7 @@ import (
 func resetMetadataFlags() {
 	scaffoldWrite = false
 	scaffoldIdempotent = true
+	scaffoldSortKey = "005/"
 	validateJSON = false
 	planJSON = false
 }

@@ -20,7 +20,9 @@ Introduce versioned API contracts for pgmi's session-scoped interface (temp tabl
 
 Before this change, deploy.sql scripts referenced internal tables like `pg_temp.pgmi_source` directly. If pgmi changes the table structure, all user deploy.sql scripts break. By introducing versioned views as the public API, pgmi can evolve internally while maintaining backward compatibility.
 
-**Use case:** A CI/CD pipeline uses `pgmi deploy --compat=1`. When a later pgmi changes its internal tables, the pipeline's queries still resolve because pgmi provides the v1 names and columns. `--compat` does not pin behavior: plan ordering, which files load, and how deploy.sql is sent follow the binary version.
+**Use case:** A CI/CD pipeline uses `pgmi deploy --compat=1`. When a later pgmi changes its internal tables, the pipeline's queries still resolve because every v1 view names its columns. `--compat` does not pin behavior: plan ordering, which files load, and how deploy.sql is sent follow the binary version.
+
+**Pre-1.0 promise (supersedes "backward compatible" below):** before pgmi 1.0 the v1 contract may change in a minor release. Every change is listed under Upgrading in that release's notes, and `internal/contract/testdata/session-api.snapshot` makes each one a deliberate diff. No contract-version bump and no old contract files are kept for these changes.
 
 ---
 
@@ -32,7 +34,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 | View naming | `pgmi_*_view` suffix | Explicit, consistent with existing `pgmi_plan_view` |
 | Internal table naming | `_pgmi_*` underscore prefix | Convention: underscore = internal |
 | Default version | Latest stable | New users get best experience |
-| Deprecation policy | Names and columns stay backward compatible | No version removal; behavior follows the binary version |
+| Deprecation policy | Pre-1.0: may change in a minor release, listed under Upgrading | No version removal; behavior follows the binary version |
 | File naming | `api-v1.sql`, `api-v2.sql` | Major versions only, no semver in filenames |
 | `pgmi_plan_view` location | Moves to `api-v1.sql` | It's part of the public API, references internal tables |
 | Macro code generation | SQL function returns replacement code | Go calls `pgmi_test_generate()`, replaces macro with result |
@@ -233,7 +235,7 @@ Called by Go preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
-> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through `SELECT pg_temp.pgmi_run_test_source(path)`. See `internal/contract/api-v1.sql` for the working implementation.
+> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `internal/contract/api-v1.sql` for the working implementation.
 
 ### Updated Go Preprocessor Flow
 

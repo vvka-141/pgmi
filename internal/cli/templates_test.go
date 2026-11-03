@@ -79,7 +79,7 @@ func TestTemplateDescriptionContent(t *testing.T) {
 	}{
 		{
 			name:                "basic",
-			expectedShort:       "Linear migrations, minimal structure",
+			expectedShort:       "Two layers: run-once tables, re-run views and functions",
 			minFeatures:         3,
 			minStructureEntries: 2,
 		},

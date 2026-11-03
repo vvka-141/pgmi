@@ -12,7 +12,7 @@ weight: 70
 
 ```bash
 # Instead of:
-pgmi deploy . --database myapp --param env=development
+pgmi deploy . --database myapp --param env=dev
 
 # Just:
 pgmi deploy .
@@ -52,7 +52,7 @@ connection:
   google_instance: my-project:us-central1:my-instance
 
 params:                  # Key-value parameters passed to deploy.sql
-  env: development
+  env: dev
   max_connections: "100"
 
 timeout: 5m              # Deployment timeout (e.g., 30s, 5m, 1h)
@@ -103,6 +103,15 @@ connection:
   maintenance_database: admin_db
 ```
 
+## `.pgmiignore`
+
+`pgmi.yaml` configures how pgmi connects; `.pgmiignore` configures what it
+loads. It sits at the project root, uses `.gitignore` syntax, and adds to the
+built-in exclusions (dot-paths, `node_modules/`, `__pycache__/`). It only
+decides what enters the session; `deploy.sql` still decides what runs. Syntax,
+the `deploy.sql` rule and how ignored paths are reported:
+[what gets loaded](DEPLOY-GUIDE.md#pgmiignore).
+
 ## Precedence Chain
 
 ```
@@ -117,8 +126,10 @@ connection string.
 
 **`--connection` replaces the `connection:` block in `pgmi.yaml`; it does not
 merge with it.** The chain above is per-field for flags and environment
-variables, but a connection string is one value. Supplying it leaves every field
-it does not name at the built-in default, not at the `pgmi.yaml` value:
+variables, but a connection string is one value. Every field it does not name
+comes from its PG* variable (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLMODE`), as in libpq, then from the
+built-in default (`localhost:5432/postgres`), never from the `pgmi.yaml` value:
 
 ```yaml
 # pgmi.yaml
@@ -132,15 +143,19 @@ connection:
 
 ```bash
 # The string names only a host, so port, username, sslmode AND database
-# come from the built-in defaults — not from pgmi.yaml.
+# come from PG* variables or the built-in defaults — not from pgmi.yaml.
 pgmi deploy . --connection "postgresql://other.host"
-# → port 5432, sslmode prefer, and the target database is postgres, not myapp
+# → with no PG* set: port 5432, sslmode prefer, and the target database is postgres, not myapp
 ```
 
 This is deliberate: merging `sslmode: require` from `pgmi.yaml` into a string
 pointing at a *different* host would apply one host's trust policy to another.
 Name the fields you need in the string, or use `-d` and the granular flags,
-which do compose. Pinned by `TestResolveConnectionParams_ConnectionStringReplacesProjectConfig`.
+which do compose. Pinned by `TestResolveConnectionParams_ConnectionStringReplacesProjectConfig`
+and `TestResolveConnectionString_FillsOmittedFromEnvironment`.
+
+pgmi reads no libpq service files: `service=` in a connection string and a set
+`PGSERVICE` are refused with exit 10 rather than ignored.
 
 **The database name follows the same rule, and it surprises people.** A dbname in
 `PGMI_CONNECTION_STRING` or `DATABASE_URL` is an *environment* source, so it
@@ -202,11 +217,22 @@ The same rules apply to `--param key=value`, which also splits on the first
 
 ## Parameter Merging
 
-Parameters merge from three sources (later wins):
+Parameters merge from four sources (later wins):
 
 ```
-pgmi.yaml params < --params-file < --param
+pgmi.yaml params < PGMI_PARAM_* environment variables < --params-file < --param
 ```
+
+`PGMI_PARAM_<NAME>=value` becomes parameter `<name>`; no other environment
+variable is read, and an empty value exits 10 (a CI secret that failed to map).
+`--params-file -` reads the same `KEY=VALUE` format from stdin. For secrets, see
+[Security: pipeline patterns](SECURITY.md#pipeline-patterns).
+
+Keys compare case-insensitively, because the session stores them lower-cased:
+`Env` from `pgmi.yaml` and `--param env=prod` are one parameter, and the later
+source wins. Two keys differing only in case inside one source — one
+`pgmi.yaml` `params:` block, the `PGMI_PARAM_*` variables, or one params file —
+have no defined order, so pgmi rejects them before connecting (exit 10).
 
 Example:
 
@@ -217,11 +243,11 @@ log_level=info
 
 # pgmi.yaml
 params:
-  env: development
+  env: dev
   feature_flag: "true"
 
 # CLI
-# --param env=production
+# --param env=prod
 ```
 
 Result:
@@ -229,7 +255,7 @@ Result:
 |-----|-------|--------|
 | `log_level` | `info` | params-file |
 | `feature_flag` | `true` | pgmi.yaml |
-| `env` | `production` | --param (wins) |
+| `env` | `prod` | --param (wins) |
 
 ## Timeout Behavior
 
@@ -271,7 +297,7 @@ connection:
   sslmode: prefer
 
 params:
-  env: development
+  env: dev
 
 timeout: 3m
 ```
@@ -288,8 +314,10 @@ connection:
 timeout: 5m
 ```
 
-`env` is required and deliberately absent: pass `--param env=dev` for a local
-database, or put `env` and `database_admin_password` in a params file.
+`env` (`dev`, `test` or `prod`) is required and deliberately absent: pass
+`--param env=dev` for a local database, or put `env` and
+`database_admin_password` in a params file. The database remembers its `env` and
+refuses a redeploy that names another.
 
 ## Common Patterns
 
@@ -301,7 +329,7 @@ connection:
   database: myapp_dev
 
 params:
-  env: development
+  env: dev
 ```
 
 ```bash
@@ -341,14 +369,14 @@ connection:
   sslmode: require
 
 params:
-  env: development
+  env: dev
 
 timeout: 5m
 ```
 
 ```yaml
 # GitHub Actions — override per environment
-- run: pgmi deploy . -d ${{ vars.DATABASE_NAME }} --param env=production --timeout 15m
+- run: pgmi deploy . -d ${{ vars.DATABASE_NAME }} --param env=prod --timeout 15m
   env:
     PGMI_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
 ```
@@ -364,13 +392,13 @@ connection:
   sslmode: require
 
 params:
-  env: development
+  env: dev
 ```
 
 ```bash
 # Staging
-pgmi deploy . -d myapp_staging --param env=staging
+pgmi deploy . -d myapp_test --param env=test
 
 # Production
-pgmi deploy . -d myapp_prod --param env=production --timeout 30m
+pgmi deploy . -d myapp_prod --param env=prod --timeout 30m
 ```

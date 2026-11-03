@@ -37,15 +37,17 @@ var serveCmd = &cobra.Command{
 
 MCP-capable assistants (Claude Code, OpenCode) can use pgmi natively instead of
 spawning a subprocess and parsing text. The tools map 1:1 to existing CLI
-commands — no new deployment semantics. Connection and parameters are passed per
-tool call, never stored in server state.
+commands — no new deployment semantics. deploy resolves its connection,
+database, timeout and parameters like pgmi deploy: tool arguments, then the
+server's environment, then the project's pgmi.yaml. The project .env is not
+read. Nothing from one call is stored in server state.
 
 Add it to Claude Code with:
 
   claude mcp add pgmi -- pgmi serve
 
 Tools: deploy, init, metadata_plan, metadata_validate, templates_list,
-ai_overview, ai_skills, ai_skill, ai_contract.
+ai_overview, ai_contract.
 
 The server reads JSON-RPC from stdin and writes responses to stdout; all
 diagnostics go to stderr. It exits cleanly on EOF or SIGINT.
@@ -75,12 +77,15 @@ func runServe(_ *cobra.Command, _ []string) error {
 // comes from resolveVersionInfo, not the raw `version` var, which stays "dev"
 // on a `go install` build until debug.ReadBuildInfo fills it in — the handshake
 // is all an MCP client gets to identify the binary it is driving.
+var readOnlyTool = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
+
 func buildMCPServer() *mcp.Server {
 	v, _, _ := resolveVersionInfo()
 	s := mcp.NewServer("pgmi", v)
 
 	s.Register(mcp.Tool{
 		Name:        "ai_overview",
+		Annotations: readOnlyTool,
 		Description: "Return the pgmi overview for AI assistants (what pgmi is, core model, CLI reference).",
 		Handler: func(context.Context, json.RawMessage) (any, error) {
 			return ai.GetOverview()
@@ -88,40 +93,8 @@ func buildMCPServer() *mcp.Server {
 	})
 
 	s.Register(mcp.Tool{
-		Name:         "ai_skills",
-		Description:  "List the embedded pgmi skills (name + description) available via ai_skill.",
-		OutputSchema: skillsOutputSchema(),
-		Handler: func(context.Context, json.RawMessage) (any, error) {
-			skills, err := ai.ListSkills()
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"skills": skills}, nil
-		},
-	})
-
-	s.Register(mcp.Tool{
-		Name:        "ai_skill",
-		Description: "Return the full content of a named pgmi skill (e.g. pgmi-sql, pgmi-handler-patterns).",
-		InputSchema: objectSchema(map[string]any{
-			"name": stringProp("Skill name, e.g. pgmi-sql"),
-		}, "name"),
-		Handler: func(_ context.Context, raw json.RawMessage) (any, error) {
-			a, err := decodeArgs[struct {
-				Name string `json:"name"`
-			}](raw)
-			if err != nil {
-				return nil, err
-			}
-			if a.Name == "" {
-				return nil, errors.New("name is required")
-			}
-			return ai.GetSkill(a.Name)
-		},
-	})
-
-	s.Register(mcp.Tool{
 		Name:        "ai_contract",
+		Annotations: readOnlyTool,
 		Description: "Return the pgmi session API contract (views, functions, exit codes, test macros) as JSON.",
 		Handler: func(context.Context, json.RawMessage) (any, error) {
 			return ai.GetContractJSON()
@@ -130,6 +103,7 @@ func buildMCPServer() *mcp.Server {
 
 	s.Register(mcp.Tool{
 		Name:         "templates_list",
+		Annotations:  readOnlyTool,
 		Description:  "List the available pgmi project templates (basic, advanced) with descriptions.",
 		OutputSchema: templatesOutputSchema(),
 		Handler: func(context.Context, json.RawMessage) (any, error) {
@@ -152,6 +126,7 @@ func buildMCPServer() *mcp.Server {
 
 	s.Register(mcp.Tool{
 		Name:        "metadata_plan",
+		Annotations: readOnlyTool,
 		Description: "Return, without a database, the rows pgmi_plan_view will hold at deploy time: each file once per sort key, in execution order.",
 		InputSchema: objectSchema(map[string]any{
 			"path": stringProp("Path to the pgmi project directory"),
@@ -173,6 +148,7 @@ func buildMCPServer() *mcp.Server {
 
 	s.Register(mcp.Tool{
 		Name:        "metadata_validate",
+		Annotations: readOnlyTool,
 		Description: "Validate a project's <pgmi-meta> blocks (XML validity and duplicate-id check). Filesystem-only, no database.",
 		InputSchema: objectSchema(map[string]any{
 			"path": stringProp("Path to the pgmi project directory"),
@@ -194,6 +170,7 @@ func buildMCPServer() *mcp.Server {
 
 	s.Register(mcp.Tool{
 		Name:        "init",
+		Annotations: &mcp.ToolAnnotations{},
 		Description: "Scaffold a new pgmi project from a template into an empty or new directory.",
 		InputSchema: objectSchema(map[string]any{
 			"path":     stringProp("Target directory for the new project"),
@@ -220,7 +197,11 @@ func buildMCPServer() *mcp.Server {
 			if !scaffold.IsValidTemplate(tmpl) {
 				return nil, fmt.Errorf("%w: unknown template: %s", pgmi.ErrUsage, tmpl)
 			}
-			if err := scaffold.NewScaffolder(false).WithVersion(scaffoldVersion()).CreateProject(a.Name, tmpl, a.Path); err != nil {
+			name := a.Name
+			if name == "" {
+				name = defaultProjectName(a.Path)
+			}
+			if err := scaffold.NewScaffolder(false).WithVersion(scaffoldVersion()).CreateProject(name, tmpl, a.Path); err != nil {
 				return nil, err
 			}
 			return map[string]any{"created": true, "path": a.Path, "template": tmpl}, nil
@@ -228,26 +209,37 @@ func buildMCPServer() *mcp.Server {
 	})
 
 	s.Register(mcp.Tool{
-		Name: "deploy",
+		Name:        "deploy",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: true, OpenWorldHint: true},
+		Summary:     deploySummary,
 		Description: "Run a pgmi deployment against a database and return the structured result. " +
-			"Provide a connection string and target database; pass secrets here, never on a shared command line. " +
-			"overwrite=true DROPS the target database: it additionally requires confirmDatabaseName to equal database.",
+			"Resolves like `pgmi deploy`: arguments override the server's environment (PGMI_CONNECTION_STRING, DATABASE_URL, PG*), " +
+			"which overrides the project's pgmi.yaml (connection, params, timeout). Keep secrets in the environment (PGMI_PARAM_<NAME> becomes parameter <name>, below a params file) or a params file, not in arguments. " +
+			"overwrite=true DROPS the target database: it additionally requires confirmDatabaseName to equal the resolved database.",
 		InputSchema: objectSchema(map[string]any{
 			"path":       stringProp("Path to the pgmi project directory (contains deploy.sql)"),
-			"connection": stringProp("PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET"),
-			"database":   stringProp("Target database name"),
+			"connection": stringProp("PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET. Default: environment, then pgmi.yaml"),
+			"database":   stringProp("Target database name. Default: the connection's database, then pgmi.yaml"),
 			"overwrite":  boolProp("Drop and recreate the target database before deploying (destructive)"),
 			"confirmDatabaseName": stringProp(
 				"Required when overwrite=true: repeat the target database name exactly. " +
 					"A mismatch aborts before any connection is made."),
-			"timeout":             stringProp("Catastrophic-failure timeout, e.g. \"3m\" (default 3m). Use \"0\" for no limit"),
-			"maintenanceDatabase": stringProp("Database used for CREATE/DROP DATABASE (default \"postgres\")"),
+			"timeout":             stringProp("Catastrophic-failure timeout, e.g. \"3m\" (default: pgmi.yaml, then 3m). Use \"0\" for no limit"),
+			"maintenanceDatabase": stringProp("Database used for CREATE/DROP DATABASE (default: resolved like pgmi deploy, usually \"postgres\")"),
+			"verbose":             boolProp("Like pgmi deploy -v: RAISE DEBUG from deploy.sql and tests reaches notices"),
+			"paramsFile": map[string]any{
+				"description": "Params file path (KEY=VALUE lines), or an array of them; later files win, like --params-file. Stdin (-) is not accepted",
+				"anyOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			},
 			"params": map[string]any{
 				"type":                 "object",
-				"description":          "Deployment parameters, available as current_setting('pgmi.key')",
+				"description":          "Deployment parameters, available as current_setting('pgmi.key'); override paramsFile and pgmi.yaml, like --param",
 				"additionalProperties": map[string]any{"type": "string"},
 			},
-		}, "path", "connection", "database"),
+		}, "path"),
 		OutputSchema: deployOutputSchema(),
 		Handler:      mcpDeployHandler,
 	})
@@ -262,20 +254,23 @@ type notice struct {
 
 // noticeBuffer captures the notice stream of a deploy for the MCP tool result
 // while still forwarding to stderr for the human operator. Bounded: it keeps
-// the first head and last tail notices, and every WARNING in between, because
-// a long deploy's warnings (a defaulted password, a skipped step) sit in the
-// middle and are what the agent most needs to see.
+// the first head and last tail notices, and up to maxWarnings WARNINGs in
+// between, because a long deploy's warnings (a defaulted password, a skipped
+// step) sit in the middle and are what the agent most needs to see.
 type noticeBuffer struct {
-	mu       sync.Mutex
-	head     int
-	tail     int
-	first    []notice
-	warnings []notice
-	last     []notice
-	total    int
+	mu          sync.Mutex
+	head        int
+	tail        int
+	maxWarnings int
+	first       []notice
+	warnings    []notice
+	last        []notice
+	total       int
 }
 
-func newNoticeBuffer() *noticeBuffer { return &noticeBuffer{head: 50, tail: 150} }
+func newNoticeBuffer() *noticeBuffer {
+	return &noticeBuffer{head: 50, tail: 150, maxWarnings: 200}
+}
 
 func (b *noticeBuffer) add(severity, message, detail, hint string) {
 	b.mu.Lock()
@@ -287,7 +282,7 @@ func (b *noticeBuffer) add(severity, message, detail, hint string) {
 	default:
 		b.last = append(b.last, n)
 		if len(b.last) > b.tail {
-			if b.last[0].Severity == "WARNING" {
+			if b.last[0].Severity == "WARNING" && len(b.warnings) < b.maxWarnings {
 				b.warnings = append(b.warnings, b.last[0])
 			}
 			b.last = b.last[1:]
@@ -311,17 +306,87 @@ func (b *noticeBuffer) fields() map[string]any {
 	return f
 }
 
+// stringList accepts a JSON string or an array of strings.
+type stringList []string
+
+func (l *stringList) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*l = stringList{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return errors.New("must be a string or an array of strings")
+	}
+	*l = many
+	return nil
+}
+
+type mcpDeployArgs struct {
+	Path                string            `json:"path"`
+	Connection          string            `json:"connection"`
+	Database            string            `json:"database"`
+	Overwrite           bool              `json:"overwrite"`
+	ConfirmDatabaseName string            `json:"confirmDatabaseName"`
+	Timeout             string            `json:"timeout"`
+	MaintenanceDatabase string            `json:"maintenanceDatabase"`
+	ParamsFile          stringList        `json:"paramsFile"`
+	Params              map[string]string `json:"params"`
+	Verbose             bool              `json:"verbose"`
+}
+
+// mcpDeploymentConfig resolves the deploy tool's arguments exactly as
+// `pgmi deploy` resolves its flags. The project .env is not loaded: serve is
+// long-lived and godotenv writes the process environment, so one project's
+// credentials would leak into the next project's deploy.
+func mcpDeploymentConfig(a mcpDeployArgs) (pgmi.DeploymentConfig, error) {
+	if a.Path == "" {
+		return pgmi.DeploymentConfig{}, fmt.Errorf("%w: path is required", pgmi.ErrInvalidConfig)
+	}
+	projectCfg, err := loadProjectYAML(a.Path)
+	if err != nil {
+		return pgmi.DeploymentConfig{}, err
+	}
+
+	req := deployRequest{
+		conn:                connectionFlags{connection: a.Connection, database: a.Database},
+		overwrite:           a.Overwrite,
+		force:               a.Overwrite,
+		paramsFiles:         a.ParamsFile,
+		environ:             os.Environ(),
+		timeout:             mcpDeployDefaultTimeout,
+		maintenanceDatabase: a.MaintenanceDatabase,
+		announceEnvSource:   true,
+		verbose:             a.Verbose,
+	}
+	if a.Timeout != "" {
+		if req.timeout, err = time.ParseDuration(a.Timeout); err != nil {
+			return pgmi.DeploymentConfig{}, fmt.Errorf("%w: invalid timeout: %w", pgmi.ErrInvalidConfig, err)
+		}
+		req.timeoutSet = true
+	}
+	if err := loader.ValidateParameters(a.Params); err != nil {
+		return pgmi.DeploymentConfig{}, err
+	}
+	for _, k := range slices.Sorted(maps.Keys(a.Params)) {
+		req.params = append(req.params, k+"="+a.Params[k])
+	}
+
+	cfg, err := resolveDeploymentConfig(a.Path, projectCfg, req)
+	if err != nil {
+		return pgmi.DeploymentConfig{}, err
+	}
+	return cfg, cfg.Validate()
+}
+
 func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
-	a, err := decodeArgs[struct {
-		Path                string            `json:"path"`
-		Connection          string            `json:"connection"`
-		Database            string            `json:"database"`
-		Overwrite           bool              `json:"overwrite"`
-		ConfirmDatabaseName string            `json:"confirmDatabaseName"`
-		Timeout             string            `json:"timeout"`
-		MaintenanceDatabase string            `json:"maintenanceDatabase"`
-		Params              map[string]string `json:"params"`
-	}](raw)
+	a, err := decodeArgs[mcpDeployArgs](raw)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := mcpDeploymentConfig(a)
 	if err != nil {
 		return nil, err
 	}
@@ -329,34 +394,7 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 	// overwrite drops the database and this path auto-approves (no TTY to prompt).
 	// The echo-back is the only friction between a hallucinated database name and
 	// a destroyed database, so it is checked before anything connects.
-	if err := confirmOverwrite(a.Overwrite, a.Database, a.ConfirmDatabaseName); err != nil {
-		return nil, err
-	}
-
-	timeout := mcpDeployDefaultTimeout
-	if a.Timeout != "" {
-		timeout, err = time.ParseDuration(a.Timeout)
-		if err != nil {
-			return nil, errors.New("invalid timeout: " + err.Error())
-		}
-	}
-
-	maintenanceDB := a.MaintenanceDatabase
-	if maintenanceDB == "" {
-		maintenanceDB = "postgres"
-	}
-
-	cfg := pgmi.DeploymentConfig{
-		SourcePath:          a.Path,
-		DatabaseName:        a.Database,
-		MaintenanceDatabase: maintenanceDB,
-		ConnectionString:    a.Connection,
-		Overwrite:           a.Overwrite,
-		Force:               a.Overwrite, // non-interactive; auto-approve the drop
-		Parameters:          a.Params,
-		Timeout:             timeout,
-	}
-	if err := cfg.Validate(); err != nil {
+	if err := confirmOverwrite(a.Overwrite, cfg.DatabaseName, a.ConfirmDatabaseName); err != nil {
 		return nil, err
 	}
 
@@ -364,7 +402,7 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 	// otherwise run concurrently, which is what lets ping and cancellation
 	// reach the server while a deploy runs.
 	if !mcpDeployMu.TryLock() {
-		return nil, errors.New("another deploy is already running in this pgmi serve session; wait for its result, or cancel it")
+		return nil, fmt.Errorf("%w: another deploy is already running in this pgmi serve session; wait for its result, or cancel it", pgmi.ErrConcurrentDeploy)
 	}
 	defer mcpDeployMu.Unlock()
 
@@ -373,8 +411,9 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 	db.NoticeHandler = notices.add
 	defer func() { db.NoticeHandler = origHandler }()
 
+	prov := deployProvenance{startedAt: time.Now(), compat: cfg.Compat, target: targetOf(cfg)}
 	result, err := runMCPDeploy(ctx, cfg)
-	out := deployResultFields(result, err)
+	out := deployResultFields(result, err, prov)
 	maps.Copy(out, notices.fields())
 	if err != nil {
 		return nil, &mcp.FieldsError{Err: err, Fields: out}
@@ -383,6 +422,26 @@ func mcpDeployHandler(ctx context.Context, raw json.RawMessage) (any, error) {
 }
 
 var mcpDeployMu sync.Mutex
+
+// deploySummary is the text of a successful deploy: one line, the whole record
+// is in structuredContent.
+func deploySummary(result any) string {
+	out, _ := result.(map[string]any)
+	warnings := 0
+	notices, _ := out["notices"].([]notice)
+	for _, n := range notices {
+		if n.Severity == "WARNING" {
+			warnings++
+		}
+	}
+	return fmt.Sprintf("deployed %v: %v files loaded, %v paths ignored, %d notices (%d warnings) in %vms; the full record is in structuredContent",
+		out["database"], out["filesLoaded"], out["pathsIgnored"], len(notices)+toInt(out["noticesTruncated"]), warnings, out["durationMs"])
+}
+
+func toInt(v any) int {
+	n, _ := v.(int)
+	return n
+}
 
 // confirmOverwrite gates the destructive path on an exact echo-back of the target
 // database name. An agent that hallucinated the name cannot also hallucinate the
@@ -412,13 +471,14 @@ func runMCPDeploy(ctx context.Context, cfg pgmi.DeploymentConfig) (*services.Dep
 	fileScanner := scanner.NewScanner(checksum.New())
 	fileLoader := loader.NewLoader()
 	dbManager := manager.New()
-	sessionManager := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	pgmiVersion, _, _ := resolveVersionInfo()
+	sessionManager := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger, pgmiVersion)
 	deployer := services.NewDeploymentService(db.NewConnector, autoApprover{}, logger, sessionManager, dbManager)
 
 	ctx, cancel := deadlineContext(ctx, cfg.Timeout)
 	defer cancel()
 
-	err := deployer.Deploy(ctx, cfg)
+	err := timeoutExceeded(ctx, deployer.Deploy(ctx, cfg), cfg.Timeout)
 	return deployer.LastResult(), err
 }
 
@@ -467,7 +527,7 @@ func arrayOf(items map[string]any, description string) map[string]any {
 }
 
 // Output schemas. Declared only for tools whose result is a structured value —
-// ai_overview, ai_skill and ai_contract return markdown/JSON text and produce no
+// ai_overview and ai_contract return markdown/JSON text and produce no
 // structuredContent, so advertising a schema for them would be a lie the spec
 // forbids.
 //
@@ -489,30 +549,22 @@ func withErrorVariant(success map[string]any) map[string]any {
 // permitted: a failed deploy folds its notice stream in beside these fields.
 func errorOutputSchema() map[string]any {
 	return objectSchema(map[string]any{
-		"message":        stringProp("Human-readable failure summary"),
-		"exitCode":       intProp("Exit code the CLI would return for this failure"),
-		"sqlstate":       stringProp("PostgreSQL SQLSTATE, when the failure came from the server"),
-		"detail":         stringProp("PostgreSQL DETAIL"),
-		"hint":           stringProp("PostgreSQL HINT"),
-		"where":          stringProp("PostgreSQL WHERE context"),
-		"failedFile":     stringProp("Project file the template attributed the failure to"),
-		"script":         stringProp("Script pgmi executed, when a position was reported"),
+		"message":    stringProp("Human-readable failure summary"),
+		"exitCode":   intProp("Exit code the CLI would return for this failure"),
+		"sqlstate":   stringProp("PostgreSQL SQLSTATE, when the failure came from the server"),
+		"detail":     stringProp("PostgreSQL DETAIL"),
+		"hint":       stringProp("PostgreSQL HINT"),
+		"where":      stringProp("PostgreSQL WHERE context"),
+		"failedFile": stringProp("Project file the template attributed the failure to"),
+		"failedFileCandidates": arrayOf(stringProp("SQL file path"),
+			"Every SQL file holding the failing text, when more than one does; failedFile is the first"),
+		"phase":          stringProp("test when the failure is in a test or fixture under __test__/, deploy for any other failure of deploy.sql"),
+		"script":         stringProp("The file the failure was placed in: a project or test file, or deploy.sql"),
 		"line":           intProp("Line within that script"),
 		"column":         intProp("Column within that line"),
 		"sourceLine":     stringProp("Text of the offending line"),
 		"scriptExpanded": boolProp("True when line refers to the macro-expanded script, not the file on disk"),
 	}, "message", "exitCode")
-}
-
-func skillsOutputSchema() map[string]any {
-	return withErrorVariant(objectSchema(map[string]any{
-		"skills": arrayOf(objectSchema(map[string]any{
-			"name":        stringProp("Skill name, pass to ai_skill"),
-			"description": stringProp("What the skill covers"),
-			"scope":       stringProp("Skill scope: core, advanced-template, or contributor"),
-			"filePath":    stringProp("Path of the skill inside the embedded content tree"),
-		}, "name", "description"), "Embedded pgmi skills"),
-	}, "skills"))
 }
 
 func templatesOutputSchema() map[string]any {
@@ -547,6 +599,9 @@ func metadataValidateOutputSchema() map[string]any {
 		"filesWithoutMetadata": intProp("Files with no metadata (ordered by path)"),
 		"validationPassed":     boolProp("True when every block parses and ids are unique"),
 		"duplicateIds":         arrayOf(stringProp("Duplicated <pgmi-meta> id"), "Ids claimed by more than one file"),
+		"warnings":             arrayOf(stringProp("A file whose <pgmi-meta> is never read"), "Non-fatal findings, such as a -- <pgmi-meta> line comment"),
+		"error":                stringProp("Why validation failed, when it did"),
+		"exitCode":             intProp("Exit code the CLI returns for the failure"),
 	}, "totalFiles", "validationPassed"))
 }
 
@@ -560,9 +615,14 @@ func initOutputSchema() map[string]any {
 
 func deployOutputSchema() map[string]any {
 	return withErrorVariant(objectSchema(map[string]any{
-		"status":         stringProp("\"success\" — a failure is returned as an MCP error result"),
-		"exitCode":       intProp("The exit code `pgmi deploy` would have returned"),
-		"filesLoaded":    intProp("Project files loaded into the session"),
+		"status":       stringProp("\"success\" — a failure is returned as an MCP error result"),
+		"exitCode":     intProp("The exit code `pgmi deploy` would have returned"),
+		"filesLoaded":  intProp("Project files loaded into the session"),
+		"pathsIgnored": intProp("Paths left out by the built-in exclusions and .pgmiignore; an ignored directory counts once"),
+		"ignoredPaths": arrayOf(objectSchema(map[string]any{
+			"path": stringProp("The ignored path in ./ form; a directory ends with /"),
+			"rule": stringProp("built-in or .pgmiignore"),
+		}, "path", "rule"), "Each ignored path and the rule that left it out"),
 		"testMacros":     intProp("pgmi_test() macros expanded in deploy.sql"),
 		"durationMs":     intProp("Deployment wall time in milliseconds"),
 		"database":       stringProp("Target database"),
@@ -572,8 +632,8 @@ func deployOutputSchema() map[string]any {
 		"notices": arrayOf(objectSchema(map[string]any{
 			"severity": stringProp("NOTICE, WARNING, INFO, ..."),
 			"message":  stringProp("The notice text"),
-		}, "severity", "message"), "The deploy's notice stream: the first 50, every WARNING, and the last 150"),
-		"noticesTruncated": intProp("Notices dropped from the middle of the stream; absent when none were"),
+		}, "severity", "message"), "The deploy's notice stream: the first 50, up to 200 WARNINGs from the middle, and the last 150"),
+		"noticesTruncated": intProp("Notices dropped from the middle of the stream, WARNINGs beyond the first 200 included; absent when none were"),
 	}, "status", "exitCode", "filesLoaded", "database"))
 }
 

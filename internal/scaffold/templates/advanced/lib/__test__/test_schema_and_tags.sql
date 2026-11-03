@@ -47,10 +47,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_rest_handler_id,
-            'uri', '^/schema-rest$',
+            'path', '/schema-rest',
             'httpMethod', '^GET$',
             'name', 'schema_rest_test',
-            'requiresAuth', false,
+            'access', 'public',
             'outputSchema', jsonb_build_object(
                 'type', 'object',
                 'properties', jsonb_build_object(
@@ -69,7 +69,7 @@ END;
     SELECT output_json_schema::jsonb INTO v_stored_schema
     FROM api.handler WHERE object_id = v_rest_handler_id;
 
-    IF v_stored_schema IS NULL OR NOT v_stored_schema ? 'properties' THEN
+    IF v_stored_schema IS NULL OR (v_stored_schema ? 'properties') IS NOT TRUE THEN
         RAISE EXCEPTION 'REST output_json_schema not persisted: %', v_stored_schema;
     END IF;
 
@@ -78,7 +78,7 @@ END;
     v_http_response := api.rest_invoke('GET', '/schema-rest', ''::extensions.hstore, NULL::bytea);
     v_response_body := api.content_json((v_http_response).content);
 
-    IF NOT v_response_body ? '$schema' THEN
+    IF (v_response_body ? '$schema') IS NOT TRUE THEN
         RAISE EXCEPTION 'REST response missing $schema key (x-include-schema=true): %', v_response_body;
     END IF;
 
@@ -96,7 +96,7 @@ END;
         jsonb_build_object(
             'id', v_rpc_handler_id,
             'methodName', 'schema.rpc.test',
-            'requiresAuth', false,
+            'access', 'public',
             'outputSchema', jsonb_build_object(
                 'type', 'object',
                 'properties', jsonb_build_object(
@@ -141,10 +141,10 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', v_mcp_handler_a,
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'schema_tool_alpha',
             'description', 'Alpha schema test tool',
-            'requiresAuth', false,
+            'access', 'public',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'outputSchema', jsonb_build_object(
                 'type', 'object',
@@ -167,10 +167,10 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', v_mcp_handler_b,
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'schema_tool_beta',
             'description', 'Beta schema test tool',
-            'requiresAuth', false,
+            'access', 'public',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
             'tags', jsonb_build_array('beta', 'schema-test')
         ),
@@ -263,10 +263,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/schema-case$',
+            'path', '/schema-case',
             'httpMethod', '^GET$',
             'name', 'schema_case_test',
-            'requiresAuth', false,
+            'access', 'public',
             'outputSchema', jsonb_build_object(
                 'type', 'object',
                 'properties', jsonb_build_object('ok', jsonb_build_object('type', 'boolean'))
@@ -283,7 +283,7 @@ END;
     v_response := api.rest_invoke('GET', '/schema-case', ''::extensions.hstore, NULL::bytea);
     v_body := api.content_json((v_response).content);
 
-    IF NOT v_body ? '$schema' THEN
+    IF (v_body ? '$schema') IS NOT TRUE THEN
         RAISE EXCEPTION 'mixed-case X-Include-Schema:TRUE must trigger $schema injection: %', v_body;
     END IF;
 
@@ -297,8 +297,8 @@ END;
 END $$;
 
 -- ============================================================================
--- Test: auth-required tools are hidden from mcp_list_tools when auth.user_id
--- is unset; static resources emit `uri`, templated ones emit `uriTemplate`
+-- Test: auth-required tools are hidden from mcp_list_tools without a principal;
+-- static resources emit `uri`, templated ones emit `uriTemplate`
 -- ============================================================================
 
 DO $$
@@ -313,11 +313,11 @@ BEGIN
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', v_auth_tool_id,
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'auth_only_probe',
             'description', 'Requires auth — should be hidden when unauthenticated',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
-            'requiresAuth', true
+            'access', 'authenticated'
         ),
         $body$
 BEGIN
@@ -327,8 +327,7 @@ END;
     );
 
     -- Ensure no session auth is carried over from earlier tests
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     v_list := api.mcp_list_tools();
     IF EXISTS (
@@ -340,8 +339,7 @@ END;
 
     -- A well-formed identity that resolves to nothing must stay unauthenticated
     -- for discovery too, or a forged header enumerates the auth-gated catalog.
-    PERFORM set_config('auth.user_id', 'test|ghost-probe', true);
-    PERFORM set_config('auth.idp_subject', 'test|ghost-probe', true);
+    PERFORM pg_temp.test_act_as('test|ghost-probe');
 
     v_list := api.mcp_list_tools();
     IF EXISTS (
@@ -351,9 +349,8 @@ END;
         RAISE EXCEPTION 'auth_only_probe must stay hidden from an unresolvable identity: %', v_list;
     END IF;
 
-    PERFORM membership.upsert_user('test', 'schemaprobe', 'schema-probe@example.com');
-    PERFORM set_config('auth.user_id', 'test|schemaprobe', true);
-    PERFORM set_config('auth.idp_subject', 'test|schemaprobe', true);
+    PERFORM pg_temp.test_login('test', 'schemaprobe', 'schema-probe@example.test', NULL, true);
+    PERFORM pg_temp.test_act_as('test|schemaprobe');
 
     v_list := api.mcp_list_tools();
     IF NOT EXISTS (
@@ -363,8 +360,7 @@ END;
         RAISE EXCEPTION 'auth_only_probe must appear for a resolved user: %', v_list;
     END IF;
 
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     RAISE NOTICE '  + mcp_list_tools hides auth-required tools when unauthenticated';
 
@@ -376,7 +372,7 @@ END;
             'description', 'Static resource (no placeholders)',
             'uriTemplate', 'postgres:///catalog',
             'mimeType', 'application/json',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -400,7 +396,7 @@ END;
             'description', 'Templated resource (has {placeholder})',
             'uriTemplate', 'postgres:///docs/{doc_id}',
             'mimeType', 'application/json',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -465,9 +461,9 @@ END $$;
 -- Test: the same discovery auth filter on resources, templates, prompts, and OpenAPI
 -- ============================================================================
 -- api.mcp_list_{tools,resources,resource_templates,prompts} all carry the same
--- predicate — NOT requires_auth OR current_user_id() IS NOT NULL — but only
--- tools was covered. The two resource assertions above register their fixtures
--- with requiresAuth false, so they pass whatever the filter does.
+-- predicate — internal.current_access_denial(...) IS NULL — but only tools
+-- was covered. The two resource assertions above register their fixtures with
+-- access public, so they pass whatever the filter does.
 --
 -- Unfiltered, MCP discovery hands an unauthenticated caller the names,
 -- descriptions, resource URIs and prompt argument lists of everything it is not
@@ -486,7 +482,7 @@ BEGIN
             'type', 'resource', 'name', 'auth_only_resource',
             'description', 'Auth-required static resource',
             'uriTemplate', 'postgres:///secret-catalog',
-            'mimeType', 'application/json', 'requiresAuth', true),
+            'mimeType', 'application/json', 'access', 'authenticated'),
         $body$
 BEGIN
     RETURN api.mcp_resource_result(
@@ -501,7 +497,7 @@ END;
             'type', 'resource', 'name', 'auth_only_template',
             'description', 'Auth-required templated resource',
             'uriTemplate', 'postgres:///secret-docs/{doc_id}',
-            'mimeType', 'application/json', 'requiresAuth', true),
+            'mimeType', 'application/json', 'access', 'authenticated'),
         $body$
 BEGIN
     RETURN api.mcp_resource_result(
@@ -517,7 +513,7 @@ END;
             'description', 'Auth-required prompt',
             'arguments', jsonb_build_array(jsonb_build_object(
                 'name', 'secret_arg', 'description', 'Should not leak', 'required', true)),
-            'requiresAuth', true),
+            'access', 'authenticated'),
         $body$
 BEGIN
     RETURN api.mcp_prompt_result(
@@ -530,8 +526,8 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'e3000011-0004-4000-8000-000000000001',
-            'uri', '^/secret-catalog$', 'httpMethod', '^GET$',
-            'name', 'auth_only_route', 'requiresAuth', true),
+            'path', '/secret-catalog', 'httpMethod', '^GET$',
+            'name', 'auth_only_route', 'access', 'authenticated'),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
 
     FOR v_state IN
@@ -547,10 +543,9 @@ END;
         v_expect := v_state.expect_visible;
 
         IF v_expect THEN
-            PERFORM membership.upsert_user('test', 'mcpdiscovery', 'mcp-discovery@example.com');
+            PERFORM pg_temp.test_login('test', 'mcpdiscovery', 'mcp-discovery@example.test', NULL, true);
         END IF;
-        PERFORM set_config('auth.user_id', v_state.subject, true);
-        PERFORM set_config('auth.idp_subject', v_state.subject, true);
+        PERFORM pg_temp.test_act_as(v_state.subject);
 
         FOR v_surface IN
             SELECT * FROM (VALUES
@@ -575,8 +570,7 @@ END;
         END LOOP;
     END LOOP;
 
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     RAISE NOTICE '  + resources, resource templates, prompts and the OpenAPI document all hide auth-required entries';
     RAISE NOTICE '✓ MCP discovery auth filter tests passed';
@@ -597,10 +591,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/headers-probe$',
+            'path', '/headers-probe',
             'httpMethod', '^GET$',
             'name', 'headers_probe',
-            'requiresAuth', false,
+            'access', 'public',
             'responseHeaders', jsonb_build_object(
                 'X-Content-Type-Options', 'nosniff',
                 'X-Frame-Options', 'DENY',
@@ -641,8 +635,8 @@ END;
         PERFORM api.create_or_replace_rest_handler(
             jsonb_build_object(
                 'id', 'dddddddd-0188-4000-8000-0000000000ab',
-                'uri', '^/mixedcase-ct$', 'httpMethod', '^GET$',
-                'name', 'mixedcase_ct_probe', 'requiresAuth', false, 'autoLog', false
+                'path', '/mixedcase-ct', 'httpMethod', '^GET$',
+                'name', 'mixedcase_ct_probe', 'access', 'public', 'autoLog', false
             ),
             $body$
 DECLARE v api.http_response;

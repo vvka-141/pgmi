@@ -1,45 +1,31 @@
 -- ============================================================================
--- API Test Fixture: Pre-Provisioned Users and Organizations
+-- API Test Fixture: people and an organization, written through the kernels
 -- ============================================================================
--- Creates a realistic scenario for testing authenticated API endpoints:
---
---   Alice (owner)  ─┬─ Personal org (auto-created)
---                   └─ "Acme Corp" org (team org, Alice is admin)
---                          └── Bob (contributor member)
---
---   Bob (member)   ─── Personal org (auto-created)
+--   Alice (google|alice-api-test) - owns "Acme Corp"
+--   Bob   (github|bob-api-test)   - org.member of Acme Corp
 --
 -- Session variables set by this fixture:
---   test.alice_subject   →  'google|alice-api-test'
---   test.bob_subject     →  'github|bob-api-test'
---   test.acme_org_id     →  UUID of Acme Corp
+--   test.alice_subject   ->  'google|alice-api-test'
+--   test.bob_subject     ->  'github|bob-api-test'
+--   test.acme_org_id     ->  UUID of Acme Corp
+-- Two OIDC issuers for the sign-in tests: https://idp.example.com and
+-- https://other-idp.example.com.
 -- ============================================================================
+
+INSERT INTO membership.identity_issuer (id, kind)
+VALUES ('google', 'development'), ('github', 'development'), ('samlp', 'development'),
+       ('https://idp.example.com', 'oidc'), ('https://other-idp.example.com', 'oidc')
+ON CONFLICT (id) DO NOTHING;
 
 DO $$
 DECLARE
-    v_alice_id UUID;
-    v_bob_id UUID;
-    v_acme_id UUID;
+    v_alice uuid := pg_temp.test_login('google', 'alice-api-test', 'alice@acme.com', 'Alice Chen', true);
+    v_bob   uuid := pg_temp.test_login('github', 'bob-api-test', 'bob@acme.com', 'Bob Park', true);
+    v_acme  uuid := (membership.fn_create_organization_with_owner('Acme Corp', 'acme-corp', v_alice)).object_id;
 BEGIN
-    RAISE DEBUG '→ Setting up API test fixtures';
-
-    v_alice_id := membership.upsert_user('google', 'alice-api-test', 'alice@acme.com', 'Alice Chen', true);
-    v_bob_id := membership.upsert_user('github', 'bob-api-test', 'bob@acme.com', 'Bob Park', true);
-
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_personal)
-    VALUES ('Acme Corp', 'acme-corp', v_alice_id, false)
-    RETURNING object_id INTO v_acme_id;
-
-    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
-    VALUES
-        (v_acme_id, v_alice_id, 'admin', 'active', now()),
-        (v_acme_id, v_bob_id, 'contributor', 'active', now());
+    PERFORM membership.fn_add_member(v_acme, v_bob, 'org.member');
 
     PERFORM set_config('test.alice_subject', 'google|alice-api-test', true);
     PERFORM set_config('test.bob_subject', 'github|bob-api-test', true);
-    PERFORM set_config('test.acme_org_id', v_acme_id::TEXT, true);
-
-    RAISE DEBUG '  ✓ Alice: % (google|alice-api-test) — owns Acme Corp', v_alice_id;
-    RAISE DEBUG '  ✓ Bob:   % (github|bob-api-test)   — contributor at Acme Corp', v_bob_id;
-    RAISE DEBUG '  ✓ Acme Corp: %', v_acme_id;
+    PERFORM set_config('test.acme_org_id', v_acme::text, true);
 END $$;

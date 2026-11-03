@@ -327,7 +327,7 @@ func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 
-	_, err := loadMergedParameters(nil, []string{envFile}, nil, true)
+	_, err := loadMergedParameters(nil, paramSources{files: []string{envFile}}, true)
 	w.Close()
 	os.Stderr = oldStderr
 
@@ -356,13 +356,24 @@ func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
 // (PGMI-382).
 func TestLoadMergedParameters_CaseInsensitivePrecedence(t *testing.T) {
 	cfg := &config.ProjectConfig{Params: map[string]string{"DB_Url": "yaml"}}
-	got, err := loadMergedParameters(cfg, nil, []string{"db_url=cli", "Env=a", "env=b"}, false)
+	got, err := loadMergedParameters(cfg, paramSources{pairs: []string{"db_url=cli", "Env=a", "env=b"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{"db_url": "cli", "env": "b"}
 	if !maps.Equal(got, want) {
 		t.Errorf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestLoadMergedParameters_CaseVariantsInYamlAreInvalidConfig(t *testing.T) {
+	cfg := &config.ProjectConfig{Params: map[string]string{"Region": "eu", "region": "us"}}
+	_, err := loadMergedParameters(cfg, paramSources{}, false)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+	if !strings.Contains(err.Error(), "pgmi.yaml") {
+		t.Errorf("error should name pgmi.yaml: %v", err)
 	}
 }
 

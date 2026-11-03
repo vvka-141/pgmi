@@ -93,9 +93,7 @@ func TestContractFunctionSignaturesMatchLiveSession(t *testing.T) {
 // The contract is what an agent reads instead of guessing, so a session object
 // it does not mention is invisible. Anything deliberately withheld belongs
 // here with the reason, not in the gap between the two.
-var undeclaredSessionFunctions = map[string]string{
-	"pgmi_run_test_source": "internal helper the pgmi_test() expansion calls; deploy.sql never does",
-}
+var undeclaredSessionFunctions = map[string]string{}
 
 func TestEverySessionFunctionIsDeclaredOrExempt(t *testing.T) {
 	connString := requireTestDB(t)

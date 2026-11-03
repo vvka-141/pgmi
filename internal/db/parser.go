@@ -19,6 +19,30 @@ import (
 //   - libpq keyword/value: host=localhost port=5432 dbname=dbname user=user
 //   - ADO.NET: Host=localhost;Port=5432;Database=dbname;Username=user;Password=pass
 func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
+	config, err := parseConnectionStringRaw(connStr)
+	if err != nil {
+		return nil, err
+	}
+	applyStaticDefaults(config)
+	return config, nil
+}
+
+// applyStaticDefaults fills what neither the string nor the environment gave.
+func applyStaticDefaults(config *pgmi.ConnectionConfig) {
+	if config.Host == "" {
+		config.Host = "localhost"
+	}
+	if config.Port == 0 {
+		config.Port = 5432
+	}
+	if config.Database == "" {
+		config.Database = pgmi.DefaultMaintenanceDB
+	}
+}
+
+// parseConnectionStringRaw leaves host, port and dbname empty when the string
+// omits them, so the caller can take them from the environment first.
+func parseConnectionStringRaw(connStr string) (*pgmi.ConnectionConfig, error) {
 	if connStr == "" {
 		return nil, fmt.Errorf("connection string is empty")
 	}
@@ -40,6 +64,8 @@ func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
 
 // parsePostgreSQLURI parses a PostgreSQL URI format connection string.
 // Format: postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
+var errServiceFile = fmt.Errorf("service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE")
+
 func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 	connStr, hostList := liftHostList(connStr)
 	u, err := url.Parse(connStr)
@@ -48,9 +74,6 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 	}
 
 	config := &pgmi.ConnectionConfig{
-		Host:             "localhost",
-		Port:             5432,
-		Database:         "postgres",
 		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
@@ -117,6 +140,8 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 			config.SSLRootCert = value
 		case "sslpassword":
 			config.SSLPassword = value
+		case "service":
+			return nil, errServiceFile
 		case "application_name", "applicationname":
 			config.AppName = value
 		case "connect_timeout", "connecttimeout":
@@ -137,9 +162,6 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 // Format: Host=localhost;Port=5432;Database=dbname;Username=user;Password=pass;...
 func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 	config := &pgmi.ConnectionConfig{
-		Host:             "localhost",
-		Port:             5432,
-		Database:         "postgres",
 		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),

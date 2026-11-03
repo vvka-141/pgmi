@@ -58,7 +58,7 @@ func (c *GoogleCloudSQLConnector) Connect(ctx context.Context) (*pgxpool.Pool, e
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		dialer.Close()
-		return nil, fmt.Errorf("failed to parse connection config: %w", err)
+		return nil, fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
 	}
 
 	poolConfig.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {

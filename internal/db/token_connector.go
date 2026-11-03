@@ -40,7 +40,7 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 		// Initial token — also doubles as a reachability check before pool construction.
 		token, expiresOn, err := c.tokenProvider.GetToken(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to acquire %s token: %w", c.providerName, err)
+			return &connError{msg: fmt.Sprintf("failed to acquire %s token: %v", c.providerName, err), err: err}
 		}
 
 		if time.Until(expiresOn) < 5*time.Minute {
@@ -54,7 +54,7 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
-			return fmt.Errorf("failed to parse connection config: %w", err)
+			return fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
 		}
 
 		configurePool(poolConfig)

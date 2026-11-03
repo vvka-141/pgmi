@@ -68,13 +68,12 @@ func TestStandardConnector_RespectsContextTimeout(t *testing.T) {
 		Password: "testpass",
 	}
 
-	const timeout = 200 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
+	deadline, _ := ctx.Deadline()
 
-	start := time.Now()
 	pool, err := NewStandardConnector(config).Connect(ctx)
-	elapsed := time.Since(start)
+	returned := time.Now()
 
 	if pool != nil {
 		pool.Close()
@@ -86,11 +85,9 @@ func TestStandardConnector_RespectsContextTimeout(t *testing.T) {
 		t.Errorf("error must carry context.DeadlineExceeded, got: %v", err)
 	}
 
-	// Lower bound only. An upper bound would be a latency measurement the
-	// scheduler decides, and it has failed under concurrent load. Returning
-	// *before* the deadline is the real defect: it means something other than
-	// the context ended the attempt.
-	if elapsed < timeout {
-		t.Errorf("returned after %v, before the %v deadline — the context was not what stopped it", elapsed, timeout)
+	// Lower bound only, against the context's own deadline: a stopwatch started
+	// after WithTimeout runs behind the deadline and can read just under it.
+	if returned.Before(deadline) {
+		t.Errorf("returned %v before the deadline — the context was not what stopped it", deadline.Sub(returned))
 	}
 }

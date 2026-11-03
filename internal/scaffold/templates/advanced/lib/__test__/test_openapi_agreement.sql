@@ -25,9 +25,8 @@ DECLARE
 BEGIN
     -- The document is filtered by caller; completeness is a claim about what
     -- an authenticated caller sees.
-    PERFORM membership.upsert_user('test', 'openapi-agreement', 'openapi-agreement@example.com');
-    PERFORM set_config('auth.user_id', 'test|openapi-agreement', true);
-    PERFORM set_config('auth.idp_subject', 'test|openapi-agreement', true);
+    PERFORM pg_temp.test_login('test', 'openapi-agreement', 'openapi-agreement@example.test', NULL, true);
+    PERFORM pg_temp.test_act_as('test|openapi-agreement');
 
     -- Arm 1: every registered REST route is published, and nothing is
     -- published that is not registered. A route missing from the document is
@@ -67,10 +66,127 @@ BEGIN
             v_operations, v_routes;
     END IF;
 
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     RAISE NOTICE '  + every registered route is published, and every published path is registered';
+END $$;
+
+-- Arm 3: every status the gateway derives from a route's metadata is published
+-- on its operation, with the shared Problem body, and a body the gateway checks
+-- is a required body. A status the gateway can send but the document omits is
+-- one a generated client cannot handle.
+DO $$
+DECLARE
+    v_missing text;
+BEGIN
+    PERFORM pg_temp.test_act_as('test|openapi-agreement');
+    WITH op AS (
+        SELECT h.handler_function_name AS name, m.method, r.success_status, h.access, h.read_only,
+               h.min_transaction_isolation, h.input_json_schema, r.query_schema, r.path_params,
+               api.openapi_document()->'paths'->r.canonical_path->m.method AS operation
+        FROM api.rest_route r
+        JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
+        CROSS JOIN LATERAL unnest(api.openapi_methods(r.method_regexp)) AS m(method)
+    ),
+    expected AS (
+        SELECT op.name, op.method, op.operation, x.status
+        FROM op CROSS JOIN LATERAL (VALUES
+            (op.success_status::text, true),
+            ('400', op.method IN ('post', 'put', 'patch') OR op.query_schema IS NOT NULL
+                    OR EXISTS (SELECT FROM jsonb_array_elements(op.path_params) p WHERE p->>'type' IN ('uuid', 'int'))),
+            ('401', op.access IS DISTINCT FROM 'public'),
+            ('403', op.access = 'permission'),
+            ('428', op.read_only OR op.min_transaction_isolation IS NOT NULL)
+        ) AS x(status, applies)
+        WHERE x.applies
+    )
+    SELECT string_agg(format('%s %s: %s', upper(method), name, problem), '; ' ORDER BY name, method, problem)
+    INTO v_missing
+    FROM (
+        SELECT name, method, 'no ' || status AS problem FROM expected
+        WHERE NOT coalesce(operation->'responses' ? status, false)
+        UNION ALL
+        SELECT op.name, op.method, r.key || ' without the Problem body'
+        FROM op CROSS JOIN LATERAL jsonb_each(op.operation->'responses') r
+        WHERE r.key ~ '^4' AND r.value->'content'->'application/problem+json'->'schema'->>'$ref'
+                               IS DISTINCT FROM '#/components/schemas/Problem'
+        UNION ALL
+        SELECT name, method, 'requestBody.required missing' FROM op
+        WHERE input_json_schema IS NOT NULL AND method IN ('post', 'put', 'patch')
+          AND operation->'requestBody'->'required' IS DISTINCT FROM 'true'::jsonb
+        UNION ALL
+        SELECT name, method, 'more than one 2xx' FROM op
+        WHERE (SELECT count(*) FROM jsonb_object_keys(operation->'responses') k WHERE k ~ '^2') IS DISTINCT FROM 1::bigint
+    ) problems;
+    PERFORM pg_temp.test_act_as(NULL);
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'OpenAPI omits what the gateway answers: %', v_missing;
+    END IF;
+END $$;
+
+-- Arm 4: every $ref in the document resolves to a published component, and
+-- every registered component is used.
+DO $$
+DECLARE
+    v_doc jsonb;
+    v_dangling text;
+    v_unused text;
+BEGIN
+    PERFORM pg_temp.test_act_as('test|openapi-agreement');
+    v_doc := api.openapi_document();
+    PERFORM pg_temp.test_act_as(NULL);
+
+    SELECT string_agg(DISTINCT ref #>> '{}', ', ') INTO v_dangling
+    FROM jsonb_path_query(v_doc, 'strict $.**."$ref"') AS ref
+    WHERE NOT v_doc->'components'->'schemas' ? regexp_replace(ref #>> '{}', '^#/components/schemas/', '');
+    IF v_dangling IS NOT NULL THEN
+        RAISE EXCEPTION 'OpenAPI references schemas it does not publish: %', v_dangling;
+    END IF;
+
+    SELECT string_agg(sc.name, ', ' ORDER BY sc.name) INTO v_unused
+    FROM api.schema_component sc
+    WHERE NOT EXISTS (
+        SELECT FROM jsonb_path_query(v_doc - 'components', 'strict $.**."$ref"') AS ref
+        WHERE ref #>> '{}' = '#/components/schemas/' || sc.name)
+      AND NOT EXISTS (
+        SELECT FROM api.schema_component other
+        CROSS JOIN LATERAL jsonb_path_query(other.schema::jsonb, 'strict $.**."$ref"') AS ref
+        WHERE other.name IS DISTINCT FROM sc.name AND ref #>> '{}' = '#/components/schemas/' || sc.name);
+    IF v_unused IS NOT NULL THEN
+        RAISE EXCEPTION 'schema component(s) no operation uses: %', v_unused;
+    END IF;
+END $$;
+
+-- Arm 5: the catalog version digests every registry column the generator
+-- reads, so the ETag cannot stay put while the document changes. The check
+-- reads both functions' source; a planted column proves it can fail.
+CREATE FUNCTION pg_temp.columns_missing_from_digest(p_generator text, p_digest text)
+RETURNS SETOF text
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT DISTINCT m[1]
+    FROM regexp_matches(p_generator, '\m((?:r|h|hp|sc)\.[a-z_]+)\M', 'g') AS m
+    EXCEPT
+    SELECT DISTINCT m[1]
+    FROM regexp_matches(p_digest, '\m((?:r|h|hp|sc)\.[a-z_]+)\M', 'g') AS m;
+$$;
+
+DO $$
+DECLARE
+    v_missing text;
+BEGIN
+    SELECT string_agg(c, ', ' ORDER BY c) INTO v_missing
+    FROM pg_temp.columns_missing_from_digest(
+        (SELECT prosrc FROM pg_proc WHERE oid = 'api.openapi_document()'::regprocedure),
+        (SELECT prosrc FROM pg_proc WHERE oid = 'internal.catalog_digest()'::regprocedure)) AS c;
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'api.openapi_document() reads % but internal.catalog_digest() does not digest it', v_missing;
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_temp.columns_missing_from_digest('SELECT r.planted_column FROM api.rest_route r',
+                                                                  'SELECT r.canonical_path FROM api.rest_route r')) THEN
+        RAISE EXCEPTION 'the digest guard does not see a planted generator column';
+    END IF;
 END $$;
 
 DO $$
@@ -93,8 +209,7 @@ BEGIN
     --
     -- The operations are read as an authenticated caller, so auth-gated routes
     -- are covered too, and then sent anonymously, so no admin handler runs.
-    PERFORM set_config('auth.user_id', 'test|openapi-agreement', true);
-    PERFORM set_config('auth.idp_subject', 'test|openapi-agreement', true);
+    PERFORM pg_temp.test_act_as('test|openapi-agreement');
     SELECT array_agg(upper(op.key) || ' ' || COALESCE(NULLIF(r.probe_path, ''), p.key) ORDER BY p.key, op.key)
     INTO v_ops
     FROM jsonb_each(api.openapi_document()->'paths') p
@@ -103,8 +218,7 @@ BEGIN
         SELECT rr.probe_path FROM api.rest_route rr
         WHERE rr.canonical_path = p.key ORDER BY rr.sequence_number DESC LIMIT 1) r ON true
     WHERE op.key IN ('get', 'post', 'put', 'patch', 'delete');
-    PERFORM set_config('auth.user_id', '', true);
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     FOR v_method, v_path IN
         SELECT split_part(o, ' ', 1), split_part(o, ' ', 2) FROM unnest(v_ops) AS o
@@ -115,14 +229,14 @@ BEGIN
 
         -- A handler may answer 404 for a probe value that names no row; only
         -- the router's own 404 means the path did not resolve.
-        IF v_status = 405 OR (v_status = 404
+        IF (v_status = 405) IS NOT FALSE OR (v_status IS NOT DISTINCT FROM 404
                AND coalesce(api.content_json((v_response).content)->>'detail', '') LIKE 'No route matches%') THEN
             RAISE EXCEPTION 'OpenAPI publishes % % but the gateway answers % -- the document describes a route that does not resolve',
                 v_method, v_path, v_status;
         END IF;
     END LOOP;
 
-    IF v_checked = 0 THEN
+    IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'no published operations were exercised -- the round-trip check ran on nothing';
     END IF;
 

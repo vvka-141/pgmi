@@ -38,6 +38,7 @@ func newTestDeployer(t *testing.T) pgmi.Deployer {
 		fileScanner,
 		fileLoader,
 		logger,
+		"test",
 	)
 
 	return services.NewDeploymentService(

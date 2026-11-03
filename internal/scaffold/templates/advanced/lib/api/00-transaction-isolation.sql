@@ -24,10 +24,10 @@
 -- >= the route's required floor. A NULL floor means "no requirement" and is
 -- treated as 'read committed' (every transaction satisfies it).
 --
--- Resolve-then-open: the client gateway (tools/mcp-gateway.py, or the reverse
+-- Resolve-then-open: the client gateway (gateways/python/gateway.py, or the reverse
 -- proxy a deployment supplies) resolves the route's policy BEFORE opening the
 -- transaction — api.rest_route_policy / api.rpc_route_policy /
--- api.mcp_request_policy (lib/api/09-gateways.sql) return the effective
+-- api.mcp_request_policy (lib/api/10-mcp-protocol.sql) return the effective
 -- characteristics — and opens at max(route floor, client-requested level),
 -- READ ONLY when the route declares it, DEFERRABLE when that combination is
 -- SERIALIZABLE READ ONLY. X-PGMI-Transaction-Isolation is therefore
@@ -116,7 +116,7 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION internal.transaction_is_read_only() IS
-    'True when the current transaction is READ ONLY. Gateways use it to reject a read-only route dispatched in a read-write transaction (fail closed) and to skip their own writes (exchange logging, JIT provisioning) when the transaction cannot write.';
+    'True when the current transaction is READ ONLY. Gateways use it to reject a read-only route dispatched in a read-write transaction (fail closed) and to skip their own writes (exchange logging, session last-seen updates) when the transaction cannot write.';
 
 -- Resolve-then-open policy resolver. Given a route's declared
 -- policy and the client-requested level, returns the characteristics the

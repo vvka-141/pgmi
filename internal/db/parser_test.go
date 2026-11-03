@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -560,5 +561,65 @@ func TestParseConnectionString_KeywordValue(t *testing.T) {
 	ado, err := ParseConnectionString("Host=db1;Database=app;Username=me")
 	if err != nil || ado.Host != "db1" || ado.Database != "app" {
 		t.Errorf("ADO.NET form must still parse: %+v, %v", ado, err)
+	}
+}
+
+// An apostrophe inside an ADO.NET value hid every ';' after it, so the whole
+// string went to the keyword/value parser and its tail reached localhost as a
+// startup parameter named "Password".
+func TestParseConnectionString_ApostropheInADONETValue(t *testing.T) {
+	got, err := ParseConnectionString("Password=it's;Host=db;Database=app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != "db" || got.Database != "app" || got.Password != "it's" {
+		t.Errorf("got host=%q db=%q pass=%q", got.Host, got.Database, got.Password)
+	}
+	if len(got.AdditionalParams) != 0 {
+		t.Errorf("unexpected pass-through params: %v", got.AdditionalParams)
+	}
+}
+
+func TestParseConnectionString_KeywordValueRejectsUnknownKey(t *testing.T) {
+	for _, tt := range []struct{ in, key string }{
+		{"host=db bogus=1", "bogus"},
+		{"host=db Password=x", "Password"},
+		{"host=db dbanme=app", "dbanme"},
+	} {
+		_, err := ParseConnectionString(tt.in)
+		if err == nil {
+			t.Errorf("%q must be rejected", tt.in)
+			continue
+		}
+		if want := fmt.Sprintf("invalid connection option %q", tt.key); !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %q does not name the key", tt.in, err)
+		}
+	}
+
+	_, _, err := ResolveConnectionParams("host=db bogus=1", nil, nil, nil, nil, nil, nil, nil)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+}
+
+func TestParseConnectionString_KeywordValuePassesLibpqKeywords(t *testing.T) {
+	got, err := ParseConnectionString("host=a,b target_session_attrs=read-write options='-c search_path=app' gssencmode=disable channel_binding=require keepalives_idle=30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"target_session_attrs": "read-write",
+		"options":              "-c search_path=app",
+		"gssencmode":           "disable",
+		"channel_binding":      "require",
+		"keepalives_idle":      "30",
+	}
+	for k, v := range want {
+		if got.AdditionalParams[k] != v {
+			t.Errorf("%s = %q, want %q", k, got.AdditionalParams[k], v)
+		}
+	}
+	if got.Host != "a,b" {
+		t.Errorf("Host = %q, want a,b", got.Host)
 	}
 }

@@ -1,17 +1,14 @@
 package services
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
-	"slices"
-	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/contract"
+	"github.com/vvka-141/pgmi/internal/metadata"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -34,6 +31,7 @@ type SessionManager struct {
 	fileScanner      pgmi.FileScanner
 	fileLoader       pgmi.FileLoader
 	logger           pgmi.Logger
+	pgmiVersion      string
 }
 
 // NewSessionManager creates a new SessionManager with all dependencies injected.
@@ -43,6 +41,7 @@ func NewSessionManager(
 	fileScanner pgmi.FileScanner,
 	fileLoader pgmi.FileLoader,
 	logger pgmi.Logger,
+	pgmiVersion string,
 ) *SessionManager {
 	if connectorFactory == nil {
 		panic("connectorFactory cannot be nil")
@@ -56,12 +55,16 @@ func NewSessionManager(
 	if logger == nil {
 		panic("logger cannot be nil")
 	}
+	if pgmiVersion == "" {
+		panic("pgmiVersion cannot be empty")
+	}
 
 	return &SessionManager{
 		connectorFactory: connectorFactory,
 		fileScanner:      fileScanner,
 		fileLoader:       fileLoader,
 		logger:           logger,
+		pgmiVersion:      pgmiVersion,
 	}
 }
 
@@ -121,10 +124,9 @@ func (sm *SessionManager) PrepareSession(
 		connectorCleanup()
 	}()
 
-	// Before anything else touches the server. The advisory lock below already
-	// needs hashtextextended (PostgreSQL 11), so without this an older server
-	// answers with "function hashtextextended does not exist" — an error naming
-	// neither pgmi nor the version it requires.
+	// Before anything else touches the server, so an older server is refused
+	// with a pgmi diagnostic naming the floor rather than with the error of the
+	// first construct it lacks.
 	if err := checkServerVersion(ctx, conn); err != nil {
 		return nil, err
 	}
@@ -151,20 +153,21 @@ func (sm *SessionManager) PrepareSession(
 			pgmi.ErrConcurrentDeploy, connConfig.Database)
 	}
 
+	// Prepare session (utility functions, files, params, API contract)
+	if err := sm.prepareSessionTables(ctx, conn, &scanResult, parameters, compat); err != nil {
+		return nil, fmt.Errorf("session preparation failed: %w", err)
+	}
+
 	if verbose {
 		if _, err := conn.Exec(ctx, "SET client_min_messages = 'debug'"); err != nil {
 			return nil, fmt.Errorf("failed to set client_min_messages: %w", err)
 		}
 	}
 
-	// Prepare session (utility functions, files, params, API contract)
-	if err := sm.prepareSessionTables(ctx, conn, &scanResult, parameters, compat); err != nil {
-		return nil, fmt.Errorf("session preparation failed: %w", err)
-	}
-
 	// Create Session object to encapsulate resources
 	session := pgmi.NewSession(pool, conn, connectorCleanup)
 	session.FilesLoaded = len(scanResult.Files)
+	session.Ignored = scanResult.Ignored
 	success = true
 	return session, nil
 }
@@ -202,7 +205,7 @@ func (sm *SessionManager) ScanProject(sourcePath string) (pgmi.FileScanResult, e
 
 	// Validate deploy.sql exists
 	if err := sm.fileScanner.ValidateDeploySQL(sourcePath); err != nil {
-		return pgmi.FileScanResult{}, fmt.Errorf("failed to validate deploy.sql: %w", err)
+		return pgmi.FileScanResult{}, err
 	}
 
 	deploySQL, err := sm.fileScanner.ReadDeploySQL(sourcePath)
@@ -217,44 +220,13 @@ func (sm *SessionManager) ScanProject(sourcePath string) (pgmi.FileScanResult, e
 	}
 	scanResult.DeploySQL = deploySQL
 
-	if err := validateNoDuplicateScriptIDs(scanResult.Files); err != nil {
+	if err := metadata.CheckUniqueIDs(scanResult.Files); err != nil {
 		return pgmi.FileScanResult{}, err
 	}
 
 	sm.logger.Verbose("Found %d files to load", len(scanResult.Files))
 
 	return scanResult, nil
-}
-
-// validateNoDuplicateScriptIDs fails fast when two files share a <pgmi-meta id>.
-// A shared id makes the second one-time script silently skip on deploy (its id
-// already has an execution-log row), so this is rejected before any connection
-// or SQL execution. Returns an ErrInvalidConfig (exit code 10) naming the id and
-// every conflicting file.
-func validateNoDuplicateScriptIDs(files []pgmi.FileMetadata) error {
-	pathsByID := make(map[uuid.UUID][]string)
-	for _, f := range files {
-		if f.Metadata == nil || f.Metadata.ID == uuid.Nil {
-			continue
-		}
-		pathsByID[f.Metadata.ID] = append(pathsByID[f.Metadata.ID], f.Path)
-	}
-
-	var conflicts []string
-	for id, paths := range pathsByID {
-		if len(paths) > 1 {
-			slices.SortFunc(paths, cmp.Compare)
-			conflicts = append(conflicts, fmt.Sprintf("  %s: %s", id, strings.Join(paths, ", ")))
-		}
-	}
-
-	if len(conflicts) > 0 {
-		slices.SortFunc(conflicts, cmp.Compare)
-		return fmt.Errorf("duplicate <pgmi-meta id> across files; each script must have a unique id:\n%s: %w",
-			strings.Join(conflicts, "\n"), pgmi.ErrInvalidConfig)
-	}
-
-	return nil
 }
 
 // connectToDatabase establishes a connection to the target database.
@@ -321,6 +293,10 @@ func (sm *SessionManager) prepareSessionTables(
 		return fmt.Errorf("failed to apply API contract: %w", err)
 	}
 	sm.logger.Verbose("Applied API contract v%s", appliedVersion)
+
+	if err := params.InsertRuntime(ctx, conn, sm.pgmiVersion, string(appliedVersion)); err != nil {
+		return err
+	}
 
 	return nil
 }

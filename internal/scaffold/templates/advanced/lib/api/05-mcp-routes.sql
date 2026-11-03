@@ -1,7 +1,7 @@
 /*
 <pgmi-meta
     id="a7f01000-0005-4000-8000-000000000001"
-    idempotent="true">
+    idempotent="false">
   <description>
     MCP routing: route table for Model Context Protocol tools, resources, and prompts
   </description>
@@ -17,7 +17,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing MCP routing infrastructure'; END $$;
 -- MCP Route Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS api.mcp_route (
+CREATE TABLE api.mcp_route (
     handler_object_id uuid PRIMARY KEY
         REFERENCES api.handler(object_id) ON DELETE CASCADE,
 
@@ -31,6 +31,16 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     arguments jsonb,
     tags text[] NOT NULL DEFAULT '{}',
 
+    -- What calling a tool does, derived once at registration from its
+    -- declared effect and published by tools/list. A tool has both; a
+    -- resource or a prompt neither.
+    annotations jsonb,
+    effect jsonb,
+    CONSTRAINT mcp_route_tool_effect_check CHECK (
+        (mcp_type = 'tool') = (annotations IS NOT NULL)
+        AND (mcp_type = 'tool') = (effect IS NOT NULL)
+    ),
+
     -- api.uri_template_to_regex implements RFC 6570 Level 1 simple-string
     -- expansion only. Level 2+ operators (+ reserved, ? query, / path,
     -- . label, ; param, & form, # fragment) would silently mis-route.
@@ -39,25 +49,15 @@ CREATE TABLE IF NOT EXISTS api.mcp_route (
     -- Resource-routing precedence: when more than one template matches a URI,
     -- api.mcp_read_resource picks the most specific (longest uri_template) with
     -- mcp_name as a stable tiebreak, so routing is deterministic.
-    CONSTRAINT ck_uri_template_level1_only CHECK (
+    CONSTRAINT mcp_route_uri_template_check CHECK (
         uri_template IS NULL
         OR uri_template !~ '\{[+?#./;&]'
     )
 );
 
-DO $$
-BEGIN
-    IF NOT pg_temp.has_column('api.mcp_route', 'tags') THEN
-        ALTER TABLE api.mcp_route ADD COLUMN tags text[] NOT NULL DEFAULT '{}';
-    END IF;
-    IF NOT pg_temp.has_column('api.mcp_route', 'uri_regexp') THEN
-        ALTER TABLE api.mcp_route ADD COLUMN uri_regexp text;
-    END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS ix_mcp_route_type ON api.mcp_route(mcp_type);
+CREATE INDEX ix_mcp_route_type ON api.mcp_route(mcp_type);
 -- mcp_name already has a unique B-tree from the UNIQUE constraint; no extra index.
-CREATE INDEX IF NOT EXISTS ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
+CREATE INDEX ix_mcp_route_tags ON api.mcp_route USING GIN(tags);
 
 COMMENT ON TABLE api.mcp_route IS
     'Model Context Protocol routing. Stores tool, resource, and prompt metadata for MCP dispatch and discovery.';
@@ -75,6 +75,10 @@ COMMENT ON COLUMN api.mcp_route.mime_type IS
     'MIME type for resource responses. Defaults to application/json.';
 COMMENT ON COLUMN api.mcp_route.arguments IS
     'Argument metadata for prompts. JSON array of {name, description, required} sent to clients in prompts/list.';
+COMMENT ON COLUMN api.mcp_route.annotations IS
+    'A tool''s MCP annotations {readOnlyHint, destructiveHint, idempotentHint, openWorldHint}, derived at registration from its effect (internal.mcp_tool_annotations); never hand-written. NULL for a resource or prompt.';
+COMMENT ON COLUMN api.mcp_route.effect IS
+    'A tool''s effect block {effect read} or {effect write, reversible}, from its metadata (internal.mcp_tool_effect); tools/list publishes it as _meta["pgmi/effect"]. NULL for a resource or prompt.';
 COMMENT ON COLUMN api.mcp_route.tags IS
     'Freeform tags for filtering tools via api.mcp_list_tools(p_tags). GIN-indexed for efficient && (overlap) queries.';
 
@@ -94,3 +98,5 @@ END $$;
 DO $$ BEGIN
     RAISE NOTICE '  ✓ api.mcp_route - MCP tool/resource/prompt metadata';
 END $$;
+
+SELECT pg_temp.exempt_from_rls('api.mcp_route', 'the handler registry: framework metadata, written by registration at deploy');

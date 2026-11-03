@@ -35,7 +35,7 @@ func TestPrepareSession_FullLifecycle(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger, "test")
 
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), map[string]string{"env": "test"}, "", false)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger, "test")
 
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
 	if err != nil {
@@ -92,6 +92,42 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 	}
 	if !strings.HasPrefix(msgLevel, "debug") {
 		t.Errorf("Expected debug-level client_min_messages, got %q", msgLevel)
+	}
+}
+
+func TestPrepareSession_VerboseSetupIsQuiet(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_session_verbose_quiet"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	connConfig, err := db.ParseConnectionString(connString)
+	if err != nil {
+		t.Fatalf("Failed to parse connection string: %v", err)
+	}
+	connConfig.Database = testDB
+
+	var debugLines []string
+	orig := db.NoticeHandler
+	db.NoticeHandler = func(severity, message, _, _ string) {
+		if severity == "DEBUG" {
+			debugLines = append(debugLines, message)
+		}
+	}
+	t.Cleanup(func() { db.NoticeHandler = orig })
+
+	sm := services.NewSessionManager(db.NewConnector, scanner.NewScannerWithFS(checksum.New(), fixtures.EmptyProject()),
+		loader.NewLoader(), logging.NewNullLogger(), "test")
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
+	if err != nil {
+		t.Fatalf("PrepareSession with verbose failed: %v", err)
+	}
+	defer session.Close()
+
+	if len(debugLines) != 0 {
+		t.Errorf("pgmi's own session setup sent %d server DEBUG lines under --verbose, first: %q", len(debugLines), debugLines[0])
 	}
 }
 
@@ -114,7 +150,7 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger, "test")
 
 	params := map[string]string{"env": "staging", "version": "3.0"}
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), params, "", false)
@@ -165,7 +201,7 @@ func TestPrepareSession_CleanupOnError(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger, "test")
 
 	_, err := sm.PrepareSession(context.Background(), connConfig, mustScanProject(t, sm), nil, "", false)
 	if err == nil {

@@ -16,21 +16,23 @@ import (
 //go:embed all:templates
 var templatesFS embed.FS
 
+// Skills every template ships. They live outside templates/ because each
+// directory there is a template.
+//
+//go:embed all:skills
+var sharedSkillsFS embed.FS
+
+const sharedSkillsDir = "skills"
+
+// scaffoldSuffix is dropped from a template file's name when it is written. A
+// file named go.mod would make its directory another module, which go:embed
+// leaves out without a word.
+const scaffoldSuffix = ".scaffold"
+
 // GetTemplatesFS returns the embedded templates filesystem for testing purposes.
 // This allows tests to access embedded templates without filesystem I/O.
 func GetTemplatesFS() embed.FS {
 	return templatesFS
-}
-
-// GetAdvancedLibReadme returns the advanced template's lib/README.md content.
-// Used by `pgmi ai skill advanced-template` to surface the framework API
-// without duplicating the document.
-func GetAdvancedLibReadme() (string, error) {
-	content, err := templatesFS.ReadFile("templates/advanced/lib/README.md")
-	if err != nil {
-		return "", fmt.Errorf("advanced template lib/README.md not found: %w", err)
-	}
-	return string(content), nil
 }
 
 // Scaffolder handles project initialization from templates
@@ -87,6 +89,9 @@ func (s *Scaffolder) CreateProject(projectName, templateName, targetPath string)
 	if err := s.copyTemplateFiles(templatePath, targetPath, projectName, templateName); err != nil {
 		return fmt.Errorf("failed to copy template files: %w", err)
 	}
+	if err := s.copySharedSkills(targetPath); err != nil {
+		return fmt.Errorf("failed to copy shared skills: %w", err)
+	}
 
 	s.logVerbose("Project created successfully")
 	return nil
@@ -110,7 +115,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, te
 			return err
 		}
 
-		targetFilePath := filepath.Join(targetPath, relPath)
+		targetFilePath := filepath.Join(targetPath, strings.TrimSuffix(relPath, scaffoldSuffix))
 
 		if d.IsDir() {
 			// Create directory
@@ -148,6 +153,34 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, te
 		}
 
 		return nil
+	})
+}
+
+// copySharedSkills writes the shared skills into .agents/skills/. A template
+// skill of the same name is refused, so neither silently replaces the other.
+func (s *Scaffolder) copySharedSkills(targetPath string) error {
+	skillsRoot := filepath.Join(targetPath, ".agents", "skills")
+	return fs.WalkDir(sharedSkillsFS, sharedSkillsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == sharedSkillsDir {
+			return err
+		}
+		relPath, err := filepath.Rel(sharedSkillsDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(skillsRoot, relPath)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("the template already ships %s, which is also a shared skill", filepath.Join(".agents", "skills", relPath))
+		}
+		content, err := sharedSkillsFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		s.logVerbose("Creating file: %s", filepath.Join(".agents", "skills", relPath))
+		return os.WriteFile(target, content, 0644)
 	})
 }
 

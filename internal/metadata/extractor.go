@@ -27,6 +27,13 @@ var blockComments = preprocessor.NewCommentStripper().BlockComments
 // metaElementRegex detects the presence of <pgmi-meta tags
 var metaElementRegex = regexp.MustCompile(`<\s*pgmi-meta[\s>]`)
 
+// MentionsMetaTag reports whether content contains a <pgmi-meta tag anywhere.
+// For a file Extract found no block in, that means a tag placed where it is
+// never read, most often in a -- line comment.
+func MentionsMetaTag(content string) bool {
+	return metaElementRegex.MatchString(content)
+}
+
 // Extract parses PGMI metadata from the first block comment in SQL file content.
 // It searches for /* ... */ comments containing <pgmi-meta> XML elements.
 //

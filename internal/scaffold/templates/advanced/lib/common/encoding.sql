@@ -6,7 +6,7 @@
     Bytea encoding types and casts for chainable type conversion (utf8, latin1, win1252)
   </description>
   <sortKeys>
-    <key>001/000</key>
+    <key>001/001</key>
   </sortKeys>
 </pgmi-meta>
 */
@@ -46,33 +46,8 @@ END $$;
 -- ============================================================================
 -- Encoding Types (Composite wrappers around text)
 -- ============================================================================
--- These types wrap decoded text, preserving encoding provenance.
--- As composite types we own, we can create casts from/to them.
-
--- The types are created once and never dropped. This file is idempotent, so a
--- DROP TYPE ... CASCADE here would run on every deploy and take every dependent
--- object with it -- including a user's column, view or function typed
--- common.utf8, which these types invite by being documented as a public
--- convenience. CASCADE cannot tell those apart from the casts below.
-DO $$
-BEGIN
-    IF to_regtype('common.utf8') IS NULL THEN
-        CREATE TYPE common.utf8 AS (v text);
-    END IF;
-    IF to_regtype('common.latin1') IS NULL THEN
-        CREATE TYPE common.latin1 AS (v text);
-    END IF;
-    IF to_regtype('common.win1252') IS NULL THEN
-        CREATE TYPE common.win1252 AS (v text);
-    END IF;
-END $$;
-
-COMMENT ON TYPE common.utf8 IS
-    'UTF-8 decoded text wrapper. Enables cast chaining: my_bytea::utf8::jsonb';
-COMMENT ON TYPE common.latin1 IS
-    'Latin-1 (ISO-8859-1) decoded text wrapper. Enables cast chaining: my_bytea::latin1::text';
-COMMENT ON TYPE common.win1252 IS
-    'Windows-1252 decoded text wrapper. Enables cast chaining: my_bytea::win1252::text';
+-- The types themselves (common.utf8, common.latin1, common.win1252) are
+-- structure and live in encoding-structure.sql, which runs once.
 
 -- CREATE CAST has no OR REPLACE, so each cast is dropped by name before being
 -- recreated. Naming them individually is what keeps the redeploy from touching
@@ -354,23 +329,6 @@ BEGIN
     EXECUTE format('GRANT USAGE ON TYPE common.utf8 TO %I, %I', v_admin_role, v_api_role);
     EXECUTE format('GRANT USAGE ON TYPE common.latin1 TO %I, %I', v_admin_role, v_api_role);
     EXECUTE format('GRANT USAGE ON TYPE common.win1252 TO %I, %I', v_admin_role, v_api_role);
-
-    -- Grant execute on all functions
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_text(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1_to_text(common.latin1) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252_to_text(common.win1252) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_jsonb(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_json(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_xml(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_jsonb(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_json(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_xml(bytea) TO %I, %I', v_admin_role, v_api_role);
 END $$;
 
 DO $$

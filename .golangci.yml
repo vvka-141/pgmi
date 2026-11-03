@@ -1,3 +1,4 @@
+version: "2"
 run:
   # Catches a hung linter, not a slow one. Measured here: 81s warm, 6m36s and
   # 7m26s cold, because a cold pass compiles the whole dependency tree (AWS,
@@ -7,42 +8,48 @@ run:
   # then runs two passes, and CI hits it whenever the action's cache misses.
   timeout: 15m
   tests: true
-
 linters:
-  enable:
-    - errcheck
-    - gofmt
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - (io.Writer).Write
-      - fmt.Fprintf
-      - fmt.Fprintln
-
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Writer).Write
+        - fmt.Fprintf
+        - fmt.Fprintln
+    staticcheck:
+      # ST1005 off: several user-facing errors are deliberately capitalized,
+      # punctuated or multi-line.
+      checks: ["all", "-ST1000", "-ST1003", "-ST1005", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+        path: _test\.go
+      - linters:
+          - errcheck
+          - staticcheck
+        path: _bench_test\.go
+      - linters:
+          - errcheck
+        path: example_test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-rules:
-    # Ignore errcheck in test files - test code often ignores errors intentionally
-    - path: _test\.go
-      linters:
-        - errcheck
-
-    # Ignore benchmark files completely
-    - path: _bench_test\.go
-      linters:
-        - errcheck
-        - gosimple
-
-    # Ignore example files - they're documentation
-    - path: example_test\.go
-      linters:
-        - errcheck
-
-  # Don't limit the number of issues
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

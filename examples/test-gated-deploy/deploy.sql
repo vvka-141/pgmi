@@ -1,62 +1,144 @@
--- deploy.sql - Deployment Orchestrator (Basic Template)
+-- deploy.sql - the deployment of this project.
 --
--- pgmi loads your project files into session-scoped temp tables, then runs
--- this script. Available:
---   pg_temp.pgmi_source_view     - ALL project files (SQL, JSON, CSV, etc.)
---   pg_temp.pgmi_parameter_view  - CLI params (--param key=value)
---   current_setting('pgmi.key', true) - Parameter value (NULL if not set)
---   CALL pgmi_test()             - Run tests with savepoint isolation
+-- pgmi loads every project file into session views, then runs this script.
+-- `pgmi ai contract` lists them. This script decides the rest:
+--
+--   physical/   tables, keys, indexes: run once each (<pgmi-meta idempotent="false">)
+--   semantic/   views and functions: re-run on every deploy
+--   __test__/   tests: CALL pgmi_test() runs them before the COMMIT
+--
+-- Only those two folders run, in path order: physical/ before semantic/.
 
 BEGIN;
 
+-- env names the kind of database: dev seeds a demo project, test and prod do
+-- not. There is no default, so a CI deploy cannot fall back to dev.
 DO $$
 DECLARE
-    v_file    RECORD;
-    v_env     TEXT;
-    v_config  JSONB;
-    v_user    RECORD;
+    v_env text := current_setting('pgmi.env', true);
 BEGIN
-    v_env := COALESCE(current_setting('pgmi.env', true), 'development');
+    IF v_env IS NULL THEN
+        RAISE EXCEPTION 'Missing required parameter: env'
+            USING HINT = 'pgmi.yaml sets env: dev for local work. For a shared database pass --param env=test or --param env=prod.';
+    END IF;
+    IF v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', quote_literal(v_env);
+    END IF;
+END $$;
 
-    -- Load project metadata from a non-SQL file (pgmi loads ALL files, not just SQL)
+-- PostgreSQL lets PUBLIC execute every new function. Close that default for
+-- everything this role creates from now on; grant each role what it needs.
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON ROUTINES FROM PUBLIC;
+
+-- deployment.run_once is the ledger of run-once files. A run-once file is
+-- skipped once it has run, so an edit would reach only fresh databases.
+-- Refuse the deploy instead, before anything runs, and name the file.
+-- pgmi_checksum ignores comments, whitespace and keyword case.
+DO $$
+DECLARE
+    v_drift text;
+BEGIN
+    IF to_regclass('deployment.run_once') IS NULL THEN
+        CREATE SCHEMA IF NOT EXISTS deployment;
+        CREATE TABLE deployment.run_once (
+            id       uuid PRIMARY KEY,
+            path     text NOT NULL,
+            checksum text NOT NULL,
+            ran_at   timestamptz NOT NULL DEFAULT now()
+        );
+        RETURN;
+    END IF;
+
+    SELECT string_agg(COALESCE(m.path, r.path) || ': ' || CASE
+               WHEN m.id IS NULL      THEN 'removed from the project, or its <pgmi-meta> id changed'
+               WHEN m.path <> r.path  THEN 'moved from ' || r.path
+               WHEN m.idempotent      THEN 'now idempotent="true"'
+               ELSE 'content edited' END, E'\n  ' ORDER BY r.path)
+    INTO v_drift
+    FROM deployment.run_once r
+    LEFT JOIN pg_temp.pgmi_source_metadata_view m ON m.id = r.id
+    LEFT JOIN pg_temp.pgmi_source_view s ON s.path = m.path
+    WHERE m.id IS NULL OR m.path <> r.path OR m.idempotent OR s.pgmi_checksum <> r.checksum;
+
+    IF v_drift IS NOT NULL THEN
+        RAISE EXCEPTION E'Run-once file(s) changed after they ran on this database:\n  %', v_drift
+            USING HINT = 'Restore each file as it ran and put the change in a new run-once file after it. '
+                      || 'To rewrite run-once files on a development database, recreate it: pgmi deploy . --overwrite --force';
+    END IF;
+END $$;
+
+-- physical/ holds structure, which runs once per database. A file there
+-- without the run-once header would re-run on every deploy and fail the
+-- second one; refuse it on the first, before anything runs. A run-once file
+-- with several sort keys would run at each key on the first deploy only.
+DO $$
+DECLARE
+    v_files text;
+BEGIN
+    SELECT string_agg(m.path, E'\n  ' ORDER BY m.path) INTO v_files
+    FROM pg_temp.pgmi_source_metadata_view m
+    JOIN pg_temp.pgmi_source_view s ON s.path = m.path
+    WHERE s.is_sql_file AND NOT m.idempotent AND cardinality(m.sort_keys) > 1;
+
+    IF v_files IS NOT NULL THEN
+        RAISE EXCEPTION E'Run-once file(s) with more than one sort key:\n  %', v_files
+            USING HINT = 'A run-once file runs once, at one place in the plan: keep one key, or split the file. Several keys are for re-run files.';
+    END IF;
+
+    SELECT string_agg(s.path, E'\n  ' ORDER BY s.path) INTO v_files
+    FROM pg_temp.pgmi_source_view s
+    LEFT JOIN pg_temp.pgmi_source_metadata_view m ON m.path = s.path
+    WHERE s.is_sql_file AND s.path LIKE './physical/%' AND m.idempotent IS DISTINCT FROM false;
+
+    IF v_files IS NOT NULL THEN
+        RAISE EXCEPTION E'physical/ file(s) without a run-once header:\n  %', v_files
+            USING HINT = 'Start each with /* <pgmi-meta id="<a new uuid, e.g. from uuidgen>" idempotent="false"></pgmi-meta> */, '
+                      || 'as physical/001_project.sql does. Views and functions belong in semantic/.';
+    END IF;
+END $$;
+
+DO $$
+DECLARE
+    v_env    text := current_setting('pgmi.env');
+    v_config jsonb;
+    v_file   record;
+BEGIN
+    -- pgmi loads every file, not only SQL: project.json is data this script reads.
     SELECT content::jsonb INTO STRICT v_config
     FROM pg_temp.pgmi_source_view
     WHERE path = './project.json';
 
-    RAISE NOTICE '[%] Deploying % v% (% migration file(s))',
-        v_env,
-        v_config ->> 'app_name',
-        v_config ->> 'version',
-        (SELECT count(*) FROM pg_temp.pgmi_source_view
-         WHERE directory = './migrations/' AND is_sql_file);
+    RAISE NOTICE '[%] Deploying % v%', v_env, v_config ->> 'app_name', v_config ->> 'version';
 
-    -- Execute migration files in path order
-    FOR v_file IN (
-        SELECT path, content
-        FROM pg_temp.pgmi_source_view
-        WHERE directory = './migrations/' AND is_sql_file
-        ORDER BY path
-    )
+    FOR v_file IN
+        SELECT p.path, p.id, p.idempotent, p.content, p.pgmi_checksum
+        FROM pg_temp.pgmi_plan_view p
+        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
+        WHERE s.is_sql_file
+          AND p.path ~ '^\./(physical|semantic)/'
+          AND NOT EXISTS (SELECT FROM deployment.run_once r WHERE r.id = p.id)
+        ORDER BY p.execution_order
     LOOP
         RAISE DEBUG 'Executing: %', v_file.path;
         -- No exception handler: an error reaches pgmi untouched, which names the
         -- failing file and line and keeps the original SQLSTATE.
         EXECUTE v_file.content;
+        IF NOT v_file.idempotent THEN
+            INSERT INTO deployment.run_once (id, path, checksum)
+            VALUES (v_file.id, v_file.path, v_file.pgmi_checksum)
+            ON CONFLICT DO NOTHING;
+        END IF;
     END LOOP;
 
-    -- Environment-aware seeding: only in non-production
-    IF v_env IS DISTINCT FROM 'production' THEN
-        -- Static call works even though the migration loop above just created
-        -- upsert_user: PL/pgSQL resolves each statement at first execution.
-        SELECT * INTO v_user FROM upsert_user(
-            COALESCE(current_setting('pgmi.admin_email', true), 'admin@example.com'),
-            'Administrator'
-        );
-        RAISE NOTICE 'Dev seed: admin user ready (% id=%)', v_user.email, v_user.id;
+    -- Seed through the writer, like any caller. It refuses a duplicate name
+    -- with NULL, so the seed is safe on every deploy.
+    IF v_env = 'dev' THEN
+        PERFORM fn_create_project('Demo');
     END IF;
 END $$;
 
--- Run tests (savepoint ensures test side effects roll back)
+-- Tests run in the deploy's transaction; their changes roll back here, and a
+-- failing test fails the deploy with nothing committed.
 SAVEPOINT _tests;
 CALL pgmi_test();
 ROLLBACK TO SAVEPOINT _tests;

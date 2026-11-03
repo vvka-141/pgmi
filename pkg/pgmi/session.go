@@ -42,6 +42,7 @@ type Session struct {
 	onClose func()
 
 	FilesLoaded int
+	Ignored     []IgnoredPath
 }
 
 // NewSession creates a new Session. Panics if pool or conn is nil.

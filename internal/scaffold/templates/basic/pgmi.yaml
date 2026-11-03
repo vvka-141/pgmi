@@ -10,6 +10,6 @@ connection:
 
 # Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
 params:
-  env: development
+  env: dev
 
 timeout: 3m                   # Deployment timeout

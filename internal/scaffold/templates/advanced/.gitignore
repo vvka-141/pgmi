@@ -3,6 +3,14 @@
 *.params.*
 .env
 
+# Build output of the gateways/ examples
+node_modules/
+dist/
+target/
+bin/
+obj/
+__pycache__/
+
 # Editor and OS noise
 .DS_Store
 Thumbs.db

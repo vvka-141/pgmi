@@ -98,6 +98,9 @@ type mockDatabaseManager struct {
 	dropErr      error
 	terminateErr error
 
+	deployInProgress bool
+	terminated       []string
+
 	// Recorded so a test can assert the destructive call did NOT happen.
 	// Returning the right error is not the same as not dropping the database.
 	dropped []string
@@ -127,8 +130,13 @@ func (m *mockDatabaseManager) Drop(_ context.Context, _ pgmi.DBConnection, name 
 	return m.dropErr
 }
 
-func (m *mockDatabaseManager) TerminateConnections(_ context.Context, _ pgmi.DBConnection, _ string) error {
+func (m *mockDatabaseManager) TerminateConnections(_ context.Context, _ pgmi.DBConnection, dbName string) error {
+	m.terminated = append(m.terminated, dbName)
 	return m.terminateErr
+}
+
+func (m *mockDatabaseManager) DeployInProgress(_ context.Context, _ pgmi.DBConnection, _ string) (bool, error) {
+	return m.deployInProgress, nil
 }
 
 type mockLogger struct{}

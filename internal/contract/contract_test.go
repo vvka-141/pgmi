@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -180,10 +181,18 @@ func TestAPISQL_NoDollarQuoteInGeneratedTestSQL(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 	if strings.Contains(sql, "$__pgmi__$") {
-		t.Error("pgmi_test_generate must not use $__pgmi__$ dollar-quote tag — a test path containing that token breaks out of the quote; use pgmi_run_test_source() instead")
+		t.Error("pgmi_test_generate must not use $__pgmi__$ dollar-quote tag — a test path containing that token breaks out of the quote; pass the path through set_config instead")
 	}
-	if !strings.Contains(sql, "pgmi_run_test_source") {
-		t.Error("pgmi_test_generate must delegate to pgmi_run_test_source() to avoid dollar-quote injection")
+	// The test path reaches the dollar-quoted DO body through set_config, never
+	// as text inside it: a path containing the closing tag would end the body.
+	body := regexp.MustCompile(`(?s)\$pgmi_test\$(.*?)\$pgmi_test\$`).FindAllStringSubmatch(sql, -1)
+	if len(body) == 0 {
+		t.Fatal("pgmi_test_generate must run each test file through a $pgmi_test$ DO block")
+	}
+	for _, b := range body {
+		if strings.Contains(b[1], "%") || !strings.Contains(b[1], "current_setting(''pgmi_test.path'')") {
+			t.Errorf("the $pgmi_test$ body must be constant and read the path from pgmi_test.path, got %q", b[1])
+		}
 	}
 }
 

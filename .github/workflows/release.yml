@@ -35,15 +35,15 @@ jobs:
           fi
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
 
       - name: dead code (production only)
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
           args: -c .golangci-deadcode.yml
 
@@ -75,7 +75,7 @@ jobs:
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: v2.18.2
+          version: v2.19.0
           args: check
 
       # The release page leads with this narrative. Fail here, before anything is
@@ -114,12 +114,6 @@ jobs:
         with:
           go-version: '1.26'
 
-      # Pinned: this runs with CLOUDSMITH_API_KEY in the environment, so an
-      # unpinned install hands the publication credential to whatever version
-      # PyPI serves that day.
-      - name: Install Cloudsmith CLI
-        run: pip install cloudsmith-cli==1.19.0
-
       # RELEASE_SUMMARY is rendered at the top of the release body by
       # .goreleaser.yaml. Single-sourced from RELEASES.md so the narrative that
       # ships to strangers is the same one that lives in the repo.
@@ -135,12 +129,11 @@ jobs:
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: v2.18.2
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
 
       # checksums.txt is published unsigned, so matching a download against it
       # proves nothing if the release assets themselves were replaced. The

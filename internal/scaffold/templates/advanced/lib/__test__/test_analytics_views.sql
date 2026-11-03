@@ -130,14 +130,13 @@ BEGIN
 
     -- ========================================================================
     -- Generate a REST exchange by invoking hello_world (with auth).
-    -- requiresAuth resolves an active membership.user, so the identity has to
-    -- exist — a well-formed header alone is not an authenticated caller.
+    -- "access": "authenticated" needs a live login session of an enabled person.
     -- ========================================================================
 
-    PERFORM membership.upsert_user('test', 'admin', 'analytics-admin@example.com');
+    PERFORM pg_temp.test_login('test', 'admin', 'analytics-admin@example.test', NULL, true);
 
     v_response := api.rest_invoke('GET', '/hello?name=ViewTest',
-        ('x-user-id=>test|admin')::extensions.hstore, null::bytea);
+        pg_temp.test_session_headers('test|admin'), null::bytea);
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'hello_world invocation failed: %', (v_response).status_code;
     END IF;
@@ -156,8 +155,8 @@ BEGIN
     WHERE request_url LIKE '%/hello%'
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF coalesce(v_replay, '') NOT LIKE '%rest_invoke%' THEN
-        RAISE EXCEPTION 'vw_rest_exchange_info replay_sql should contain rest_invoke, got: %', v_replay;
+    IF coalesce(v_replay, '') NOT LIKE '%api.replay_exchange(%' THEN
+        RAISE EXCEPTION 'vw_rest_exchange_info replay_sql should call api.replay_exchange, got: %', v_replay;
     END IF;
 
     RAISE NOTICE '  + vw_rest_exchange_info: % exchanges, replay_sql generated', v_exchange_count;
@@ -196,4 +195,35 @@ BEGIN
     RAISE NOTICE '  + vw_exchange_stats: REST protocol row present';
 
     RAISE NOTICE '+ Exchange analytics view tests passed';
+END $$;
+
+DO $$
+DECLARE
+    v_row record;
+BEGIN
+    RAISE DEBUG '-> vw_handler_info: one row per handler, its route as values';
+
+    IF (SELECT count(*) FROM api.vw_handler_info) IS DISTINCT FROM (SELECT count(*) FROM api.handler)
+       OR (SELECT count(DISTINCT object_id) FROM api.vw_handler_info) IS DISTINCT FROM (SELECT count(*) FROM api.handler) THEN
+        RAISE EXCEPTION 'TEST FAILED: vw_handler_info must have exactly one row per handler';
+    END IF;
+
+    SELECT rest_path, rest_method_regexp, is_unrouted INTO v_row
+    FROM api.vw_handler_info WHERE handler_function_name = 'hello_world';
+    IF v_row.rest_path IS DISTINCT FROM '/hello' OR v_row.rest_method_regexp IS DISTINCT FROM '^GET$'
+       OR v_row.is_unrouted IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'TEST FAILED: hello_world must show /hello, ^GET$ and a route, got %', v_row;
+    END IF;
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', 'ffffffff-4481-4000-8000-000000000001', 'path', '/unrouted-probe',
+            'httpMethod', '^GET$', 'name', 'unrouted_probe', 'access', 'public'),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+    DELETE FROM api.rest_route WHERE handler_object_id = 'ffffffff-4481-4000-8000-000000000001';
+
+    SELECT rest_path, is_unrouted INTO v_row
+    FROM api.vw_handler_info WHERE object_id = 'ffffffff-4481-4000-8000-000000000001';
+    IF v_row.is_unrouted IS DISTINCT FROM true OR v_row.rest_path IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a handler without a route must show is_unrouted and no rest_path, got %', v_row;
+    END IF;
 END $$;

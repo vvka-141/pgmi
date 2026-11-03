@@ -6,7 +6,9 @@ weight: 100
 
 # Database Testing with pgmi
 
-This guide teaches you how to test your PostgreSQL code using pgmi — from your first test to hierarchical fixtures. Every example is copy-paste ready.
+This guide teaches you how to test your PostgreSQL code using pgmi — from your first test to hierarchical fixtures.
+
+> **Example layout.** The examples on this page assume SQL files under `migrations/`, with a `users` table created by `migrations/001_initial.sql`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
 
 ---
 
@@ -52,54 +54,50 @@ ships everything the test machinery needs:
 myapp/
 ├── deploy.sql              ← already calls CALL pgmi_test()
 ├── pgmi.yaml
-├── migrations/
-│   ├── 001_users.sql       ← creates the "user" table
-│   └── 002_user_crud.sql
-└── __test__/               ← already here, at the project root
-    ├── _setup.sql          ← seeds alice/bob/charlie
-    └── test_user_crud.sql
+├── physical/
+│   ├── 001_project.sql     ← creates the project table
+│   ├── 002_task.sql        ← creates the task table
+│   └── __test__/
+│       └── test_constraints.sql
+├── semantic/
+│   ├── project.sql         ← project_view, fn_create_project
+│   ├── task.sql            ← fn_add_task, fn_complete_task and their refusal functions
+│   └── __test__/
+│       ├── _setup.sql      ← creates the Website project with two open tasks
+│       ├── test_project.sql
+│       └── test_task.sql
+└── __test__/
+    └── test_function_privileges.sql
 ```
 
-`001_users.sql` creates the table you will write against. Note the name: it is
-**`"user"`, singular and quoted** — `user` is a reserved word in PostgreSQL, so
-every reference to it needs the quotes.
-
-```sql
-CREATE TABLE IF NOT EXISTS "user" (
-    id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE,
-    name TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+Each layer has its tests next to it: `physical/__test__/` proves the
+constraints refuse bad rows, `semantic/__test__/` proves the writer functions
+refuse and accept what they should.
 
 ### Step 1: Add a test file
 
-There is no directory to create — `__test__/` is already there. The name
-`__test__` (or `__tests__`) is special: pgmi loads those files into a separate
-view, so a deployment loop cannot execute one by accident.
+There is no directory to create — `semantic/__test__/` is already there. The
+name `__test__` (or `__tests__`) is special: pgmi loads those files into a
+separate view, so a deployment loop cannot execute one by accident.
 
 ### Step 2: Write the test
 
-Create `__test__/test_user_table.sql`:
+Create `semantic/__test__/test_add_task.sql`:
 
 ```sql
 DO $$
 DECLARE
-    v_email TEXT := 'dana@example.com';
+    v_project_id bigint;
 BEGIN
-    -- _setup.sql already seeded three users; add a fourth.
-    INSERT INTO "user" (email, name) VALUES (v_email, 'Dana');
+    -- _setup.sql created the Website project with two open tasks; add a third.
+    SELECT project_id INTO STRICT v_project_id FROM project WHERE name = 'Website';
+    PERFORM fn_add_task(v_project_id, 'Book the domain');
 
-    IF NOT EXISTS (SELECT 1 FROM "user" WHERE email = v_email) THEN
-        RAISE EXCEPTION 'TEST FAILED: user was not inserted';
+    IF (SELECT open_task_count FROM project_view WHERE project_id = v_project_id) IS DISTINCT FROM 3 THEN
+        RAISE EXCEPTION 'TEST FAILED: Website should have 3 open tasks';
     END IF;
 
-    IF (SELECT name FROM "user" WHERE email = v_email) IS DISTINCT FROM 'Dana' THEN
-        RAISE EXCEPTION 'TEST FAILED: name did not round-trip';
-    END IF;
-
-    RAISE NOTICE 'PASS: "user" accepts an insert and reads it back';
+    RAISE NOTICE 'PASS: fn_add_task adds an open task the view counts';
 END $$;
 ```
 
@@ -107,9 +105,10 @@ Tests are plain SQL. `RAISE EXCEPTION` stops execution immediately with a clear
 message; a passing test finishes silently, or with a `RAISE NOTICE` for your own
 visibility.
 
-`IS DISTINCT FROM` rather than `!=` is deliberate. `SELECT ... INTO` is not
-`STRICT` and a missing row yields NULL, and `NULL != 'Dana'` is NULL — not true —
-so an `IF` built on `!=` takes no branch and the assertion silently disappears.
+`IS DISTINCT FROM` rather than `!=` is deliberate. A subquery that finds no
+row yields NULL, and `NULL != 3` is NULL — not true — so an `IF` built on `!=`
+takes no branch and the assertion silently disappears. `INTO STRICT` fails the
+same way loudly when the fixture row is missing.
 See [Assertions must be able to fail](#assertions-must-be-able-to-fail).
 
 ### Step 3: Deploy
@@ -117,7 +116,8 @@ See [Assertions must be able to fail](#assertions-must-be-able-to-fail).
 Your `deploy.sql` already runs the suite — this is the block the scaffold ships:
 
 ```sql
--- Run tests (savepoint ensures test side effects roll back)
+-- Tests run in the deploy's transaction; their changes roll back here, and a
+-- failing test fails the deploy with nothing committed.
 SAVEPOINT _tests;
 CALL pgmi_test();
 ROLLBACK TO SAVEPOINT _tests;
@@ -132,31 +132,34 @@ pgmi deploy . --overwrite --force
 ```
 
 ```
-Dev seed: admin user ready (admin@example.com id=1)
+[dev] Deploying myapp v1.0.0
 [pgmi] Test suite started
-[pgmi] Fixture: ./__test__/_setup.sql
-[pgmi] Test: ./__test__/test_user_crud.sql
-[pgmi] Test: ./__test__/test_user_table.sql
-PASS: "user" accepts an insert and reads it back
+[pgmi] Test: ./__test__/test_function_privileges.sql
+[pgmi] Test: ./physical/__test__/test_constraints.sql
+[pgmi] Fixture: ./semantic/__test__/_setup.sql
+[pgmi] Test: ./semantic/__test__/test_add_task.sql
+PASS: fn_add_task adds an open task the view counts
+[pgmi] Test: ./semantic/__test__/test_project.sql
+[pgmi] Test: ./semantic/__test__/test_task.sql
 [pgmi] Test suite passed
-✓ myapp: 8 files loaded in 6.07s
+✓ myapp: 15 files loaded, 2 paths ignored in 0.11s
 ```
 
 ### Step 4: Check your database
 
 ```bash
-psql -h localhost -U postgres -d myapp -c 'SELECT * FROM "user";'
+psql -h localhost -U postgres -d myapp -c 'SELECT name, open_task_count, state FROM project_view;'
 ```
 
 ```
- id |       email       |     name      |          created_at
-----+-------------------+---------------+-------------------------------
-  1 | admin@example.com | Administrator | 2026-07-27 18:47:36.515231+00
+ name | open_task_count | state
+------+-----------------+-------
+ Demo |               0 | empty
 (1 row)
 ```
 
-**One row — the dev seed, and nothing else.** Alice, Bob and Charlie from the
-fixture are gone, and so is Dana from the test. Everything the suite touched was
+**One row — the dev seed, and nothing else.** The Website project from the
+fixture is gone, and so is the task the test added. Everything the suite touched was
 rolled back; only the deployment itself committed.
 
 ---
@@ -250,13 +253,13 @@ Here's the structure pgmi generates for the example above. Understanding this is
 BEGIN;                                  ← outer transaction
 
     SAVEPOINT __pgmi_d1__;                         ← fixture boundary (top-level SQL)
-    SELECT pg_temp.pgmi_run_test_source('…/_setup.sql');
+    RUN …/_setup.sql
 
         SAVEPOINT __pgmi_t2__;                     ← test boundary, one per directory
-        SELECT pg_temp.pgmi_run_test_source('…/test_insert.sql');
+        RUN …/test_insert.sql
         ROLLBACK TO SAVEPOINT __pgmi_t2__;         ← undo test_insert.sql changes
 
-        SELECT pg_temp.pgmi_run_test_source('…/test_user_count.sql');
+        RUN …/test_user_count.sql
         ROLLBACK TO SAVEPOINT __pgmi_t2__;         ← undo test_user_count.sql changes
 
     ROLLBACK TO SAVEPOINT __pgmi_d1__;             ← undo fixture (Alice, Bob gone)
@@ -269,7 +272,7 @@ The `ROLLBACK TO SAVEPOINT __pgmi_t2__` after `test_insert.sql` is what erases C
 
 The `ROLLBACK TO SAVEPOINT __pgmi_d1__` at the end erases even the fixture data.
 
-**Key implementation detail:** The SAVEPOINT commands are generated as **top-level SQL statements**, not inside PL/pgSQL blocks. PostgreSQL's PL/pgSQL does not support savepoints directly — you cannot use `EXECUTE 'SAVEPOINT ...'` inside a DO block. pgmi's `pgmi_test_generate()` function produces inline SQL where savepoints are at the top level, and each fixture or test runs through `SELECT pg_temp.pgmi_run_test_source(path)`.
+**Key implementation detail:** The SAVEPOINT commands are generated as **top-level SQL statements**, not inside PL/pgSQL blocks. PostgreSQL's PL/pgSQL does not support savepoints directly — you cannot use `EXECUTE 'SAVEPOINT ...'` inside a DO block. pgmi's `pgmi_test_generate()` function produces inline SQL where savepoints are at the top level. `RUN <file>` above stands for `SELECT set_config('pgmi_test.path', '<file>', true);` followed by a constant `DO` block that `EXECUTE`s that file's content. The block has no exception handler, so a failing test reaches pgmi with its original SQLSTATE and position, and pgmi reports the test file and line.
 
 **PostgreSQL's transactional savepoints do all the work.** pgmi just generates the right savepoint structure. No cleanup scripts. No teardown hooks. No manual state management.
 
@@ -669,13 +672,17 @@ Against the scaffolded basic template that produces:
 
 ```
 [suite_start]
-[FIXTURE] ./__test__/_setup.sql
-[fixture_end] ./__test__/_setup.sql
-[TEST] ./__test__/test_user_crud.sql
-[test_end] ./__test__/test_user_crud.sql
-[rollback] ./__test__/test_user_crud.sql
-[TEARDOWN] ./__test__/
-[teardown_end] ./__test__/
+...
+[FIXTURE] ./semantic/__test__/_setup.sql
+[fixture_end] ./semantic/__test__/_setup.sql
+[TEST] ./semantic/__test__/test_project.sql
+[test_end] ./semantic/__test__/test_project.sql
+[rollback] ./semantic/__test__/test_project.sql
+[TEST] ./semantic/__test__/test_task.sql
+[test_end] ./semantic/__test__/test_task.sql
+[rollback] ./semantic/__test__/test_task.sql
+[TEARDOWN] ./semantic/__test__/
+[teardown_end] ./semantic/__test__/
 [suite_end]
 ```
 

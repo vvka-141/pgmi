@@ -14,17 +14,22 @@ weight: 60
 
 | Function | Purpose |
 |----------|---------|
-| `api.mcp_handle_request(request, context)` | Unified dispatcher — returns `NULL` envelope for JSON-RPC notifications (no response sent) |
-| `api.mcp_initialize(params, request_id jsonb)` | Handshake handler |
-| `api.mcp_ping(request_id jsonb)` | Keepalive response |
+| `api.mcp_handle_request(request, context)` | Unified dispatcher for both eras — returns `NULL` envelope for JSON-RPC notifications (no response sent) |
+| `api.mcp_supported_versions()` | The versions a 2026-07-28-era request may name in `_meta`: `{2026-07-28}` |
+| `api.mcp_discover()` | The `server/discover` result (before `api.mcp_success` adds `resultType` and serverInfo) |
+| `internal.mcp_server_instructions()` | Hook: the server instructions; NULL (default) publishes none |
+| `api.mcp_initialize(params, request_id jsonb)` | Legacy handshake handler |
+| `api.mcp_ping(request_id jsonb)` | Legacy keepalive response |
+| `api.mcp_server_info()` | The server identity in every result's `_meta` |
+| `api.mcp_cache_policy()` | `ttlMs` and `cacheScope` of the four lists and `resources/read` |
 | `api.mcp_call_tool(name, args, context, id jsonb)` | Invoke a tool; handler exceptions → `result.isError=true` (not JSON-RPC error) |
 | `api.mcp_read_resource(uri, context, id jsonb)` | Read a resource |
 | `api.mcp_get_prompt(name, args, context, id jsonb)` | Expand a prompt |
-| `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` | Tool discovery; hides `requires_auth` tools when `auth.user_id` is unset; surfaces tags as `_meta.tags`; `p_tags` filter matches by overlap (NULL or empty array = no filter) |
+| `api.mcp_list_tools(p_tags text[] DEFAULT NULL)` | Tool discovery; lists only the tools the caller may call (`internal.current_access_denial`); surfaces tags as `_meta.tags`; `p_tags` filter matches by overlap (NULL or empty array = no filter) |
 | `api.mcp_list_resources()` | Concrete-resource discovery (`resources/list`); emits `uri` objects only; same auth-hide semantics |
 | `api.mcp_list_resource_templates()` | Template discovery (`resources/templates/list`); emits `uriTemplate` objects (RFC 6570); same auth-hide semantics |
 | `api.mcp_list_prompts()` | Prompt discovery; same auth-hide semantics |
-| `api.mcp_request_policy(request, requested_isolation)` | Resolve a request's transaction policy before opening the dispatch transaction — see [transaction policy](MCP-GATEWAY.md#transaction-policy) |
+| `api.mcp_request_policy(request, requested_isolation, protocol_version, mcp_method, mcp_name)` | Before dispatch: the refusal for a header, version or `_meta` problem, the era (`modern`) and the transaction policy — see [transport behavior](MCP-PROTOCOL.md#transport-behavior) and [transaction policy](MCP-GATEWAY.md#transaction-policy) |
 
 `request_id` is **jsonb** across the MCP API so JSON-RPC 2.0 id types (string,
 integer, null) round-trip verbatim. Passing a raw text literal (`'req-1'`)
@@ -35,13 +40,15 @@ fails domain parsing — use `'"req-1"'::jsonb` or `'42'::jsonb`.
 The dispatcher (`api.mcp_handle_request`) routes requests by method. Any
 method in the `notifications/*` family (or any request missing an `id`
 member) returns a NULL envelope — callers MUST NOT write anything to the wire
-for notifications per JSON-RPC 2.0.
+for notifications per JSON-RPC 2.0. Which era a request belongs to is on the
+[protocol page](MCP-PROTOCOL.md#two-eras-on-one-endpoint).
 
 | Method | Handler |
 |--------|---------|
-| `initialize` | `api.mcp_initialize(params, id)` |
+| `server/discover` | `api.mcp_discover()` |
+| `initialize` | `api.mcp_initialize(params, id)` (legacy era; `-32601` on 2026-07-28) |
 | `notifications/initialized` / any `notifications/*` | returns NULL envelope (no response) |
-| `ping` | `api.mcp_ping(id)` |
+| `ping` | `api.mcp_ping(id)` (legacy era; `-32601` on 2026-07-28) |
 | `tools/list` | `api.mcp_list_tools()` |
 | `tools/call` | `api.mcp_call_tool(name, args, context, id)` |
 | `resources/list` | `api.mcp_list_resources()` |
@@ -69,11 +76,16 @@ api.mcp_prompt_result(messages jsonb, request_id jsonb) RETURNS api.mcp_response
 api.mcp_success(result jsonb, request_id jsonb) RETURNS api.mcp_response
 ```
 
+Every success builder adds `resultType: "complete"` and
+`_meta["io.modelcontextprotocol/serverInfo"]`, keeping the result's own
+`_meta` keys. `api.mcp_resource_result` adds `ttlMs` and `cacheScope`. Nulls
+inside `structured_content` are kept.
+
 ### Error Responses
 
 ```sql
--- Generic JSON-RPC error
-api.mcp_error(code integer, message text, request_id jsonb) RETURNS api.mcp_response
+-- Generic JSON-RPC error; data is kept as given, nulls inside it included
+api.mcp_error(code integer, message text, request_id jsonb, data jsonb DEFAULT NULL) RETURNS api.mcp_response
 
 -- Tool error: a successful tool result with isError = true, not a JSON-RPC error
 api.mcp_tool_error(message text, request_id jsonb) RETURNS api.mcp_response

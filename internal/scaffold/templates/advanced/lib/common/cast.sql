@@ -3,7 +3,7 @@
     id="39c75443-ec03-4212-9140-755626f56c01"
     idempotent="true">
   <description>
-    Type conversion utility functions with fallback defaults (UUID, interval, timestamp, boolean, numeric)
+    Type conversion utility functions with fallback defaults (UUID, boolean, integer, bigint, numeric, interval, timestamp, timestamptz, date, inet). Surrounding whitespace is ignored; NaN, infinity and out-of-range values give the default.
   </description>
   <sortKeys>
     <key>001/000</key>
@@ -17,32 +17,19 @@
 -- boolean, integer, bigint, and numeric types.
 -- ============================================================================
 
--- Operators are created in the api schema so they resolve inside handler
--- bodies (handler search_path: api, internal, extensions, pg_temp).
-
--- Drop old ?| operators (renamed to ?>)
-DROP OPERATOR IF EXISTS ?| (text, uuid) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, boolean) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, integer) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, bigint) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, numeric) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, interval) CASCADE;
-DROP OPERATOR IF EXISTS ?| (text, timestamp) CASCADE;
-
--- Drop current ?> for idempotency
-DROP OPERATOR IF EXISTS api.?> (text, uuid) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, boolean) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, integer) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, bigint) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, numeric) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, interval) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, timestamp) CASCADE;
-DROP OPERATOR IF EXISTS api.?> (text, timestamptz) CASCADE;
-
 DO $$
 BEGIN
     RAISE NOTICE '→ Installing common type conversion functions';
 END $$;
+
+-- ASCII whitespace of every kind; btrim alone strips only spaces, so a value
+-- pasted with a tab or a trailing newline would fall to the default.
+CREATE OR REPLACE FUNCTION common.trim_space(input text)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+    SELECT btrim($1, E' \t\n\r\f\x0b');
+$$;
 
 -- ============================================================================
 -- try_cast(text, uuid) - UUID Try-Cast with Default
@@ -53,7 +40,7 @@ END $$;
 -- Example:
 --   SELECT common.try_cast('550e8400-e29b-41d4-a716-446655440000', extensions.uuid_nil());
 --   SELECT common.try_cast('invalid', extensions.uuid_nil());  -- Returns nil UUID
---   SELECT '550e8400e29b41d4a716446655440000' ?> extensions.uuid_nil();  -- Operator syntax
+--   SELECT '550e8400e29b41d4a716446655440000' ?> extensions.uuid_nil();
 
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value uuid)
 RETURNS uuid
@@ -62,23 +49,14 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN $1 ~* '^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$'
-        THEN $1::uuid
+        WHEN common.trim_space($1) ~* '^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$'
+        THEN common.trim_space($1)::uuid
         ELSE $2
     END;
 $$;
 
 COMMENT ON FUNCTION common.try_cast(text, uuid) IS
     'Try to parse text as UUID, returning default value on failure. Accepts standard (with dashes) and compact (without dashes) formats.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = uuid,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, uuid) IS
-    'Try-cast operator: parse left as UUID or return right as default. Example: ''text'' ?> extensions.uuid_nil()';
 
 -- Inline tests
 DO $$
@@ -91,12 +69,6 @@ BEGIN
     END IF;
     IF common.try_cast('invalid', extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
         RAISE EXCEPTION 'try_cast(uuid) failed: invalid input should return default';
-    END IF;
-    IF ('550e8400-e29b-41d4-a716-446655440000' ?> extensions.uuid_nil()) = extensions.uuid_nil() THEN
-        RAISE EXCEPTION 'operator ?>(uuid) failed: valid UUID should parse';
-    END IF;
-    IF ('invalid' ?> extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
-        RAISE EXCEPTION 'operator ?>(uuid) failed: invalid input should return default';
     END IF;
 END $$;
 
@@ -154,7 +126,7 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        ELSE CASE btrim(lower($1))
+        ELSE CASE lower(common.trim_space($1))
             WHEN 'true'  THEN true
             WHEN 't'     THEN true
             WHEN 'yes'   THEN true
@@ -174,15 +146,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, boolean) IS
     'Try to parse text as boolean. Accepts: true/t/yes/y/on/1 (true), false/f/no/n/off/0 (false). Case insensitive. Returns default on unrecognized input.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = boolean,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, boolean) IS
-    'Try-cast operator: parse left as boolean or return right as default. Example: ''yes'' ?> false';
 
 -- Inline tests
 DO $$
@@ -253,16 +216,6 @@ BEGIN
         RAISE EXCEPTION 'try_cast(boolean) failed: empty string should return default';
     END IF;
 
-    -- Test operator syntax
-    IF ('yes' ?> false) IS DISTINCT FROM true THEN
-        RAISE EXCEPTION 'operator ?>(boolean) failed: "yes" should parse as true';
-    END IF;
-    IF ('no' ?> true) IS DISTINCT FROM false THEN
-        RAISE EXCEPTION 'operator ?>(boolean) failed: "no" should parse as false';
-    END IF;
-    IF ('invalid' ?> false) IS DISTINCT FROM false THEN
-        RAISE EXCEPTION 'operator ?>(boolean) failed: invalid input should return default';
-    END IF;
 END $$;
 
 -- ============================================================================
@@ -287,10 +240,10 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN length(btrim($1)) <= 39 AND btrim($1) ~ '^[+-]?\d+$' THEN
+        WHEN length(common.trim_space($1)) <= 39 AND common.trim_space($1) ~ '^[+-]?\d+$' THEN
             CASE
-                WHEN btrim($1)::numeric BETWEEN -2147483648 AND 2147483647
-                THEN btrim($1)::integer
+                WHEN common.trim_space($1)::numeric BETWEEN -2147483648 AND 2147483647
+                THEN common.trim_space($1)::integer
                 ELSE $2
             END
         ELSE $2
@@ -299,15 +252,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, integer) IS
     'Try to parse text as integer (32-bit). Handles signs, whitespace, leading zeros. Returns default if invalid or out of range.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = integer,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, integer) IS
-    'Try-cast operator: parse left as integer or return right as default. Example: ''42'' ?> 0';
 
 -- Inline tests
 DO $$
@@ -371,13 +315,6 @@ BEGIN
         RAISE EXCEPTION 'try_cast(integer) failed: mixed alphanumeric should return default';
     END IF;
 
-    -- Test operator syntax
-    IF ('42' ?> 0) IS DISTINCT FROM 42 THEN
-        RAISE EXCEPTION 'operator ?>(integer) failed: "42" should parse';
-    END IF;
-    IF ('invalid' ?> -1) IS DISTINCT FROM -1 THEN
-        RAISE EXCEPTION 'operator ?>(integer) failed: invalid input should return default';
-    END IF;
 END $$;
 
 -- ============================================================================
@@ -399,10 +336,10 @@ IMMUTABLE PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN $1 IS NULL THEN $2
-        WHEN length(btrim($1)) <= 39 AND btrim($1) ~ '^[+-]?\d+$' THEN
+        WHEN length(common.trim_space($1)) <= 39 AND common.trim_space($1) ~ '^[+-]?\d+$' THEN
             CASE
-                WHEN btrim($1)::numeric BETWEEN -9223372036854775808 AND 9223372036854775807
-                THEN btrim($1)::bigint
+                WHEN common.trim_space($1)::numeric BETWEEN -9223372036854775808 AND 9223372036854775807
+                THEN common.trim_space($1)::bigint
                 ELSE $2
             END
         ELSE $2
@@ -411,15 +348,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, bigint) IS
     'Try to parse text as bigint (64-bit). Handles signs, whitespace, leading zeros. Returns default if invalid or out of range.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = bigint,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, bigint) IS
-    'Try-cast operator: parse left as bigint or return right as default. Example: ''1705327800000'' ?> 0';
 
 -- Inline tests
 DO $$
@@ -471,13 +399,6 @@ BEGIN
         RAISE EXCEPTION 'try_cast(bigint) failed: non-numeric should return default';
     END IF;
 
-    -- Test operator syntax
-    IF ('1705327800000' ?> 0::bigint) IS DISTINCT FROM 1705327800000 THEN
-        RAISE EXCEPTION 'operator ?>(bigint) failed: large value should parse';
-    END IF;
-    IF ('invalid' ?> -1::bigint) IS DISTINCT FROM -1 THEN
-        RAISE EXCEPTION 'operator ?>(bigint) failed: invalid input should return default';
-    END IF;
 END $$;
 
 -- ============================================================================
@@ -498,30 +419,20 @@ END $$;
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value numeric)
 RETURNS numeric
 LANGUAGE plpgsql
-IMMUTABLE PARALLEL SAFE
+STABLE PARALLEL SAFE
 AS $$
+DECLARE
+    v_input text := common.trim_space($1);
 BEGIN
-    IF $1 IS NULL THEN
-        RETURN $2;
+    IF pg_input_is_valid(v_input, 'numeric') AND v_input !~* '(nan|inf)' THEN
+        RETURN v_input::numeric;
     END IF;
-    RETURN btrim($1)::numeric;
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN $2;
+    RETURN $2;
 END;
 $$;
 
 COMMENT ON FUNCTION common.try_cast(text, numeric) IS
-    'Try to parse text as numeric (arbitrary precision). Handles integers, decimals, scientific notation. Returns default on failure.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = numeric,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, numeric) IS
-    'Try-cast operator: parse left as numeric or return right as default. Example: ''19.99'' ?> 0';
+    'Try to parse text as numeric (arbitrary precision). Handles integers, decimals, scientific notation. NaN, Infinity and malformed input return the default. STABLE: pg_input_is_valid is.';
 
 -- Inline tests
 DO $$
@@ -587,16 +498,6 @@ BEGIN
         RAISE EXCEPTION 'try_cast(numeric) failed: mixed alphanumeric should return default';
     END IF;
 
-    -- Test operator syntax
-    IF ('19.99' ?> 0::numeric) IS DISTINCT FROM 19.99 THEN
-        RAISE EXCEPTION 'operator ?>(numeric) failed: decimal should parse';
-    END IF;
-    IF ('1.5e10' ?> 0::numeric) IS DISTINCT FROM 15000000000 THEN
-        RAISE EXCEPTION 'operator ?>(numeric) failed: scientific notation should parse';
-    END IF;
-    IF ('invalid' ?> (-1)::numeric) IS DISTINCT FROM -1 THEN
-        RAISE EXCEPTION 'operator ?>(numeric) failed: invalid input should return default';
-    END IF;
 END $$;
 
 -- ============================================================================
@@ -631,11 +532,17 @@ BEGIN
         RETURN $2;
     END IF;
 
-    v_input := btrim($1);
+    v_input := common.trim_space($1);
+    IF v_input ~* '^[+-]?infinity$' THEN
+        RETURN $2;
+    END IF;
     -- Use coarse patterns to classify format, then parse accordingly
     -- This avoids expensive regex validation upfront
 
-    -- ISO-8601: starts with optional sign + 'P'
+    -- ISO-8601: starts with optional sign + 'P', and names at least one component
+    IF v_input ~* '^-?PT?$' THEN
+        RETURN $2;
+    END IF;
     IF v_input ~* '^-?P' THEN
         v_match := regexp_match(
             v_input,
@@ -700,15 +607,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, interval) IS
     'Try to parse text as interval using ISO-8601, .NET TimeSpan, or natural language formats. Returns default value on failure.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = interval,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, interval) IS
-    'Try-cast operator: parse left as interval or return right as default. Example: ''2 days'' ?> ''0''::interval';
 
 -- Inline tests
 DO $$
@@ -802,20 +700,6 @@ BEGIN
         RAISE EXCEPTION 'try_cast(interval) failed: empty input should return default';
     END IF;
 
-    -- Test operator syntax
-    v_result := '2 days 3 hours' ?> v_default;
-    IF v_result = v_default THEN
-        RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" should parse';
-    END IF;
-    IF v_result IS DISTINCT FROM make_interval(days => 2, hours => 3) THEN
-        RAISE EXCEPTION 'operator ?>(interval) failed: "2 days 3 hours" incorrect result';
-    END IF;
-
-    v_result := 'invalid' ?> v_default;
-    IF v_result IS DISTINCT FROM v_default THEN
-        RAISE EXCEPTION 'operator ?>(interval) failed: invalid input should return default';
-    END IF;
-
     -- Oversized components must return the default, not raise. try_cast is the
     -- documented way to parse untrusted query/body params, so a throw here is a
     -- 500 on input any caller can send.
@@ -833,11 +717,6 @@ BEGIN
     v_result := common.try_cast('P500000000W', v_default);
     IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(interval) failed: 7*weeks overflow should return default, got %', v_result;
-    END IF;
-
-    v_result := 'P99999999999Y' ?> v_default;
-    IF v_result IS DISTINCT FROM v_default THEN
-        RAISE EXCEPTION 'operator ?>(interval) failed: oversized input should return default, got %', v_result;
     END IF;
 END $$;
 
@@ -873,7 +752,10 @@ BEGIN
         RETURN $2;
     END IF;
 
-    v_input := btrim($1);
+    v_input := common.trim_space($1);
+    IF v_input ~* '^[+-]?infinity$' THEN
+        RETURN $2;
+    END IF;
 
     -- Empty input returns default
     IF v_input = '' THEN
@@ -889,8 +771,10 @@ BEGIN
             -- Distinguish milliseconds from seconds by magnitude
             -- Millisecond epoch >= 10^10 (corresponds to year ~2286 as seconds, or ~1973 as milliseconds)
             IF abs(v_numeric) >= 10000000000 THEN
-                -- Millisecond epoch: divide by 1000
-                RETURN to_timestamp(v_numeric / 1000.0)::timestamp;
+                -- Millisecond epoch: divide by 1000, same 0001..9999 bounds
+                IF v_numeric BETWEEN -62135596800000 AND 253402300799999 THEN
+                    RETURN to_timestamp(v_numeric / 1000.0)::timestamp;
+                END IF;
             ELSE
                 -- Second epoch (supports decimal for subsecond precision)
                 -- Sanity check: PostgreSQL timestamp range is 4713 BC to 294276 AD
@@ -918,15 +802,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, timestamp) IS
     'Try to parse text as timestamp using Unix epoch (seconds/milliseconds) or standard formats. Returns default value on failure.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = timestamp,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, timestamp) IS
-    'Try-cast operator: parse left as timestamp or return right as default. Example: ''2025-01-15'' ?> CURRENT_TIMESTAMP';
 
 -- Inline tests
 DO $$
@@ -999,18 +874,6 @@ BEGIN
     IF v_result IS DISTINCT FROM v_default THEN
         RAISE EXCEPTION 'try_cast(timestamp) failed: invalid date should return default';
     END IF;
-
-    -- Test operator syntax
-    v_result := '2025-01-15 14:30:00' ?> v_default;
-    v_expected := '2025-01-15 14:30:00'::timestamp;
-    IF v_result IS DISTINCT FROM v_expected THEN
-        RAISE EXCEPTION 'operator ?>(timestamp) failed: ISO-8601 format should parse correctly';
-    END IF;
-
-    v_result := 'invalid' ?> v_default;
-    IF v_result IS DISTINCT FROM v_default THEN
-        RAISE EXCEPTION 'operator ?>(timestamp) failed: invalid input should return default';
-    END IF;
 END $$;
 
 -- ============================================================================
@@ -1034,7 +897,10 @@ BEGIN
         RETURN $2;
     END IF;
 
-    v_input := btrim($1);
+    v_input := common.trim_space($1);
+    IF v_input ~* '^[+-]?infinity$' THEN
+        RETURN $2;
+    END IF;
     IF v_input = '' THEN
         RETURN $2;
     END IF;
@@ -1044,7 +910,9 @@ BEGIN
         BEGIN
             v_numeric := v_input::numeric;
             IF abs(v_numeric) >= 10000000000 THEN
-                RETURN to_timestamp(v_numeric / 1000.0);
+                IF v_numeric BETWEEN -62135596800000 AND 253402300799999 THEN
+                    RETURN to_timestamp(v_numeric / 1000.0);
+                END IF;
             ELSIF v_numeric BETWEEN -62135596800 AND 253402300799 THEN
                 RETURN to_timestamp(v_numeric);
             END IF;
@@ -1065,15 +933,6 @@ $$;
 
 COMMENT ON FUNCTION common.try_cast(text, timestamptz) IS
     'Try to parse text as timestamptz using Unix epoch (seconds/milliseconds) or standard formats; preserves explicit ISO offsets. Returns default value on failure.';
-
-CREATE OPERATOR api.?> (
-    LEFTARG = text,
-    RIGHTARG = timestamptz,
-    PROCEDURE = common.try_cast
-);
-
-COMMENT ON OPERATOR api.?> (text, timestamptz) IS
-    'Try-cast operator: parse left as timestamptz or return right as default. Example: ''2025-01-15T14:30:00+02:00'' ?> CURRENT_TIMESTAMP';
 
 -- Inline tests
 DO $$
@@ -1109,6 +968,93 @@ BEGIN
 END $$;
 
 -- NULL input returns the default for every try_cast variant (NULL-safety contract)
+-- ============================================================================
+-- try_cast(text, date), try_cast(text, inet)
+-- ============================================================================
+-- pg_input_is_valid checks without a subtransaction. PL/pgSQL, not SQL: an
+-- inlined CASE would let the planner fold the cast of a constant and raise.
+-- STABLE: date input depends on DateStyle, and pg_input_is_valid is STABLE.
+
+CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value date)
+RETURNS date
+LANGUAGE plpgsql
+STABLE PARALLEL SAFE
+AS $$
+DECLARE
+    v_input text := common.trim_space($1);
+BEGIN
+    IF pg_input_is_valid(v_input, 'date') AND v_input !~* '^[+-]?infinity$' THEN
+        RETURN v_input::date;
+    END IF;
+    RETURN $2;
+END;
+$$;
+
+COMMENT ON FUNCTION common.try_cast(text, date) IS
+    'Try to parse text as date. Infinity and malformed input return the default.';
+
+CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value inet)
+RETURNS inet
+LANGUAGE plpgsql
+STABLE PARALLEL SAFE
+AS $$
+DECLARE
+    v_input text := common.trim_space($1);
+BEGIN
+    IF pg_input_is_valid(v_input, 'inet') THEN
+        RETURN v_input::inet;
+    END IF;
+    RETURN $2;
+END;
+$$;
+
+COMMENT ON FUNCTION common.try_cast(text, inet) IS
+    'Try to parse text as inet (IPv4 or IPv6 address, optional prefix). Malformed input returns the default.';
+
+-- Hardening: whitespace of any kind, non-finite values, overflow, bare ISO
+-- designators and out-of-range epochs all give the default.
+DO $$
+DECLARE
+    v_case record;
+BEGIN
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('trim keeps letters', common.trim_space(E'\tv1v\x0b'), 'v1v'),
+            ('uuid tab/newline', common.try_cast(E'\t550e8400-e29b-41d4-a716-446655440000\n', NULL::uuid)::text, '550e8400-e29b-41d4-a716-446655440000'),
+            ('boolean tab', common.try_cast(E'\tyes', NULL::boolean)::text, 'true'),
+            ('integer newline', common.try_cast(E'42\r\n', NULL::integer)::text, '42'),
+            ('bigint tab', common.try_cast(E'\t7', NULL::bigint)::text, '7'),
+            ('numeric newline', common.try_cast(E'\n3.5\t', NULL::numeric)::text, '3.5'),
+            ('numeric NaN', common.try_cast('NaN', NULL::numeric)::text, NULL),
+            ('numeric Infinity', common.try_cast('-Infinity', NULL::numeric)::text, NULL),
+            ('numeric inf', common.try_cast('inf', NULL::numeric)::text, NULL),
+            ('numeric overflow', common.try_cast('1e1000000', NULL::numeric)::text, NULL),
+            ('integer overflow', common.try_cast('2147483648', NULL::integer)::text, NULL),
+            ('interval infinity', common.try_cast('infinity', NULL::interval)::text, NULL),
+            ('interval bare P', common.try_cast('P', NULL::interval)::text, NULL),
+            ('interval bare PT', common.try_cast(' PT ', NULL::interval)::text, NULL),
+            ('interval ISO fraction', common.try_cast('PT1.5S', NULL::interval)::text, '00:00:01.5'),
+            ('interval ISO overflow', common.try_cast('P99999999999D', NULL::interval)::text, NULL),
+            ('timestamp infinity', common.try_cast('infinity', NULL::timestamp)::text, NULL),
+            ('timestamptz -infinity', common.try_cast(E'\t-infinity', NULL::timestamptz)::text, NULL),
+            ('timestamp ms epoch out of range', common.try_cast('300000000000000', NULL::timestamp)::text, NULL),
+            ('timestamptz ms epoch out of range', common.try_cast('-100000000000000', NULL::timestamptz)::text, NULL),
+            ('date', common.try_cast(E' 2025-01-15\n', NULL::date)::text, '2025-01-15'),
+            ('date invalid', common.try_cast('2025-02-30', NULL::date)::text, NULL),
+            ('date infinity', common.try_cast('infinity', NULL::date)::text, NULL),
+            ('date NULL', common.try_cast(NULL, date '2000-01-01')::text, '2000-01-01'),
+            ('inet v4', common.try_cast(' 10.0.0.1 ', NULL::inet)::text, '10.0.0.1/32'),
+            ('inet v6 prefix', common.try_cast('2001:db8::/32', NULL::inet)::text, '2001:db8::/32'),
+            ('inet invalid', common.try_cast('10.0.0.256', NULL::inet)::text, NULL),
+            ('inet NULL', common.try_cast(NULL, inet '127.0.0.1')::text, '127.0.0.1/32')
+        ) AS c(name, got, want)
+    LOOP
+        IF v_case.got IS DISTINCT FROM v_case.want THEN
+            RAISE EXCEPTION 'try_cast hardening failed: % gave %, want %', v_case.name, v_case.got, v_case.want;
+        END IF;
+    END LOOP;
+END $$;
+
 DO $$
 BEGIN
     IF common.try_cast(NULL::text, extensions.uuid_nil()) IS DISTINCT FROM extensions.uuid_nil() THEN
@@ -1137,19 +1083,6 @@ BEGIN
     END IF;
 END $$;
 
--- ============================================================================
--- Grant Permissions
--- ============================================================================
-
-DO $$
-DECLARE
-    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
-    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
-BEGIN
-    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA common TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA common TO %I', v_api_role);
-END $$;
-
 DO $$
 BEGIN
     RAISE NOTICE '  ✓ common.try_cast(text, uuid) - UUID try-cast with default';
@@ -1159,14 +1092,7 @@ BEGIN
     RAISE NOTICE '  ✓ common.try_cast(text, numeric) - numeric try-cast with default';
     RAISE NOTICE '  ✓ common.try_cast(text, interval) - interval try-cast with default';
     RAISE NOTICE '  ✓ common.try_cast(text, timestamp) - timestamp try-cast with default';
-    RAISE NOTICE '  ✓ operator api.?>(text, uuid) - UUID try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, boolean) - boolean try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, integer) - integer try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, bigint) - bigint try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, numeric) - numeric try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, interval) - interval try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, timestamp) - timestamp try-cast operator';
-    RAISE NOTICE '  ✓ operator api.?>(text, timestamptz) - timestamptz try-cast operator';
+    RAISE NOTICE '  ✓ common.try_cast(text, date|inet) - date and inet try-cast with default';
     RAISE NOTICE '  ✓ common.uuid_is_nil(uuid) - nil UUID check';
 END $$;
 

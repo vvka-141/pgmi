@@ -1,7 +1,9 @@
 # sync-ai-content.ps1
-# Refreshes the local .claude/skills/ mirror FROM the tracked, embedded skills.
-# internal/ai/content/skills/ is the source of truth (it ships in the binary);
-# .claude/skills/ is gitignored, local-only tooling and must never feed back into it.
+# Refreshes the local .claude/skills/ mirror FROM the skills pgmi scaffolds:
+# internal/scaffold/skills/ (every template) and
+# internal/scaffold/templates/<name>/.agents/skills/ (one template's own).
+# Those tracked trees are the source of truth; .claude/skills/ is gitignored,
+# local-only tooling and must never feed back into them.
 
 $ErrorActionPreference = "Stop"
 
@@ -10,23 +12,27 @@ if (-not $scriptDir) {
     $scriptDir = Get-Location
 }
 $repoRoot = Split-Path -Parent $scriptDir
-
-$sourceDir = Join-Path $repoRoot "internal\ai\content\skills"
 $targetDir = Join-Path $repoRoot ".claude\skills"
 
-Write-Host "Refreshing .claude/skills/ from internal/ai/content/skills/ (tracked -> local)"
-Write-Host "Source: $sourceDir"
-Write-Host "Target: $targetDir"
+Write-Host "Refreshing .claude/skills/ from the scaffold skill trees (tracked -> local)"
+
+$sources = @(Get-ChildItem -Directory (Join-Path $repoRoot "internal\scaffold\skills"))
+foreach ($template in Get-ChildItem -Directory (Join-Path $repoRoot "internal\scaffold\templates")) {
+    $templateSkills = Join-Path $template.FullName ".agents\skills"
+    if (Test-Path $templateSkills) {
+        $sources += Get-ChildItem -Directory $templateSkills
+    }
+}
 
 $synced = 0
-foreach ($file in Get-ChildItem -Path $sourceDir -Filter "*.md") {
-    $skill = $file.BaseName
-    $targetSkillDir = Join-Path $targetDir $skill
-    if (-not (Test-Path $targetSkillDir)) {
-        New-Item -ItemType Directory -Path $targetSkillDir -Force | Out-Null
+foreach ($skill in $sources) {
+    if (-not (Test-Path (Join-Path $skill.FullName "SKILL.md"))) { continue }
+    $targetSkillDir = Join-Path $targetDir $skill.Name
+    if (Test-Path $targetSkillDir) {
+        Remove-Item -Recurse -Force $targetSkillDir
     }
-    Copy-Item $file.FullName (Join-Path $targetSkillDir "SKILL.md") -Force
-    Write-Host "  Synced: $skill"
+    Copy-Item -Recurse $skill.FullName $targetSkillDir
+    Write-Host "  Synced: $($skill.Name)"
     $synced++
 }
 

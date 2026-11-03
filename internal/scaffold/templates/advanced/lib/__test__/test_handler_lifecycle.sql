@@ -23,12 +23,12 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/test-lifecycle$',
+            'path', '/test-lifecycle',
             'httpMethod', '^GET$',
             'name', 'test_lifecycle',
             'description', 'Lifecycle test handler',
             'autoLog', true,
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -48,13 +48,12 @@ END;
 
     RAISE NOTICE '  + Handler invoked';
 
-    -- Verify queue logging
     SELECT COUNT(*) INTO v_queue_count
-    FROM api.inbound_queue
+    FROM api.exchange
     WHERE handler_object_id = v_handler_id;
 
     IF v_queue_count IS DISTINCT FROM 1 THEN
-        RAISE EXCEPTION 'Expected 1 queue entry, got %', v_queue_count;
+        RAISE EXCEPTION 'Expected 1 exchange entry, got %', v_queue_count;
     END IF;
 
     IF NOT EXISTS (
@@ -64,7 +63,7 @@ END;
         RAISE EXCEPTION 'REST exchange not logged';
     END IF;
 
-    RAISE NOTICE '  + Queue logging verified';
+    RAISE NOTICE '  + Exchange logging verified';
 
     RAISE NOTICE '+ Handler Lifecycle tests passed';
 END $$;
@@ -80,12 +79,12 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/test-content-nego$',
+            'path', '/test-content-nego',
             'httpMethod', '^GET$',
             'name', 'test_content_nego',
             'description', 'Content negotiation test handler',
             'autoLog', false,
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -143,12 +142,12 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'dddddddd-0050-4000-8000-000000000001',
-            'uri', '^/test-accepts$',
+            'path', '/test-accepts',
             'httpMethod', '^POST$',
             'name', 'test_accepts',
             'description', 'Handler that only accepts application/json bodies',
             'autoLog', false,
-            'requiresAuth', false,
+            'access', 'public',
             'accepts', jsonb_build_array('application/json')
         ),
         $body$
@@ -247,10 +246,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
-            'uri', '^/qs-probe$',  -- No '(\?.*)?$' needed; gateway strips query string
+            'path', '/qs-probe',  -- No '(\?.*)?$' needed; gateway strips query string
             'httpMethod', '^GET$',
             'name', 'qs_probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -286,11 +285,11 @@ BEGIN
         PERFORM api.create_or_replace_rest_handler(
             jsonb_build_object(
                 'id', 'ffffffff-c005-4000-8000-000000000001',
-                'uri', '^/long$',
+                'path', '/long',
                 'httpMethod', '^GET$',
                 -- 60 chars - over the 49 limit
                 'name', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                'requiresAuth', false
+                'access', 'public'
             ),
             'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
         );
@@ -312,10 +311,10 @@ BEGIN
         PERFORM api.create_or_replace_rest_handler(
             jsonb_build_object(
                 'id', 'ffffffff-c006-4000-8000-000000000001',
-                'uri', '^/empty$',
+                'path', '/empty',
                 'httpMethod', '^GET$',
                 'name', '',
-                'requiresAuth', false
+                'access', 'public'
             ),
             'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
         );
@@ -346,8 +345,8 @@ BEGIN
     -- Register under the first name
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
-            'id', v_id, 'uri', '^/rename-test$', 'httpMethod', '^GET$',
-            'name', 'rename_alpha', 'requiresAuth', false
+            'id', v_id, 'path', '/rename-test', 'httpMethod', '^GET$',
+            'name', 'rename_alpha', 'access', 'public'
         ),
         'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
     );
@@ -364,8 +363,8 @@ BEGIN
     -- Re-register the SAME id under a new name
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
-            'id', v_id, 'uri', '^/rename-test$', 'httpMethod', '^GET$',
-            'name', 'rename_beta', 'requiresAuth', false
+            'id', v_id, 'path', '/rename-test', 'httpMethod', '^GET$',
+            'name', 'rename_beta', 'access', 'public'
         ),
         'BEGIN RETURN api.json_response(200, ''{}''::jsonb); END;'
     );
@@ -421,16 +420,16 @@ BEGIN
     RAISE NOTICE '-> Testing REST handler name-collision guard';
 
     PERFORM api.create_or_replace_rest_handler(
-        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
-            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        jsonb_build_object('id', v_first, 'path', '/collide-first', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'access', 'public', 'autoLog', false),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first')); END; $body$
     );
 
     -- Same name, different handler: a realistic copy-paste of the metadata block.
     BEGIN
         PERFORM api.create_or_replace_rest_handler(
-            jsonb_build_object('id', v_second, 'uri', '^/collide-second$', 'httpMethod', '^GET$',
-                'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+            jsonb_build_object('id', v_second, 'path', '/collide-second', 'httpMethod', '^GET$',
+                'name', 'collision_probe', 'access', 'public', 'autoLog', false),
             $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'second')); END; $body$
         );
         RAISE EXCEPTION 'TEST FAILED: two REST handlers must not both claim the name "collision_probe"';
@@ -456,8 +455,8 @@ BEGIN
     -- Re-registering under the SAME id must still work: that is a replacement,
     -- not a collision. A guard that blocked this would break every redeploy.
     PERFORM api.create_or_replace_rest_handler(
-        jsonb_build_object('id', v_first, 'uri', '^/collide-first$', 'httpMethod', '^GET$',
-            'name', 'collision_probe', 'requiresAuth', false, 'autoLog', false),
+        jsonb_build_object('id', v_first, 'path', '/collide-first', 'httpMethod', '^GET$',
+            'name', 'collision_probe', 'access', 'public', 'autoLog', false),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'first-v2')); END; $body$
     );
 
@@ -479,15 +478,15 @@ BEGIN
     RAISE NOTICE '-> Testing MCP handler name-collision guard';
 
     PERFORM api.create_or_replace_mcp_handler(
-        jsonb_build_object('id', v_first, 'type', 'tool', 'name', 'mcp_collision_probe',
-            'description', 'first', 'requiresAuth', false),
+        jsonb_build_object('id', v_first, 'type', 'tool', 'effect', 'read', 'name', 'mcp_collision_probe',
+            'description', 'first', 'access', 'public'),
         $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('first'::text), (request).request_id); END; $body$
     );
 
     BEGIN
         PERFORM api.create_or_replace_mcp_handler(
-            jsonb_build_object('id', v_second, 'type', 'tool', 'name', 'mcp_collision_probe',
-                'description', 'second', 'requiresAuth', false),
+            jsonb_build_object('id', v_second, 'type', 'tool', 'effect', 'read', 'name', 'mcp_collision_probe',
+                'description', 'second', 'access', 'public'),
             $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('second'::text), (request).request_id); END; $body$
         );
         RAISE EXCEPTION 'TEST FAILED: two MCP handlers must not both claim one name';
@@ -517,11 +516,11 @@ BEGIN
 
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000001',
-            'methodName', 'reports.run', 'requiresAuth', false),
+            'methodName', 'reports.run', 'access', 'public'),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'rpc-first')); END; $body$);
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000003',
-            'type', 'tool', 'name', 'fold.probe', 'description', 'first', 'requiresAuth', false),
+            'type', 'tool', 'effect', 'read', 'name', 'fold.probe', 'description', 'first', 'access', 'public'),
         $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('mcp-first'::text), (request).request_id); END; $body$);
 
     FOR v_case IN
@@ -535,12 +534,12 @@ BEGIN
             IF v_case.kind = 'rpc' THEN
                 PERFORM api.create_or_replace_rpc_handler(
                     jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000002',
-                        'methodName', v_case.second_name, 'requiresAuth', false),
+                        'methodName', v_case.second_name, 'access', 'public'),
                     $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('owner', 'second')); END; $body$);
             ELSE
                 PERFORM api.create_or_replace_mcp_handler(
                     jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000004',
-                        'type', 'tool', 'name', v_case.second_name, 'description', 'second', 'requiresAuth', false),
+                        'type', 'tool', 'effect', 'read', 'name', v_case.second_name, 'description', 'second', 'access', 'public'),
                     $body$ BEGIN RETURN api.mcp_tool_result(to_jsonb('second'::text), (request).request_id); END; $body$);
             END IF;
             RAISE EXCEPTION 'TEST FAILED: % "%" and "%" must not share one function', v_case.kind, v_case.first_name, v_case.second_name;

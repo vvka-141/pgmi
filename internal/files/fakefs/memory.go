@@ -282,7 +282,7 @@ func (mfs *MemoryFileSystem) ReadFile(filePath string) ([]byte, error) {
 
 	file, exists := mfs.files[absPath]
 	if !exists {
-		return nil, fmt.Errorf("file not found: %s", filePath)
+		return nil, fmt.Errorf("file not found: %s: %w", filePath, fs.ErrNotExist)
 	}
 
 	if file.info.IsDir() {

@@ -2,8 +2,11 @@ package manager
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +20,17 @@ const (
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
 	`
+)
+
+var (
+	//go:embed queries/settings.sql
+	querySettings string
+	//go:embed queries/role_settings.sql
+	queryRoleSettings string
+	//go:embed queries/acl.sql
+	queryACL string
+	//go:embed queries/deploy_locked.sql
+	queryDeployLocked string
 )
 
 // Manager implements database lifecycle operations using the DBConnection abstraction.
@@ -49,43 +63,31 @@ func (m *Manager) Exists(ctx context.Context, conn pgmi.DBConnection, dbName str
 // keeps inheriting whatever a site has installed there. Only a database that
 // differs has to be recreated explicitly, and that forces template0.
 func (m *Manager) Settings(ctx context.Context, conn pgmi.DBConnection, dbName string) (*pgmi.DatabaseSettings, error) {
-	const q = `
-		SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype,
-		       pg_get_userbyid(d.datdba), d.datconnlimit,
-		       coalesce((SELECT s.setconfig FROM pg_db_role_setting s
-		                 WHERE s.setdatabase = d.oid AND s.setrole = 0), '{}'),
-		       shobj_description(d.oid, 'pg_database'),
-		       pg_encoding_to_char(t.encoding), t.datcollate, t.datctype
-		FROM pg_database d, pg_database t
-		WHERE d.datname = $1 AND t.datname = 'template1'`
-
 	var s, def pgmi.DatabaseSettings
-	err := conn.QueryRow(ctx, q, dbName).Scan(
-		&s.Encoding, &s.Collate, &s.CType,
+	err := conn.QueryRow(ctx, querySettings, dbName).Scan(
+		&s.Encoding, &s.Collate, &s.CType, &s.LocaleProvider, &s.Locale, &s.ICURules,
 		&s.Owner, &s.ConnectionLimit, &s.Options, &s.Comment,
-		&def.Encoding, &def.Collate, &def.CType)
+		&def.Encoding, &def.Collate, &def.CType, &def.LocaleProvider, &def.Locale, &def.ICURules)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // absent, so there is nothing to preserve
 		}
 		return nil, fmt.Errorf("failed to read settings of database %q: %w", dbName, err)
 	}
-	s.PreserveLocale = s.Encoding != def.Encoding || s.Collate != def.Collate || s.CType != def.CType
+	s.PreserveLocale = s.Encoding != def.Encoding || s.Collate != def.Collate || s.CType != def.CType ||
+		s.LocaleProvider != def.LocaleProvider || s.Locale != def.Locale || s.ICURules != def.ICURules
 
-	const aclQ = `
-		SELECT d.datacl IS NOT NULL, coalesce(g.grantees, '{}'), coalesce(g.privileges, '{}'), coalesce(g.grantable, '{}')
-		FROM pg_database d
-		CROSS JOIN LATERAL (
-			SELECT array_agg(coalesce(pg_get_userbyid(nullif(a.grantee, 0)), '') ORDER BY a.grantee, a.privilege_type) AS grantees,
-			       array_agg(a.privilege_type ORDER BY a.grantee, a.privilege_type) AS privileges,
-			       array_agg(a.is_grantable ORDER BY a.grantee, a.privilege_type) AS grantable
-			FROM aclexplode(d.datacl) a
-			WHERE a.grantee <> d.datdba
-		) g
-		WHERE d.datname = $1`
+	var roleOptions []byte
+	if err := conn.QueryRow(ctx, queryRoleSettings, dbName).Scan(&roleOptions); err != nil {
+		return nil, fmt.Errorf("failed to read the role settings of database %q: %w", dbName, err)
+	}
+	if err := json.Unmarshal(roleOptions, &s.RoleOptions); err != nil {
+		return nil, fmt.Errorf("failed to read the role settings of database %q: %w", dbName, err)
+	}
+
 	var grantees, privileges []string
 	var grantable []bool
-	if err := conn.QueryRow(ctx, aclQ, dbName).Scan(&s.CustomACL, &grantees, &privileges, &grantable); err != nil {
+	if err := conn.QueryRow(ctx, queryACL, dbName).Scan(&s.CustomACL, &grantees, &privileges, &grantable); err != nil {
 		return nil, fmt.Errorf("failed to read the ACL of database %q: %w", dbName, err)
 	}
 	for i := range privileges {
@@ -111,6 +113,7 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 			// whatever a site installed there may not survive the conversion.
 			query += fmt.Sprintf(" TEMPLATE template0 ENCODING %s LC_COLLATE %s LC_CTYPE %s",
 				quoteLiteral(settings.Encoding), quoteLiteral(settings.Collate), quoteLiteral(settings.CType))
+			query += localeProviderClause(settings)
 		}
 		if settings.Owner != "" {
 			query += " OWNER " + pgx.Identifier{settings.Owner}.Sanitize()
@@ -137,9 +140,22 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 			continue
 		}
 		alter := fmt.Sprintf("ALTER DATABASE %s SET %s = %s",
-			ident, pgx.Identifier{name}.Sanitize(), quoteLiteral(value))
+			ident, pgx.Identifier{name}.Sanitize(), settingValue(name, value))
 		if _, err := pooledConn.Exec(ctx, alter); err != nil {
 			return fmt.Errorf("failed to restore setting %q on database %q: %w", name, dbName, err)
+		}
+	}
+	for _, r := range settings.RoleOptions {
+		for _, opt := range r.Options {
+			name, value, found := strings.Cut(opt, "=")
+			if !found {
+				continue
+			}
+			alter := fmt.Sprintf("ALTER ROLE %s IN DATABASE %s SET %s = %s",
+				pgx.Identifier{r.Role}.Sanitize(), ident, pgx.Identifier{name}.Sanitize(), settingValue(name, value))
+			if _, err := pooledConn.Exec(ctx, alter); err != nil {
+				return fmt.Errorf("failed to restore setting %q of role %q on database %q: %w", name, r.Role, dbName, err)
+			}
 		}
 	}
 	if settings.Comment != nil {
@@ -168,6 +184,59 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 		}
 	}
 	return nil
+}
+
+func localeProviderClause(s *pgmi.DatabaseSettings) string {
+	switch s.LocaleProvider {
+	case "i":
+		clause := " LOCALE_PROVIDER icu ICU_LOCALE " + quoteLiteral(s.Locale)
+		if s.ICURules != "" {
+			clause += " ICU_RULES " + quoteLiteral(s.ICURules)
+		}
+		return clause
+	case "b":
+		return " LOCALE_PROVIDER builtin BUILTIN_LOCALE " + quoteLiteral(s.Locale)
+	case "c":
+		return " LOCALE_PROVIDER libc"
+	}
+	return ""
+}
+
+// listQuoted are the settings PostgreSQL stores as a list of quoted
+// identifiers ("$user", public). Restored as one literal, the whole list
+// would become a single element.
+var listQuoted = map[string]bool{
+	"search_path":               true,
+	"temp_tablespaces":          true,
+	"session_preload_libraries": true,
+	"local_preload_libraries":   true,
+}
+
+var identifierList = regexp.MustCompile(`^(?:[a-z_][a-z0-9_$]*|"(?:[^"]|"")+")(?:, (?:[a-z_][a-z0-9_$]*|"(?:[^"]|"")+"))*$`)
+
+// settingValue renders a stored setting for ALTER ... SET. A quoted list is
+// passed through as the identifiers PostgreSQL stored, and only when it is
+// nothing but identifiers; everything else is a string literal.
+func settingValue(name, value string) string {
+	if listQuoted[strings.ToLower(name)] {
+		if value == `""` {
+			return "''"
+		}
+		if identifierList.MatchString(value) {
+			return value
+		}
+	}
+	return quoteLiteral(value)
+}
+
+// DeployInProgress reports whether a pgmi deploy holds its advisory lock on
+// dbName, read from the maintenance database before connections are ended.
+func (m *Manager) DeployInProgress(ctx context.Context, conn pgmi.DBConnection, dbName string) (bool, error) {
+	var locked bool
+	if err := conn.QueryRow(ctx, queryDeployLocked, dbName).Scan(&locked); err != nil {
+		return false, fmt.Errorf("failed to check for a deploy in progress on database %q: %w", dbName, err)
+	}
+	return locked, nil
 }
 
 // quoteLiteral renders a SQL string literal. CREATE DATABASE takes no

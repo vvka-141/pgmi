@@ -29,13 +29,11 @@ This is an intentional constraint, not an oversight. pgmi's flexibility comes fr
 
 There is no built-in `schema_version` table. pgmi does not track migrations, because pgmi does not decide what runs — your `deploy.sql` does.
 
-**Basic template, default:** every deployment re-runs every file. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Nothing to drift.
-
-**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and each migration runs once per path, with its checksum stored. That is all it does. It does not order by version, and it does not stop on a checksum mismatch: whether a changed file should warn, fail or be ignored is an `IF` you write in `deploy.sql`. The template README compares both models side by side, and [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) runs the apply-once model with drift detection in CI.
+**Basic template:** two kinds of file. A file marked run-once (`<pgmi-meta idempotent="false">`, the tables in `physical/`) runs once per database; `deploy.sql` records it in a `deployment.run_once` ledger by id, path and checksum. Every other file (the views and functions in `semantic/`) re-runs on every deploy, so it must be safe to repeat (`CREATE OR REPLACE`). When a run-once file that already ran is edited, moved, flipped to re-run or removed, the deploy fails before anything runs and names the file; a change to a table is a new run-once file. Comments, whitespace and keyword case do not count as edits. The whole mechanism is one `DO` block and a loop condition in `deploy.sql`: change it if you want a mismatch to warn instead. [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) shows a path-keyed variant.
 
 **Advanced template:** a fuller PL/pgSQL tracking system recording script UUIDs, checksums, and execution history. More capable, and more code you own.
 
-The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in three lines you can read.
+The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in SQL you can read.
 
 ---
 
@@ -99,7 +97,7 @@ See [deploy.sql guide](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-
 By default, pgmi tests produce NOTICE messages:
 
 ```
-NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
+NOTICE: [pgmi] Test: ./semantic/__test__/test_task.sql
 ```
 
 The default reporter has no JUnit XML, TAP, JSON report, or timing information. A test either succeeds (the suite continues) or fails (`RAISE EXCEPTION` aborts the transaction), and a full run ends with `[pgmi] Test suite passed`.
@@ -120,7 +118,7 @@ pgmi is a CLI tool. There is no:
 - Commercial support or training programs
 - Web dashboard
 
-Documentation is `README.md`, these docs, `pgmi ai skills`, and the embedded AI documentation.
+Documentation is `README.md`, these docs, `pgmi ai`, and the agent skills `pgmi init` writes into each project.
 
 ---
 
@@ -169,17 +167,17 @@ See [Connections](CONNECTIONS.md#connection-pooler-compatibility) for details.
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
-The advanced template's `deploy.sql` is several hundred lines of PL/pgSQL that
-handles:
+The advanced template's `deploy.sql` is a PL/pgSQL program of over a thousand
+lines that handles:
 
 - XML parameter declaration and validation
-- Database role setup (owner, admin, api, customer)
+- Database role setup (owner, admin, api, kernel, and grants to an optional jobs login)
 - Migration tracking with UUID-based idempotency
 - Audit logging to `internal.deployment_script_execution_log`
 - Test execution gating
 - Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects
 
-If it breaks, you debug PL/pgSQL exception handling, not framework configuration. You own this code — pgmi scaffolds it, but you maintain it.
+If it breaks, you debug PL/pgSQL exception handling, not framework configuration. You own this code — pgmi scaffolds it, but you maintain it. It needs PostgreSQL 18, and a new template release can need a new database: v0.14 cannot upgrade a v0.13 advanced database in place ([upgrading](advanced/UPGRADING.md)).
 
 For teams comfortable with PL/pgSQL, this is a feature. For teams that want a tool to handle complexity, this is a cost.
 

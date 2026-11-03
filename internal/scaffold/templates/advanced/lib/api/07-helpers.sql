@@ -168,62 +168,6 @@ SET uri_regexp = api.uri_template_to_regex(uri_template)
 WHERE uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template);
 
 -- ============================================================================
--- Route Path Tokens
--- ============================================================================
--- Splits a stored route regex into literal runs and capture groups. The OpenAPI
--- generator and the registration guard both read path parameters from here, so
--- there is exactly one definition of "what counts as a path parameter" — two
--- would drift. group_index is NULL for literal runs and 1..N, left to right,
--- for capture groups.
---
--- The three nested strips remove the anchors and the optional query-string
--- suffix routes conventionally carry ('(\?.*)?$'), which is not a parameter.
-
--- Dollar-quoted with a named tag: the strip patterns below contain '$$', which
--- would close an anonymous $$ body mid-string.
-CREATE OR REPLACE FUNCTION api.route_path_tokens(p_address_regexp text)
-RETURNS TABLE (ord bigint, token text, group_index bigint)
-LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $route_path_tokens$
-    WITH c_pattern AS (
-        SELECT regexp_replace(
-                   regexp_replace(
-                       regexp_replace(p_address_regexp, '^\^', ''),
-                       '\(\\\\?\?\.\*\)\?\$?$', ''),
-                   '\$$', '') AS pattern
-    ),
-    c_token AS (
-        SELECT t.ord, t.m[1] AS token
-        FROM c_pattern
-        CROSS JOIN LATERAL regexp_matches(c_pattern.pattern, '\([^)]*\)|[^(]+', 'g')
-            WITH ORDINALITY AS t(m, ord)
-    )
-    SELECT
-        c_token.ord,
-        c_token.token,
-        CASE
-            WHEN c_token.token LIKE '(%'
-            THEN row_number() OVER (PARTITION BY c_token.token LIKE '(%' ORDER BY c_token.ord)
-        END
-    FROM c_token;
-$route_path_tokens$;
-
-COMMENT ON FUNCTION api.route_path_tokens(text) IS
-    'Splits a route regex into literal runs and capture groups (group_index 1..N left to right). Used to derive canonical_path from a regex for uri-only (level-2) route registrations.';
-
-DROP FUNCTION IF EXISTS api.route_path_param_name(text[], bigint);
-
-DO $$
-BEGIN
-    IF (SELECT count(*) FROM api.route_path_tokens('^/orgs/([^/]+)/users/(\d+)$') WHERE group_index IS NOT NULL) IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'route_path_tokens must find both capture groups in a two-parameter route';
-    END IF;
-
-    IF (SELECT count(*) FROM api.route_path_tokens('^/hello(\?.*)?$') WHERE group_index IS NOT NULL) IS DISTINCT FROM 0 THEN
-        RAISE EXCEPTION 'route_path_tokens must not treat the query-string suffix as a path parameter';
-    END IF;
-END $$;
-
--- ============================================================================
 -- Path Template Helpers
 -- ============================================================================
 
@@ -243,44 +187,50 @@ $$;
 COMMENT ON FUNCTION api.path_template_to_regex(text) IS
     'Converts a path template (e.g. /users/{id}) to an anchored POSIX regex with capture groups for each parameter.';
 
-CREATE OR REPLACE FUNCTION api.path_template_params(p_path text)
-RETURNS text[]
+-- A template parameter is {name} (text), {name:uuid} or {name:int}.
+CREATE OR REPLACE FUNCTION api.path_template_canonical(p_path text)
+RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT COALESCE(
-        ARRAY(SELECT m[1] FROM regexp_matches(p_path, '\{([^}]+)\}', 'g') AS m),
-        '{}'::text[]
-    );
+    SELECT regexp_replace(p_path, '\{([^}:]+):[^}]*\}', '{\1}', 'g');
 $$;
 
-COMMENT ON FUNCTION api.path_template_params(text) IS
-    'Extracts parameter names from a path template. /orgs/{orgId}/users/{userId} returns ARRAY[''orgId'', ''userId''].';
+COMMENT ON FUNCTION api.path_template_canonical(text) IS
+    'The template with parameter types removed: /projects/{id:uuid} returns /projects/{id}. This is the OpenAPI path.';
+
+CREATE OR REPLACE FUNCTION api.path_template_param_spec(p_path text)
+RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+DECLARE
+    v_spec jsonb;
+    v_bad  text;
+BEGIN
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('name', m[1], 'type', COALESCE(m[2], 'text')) ORDER BY ord), '[]'::jsonb),
+           string_agg(m[2], ', ') FILTER (WHERE m[2] NOT IN ('uuid', 'int', 'text'))
+      INTO v_spec, v_bad
+      FROM regexp_matches(p_path, '\{([^}:]+)(?::([^}]*))?\}', 'g') WITH ORDINALITY AS t(m, ord);
+    IF v_bad IS NOT NULL THEN
+        RAISE EXCEPTION 'unknown path parameter type "%" in %', v_bad, p_path
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Use {name}, {name:uuid} or {name:int}.';
+    END IF;
+    RETURN v_spec;
+END $$;
+
+COMMENT ON FUNCTION api.path_template_param_spec(text) IS
+    'The template''s parameters in capture order with their types: /projects/{id:uuid}/tasks/{n} returns [{"name": "id", "type": "uuid"}, {"name": "n", "type": "text"}]. Refuses an unknown type.';
 
 DO $$
 BEGIN
-    IF api.path_template_to_regex('/users/{id}') IS DISTINCT FROM '^/users/([^/]+)$' THEN
-        RAISE EXCEPTION 'path_template_to_regex: simple param failed, got %',
-            api.path_template_to_regex('/users/{id}');
-    END IF;
-
-    IF api.path_template_to_regex('/openapi.json') IS DISTINCT FROM '^/openapi\.json$' THEN
-        RAISE EXCEPTION 'path_template_to_regex: dot escaping failed, got %',
-            api.path_template_to_regex('/openapi.json');
-    END IF;
-
-    IF api.path_template_to_regex('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM '^/orgs/([^/]+)/users/([^/]+)$' THEN
-        RAISE EXCEPTION 'path_template_to_regex: multi-param failed';
-    END IF;
-
-    IF api.path_template_to_regex('/hello') IS DISTINCT FROM '^/hello$' THEN
-        RAISE EXCEPTION 'path_template_to_regex: no-param failed';
-    END IF;
-
-    IF api.path_template_params('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM ARRAY['orgId', 'userId'] THEN
-        RAISE EXCEPTION 'path_template_params: multi-param failed';
-    END IF;
-
-    IF api.path_template_params('/hello') IS DISTINCT FROM '{}'::text[] THEN
-        RAISE EXCEPTION 'path_template_params: no-param failed';
+    IF api.path_template_to_regex('/users/{id}') IS DISTINCT FROM '^/users/([^/]+)$'
+       OR api.path_template_to_regex('/users/{id:uuid}') IS DISTINCT FROM '^/users/([^/]+)$'
+       OR api.path_template_to_regex('/openapi.json') IS DISTINCT FROM '^/openapi\.json$'
+       OR api.path_template_to_regex('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM '^/orgs/([^/]+)/users/([^/]+)$'
+       OR api.path_template_to_regex('/hello') IS DISTINCT FROM '^/hello$'
+       OR api.path_template_canonical('/users/{id:uuid}/x/{n}') IS DISTINCT FROM '/users/{id}/x/{n}'
+       OR api.path_template_param_spec('/users/{id:uuid}/x/{n}')
+          IS DISTINCT FROM '[{"name": "id", "type": "uuid"}, {"name": "n", "type": "text"}]'::jsonb
+       OR api.path_template_param_spec('/hello') IS DISTINCT FROM '[]'::jsonb THEN
+        RAISE EXCEPTION 'path template helpers disagree with their examples';
     END IF;
 END $$;
 
@@ -327,23 +277,39 @@ $$;
 COMMENT ON FUNCTION api.accept_matches(text, text[]) IS
     'HTTP content negotiation. Returns true when the Accept header matches at least one of the produced media types; supports */*, type/* wildcards and honours q=0 as an explicit refusal (RFC 9110 12.5.1). NULL or empty Accept accepts all.';
 
+-- The query string's key/value pairs in order, decoded. The query is everything
+-- after the first '?', and a value is everything after its first '=', so '?'
+-- and '=' inside a value survive (?t=YWJj== keeps YWJj==).
+CREATE OR REPLACE FUNCTION api.query_pairs(url text)
+RETURNS TABLE (key text, value text, ord bigint)
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT api.url_decode(CASE WHEN strpos(t.pair, '=') > 0 THEN left(t.pair, strpos(t.pair, '=') - 1) ELSE t.pair END),
+           api.url_decode(CASE WHEN strpos(t.pair, '=') > 0 THEN substr(t.pair, strpos(t.pair, '=') + 1) ELSE '' END),
+           t.ord
+    FROM unnest(string_to_array(
+             CASE WHEN strpos(url, '?') > 0 THEN split_part(substr(url, strpos(url, '?') + 1), '#', 1) ELSE '' END,
+             '&')) WITH ORDINALITY AS t(pair, ord)
+    WHERE t.pair <> '';
+$$;
+
+COMMENT ON FUNCTION api.query_pairs(text) IS
+    'The decoded key/value pairs of a URL''s query string, in order. A value keeps any further = and ?.';
+
 -- Single-value query-string parser. hstore cannot hold duplicate keys, so for
 -- a repeated key (?tag=a&tag=b) this keeps the FIRST occurrence. Use
 -- api.query_params_multi() when a parameter may legitimately repeat.
 CREATE OR REPLACE FUNCTION api.query_params(url text)
 RETURNS extensions.hstore
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    WITH params AS (
-        SELECT unnest(string_to_array(split_part(url, '?', 2), '&')) AS param
-    )
     SELECT COALESCE(
-        extensions.hstore(
-            array_agg(api.url_decode(split_part(param, '=', 1))),
-            array_agg(api.url_decode(COALESCE(nullif(split_part(param, '=', 2), ''), '')))
-        ),
+        extensions.hstore(array_agg(p.key ORDER BY p.ord), array_agg(p.value ORDER BY p.ord)),
         ''::extensions.hstore
     )
-    FROM params WHERE param != '';
+    FROM (
+        SELECT DISTINCT ON (key) key, value, ord
+        FROM api.query_pairs(url)
+        ORDER BY key, ord
+    ) p;
 $$;
 
 COMMENT ON FUNCTION api.query_params(text) IS
@@ -355,27 +321,154 @@ COMMENT ON FUNCTION api.query_params(text) IS
 CREATE OR REPLACE FUNCTION api.query_params_multi(url text)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    WITH params AS (
-        SELECT
-            api.url_decode(split_part(param, '=', 1)) AS key,
-            api.url_decode(COALESCE(nullif(split_part(param, '=', 2), ''), '')) AS value,
-            ordinality
-        FROM unnest(string_to_array(split_part(url, '?', 2), '&')) WITH ORDINALITY AS t(param, ordinality)
-        WHERE param != ''
-    )
-    SELECT COALESCE(
-        jsonb_object_agg(key, arr),
-        '{}'::jsonb
-    )
+    SELECT COALESCE(jsonb_object_agg(key, arr), '{}'::jsonb)
     FROM (
-        SELECT key, jsonb_agg(value ORDER BY ordinality) AS arr
-        FROM params
+        SELECT key, jsonb_agg(value ORDER BY ord) AS arr
+        FROM api.query_pairs(url)
         GROUP BY key
     ) grouped;
 $$;
 
 COMMENT ON FUNCTION api.query_params_multi(text) IS
     'Multi-value query-string parser (jsonb). Each key maps to a JSON array of all its values in order; preserves duplicate keys that api.query_params() would drop.';
+
+-- A REST route declares its query parameters as querySchema: a JSON Schema
+-- object in the dialect of inputSchema. The gateway enforces every keyword it
+-- accepts here, so the published contract and the enforced one cannot differ;
+-- a keyword it could not enforce is refused at registration.
+CREATE OR REPLACE FUNCTION internal.query_property_problem(p_property jsonb, p_top boolean)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(p_property) IS DISTINCT FROM 'object' THEN 'must be a schema object'
+        WHEN EXISTS (SELECT 1 FROM jsonb_object_keys(p_property) k
+                     WHERE k <> ALL (ARRAY['type', 'format', 'enum', 'minimum', 'maximum', 'description', 'default', 'items']))
+            THEN 'supports type, format, enum, minimum, maximum, items, description and default'
+        WHEN p_property->>'type' = 'array' AND p_top
+            THEN internal.query_property_problem(p_property->'items', false)
+        WHEN p_property ? 'items' THEN '"items" belongs to "type": "array"'
+        WHEN COALESCE(p_property->>'type', 'string') <> ALL (ARRAY['string', 'integer', 'number', 'boolean'])
+            THEN 'type must be string, integer, number or boolean' || CASE WHEN p_top THEN ', or an array of those' ELSE '' END
+        WHEN p_property ? 'enum' AND (jsonb_typeof(p_property->'enum') IS DISTINCT FROM 'array'
+             OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_property->'enum') e
+                        WHERE jsonb_typeof(e) NOT IN ('string', 'number', 'boolean')))
+            THEN 'enum must be an array of strings, numbers or booleans'
+        WHEN p_property ? 'format' AND (COALESCE(p_property->>'type', 'string') <> 'string'
+             OR COALESCE(p_property->>'format', '') <> ALL (ARRAY['uuid', 'date', 'date-time']))
+            THEN 'format must be uuid, date or date-time, on type string'
+        WHEN (p_property ? 'minimum' OR p_property ? 'maximum')
+             AND COALESCE(p_property->>'type', 'string') NOT IN ('integer', 'number')
+            THEN 'minimum and maximum need type integer or number'
+        WHEN jsonb_typeof(COALESCE(p_property->'minimum', '0')) <> 'number'
+             OR jsonb_typeof(COALESCE(p_property->'maximum', '0')) <> 'number'
+            THEN 'minimum and maximum must be numbers'
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.query_schema_problem(p_schema jsonb)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(p_schema) IS DISTINCT FROM 'object' THEN 'querySchema must be a JSON Schema object'
+        WHEN EXISTS (SELECT 1 FROM jsonb_object_keys(p_schema) k
+                     WHERE k <> ALL (ARRAY['type', 'properties', 'required', 'description']))
+            THEN 'querySchema supports type, properties, required and description at its root'
+        WHEN p_schema->>'type' IS DISTINCT FROM 'object' THEN 'querySchema must have "type": "object"'
+        WHEN jsonb_typeof(p_schema->'properties') IS DISTINCT FROM 'object' THEN 'querySchema needs "properties"'
+        WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(p_schema->'required', '[]')) r
+                     WHERE NOT p_schema->'properties' ? r)
+            THEN 'querySchema requires a parameter it does not declare'
+        ELSE (SELECT string_agg(format('query parameter "%s": %s', p.key, p.problem), '; ' ORDER BY p.key)
+              FROM (SELECT e.key, internal.query_property_problem(e.value, true) AS problem
+                    FROM jsonb_each(p_schema->'properties') e) p
+              WHERE p.problem IS NOT NULL)
+    END;
+$$;
+
+-- One query value against one scalar property schema. Enum values compare by
+-- their text form, so an integer or boolean enum accepts ?size=20 or ?on=true.
+CREATE OR REPLACE FUNCTION internal.query_value_is_valid(p_property jsonb, p_value text)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE COALESCE(p_property->>'type', 'string')
+               WHEN 'integer' THEN p_value ~ '^-?[0-9]{1,18}$'
+               WHEN 'number' THEN p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+               WHEN 'boolean' THEN p_value IN ('true', 'false')
+               ELSE CASE p_property->>'format'
+                        WHEN 'uuid' THEN p_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                        WHEN 'date' THEN p_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND pg_input_is_valid(p_value, 'date')
+                        WHEN 'date-time' THEN p_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' AND pg_input_is_valid(p_value, 'timestamptz')
+                        ELSE true
+                    END
+           END
+       AND (NOT p_property ? 'enum'
+            OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_property->'enum') e WHERE e #>> '{}' = p_value))
+       AND (CASE WHEN p_property ? 'minimum' AND p_property->>'type' IN ('integer', 'number')
+                      AND p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+                 THEN p_value::numeric >= (p_property->>'minimum')::numeric ELSE true END)
+       AND (CASE WHEN p_property ? 'maximum' AND p_property->>'type' IN ('integer', 'number')
+                      AND p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+                 THEN p_value::numeric <= (p_property->>'maximum')::numeric ELSE true END);
+$$;
+
+-- What a request's query violates, as RFC 9457 invalid-params: reason
+-- "required" for a missing required parameter, "invalid" for a value that does
+-- not fit. An empty value (?q=) counts as absent. A parameter declared as an
+-- array may repeat; any other may not. NULL when the query fits.
+CREATE OR REPLACE FUNCTION internal.query_schema_violations(p_schema jsonb, p_params jsonb)
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT jsonb_agg(jsonb_build_object('name', v.name, 'reason', v.reason) ORDER BY v.name)
+    FROM (
+        SELECT e.key AS name,
+               CASE WHEN vals.n = 0 THEN 'required' ELSE 'invalid' END AS reason
+        FROM jsonb_each(p_schema->'properties') e
+        CROSS JOIN LATERAL (
+            SELECT count(*) AS n,
+                   bool_and(internal.query_value_is_valid(
+                       CASE WHEN e.value->>'type' = 'array' THEN e.value->'items' ELSE e.value END, x.value)) AS valid
+            FROM jsonb_array_elements_text(COALESCE(p_params->e.key, '[]')) AS x(value)
+            WHERE x.value <> ''
+        ) vals
+        WHERE (vals.n = 0 AND COALESCE(p_schema->'required', '[]') ? e.key)
+           OR (vals.n > 0 AND (NOT vals.valid OR (vals.n > 1 AND e.value->>'type' IS DISTINCT FROM 'array')))
+    ) v;
+$$;
+
+COMMENT ON FUNCTION internal.query_schema_violations(jsonb, jsonb) IS
+    'Checks parsed query parameters (api.query_params_multi) against a querySchema: required, type, enum (by text form), minimum, maximum. Returns invalid-params entries {name, reason: required|invalid}, or NULL.';
+
+DO $$
+DECLARE
+    v_schema jsonb := '{"type": "object", "required": ["format"], "properties": {
+        "format": {"type": "string", "enum": ["csv", "json"]},
+        "size": {"type": "integer", "enum": [10, 20, 50]},
+        "on": {"type": "boolean", "enum": [true]},
+        "page": {"type": "integer", "minimum": 1},
+        "since": {"type": "string", "format": "date"},
+        "tag": {"type": "array", "items": {"type": "string"}}}}';
+BEGIN
+    IF internal.query_schema_problem(v_schema) IS NOT NULL THEN
+        RAISE EXCEPTION 'query schema: a valid schema was refused: %', internal.query_schema_problem(v_schema);
+    END IF;
+    IF internal.query_schema_problem('{"type": "object", "properties": {"q": {"type": "string", "pattern": "^a"}}}') IS NULL
+       OR internal.query_schema_problem('{"type": "object", "properties": {"q": {"type": "object"}}}') IS NULL
+       OR internal.query_schema_problem('{"type": "object", "required": ["x"], "properties": {}}') IS NULL THEN
+        RAISE EXCEPTION 'query schema: a keyword the gateway cannot enforce must be refused';
+    END IF;
+    IF internal.query_schema_violations(v_schema,
+           api.query_params_multi('/r?format=csv&size=20&on=true&page=3&tag=a&tag=b&since=2026-10-31')) IS NOT NULL THEN
+        RAISE EXCEPTION 'query schema: valid values (integer and boolean enums included) were refused: %',
+            internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=csv&size=20&on=true&page=3&tag=a&tag=b'));
+    END IF;
+    IF internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=&size=30&on=false&page=0&since=2026-02-30'))
+       IS DISTINCT FROM '[{"name": "format", "reason": "required"}, {"name": "on", "reason": "invalid"},
+                          {"name": "page", "reason": "invalid"}, {"name": "since", "reason": "invalid"},
+                          {"name": "size", "reason": "invalid"}]'::jsonb THEN
+        RAISE EXCEPTION 'query schema: violations not reported as expected: %',
+            internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=&size=30&on=false&page=0&since=2026-02-30'));
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION api.url_path(url text)
 RETURNS text
@@ -501,7 +594,7 @@ BEGIN
         RAISE EXCEPTION 'accept_matches: unrelated type must not match';
     END IF;
     -- q=0 is an explicit refusal (RFC 9110 12.5.1), including through a
-    -- wildcard. tools/mcp-gateway.py answers the same question about the same
+    -- wildcard. gateways/python/gateway.py answers the same question about the same
     -- header and must agree; see TestMCPGateway_AcceptQValues.
     IF api.accept_matches('application/json;q=0', ARRAY['application/json']) THEN
         RAISE EXCEPTION 'accept_matches: q=0 is a refusal, not an acceptance';
@@ -581,6 +674,12 @@ BEGIN
     END IF;
     IF v_params->'filter' IS DISTINCT FROM 'a+b' THEN
         RAISE EXCEPTION 'query_params url decode plus failed: got %', v_params->'filter';
+    END IF;
+
+    IF api.query_params('/f?t=YWJj==&next=/a?b=1&flag')
+       IS DISTINCT FROM 't=>YWJj==, next=>/a?b=1, flag=>""'::extensions.hstore THEN
+        RAISE EXCEPTION 'query_params must keep = and ? inside a value: got %',
+            api.query_params('/f?t=YWJj==&next=/a?b=1&flag');
     END IF;
 
     -- query_params drops repeated keys (first wins); query_params_multi keeps all
@@ -689,23 +788,22 @@ COMMENT ON FUNCTION api.json_response(integer, jsonb) IS
     'Builds an HTTP response with application/json content-type and the given status code.';
 
 -- RFC 9110 §15.5.2 makes at least one challenge mandatory on a 401. The scheme
--- is a deployment decision -- the gateway in front may validate a JWT, a
--- session cookie, or something else -- so it is a GUC rather than a code edit.
--- Set it in deploy.sql with ALTER DATABASE ... SET api.www_authenticate = '...'.
-CREATE OR REPLACE FUNCTION api.www_authenticate_challenge()
-RETURNS text
-LANGUAGE sql STABLE PARALLEL SAFE AS $$
-    SELECT COALESCE(NULLIF(current_setting('api.www_authenticate', true), ''), 'X-User-Id');
-$$;
+-- is the transport's, so it is the deploy parameter www_authenticate.
+DO $$
+BEGIN
+    EXECUTE format($fn$
+        CREATE OR REPLACE FUNCTION api.www_authenticate_challenge()
+        RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $body$
+            SELECT %L::text;
+        $body$
+    $fn$, btrim(pg_temp.deployment_setting('www_authenticate')));
+END $$;
 
 COMMENT ON FUNCTION api.www_authenticate_challenge() IS
-    'The challenge stamped on a 401 (RFC 9110 15.5.2). Defaults to X-User-Id; override with the api.www_authenticate GUC (e.g. Bearer for a JWT-proxy deployment).';
+    'The challenge stamped on a 401 (RFC 9110 15.5.2): the deploy parameter www_authenticate, Session by default.';
 
--- Drop the pre-RFC-9457 signature so the extended one below is the only
--- problem_response; an added-parameter overload would make 3-arg calls
--- ambiguous. CREATE OR REPLACE cannot change the parameter count.
-DROP FUNCTION IF EXISTS api.problem_response(integer, text, text, text, text);
-
+-- extensions are RFC 9457 extension members; the standard members win on a
+-- name clash.
 CREATE OR REPLACE FUNCTION api.problem_response(
     status_code integer,
     title text,
@@ -713,14 +811,15 @@ CREATE OR REPLACE FUNCTION api.problem_response(
     type_uri text DEFAULT NULL,
     instance text DEFAULT NULL,
     code text DEFAULT NULL,
-    invalid_params jsonb DEFAULT NULL
+    invalid_params jsonb DEFAULT NULL,
+    extensions jsonb DEFAULT NULL
 ) RETURNS api.http_response
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT (
         status_code,
         extensions.hstore('content-type', 'application/problem+json'),
         convert_to(
-            jsonb_strip_nulls(jsonb_build_object(
+            (COALESCE(extensions, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
                 'type', COALESCE(type_uri, 'about:blank'),
                 'title', title,
                 'status', status_code,
@@ -728,14 +827,14 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                 'instance', instance,
                 'code', code,
                 'invalid-params', invalid_params
-            ))::text,
+            )))::text,
             'UTF8'
         )
     )::api.http_response;
 $$;
 
-COMMENT ON FUNCTION api.problem_response(integer, text, text, text, text, text, jsonb) IS
-    'RFC 9457 problem+json response. Optional code is a stable machine-readable token; invalid_params is a jsonb array of {name,reason} (build with api.invalid_param). NULL members are stripped.';
+COMMENT ON FUNCTION api.problem_response(integer, text, text, text, text, text, jsonb, jsonb) IS
+    'RFC 9457 problem+json response. code is a stable machine-readable token (framework codes start with pgmi., application codes are bare); invalid_params is a jsonb array of {name,reason} (build with api.invalid_param); extensions is an object of extra members. NULL members are stripped.';
 
 -- RFC 9457 invalid-params member constructor: one {name, reason} entry.
 CREATE OR REPLACE FUNCTION api.invalid_param(p_name text, p_reason text)
@@ -781,15 +880,19 @@ BEGIN
     -- RFC 9457 fields surface when provided
     v_response := api.problem_response(
         422, 'Unprocessable', 'Validation failed',
-        code => 'validation_error',
-        invalid_params => jsonb_build_array(api.invalid_param('total', 'must be positive'))
+        code => 'pgmi.invalid_value',
+        invalid_params => jsonb_build_array(api.invalid_param('total', 'must be positive')),
+        extensions => jsonb_build_object('requiredReadOnly', true, 'status', 999)
     );
     v_content := api.content_json((v_response).content);
-    IF v_content->>'code' IS DISTINCT FROM 'validation_error' THEN
+    IF v_content->>'code' IS DISTINCT FROM 'pgmi.invalid_value' THEN
         RAISE EXCEPTION 'problem_response code member missing';
     END IF;
     IF v_content->'invalid-params'->0->>'name' IS DISTINCT FROM 'total' THEN
         RAISE EXCEPTION 'problem_response invalid-params member missing';
+    END IF;
+    IF v_content->'requiredReadOnly' IS DISTINCT FROM 'true'::jsonb OR (v_content->>'status')::int IS DISTINCT FROM 422 THEN
+        RAISE EXCEPTION 'problem_response extensions must be merged under the standard members, got %', v_content;
     END IF;
 END $$;
 
@@ -797,7 +900,7 @@ END $$;
 -- List Pagination
 -- ============================================================================
 -- Uniform ?limit/?offset parsing for list handlers: clamps limit to [0, max]
--- and offset to >= 0, and returns a ready 422 in o_error when either value is
+-- and offset to >= 0, and returns a ready 422 (pgmi.invalid_pagination) in o_error when either value is
 -- present but not an integer. Callers check `(o_error).status_code IS NOT NULL`
 -- and return o_error before running the query. Fetch o_limit + 1 rows to derive
 -- a boolean hasMore without a second count query.
@@ -817,18 +920,18 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         CASE
             WHEN NULLIF(p_q->'limit', '') IS NOT NULL
                  AND common.try_cast(p_q->'limit', NULL::integer) IS NULL
-                THEN api.problem_response(422, 'Unprocessable', 'limit must be an integer',
-                        invalid_params => jsonb_build_array(api.invalid_param('limit', 'must be an integer')))
+                THEN api.problem_response(422, 'Unprocessable Entity', 'limit must be an integer', code => 'pgmi.invalid_pagination',
+                        invalid_params => jsonb_build_array(api.invalid_param('limit', 'invalid')))
             WHEN NULLIF(p_q->'offset', '') IS NOT NULL
                  AND common.try_cast(p_q->'offset', NULL::integer) IS NULL
-                THEN api.problem_response(422, 'Unprocessable', 'offset must be an integer',
-                        invalid_params => jsonb_build_array(api.invalid_param('offset', 'must be an integer')))
+                THEN api.problem_response(422, 'Unprocessable Entity', 'offset must be an integer', code => 'pgmi.invalid_pagination',
+                        invalid_params => jsonb_build_array(api.invalid_param('offset', 'invalid')))
             ELSE NULL
         END;
 $$;
 
 COMMENT ON FUNCTION api.pagination_params(extensions.hstore, integer, integer) IS
-    'Parses ?limit/?offset from a query hstore: clamps limit to [0,p_max] (default p_default) and offset to >=0; sets o_error to a 422 problem_response when either is present but non-integer. Callers return o_error when its status_code is not null.';
+    'Parses ?limit/?offset from a query hstore: clamps limit to [0,p_max] (default p_default) and offset to >=0; sets o_error to a 422 pgmi.invalid_pagination problem when either is present but non-integer. Callers return o_error when its status_code is not null.';
 
 -- Inline tests
 DO $$
@@ -847,16 +950,122 @@ BEGIN
         RAISE EXCEPTION 'pagination_params clamping failed (limit=%, offset=%)', v_page.o_limit, v_page.o_offset;
     END IF;
 
-    -- Non-integer limit -> 422 in o_error
     v_page := api.pagination_params('limit=>abc'::extensions.hstore);
-    IF (v_page.o_error).status_code IS DISTINCT FROM 422 THEN
-        RAISE EXCEPTION 'pagination_params should 422 on non-integer limit, got %', (v_page.o_error).status_code;
+    IF (v_page.o_error).status_code IS DISTINCT FROM 422
+       OR api.content_json((v_page.o_error).content)->>'code' IS DISTINCT FROM 'pgmi.invalid_pagination' THEN
+        RAISE EXCEPTION 'pagination_params should answer 422 pgmi.invalid_pagination on a non-integer limit, got %', (v_page.o_error).status_code;
     END IF;
 
     -- limit=0 is honored (empty page), not treated as missing
     v_page := api.pagination_params('limit=>0'::extensions.hstore);
     IF v_page.o_limit IS DISTINCT FROM 0 OR (v_page.o_error).status_code IS NOT NULL THEN
         RAISE EXCEPTION 'pagination_params should honor limit=0, got %', v_page.o_limit;
+    END IF;
+END $$;
+
+-- Optional page helper for list routes. The three pieces agree by
+-- construction: page_query_schema declares limit and offset (the gateway
+-- enforces them), api.pagination_params reads them, page_response answers the
+-- envelope page_output_schema declares. lib/__test__/test_response_contract.sql
+-- holds every route that declares the envelope to that.
+CREATE OR REPLACE FUNCTION api.page_query_schema(
+    p_properties    jsonb DEFAULT '{}'::jsonb,
+    p_default_limit integer DEFAULT 50,
+    p_max_limit     integer DEFAULT 200
+) RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT jsonb_build_object('type', 'object', 'properties', COALESCE(p_properties, '{}'::jsonb) || jsonb_build_object(
+        'limit', jsonb_build_object('type', 'integer', 'minimum', 0, 'maximum', p_max_limit, 'default', p_default_limit),
+        'offset', jsonb_build_object('type', 'integer', 'minimum', 0, 'default', 0)));
+$$;
+
+COMMENT ON FUNCTION api.page_query_schema(jsonb, integer, integer) IS
+    'The querySchema of a list route: p_properties plus limit (0..p_max_limit, default p_default_limit) and offset (>= 0, default 0).';
+
+CREATE OR REPLACE FUNCTION api.page_output_schema(p_item jsonb DEFAULT NULL)
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT jsonb_build_object(
+        'type', 'object',
+        'properties', jsonb_build_object(
+            'items', jsonb_build_object('type', 'array', 'items', COALESCE(p_item, '{"type": "object"}'::jsonb)),
+            'total', jsonb_build_object('type', 'integer', 'minimum', 0),
+            'limit', jsonb_build_object('type', 'integer', 'minimum', 0),
+            'offset', jsonb_build_object('type', 'integer', 'minimum', 0),
+            'hasMore', jsonb_build_object('type', 'boolean')),
+        'required', jsonb_build_array('items', 'total', 'limit', 'offset', 'hasMore'));
+$$;
+
+COMMENT ON FUNCTION api.page_output_schema(jsonb) IS
+    'The outputSchema of a list route answering api.page_response: items (each p_item, an object when NULL), total, limit, offset, hasMore, all required.';
+
+CREATE OR REPLACE FUNCTION api.page_response(p_items jsonb, p_total bigint, p_limit integer, p_offset integer)
+RETURNS api.http_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.json_response(200, jsonb_build_object(
+        'items', COALESCE(p_items, '[]'::jsonb),
+        'total', p_total,
+        'limit', p_limit,
+        'offset', p_offset,
+        'hasMore', p_offset + jsonb_array_length(COALESCE(p_items, '[]'::jsonb)) < p_total));
+$$;
+
+COMMENT ON FUNCTION api.page_response(jsonb, bigint, integer, integer) IS
+    'A 200 page of a list: {items, total, limit, offset, hasMore}; hasMore when rows follow this page. Declare it with api.page_output_schema and api.page_query_schema.';
+
+DO $$
+DECLARE
+    v_body jsonb := api.content_json((api.page_response('[1, 2]', 5, 2, 2)).content);
+BEGIN
+    IF v_body IS DISTINCT FROM '{"items": [1, 2], "total": 5, "limit": 2, "offset": 2, "hasMore": true}'::jsonb THEN
+        RAISE EXCEPTION 'page_response: middle page wrong: %', v_body;
+    END IF;
+    v_body := api.content_json((api.page_response(NULL, 4, 2, 4)).content);
+    IF v_body->'items' IS DISTINCT FROM '[]'::jsonb OR v_body->'hasMore' IS DISTINCT FROM 'false'::jsonb THEN
+        RAISE EXCEPTION 'page_response: an empty last page must have items [] and no more: %', v_body;
+    END IF;
+END $$;
+
+-- The validate step for typed body fields: every field named in p_types that
+-- is present and not blank but does not read as its PostgreSQL type, as
+-- invalid-params with reason "invalid". Absent, null and blank fields are the
+-- required check's business, not this one's. NaN and Infinity are not numbers
+-- a client means. NULL when everything reads.
+CREATE OR REPLACE FUNCTION api.malformed_params(p_input jsonb, p_types jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    SELECT jsonb_agg(api.invalid_param(t.key, 'invalid') ORDER BY t.key)
+    FROM jsonb_each_text(p_types) AS t(key, type_name)
+    CROSS JOIN LATERAL (SELECT btrim(p_input->>t.key) AS value) v
+    WHERE jsonb_typeof(p_input) = 'object'
+      AND v.value <> ''
+      AND (NOT pg_input_is_valid(v.value, t.type_name)
+           OR (t.type_name IN ('numeric', 'real', 'double precision', 'float4', 'float8')
+               AND lower(v.value) ~ '^[-+]?(nan|inf|infinity)$'));
+$$;
+
+COMMENT ON FUNCTION api.malformed_params(jsonb, jsonb) IS
+    'Fields of p_input that are present but do not read as the PostgreSQL type p_types names for them ({"dueOn": "date", "projectId": "uuid"}), as invalid-params {name, reason: invalid}; NULL when all read. A handler answers 422 with invalid_params => the result.';
+
+DO $$
+DECLARE
+    v_types jsonb := '{"projectId": "uuid", "dueOn": "date", "estimate": "numeric", "done": "boolean", "position": "integer"}';
+BEGIN
+    IF api.malformed_params('{}', v_types) IS NOT NULL
+       OR api.malformed_params(NULL, v_types) IS NOT NULL
+       OR api.malformed_params('{"dueOn": null, "estimate": "  ", "done": ""}', v_types) IS NOT NULL THEN
+        RAISE EXCEPTION 'malformed_params: absent, null and blank fields are not malformed';
+    END IF;
+    IF api.malformed_params('{"projectId": " 019a0000-0000-7000-8000-000000000001 ", "dueOn": "2026-10-31",
+                              "estimate": 2.5, "done": true, "position": "3", "other": "x"}', v_types) IS NOT NULL THEN
+        RAISE EXCEPTION 'malformed_params: well-formed fields were reported';
+    END IF;
+    IF api.malformed_params('{"projectId": "abc", "dueOn": "2026-13-01", "estimate": "NaN", "done": "maybe", "position": "1.5"}', v_types)
+       IS DISTINCT FROM '[{"name": "done", "reason": "invalid"}, {"name": "dueOn", "reason": "invalid"},
+                          {"name": "estimate", "reason": "invalid"}, {"name": "position", "reason": "invalid"},
+                          {"name": "projectId", "reason": "invalid"}]'::jsonb THEN
+        RAISE EXCEPTION 'malformed_params: every malformed field must be reported, got %',
+            api.malformed_params('{"projectId": "abc", "dueOn": "2026-13-01", "estimate": "NaN", "done": "maybe", "position": "1.5"}', v_types);
     END IF;
 END $$;
 
@@ -928,33 +1137,54 @@ END $$;
 -- MCP Response Builders (JSON-RPC 2.0 Compliant)
 -- ============================================================================
 -- request_id is jsonb so JSON-RPC id types (string, integer, null) round-trip
--- exactly. Drop any prior text-signature variants before recreating.
+-- exactly.
 
-DROP FUNCTION IF EXISTS api.mcp_success(jsonb, text);
-DROP FUNCTION IF EXISTS api.mcp_error(integer, text, text, jsonb);
-DROP FUNCTION IF EXISTS api.mcp_tool_result(jsonb, text, boolean);
-DROP FUNCTION IF EXISTS api.mcp_tool_error(text, text);
-DROP FUNCTION IF EXISTS api.mcp_resource_result(jsonb, text);
-DROP FUNCTION IF EXISTS api.mcp_resource_error(text, text);
-DROP FUNCTION IF EXISTS api.mcp_prompt_result(jsonb, text);
-DROP FUNCTION IF EXISTS api.mcp_prompt_error(text, text);
+-- The server's identity, named in every success result's _meta
+-- (io.modelcontextprotocol/serverInfo) and in a legacy initialize result.
+-- SET mcp.server_name / mcp.server_version to override the database name and 1.0.0.
+CREATE OR REPLACE FUNCTION api.mcp_server_info()
+RETURNS jsonb
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    SELECT jsonb_build_object(
+        'name', COALESCE(NULLIF(current_setting('mcp.server_name', true), ''), current_database()),
+        'version', COALESCE(NULLIF(current_setting('mcp.server_version', true), ''), '1.0.0')
+    );
+$$;
+
+COMMENT ON FUNCTION api.mcp_server_info() IS
+    'Server identity: in every MCP success result''s _meta (io.modelcontextprotocol/serverInfo) and the legacy initialize result. Configurable via mcp.server_name / mcp.server_version; defaults to the database name and 1.0.0.';
+
+-- The ttlMs and cacheScope of the cacheable results: the four lists and
+-- resources/read. Private, because every list is filtered by the caller's
+-- access; five minutes, because the registry changes only at a deploy and
+-- every call decides access again.
+CREATE OR REPLACE FUNCTION api.mcp_cache_policy()
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT '{"ttlMs": 300000, "cacheScope": "private"}'::jsonb;
+$$;
+
+COMMENT ON FUNCTION api.mcp_cache_policy() IS
+    'ttlMs and cacheScope of the cacheable MCP results (tools/list, prompts/list, resources/list, resources/templates/list, resources/read): five minutes, private to the caller.';
 
 CREATE OR REPLACE FUNCTION api.mcp_success(
     result jsonb,
     request_id jsonb
 ) RETURNS api.mcp_response
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT ROW(
         jsonb_build_object(
             'jsonrpc', '2.0',
             'id', request_id,
-            'result', result
+            'result', '{"resultType": "complete"}'::jsonb || result
+                || jsonb_build_object('_meta', COALESCE(result->'_meta', '{}'::jsonb)
+                       || jsonb_build_object('io.modelcontextprotocol/serverInfo', api.mcp_server_info()))
         )
     )::api.mcp_response;
 $$;
 
 COMMENT ON FUNCTION api.mcp_success(jsonb, jsonb) IS
-    'MCP JSON-RPC 2.0 success envelope. request_id is jsonb to preserve the original JSON type (string, integer, or null).';
+    'MCP JSON-RPC 2.0 success envelope. The result object gains resultType "complete" (unless it names its own) and _meta["io.modelcontextprotocol/serverInfo"], its own _meta keys kept. request_id is jsonb to preserve the original JSON type.';
 
 CREATE OR REPLACE FUNCTION api.mcp_error(
     code integer,
@@ -967,17 +1197,14 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         jsonb_build_object(
             'jsonrpc', '2.0',
             'id', request_id,
-            'error', jsonb_strip_nulls(jsonb_build_object(
-                'code', code,
-                'message', COALESCE(message, 'Error'),
-                'data', data
-            ))
+            'error', jsonb_build_object('code', code, 'message', COALESCE(message, 'Error'))
+                || CASE WHEN data IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('data', data) END
         )
     )::api.mcp_response;
 $$;
 
 COMMENT ON FUNCTION api.mcp_error(integer, text, jsonb, jsonb) IS
-    'MCP JSON-RPC 2.0 error envelope. Use for protocol-level errors (parse, method-not-found); tool execution failures use api.mcp_tool_error instead.';
+    'MCP JSON-RPC 2.0 error envelope. Use for protocol-level errors (parse, method-not-found); tool execution failures use api.mcp_tool_error instead. data is kept as given, nulls inside it included.';
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     content jsonb,
@@ -985,25 +1212,24 @@ CREATE OR REPLACE FUNCTION api.mcp_tool_result(
     is_error boolean DEFAULT false,
     structured_content jsonb DEFAULT NULL
 ) RETURNS api.mcp_response
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_strip_nulls(jsonb_build_object(
-            'content', content,
-            'isError', is_error,
-            'structuredContent', structured_content
-        )),
+        jsonb_build_object('content', content)
+        || CASE WHEN is_error IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('isError', is_error) END
+        || CASE WHEN structured_content IS NULL THEN '{}'::jsonb
+                ELSE jsonb_build_object('structuredContent', structured_content) END,
         request_id
     );
 $$;
 
 COMMENT ON FUNCTION api.mcp_tool_result(jsonb, jsonb, boolean, jsonb) IS
-    'MCP tool invocation result. is_error signals application-level failure (still uses the success envelope per MCP spec). structured_content carries typed output when the tool declares an outputSchema.';
+    'MCP tool invocation result. is_error signals application-level failure (still uses the success envelope per MCP spec). structured_content carries typed output when the tool declares an outputSchema; nulls inside it are kept.';
 
 CREATE OR REPLACE FUNCTION api.mcp_tool_error(
     message text,
     request_id jsonb
 ) RETURNS api.mcp_response
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_tool_result(
         jsonb_build_array(jsonb_build_object('type', 'text', 'text', message)),
         request_id,
@@ -1018,15 +1244,15 @@ CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
     request_id jsonb
 ) RETURNS api.mcp_response
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
-        jsonb_build_object('contents', contents),
+        jsonb_build_object('contents', contents) || api.mcp_cache_policy(),
         request_id
     );
 $$;
 
 COMMENT ON FUNCTION api.mcp_resource_result(jsonb, jsonb) IS
-    'MCP resources/read success response. contents is the JSON array of resource content items.';
+    'MCP resources/read success response. contents is the JSON array of resource content items; ttlMs and cacheScope from api.mcp_cache_policy().';
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_error(
     message text,
@@ -1039,11 +1265,22 @@ $$;
 COMMENT ON FUNCTION api.mcp_resource_error(text, jsonb) IS
     'MCP resource error. Wraps the message as a -32603 internal error in the JSON-RPC error envelope.';
 
+CREATE OR REPLACE FUNCTION api.mcp_resource_not_found(
+    uri text,
+    request_id jsonb
+) RETURNS api.mcp_response
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT api.mcp_error(-32602, 'Resource not found', request_id, jsonb_build_object('uri', uri));
+$$;
+
+COMMENT ON FUNCTION api.mcp_resource_not_found(text, jsonb) IS
+    'MCP resources/read answer for a resource that does not exist: -32602 with data.uri. An empty contents array is turned into the same answer.';
+
 CREATE OR REPLACE FUNCTION api.mcp_prompt_result(
     messages jsonb,
     request_id jsonb
 ) RETURNS api.mcp_response
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT api.mcp_success(
         jsonb_build_object('messages', messages),
         request_id
@@ -1153,6 +1390,39 @@ BEGIN
         RAISE EXCEPTION 'mcp_tool_error: result.content must contain the error message';
     END IF;
 
+    -- Every success result is complete and names the server; a handler's own
+    -- _meta keys stay beside it.
+    v_envelope := (api.mcp_success('{"_meta": {"x": 1}}'::jsonb, '"m"'::jsonb)).envelope;
+    IF v_envelope->'result'->>'resultType' IS DISTINCT FROM 'complete'
+       OR v_envelope->'result'->'_meta'->'io.modelcontextprotocol/serverInfo'->>'name' IS DISTINCT FROM current_database()
+       OR v_envelope->'result'->'_meta'->'x' IS DISTINCT FROM '1'::jsonb THEN
+        RAISE EXCEPTION 'mcp_success: resultType, serverInfo or the own _meta missing: %', v_envelope;
+    END IF;
+
+    -- Nulls inside structuredContent and error.data are data, not absent members.
+    v_envelope := (api.mcp_tool_result('[]'::jsonb, '"n"'::jsonb, false, '{"due": null, "items": [null]}'::jsonb)).envelope;
+    IF v_envelope->'result'->'structuredContent' IS DISTINCT FROM '{"due": null, "items": [null]}'::jsonb THEN
+        RAISE EXCEPTION 'mcp_tool_result: nulls inside structuredContent were dropped: %', v_envelope;
+    END IF;
+    v_envelope := (api.mcp_error(-32022, 'm', '"e"'::jsonb, '{"requested": null}'::jsonb)).envelope;
+    IF v_envelope->'error'->'data' IS DISTINCT FROM '{"requested": null}'::jsonb THEN
+        RAISE EXCEPTION 'mcp_error: nulls inside data were dropped: %', v_envelope;
+    END IF;
+    IF (api.mcp_error(-1, NULL, '"e"'::jsonb)).envelope->'error' ? 'data'
+       OR (api.mcp_error(-1, NULL, '"e"'::jsonb)).envelope->'error'->>'message' IS DISTINCT FROM 'Error' THEN
+        RAISE EXCEPTION 'mcp_error: an absent data member or the NULL-message fallback changed';
+    END IF;
+
+    -- Only resources/read of the results built here is cacheable.
+    v_envelope := (api.mcp_resource_result('[]'::jsonb, '"r"'::jsonb)).envelope;
+    IF NOT v_envelope->'result' @> api.mcp_cache_policy() THEN
+        RAISE EXCEPTION 'mcp_resource_result: ttlMs/cacheScope missing: %', v_envelope;
+    END IF;
+    IF (api.mcp_tool_result('[]'::jsonb, '"t"'::jsonb)).envelope->'result' ?| ARRAY['ttlMs', 'cacheScope']
+       OR (api.mcp_prompt_result('[]'::jsonb, '"p"'::jsonb)).envelope->'result' ?| ARRAY['ttlMs', 'cacheScope'] THEN
+        RAISE EXCEPTION 'a tool or prompt result must not carry cache members';
+    END IF;
+
     -- Test mcp_text helper
     v_text := api.mcp_text('Hello world');
     IF v_text->>'type' IS DISTINCT FROM 'text' OR v_text->>'text' IS DISTINCT FROM 'Hello world' THEN
@@ -1177,15 +1447,3 @@ DO $$ BEGIN
     RAISE NOTICE '  ✓ api.mcp_prompt_result/error - MCP prompt response builders';
 END $$;
 
--- ============================================================================
--- Grant Permissions
--- ============================================================================
-
-DO $$
-DECLARE
-    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
-    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
-BEGIN
-    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO %I', v_admin_role);
-    EXECUTE format('GRANT EXECUTE ON ALL ROUTINES IN SCHEMA api TO %I', v_api_role);
-END $$;

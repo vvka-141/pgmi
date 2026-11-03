@@ -55,6 +55,19 @@ If your transactions are well-tested:
 - Issues surfacing after deployment are "minor" (UI glitches, service integration) not "fundamental" (data corruption)
 - You can reason about system correctness by examining transactions alone
 
+## The Deploy Contract
+
+A deploy is itself a transaction over the dataset, so `deploy.sql` refuses anything that would leave the database different from what the files say.
+
+- **Two kinds of file.** Structure (tables, indexes, types, domains, policies, operators, constraint triggers) lives in run-once files written as plain DDL. Code (functions, views, registrations, catalog sync) lives in re-run files and is replaced on every deploy. A file holding the wrong kind stops the deploy before anything runs.
+- **Run-once means fixed.** Editing, moving, re-sorting or removing a run-once file that already ran is refused, naming the file. The change goes in a new run-once file, so every database, old or new, reaches the same state by the same steps.
+- **The database knows what it is.** It carries an environment label (`dev`, `test`, `prod`) and a deploy naming another is refused; relabelling is an explicit parameter. Files under `dev/` deploy only to dev databases.
+- **Access is part of the state.** Privileges start closed, and grants, policies and triggers may not disappear unless a file declares the removal (below).
+- **Reference data is a file.** `data/catalogs/<schema>.<table>.json` is the whole content of a lookup table; every deploy makes the table equal it.
+- **Atomic head, then a tail.** Everything up to the `COMMIT` is one transaction. After it, `deploy.sql` builds concurrent indexes and fails on any invalid index.
+
+The history of every deploy and script is readable in `internal.vw_deployment` and `internal.vw_deployed_script`. README "Extending the Framework" has the details.
+
 ## Layered Schema Architecture
 
 The template has five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects. Within them it uses a three-layer design:
@@ -168,17 +181,17 @@ $$ LANGUAGE plpgsql;
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'confirm-order-handler-uuid',
-        'path', '/orders/{orderId}/confirm',
+        'path', '/orders/{orderId:uuid}/confirm',
         'httpMethod', '^POST$',
         'name', 'confirm_order',
-        'requiresAuth', true
+        'permissions', jsonb_build_array('order.write')
     ),
     $body$
 DECLARE
     v_order_id UUID;
 BEGIN
-    -- Extract and validate
-    v_order_id := (regexp_matches((request).url, '/orders/([0-9a-f-]+)/confirm'))[1]::uuid;
+    -- The gateway has checked the uuid
+    v_order_id := ((request).path_params->>'orderId')::uuid;
 
     -- Call virtual layer
     PERFORM core.confirm_order(v_order_id);
@@ -199,6 +212,14 @@ END;
 2. **Reusability**: Multiple API handlers can use the same virtual layer views/functions
 3. **Testability**: Test each layer independently
 4. **Maintainability**: Change API protocol without touching business logic
+
+### Access Is Declared, Not Inherited
+
+Layers are only a boundary if a role cannot reach past them. No routine is callable by `PUBLIC`: default privileges close every function the owner creates, and an end-of-deploy sweep closes the rest in every application schema the catalog shows. Only the template's roles may connect. Every grant, policy and trigger the database had before a deploy must still be there after it, unless a file declares the removal (`pg_temp.access_removal`). See README "Privileges: closed by default".
+
+### Identity Is Resolved, Not Claimed
+
+A request never states who calls. The transport signs the person in and opens a login session (`api.open_login_session`); after that a request carries only opaque handles (`x-login-session`, `x-organization-session`, or an MCP connection handle), or, for an MCP client with OAuth, the issuer, subject and client id the gateway verified in its token. The database resolves them, once per request, into one person, at most one organization and that membership's permissions, and only for a login in the api role. Handlers read the result through typed readers (`api.current_principal_id()`, `api.current_organization_id()`, `api.has_permission()`), never through a header or a setting. An MCP connection has its own agent principal: the request acts for the person (effective principal) and is made by the agent (`api.current_actual_principal_id()`, `api.current_actor_kind()` = `agent`), and every log records both. The agent holds its connection's `agent.*` role's permissions intersected with the person's, recomputed per request; it acts only while its connection is live (not paused, revoked or expired, its membership current, its organization's agents switched on). A handler declares `access` or `permissions`; the gateway refuses everyone else with 401 or 403 before the body runs, with one decision for REST, RPC and MCP. See README "Sign-in, sessions and connections".
 
 ## Testing Philosophy
 
@@ -264,52 +285,44 @@ The tests define the contract. Implementation fulfills it.
 ### Maybe Choose Basic Template If:
 
 - Learning pgmi for the first time
-- Simple migration-only use case
+- Tables, views and functions without an API
 - Team is new to PostgreSQL
 - Rapid prototyping is the priority
 
 ## Advanced Patterns
 
-### Stored Procedures for Batch Processing
+### Background Jobs: Batches That Commit
 
-Reduce client-server roundtrips by processing batches server-side:
+Backlog work (retention, closing stale tasks, re-indexing documents) runs in
+the database as a job a scheduler CALLs. The worker holds no logic: it opens a
+session, sends one CALL and closes the session.
 
 ```sql
-CREATE PROCEDURE core.process_pending_orders(p_batch_size INT DEFAULT 100)
+-- the batch: (int) RETURNS int, rows processed, 0 when done
+CREATE FUNCTION api.job_close_stale_tasks_batch(p_batch_size int) RETURNS int ...;
+
+-- the job: hands the batch to the driver
+CREATE PROCEDURE api.job_close_stale_tasks(p_batch_size int DEFAULT 5000, p_max_batches int DEFAULT NULL)
 LANGUAGE plpgsql AS $$
-DECLARE
-    v_processed INT := 0;
-    v_order RECORD;
 BEGIN
-    LOOP
-        -- Process one batch
-        FOR v_order IN
-            SELECT order_id FROM core.order
-            WHERE status = 'pending'
-            ORDER BY created_at
-            LIMIT p_batch_size
-            FOR UPDATE SKIP LOCKED
-        LOOP
-            PERFORM core.confirm_order(v_order.order_id);
-            v_processed := v_processed + 1;
-        END LOOP;
-
-        -- Commit this batch
-        COMMIT;
-
-        -- Exit if no more work
-        EXIT WHEN v_processed = 0;
-        v_processed := 0;
-    END LOOP;
-END;
-$$;
+    CALL api.job_run('close_stale_tasks', 'api.job_close_stale_tasks_batch(int)', p_batch_size, p_max_batches);
+END $$;
 ```
 
-**Benefits:**
-- Single connection processes entire backlog
-- Commits per batch limit transaction size
-- `SKIP LOCKED` enables parallel workers
-- No client involvement during processing
+`api.job_run` is the one driver. It refuses bad arguments (22023) before any
+lock, takes the job's session-level advisory lock (a second run returns
+quietly), logs the run in `internal.job_run_log`, and commits after every
+batch, so a long backlog never holds one long transaction or one long lock.
+Batch functions select `FOR UPDATE SKIP LOCKED` so work they touch stays
+available to the application.
+
+**Why these rules.** A procedure may COMMIT only when it is CALLed at top
+level, outside a transaction block, and has no `SECURITY DEFINER` and no `SET`
+clause; the jobs follow from that. A session-level lock survives a rollback,
+so a failed run keeps it until its session ends: the worker uses one session
+per run, and the next run marks the failed one `abandoned`. The README's
+Background jobs section has the contract, the run log and cron and `pg_cron`
+examples.
 
 ### Near Real-Time Notifications
 
@@ -342,8 +355,8 @@ $$ LANGUAGE plpgsql;
 Leverage PostgreSQL's rich index ecosystem:
 
 ```sql
+-- In a run-once file. pg_trgm is installed by deploy.sql in schema extensions.
 -- Trigram index for search-as-you-type
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX ix_customer_name_trgm ON core.customer USING gin (name gin_trgm_ops);
 
 -- Full-text search

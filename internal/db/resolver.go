@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -95,6 +96,7 @@ type EnvVars struct {
 	PGSSLMODE              string // SSL mode
 	PGAPPNAME              string // application_name reported in pg_stat_activity
 	PGCONNECT_TIMEOUT      string // Connection timeout in seconds (libpq convention)
+	PGSERVICE              string // libpq service file entry; refused, pgmi reads no service files
 	DATABASE_URL           string // Full connection string (Heroku/Rails convention)
 	PGMI_CONNECTION_STRING string
 
@@ -126,6 +128,7 @@ func LoadFromEnvironment() *EnvVars {
 		PGSSLMODE:              os.Getenv("PGSSLMODE"),
 		PGAPPNAME:              os.Getenv("PGAPPNAME"),
 		PGCONNECT_TIMEOUT:      os.Getenv("PGCONNECT_TIMEOUT"),
+		PGSERVICE:              os.Getenv("PGSERVICE"),
 		DATABASE_URL:           os.Getenv("DATABASE_URL"),
 		PGMI_CONNECTION_STRING: os.Getenv("PGMI_CONNECTION_STRING"),
 		AZURE_TENANT_ID:        os.Getenv("AZURE_TENANT_ID"),
@@ -146,7 +149,7 @@ func LoadFromEnvironment() *EnvVars {
 // 2. Granular flags (-h, -p, -U, --sslmode) - if any provided, build config from flags
 // 3. PGMI_CONNECTION_STRING, then DATABASE_URL - only when no granular flag is given
 // 4. Environment variables (PGHOST, PGPORT, etc.), then pgmi.yaml
-// 5. Defaults (localhost:5432, prefer SSL)
+// 5. Defaults (localhost:5432; sslmode prefer, or a TLS-only mode under token auth)
 //
 // Cloud Authentication:
 // If azureFlags/awsFlags/googleFlags are provided OR corresponding environment variables are set,
@@ -188,6 +191,9 @@ func ResolveConnectionParams(
 	if envVars == nil {
 		envVars = &EnvVars{}
 	}
+	if envVars.PGSERVICE != "" {
+		return nil, "", fmt.Errorf("PGSERVICE is set: %w: %w", errServiceFile, pgmi.ErrInvalidConfig)
+	}
 
 	// Check for conflicts: cannot use multiple cloud auth methods
 	enabledCount := 0
@@ -217,16 +223,16 @@ func ResolveConnectionParams(
 	}
 
 	var config *pgmi.ConnectionConfig
-	var maintenanceDB string
+	var maintenanceDB, sslModeSource string
 	var err error
 
 	if connStr, source := SelectConnectionString(connStringFlag, granularFlags, envVars); connStr != "" {
-		config, maintenanceDB, err = resolveFromConnectionString(connStr, envVars)
+		config, maintenanceDB, sslModeSource, err = resolveFromConnectionString(connStr, source, envVars)
 		if err != nil && source != "--connection" {
 			err = fmt.Errorf("%s: %w", source, err)
 		}
 	} else {
-		config, maintenanceDB, err = resolveFromGranularParams(granularFlags, envVars, projectConfig)
+		config, maintenanceDB, sslModeSource, err = resolveFromGranularParams(granularFlags, envVars, projectConfig)
 	}
 
 	if err != nil {
@@ -241,7 +247,47 @@ func ResolveConnectionParams(
 	// Apply TLS client certificate parameters
 	applyCertParams(config, certFlags, envVars, projectConfig)
 
+	if err := applySSLMode(config, sslModeSource); err != nil {
+		return nil, "", err
+	}
+
 	return config, maintenanceDB, nil
+}
+
+var tokenAuthSSLModes = []string{"require", "verify-ca", "verify-full"}
+
+// applySSLMode fills in the default sslmode and refuses modes that can fall
+// back to plaintext when the password is an IAM token (Azure, AWS). It runs
+// after auth and certificate resolution because an unset mode and an explicit
+// "prefer" must stay distinguishable until the auth method is known.
+//
+// Azure's server certificates chain to public roots (DigiCert Global Root G2,
+// Microsoft RSA Root CA 2017) that the system trust store holds, so verify-full
+// works without configuration. RDS certificates chain to private Amazon RDS
+// CAs, so verify-full needs the RDS bundle in sslrootcert; without one the
+// default is require.
+func applySSLMode(cfg *pgmi.ConnectionConfig, source string) error {
+	tokenAuth := cfg.AuthMethod == pgmi.AuthMethodAzureEntraID || cfg.AuthMethod == pgmi.AuthMethodAWSIAM
+
+	if cfg.SSLMode == "" {
+		switch {
+		case cfg.AuthMethod == pgmi.AuthMethodAzureEntraID, tokenAuth && cfg.SSLRootCert != "":
+			cfg.SSLMode = "verify-full"
+		case tokenAuth:
+			cfg.SSLMode = "require"
+		default:
+			cfg.SSLMode = "prefer"
+		}
+		return nil
+	}
+
+	if tokenAuth && !slices.Contains(tokenAuthSSLModes, cfg.SSLMode) {
+		return fmt.Errorf(
+			"sslmode %q from %s is not allowed with %s authentication: it can send the token without TLS; use require, verify-ca or verify-full: %w",
+			cfg.SSLMode, source, cfg.AuthMethod, pgmi.ErrInvalidConfig,
+		)
+	}
+	return nil
 }
 
 // SelectConnectionString returns the connection string the resolver uses and
@@ -415,21 +461,52 @@ func firstNonEmpty(values ...string) string {
 //
 // Environment variables are applied as fallbacks for parameters not specified
 // in the connection string (following PostgreSQL standard behavior).
-func resolveFromConnectionString(connStr string, envVars *EnvVars) (*pgmi.ConnectionConfig, string, error) {
-	config, err := ParseConnectionString(connStr)
+func resolveFromConnectionString(connStr, source string, envVars *EnvVars) (*pgmi.ConnectionConfig, string, string, error) {
+	config, err := parseConnectionStringRaw(connStr)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid connection string: %w: %w", err, pgmi.ErrInvalidConfig)
+		return nil, "", "", fmt.Errorf("invalid connection string: %w: %w", err, pgmi.ErrInvalidConfig)
 	}
 
-	// Apply PGSSLMODE from environment if not specified in connection string
-	// This follows PostgreSQL's libpq behavior where environment variables
-	// serve as fallbacks for connection string parameters
+	// libpq takes every parameter the string leaves out from PG*, then from its
+	// defaults; explicit keywords win.
+	if envVars != nil {
+		if config.Host == "" {
+			config.Host = envVars.PGHOST
+		}
+		if config.Port == 0 && envVars.PGPORT != "" {
+			port, err := strconv.Atoi(envVars.PGPORT)
+			if err != nil || validatePort(port) != nil {
+				return nil, "", "", fmt.Errorf("invalid $PGPORT value '%s': %w", envVars.PGPORT, pgmi.ErrInvalidConfig)
+			}
+			config.Port = port
+		}
+		if config.Database == "" {
+			config.Database = envVars.PGDATABASE
+		}
+		if config.Username == "" {
+			config.Username = envVars.PGUSER
+		}
+		if config.AppName == "" {
+			config.AppName = envVars.PGAPPNAME
+		}
+		if config.ConnectTimeout == 0 && envVars.PGCONNECT_TIMEOUT != "" {
+			seconds, err := strconv.Atoi(envVars.PGCONNECT_TIMEOUT)
+			if err != nil || seconds < 0 {
+				return nil, "", "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds): %w", envVars.PGCONNECT_TIMEOUT, pgmi.ErrInvalidConfig)
+			}
+			config.ConnectTimeout = time.Duration(seconds) * time.Second
+		}
+	}
+	applyStaticDefaults(config)
+	if config.AppName == "" {
+		config.AppName = "pgmi"
+	}
+
+	// PGSSLMODE is a fallback for a connection string without sslmode (libpq behavior).
+	sslModeSource := source
 	if config.SSLMode == "" && envVars != nil && envVars.PGSSLMODE != "" {
 		config.SSLMode = envVars.PGSSLMODE
-	}
-	// Default to "prefer" if still not set
-	if config.SSLMode == "" {
-		config.SSLMode = "prefer"
+		sslModeSource = "$PGSSLMODE"
 	}
 
 	// The database in the connection string becomes the maintenance DB
@@ -439,7 +516,7 @@ func resolveFromConnectionString(connStr string, envVars *EnvVars) (*pgmi.Connec
 		maintenanceDB = pgmi.DefaultMaintenanceDB // "postgres"
 	}
 
-	return config, maintenanceDB, nil
+	return config, maintenanceDB, sslModeSource, nil
 }
 
 // resolveFromGranularParams builds ConnectionConfig from granular flags and environment variables.
@@ -454,7 +531,7 @@ func resolveFromGranularParams(
 	flags *GranularConnFlags,
 	envVars *EnvVars,
 	projectConfig *config.ProjectConfig,
-) (*pgmi.ConnectionConfig, string, error) {
+) (*pgmi.ConnectionConfig, string, string, error) {
 	cfg := &pgmi.ConnectionConfig{
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
@@ -480,16 +557,16 @@ func resolveFromGranularParams(
 	// Port: flag > PGPORT > pgmi.yaml > default
 	if flags.Port != 0 {
 		if err := validatePort(flags.Port); err != nil {
-			return nil, "", fmt.Errorf("invalid --port flag: %w: %w", err, pgmi.ErrInvalidConfig)
+			return nil, "", "", fmt.Errorf("invalid --port flag: %w: %w", err, pgmi.ErrInvalidConfig)
 		}
 		cfg.Port = flags.Port
 	} else if envVars.PGPORT != "" {
 		port, err := strconv.Atoi(envVars.PGPORT)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer: %w", envVars.PGPORT, pgmi.ErrInvalidConfig)
+			return nil, "", "", fmt.Errorf("invalid $PGPORT value '%s': must be an integer: %w", envVars.PGPORT, pgmi.ErrInvalidConfig)
 		}
 		if err := validatePort(port); err != nil {
-			return nil, "", fmt.Errorf("invalid $PGPORT value '%s': %w: %w", envVars.PGPORT, err, pgmi.ErrInvalidConfig)
+			return nil, "", "", fmt.Errorf("invalid $PGPORT value '%s': %w: %w", envVars.PGPORT, err, pgmi.ErrInvalidConfig)
 		}
 		cfg.Port = port
 	} else if pc.Port != 0 {
@@ -525,16 +602,15 @@ func resolveFromGranularParams(
 		cfg.Database = pc.Database
 	}
 
-	// SSLMode: flag > PGSSLMODE > pgmi.yaml > default
-	cfg.SSLMode = flags.SSLMode
-	if cfg.SSLMode == "" {
-		cfg.SSLMode = envVars.PGSSLMODE
-	}
-	if cfg.SSLMode == "" {
-		cfg.SSLMode = pc.SSLMode
-	}
-	if cfg.SSLMode == "" {
-		cfg.SSLMode = "prefer"
+	// SSLMode: flag > PGSSLMODE > pgmi.yaml; applySSLMode supplies the default
+	var sslModeSource string
+	switch {
+	case flags.SSLMode != "":
+		cfg.SSLMode, sslModeSource = flags.SSLMode, "--sslmode"
+	case envVars.PGSSLMODE != "":
+		cfg.SSLMode, sslModeSource = envVars.PGSSLMODE, "$PGSSLMODE"
+	case pc.SSLMode != "":
+		cfg.SSLMode, sslModeSource = pc.SSLMode, "pgmi.yaml connection.sslmode"
 	}
 
 	// AppName: PGAPPNAME > "pgmi" default. Surfaces in pg_stat_activity.application_name
@@ -548,7 +624,7 @@ func resolveFromGranularParams(
 	if envVars.PGCONNECT_TIMEOUT != "" {
 		seconds, err := strconv.Atoi(envVars.PGCONNECT_TIMEOUT)
 		if err != nil || seconds < 0 {
-			return nil, "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds): %w", envVars.PGCONNECT_TIMEOUT, pgmi.ErrInvalidConfig)
+			return nil, "", "", fmt.Errorf("invalid $PGCONNECT_TIMEOUT value '%s': must be a non-negative integer (seconds): %w", envVars.PGCONNECT_TIMEOUT, pgmi.ErrInvalidConfig)
 		}
 		cfg.ConnectTimeout = time.Duration(seconds) * time.Second
 	}
@@ -559,7 +635,7 @@ func resolveFromGranularParams(
 		maintenanceDB = pgmi.DefaultMaintenanceDB
 	}
 
-	return cfg, maintenanceDB, nil
+	return cfg, maintenanceDB, sslModeSource, nil
 }
 
 func validatePort(port int) error {

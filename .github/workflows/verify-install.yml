@@ -2,15 +2,16 @@ name: Verify Install
 
 # Installs pgmi through every channel the README documents and checks that
 # each one serves the latest release and that it works. Runs after each
-# release (publishing to the tap and Cloudsmith lags by minutes) and nightly,
-# because a channel can break with nothing changing here: a Homebrew
-# deprecation, a Cloudsmith outage, an install script edited on main.
+# release (publishing to the tap lags by minutes) and weekly, because a channel
+# can break with nothing changing here: a Homebrew deprecation, an install
+# script edited on main. Weekly, not nightly: every run downloads release
+# assets, and nightly runs swamped the download counts.
 on:
   workflow_run:
     workflows: [Release]
     types: [completed]
   schedule:
-    - cron: '17 4 * * *'
+    - cron: '17 4 * * 1'
   workflow_dispatch:
     inputs:
       expected_tag:
@@ -35,7 +36,7 @@ jobs:
     outputs:
       version: ${{ steps.latest.outputs.version }}
     steps:
-      - name: Let the tap and APT index catch up
+      - name: Let the tap catch up
         if: github.event_name == 'workflow_run'
         run: sleep 600
 
@@ -62,22 +63,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The install jobs exercise only their runner's arch; the other archives
-      # the installers can fetch are checked here against checksums.txt.
+      # and the .deb packages are checked here. Compares checksums.txt with the
+      # sha256 digest GitHub publishes per asset, so only checksums.txt is
+      # downloaded and the archive download counts stay free of CI.
       - env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.expected.outputs.version }}
         run: |
-          gh release download "v$VERSION" --repo "${{ github.repository }}" --dir assets
-          cd assets
-          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
-            [ -f "pgmi_${VERSION}_${target}.tar.gz" ] || { echo "::error::missing pgmi_${VERSION}_${target}.tar.gz"; exit 1; }
-          done
-          for target in windows_amd64 windows_arm64; do
-            [ -f "pgmi_${VERSION}_${target}.zip" ] || { echo "::error::missing pgmi_${VERSION}_${target}.zip"; exit 1; }
-          done
-          grep -E "pgmi_${VERSION}_(linux|darwin|windows)_(amd64|arm64)\.(tar\.gz|zip)$" checksums.txt > archives.sha256
-          [ "$(wc -l < archives.sha256)" -eq 6 ] || { echo "::error::checksums.txt does not list all six archives"; cat checksums.txt; exit 1; }
-          sha256sum -c archives.sha256
+          tag="v$VERSION"
+          packages="^pgmi_${VERSION}_(((linux|darwin)_(amd64|arm64)\.tar\.gz)|(windows_(amd64|arm64)\.zip)|(linux_(amd64|arm64)\.deb)) "
+          gh release download "$tag" --repo "${{ github.repository }}" --pattern checksums.txt
+          awk '{print $2 " " $1}' checksums.txt | grep -E "$packages" | sort > listed || true
+          gh api "repos/${{ github.repository }}/releases/tags/$tag" \
+            --jq '.assets[] | "\(.name) \(.digest // "missing" | ltrimstr("sha256:"))"' \
+            | grep -E "$packages" | sort > published || true
+          [ "$(wc -l < published)" -eq 8 ] || { echo "::error::$tag should carry six archives and two .deb packages"; cat published; exit 1; }
+          diff -u listed published || { echo "::error::checksums.txt disagrees with the digests GitHub publishes for $tag"; exit 1; }
 
   linux:
     name: ${{ matrix.channel }}
@@ -86,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        channel: [install.sh, install.sh without sudo, apt, go install]
+        channel: [install.sh, install.sh without sudo, go install]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -104,9 +105,6 @@ jobs:
             "install.sh without sudo")
               curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
               echo "$HOME/.local/bin" >> "$GITHUB_PATH" ;;
-            apt)
-              curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-              sudo apt update && sudo apt install -y pgmi ;;
             "go install")
               (cd "$RUNNER_TEMP" && go list -m "github.com/vvka-141/pgmi@v${{ needs.expected.outputs.version }}")
               go install github.com/vvka-141/pgmi/cmd/pgmi@latest
@@ -134,7 +132,8 @@ jobs:
         run: |
           brew install --cask vvka-141/pgmi/pgmi 2>&1 | tee brew.log
           if grep -q '^Warning:' brew.log; then
-            grep '^Warning:' brew.log | while read -r line; do echo "::warning::brew: $line"; done
+            grep '^Warning:' brew.log | while read -r line; do echo "::error::brew: $line"; done
+            exit 1
           fi
 
       - name: Serves the latest release

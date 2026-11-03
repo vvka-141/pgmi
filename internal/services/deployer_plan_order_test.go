@@ -399,11 +399,11 @@ COMMIT;
 	}
 }
 
-// TestDeployError_ReportsLineAfterMacroExpansion proves the reported line is the
-// line of the script pgmi actually sent, not of the file on disk. CALL pgmi_test()
-// expands into many lines before the syntax error, so a naive line count against
-// deploy.sql would point at the wrong statement.
-func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
+// TestDeployError_ReportsFileLineAfterMacroExpansion proves the reported line is
+// the line of deploy.sql on disk. CALL pgmi_test() expands into many lines
+// before the syntax error, so the position PostgreSQL reports must be mapped
+// back through the expansion, or it points far below the file's last line.
+func TestDeployError_ReportsFileLineAfterMacroExpansion(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
 	ctx := context.Background()
@@ -454,12 +454,12 @@ func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
 		t.Errorf("reported line %d does not hold the offending statement: got %q, want %q",
 			loc.Line, loc.SourceLine, "SELEC 1;")
 	}
-	if !loc.Expanded {
-		t.Error("expected the location to be flagged as expanded — deploy.sql contained a pgmi_test() macro")
+	if loc.Expanded {
+		t.Error("a line mapped back to the file must not be flagged as an expanded-script line")
 	}
-	if loc.Line <= rawLine {
-		t.Errorf("expected macro expansion to push the error past line %d of the file on disk, got line %d",
-			rawLine, loc.Line)
+	if loc.Script != "deploy.sql" || loc.Line != rawLine || loc.Column != 1 {
+		t.Errorf("want deploy.sql line %d column 1 of the file on disk, got %s line %d column %d",
+			rawLine, loc.Script, loc.Line, loc.Column)
 	}
 
 	if out := pgmi.FormatError(err); !strings.Contains(out, "LINE ") {

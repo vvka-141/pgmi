@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 )
 
@@ -59,27 +58,6 @@ func completeTemplateNames(cmd *cobra.Command, args []string, toComplete string)
 	for _, t := range templates {
 		if strings.HasPrefix(t, toComplete) {
 			matches = append(matches, t)
-		}
-	}
-
-	return matches, cobra.ShellCompDirectiveNoFileComp
-}
-
-// completeSkillNames provides shell completion for skill names.
-func completeSkillNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) > 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-
-	names, err := ai.GetSkillNames()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
-
-	var matches []string
-	for _, name := range names {
-		if strings.HasPrefix(name, toComplete) {
-			matches = append(matches, name)
 		}
 	}
 

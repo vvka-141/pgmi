@@ -1,7 +1,7 @@
 /*
 <pgmi-meta
     id="a7f01000-0002-4000-8000-000000000001"
-    idempotent="true">
+    idempotent="false">
   <description>
     Handler registry: central table for all protocol handlers with pg_proc snapshot
   </description>
@@ -20,7 +20,7 @@ DO $$ BEGIN RAISE NOTICE '→ Installing handler registry'; END $$;
 -- created_at and deleted_at columns are injected by the deploy-end sweep.
 -- The inline call below ensures columns exist immediately for indexes.
 
-CREATE TABLE IF NOT EXISTS api.handler (
+CREATE TABLE api.handler (
     object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
 
     handler_type api.handler_type NOT NULL,
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS api.handler (
     accepts text[] NOT NULL DEFAULT ARRAY['*/*'],
     produces text[] NOT NULL DEFAULT ARRAY['application/json'],
     response_headers jsonb NOT NULL DEFAULT '{}',
-    requires_auth boolean NOT NULL DEFAULT true,
+    access text NOT NULL CONSTRAINT handler_access_check
+        CHECK (access IN ('public', 'authenticated', 'permission')),
 
     min_transaction_isolation text
         CONSTRAINT handler_min_transaction_isolation_check
@@ -62,58 +63,9 @@ CREATE TABLE IF NOT EXISTS api.handler (
     output_xml_schema    api.xml_schema
 );
 
--- Evolution path: keep columns when DROP DOMAIN CASCADE removed them during
--- api.json_schema rebuild (see lib/api/01-types.sql).
-DO $$
-BEGIN
-    IF NOT pg_temp.has_column('api.handler', 'input_json_schema') THEN
-        ALTER TABLE api.handler ADD COLUMN input_json_schema api.json_schema;
-    END IF;
-    IF NOT pg_temp.has_column('api.handler', 'output_json_schema') THEN
-        ALTER TABLE api.handler ADD COLUMN output_json_schema api.json_schema;
-    END IF;
-    IF NOT pg_temp.has_column('api.handler', 'input_xml_schema') THEN
-        ALTER TABLE api.handler ADD COLUMN input_xml_schema api.xml_schema;
-    END IF;
-    IF NOT pg_temp.has_column('api.handler', 'output_xml_schema') THEN
-        ALTER TABLE api.handler ADD COLUMN output_xml_schema api.xml_schema;
-    END IF;
-END $$;
-
--- The column is a FLOOR, not an exact requirement, and the name now says so.
--- Rename in place on databases deployed before that: ADD COLUMN IF NOT EXISTS
--- below would otherwise leave the old column beside the new one, with the values
--- in the wrong one and every route silently unenforced.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'api' AND table_name = 'handler'
-          AND column_name = 'required_transaction_isolation'
-    ) THEN
-        ALTER TABLE api.handler
-            RENAME COLUMN required_transaction_isolation TO min_transaction_isolation;
-    END IF;
-END $$;
-
-DO $$
-BEGIN
-    -- Additive isolation floor; NULL on existing rows keeps them working.
-    IF NOT pg_temp.has_column('api.handler', 'min_transaction_isolation') THEN
-        ALTER TABLE api.handler ADD COLUMN min_transaction_isolation text
-            CONSTRAINT handler_min_transaction_isolation_check
-            CHECK (min_transaction_isolation IS NULL
-                   OR min_transaction_isolation IN ('read committed', 'repeatable read', 'serializable'));
-    END IF;
-    -- Additive read-only policy; false on existing rows keeps them working.
-    IF NOT pg_temp.has_column('api.handler', 'read_only') THEN
-        ALTER TABLE api.handler ADD COLUMN read_only boolean NOT NULL DEFAULT false;
-    END IF;
-END $$;
-
 DO $$ BEGIN PERFORM pg_temp.apply_entity_table_standards('api.handler'); END $$;
 
-CREATE INDEX IF NOT EXISTS ix_handler_type ON api.handler(handler_type);
+CREATE INDEX ix_handler_type ON api.handler(handler_type);
 
 -- ============================================================================
 -- Table and Column Documentation
@@ -140,8 +92,8 @@ COMMENT ON COLUMN api.handler.produces IS
 COMMENT ON COLUMN api.handler.response_headers IS
     'Additional HTTP headers to include in responses (JSONB object).';
 
-COMMENT ON COLUMN api.handler.requires_auth IS
-    'Whether authentication is required before invocation.';
+COMMENT ON COLUMN api.handler.access IS
+    'Declared access: public (no identity), authenticated (a resolved principal, no organization needed) or permission (a resolved principal holding any of the handler''s permissions in api.handler_permission). Set from the access / permissions handler-metadata keys; a registration without one fails.';
 
 COMMENT ON COLUMN api.handler.min_transaction_isolation IS
     'Minimum transaction isolation floor (read committed | repeatable read | serializable) the gateway enforces before dispatching. NULL means no requirement (treated as read committed). Set from the minTransactionIsolation handler-metadata key; see lib/api/00-transaction-isolation.sql.';
@@ -216,3 +168,5 @@ BEGIN
     EXECUTE format('GRANT SELECT ON api.handler TO %I', v_api_role);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.handler TO %I', v_admin_role);
 END $$;
+
+SELECT pg_temp.exempt_from_rls('api.handler', 'the handler registry: framework metadata, written by registration at deploy');

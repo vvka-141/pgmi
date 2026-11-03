@@ -1,5 +1,5 @@
 # Connection comes from PGMI_CONNECTION_STRING or CLI flags — see README.md.
 params:
-  env: development
+  env: dev
 
 timeout: 3m

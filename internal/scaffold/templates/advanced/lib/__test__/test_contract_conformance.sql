@@ -3,7 +3,7 @@
 -- MCP gateway serves exactly what it advertises (direction B)
 -- ============================================================================
 -- Declared-but-unenforced contracts were found one at a time by unrelated
--- reviews: an advertised auth scheme the gateway never read, requiresAuth
+-- reviews: an advertised auth scheme the gateway never read, declared access
 -- satisfied by any well-formed header, an outputSchema nothing obliged the
 -- handler to meet, query parameters enforced but never published. Each
 -- assertion here is driven by the registry, so a route or tool added later is
@@ -61,39 +61,80 @@ END;
 $$;
 
 -- A URL the route accepts: its probe, plus every required query parameter.
-CREATE FUNCTION pg_temp.conformance_url(p_probe text, p_query jsonb)
+CREATE FUNCTION pg_temp.conformance_url(p_probe text, p_query_schema jsonb)
 RETURNS text
 LANGUAGE sql AS $$
-    SELECT p_probe || COALESCE('?' || string_agg(q->>'name' || '=x', '&'), '')
-    FROM jsonb_array_elements(p_query) q
-    WHERE COALESCE((q->>'required')::boolean, false)
+    SELECT p_probe || COALESCE('?' || string_agg(r || '=' || COALESCE(v.p->'enum'->>0,
+               CASE v.p->>'type' WHEN 'integer' THEN COALESCE(v.p->>'minimum', '1')
+                                 WHEN 'number' THEN COALESCE(v.p->>'minimum', '1')
+                                 WHEN 'boolean' THEN 'true'
+                                 ELSE CASE v.p->>'format' WHEN 'uuid' THEN '00000000-0000-4000-8000-000000000000'
+                                                          WHEN 'date' THEN '2026-01-01'
+                                                          WHEN 'date-time' THEN '2026-01-01T00:00:00Z'
+                                                          ELSE 'x' END END), '&'), '')
+    FROM jsonb_array_elements_text(COALESCE(p_query_schema->'required', '[]')) r
+    CROSS JOIN LATERAL (SELECT CASE WHEN p_query_schema->'properties'->r->>'type' = 'array'
+                                    THEN p_query_schema->'properties'->r->'items'
+                                    ELSE p_query_schema->'properties'->r END AS p) v
 $$;
+
+-- Session headers for a caller who may call every route: a platform operator
+-- with a second factor, in an organization it owns.
+CREATE FUNCTION pg_temp.conformance_caller()
+RETURNS extensions.hstore
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_caller uuid := pg_temp.test_person('test|contract-conformance');
+BEGIN
+    PERFORM pg_temp.test_act_as(NULL);
+    IF current_setting('test.conformance_operator', true) IS DISTINCT FROM 'yes' THEN
+        PERFORM pg_temp.test_operator(v_caller);
+        PERFORM set_config('test.conformance_operator', 'yes', true);
+    END IF;
+    RETURN pg_temp.test_session_headers('test|contract-conformance',
+               coalesce(pg_temp.test_organization('conformance-org'),
+                        (membership.fn_create_organization_with_owner('Conformance', 'conformance-org', v_caller)).object_id),
+               ARRAY['pwd', 'mfa']);
+END $$;
+
+-- An MCP context for the same caller: a connection in the organization it owns.
+CREATE FUNCTION pg_temp.conformance_mcp_context()
+RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_caller uuid := pg_temp.test_person('test|contract-conformance');
+BEGIN
+    RETURN pg_temp.test_mcp_context('test|contract-conformance',
+               coalesce(pg_temp.test_organization('conformance-org'),
+                        (membership.fn_create_organization_with_owner('Conformance', 'conformance-org', v_caller)).object_id));
+END $$;
 
 DO $$
 BEGIN
-    PERFORM membership.upsert_user('test', 'contract-conformance', 'contract-conformance@example.com');
+    PERFORM pg_temp.test_login('test', 'contract-conformance', 'contract-conformance@example.test', NULL, true);
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000001', 'path', '/conformance/read',
-            'httpMethod', '^GET$', 'name', 'conformance_read', 'requiresAuth', true,
-            'readOnly', true,
+            'httpMethod', '^GET$', 'name', 'conformance_read', 'access', 'authenticated',
+            'readOnly', true, 'autoLog', false,
             'produces', jsonb_build_array('application/json'),
             'outputSchema', jsonb_build_object('type', 'object',
                 'required', jsonb_build_array('n'),
                 'properties', jsonb_build_object('n', jsonb_build_object('type', 'integer'))),
-            'query', jsonb_build_array(jsonb_build_object('name', 'format', 'required', true))),
+            'querySchema', jsonb_build_object('type', 'object', 'required', jsonb_build_array('format'),
+                'properties', jsonb_build_object('format', jsonb_build_object('type', 'string')))),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('n', 1)); END; $body$);
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000005', 'path', '/conformance/floor',
-            'httpMethod', '^GET$', 'name', 'conformance_floor', 'requiresAuth', false,
+            'httpMethod', '^GET$', 'name', 'conformance_floor', 'access', 'public',
             'minTransactionIsolation', 'serializable',
             'outputSchema', jsonb_build_object('type', 'object')),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000002', 'path', '/conformance/shape',
-            'httpMethod', '^GET$', 'name', 'conformance_shape', 'requiresAuth', true,
+            'httpMethod', '^GET$', 'name', 'conformance_shape', 'access', 'authenticated',
             'produces', jsonb_build_array('application/json'),
             'outputSchema', jsonb_build_object('type', 'object',
                 'required', jsonb_build_array('items'),
@@ -102,9 +143,9 @@ BEGIN
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('items', jsonb_build_array('a', 'b'))); END; $body$);
 
     PERFORM api.create_or_replace_mcp_handler(
-        jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000003', 'type', 'tool',
+        jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000003', 'type', 'tool', 'effect', 'read',
             'name', 'conformance_tool', 'description', 'Conformance fixture',
-            'requiresAuth', true,
+            'access', 'authenticated',
             'outputSchema', jsonb_build_object('type', 'object',
                 'required', jsonb_build_array('n'),
                 'properties', jsonb_build_object('n', jsonb_build_object('type', 'integer')))),
@@ -116,21 +157,15 @@ END;
         $body$);
 
     PERFORM api.create_or_replace_mcp_handler(
-        jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000004', 'type', 'tool',
-            'name', 'conformance_ro_tool', 'description', 'Read-only conformance fixture',
-            'requiresAuth', false, 'readOnly', true),
-        $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id); END; $body$);
-
-    PERFORM api.create_or_replace_mcp_handler(
-        jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000006', 'type', 'tool',
+        jsonb_build_object('id', 'ffffffff-0305-4000-8000-000000000006', 'type', 'tool', 'effect', 'read',
             'name', 'conformance_floor_tool', 'description', 'Isolation-floor conformance fixture',
-            'requiresAuth', false, 'minTransactionIsolation', 'serializable'),
+            'access', 'public', 'minTransactionIsolation', 'serializable'),
         $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id); END; $body$);
 END $$;
 
 -- ----------------------------------------------------------------------------
--- A: requiresAuth means no identity, and an identity that resolves to no user,
--- are both refused
+-- A: a non-public access declaration means no session, and a handle that names
+-- no live session, are both refused
 -- ----------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -140,50 +175,49 @@ DECLARE
     v_rest   int := 0;
     v_mcp    int := 0;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: requiresAuth';
+    RAISE NOTICE '-> Contract conformance: declared access';
 
     FOR v_route IN
-        SELECT r.route_name, r.probe_path, r.query_contract,
+        SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema,
                upper((api.openapi_methods(r.method_regexp))[1]) AS method
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
-        WHERE h.requires_auth AND r.probe_path IS DISTINCT FROM ''
+        WHERE h.access IS DISTINCT FROM 'public' AND r.probe_path IS DISTINCT FROM ''
     LOOP
-        PERFORM set_config('auth.idp_subject', '', true);
-        v_status := (api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
+        PERFORM pg_temp.test_act_as(NULL);
+        v_status := (api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
                                      ''::extensions.hstore, NULL::bytea)).status_code;
         IF v_status IS DISTINCT FROM 401 THEN
-            RAISE EXCEPTION 'CONFORMANCE: % declares requiresAuth but answered % with no identity', v_route.route_name, v_status;
+            RAISE EXCEPTION 'CONFORMANCE: % is not public but answered % with no identity', v_route.route_name, v_status;
         END IF;
 
-        PERFORM set_config('auth.idp_subject', 'test|contract-conformance-ghost', true);
-        v_status := (api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
-                                     extensions.hstore('x-user-id', 'test|contract-conformance-ghost'), NULL::bytea)).status_code;
+        v_status := (api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+                                     'x-login-session=>ls_ghost'::extensions.hstore, NULL::bytea)).status_code;
         IF v_status IS DISTINCT FROM 401 THEN
-            RAISE EXCEPTION 'CONFORMANCE: % declares requiresAuth but answered % to an identity that resolves to no user',
+            RAISE EXCEPTION 'CONFORMANCE: % is not public but answered % to a handle that names no session',
                 v_route.route_name, v_status;
         END IF;
         v_rest := v_rest + 1;
     END LOOP;
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     FOR v_route IN
         SELECT m.mcp_name FROM api.mcp_route m
         JOIN api.handler h ON h.object_id = m.handler_object_id AND h.deleted_at IS NULL
-        WHERE h.requires_auth AND h.handler_type = 'mcp_tool'
+        WHERE h.access IS DISTINCT FROM 'public' AND h.handler_type = 'mcp_tool'
     LOOP
-        FOREACH v_env IN ARRAY ARRAY[NULL::jsonb, jsonb_build_object('user_id', 'test|contract-conformance-ghost')] LOOP
+        FOREACH v_env IN ARRAY ARRAY[NULL::jsonb, '{"connection": "cn_ghost"}'::jsonb] LOOP
             v_env := (api.mcp_call_tool(v_route.mcp_name, '{}'::jsonb, v_env, '"c1"'::jsonb)).envelope;
             IF v_env->'error' IS NULL THEN
-                RAISE EXCEPTION 'CONFORMANCE: MCP tool % declares requiresAuth but ran for an unresolved caller: %',
+                RAISE EXCEPTION 'CONFORMANCE: MCP tool % is not public but ran for an unresolved caller: %',
                     v_route.mcp_name, v_env;
             END IF;
         END LOOP;
         v_mcp := v_mcp + 1;
     END LOOP;
 
-    IF v_rest = 0 OR v_mcp = 0 THEN
-        RAISE EXCEPTION 'CONFORMANCE: requiresAuth arm exercised % REST route(s) and % MCP tool(s)', v_rest, v_mcp;
+    IF (v_rest = 0) IS NOT FALSE OR (v_mcp = 0) IS NOT FALSE THEN
+        RAISE EXCEPTION 'CONFORMANCE: declared-access arm exercised % REST route(s) and % MCP tool(s)', v_rest, v_mcp;
     END IF;
     RAISE NOTICE '  + % REST route(s) and % MCP tool(s) refuse unresolved callers', v_rest, v_mcp;
 END $$;
@@ -197,47 +231,59 @@ DECLARE
     v_route  record;
     v_status int;
     v_checked int := 0;
+    v_org uuid;
+    v_headers extensions.hstore;
 BEGIN
     RAISE NOTICE '-> Contract conformance: advertised security schemes';
 
-    SELECT r.route_name, r.probe_path, r.query_contract INTO v_route
+    SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema INTO v_route
     FROM api.rest_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
-    WHERE h.requires_auth AND r.probe_path IS DISTINCT FROM '' AND r.route_name = 'conformance_shape';
+    WHERE h.access IS DISTINCT FROM 'public' AND r.probe_path IS DISTINCT FROM '' AND r.route_name = 'conformance_shape';
+
+    v_org := (membership.fn_create_organization_with_owner('Conformance', 'conformance-org',
+                  pg_temp.test_person('test|contract-conformance'))).object_id;
+    v_headers := pg_temp.test_session_headers('test|contract-conformance', v_org);
+    v_status := (api.rest_invoke('GET', pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+                    v_headers, NULL::bytea)).status_code;
+    IF v_status IS NOT DISTINCT FROM 401 THEN
+        RAISE EXCEPTION 'CONFORMANCE: a valid login and organization session were refused 401';
+    END IF;
 
     FOR v_scheme IN
         SELECT key AS name, value AS scheme
         FROM jsonb_each(api.openapi_document()->'components'->'securitySchemes')
         WHERE value->>'type' = 'apiKey' AND value->>'in' = 'header'
     LOOP
-        PERFORM set_config('auth.idp_subject', '', true);
-        PERFORM set_config('auth.user_id', '', true);
-        v_status := (api.rest_invoke('GET', pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
-                        extensions.hstore(lower(v_scheme.scheme->>'name'), 'test|contract-conformance'), NULL::bytea)).status_code;
-        IF v_status IS NOT DISTINCT FROM 401 THEN
-            RAISE EXCEPTION 'CONFORMANCE: the spec advertises % (header %), but a valid identity sent in it was refused 401',
+        IF (v_headers ? lower(v_scheme.scheme->>'name')) IS NOT TRUE THEN
+            RAISE EXCEPTION 'CONFORMANCE: the spec advertises % (header %), but a signed-in request does not carry it',
                 v_scheme.name, v_scheme.scheme->>'name';
+        END IF;
+        v_status := (api.rest_invoke('GET', pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+                        v_headers - lower(v_scheme.scheme->>'name'), NULL::bytea)).status_code;
+        IF (lower(v_scheme.scheme->>'name') = 'x-login-session') IS NOT FALSE AND v_status IS DISTINCT FROM 401 THEN
+            RAISE EXCEPTION 'CONFORMANCE: the spec advertises % (header %), but the gateway does not read it (% without it)',
+                v_scheme.name, v_scheme.scheme->>'name', v_status;
         END IF;
         v_checked := v_checked + 1;
     END LOOP;
-    PERFORM set_config('auth.idp_subject', '', true);
 
-    IF v_checked = 0 THEN
+    IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: the spec advertises no header security scheme to check';
     END IF;
     RAISE NOTICE '  + % advertised header scheme(s) are read by the gateway', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
--- B: every request header the gateway maps into the session is either
--- advertised as a security scheme or named here as a trust-boundary header.
--- Those are headers a trusted proxy sets and clients must never send, so
--- publishing them would invite clients to forge them. Adding one to the
--- gateway without adding it here, or to the spec, fails this arm.
+-- B: every request header the gateway maps into the request context is
+-- advertised as a security scheme, or named here as a trust-boundary header (one
+-- a trusted proxy sets and clients must never send, so publishing it would
+-- invite forgery). Adding one to the gateway without adding it here, or to the
+-- spec, fails this arm.
 -- ----------------------------------------------------------------------------
 DO $$
 DECLARE
-    v_trust_boundary text[] := ARRAY['x-user-email', 'x-tenant-id', 'authorization'];
+    v_trust_boundary text[] := '{}';
     v_read      text[];
     v_declared  text[];
     v_undeclared text;
@@ -256,7 +302,7 @@ BEGIN
     FROM unnest(v_read) h
     WHERE NOT h = ANY (COALESCE(v_declared, '{}') || v_trust_boundary);
 
-    IF COALESCE(cardinality(v_read), 0) = 0 THEN
+    IF (COALESCE(cardinality(v_read), 0) = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: found no headers read by api.set_auth_context, so this arm checked nothing';
     END IF;
     IF v_undeclared IS NOT NULL THEN
@@ -282,22 +328,22 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Contract conformance: produces and outputSchema';
 
-    PERFORM set_config('auth.idp_subject', 'test|contract-conformance', true);
+    PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
-        SELECT r.route_name, r.probe_path, r.query_contract, h.produces, h.output_json_schema::jsonb AS schema,
+        SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema, h.produces, h.output_json_schema::jsonb AS schema,
                h.min_transaction_isolation, h.read_only
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
         WHERE 'get' = ANY (api.openapi_methods(r.method_regexp)) AND r.probe_path IS DISTINCT FROM ''
           AND h.min_transaction_isolation IS NULL AND NOT h.read_only
     LOOP
-        v_response := api.rest_invoke('GET', pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
-                                      extensions.hstore('x-user-id', 'test|contract-conformance'), NULL::bytea);
+        v_response := api.rest_invoke('GET', pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+                                      pg_temp.test_session_headers('test|contract-conformance'), NULL::bytea);
         CONTINUE WHEN (v_response).status_code NOT BETWEEN 200 AND 299 OR (v_response).status_code = 204;
 
         v_media := lower(btrim(split_part((v_response).headers->'content-type', ';', 1)));
-        IF cardinality(v_route.produces) > 0 AND NOT v_media = ANY (
-                SELECT lower(p) FROM unnest(v_route.produces) p) THEN
+        IF cardinality(v_route.produces) > 0 AND (v_media = ANY (
+                SELECT lower(p) FROM unnest(v_route.produces) p)) IS NOT TRUE THEN
             RAISE EXCEPTION 'CONFORMANCE: % declares produces % but answered content-type %',
                 v_route.route_name, v_route.produces, (v_response).headers->'content-type';
         END IF;
@@ -320,7 +366,7 @@ BEGIN
           AND jsonb_array_length(COALESCE(h.input_json_schema::jsonb->'required', '[]')) = 0
     LOOP
         v_env := (api.mcp_call_tool(v_route.mcp_name, '{}'::jsonb,
-                     jsonb_build_object('user_id', 'test|contract-conformance'), '"c2"'::jsonb)).envelope;
+                     pg_temp.conformance_mcp_context(), '"c2"'::jsonb)).envelope;
         CONTINUE WHEN v_env->'error' IS NOT NULL OR COALESCE((v_env->'result'->>'isError')::boolean, false);
         IF v_env->'result'->'structuredContent' IS NULL THEN
             RAISE EXCEPTION 'CONFORMANCE: MCP tool % declares outputSchema but returned no structuredContent', v_route.mcp_name;
@@ -331,9 +377,9 @@ BEGIN
         END IF;
         v_mcp := v_mcp + 1;
     END LOOP;
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
-    IF v_rest = 0 OR v_mcp = 0 THEN
+    IF (v_rest = 0) IS NOT FALSE OR (v_mcp = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: response-shape arm checked % REST response(s) and % MCP result(s)', v_rest, v_mcp;
     END IF;
     RAISE NOTICE '  + % REST response(s) and % MCP result(s) match their declared shape', v_rest, v_mcp;
@@ -347,28 +393,30 @@ DECLARE
     v_route  record;
     v_status int;
     v_checked int := 0;
+    v_headers extensions.hstore;
 BEGIN
     RAISE NOTICE '-> Contract conformance: declared query parameters';
 
-    PERFORM set_config('auth.idp_subject', 'test|contract-conformance', true);
+    -- The query is checked only after access.
+    v_headers := pg_temp.conformance_caller();
+    PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
         SELECT r.route_name, r.probe_path, upper((api.openapi_methods(r.method_regexp))[1]) AS method
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
         WHERE r.probe_path IS DISTINCT FROM '' AND EXISTS (
-            SELECT 1 FROM jsonb_array_elements(r.query_contract) q WHERE COALESCE((q->>'required')::boolean, false))
+            SELECT 1 FROM jsonb_array_elements(r.query_schema->'required'))
     LOOP
-        v_status := (api.rest_invoke(v_route.method, v_route.probe_path,
-                        extensions.hstore('x-user-id', 'test|contract-conformance'), NULL::bytea)).status_code;
+        v_status := (api.rest_invoke(v_route.method, v_route.probe_path, v_headers, NULL::bytea)).status_code;
         IF v_status IS DISTINCT FROM 400 THEN
             RAISE EXCEPTION 'CONFORMANCE: % declares a required query parameter but answered % without it',
                 v_route.route_name, v_status;
         END IF;
         v_checked := v_checked + 1;
     END LOOP;
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
-    IF v_checked = 0 THEN
+    IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no route declares a required query parameter';
     END IF;
     RAISE NOTICE '  + % route(s) refuse a request missing a required query parameter', v_checked;
@@ -390,13 +438,13 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Contract conformance: transaction policy';
 
-    IF v_rank = 3 OR current_setting('transaction_read_only') = 'on' THEN
+    IF (v_rank = 3) IS NOT FALSE OR (current_setting('transaction_read_only') = 'on') IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: this arm needs a read-write transaction below serializable';
     END IF;
 
-    PERFORM set_config('auth.idp_subject', 'test|contract-conformance', true);
+    PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
-        SELECT r.route_name, r.probe_path, r.query_contract, h.read_only, h.min_transaction_isolation,
+        SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema, h.read_only, h.min_transaction_isolation,
                upper((api.openapi_methods(r.method_regexp))[1]) AS method,
                CASE WHEN CASE h.min_transaction_isolation
                              WHEN 'serializable' THEN 3 WHEN 'repeatable read' THEN 2 ELSE 1 END > v_rank
@@ -409,8 +457,8 @@ BEGIN
                    WHEN 'serializable' THEN 3 WHEN 'repeatable read' THEN 2 ELSE 1 END > v_rank)
     LOOP
         v_content := api.content_json((api.rest_invoke(v_route.method,
-            pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
-            extensions.hstore('x-user-id', 'test|contract-conformance'), NULL::bytea)).content);
+            pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+            pg_temp.test_session_headers('test|contract-conformance'), NULL::bytea)).content);
         IF v_content->>'code' IS DISTINCT FROM v_route.expected THEN
             RAISE EXCEPTION 'CONFORMANCE: % declares readOnly=% / floor % but ran in a read-write % transaction: %',
                 v_route.route_name, v_route.read_only, v_route.min_transaction_isolation,
@@ -423,24 +471,23 @@ BEGIN
         SELECT m.mcp_name,
                CASE WHEN CASE h.min_transaction_isolation
                              WHEN 'serializable' THEN 3 WHEN 'repeatable read' THEN 2 ELSE 1 END > v_rank
-                    THEN 'pgmi.transaction_isolation_too_weak'
-                    ELSE 'pgmi.transaction_read_only_required' END AS expected
+                    THEN 'pgmi.transaction_isolation_too_weak' END AS expected
         FROM api.mcp_route m
         JOIN api.handler h ON h.object_id = m.handler_object_id AND h.deleted_at IS NULL
         WHERE h.handler_type = 'mcp_tool'
-          AND (h.read_only OR CASE h.min_transaction_isolation
+          AND (CASE h.min_transaction_isolation
                    WHEN 'serializable' THEN 3 WHEN 'repeatable read' THEN 2 ELSE 1 END > v_rank)
     LOOP
         v_env := (api.mcp_call_tool(v_route.mcp_name, '{}'::jsonb,
-                     jsonb_build_object('user_id', 'test|contract-conformance'), '"c3"'::jsonb)).envelope;
+                     pg_temp.conformance_mcp_context(), '"c3"'::jsonb)).envelope;
         IF v_env->'error'->'data'->>'code' IS DISTINCT FROM v_route.expected THEN
             RAISE EXCEPTION 'CONFORMANCE: MCP tool % declares a transaction policy but ran outside it: %', v_route.mcp_name, v_env;
         END IF;
         v_checked := v_checked + 1;
     END LOOP;
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
-    IF v_checked = 0 THEN
+    IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no route or tool declares a transaction policy to check';
     END IF;
     RAISE NOTICE '  + % route(s) and tool(s) refuse a transaction weaker than they declare', v_checked;
@@ -457,21 +504,25 @@ DECLARE
     v_response api.http_response;
     v_detail   text;
     v_checked  int := 0;
+    v_headers  extensions.hstore;
 BEGIN
     RAISE NOTICE '-> Contract conformance: declared request bodies';
 
+    -- The body is checked only after access.
+    v_headers := pg_temp.conformance_caller() || extensions.hstore('content-type', 'application/json');
+
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000001', 'path', '/conformance/write',
-            'httpMethod', '^POST$', 'name', 'conformance_write', 'requiresAuth', false,
+            'httpMethod', '^POST$', 'name', 'conformance_write', 'access', 'public',
             'outputSchema', jsonb_build_object('type', 'object'),
             'inputSchema', jsonb_build_object('type', 'object',
                 'required', jsonb_build_array('qty'),
                 'properties', jsonb_build_object('qty', jsonb_build_object('type', 'integer')))),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$);
 
-    PERFORM set_config('auth.idp_subject', 'test|contract-conformance', true);
+    PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
-        SELECT r.route_name, r.probe_path, r.query_contract, m.method
+        SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema, m.method
         FROM api.rest_route r
         JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
         CROSS JOIN LATERAL (
@@ -481,9 +532,8 @@ BEGIN
           AND jsonb_array_length(COALESCE(h.input_json_schema::jsonb->'required', '[]')) > 0
           AND h.min_transaction_isolation IS NULL AND NOT h.read_only
     LOOP
-        v_response := api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_contract),
-            extensions.hstore(ARRAY['x-user-id', 'test|contract-conformance', 'content-type', 'application/json']),
-            convert_to('{}', 'UTF8'));
+        v_response := api.rest_invoke(v_route.method, pg_temp.conformance_url(v_route.probe_path, v_route.query_schema),
+            v_headers, convert_to('{}', 'UTF8'));
         v_detail := api.content_json((v_response).content)->>'detail';
         IF (v_response).status_code IS DISTINCT FROM 400 OR coalesce(v_detail, '') NOT LIKE 'Invalid request body:%' THEN
             RAISE EXCEPTION 'CONFORMANCE: % declares required body keys but the gateway let {} through (% %)',
@@ -492,7 +542,7 @@ BEGIN
         v_checked := v_checked + 1;
     END LOOP;
 
-    IF v_checked = 0 THEN
+    IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no route declares required body keys';
     END IF;
 
@@ -511,7 +561,7 @@ BEGIN
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'CONFORMANCE: a conforming body must reach the handler, got %', (v_response).status_code;
     END IF;
-    PERFORM set_config('auth.idp_subject', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
 
     RAISE NOTICE '  + % route(s) refuse a body missing a required key; types and non-JSON refused too', v_checked;
 END $$;
@@ -528,14 +578,13 @@ BEGIN
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000002', 'path', '/conformance/list',
-            'httpMethod', '^GET$', 'name', 'conformance_list', 'requiresAuth', false,
+            'httpMethod', '^GET$', 'name', 'conformance_list', 'access', 'public',
             'outputSchema', jsonb_build_object('type', 'object'),
-            'query', jsonb_build_array(
-                jsonb_build_object('name', 'limit', 'schema', jsonb_build_object('type', 'integer')),
-                jsonb_build_object('name', 'ratio', 'schema', jsonb_build_object('type', 'number')),
-                jsonb_build_object('name', 'flag', 'schema', jsonb_build_object('type', 'boolean')),
-                jsonb_build_object('name', 'format', 'schema', jsonb_build_object('type', 'string',
-                    'enum', jsonb_build_array('json', 'csv'))))),
+            'querySchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object(
+                'limit', jsonb_build_object('type', 'integer'),
+                'ratio', jsonb_build_object('type', 'number'),
+                'flag', jsonb_build_object('type', 'boolean'),
+                'format', jsonb_build_object('type', 'string', 'enum', jsonb_build_array('json', 'csv'))))),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$);
 
     FOR v_case IN SELECT * FROM (VALUES
@@ -555,41 +604,37 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- A: two routes that can claim one address cannot both register
+-- A: two routes that can claim one address are ranked, never left to order
 -- ----------------------------------------------------------------------------
 DO $$
 DECLARE
-    v_refused boolean := false;
+    v_response api.http_response;
 BEGIN
     RAISE NOTICE '-> Contract conformance: cross-overlapping routes';
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000003', 'path', '/conformance/shops/{shop}/orders',
-            'httpMethod', '^GET$', 'name', 'conformance_shop_orders', 'requiresAuth', false,
+            'httpMethod', '^GET$', 'name', 'conformance_shop_orders', 'access', 'public',
             'outputSchema', jsonb_build_object('type', 'object')),
-        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+        $body$ BEGIN RETURN api.json_response(200, '{"route": "shop_orders"}'::jsonb); END; $body$);
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000004', 'path', '/conformance/shops/main/{section}',
+            'httpMethod', '^GET$', 'name', 'conformance_main_section', 'access', 'public',
+            'outputSchema', jsonb_build_object('type', 'object')),
+        $body$ BEGIN RETURN api.json_response(200, '{"route": "main_section"}'::jsonb); END; $body$);
 
-    BEGIN
-        PERFORM api.create_or_replace_rest_handler(
-            jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000004', 'path', '/conformance/shops/main/{section}',
-                'httpMethod', '^GET$', 'name', 'conformance_main_section', 'requiresAuth', false,
-                'outputSchema', jsonb_build_object('type', 'object')),
-            $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
-    EXCEPTION WHEN invalid_parameter_value THEN
-        v_refused := true;
-    END;
-
-    IF v_refused IS DISTINCT FROM true THEN
-        RAISE EXCEPTION 'CONFORMANCE: /conformance/shops/{shop}/orders and /conformance/shops/main/{section} both registered, though /conformance/shops/main/orders matches both';
+    v_response := api.rest_invoke('GET', '/conformance/shops/main/orders', ''::extensions.hstore, NULL::bytea);
+    IF api.content_json(v_response.content)->>'route' IS DISTINCT FROM 'main_section' THEN
+        RAISE EXCEPTION 'CONFORMANCE: /conformance/shops/main/orders matches both routes and must go to the one literal earlier, got %',
+            convert_from(v_response.content, 'UTF8');
+    END IF;
+    v_response := api.rest_invoke('GET', '/conformance/shops/north/orders', ''::extensions.hstore, NULL::bytea);
+    IF api.content_json(v_response.content)->>'route' IS DISTINCT FROM 'shop_orders' THEN
+        RAISE EXCEPTION 'CONFORMANCE: /conformance/shops/north/orders must reach the shop route, got %',
+            convert_from(v_response.content, 'UTF8');
     END IF;
 
-    PERFORM api.create_or_replace_rest_handler(
-        jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000005', 'path', '/conformance/shops/{shop}/refunds',
-            'httpMethod', '^GET$', 'name', 'conformance_shop_refunds', 'requiresAuth', false,
-            'outputSchema', jsonb_build_object('type', 'object')),
-        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
-
-    RAISE NOTICE '  + cross-overlapping routes are refused; disjoint siblings still register';
+    RAISE NOTICE '  + cross-overlapping routes are ranked by their first literal segment';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -605,8 +650,7 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Contract conformance: MCP listings agree with the registry';
 
-    PERFORM set_config('auth.idp_subject', 'test|contract-conformance', true);
-    PERFORM set_config('auth.user_id', 'test|contract-conformance', true);
+    PERFORM pg_temp.test_act_as('test|contract-conformance');
 
     WITH listed AS (
         SELECT 'mcp_tool' AS kind, t->>'name' AS name FROM jsonb_array_elements(api.mcp_list_tools()->'tools') t
@@ -632,7 +676,7 @@ BEGIN
     IF v_phantom IS NOT NULL THEN
         RAISE EXCEPTION 'CONFORMANCE: advertised but not registered: %', v_phantom;
     END IF;
-    IF v_listed = 0 THEN
+    IF (v_listed = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: the MCP listings were empty, so agreement proved nothing';
     END IF;
 
@@ -640,14 +684,13 @@ BEGIN
     -- then answers, it must not be "not found".
     FOR v_name IN SELECT t->>'name' FROM jsonb_array_elements(api.mcp_list_tools()->'tools') t LOOP
         v_env := (api.mcp_call_tool(v_name, '{}'::jsonb,
-                     jsonb_build_object('user_id', 'test|contract-conformance'), '"c4"'::jsonb)).envelope;
+                     pg_temp.conformance_mcp_context(), '"c4"'::jsonb)).envelope;
         IF v_env->'error'->>'message' ILIKE '%not found%' THEN
             RAISE EXCEPTION 'CONFORMANCE: tools/list advertises % but tools/call cannot find it', v_name;
         END IF;
     END LOOP;
 
-    PERFORM set_config('auth.idp_subject', '', true);
-    PERFORM set_config('auth.user_id', '', true);
+    PERFORM pg_temp.test_act_as(NULL);
     RAISE NOTICE '  + % advertised MCP entr(ies) match the registry, and every tool dispatches', v_listed;
     RAISE NOTICE '✓ Contract conformance tests passed';
 END $$;

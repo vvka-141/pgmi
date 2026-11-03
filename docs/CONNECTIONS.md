@@ -4,32 +4,17 @@ description: "Understand pgmi connection resolution, cloud authentication, SSL, 
 weight: 60
 ---
 
-# Connection Architecture
+# Connections
 
-How pgmi connects to every PostgreSQL target — from localhost to multi-cloud managed services.
+How to connect pgmi to a PostgreSQL server: a password, a cloud identity
+(Azure, AWS, Google Cloud), TLS, and poolers. Start with the section for your
+target; how pgmi builds the connection is at the end.
 
-For CLI flag details, see [CLI reference](CLI.md#connection-flags). For CI/CD pipeline examples, see [Production](PRODUCTION.md#cicd-patterns).
-
----
-
-## Connection provider factory
-
-pgmi resolves CLI flags and environment variables into a concrete connector at startup:
-
-![The connection factory: connection string, flags, and environment resolve into a ConnectionConfig; NewConnector picks the concrete connector by auth method; cloud connectors mint short-lived tokens](diagrams/d07-connection-factory.drawio.svg)
-
-| Auth method | Connector | How tokens work |
-|-------------|-----------|-----------------|
-| Standard | `StandardConnector` | Username/password via pgx, with retry (3 attempts, exponential backoff) |
-| Azure Entra ID | `TokenBasedConnector` | `azidentity.NewDefaultAzureCredential` chain, OAuth token as password |
-| AWS IAM | `TokenBasedConnector` | `rds/auth.BuildAuthToken` via default AWS credential chain |
-| Google Cloud SQL IAM | `GoogleCloudSQLConnector` | `cloud.google.com/go/cloudsqlconn` with IAM auth and internal TLS |
-
-All providers produce a `*pgx.Conn` — the rest of pgmi doesn't know or care which auth method was used.
+For CLI flag details, see [CLI reference](CLI.md#connection-flags). For CI/CD pipeline examples, see [Production](PRODUCTION.md#cicd).
 
 ---
 
-## Standard PostgreSQL connections
+## Connect with a password
 
 The default. Works with any PostgreSQL instance that accepts password authentication.
 
@@ -37,14 +22,15 @@ The default. Works with any PostgreSQL instance that accepts password authentica
 # Granular flags
 pgmi deploy . --host db.example.com -p 5432 -U deployer -d myapp
 
-# Connection string (PostgreSQL URI)
-pgmi deploy . --connection "postgresql://deployer:secret@db.example.com:5432/postgres" -d myapp
+# Connection string (PostgreSQL URI) from the environment: the password comes
+# from your secret store, so it reaches neither `ps` nor your shell history
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db.example.com:5432/postgres" pgmi deploy . -d myapp
 
 # ADO.NET format (common in .NET ecosystems)
-pgmi deploy . --connection "Host=db.example.com;Port=5432;Database=postgres;Username=deployer;Password=secret" -d myapp
+PGMI_CONNECTION_STRING="Host=db.example.com;Port=5432;Database=postgres;Username=deployer;Password=${DB_PASSWORD}" pgmi deploy . -d myapp
 ```
 
-Passwords are never passed as CLI flags. Use `PGPASSWORD`, `.pgpass`, or embed in the connection string.
+Never put a password on the command line: a password inside `--connection` is visible in `ps`, shell history and CI logs. Use `PGPASSWORD`, `.pgpass`, or `PGMI_CONNECTION_STRING` filled from a secret.
 
 ---
 
@@ -56,7 +42,7 @@ Passwordless authentication to Azure Database for PostgreSQL Flexible Server.
 # Managed Identity (no credentials needed on Azure VMs, App Service, Functions)
 pgmi deploy . --azure \
     --host mydb.postgres.database.azure.com \
-    -d myapp --sslmode require
+    -d myapp
 
 # Service Principal (credentials via environment variables)
 export AZURE_TENANT_ID="..."
@@ -64,7 +50,7 @@ export AZURE_CLIENT_ID="..."
 export AZURE_CLIENT_SECRET="..."
 pgmi deploy . --azure \
     --host mydb.postgres.database.azure.com \
-    -d myapp --sslmode require
+    -d myapp
 ```
 
 **Credential chain** (tried in order):
@@ -82,6 +68,8 @@ pgmi deploy . --azure \
 - OAuth scope: `https://ossrdbms-aad.database.windows.net/.default`
 - pgmi acquires a fresh token at connection time via the Azure SDK credential chain; token lifetime only matters for long-running connections, not typical deployments
 
+**TLS:** sslmode defaults to `verify-full`. Azure's server certificates chain to DigiCert Global Root G2 and Microsoft RSA Root CA 2017, which the system trust store already holds, so no `--sslrootcert` is needed. If a private endpoint or VNet DNS name does not match the certificate, use `--sslmode verify-ca`. See [TLS with token authentication](#tls-with-token-authentication).
+
 ---
 
 ## AWS IAM
@@ -92,14 +80,14 @@ Token-based authentication to Amazon RDS and Aurora PostgreSQL.
 # IAM role (EC2, ECS, Lambda — no credentials needed)
 pgmi deploy . --aws --aws-region us-west-2 \
     --host mydb.cluster-xyz.us-west-2.rds.amazonaws.com \
-    -U iam_deploy_user -d myapp --sslmode require
+    -U iam_deploy_user -d myapp --sslrootcert global-bundle.pem
 
 # IAM user (credentials via env vars or ~/.aws/credentials)
 export AWS_ACCESS_KEY_ID="..."
 export AWS_SECRET_ACCESS_KEY="..."
 pgmi deploy . --aws --aws-region us-west-2 \
     --host mydb.cluster-xyz.us-west-2.rds.amazonaws.com \
-    -U iam_deploy_user -d myapp --sslmode require
+    -U iam_deploy_user -d myapp --sslrootcert global-bundle.pem
 ```
 
 **Token characteristics:**
@@ -107,6 +95,8 @@ pgmi deploy . --aws --aws-region us-west-2 \
 - Token format: Signature Version 4 signed request
 - New connection rate limit: 200 connections per second per instance
 - Database memory overhead: 300–1,000 MiB per instance for IAM auth
+
+**TLS:** RDS server certificates chain to private Amazon RDS CAs, not to roots in the system trust store. Download the bundle once (`curl -O https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`) and pass it with `--sslrootcert` (or `PGSSLROOTCERT`); sslmode then defaults to `verify-full`. Without a root certificate the default is `require`: encrypted, but the server's identity is not checked. RDS Proxy uses public ACM certificates, so `--sslmode verify-full` works there without a bundle. See [TLS with token authentication](#tls-with-token-authentication).
 
 ---
 
@@ -128,7 +118,7 @@ pgmi deploy . --google \
 ```
 
 **How it differs from other providers:**
-- The Cloud SQL connector handles TLS internally — set `sslmode=disable` in the pgx DSN (the connector wraps the connection with its own TLS)
+- The Cloud SQL connector handles TLS itself, so `--sslmode` does not apply: pgmi sets `sslmode=disable` on the inner connection, which the connector wraps in its own TLS
 - The `--google-instance` flag is required and uses the format `project:region:instance`
 
 ---
@@ -158,6 +148,11 @@ Quote a value containing spaces with single quotes, and escape a quote or
 backslash inside it with `\`: `password='a b\'c'`. `host` and `port` may be
 lists (`host=db1,db2 port=5432,5433`). `hostaddr` is rejected: pgx, which
 pgmi connects through, does not support it, so put the address in `host`.
+Keys are lowercase libpq keywords, as in libpq. Any other key, such as a
+typo or an ADO.NET-style `Password=`, is refused with
+`invalid connection option "..."` (exit 10) rather than sent to the server.
+A single quote opens a quoted value only right after `=`; elsewhere it is a
+plain character, so `Password=it's;Host=db` is read as ADO.NET.
 
 **ADO.NET:**
 ```
@@ -194,10 +189,22 @@ pgmi supports all six PostgreSQL SSL modes:
 |------|-----------|--------------------------|
 | `disable` | No | No |
 | `allow` | If server supports | No |
-| `prefer` (default) | If server supports | No |
+| `prefer` (default, except with `--azure`/`--aws`) | If server supports | No |
 | `require` | Yes | No |
 | `verify-ca` | Yes | CA certificate checked |
 | `verify-full` | Yes | CA + hostname checked |
+
+### TLS with token authentication
+
+With `--azure` or `--aws` the password is a bearer token, so pgmi never lets the connection fall back to plaintext:
+
+- `disable`, `allow` and `prefer` are refused before connecting (exit 10), whichever source set them: `--sslmode`, `PGSSLMODE`, the connection string, or `connection.sslmode` in pgmi.yaml. The error names the source.
+- `require`, `verify-ca` and `verify-full` are accepted.
+- When nothing sets sslmode, the default is `verify-full` for Azure, and for AWS when a root certificate is configured (`--sslrootcert`, `PGSSLROOTCERT`, pgmi.yaml, or `sslrootcert` in the connection string). AWS without one defaults to `require`.
+
+Google Cloud SQL is not affected: its connector supplies TLS itself.
+
+### Mutual TLS
 
 **mTLS configuration** (client certificate authentication):
 
@@ -232,7 +239,7 @@ pgmi uses session-scoped temporary tables (`pg_temp`) that must survive for the 
 
 ```bash
 # Direct connection for pgmi (bypasses pooler)
-pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb" pgmi deploy .
 
 # Application traffic uses pooler as usual
 # postgresql://user:pass@pgbouncer:6432/mydb
@@ -267,7 +274,7 @@ SELECT current_setting('server_version_num')::int,
        current_setting('server_version')
 ```
 
-Servers below PostgreSQL 11 (`server_version_num < 110000`) are rejected with exit code 10 before any session tables are created.
+Servers below PostgreSQL 15 (`server_version_num < 150000`) are rejected with exit code 10 before any session tables are created.
 
 ---
 
@@ -316,7 +323,7 @@ output "pgmi_host" {
   run: |
     pgmi deploy ./project --azure \
       --host ${{ steps.terraform.outputs.pgmi_host }} \
-      -d myapp --param env=production --force
+      -d myapp --param env=prod --force
   env:
     AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
     AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -360,6 +367,23 @@ jobs:
     steps:
       - run: pgmi deploy . --google --google-instance $INSTANCE -U $SA_EMAIL -d myapp --force
 ```
+
+---
+
+## Internals: connection provider factory
+
+pgmi resolves CLI flags and environment variables into a concrete connector at startup:
+
+![The connection factory: connection string, flags, and environment resolve into a ConnectionConfig; NewConnector picks the concrete connector by auth method; cloud connectors mint short-lived tokens](diagrams/d07-connection-factory.drawio.svg)
+
+| Auth method | Connector | How tokens work |
+|-------------|-----------|-----------------|
+| Standard | `StandardConnector` | Username/password via pgx, with retry (3 attempts, exponential backoff) |
+| Azure Entra ID | `TokenBasedConnector` | `azidentity.NewDefaultAzureCredential` chain, OAuth token as password |
+| AWS IAM | `TokenBasedConnector` | `rds/auth.BuildAuthToken` via default AWS credential chain |
+| Google Cloud SQL IAM | `GoogleCloudSQLConnector` | `cloud.google.com/go/cloudsqlconn` with IAM auth and internal TLS |
+
+All providers produce a `*pgx.Conn` — the rest of pgmi doesn't know or care which auth method was used.
 
 ---
 

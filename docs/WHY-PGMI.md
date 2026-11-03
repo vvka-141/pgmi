@@ -48,7 +48,7 @@ BEGIN
         SELECT p.path, p.content
         FROM pg_temp.pgmi_plan_view p
         JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        WHERE s.is_sql_file AND p.path LIKE './physical/%'
         ORDER BY p.execution_order
     )
     LOOP
@@ -107,7 +107,7 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic**, a small, explicit migration scaffold, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — either can be production depending on your project. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for the canonical comparison.
+pgmi handles linear migrations out of the box (the basic template runs its tables once each, in path order). pgmi ships with two templates — **basic**, a small two-layer project, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — either can be production depending on your project. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for the canonical comparison.
 
 But consider simpler tools if:
 
@@ -141,7 +141,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Plan inspectability | `pgmi_plan_view` is a SQL view — assertable by project-authored queries | Atlas [`migrate lint`](https://atlasgo.io/versioned/lint) ships 50+ vendor-supplied analyzers (requires a dev database); Flyway validates checksums against history |
 | Same file at multiple positions | Yes — `UNNEST(sort_keys)` places one idempotent file at several stages | One file, one ordinal |
 | Database-free CI validation | Structure, metadata, UUID uniqueness, and full execution order computable offline (`--json`) | Atlas lint and Flyway validate both require a database connection |
-| Coding-agent support | Guidance embedded in the binary and versioned with it (`pgmi ai`); `pgmi ai setup` commits a self-gating skill to the project, and `pgmi ai check` reports when it drifts from the binary | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
+| Coding-agent support | Every scaffolded project carries an `AGENTS.md` and skills, including PostgreSQL recipes whose SQL runs in pgmi's CI; facts that change with the binary come from the binary (`pgmi ai contract`) | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
 
 For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md). For the
 other side — the capabilities that are hard to reproduce with another tool at all —

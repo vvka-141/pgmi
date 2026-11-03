@@ -47,10 +47,10 @@ func TestAdvancedTemplate_SerializationFailureRetryContract(t *testing.T) {
 		SELECT api.create_or_replace_rest_handler(
 			jsonb_build_object(
 				'id', 'ffffffff-0179-4000-8000-000000000001',
-				'uri', '^/contend$',
+				'path', '/contend',
 				'httpMethod', '^POST$',
 				'name', 'contend_test',
-				'requiresAuth', false,
+				'access', 'public',
 				'autoLog', false
 			),
 			$body$
@@ -179,11 +179,11 @@ func TestAdvancedTemplate_MCPSerializationFailureRetryContract(t *testing.T) {
 		SELECT api.create_or_replace_mcp_handler(
 			jsonb_build_object(
 				'id', 'ffffffff-0179-4000-8000-000000000002',
-				'type', 'tool',
+				'type', 'tool', 'effect', 'write', 'reversible', true,
 				'name', 'mcp_contend_test',
 				'description', 'Increments a contended row',
 				'inputSchema', jsonb_build_object('type', 'object'),
-				'requiresAuth', false
+				'access', 'public'
 			),
 			$body$
 		BEGIN

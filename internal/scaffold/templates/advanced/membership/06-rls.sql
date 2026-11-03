@@ -1,9 +1,18 @@
 /*
 <pgmi-meta
-    id="b1000001-0006-4000-8000-000000000001"
-    idempotent="true">
+    id="2cc1c534-c92c-4e57-a78b-17a5b4943a32"
+    idempotent="false">
   <description>
-    Row-Level Security policies for membership tables, targeting customer role
+    Row-level security on every membership table. The tables holding people
+    and organizations are forced, so the owner, which runs every handler, is
+    held to the policies too: a request reads itself, its organization's
+    members, roles, invitations and audit trail, and the organizations it
+    belongs to; a platform operator reads all of it. No request writes them:
+    every write, and every read across organizations, goes through a kernel,
+    which runs as the kernel role and passes by its own policy. The
+    authorization vocabulary and the identity issuers are reference data the
+    deploy syncs, so they are exempt from forcing; the kernel reads them.
+    Policies wrap the readers as (SELECT ...), one InitPlan per query.
   </description>
   <sortKeys>
     <key>005/000/006</key>
@@ -11,116 +20,98 @@
 </pgmi-meta>
 */
 
-DO $$ BEGIN RAISE NOTICE '→ Installing membership RLS policies'; END $$;
+ALTER TABLE membership.identity_issuer ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.role ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.permission ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.role_permission ENABLE ROW LEVEL SECURITY;
 
--- ============================================================================
--- RLS on membership.organization
--- ============================================================================
+SELECT pg_temp.exempt_from_rls(t::regclass, 'reference data synced by the deploy; holds no organization rows')
+FROM unnest(ARRAY['membership.identity_issuer', 'membership.role', 'membership.permission',
+                  'membership.role_permission']) t;
 
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership.organization');
-    PERFORM core.ensure_policy('membership.organization', 'org_member_access', format(
-        $policy$FOR SELECT TO %I USING (object_id IN (SELECT unnest(api.current_member_org_ids())))$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
+ALTER TABLE membership.principal ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.principal FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.user_principal ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.user_principal FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.external_identity ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.external_identity FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.service_principal ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.service_principal FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.platform_operator ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.platform_operator FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.organization ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.organization FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.organization_membership ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.organization_membership FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.role_assignment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.role_assignment FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.invitation ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.invitation FORCE ROW LEVEL SECURITY;
+ALTER TABLE membership.audit_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE membership.audit_event FORCE ROW LEVEL SECURITY;
 
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization'; END $$;
+CREATE POLICY principal_visible ON membership.principal FOR SELECT
+    USING (object_id = (SELECT api.current_principal_id())
+           OR EXISTS (SELECT FROM membership.organization_membership m
+                      WHERE m.principal_object_id = principal.object_id
+                        AND m.organization_object_id = (SELECT api.current_organization_id())
+                        AND upper_inf(m.valid_during))
+           OR (SELECT api.is_platform_operator()));
 
--- ============================================================================
--- RLS on membership.organization_member
--- ============================================================================
+CREATE POLICY user_principal_visible ON membership.user_principal FOR SELECT
+    USING (EXISTS (SELECT FROM membership.principal p WHERE p.object_id = user_principal.principal_object_id));
 
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership.organization_member');
-    PERFORM core.ensure_policy('membership.organization_member', 'org_member_see_own_org', format(
-        $policy$FOR SELECT TO %I USING (organization_id IN (SELECT unnest(api.current_member_org_ids())))$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
+CREATE POLICY external_identity_visible ON membership.external_identity FOR SELECT
+    USING (user_principal_object_id = (SELECT api.current_principal_id()) OR (SELECT api.is_platform_operator()));
 
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on organization_member'; END $$;
+CREATE POLICY service_principal_visible ON membership.service_principal FOR SELECT
+    USING ((SELECT api.is_platform_operator()));
 
--- ============================================================================
--- RLS on membership.user_identity
--- ============================================================================
+CREATE POLICY platform_operator_visible ON membership.platform_operator FOR SELECT
+    USING (user_principal_object_id = (SELECT api.current_principal_id()) OR (SELECT api.is_platform_operator()));
 
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership.user_identity');
-    PERFORM core.ensure_policy('membership.user_identity', 'identity_own_only', format(
-        $policy$FOR SELECT TO %I USING (user_object_id = (SELECT api.current_user_id()))$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
+CREATE POLICY organization_visible ON membership.organization FOR SELECT
+    USING (object_id = (SELECT api.current_organization_id())
+           OR EXISTS (SELECT FROM membership.organization_membership m
+                      WHERE m.organization_object_id = organization.object_id
+                        AND m.principal_object_id = (SELECT api.current_principal_id())
+                        AND upper_inf(m.valid_during))
+           OR (SELECT api.is_platform_operator()));
 
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user_identity'; END $$;
+CREATE POLICY organization_membership_visible ON membership.organization_membership FOR SELECT
+    USING (organization_object_id = (SELECT api.current_organization_id())
+           OR principal_object_id = (SELECT api.current_principal_id())
+           OR (SELECT api.is_platform_operator()));
 
--- ============================================================================
--- RLS on membership."user"
--- ============================================================================
+CREATE POLICY role_assignment_visible ON membership.role_assignment FOR SELECT
+    USING (organization_object_id = (SELECT api.current_organization_id())
+           OR EXISTS (SELECT FROM membership.organization_membership m
+                      WHERE m.object_id = role_assignment.membership_object_id
+                        AND m.principal_object_id = (SELECT api.current_principal_id()))
+           OR (SELECT api.is_platform_operator()));
 
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership."user"');
-    PERFORM core.ensure_policy('membership."user"', 'user_see_self', format(
-        $policy$FOR SELECT TO %I USING (object_id = (SELECT api.current_user_id()))$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
+CREATE POLICY invitation_visible ON membership.invitation FOR SELECT
+    USING (organization_object_id = (SELECT api.current_organization_id()) OR (SELECT api.is_platform_operator()));
 
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user'; END $$;
+CREATE POLICY connection_visible ON membership.connection FOR SELECT
+    USING (principal_object_id = (SELECT api.current_principal_id()) OR (SELECT api.is_platform_operator()));
 
--- ============================================================================
--- RLS on membership.user_role
--- ============================================================================
--- A customer may see only their own role assignments.
+CREATE POLICY audit_event_visible ON membership.audit_event FOR SELECT
+    USING (organization_object_id = (SELECT api.current_organization_id()) OR (SELECT api.is_platform_operator()));
 
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership.user_role');
-    PERFORM core.ensure_policy('membership.user_role', 'user_role_own_only', format(
-        $policy$FOR SELECT TO %I USING (user_object_id = (SELECT api.current_user_id()))$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
-
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on user_role'; END $$;
-
--- ============================================================================
--- RLS on membership.role
--- ============================================================================
--- Decision: roles are a global, non-tenant catalog (object_id, name,
--- description) with no per-user/per-tenant data — public-read to the customer
--- role. RLS is still enabled so the table is not left uncovered.
-
-DO $$
-BEGIN
-    PERFORM core.ensure_rls('membership.role');
-    PERFORM core.ensure_policy('membership.role', 'role_public_read', format(
-        $policy$FOR SELECT TO %I USING (true)$policy$,
-        pg_temp.deployment_setting('database_customer_role')));
-END $$;
-
-DO $$ BEGIN RAISE DEBUG 'membership: RLS enabled on role'; END $$;
-
--- ============================================================================
--- Customer role table grants (RLS restricts actual visibility)
--- ============================================================================
-
-DO $$
-DECLARE
-    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
-BEGIN
-    EXECUTE format('GRANT SELECT ON membership.organization TO %I', v_customer_role);
-    EXECUTE format('GRANT SELECT ON membership.organization_member TO %I', v_customer_role);
-    EXECUTE format('GRANT SELECT ON membership.user_identity TO %I', v_customer_role);
-    EXECUTE format('GRANT SELECT ON membership."user" TO %I', v_customer_role);
-    EXECUTE format('GRANT SELECT ON membership.user_role TO %I', v_customer_role);
-    EXECUTE format('GRANT SELECT ON membership.role TO %I', v_customer_role);
-END $$;
-
--- Structural conformance (every granted table has RLS; every vw_* view is
--- security_invoker) is asserted post-deploy in
--- __test__/test_membership_rls.sql — a guard here would run at this file's
--- sort position and miss membership tables created by later files
--- (e.g. 08-api-keys.sql).
-
-DO $$ BEGIN RAISE NOTICE '  ✓ membership RLS policies installed'; END $$;
+SELECT pg_temp.kernel_passes(t::regclass, ops)
+FROM (VALUES
+    ('membership.identity_issuer',         '{select}'::text[]),
+    ('membership.role',                    '{select}'),
+    ('membership.permission',              '{select}'),
+    ('membership.role_permission',         '{select}'),
+    ('membership.principal',               '{select,insert,update}'),
+    ('membership.user_principal',          '{select,insert,update}'),
+    ('membership.external_identity',       '{select,insert}'),
+    ('membership.service_principal',       '{select,insert}'),
+    ('membership.platform_operator',       '{select,insert,update}'),
+    ('membership.organization',            '{select,insert,update}'),
+    ('membership.organization_membership', '{select,insert,update}'),
+    ('membership.role_assignment',         '{select,insert,update}'),
+    ('membership.invitation',              '{select,insert,update}'),
+    ('membership.audit_event',             '{select,insert}')) v(t, ops);

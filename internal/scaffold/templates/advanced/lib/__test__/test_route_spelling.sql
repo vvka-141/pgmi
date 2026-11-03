@@ -15,11 +15,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3001-4000-8000-000000000001',
-            'uri', '^/spell-probe$',
+            'path', '/spell-probe',
             'httpMethod', '^GET$',
             'name', 'spell_probe',
             'description', 'Spelling tolerance probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -117,12 +117,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3002-4000-8000-000000000001',
-            'uri', '^/spell/([0-9]+)$',
-            'example', '/spell/42',
+            'path', '/spell/{n}',
             'httpMethod', '^GET$',
             'name', 'spell_param_probe',
             'description', 'Parameterized spelling probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN

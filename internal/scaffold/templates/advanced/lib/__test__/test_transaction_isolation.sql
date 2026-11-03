@@ -29,10 +29,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-7001-4000-8000-000000000001',
-            'uri', '^/iso-rr$',
+            'path', '/iso-rr',
             'httpMethod', '^GET$',
             'name', 'iso_rr',
-            'requiresAuth', false,
+            'access', 'public',
             'minTransactionIsolation', 'REPEATABLE-READ'
         ),
         $body$
@@ -56,10 +56,10 @@ END;
         PERFORM api.create_or_replace_rest_handler(
             jsonb_build_object(
                 'id', 'ffffffff-7002-4000-8000-000000000001',
-                'uri', '^/iso-bad$',
+                'path', '/iso-bad',
                 'httpMethod', '^GET$',
                 'name', 'iso_bad',
-                'requiresAuth', false,
+                'access', 'public',
                 'minTransactionIsolation', 'snapshot'
             ),
             $body$
@@ -89,16 +89,16 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-7101-4000-8000-000000000001',
-            'uri', '^/iso-none$', 'httpMethod', '^GET$',
-            'name', 'iso_none', 'requiresAuth', false
+            'path', '/iso-none', 'httpMethod', '^GET$',
+            'name', 'iso_none', 'access', 'public'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-7102-4000-8000-000000000001',
-            'uri', '^/iso-rc$', 'httpMethod', '^GET$',
-            'name', 'iso_rc', 'requiresAuth', false,
+            'path', '/iso-rc', 'httpMethod', '^GET$',
+            'name', 'iso_rc', 'access', 'public',
             'minTransactionIsolation', 'read committed'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
@@ -107,8 +107,8 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-7103-4000-8000-000000000001',
-            'uri', '^/iso-rr-rest$', 'httpMethod', '^GET$',
-            'name', 'iso_rr_rest', 'requiresAuth', false,
+            'path', '/iso-rr-rest', 'httpMethod', '^GET$',
+            'name', 'iso_rr_rest', 'access', 'public',
             'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
@@ -116,8 +116,8 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-7104-4000-8000-000000000001',
-            'uri', '^/iso-ser-rest$', 'httpMethod', '^GET$',
-            'name', 'iso_ser_rest', 'requiresAuth', false,
+            'path', '/iso-ser-rest', 'httpMethod', '^GET$',
+            'name', 'iso_ser_rest', 'access', 'public',
             'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
@@ -139,8 +139,9 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: repeatable read floor should return 428 at read committed, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
-        RAISE EXCEPTION 'TEST FAILED: REST rejection missing machine code, got %', v_content->>'code';
+    IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak'
+       OR v_content->>'requiredIsolation' IS DISTINCT FROM 'repeatable read' THEN
+        RAISE EXCEPTION 'TEST FAILED: REST rejection missing machine code or requiredIsolation, got %', v_content;
     END IF;
 
     v_response := api.rest_invoke('GET', '/iso-ser-rest', ''::extensions.hstore, NULL::bytea);
@@ -168,14 +169,14 @@ BEGIN
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', 'ffffffff-7201-4000-8000-000000000001',
-            'methodName', 'iso.ok', 'requiresAuth', false
+            'methodName', 'iso.ok', 'access', 'public'
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
     );
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', 'ffffffff-7202-4000-8000-000000000001',
-            'methodName', 'iso.serializable', 'requiresAuth', false,
+            'methodName', 'iso.serializable', 'access', 'public',
             'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
@@ -195,8 +196,9 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: RPC serializable floor should return 428, got %', (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
-        RAISE EXCEPTION 'TEST FAILED: RPC rejection missing machine code, got %', v_content->'error'->'data'->>'code';
+    IF v_content->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak'
+       OR v_content->'error'->'data'->>'requiredIsolation' IS DISTINCT FROM 'serializable' THEN
+        RAISE EXCEPTION 'TEST FAILED: RPC rejection missing machine code or requiredIsolation, got %', v_content;
     END IF;
     IF v_content->>'id' IS DISTINCT FROM '2' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC rejection must echo the request id, got %', v_content->>'id';
@@ -214,7 +216,7 @@ BEGIN
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-7301-4000-8000-000000000001',
-            'type', 'tool', 'name', 'iso_tool_ok', 'requiresAuth', false,
+            'type', 'tool', 'effect', 'read', 'name', 'iso_tool_ok', 'access', 'public',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$
@@ -222,7 +224,7 @@ BEGIN
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-7302-4000-8000-000000000001',
-            'type', 'tool', 'name', 'iso_tool_ser', 'requiresAuth', false,
+            'type', 'tool', 'effect', 'read', 'name', 'iso_tool_ser', 'access', 'public',
             'minTransactionIsolation', 'serializable',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
@@ -240,16 +242,17 @@ BEGIN
     IF v_envelope->'error' IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: MCP serializable floor should reject with an error envelope';
     END IF;
-    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32600 THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP rejection should use code -32600, got %', v_envelope->'error'->>'code';
+    IF (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32603 THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP rejection should use code -32603, got %', v_envelope->'error'->>'code';
     END IF;
-    IF v_envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak' THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP rejection missing machine code, got %', v_envelope->'error'->'data'->>'code';
+    IF v_envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_isolation_too_weak'
+       OR v_envelope->'error'->'data'->>'requiredIsolation' IS DISTINCT FROM 'serializable' THEN
+        RAISE EXCEPTION 'TEST FAILED: MCP rejection missing machine code or requiredIsolation, got %', v_envelope;
     END IF;
     IF v_envelope->>'id' IS DISTINCT FROM 'req-2' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP rejection must echo the request id, got %', v_envelope->>'id';
     END IF;
-    RAISE NOTICE '  ✓ MCP too-weak floor rejected (-32600) with machine code and echoed id';
+    RAISE NOTICE '  ✓ MCP too-weak floor rejected (-32603) with machine code and echoed id';
 END $$;
 
 DO $$

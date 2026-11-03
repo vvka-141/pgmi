@@ -1,148 +1,45 @@
 -- ============================================================================
--- Test: RLS isolation on membership.user_role and membership.role
--- A customer-role session sees only its own role assignments, never another
--- user's; the global role catalog stays readable (public-read).
+-- Test: membership tables are closed to every role but the owner and the kernel
 -- ============================================================================
+-- Requests read membership through the owner's policies and write it only
+-- through the kernels. Every membership table has row-level security, a
+-- policy for the kernel role, and no grant to any other role; every view is
+-- security_invoker, so none reads around that.
 
 DO $$
 DECLARE
-    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
-    v_alice_id UUID;
-    v_bob_id UUID;
-    v_role_id UUID;
-    v_own_visible INT;
-    v_other_visible INT;
-    v_role_visible INT;
+    v_kernel   text := pg_temp.deployment_setting('database_kernel_role');
+    v_offender text;
 BEGIN
-    SELECT u.object_id INTO v_alice_id
-    FROM membership."user" u
-    JOIN membership.user_identity ui ON ui.user_object_id = u.object_id
-    WHERE ui.idp_provider = 'google' AND ui.idp_subject_id = 'alice-001';
-
-    SELECT u.object_id INTO v_bob_id
-    FROM membership."user" u
-    JOIN membership.user_identity ui ON ui.user_object_id = u.object_id
-    WHERE ui.idp_provider = 'github' AND ui.idp_subject_id = 'bob-001';
-
-    -- Arrange (as owner; RLS is bypassed): one role assigned to both users.
-    INSERT INTO membership.role (name, description)
-        VALUES ('rls_test_role', 'fixture for RLS isolation test')
-        ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
-        RETURNING object_id INTO v_role_id;
-
-    INSERT INTO membership.user_role (user_object_id, role_object_id)
-        VALUES (v_alice_id, v_role_id), (v_bob_id, v_role_id)
-        ON CONFLICT DO NOTHING;
-
-    -- Act as the customer role, authenticated as Alice.
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-    EXECUTE format('SET ROLE %I', v_customer_role);
-
-    SELECT count(*) INTO v_own_visible
-        FROM membership.user_role WHERE user_object_id = v_alice_id;
-    SELECT count(*) INTO v_other_visible
-        FROM membership.user_role WHERE user_object_id = v_bob_id;
-    SELECT count(*) INTO v_role_visible
-        FROM membership.role WHERE object_id = v_role_id;
-
-    RESET ROLE;
-
-    IF v_own_visible IS DISTINCT FROM 1 THEN
-        RAISE EXCEPTION 'TEST FAILED: customer should see its own user_role row, saw %', v_own_visible;
-    END IF;
-    IF v_other_visible IS DISTINCT FROM 0 THEN
-        RAISE EXCEPTION 'TEST FAILED: customer must NOT see another user''s user_role rows, saw %', v_other_visible;
-    END IF;
-    IF v_role_visible IS DISTINCT FROM 1 THEN
-        RAISE EXCEPTION 'TEST FAILED: customer should read the global role catalog, saw %', v_role_visible;
-    END IF;
-
-    RAISE DEBUG '✓ membership.user_role RLS isolates per user; role catalog public-read';
-
-    -- View-layer RLS: vw_users through customer role only shows own data
-    DECLARE
-        v_alice_visible int;
-        v_bob_visible int;
-    BEGIN
-        PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-        EXECUTE format('SET ROLE %I', v_customer_role);
-
-        SELECT count(*) INTO v_alice_visible
-        FROM membership.vw_active_users WHERE object_id = v_alice_id;
-        SELECT count(*) INTO v_bob_visible
-        FROM membership.vw_active_users WHERE object_id = v_bob_id;
-
-        RESET ROLE;
-
-        IF v_alice_visible < 1 THEN
-            RAISE EXCEPTION 'TEST FAILED: alice should be visible in vw_active_users via customer role';
-        END IF;
-        IF v_bob_visible IS DISTINCT FROM 0 THEN
-            RAISE EXCEPTION 'TEST FAILED: alice read another user through vw_active_users, saw % row(s) for bob — the view is not security_invoker, or user_see_self is gone',
-                v_bob_visible;
-        END IF;
-        RAISE DEBUG '  ✓ vw_active_users accessible through customer role (alice visible=%,bob visible=%)',
-            v_alice_visible, v_bob_visible;
-    END;
-END $$;
-
--- ============================================================================
--- Structural conformance. Runs post-deploy, so it sees membership tables from
--- every file regardless of sort order — a deploy-time guard in 06-rls.sql
--- could not see later-sorted files like 08-api-keys.sql:
---   1. every membership table the customer role can SELECT has RLS enabled;
---   2. every membership vw_* view is security_invoker so RLS applies through it;
---   3. api.vw_current_user is security_invoker. It is the one api view exposing
---      per-session identity through membership tables, and it drifted from the
---      invariant once (its own current_user_id() predicate kept it safe, but the
---      membership-scoped checks above never saw it because it lives in api).
---      The api.vw_* admin analytics views are deliberately NOT checked: they are
---      admin-only introspection over system metadata (handlers/routes/exchanges),
---      not RLS-gated tenant data.
--- ============================================================================
-
-DO $$
-DECLARE
-    v_customer_role TEXT := pg_temp.deployment_setting('database_customer_role');
-    v_offender TEXT;
-BEGIN
-    SELECT string_agg(c.relname, ', ')
-    INTO v_offender
+    SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO v_offender
     FROM pg_class c
-    WHERE c.relnamespace = 'membership'::regnamespace
-      AND c.relkind = 'r'
-      AND has_table_privilege(v_customer_role, c.oid, 'SELECT')
-      AND NOT c.relrowsecurity;
-
+    WHERE c.relnamespace = 'membership'::regnamespace AND c.relkind = 'r'
+      AND (NOT c.relrowsecurity
+           OR NOT EXISTS (SELECT FROM pg_policy p WHERE p.polrelid = c.oid AND v_kernel::regrole = ANY (p.polroles)));
     IF v_offender IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: membership table(s) granted to % without RLS: %',
-            v_customer_role, v_offender;
+        RAISE EXCEPTION 'TEST FAILED: membership table(s) without row-level security or a kernel policy: %', v_offender;
     END IF;
 
-    SELECT string_agg(v.table_name, ', ')
-    INTO v_offender
-    FROM information_schema.views v
-    JOIN pg_class c ON c.relnamespace = 'membership'::regnamespace
-                   AND c.relname = v.table_name
-    WHERE v.table_schema = 'membership'
-      AND v.table_name LIKE 'vw\_%' ESCAPE '\'
-      AND (c.reloptions IS NULL OR NOT ('security_invoker=true' = ANY(c.reloptions)));
-
+    SELECT string_agg(DISTINCT c.relname || ' to ' || CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, ', ') INTO v_offender
+    FROM pg_class c
+    CROSS JOIN LATERAL aclexplode(c.relacl) a
+    WHERE c.relnamespace = 'membership'::regnamespace AND c.relkind = 'r'
+      AND a.grantee IS DISTINCT FROM c.relowner
+      AND a.grantee IS DISTINCT FROM v_kernel::regrole
+      AND CASE WHEN a.grantee = 0 THEN true ELSE NOT pg_has_role(a.grantee, c.relowner, 'MEMBER') END;
     IF v_offender IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: membership view(s) must have security_invoker=true for RLS: %',
-            v_offender;
+        RAISE EXCEPTION 'TEST FAILED: membership table(s) granted beyond the owner and the kernel: %', v_offender;
     END IF;
 
-    -- api.vw_current_user specifically (see note 3 above).
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_class c
-        WHERE c.relnamespace = 'api'::regnamespace
-          AND c.relname = 'vw_current_user'
-          AND c.reloptions IS NOT NULL
-          AND 'security_invoker=true' = ANY(c.reloptions)
-    ) THEN
-        RAISE EXCEPTION 'TEST FAILED: api.vw_current_user must have security_invoker=true';
+    SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO v_offender
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind = 'v'
+      AND (n.nspname = 'membership' OR (n.nspname = 'api' AND c.relname = 'vw_current_user'))
+      AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
+    IF v_offender IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: view(s) over membership without security_invoker: %', v_offender;
     END IF;
 
-    RAISE DEBUG '✓ structural conformance: RLS on granted membership tables, security_invoker on membership vw_* and api.vw_current_user';
+    RAISE DEBUG '  + membership tables closed, views security_invoker';
 END $$;

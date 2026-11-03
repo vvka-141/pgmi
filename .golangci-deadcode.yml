@@ -1,14 +1,31 @@
 # Production-only pass for `unused`. The main config lints with tests: true, so a
 # symbol whose only caller is a test counts as used there and dead code hides.
+version: "2"
 run:
   timeout: 15m
   tests: false
-
 linters:
-  disable-all: true
+  default: none
   enable:
     - unused
-
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

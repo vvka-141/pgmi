@@ -70,7 +70,7 @@ var sampleResult = &services.DeployResult{
 func TestDeployJSON_EnvelopeShape(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		env := decodeEnvelope(t, captureStdout(t, func() {
-			printDeployJSON(sampleResult, nil)
+			printDeployJSON(sampleResult, nil, deployProvenance{})
 		}))
 
 		want := map[string]any{
@@ -110,7 +110,7 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 		deployErr := fmt.Errorf("execution failed: %w", pgErr)
 
 		env := decodeEnvelope(t, captureStdout(t, func() {
-			printDeployJSON(sampleResult, deployErr)
+			printDeployJSON(sampleResult, deployErr, deployProvenance{})
 		}))
 
 		if env["status"] != "failed" {
@@ -144,7 +144,7 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 		deployErr := errors.New(
 			`failed to connect: host=db port=5432 password=hunter2 sslmode=require`)
 
-		out := captureStdout(t, func() { printDeployJSON(nil, deployErr) })
+		out := captureStdout(t, func() { printDeployJSON(nil, deployErr, deployProvenance{}) })
 
 		if strings.Contains(out, "hunter2") {
 			t.Errorf("envelope leaked a password:\n%s", out)
@@ -197,7 +197,7 @@ func TestDeployJSON_ExitCodeMatchesProcessExit(t *testing.T) {
 			var emitted bool
 
 			out := captureStdout(t, func() {
-				returned, emitted = finishDeploy(sampleResult, tt.deployErr, tt.interrupted, true)
+				returned, emitted = finishDeploy(sampleResult, tt.deployErr, tt.interrupted, true, deployProvenance{})
 			})
 
 			if !emitted {
@@ -237,7 +237,7 @@ func TestDeployJSON_TailFailureCarriesUnitContext(t *testing.T) {
 	deployErr := errors.New("execution failed: boom")
 
 	env := decodeEnvelope(t, captureStdout(t, func() {
-		printDeployJSON(tailResult, deployErr)
+		printDeployJSON(tailResult, deployErr, deployProvenance{})
 	}))
 
 	if env["executionUnits"] != float64(4) {
@@ -264,7 +264,7 @@ func TestDeployJSON_AtomicFailureCarriesUnitContext(t *testing.T) {
 	deployErr := errors.New("execution failed: syntax error")
 
 	env := decodeEnvelope(t, captureStdout(t, func() {
-		printDeployJSON(atomicResult, deployErr)
+		printDeployJSON(atomicResult, deployErr, deployProvenance{})
 	}))
 
 	if env["executionUnits"] != float64(3) {
@@ -285,6 +285,7 @@ func TestDeploySummary_TailFailureMentionsUnitOrdinal(t *testing.T) {
 		Database:       "prod",
 		ExecutionUnits: 4,
 		UnitsCommitted: 2,
+		FailedUnit:     3,
 		ExecutionMode:  "psql",
 	}
 	out := captureStderr(t, func() {

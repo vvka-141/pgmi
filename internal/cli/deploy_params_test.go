@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/vvka-141/pgmi/internal/files/fakefs"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // TestLoadParamsFromFiles tests the params file loading with filesystem abstraction
@@ -180,7 +183,7 @@ DB_SSL=require`,
 			}
 
 			// Call the function under test
-			result, err := loadParamsFromFiles(mfs, tt.paramsFiles, tt.verbose)
+			result, err := loadParamsFromFiles(mfs, nil, tt.paramsFiles, tt.verbose)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -189,7 +192,11 @@ DB_SSL=require`,
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, tt.expected, result)
+			want := make(map[string]string, len(tt.expected))
+			for k, v := range tt.expected {
+				want[strings.ToLower(k)] = v
+			}
+			require.Equal(t, want, result)
 		})
 	}
 }
@@ -201,18 +208,45 @@ func TestLoadParamsFromFiles_Verbose(t *testing.T) {
 
 	// Test that verbose mode doesn't cause errors
 	// (We can't easily capture stdout in this test, but we verify it doesn't error)
-	result, err := loadParamsFromFiles(mfs, []string{"/test/config.env"}, true)
+	result, err := loadParamsFromFiles(mfs, nil, []string{"/test/config.env"}, true)
 
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"KEY": "value"}, result)
+	require.Equal(t, map[string]string{"key": "value"}, result)
 }
 
 // TestLoadParamsFromFiles_EmptyList tests behavior with no params files
 func TestLoadParamsFromFiles_EmptyList(t *testing.T) {
 	mfs := fakefs.NewMemoryFileSystem("/")
 
-	result, err := loadParamsFromFiles(mfs, []string{}, false)
+	result, err := loadParamsFromFiles(mfs, nil, []string{}, false)
 
 	require.NoError(t, err)
 	require.Empty(t, result)
+}
+
+func TestLoadParamsFromFiles_CaseVariantsInOneFileAreInvalidConfig(t *testing.T) {
+	mfs := fakefs.NewMemoryFileSystem("/")
+	mfs.AddFile("/test/a.env", "Abc=1\nabc=2")
+
+	_, err := loadParamsFromFiles(mfs, nil, []string{"/test/a.env"}, false)
+
+	require.True(t, errors.Is(err, pgmi.ErrInvalidConfig), "want ErrInvalidConfig (exit 10), got %v", err)
+	require.Contains(t, err.Error(), "/test/a.env")
+}
+
+func TestLoadParamsFromFiles_CaseVariantsAcrossFilesLaterWins(t *testing.T) {
+	mfs := fakefs.NewMemoryFileSystem("/")
+	mfs.AddFile("/test/a.env", "Env=a")
+	mfs.AddFile("/test/b.env", "env=b")
+	mfs.AddFile("/test/c.env", "ENV=c")
+
+	for range 20 {
+		got, err := loadParamsFromFiles(mfs, nil, []string{"/test/a.env", "/test/b.env"}, false)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"env": "b"}, got)
+
+		got, err = loadParamsFromFiles(mfs, nil, []string{"/test/b.env", "/test/a.env", "/test/c.env"}, false)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"env": "c"}, got)
+	}
 }
