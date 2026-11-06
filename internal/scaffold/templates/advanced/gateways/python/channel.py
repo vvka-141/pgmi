@@ -25,6 +25,7 @@ thread shares them, and per-request data travels in the arguments.
 """
 
 import json
+import math
 import random
 import threading
 import time
@@ -129,10 +130,12 @@ class DeadlineExceeded(Exception):
 
 
 def _deadline_milliseconds(ctx):
-    left = int(ctx.remaining() * 1000)
-    if left <= 0:
+    # Rounded up, so the server's timer fires no earlier than the gateway's
+    # deadline and a 57014 always finds the request out of time.
+    remaining = ctx.remaining()
+    if remaining <= 0:
         raise DeadlineExceeded()
-    return str(left)
+    return str(math.ceil(remaining * 1000))
 
 
 class RetriesExhausted(Exception):

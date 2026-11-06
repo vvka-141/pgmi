@@ -334,10 +334,11 @@ impl Drop for Cancellable {
     }
 }
 
-/// What is left of the request, as statement_timeout takes it: whole
-/// milliseconds, text. None when nothing is left: 0 would disable the timeout.
+/// What is left of the request, as statement_timeout takes it: milliseconds
+/// rounded up, so the server's timer fires no earlier than the gateway's
+/// deadline, as text. None when nothing is left: 0 would disable the timeout.
 fn statement_timeout(left: Duration) -> Option<String> {
-    Some(left.as_millis()).filter(|&ms| ms > 0).map(|ms| ms.to_string())
+    Some(left.as_nanos().div_ceil(1_000_000)).filter(|&ms| ms > 0).map(|ms| ms.to_string())
 }
 
 fn isolation(level: Option<String>) -> Option<IsolationLevel> {
@@ -733,7 +734,8 @@ mod tests {
     fn the_statement_timeout_is_what_is_left_and_never_zero() {
         assert_eq!(statement_timeout(Duration::from_millis(1999)).as_deref(), Some("1999"));
         assert_eq!(statement_timeout(Duration::from_secs_f64(2.5)).as_deref(), Some("2500"));
-        assert_eq!(statement_timeout(Duration::from_micros(999)), None);
+        assert_eq!(statement_timeout(Duration::from_micros(1999_500)).as_deref(), Some("2000"));
+        assert_eq!(statement_timeout(Duration::from_micros(999)).as_deref(), Some("1"));
         assert_eq!(statement_timeout(Duration::ZERO), None);
     }
 

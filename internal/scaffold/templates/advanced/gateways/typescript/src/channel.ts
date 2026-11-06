@@ -264,12 +264,13 @@ export async function cancelBackend(pool: pg.Pool, pid: number, requestId: strin
   }
 }
 
-// What the request has left, in whole milliseconds, as statement_timeout
-// takes it. Never "0": that would disable the timeout.
+// What the request has left, in milliseconds rounded up, as statement_timeout
+// takes it: the server's timer then fires no earlier than the gateway's
+// deadline. Never "0": that would disable the timeout.
 export function statementTimeout(ctx: RequestContext, now = Date.now()): string {
-  const left = Math.floor(ctx.deadline - now);
+  const left = ctx.deadline - now;
   if (left <= 0) throw new DeadlineExceeded();
-  return String(left);
+  return String(Math.ceil(left));
 }
 
 interface PolicyRow {

@@ -221,8 +221,9 @@ describe("the database channel", () => {
   });
 
   test("statement_timeout is what the request has left, never 0", () => {
-    assert.equal(statementTimeout(ctx({ deadline: 10_000 }), 7_500.4), "2499");
-    assert.throws(() => statementTimeout(ctx({ deadline: 10_000 }), 9_999.5), DeadlineExceeded);
+    assert.equal(statementTimeout(ctx({ deadline: 10_000 }), 7_500.4), "2500");
+    assert.equal(statementTimeout(ctx({ deadline: 10_000 }), 9_999.5), "1");
+    assert.throws(() => statementTimeout(ctx({ deadline: 10_000 }), 10_000), DeadlineExceeded);
     assert.throws(() => statementTimeout(ctx({ deadline: 10_000 }), 12_000), DeadlineExceeded);
   });
 

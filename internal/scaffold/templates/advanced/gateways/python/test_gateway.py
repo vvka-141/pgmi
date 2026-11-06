@@ -474,6 +474,18 @@ class ChannelTest(unittest.TestCase):
     def retrying(self, inner):
         return channel.ConnectionRetry(inner, attempts=3, base_delay=0, log=lambda line: None)
 
+    def test_statement_timeout_rounds_up_so_the_server_never_fires_first(self):
+        class Left:
+            def __init__(self, seconds):
+                self.seconds = seconds
+
+            def remaining(self):
+                return self.seconds
+        self.assertEqual(channel._deadline_milliseconds(Left(1.9995)), "2000")
+        self.assertEqual(channel._deadline_milliseconds(Left(0.0004)), "1")
+        with self.assertRaises(channel.DeadlineExceeded):
+            channel._deadline_milliseconds(Left(0))
+
     def test_a_lost_connection_retries_the_policy_lookups(self):
         inner = FakeChannel(LOST, failures=2)
         outer = self.retrying(inner)
