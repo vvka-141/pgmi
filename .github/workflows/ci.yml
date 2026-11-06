@@ -40,10 +40,14 @@ jobs:
 
       # PGMI_REQUIRE_DB: without it an unreachable Docker daemon skips every
       # integration test and the job still passes.
+      # The runner is discarded after the job, so testcontainers' reaper has
+      # nothing to clean up; a failed reaper handshake reaped the shared
+      # PostgreSQL mid-run. internal/scaffold alone takes over 10m under -race.
       - name: Run tests
         env:
           PGMI_REQUIRE_DB: '1'
-        run: go test -race -tags pgmi_testhooks -timeout 10m ./...
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        run: go test -race -tags pgmi_testhooks -timeout 25m ./...
 
   # The compatibility table is a claim, and until this job existed nothing
   # checked it: every test ran against a single PostgreSQL image. This job

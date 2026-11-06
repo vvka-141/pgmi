@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 import pg from "pg";
 import {
-  APPLICATION_NAME, cancelBackend, type Channel, connectionLost, connectionRetry, connectionStrings, createPool, DeadlineExceeded, type McpHeaders, NO_ROUTE, normalizeIsolation,
+  acquire, APPLICATION_NAME, cancelBackend, type Channel, connectionLost, connectionRetry, connectionStrings, createPool, DeadlineExceeded, type McpHeaders, NO_ROUTE, normalizeIsolation,
   type Policy, PoolTimeout, postgresChannel, type RequestContext, RetriesExhausted, serializationRetry, statementTimeout, tracing,
 } from "./channel.js";
 import { acceptsJson, bearerHandle, createGateway, envelopeStatus, handleUnknown, MAX_BODY_BYTES, mcpRoute, rpcIdOf } from "./gateway.js";
@@ -717,7 +717,7 @@ describe("against the deployed template", { skip: databaseUrl ? false : "DATABAS
 
   test("cancelBackend stops a running statement in moments, from outside the pool", async () => {
     const one = createPool(databaseUrl!, 1);
-    const client = await one.connect();
+    const client = await acquire(one);
     try {
       const { rows: [{ pid }] } = await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
       const started = Date.now();

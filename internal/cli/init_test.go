@@ -60,7 +60,7 @@ func TestRunInit_KeptConfigNamesTheTarget(t *testing.T) {
 			t.Errorf("init: %v", err)
 		}
 	})
-	if strings.Contains(out, "-d mydb") || !strings.Contains(out, "pgmi deploy "+dir+" --param env=dev") {
+	if strings.Contains(out, "-d mydb") || !strings.Contains(out, "pgmi deploy "+shellQuote(dir)+" --param env=dev") {
 		t.Errorf("the Next line must omit -d when pgmi.yaml names the database:\n%s", out)
 	}
 }

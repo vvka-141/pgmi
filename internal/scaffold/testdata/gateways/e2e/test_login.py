@@ -77,7 +77,7 @@ class LoginTest(unittest.TestCase):
     def test_return_to_stays_on_this_site(self):
         hostile = ["//evil.example/steal", "/\\evil.example", "https://evil.example/",
                    "/\r\nSet-Cookie: pwned=1", "/\t/evil.example", "/\n/evil.example", "/\x00x", "/caf€"]
-        for return_to, expected in [(value, "/") for value in hostile] + [("/app?tab=2", "/app?tab=2")]:
+        for return_to, expected in [(value, "/api/docs") for value in hostile] + [("/app?tab=2", "/app?tab=2")]:
             with self.subTest(return_to=return_to):
                 browser = Browser()
                 subject = "return-" + uuid.uuid4().hex[:8]

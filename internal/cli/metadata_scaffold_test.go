@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -186,12 +187,15 @@ func TestScaffoldSortKeys_DirectoryWithoutSortKeysGetsNone(t *testing.T) {
 }
 
 func TestMetadataScaffold_WritesAFileThatStillDeploys(t *testing.T) {
-	dir := createTestProject(t, map[string]string{
+	files := map[string]string{
 		"deploy.sql": "SELECT 1;",
 		"m/a&b.sql":  "SELECT 1;",
-		"m/a<b.sql":  "SELECT 2;",
 		"m/bom.sql":  "\ufeffCREATE TABLE bom(id int);",
-	})
+	}
+	if runtime.GOOS != "windows" {
+		files["m/a<b.sql"] = "SELECT 2;"
+	}
+	dir := createTestProject(t, files)
 	if err := scaffoldMeta(t, filepath.Join(dir, "m"), "005/x/"); err != nil {
 		t.Fatal(err)
 	}

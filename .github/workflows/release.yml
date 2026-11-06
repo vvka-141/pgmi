@@ -49,10 +49,13 @@ jobs:
 
       # PGMI_REQUIRE_DB: a release must never be cut off a run whose integration
       # tests all skipped because Docker was unreachable.
+      # As in ci.yml: no reaper on a discarded runner, and internal/scaffold
+      # takes over 10m under -race.
       - name: Tests
         env:
           PGMI_REQUIRE_DB: '1'
-        run: go test -race -timeout 10m ./...
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        run: go test -race -timeout 25m ./...
 
       - name: Connection & security tests
         env:

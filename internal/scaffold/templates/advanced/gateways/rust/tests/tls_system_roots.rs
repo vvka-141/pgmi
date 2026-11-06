@@ -2,9 +2,10 @@
 // baseline to learn from, not a library. Read it, then
 // write your own tests for the gateway you write.
 //
-// Run with SSL_CERT_FILE=$TLS_CA, so the test server's CA is a system root:
-// sslrootcert must still be the only CA the gateway trusts. CI sets
-// REQUIRE_SYSTEM_ROOTS_TEST on that command only.
+// Run with REQUIRE_SYSTEM_ROOTS_TEST=1 SSL_CERT_FILE=$TLS_CA, so the test
+// server's CA is a system root: sslrootcert must still be the only CA the
+// gateway trusts. SSL_CERT_FILE alone cannot switch the test on, because cargo
+// sets it to the system bundle for every test it runs.
 
 use pgmi_gateway::db::create_pool;
 
@@ -15,12 +16,11 @@ async fn connects(url: &str) -> bool {
 
 #[tokio::test]
 async fn sslrootcert_replaces_the_system_roots() {
-    let (Ok(url), Ok(_)) = (std::env::var("TLS_DATABASE_URL"), std::env::var("SSL_CERT_FILE")) else {
-        assert!(std::env::var("REQUIRE_SYSTEM_ROOTS_TEST").is_err(),
-            "REQUIRE_SYSTEM_ROOTS_TEST is set but TLS_DATABASE_URL or SSL_CERT_FILE is not");
-        eprintln!("skipped: TLS_DATABASE_URL and SSL_CERT_FILE are not both set");
+    if std::env::var("REQUIRE_SYSTEM_ROOTS_TEST").is_err() {
+        eprintln!("skipped: REQUIRE_SYSTEM_ROOTS_TEST is not set");
         return;
-    };
+    }
+    let url = std::env::var("TLS_DATABASE_URL").expect("REQUIRE_SYSTEM_ROOTS_TEST needs TLS_DATABASE_URL");
     let wrong_ca = std::env::var("TLS_WRONG_CA").unwrap();
     let verify = url.replace("sslmode=require", "sslmode=verify-full");
     assert!(connects(&format!("{verify}&sslrootcert=system")).await,

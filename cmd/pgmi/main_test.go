@@ -43,7 +43,8 @@ func pgmiCommand(t *testing.T, args ...string) *exec.Cmd {
 		t.Fatalf("locating the test binary: %v", err)
 	}
 	cmd := exec.Command(self, args...)
-	cmd.Env = append(os.Environ(), reexecEnv+"=1")
+	// A -race binary sleeps atexit_sleep_ms (1s by default) after main returns.
+	cmd.Env = append(os.Environ(), reexecEnv+"=1", "GORACE=atexit_sleep_ms=0")
 	return cmd
 }
 
