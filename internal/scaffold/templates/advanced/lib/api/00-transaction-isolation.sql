@@ -24,16 +24,16 @@
 -- >= the route's required floor. A NULL floor means "no requirement" and is
 -- treated as 'read committed' (every transaction satisfies it).
 --
--- Resolve-then-open: the client gateway (tools/mcp-gateway.py, or the reverse
+-- Resolve-then-open: the client gateway (gateways/python/gateway.py, or the reverse
 -- proxy a deployment supplies) resolves the route's policy BEFORE opening the
 -- transaction — api.rest_route_policy / api.rpc_route_policy /
--- api.mcp_request_policy (lib/api/09-gateways.sql) return the effective
+-- api.mcp_request_policy (lib/api/10-mcp-protocol.sql) return the effective
 -- characteristics — and opens at max(route floor, client-requested level),
 -- READ ONLY when the route declares it, DEFERRABLE when that combination is
 -- SERIALIZABLE READ ONLY. X-PGMI-Transaction-Isolation is therefore
 -- escalation, not obligation: a client may ask for more than the floor, never
--- less. The SQL gateways cannot SET the level — transaction control is
--- forbidden inside functions (.claude/rules/postgres-transaction.md); they
+-- less. The SQL gateways cannot SET the level — a function cannot change
+-- its transaction's isolation once a statement has run; they
 -- only READ current_setting('transaction_isolation') /
 -- current_setting('transaction_read_only') and reject a shortfall. That
 -- DB-side check is the fail-closed invariant for proxies that skip the
@@ -45,8 +45,6 @@
 -- (it implements no dirty-read level), so the normalizer does the same rather
 -- than rejecting it — matching server behavior. NULL passes through (absent
 -- floor); anything else RAISEs.
-
-DO $$ BEGIN RAISE NOTICE '→ Installing transaction isolation contract'; END $$;
 
 CREATE OR REPLACE FUNCTION internal.normalize_transaction_isolation(p_value text, p_raise boolean)
 RETURNS text
@@ -116,7 +114,7 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION internal.transaction_is_read_only() IS
-    'True when the current transaction is READ ONLY. Gateways use it to reject a read-only route dispatched in a read-write transaction (fail closed) and to skip their own writes (exchange logging, JIT provisioning) when the transaction cannot write.';
+    'True when the current transaction is READ ONLY. Gateways use it to reject a read-only route dispatched in a read-write transaction (fail closed) and to skip their own writes (exchange logging, session last-seen updates) when the transaction cannot write.';
 
 -- Resolve-then-open policy resolver. Given a route's declared
 -- policy and the client-requested level, returns the characteristics the
@@ -350,13 +348,4 @@ BEGIN
     IF internal.transaction_is_read_only() THEN
         RAISE EXCEPTION 'transaction_is_read_only: deploy transaction must be read-write';
     END IF;
-END $$;
-
-DO $$ BEGIN
-    RAISE NOTICE '  ✓ internal.normalize_transaction_isolation(text, boolean) - canonical level normalizer';
-    RAISE NOTICE '  ✓ internal.transaction_isolation_rank(text) - level ordering (rc<rr<s)';
-    RAISE NOTICE '  ✓ internal.transaction_isolation_shortfall(text) - gateway floor validation';
-    RAISE NOTICE '  ✓ internal.transaction_is_read_only() - gateway read-only probe';
-    RAISE NOTICE '  ✓ internal.resolve_transaction_policy(text, boolean, text) - resolve-then-open characteristics';
-    RAISE NOTICE '  ✓ internal.transaction_policy_replica_safe(text, boolean) - replica-routing hint';
 END $$;

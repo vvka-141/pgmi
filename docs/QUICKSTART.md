@@ -16,7 +16,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 5. Verify the deployment
 
 **What you need:**
-- PostgreSQL 11 or newer (15 or newer for the advanced template) running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
+- PostgreSQL 15 or newer (18 or newer for the advanced template) running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
 
 No Go toolchain required — the quickstart installs a prebuilt binary. (Installing from source with `go install` is an optional alternative; see Step 1.)
@@ -39,23 +39,26 @@ If either command prints an error (say, the port is already in use), stop: run
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 pgmi init demo --template basic
-pgmi deploy demo -d demo_db
+pgmi deploy demo -d demo_db --param env=dev
 ```
 
-pgmi creates the `demo_db` database, loads the project into a session, and your generated `deploy.sql` runs the migrations and the test suite in the [atomic head](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) of the script — everything up to the first top-level `COMMIT` is one transaction:
+pgmi creates the `demo_db` database, loads the project into a session, and your generated `deploy.sql` runs the project's SQL files and the test suite in the [atomic head](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) of the script — everything up to the first top-level `COMMIT` is one transaction:
 
 ```text
 [pgmi] Test suite started
-[pgmi] Fixture: ./__test__/_setup.sql
-[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test: ./__test__/test_function_privileges.sql
+[pgmi] Test: ./physical/__test__/test_constraints.sql
+[pgmi] Fixture: ./semantic/__test__/_setup.sql
+[pgmi] Test: ./semantic/__test__/test_project.sql
+[pgmi] Test: ./semantic/__test__/test_task.sql
 [pgmi] Test suite passed
-✓ demo_db: 7 files loaded in 0.91s
+✓ demo_db: 14 files loaded, 3 paths ignored in 0.09s
 ```
 
-Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/__test__/test_user_crud.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
+Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/semantic/__test__/test_task.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
 
 ```bash
-pgmi deploy demo -d demo_db
+pgmi deploy demo -d demo_db --param env=dev
 ```
 
 pgmi exits with code `13`, and PostgreSQL rolls back the transactional schema and
@@ -81,7 +84,7 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
-Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), APT, or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive all work — see the [full install options](../README.md#install).
+Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive or `.deb` package all work — see the [full install options](../README.md#install).
 
 Verify the installation:
 
@@ -99,7 +102,7 @@ Commit: <sha>, Built: <date>, Platform: <os>/<arch>
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
 
 <details>
-<summary>Install from source (optional — requires Go 1.26+)</summary>
+<summary>Install from source (optional — requires Go 1.27+)</summary>
 
 ```bash
 go install github.com/vvka-141/pgmi/cmd/pgmi@latest
@@ -127,14 +130,16 @@ brew install --cask vvka-141/pgmi/pgmi
 </details>
 
 <details>
-<summary>Debian/Ubuntu (APT)</summary>
+<summary>Debian/Ubuntu (.deb)</summary>
+
+Download the `.deb` for your architecture from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it against `checksums.txt`, and install it:
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-sudo apt update && sudo apt install pgmi
+sha256sum --ignore-missing -c checksums.txt
+sudo apt install ./pgmi_<version>_linux_amd64.deb
 ```
 
-The script configures the [Cloudsmith APT repository](https://cloudsmith.io/~vvka-141/repos/pgmi/packages/) and GPG key. The pgmi binary is then installed via standard `apt install` with package signature verification.
+There is no APT repository, so `apt upgrade` does not pick up new releases; install the next `.deb` the same way.
 </details>
 
 <details>
@@ -186,7 +191,7 @@ cd myapp
 
 > **Interactive setup**: if you run `pgmi init myapp` (without flags) on a TTY, an interactive wizard walks you through template choice and connection setup, saving a `pgmi.yaml` for later `pgmi deploy` runs. Add `--template <name>` to skip the template prompt, or set `PGMI_NON_INTERACTIVE=1` / `CI=1` to bypass wizards entirely.
 >
-> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold .` from the project root to auto-generate them. Basic template users can ignore this.
+> If you are using the advanced template (or adopting metadata-driven ordering) and already have SQL files without `<pgmi-meta>` blocks, run `pgmi metadata scaffold <dir> --sort-key <prefix>` per directory (e.g. `pgmi metadata scaffold ./core --sort-key 005/core/`) to generate them. Basic template users can ignore this.
 
 This creates a ready-to-deploy project:
 
@@ -195,14 +200,23 @@ myapp/
 ├── deploy.sql              ← Your deployment logic (the brain)
 ├── project.json            ← Project metadata (read by deploy.sql, not by pgmi)
 ├── pgmi.yaml               ← Connection defaults (the config)
-├── migrations/             ← Your SQL files go here
-│   ├── 001_users.sql
-│   └── 002_user_crud.sql
-├── __test__/               ← Your test files (or __tests__/)
-│   ├── _setup.sql          ← Test fixture (seed data)
-│   └── test_user_crud.sql
+├── physical/               ← Tables, keys, indexes: each file runs once
+│   ├── 001_project.sql
+│   ├── 002_task.sql
+│   └── __test__/           ← Tests of the constraints
+├── semantic/               ← Views and functions: re-run on every deploy
+│   ├── project.sql
+│   ├── task.sql
+│   └── __test__/           ← Fixture and tests of the writers (or __tests__/)
+├── __test__/
+│   └── test_function_privileges.sql
+├── AGENTS.md               ← Routing table for coding agents (CLAUDE.md imports it)
+├── CLAUDE.md
+├── .agents/
+│   └── skills/             ← Project-owned agent skills
 ├── README.md
-└── .gitignore
+├── .gitignore
+└── .pgmiignore             ← Files pgmi does not load (parameter files)
 ```
 
 > **Note:** Both `__test__/` and `__tests__/` work identically. Use whichever matches your team's convention.
@@ -211,11 +225,14 @@ Let's look at what was generated.
 
 ### pgmi.yaml — your project config
 
-Open `pgmi.yaml`. It looks like this:
+Open `pgmi.yaml`. It looks like this (a `PGHOST`, `PGPORT`, `PGUSER` or
+`PGDATABASE` in your shell overrides the matching value, and pgmi says so on
+stderr):
 
 ```yaml
 # pgmi project configuration
-# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
+# CLI flags override these values. Environment variables (PGHOST, PGDATABASE, ...)
+# override them too; pgmi names each one it applies over a value set here.
 
 connection:
   database: mydb              # Target database (change this!)
@@ -225,8 +242,12 @@ connection:
   # username: postgres        # PostgreSQL user (default: current OS user)
 
 # Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
-params:
-  env: development
+# env (dev, test or prod) is required and deliberately not set here: only dev
+# seeds the Demo project, so a CI deploy that forgets env must fail, not seed.
+#   local:  pgmi deploy . -d mydb --param env=dev
+#   CI:     PGMI_PARAM_ENV=prod pgmi deploy . -d mydb
+# params:
+#   some_setting: value
 
 timeout: 3m                   # Deployment timeout
 ```
@@ -241,9 +262,6 @@ connection:
   port: 5432
   username: postgres
   database: myapp
-
-params:
-  env: development
 
 timeout: 3m
 ```
@@ -289,11 +307,11 @@ pgmi loads your project files into session-scoped views, then runs `deploy.sql`:
 - **`pg_temp.pgmi_source_view`** — raw access to all files (for introspection)
 - **`pg_temp.pgmi_plan_view`** — files sorted by execution order (for deployment)
 
-The basic template queries `pg_temp.pgmi_source_view` (raw file access); the advanced template uses `pg_temp.pgmi_plan_view` (metadata-driven ordering).
+Both templates run the files from `pg_temp.pgmi_plan_view`. The basic template's `deploy.sql` also keeps a small ledger, `deployment.run_once`, of the files marked run-once, and refuses a deploy when one of them changed after it ran.
 
-### migrations/ — your SQL files
+### physical/ and semantic/ — two layers
 
-These are regular SQL files — no annotations or special comments required. The basic template creates a `"user"` table (`001_users.sql`) and CRUD functions (`002_user_crud.sql`).
+`physical/` holds the tables, keys, constraints and indexes. Each file opens with a `<pgmi-meta ... idempotent="false">` header: it runs once per database and is frozen after that. `semantic/` holds the views (the read surface) and the functions that are the only writers; those files carry no header and re-run on every deploy, so they use `CREATE OR REPLACE`. The sample is a small project and task model: `fn_create_project`, `fn_add_task` and `fn_complete_task` write, `project_view` reads, and `fn_project_problems`, `fn_task_problems` and `fn_task_problem` say why a write would be refused.
 
 ---
 
@@ -302,7 +320,7 @@ These are regular SQL files — no annotations or special comments required. The
 Make sure your password is set (see Step 3), then:
 
 ```bash
-pgmi deploy . --overwrite --force
+pgmi deploy . --overwrite --force --param env=dev
 ```
 
 What this does:
@@ -310,21 +328,24 @@ What this does:
 - `--overwrite` allows dropping and recreating the database if it already exists
 - `--force` replaces interactive confirmation with a 5-second countdown (you can still press Ctrl+C to cancel)
 
-**Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag.
+**Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag. pgmi drops and recreates the database *before* `deploy.sql` runs, so a deploy that then fails (for example on a missing parameter) leaves an empty database behind. Both templates require `env`: pass `--param env=dev` on a local `--overwrite`.
 
-> **CI/CD:** pin the session API's names and columns with `--compat 1`, pin the pgmi binary version for behavior, and drop `--overwrite` for incremental deploys:
+> **CI/CD:** pin the pgmi binary version (before 1.0 the session API may change in a minor release, listed under Upgrading in the release notes), add `--compat 1`, and drop `--overwrite` for incremental deploys:
 > ```bash
-> pgmi deploy . -d myapp --compat 1 --force
+> pgmi deploy . -d myapp --compat 1 --force --param env=prod
 > ```
 > See the [CI/CD Guide](CICD.md) for a complete pipeline example.
 
 You should see output including test notices and ending with an ASCII art "DONE" banner:
 
 ```
-Dev seed: admin user ready (admin@example.com id=1)
+[dev] Deploying myapp v1.0.0
 [pgmi] Test suite started
-[pgmi] Fixture: ./__test__/_setup.sql
-[pgmi] Test: ./__test__/test_user_crud.sql
+[pgmi] Test: ./__test__/test_function_privileges.sql
+[pgmi] Test: ./physical/__test__/test_constraints.sql
+[pgmi] Fixture: ./semantic/__test__/_setup.sql
+[pgmi] Test: ./semantic/__test__/test_project.sql
+[pgmi] Test: ./semantic/__test__/test_task.sql
 [pgmi] Test suite passed
 
   ___   ___  _  _ ___
@@ -333,7 +354,7 @@ Dev seed: admin user ready (admin@example.com id=1)
  |___/ \___/|_|\_|___|
 ```
 
-Your database `myapp` now exists with a `"user"` table, CRUD functions, and the built-in tests have already verified they work.
+Your database `myapp` now exists with `project` and `task` tables, a view, the writer functions and a `Demo` project, and the built-in tests have already verified them.
 
 ---
 
@@ -346,64 +367,74 @@ Your database `myapp` now exists with a `"user"` table, CRUD functions, and the 
 3. Open the Query Tool (Tools → Query Tool) and run:
 
 ```sql
-SELECT * FROM get_user('admin@example.com');
+SELECT name, open_task_count, state FROM project_view;
 ```
 
-You should see the admin user record with `email = 'admin@example.com'` and `name = 'Administrator'`.
+You should see the `Demo` project, with no tasks, in state `empty`.
 
 ### Using the terminal
 
 ```bash
-psql -h localhost -U postgres -d myapp -c "SELECT * FROM get_user('admin@example.com');"
+psql -h localhost -U postgres -d myapp -c "SELECT name, open_task_count, state FROM project_view;"
 ```
 
 ```
- id |        email        |     name      |          created_at
-----+---------------------+---------------+-------------------------------
-  1 | admin@example.com   | Administrator | 2026-...
+ name | open_task_count | state
+------+-----------------+-------
+ Demo |               0 | empty
 ```
 
-Try it with a custom admin email parameter:
+Add a task through the writer and read the view again:
 
 ```bash
-pgmi deploy . --overwrite --force --param admin_email=you@example.com
-psql -h localhost -U postgres -d myapp -c "SELECT * FROM get_user('you@example.com');"
+psql -h localhost -U postgres -d myapp \
+  -c "SELECT title, status FROM fn_add_task((SELECT project_id FROM project WHERE name = 'Demo'), 'Write the plan');" \
+  -c "SELECT name, open_task_count, state FROM project_view;"
 ```
+
+The project is now `active`. Call `fn_add_task` again with the same title and it returns NULL, shown as a row whose columns are all empty: an open task of the project already has it. `SELECT * FROM fn_task_problems(<project_id>, 'Write the plan')` says why (`title`, `duplicate`).
 
 You just deployed a PostgreSQL project with pgmi.
 
 ---
 
-## Step 6: Add a new migration
+## Step 6: Change the schema
 
-Create a new file `migrations/003_orders.sql`:
+Add a column to the tasks. Treat `myapp` as a database that keeps its data: add `due_on date,` to the `CREATE TABLE task` in `physical/002_task.sql` and deploy without `--overwrite`:
+
+```bash
+pgmi deploy . --force --param env=dev
+```
+
+The deploy fails before anything runs:
+
+```
+Run-once file(s) changed after they ran on this database:
+  ./physical/002_task.sql: content edited
+```
+
+That file already ran here and is never run again, so the edit would only ever reach fresh databases. Undo the edit and put the change in a new run-once file instead, `physical/003_task_due_on.sql`, with a fresh id from `uuidgen`:
 
 ```sql
-CREATE TABLE IF NOT EXISTS "order" (
-    id SERIAL PRIMARY KEY,
-    user_id INT NOT NULL REFERENCES "user"(id),
-    total NUMERIC(10,2) NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+/*
+<pgmi-meta id="<your new uuid>" idempotent="false">
+  <description>Tasks get a due date</description>
+</pgmi-meta>
+*/
+ALTER TABLE task ADD COLUMN due_on date;
 ```
 
-Deploy again:
+A file in `physical/` without that header would run again on every deploy, so the deploy refuses it, naming the file. `pgmi deploy . --force --param env=dev` now runs the new file once (and re-runs `semantic/`, as always), and the ledger records it:
 
 ```bash
-pgmi deploy . --overwrite --force
+psql -h localhost -U postgres -d myapp -c "SELECT path, ran_at FROM deployment.run_once ORDER BY ran_at;"
 ```
 
-Check the database (pgAdmin: refresh, or terminal):
+While a database can still be thrown away, keeping the edit in `002_task.sql` and recreating it with `pgmi deploy . --overwrite --force --param env=dev` is fine too. Views and functions in `semantic/` need none of this: edit them and redeploy, they re-run every time. The exception is a change `CREATE OR REPLACE` refuses (dropping, renaming or reordering a view's columns, changing a function's return type): drop the object first in the same file, as the `pgmi-layers` skill shows.
 
-```bash
-psql -h localhost -U postgres -d myapp -c "\dt"
-```
+Now watch a test gate the deploy. Add `RAISE EXCEPTION 'forced failure';` inside the DO block in `semantic/__test__/test_task.sql`, then run `pgmi deploy . --force --param env=dev`. pgmi exits with code `13`, and the transaction that held this run's changes rolls back. Remove the line before you continue.
 
-You should see both the `user` and `order` tables. The basic template uses `CREATE OR REPLACE` / `IF NOT EXISTS` patterns, so you can also deploy without `--overwrite` for incremental changes — though during early development, `--overwrite --force` is the simplest approach.
-
-Now watch a test gate the deploy. Add `RAISE EXCEPTION 'forced failure';` inside the DO block in `__test__/test_user_crud.sql`, then run `pgmi deploy . --force`. pgmi exits with code `13`, and the transaction that held this run's migrations rolls back. Remove the line before you continue.
-
-> **Where the atomic boundary is.** The generated `deploy.sql` has a `COMMIT` after the test gate (line 99). Everything you add *above* it shares the test-gated transaction; anything *below* it autocommits statement by statement. If you need `CREATE INDEX CONCURRENTLY` or another command that cannot run inside a transaction, put it after the `COMMIT`. See [the execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full rules.
+> **Where the atomic boundary is.** The generated `deploy.sql` has a `COMMIT` after the test gate (the `COMMIT;` right after `ROLLBACK TO SAVEPOINT _tests`). Everything you add *above* it shares the test-gated transaction; anything *below* it autocommits statement by statement. If you need `CREATE INDEX CONCURRENTLY` or another command that cannot run inside a transaction, put it after the `COMMIT`. See [the execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full rules.
 
 ---
 
@@ -422,44 +453,7 @@ This is what makes pgmi different from migration tools: PostgreSQL itself is the
 
 ## Choosing a template
 
-pgmi provides two templates for `pgmi init`. Start with **basic** when you want a small migration scaffold. Reach for **advanced** when you want a large, editable reference system — metadata tracking, roles, schemas, audit logging, and API/MCP patterns you adapt to your needs. Advanced is not a "more production" version of basic; it's a different, richer starting point you own and trim. **Either can be production** depending on the project — advanced is _more complete_, not _more production_.
-
-| Feature | Basic | Advanced |
-|---------|-------|----------|
-| **Learning curve** | Minimal — read the code, understand it | Moderate — more moving parts |
-| **File ordering** | Path-based (`001_`, `002_`, ...) | Metadata-driven via `<pgmi-meta>` sort keys |
-| **Execution view** | `pg_temp.pgmi_source_view` | `pg_temp.pgmi_plan_view` (with multi-phase support) |
-| **Idempotency control** | Manual (`CREATE OR REPLACE`, `IF NOT EXISTS`) | Metadata-driven (`idempotent="true/false"`) |
-| **Script tracking** | None by default; a 3-line opt-in `_migration` ledger ships commented in `deploy.sql` | UUID-based tracking in `internal.deployment_script_execution_log` |
-| **Testing** | `CALL pgmi_test()` with savepoints | Same, plus hierarchical fixtures |
-| **Project structure** | Flat: `migrations/`, `__test__/` | Multi-module: `api/`, `lib/` (core, common, api), `membership/`, `tools/` |
-| **Parameters** | `current_setting('pgmi.key', true)` | Same, plus `deployment_setting()` helper with defaults |
-| **MCP integration** | None | Full MCP server for AI assistants |
-
-**When to use basic:**
-- Learning pgmi
-- Simple projects with < 20 SQL files
-- Linear migrations without complex ordering needs
-
-**When to use advanced:**
-- You want pre-built patterns for script tracking, idempotency, role separation, audit logging, or API/MCP integration — and you're comfortable adapting or removing what doesn't apply
-- Large projects with explicit execution phases
-- Teams that benefit from script tracking and audit logging
-- Projects integrating with AI assistants via MCP
-
-**Advanced template requirements:**
-- PostgreSQL 15+ (the RLS model relies on `security_invoker` views)
-- A role with `CREATEROLE` + `CREATE EXTENSION` for initial setup — **no superuser** (creates owner, admin, api, customer roles). The admin role on managed providers (`rds_superuser`, `azure_pg_admin`, `supabase_admin`, …) carries these grants.
-- Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` (all available on managed clouds — RDS, Azure Flexible Server, Cloud SQL, Supabase, Neon)
-
-**Switching templates:**
-
-You can migrate from basic to advanced later:
-1. Run `pgmi metadata scaffold . --write` to add metadata blocks to existing files
-2. Adjust `idempotent` flags (migrations → false, functions → true)
-3. Update `deploy.sql` to query `pg_temp.pgmi_plan_view` instead of `pg_temp.pgmi_source_view`
-
-See [Metadata Guide](METADATA.md) for details on the migration process.
+Without `--template`, `pgmi init` writes the **minimal** project: a `deploy.sql` loop, `hello_world.sql` and a `.pgmiignore`. The **basic** template adds a run-once ledger and a test gate to a small two-layer project; the **advanced** template is an opinionated application backend with REST, RPC and MCP routing in the database. [Choose a template](templates.md) compares the three side by side.
 
 ---
 

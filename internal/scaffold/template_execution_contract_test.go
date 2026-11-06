@@ -30,9 +30,12 @@ func TestShippedTemplatesSplitAtTheirDocumentedCommit(t *testing.T) {
 		// A fragment from inside the dollar-quoted body whose bare END; could
 		// be mistaken for a terminator. Must land in the atomic head.
 		beforeFalseTerminator string
+		// A fragment of each tail unit, in order.
+		tail []string
 	}{
-		{"basic", "SAVEPOINT _tests"},
-		{"advanced", "Required deployment parameter"},
+		{"basic", "SAVEPOINT _tests", []string{"RAISE NOTICE"}},
+		{"advanced", "Required deployment parameter", []string{
+			"Deployment lock released", "NOT i.indisvalid", "RAISE NOTICE $ascii$"}},
 	} {
 		t.Run(tc.template, func(t *testing.T) {
 			body, err := os.ReadFile("templates/" + tc.template + "/deploy.sql")
@@ -41,13 +44,13 @@ func TestShippedTemplatesSplitAtTheirDocumentedCommit(t *testing.T) {
 			}
 
 			units := preprocessor.SplitExecutionUnits(string(body))
-			if len(units) != 2 {
-				t.Fatalf("splits into %d execution unit(s), want 2 (atomic head + DONE banner); "+
-					"more than 2 means a mid-file terminator was found, 1 means the real COMMIT was missed",
-					len(units))
+			if len(units) != 1+len(tc.tail) {
+				t.Fatalf("splits into %d execution unit(s), want %d (atomic head + %d tail statements); "+
+					"more means a mid-file terminator was found, 1 means the real COMMIT was missed",
+					len(units), 1+len(tc.tail), len(tc.tail))
 			}
 
-			head, tail := strings.TrimSpace(units[0]), strings.TrimSpace(units[1])
+			head := strings.TrimSpace(units[0])
 
 			if !strings.HasSuffix(head, "COMMIT;") {
 				t.Errorf("the atomic head does not end at COMMIT; it ends with %q",
@@ -71,13 +74,16 @@ func TestShippedTemplatesSplitAtTheirDocumentedCommit(t *testing.T) {
 					"roll the deployment back")
 			}
 
-			// The tail is the banner and nothing else. Anything a user appends
-			// lands here and autocommits, which is what the docs warn about.
-			if !strings.Contains(tail, "RAISE NOTICE") {
-				t.Errorf("the tail is not the DONE banner, it is %q", firstRunes(tail, 60))
-			}
-			if strings.Contains(tail, "COMMIT;") {
-				t.Error("a second COMMIT is in the tail — the head ended at the wrong terminator")
+			// Anything a user appends lands in the tail and autocommits, which
+			// is what the docs warn about.
+			for i, want := range tc.tail {
+				unit := units[1+i]
+				if !strings.Contains(unit, want) {
+					t.Errorf("tail statement %d is not the expected one (%q), it is %q", i+1, want, firstRunes(strings.TrimSpace(unit), 60))
+				}
+				if strings.Contains(unit, "COMMIT;") {
+					t.Error("a second COMMIT is in the tail — the head ended at the wrong terminator")
+				}
 			}
 		})
 	}

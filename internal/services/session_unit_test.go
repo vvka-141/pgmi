@@ -9,49 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-func TestValidateNoDuplicateScriptIDs(t *testing.T) {
-	id1 := uuid.MustParse("11111111-1111-4111-8111-111111111111")
-	id2 := uuid.MustParse("22222222-2222-4222-8222-222222222222")
-
-	t.Run("duplicate id is rejected", func(t *testing.T) {
-		files := []pgmi.FileMetadata{
-			{Path: "./b.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
-			{Path: "./a.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
-		}
-		err := validateNoDuplicateScriptIDs(files)
-		if err == nil {
-			t.Fatal("expected error for duplicate id, got nil")
-		}
-		if !errors.Is(err, pgmi.ErrInvalidConfig) {
-			t.Errorf("expected ErrInvalidConfig (exit 10), got: %v", err)
-		}
-		msg := err.Error()
-		if !strings.Contains(msg, id1.String()) || !strings.Contains(msg, "./a.sql") || !strings.Contains(msg, "./b.sql") {
-			t.Errorf("error should name the id and both files, got: %s", msg)
-		}
-	})
-
-	t.Run("unique ids and metadata-less files pass", func(t *testing.T) {
-		files := []pgmi.FileMetadata{
-			{Path: "./a.sql", Metadata: &pgmi.ScriptMetadata{ID: id1}},
-			{Path: "./b.sql", Metadata: &pgmi.ScriptMetadata{ID: id2}},
-			{Path: "./c.sql", Metadata: nil},
-			{Path: "./d.txt", Metadata: nil},
-		}
-		if err := validateNoDuplicateScriptIDs(files); err != nil {
-			t.Errorf("expected no error, got: %v", err)
-		}
-	})
-}
-
 func TestNewSessionManager_NilDeps(t *testing.T) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{}, nil
 	}
 
@@ -60,16 +25,19 @@ func TestNewSessionManager_NilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil connectorFactory", func() {
-			NewSessionManager(nil, &mockFileScanner{}, &mockFileLoader{}, &mockLogger{})
+			NewSessionManager(nil, &mockFileScanner{}, &mockFileLoader{}, &mockLogger{}, "test")
 		}},
 		{"nil fileScanner", func() {
-			NewSessionManager(connFactory, nil, &mockFileLoader{}, &mockLogger{})
+			NewSessionManager(connFactory, nil, &mockFileLoader{}, &mockLogger{}, "test")
 		}},
 		{"nil fileLoader", func() {
-			NewSessionManager(connFactory, &mockFileScanner{}, nil, &mockLogger{})
+			NewSessionManager(connFactory, &mockFileScanner{}, nil, &mockLogger{}, "test")
 		}},
 		{"nil logger", func() {
-			NewSessionManager(connFactory, &mockFileScanner{}, &mockFileLoader{}, nil)
+			NewSessionManager(connFactory, &mockFileScanner{}, &mockFileLoader{}, nil, "test")
+		}},
+		{"empty pgmiVersion", func() {
+			NewSessionManager(connFactory, &mockFileScanner{}, &mockFileLoader{}, &mockLogger{}, "")
 		}},
 	}
 
@@ -108,11 +76,11 @@ func TestScanProject_UnloadableContentIsInvalidConfig(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+			connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 				t.Fatal("scanning must not create a connector")
 				return nil, nil
 			}
-			sm := NewSessionManager(connFactory, scanner.NewScanner(checksum.New()), &mockFileLoader{}, &mockLogger{})
+			sm := NewSessionManager(connFactory, scanner.NewScanner(checksum.New()), &mockFileLoader{}, &mockLogger{}, "test")
 
 			_, err := sm.ScanProject(dir)
 			if !errors.Is(err, pgmi.ErrInvalidConfig) {
@@ -126,27 +94,27 @@ func TestScanProject_UnloadableContentIsInvalidConfig(t *testing.T) {
 }
 
 func TestScanProject_ValidateDeploySQLFails(t *testing.T) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{}, nil
 	}
-	scanner := &mockFileScanner{validateErr: fmt.Errorf("deploy.sql missing")}
-	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
+	fileScanner := &mockFileScanner{validateErr: fmt.Errorf("deploy.sql missing")}
+	sm := NewSessionManager(connFactory, fileScanner, &mockFileLoader{}, &mockLogger{}, "test")
 
 	_, err := sm.ScanProject("/src")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
-	if !strings.Contains(err.Error(), "failed to validate deploy.sql") {
-		t.Errorf("Expected 'failed to validate deploy.sql' in error, got: %v", err)
+	if err.Error() != "deploy.sql missing" {
+		t.Errorf("the validator's own message must reach the user unwrapped, got: %v", err)
 	}
 }
 
 func TestScanProject_ScanDirectoryFails(t *testing.T) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{}, nil
 	}
-	scanner := &mockFileScanner{scanErr: fmt.Errorf("permission denied")}
-	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
+	fileScanner := &mockFileScanner{scanErr: fmt.Errorf("permission denied")}
+	sm := NewSessionManager(connFactory, fileScanner, &mockFileLoader{}, &mockLogger{}, "test")
 
 	_, err := sm.ScanProject("/src")
 	if err == nil {
@@ -158,13 +126,13 @@ func TestScanProject_ScanDirectoryFails(t *testing.T) {
 }
 
 func TestPrepareSession_ConnectorFactoryFails(t *testing.T) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return nil, fmt.Errorf("factory error")
 	}
-	scanner := &mockFileScanner{}
-	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
+	fileScanner := &mockFileScanner{}
+	sm := NewSessionManager(connFactory, fileScanner, &mockFileLoader{}, &mockLogger{}, "test")
 
-	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, pgmi.FileScanResult{}, nil, "", false)
+	_, err := sm.PrepareSession(context.Background(), &db.ConnectionConfig{}, scanner.Result{}, nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -174,13 +142,13 @@ func TestPrepareSession_ConnectorFactoryFails(t *testing.T) {
 }
 
 func TestPrepareSession_ConnectFails(t *testing.T) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{err: fmt.Errorf("connection refused")}, nil
 	}
-	scanner := &mockFileScanner{}
-	sm := NewSessionManager(connFactory, scanner, &mockFileLoader{}, &mockLogger{})
+	fileScanner := &mockFileScanner{}
+	sm := NewSessionManager(connFactory, fileScanner, &mockFileLoader{}, &mockLogger{}, "test")
 
-	_, err := sm.PrepareSession(context.Background(), &pgmi.ConnectionConfig{}, pgmi.FileScanResult{}, nil, "", false)
+	_, err := sm.PrepareSession(context.Background(), &db.ConnectionConfig{}, scanner.Result{}, nil, "", false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}

@@ -6,14 +6,43 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // PreprocessResult contains the result of preprocessing deploy.sql.
 type PreprocessResult struct {
-	ExpandedSQL string // SQL with macros expanded
-	MacroCount  int    // Number of macros expanded
+	ExpandedSQL string  // SQL with macros expanded
+	MacroCount  int     // Number of macros expanded
+	Lines       LineMap // maps ExpandedSQL lines back to the input
+}
+
+// macroSpan is one expanded macro: its lines in the input and in the output.
+type macroSpan struct {
+	origLine, expStart, expEnd, shiftAfter int
+}
+
+// LineMap maps a line of the expanded script to the line of the script on
+// disk. A line inside a macro's expansion maps to the macro's own line.
+type LineMap []macroSpan
+
+// OriginalLine returns the input line for an expanded line, and whether the
+// expanded line came from a macro expansion rather than from the input.
+func (m LineMap) OriginalLine(expanded int) (line int, inMacro bool) {
+	shift := 0
+	for _, span := range m {
+		if expanded < span.expStart {
+			break
+		}
+		if expanded <= span.expEnd {
+			return span.origLine, true
+		}
+		shift = span.shiftAfter
+	}
+	return expanded - shift, false
 }
 
 // testGenerateFunc is the signature for calling pgmi_test_generate.
@@ -64,6 +93,7 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 	})
 
 	expandedSQL := sql
+	generated := make(map[int]string, len(sortedMacros))
 
 	for _, macro := range sortedMacros {
 		if err := validateCallbackName(macro.Callback); err != nil {
@@ -72,14 +102,34 @@ func (p *Pipeline) Process(ctx context.Context, conn *pgxpool.Conn, sql string) 
 
 		generatedSQL, err := p.testGenerateFn(ctx, conn, macro.Pattern, macro.Callback)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 		}
 
 		expandedSQL = expandedSQL[:macro.StartPos] + generatedSQL + expandedSQL[macro.EndPos:]
+		generated[macro.StartPos] = generatedSQL
 	}
 
 	result.ExpandedSQL = expandedSQL
+	result.Lines = buildLineMap(sql, macros, generated)
 	return result, nil
+}
+
+func buildLineMap(sql string, macros []MacroCall, generated map[int]string) LineMap {
+	ascending := slices.Clone(macros)
+	slices.SortFunc(ascending, func(a, b MacroCall) int { return cmp.Compare(a.StartPos, b.StartPos) })
+	var (
+		m     LineMap
+		shift int
+	)
+	for _, macro := range ascending {
+		origLine := strings.Count(sql[:macro.StartPos], "\n") + 1
+		origSpan := strings.Count(sql[macro.StartPos:macro.EndPos], "\n")
+		expSpan := strings.Count(generated[macro.StartPos], "\n")
+		expStart := origLine + shift
+		shift += expSpan - origSpan
+		m = append(m, macroSpan{origLine: origLine, expStart: expStart, expEnd: expStart + expSpan, shiftAfter: shift})
+	}
+	return m
 }
 
 // callTestGenerate calls pg_temp.pgmi_test_generate() to get test execution SQL.

@@ -1,5 +1,4 @@
 # Connection comes from PGMI_CONNECTION_STRING or CLI flags — see README.md.
-params:
-  env: development
+# env is required and not set here; pass --param env=dev locally, PGMI_PARAM_ENV in CI.
 
 timeout: 3m

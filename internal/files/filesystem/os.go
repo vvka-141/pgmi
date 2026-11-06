@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,14 +15,20 @@ import (
 
 const DefaultMaxFileSize int64 = 10 * 1024 * 1024 // 10 MiB
 
-var maxFileSize = sync.OnceValue(func() int64 {
-	if raw := os.Getenv("PGMI_MAX_FILE_SIZE"); raw != "" {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
-			return n
-		}
-	}
-	return DefaultMaxFileSize
+var maxFileSize = sync.OnceValues(func() (int64, error) {
+	return parseMaxFileSize(os.Getenv("PGMI_MAX_FILE_SIZE"))
 })
+
+func parseMaxFileSize(raw string) (int64, error) {
+	if raw == "" {
+		return DefaultMaxFileSize, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("PGMI_MAX_FILE_SIZE=%q: want a positive whole number of bytes, such as 20971520: %w", raw, pgmi.ErrInvalidConfig)
+	}
+	return n, nil
+}
 
 // osFile implements File interface for OS filesystem
 type osFile struct {
@@ -46,15 +53,24 @@ func (f *osFile) ReadContent() ([]byte, error) {
 		return nil, fmt.Errorf("lstat %s: %w", f.relPath, err)
 	}
 	if linkInfo.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to read symlink %s (symlinks are rejected by the scanner to avoid path-escape)", f.relPath)
+		return nil, fmt.Errorf("refusing to read symlink %s: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file: %w", f.relPath, pgmi.ErrInvalidConfig)
+	}
+	if !linkInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing to read %s: not a regular file (a named pipe, socket or device); exclude it in .pgmiignore or remove it: %w", f.relPath, pgmi.ErrInvalidConfig)
 	}
 
-	limit := maxFileSize()
+	limit, err := maxFileSize()
+	if err != nil {
+		return nil, err
+	}
 	if linkInfo.Size() > limit {
 		return nil, fmt.Errorf("file %s is %d bytes, exceeds %d-byte limit (override via PGMI_MAX_FILE_SIZE): %w", f.relPath, linkInfo.Size(), limit, pgmi.ErrInvalidConfig)
 	}
 
 	file, err := os.Open(f.absPath)
+	if errors.Is(err, fs.ErrPermission) {
+		return nil, fmt.Errorf("cannot read %s: permission denied; exclude it in .pgmiignore or make it readable: %w", f.relPath, pgmi.ErrInvalidConfig)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", f.relPath, err)
 	}

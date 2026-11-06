@@ -15,7 +15,7 @@ BEGIN
     -- ========================================================================
 
     SELECT count(*) INTO v_handler_count FROM api.vw_handler_info;
-    IF v_handler_count < 1 THEN
+    IF coalesce(v_handler_count, 0) < 1 THEN
         RAISE EXCEPTION 'vw_handler_info should have at least 1 row (demo handlers registered)';
     END IF;
 
@@ -71,10 +71,10 @@ BEGIN
         IF NOT FOUND THEN
             RAISE EXCEPTION 'vw_handler_summary returned no row';
         END IF;
-        IF v_summary.total_handlers < 1 THEN
+        IF coalesce(v_summary.total_handlers, 0) < 1 THEN
             RAISE EXCEPTION 'vw_handler_summary total_handlers should be >= 1';
         END IF;
-        IF v_summary.rest_handlers < 1 THEN
+        IF coalesce(v_summary.rest_handlers, 0) < 1 THEN
             RAISE EXCEPTION 'vw_handler_summary rest_handlers should be >= 1';
         END IF;
 
@@ -86,7 +86,7 @@ BEGIN
     -- ========================================================================
 
     SELECT count(*) INTO v_route_count FROM api.vw_route_info;
-    IF v_route_count < 1 THEN
+    IF coalesce(v_route_count, 0) < 1 THEN
         RAISE EXCEPTION 'vw_route_info should have at least 1 route';
     END IF;
 
@@ -110,7 +110,7 @@ BEGIN
         IF NOT FOUND THEN
             RAISE EXCEPTION 'vw_route_summary returned no row';
         END IF;
-        IF v_rsummary.total_routes < 1 THEN
+        IF coalesce(v_rsummary.total_routes, 0) < 1 THEN
             RAISE EXCEPTION 'vw_route_summary total_routes should be >= 1';
         END IF;
         RAISE NOTICE '  + vw_route_summary: total=%, rest=%', v_rsummary.total_routes, v_rsummary.rest_routes;
@@ -130,14 +130,13 @@ BEGIN
 
     -- ========================================================================
     -- Generate a REST exchange by invoking hello_world (with auth).
-    -- requiresAuth resolves an active membership.user, so the identity has to
-    -- exist — a well-formed header alone is not an authenticated caller.
+    -- "access": "authenticated" needs a live login session of an enabled person.
     -- ========================================================================
 
-    PERFORM membership.upsert_user('test', 'admin', 'analytics-admin@example.com');
+    PERFORM pg_temp.test_login('test', 'admin', 'analytics-admin@example.test', NULL, true);
 
     v_response := api.rest_invoke('GET', '/hello?name=ViewTest',
-        ('x-user-id=>test|admin')::extensions.hstore, null::bytea);
+        pg_temp.test_session_headers('test|admin'), null::bytea);
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'hello_world invocation failed: %', (v_response).status_code;
     END IF;
@@ -147,7 +146,7 @@ BEGIN
     -- ========================================================================
 
     SELECT count(*) INTO v_exchange_count FROM api.vw_rest_exchange_info;
-    IF v_exchange_count < 1 THEN
+    IF coalesce(v_exchange_count, 0) < 1 THEN
         RAISE EXCEPTION 'vw_rest_exchange_info should have at least 1 row after invocation';
     END IF;
 
@@ -156,8 +155,8 @@ BEGIN
     WHERE request_url LIKE '%/hello%'
     ORDER BY enqueued_at DESC LIMIT 1;
 
-    IF coalesce(v_replay, '') NOT LIKE '%rest_invoke%' THEN
-        RAISE EXCEPTION 'vw_rest_exchange_info replay_sql should contain rest_invoke, got: %', v_replay;
+    IF coalesce(v_replay, '') NOT LIKE '%api.replay_exchange(%' THEN
+        RAISE EXCEPTION 'vw_rest_exchange_info replay_sql should call api.replay_exchange, got: %', v_replay;
     END IF;
 
     RAISE NOTICE '  + vw_rest_exchange_info: % exchanges, replay_sql generated', v_exchange_count;
@@ -172,10 +171,10 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'vw_exchange_summary returned no row';
     END IF;
-    IF v_summary.total_exchanges < 1 THEN
+    IF coalesce(v_summary.total_exchanges, 0) < 1 THEN
         RAISE EXCEPTION 'vw_exchange_summary total_exchanges should be >= 1';
     END IF;
-    IF v_summary.rest_exchanges < 1 THEN
+    IF coalesce(v_summary.rest_exchanges, 0) < 1 THEN
         RAISE EXCEPTION 'vw_exchange_summary rest_exchanges should be >= 1';
     END IF;
 
@@ -195,5 +194,43 @@ BEGIN
 
     RAISE NOTICE '  + vw_exchange_stats: REST protocol row present';
 
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'api' AND table_name LIKE 'vw\_%exchange%' AND column_name LIKE '%pending%'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: an exchange view still has a pending column; the log is written with its response';
+    END IF;
+
     RAISE NOTICE '+ Exchange analytics view tests passed';
+END $$;
+
+DO $$
+DECLARE
+    v_row record;
+BEGIN
+    RAISE DEBUG '-> vw_handler_info: one row per handler, its route as values';
+
+    IF (SELECT count(*) FROM api.vw_handler_info) IS DISTINCT FROM (SELECT count(*) FROM api.handler)
+       OR (SELECT count(DISTINCT object_id) FROM api.vw_handler_info) IS DISTINCT FROM (SELECT count(*) FROM api.handler) THEN
+        RAISE EXCEPTION 'TEST FAILED: vw_handler_info must have exactly one row per handler';
+    END IF;
+
+    SELECT rest_path, rest_method_regexp, is_unrouted INTO v_row
+    FROM api.vw_handler_info WHERE handler_function_name = 'hello_world';
+    IF v_row.rest_path IS DISTINCT FROM '/hello' OR v_row.rest_method_regexp IS DISTINCT FROM '^GET$'
+       OR v_row.is_unrouted IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'TEST FAILED: hello_world must show /hello, ^GET$ and a route, got %', v_row;
+    END IF;
+
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', 'ffffffff-4481-4000-8000-000000000001', 'path', '/unrouted-probe',
+            'httpMethod', '^GET$', 'name', 'unrouted_probe', 'access', 'public'),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+    DELETE FROM api.rest_route WHERE handler_object_id = 'ffffffff-4481-4000-8000-000000000001';
+
+    SELECT rest_path, is_unrouted INTO v_row
+    FROM api.vw_handler_info WHERE object_id = 'ffffffff-4481-4000-8000-000000000001';
+    IF v_row.is_unrouted IS DISTINCT FROM true OR v_row.rest_path IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a handler without a route must show is_unrouted and no rest_path, got %', v_row;
+    END IF;
 END $$;

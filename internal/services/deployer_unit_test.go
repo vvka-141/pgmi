@@ -9,19 +9,21 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var errMockStop = errors.New("mock stop")
 
 func validDeps() (
-	func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
+	func(*db.ConnectionConfig) (db.Connector, error),
 	pgmi.Approver,
 	pgmi.Logger,
-	pgmi.SessionPreparer,
-	pgmi.DatabaseManager,
+	SessionPreparer,
+	DatabaseManager,
 ) {
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{}, nil
 	}
 	return connFactory, &mockApprover{}, &mockLogger{}, &mockSessionPreparer{}, &mockDatabaseManager{}
@@ -61,13 +63,13 @@ func newTestService(
 func noop() {}
 
 func successfulMgmtConn() maintenanceDBConnFunc {
-	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+	return func(_ context.Context, _ *db.ConnectionConfig, _ string) (db.DBConnection, func(), error) {
 		return &mockDBConnection{}, noop, nil
 	}
 }
 
 func failingMgmtConn(err error) maintenanceDBConnFunc {
-	return func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+	return func(_ context.Context, _ *db.ConnectionConfig, _ string) (db.DBConnection, func(), error) {
 		return nil, nil, err
 	}
 }
@@ -76,7 +78,7 @@ func failingMgmtConn(err error) maintenanceDBConnFunc {
 // probe gets PostgreSQL's invalid_catalog_name, every other database connects.
 // Dialed database names are appended to dialed in call order.
 func missingTargetMgmtConn(targetDB string, dialed *[]string) maintenanceDBConnFunc {
-	return func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+	return func(_ context.Context, _ *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
 		*dialed = append(*dialed, dbName)
 		if dbName == targetDB {
 			return nil, nil, &pgconn.PgError{Code: "3D000", Message: `database "` + targetDB + `" does not exist`}
@@ -158,7 +160,7 @@ func TestDeploy_InvalidConnectionString(t *testing.T) {
 func TestDeploy_InvalidParameterKey_FailsBeforeConnecting(t *testing.T) {
 	for _, key := range []string{"api-key", "1abc"} {
 		t.Run(key, func(t *testing.T) {
-			svc := newTestService(nil, nil, nil, func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+			svc := newTestService(nil, nil, nil, func(_ context.Context, _ *db.ConnectionConfig, _ string) (db.DBConnection, func(), error) {
 				t.Fatal("connected to the server before validating parameters")
 				return nil, noop, nil
 			})
@@ -182,7 +184,7 @@ func TestDeploy_MissingDeploySQL_FailsBeforeConnecting(t *testing.T) {
 			svc := NewDeploymentService(cf, ap, lg, sm, dm)
 
 			connected := false
-			svc.mgmtConnector = func(_ context.Context, _ *pgmi.ConnectionConfig, _ string) (pgmi.DBConnection, func(), error) {
+			svc.mgmtConnector = func(_ context.Context, _ *db.ConnectionConfig, _ string) (db.DBConnection, func(), error) {
 				connected = true
 				return &mockDBConnection{}, noop, nil
 			}
@@ -257,8 +259,8 @@ func TestDeploy_OverwriteDenied(t *testing.T) {
 	}
 }
 
-func TestDeploy_OverwriteTerminateFails(t *testing.T) {
-	dbMgr := &mockDatabaseManager{existsResult: true, terminateErr: fmt.Errorf("terminate failed")}
+func TestDeploy_OverwriteRefusesWhileADeployRuns(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, deployInProgress: true}
 	approver := &mockApprover{approved: true}
 	svc := newTestService(dbMgr, approver, nil, successfulMgmtConn())
 
@@ -267,11 +269,47 @@ func TestDeploy_OverwriteTerminateFails(t *testing.T) {
 	cfg.Force = true
 
 	err := svc.Deploy(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("Expected error")
+	if !errors.Is(err, pgmi.ErrConcurrentDeploy) {
+		t.Fatalf("Expected ErrConcurrentDeploy, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "terminate") {
-		t.Fatalf("Expected terminate error, got: %v", err)
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("a running deploy was ended: dropped %v", dbMgr.dropped)
+	}
+	if dbMgr.unlocked != 1 {
+		t.Errorf("the overwrite lock was released %d times, want 1", dbMgr.unlocked)
+	}
+}
+
+func TestDeploy_OverwriteRefusesWhileAnotherOverwriteRuns(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, overwriteBusy: true}
+	svc := newTestService(dbMgr, &mockApprover{approved: true}, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	if err := svc.Deploy(context.Background(), cfg); !errors.Is(err, pgmi.ErrConcurrentDeploy) {
+		t.Fatalf("Expected ErrConcurrentDeploy, got: %v", err)
+	}
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("an overwrite ran while another held the target: dropped %v", dbMgr.dropped)
+	}
+}
+
+func TestDeploy_OverwriteRefusesWhatItCouldNotRestore(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true, restoreGaps: []string{"setting log_min_duration_statement on the database"}}
+	svc := newTestService(dbMgr, &mockApprover{approved: true}, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+	cfg.Force = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) || !strings.Contains(err.Error(), "log_min_duration_statement") {
+		t.Fatalf("want ErrInvalidConfig naming the setting, got: %v", err)
+	}
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("an unrestorable database was touched: dropped %v", dbMgr.dropped)
 	}
 }
 
@@ -447,7 +485,7 @@ func TestDeploy_OverwriteCustomMaintenanceDB(t *testing.T) {
 	sessPreparer := &mockSessionPreparer{err: errMockStop}
 
 	var capturedDB string
-	customMgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+	customMgmt := func(_ context.Context, _ *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
 		capturedDB = dbName
 		return &mockDBConnection{}, noop, nil
 	}
@@ -634,6 +672,12 @@ func TestDeploy_CreateFailureOtherThanCollisionIsNotConcurrent(t *testing.T) {
 	if !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("the original cause was lost: %v", err)
 	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitExecutionFailed {
+		t.Errorf("exit code %d, want %d: the server refused a statement pgmi sent", got, pgmi.ExitExecutionFailed)
+	}
+	if !strings.Contains(err.Error(), "-d") || !strings.Contains(err.Error(), "CREATEDB") {
+		t.Errorf("the error must point at -d and CREATEDB: %v", err)
+	}
 }
 
 // db/manager already names both the operation and the database in its errors
@@ -661,13 +705,6 @@ func TestDeploy_ManagerErrorsAreNotWrappedTwice(t *testing.T) {
 				dropErr: fmt.Errorf("failed to drop database %q: %w", "testdb", pgErr)},
 			overwrite: true,
 			phrase:    "failed to drop database",
-		},
-		{
-			name: "terminate",
-			mgr: &mockDatabaseManager{existsResult: true,
-				terminateErr: fmt.Errorf("failed to terminate connections to database %q: %w", "testdb", pgErr)},
-			overwrite: true,
-			phrase:    "failed to terminate connections",
 		},
 		{
 			name: "exists",
@@ -715,7 +752,7 @@ func TestDeploy_ManagerErrorsAreNotWrappedTwice(t *testing.T) {
 // unchanged.
 func TestDeploy_OverwritePreservesEncodingAndLocale(t *testing.T) {
 	comment := "important note"
-	settings := &pgmi.DatabaseSettings{
+	settings := &manager.DatabaseSettings{
 		Encoding: "LATIN1", Collate: "C", CType: "C", PreserveLocale: true,
 		Owner: "app_owner", ConnectionLimit: 42,
 		Options: []string{"statement_timeout=7s"}, Comment: &comment,
@@ -797,5 +834,130 @@ func TestValidateAndParseConfig_CarriesCloudAuthSettings(t *testing.T) {
 	}
 	if connConfig.GoogleInstance != "proj:region:inst" {
 		t.Errorf("GoogleInstance = %q, want %q", connConfig.GoogleInstance, "proj:region:inst")
+	}
+}
+
+func TestDeploy_MissingMaintenanceDatabase(t *testing.T) {
+	noDatabases := func(_ context.Context, _ *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
+		pgErr := &pgconn.PgError{Code: "3D000", Message: `database "` + dbName + `" does not exist`}
+		return nil, nil, db.WrapConnectionError(pgErr, "127.0.0.1", 55601, dbName, "postgres")
+	}
+	for _, overwrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {
+			svc := newTestService(nil, nil, nil, noDatabases)
+			cfg := validConfig()
+			cfg.DatabaseName = "newtarget"
+			cfg.MaintenanceDatabase = "nosuchmaint"
+			cfg.Overwrite, cfg.Force = overwrite, overwrite
+
+			err := svc.Deploy(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			msg := err.Error()
+			for _, want := range []string{`maintenance database "nosuchmaint" does not exist`, "DeploymentConfig.MaintenanceDatabase"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message lacks %q: %s", want, msg)
+				}
+			}
+			for _, wrong := range []string{"--overwrite", "createdb"} {
+				if strings.Contains(msg, wrong) {
+					t.Errorf("message sends the user to %q, which cannot help: %s", wrong, msg)
+				}
+			}
+			if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConnectionError {
+				t.Errorf("exit code %d, want %d", got, pgmi.ExitConnectionError)
+			}
+		})
+	}
+}
+
+func TestDeploy_OverwriteCountdownCancelled(t *testing.T) {
+	dbMgr := &mockDatabaseManager{existsResult: true}
+	svc := newTestService(dbMgr, &mockApprover{err: context.Canceled}, nil, successfulMgmtConn())
+
+	cfg := validConfig()
+	cfg.Overwrite = true
+
+	err := svc.Deploy(context.Background(), cfg)
+	if got := pgmi.FormatError(err); got != "overwrite cancelled" {
+		t.Errorf("message = %q, want %q", got, "overwrite cancelled")
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitInterrupted {
+		t.Errorf("exit code %d, want %d", got, pgmi.ExitInterrupted)
+	}
+	if len(dbMgr.dropped) > 0 {
+		t.Errorf("a cancelled countdown dropped %v", dbMgr.dropped)
+	}
+}
+
+// A library deploy gets the CLI's TLS gate for token authentication: an unset
+// sslmode takes the CLI's default, a mode that can fall back to plaintext is
+// refused before connecting, and password authentication is left alone.
+func TestValidateAndParseConfig_TokenAuthNeedsTLS(t *testing.T) {
+	t.Setenv("PGSSLMODE", "")
+	svc := newTestService(nil, nil, nil, nil)
+	cfg := func(auth pgmi.AuthMethod, conn string) pgmi.DeploymentConfig {
+		return pgmi.DeploymentConfig{SourcePath: "p", DatabaseName: "d", ConnectionString: conn, AuthMethod: auth}
+	}
+	for _, tc := range []struct {
+		name string
+		auth pgmi.AuthMethod
+		conn string
+		want string
+	}{
+		{"azure without sslmode", pgmi.AuthMethodAzureEntraID, "postgresql://me@db.postgres.database.azure.com/postgres", "verify-full"},
+		{"aws without sslmode", pgmi.AuthMethodAWSIAM, "postgresql://me@db.rds.amazonaws.com/postgres", "require"},
+		{"password auth keeps it unset", pgmi.AuthMethodStandard, "postgresql://me@h/postgres", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := svc.validateAndParseConfig(cfg(tc.auth, tc.conn))
+			if err != nil || got.SSLMode != tc.want {
+				t.Fatalf("sslmode %q err %v, want %q", got.SSLMode, err, tc.want)
+			}
+		})
+	}
+	for _, mode := range []string{"disable", "allow", "prefer"} {
+		_, err := svc.validateAndParseConfig(cfg(pgmi.AuthMethodAzureEntraID, "postgresql://me@h/postgres?sslmode="+mode))
+		if !errors.Is(err, pgmi.ErrInvalidConfig) || !strings.Contains(err.Error(), "can send the token without TLS") {
+			t.Errorf("sslmode=%s with a token: want the CLI's refusal, got %v", mode, err)
+		}
+	}
+	t.Setenv("PGSSLMODE", "disable")
+	if _, err := svc.validateAndParseConfig(cfg(pgmi.AuthMethodAWSIAM, "postgresql://me@h/postgres")); !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("PGSSLMODE=disable with a token must be refused, got %v", err)
+	}
+}
+
+func TestDeploy_AnUnsupportedServerIsRefusedBeforeAnyCreateOrDrop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overwrite bool
+		exists    bool
+	}{
+		{"overwrite of an existing target", true, true},
+		{"overwrite of a missing target", true, false},
+		{"create-if-missing", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbMgr := &mockDatabaseManager{existsResult: tc.exists, serverVersionNum: 140000}
+			sessPreparer := &mockSessionPreparer{err: errMockStop}
+			conn := successfulMgmtConn()
+			if !tc.overwrite {
+				var dialed []string
+				conn = missingTargetMgmtConn("testdb", &dialed)
+			}
+			svc := newTestService(dbMgr, &mockApprover{approved: true}, sessPreparer, conn)
+
+			cfg := validConfig()
+			cfg.Overwrite, cfg.Force = tc.overwrite, tc.overwrite
+			err := svc.Deploy(context.Background(), cfg)
+			if pgmi.ExitCodeForError(err) != pgmi.ExitConfigError {
+				t.Fatalf("want exit 10, got %v", err)
+			}
+			if dbMgr.created != 0 || len(dbMgr.dropped) != 0 {
+				t.Errorf("created %d, dropped %v before refusing the server", dbMgr.created, dbMgr.dropped)
+			}
+		})
 	}
 }

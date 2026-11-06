@@ -1,9 +1,12 @@
 package services
 
 import (
+	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,54 +15,41 @@ import (
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/loader"
+	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// DeployResult contains statistics from a completed deployment.
-type DeployResult struct {
-	FilesLoaded    int
-	TestMacros     int
-	Duration       time.Duration
-	Database       string
-	ExecutionUnits int
-	UnitsCommitted int
-	ExecutionMode  string
-	// Created is true when this deploy created a database that did not exist,
-	// which is also what a mistyped -d looks like.
-	Created bool
-}
+const overwriteRecreateTimeout = 60 * time.Second
 
-type maintenanceDBConnFunc func(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error)
+type maintenanceDBConnFunc func(ctx context.Context, connConfig *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error)
 
-// DeploymentService implements the Deployer interface.
+// DeploymentService runs deployments; pkg/pgmi/deploy wires it.
 // Not safe for concurrent Deploy() calls on the same instance.
 type DeploymentService struct {
-	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error)
+	connectorFactory func(*db.ConnectionConfig) (db.Connector, error)
 	approver         pgmi.Approver
 	logger           pgmi.Logger
-	sessionManager   pgmi.SessionPreparer
-	dbManager        pgmi.DatabaseManager
+	sessionManager   SessionPreparer
+	dbManager        DatabaseManager
 	mgmtConnector    maintenanceDBConnFunc
-	lastResult       *DeployResult
+	lastResult       *pgmi.DeployResult
 }
 
 // LastResult returns statistics from the most recent Deploy call,
 // or nil if Deploy has not been called.
-func (s *DeploymentService) LastResult() *DeployResult {
+func (s *DeploymentService) LastResult() *pgmi.DeployResult {
 	return s.lastResult
 }
-
-var _ pgmi.Deployer = (*DeploymentService)(nil)
 
 // NewDeploymentService creates a new DeploymentService with all dependencies injected.
 // Panics on nil dependencies (programmer error); returns errors for runtime conditions.
 func NewDeploymentService(
-	connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
+	connectorFactory func(*db.ConnectionConfig) (db.Connector, error),
 	approver pgmi.Approver,
 	logger pgmi.Logger,
-	sessionManager pgmi.SessionPreparer,
-	dbManager pgmi.DatabaseManager,
+	sessionManager SessionPreparer,
+	dbManager DatabaseManager,
 ) *DeploymentService {
 	if connectorFactory == nil {
 		panic("connectorFactory cannot be nil")
@@ -88,7 +78,7 @@ func NewDeploymentService(
 	return svc
 }
 
-func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
 	mgmtConfig := connConfig.DeepCopy()
 	mgmtConfig.Database = dbName
 
@@ -100,7 +90,7 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 	pool, err := connector.Connect(ctx)
 	if err != nil {
 		closeConnector(connector)
-		return nil, nil, fmt.Errorf("failed to connect to maintenance database: %w", err)
+		return nil, nil, fmt.Errorf("connect to %q: %w", dbName, err)
 	}
 
 	dbConn := db.NewPoolAdapter(pool)
@@ -115,8 +105,25 @@ func (s *DeploymentService) defaultMgmtConnector(ctx context.Context, connConfig
 // This method orchestrates the deployment workflow by calling smaller, focused methods.
 // After Deploy returns, call LastResult() for deployment statistics.
 func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentConfig) error {
+	err := s.deploy(ctx, config)
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		return &stoppedError{err: err, cause: ctx.Err()}
+	}
+	return err
+}
+
+// stoppedError keeps the server's 57014 for the location and the context's
+// error for the exit code.
+type stoppedError struct {
+	err, cause error
+}
+
+func (e *stoppedError) Error() string   { return e.err.Error() }
+func (e *stoppedError) Unwrap() []error { return []error{e.err, e.cause} }
+
+func (s *DeploymentService) deploy(ctx context.Context, config pgmi.DeploymentConfig) error {
 	start := time.Now()
-	s.lastResult = &DeployResult{Database: config.DatabaseName}
+	s.lastResult = &pgmi.DeployResult{Database: config.DatabaseName}
 	defer func() { s.lastResult.Duration = time.Since(start) }()
 
 	// Validate and parse configuration
@@ -130,7 +137,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	// database behind.
 	scanResult, err := s.sessionManager.ScanProject(config.SourcePath)
 	if err != nil {
-		return fmt.Errorf("file scanning failed: %w", err)
+		return err
 	}
 
 	// --compat is resolved entirely offline, so rejecting it here keeps
@@ -145,13 +152,15 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 
 	// Handle overwrite workflow if requested (drop and recreate database)
 	if config.Overwrite {
-		if err := s.handleOverwrite(ctx, connConfig, config); err != nil {
-			return fmt.Errorf("overwrite workflow failed: %w", err)
+		release, err := s.handleOverwrite(ctx, connConfig, config)
+		if err != nil {
+			return err
 		}
+		defer release()
 	} else {
 		// If not overwriting, ensure database exists (create if missing)
 		if err := s.ensureDatabaseExists(ctx, connConfig, config); err != nil {
-			return fmt.Errorf("failed to ensure database exists: %w", err)
+			return err
 		}
 	}
 
@@ -167,6 +176,15 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 	defer session.Close()
 
 	s.lastResult.FilesLoaded = session.FilesLoaded
+	s.lastResult.Ignored = session.Ignored
+	pgConn := session.Conn().Conn().PgConn()
+	s.lastResult.ServerVersion = pgConn.ParameterStatus("server_version")
+	s.lastResult.TLS = &pgmi.TLSInfo{SSLMode: targetConfig.SSLMode}
+	if conn, ok := pgConn.Conn().(*tls.Conn); ok {
+		s.lastResult.TLS.Enabled = true
+		s.lastResult.TLS.Version = tls.VersionName(conn.ConnectionState().Version)
+	}
+	s.logger.Verbose("TLS: %s (sslmode=%s)", cmp.Or(s.lastResult.TLS.Version, "none"), targetConfig.SSLMode)
 
 	s.logger.Info("Executing deploy.sql")
 	macroCount, err := s.executeDeploySQL(ctx, session.Conn(), scanResult)
@@ -175,7 +193,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, config pgmi.DeploymentCo
 }
 
 // validateAndParseConfig validates the configuration and parses the connection string.
-func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig) (*pgmi.ConnectionConfig, error) {
+func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig) (*db.ConnectionConfig, error) {
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -203,6 +221,19 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 	connConfig.AWSRegion = config.AWSRegion
 	connConfig.GoogleInstance = config.GoogleInstance
 
+	// A token must never travel without TLS: the same gate the CLI applies.
+	// Only for token auth, so a library deploy with a password still leaves
+	// an unset sslmode to the driver, PGSSLMODE included.
+	if config.AuthMethod == pgmi.AuthMethodAzureEntraID || config.AuthMethod == pgmi.AuthMethodAWSIAM {
+		source := "the connection string"
+		if connConfig.SSLMode == "" && os.Getenv("PGSSLMODE") != "" {
+			connConfig.SSLMode, source = os.Getenv("PGSSLMODE"), "PGSSLMODE"
+		}
+		if err := db.ApplySSLMode(connConfig, source); err != nil {
+			return nil, err
+		}
+	}
+
 	return connConfig, nil
 }
 
@@ -213,7 +244,7 @@ func (s *DeploymentService) validateAndParseConfig(config pgmi.DeploymentConfig)
 func (s *DeploymentService) executeDeploySQL(
 	ctx context.Context,
 	conn *pgxpool.Conn,
-	scan pgmi.FileScanResult,
+	scan scanner.Result,
 ) (int, error) {
 	// Preprocess: expand CALL pgmi_test() macros by querying pgmi_test_plan() from SQL
 	pipeline := preprocessor.NewPipeline()
@@ -244,53 +275,85 @@ func (s *DeploymentService) executeDeploySQL(
 	if len(units) > 1 {
 		s.logger.Verbose("deploy.sql splits into %d execution units at the first top-level transaction terminator", len(units))
 	}
+	committed := 0
 	for i, unit := range units {
 		if _, err := conn.Exec(ctx, unit); err != nil {
-			s.lastResult.UnitsCommitted = i
-			if i == 0 {
-				s.lastResult.ExecutionMode = "atomic"
-			} else {
-				s.lastResult.ExecutionMode = "psql"
+			s.lastResult.UnitsCommitted = committed
+			s.lastResult.FailedUnit = i + 1
+			s.lastResult.ExecutionMode = executionMode(committed)
+			scriptErr := &pgmi.ScriptError{
+				Err: err, Name: "deploy.sql", Script: unit, Expanded: result.MacroCount > 0, Files: scan.Files,
+				Source: scan.DeploySQL, OriginalLine: result.Lines.OriginalLine, Tail: i > 0,
 			}
-			scriptErr := &pgmi.ScriptError{Err: err, Name: "deploy.sql", Script: unit, Expanded: result.MacroCount > 0, Files: scan.Files}
 			return result.MacroCount, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
 		}
+		if conn.Conn().PgConn().TxStatus() == 'I' || (i == 0 && preprocessor.HeadCommits(unit)) {
+			committed = i + 1
+		}
 	}
-	s.lastResult.UnitsCommitted = len(units)
+	s.lastResult.UnitsCommitted = committed
 
 	// Session cleanup rolls back whatever is still open, so a script ending
 	// inside BEGIN ... without its COMMIT applied nothing from that block.
-	if status := conn.Conn().PgConn().TxStatus(); status != 'I' {
-		s.lastResult.UnitsCommitted = len(units) - 1
+	if committed < len(units) {
+		s.lastResult.FailedUnit = len(units)
+		s.lastResult.ExecutionMode = executionMode(committed)
 		return result.MacroCount, fmt.Errorf("%w: deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT", pgmi.ErrExecutionFailed)
 	}
 
 	return result.MacroCount, nil
 }
 
+// executionMode names what a failure left behind: "atomic" when nothing
+// committed, "psql" when earlier units did.
+func executionMode(committed int) string {
+	if committed == 0 {
+		return "atomic"
+	}
+	return "psql"
+}
+
 func validateOverwriteTarget(targetDB, maintenanceDB string) error {
 	if strings.EqualFold(targetDB, maintenanceDB) {
 		return fmt.Errorf("cannot overwrite maintenance database %q\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d: %w", targetDB, pgmi.ErrInvalidConfig)
 	}
-	if pgmi.IsTemplateDatabase(targetDB) {
+	if isTemplateDatabase(targetDB) {
 		return fmt.Errorf("cannot drop template database %q (template0/template1 are protected by PostgreSQL): %w", targetDB, pgmi.ErrInvalidConfig)
 	}
 	return nil
 }
 
 // connectMaintenance resolves the maintenance DB name (defaulting to "postgres") and connects.
-func (s *DeploymentService) connectMaintenance(ctx context.Context, connConfig *pgmi.ConnectionConfig, maintenanceDB string) (pgmi.DBConnection, func(), error) {
+func (s *DeploymentService) connectMaintenance(ctx context.Context, connConfig *db.ConnectionConfig, maintenanceDB string) (db.DBConnection, func(), error) {
 	mgmtDB := maintenanceDB
 	if mgmtDB == "" {
-		mgmtDB = pgmi.DefaultMaintenanceDB
+		mgmtDB = db.DefaultMaintenanceDB
 	}
 	s.logger.Verbose("Connecting to maintenance database %q", mgmtDB)
-	return s.mgmtConnector(ctx, connConfig, mgmtDB)
+	conn, cleanup, err := s.mgmtConnector(ctx, connConfig, mgmtDB)
+	if isUndefinedDatabase(err) {
+		return nil, nil, MissingMaintenanceDBError{Name: mgmtDB, Err: err}
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("maintenance database: %w", err)
+	}
+	return conn, cleanup, nil
+}
+
+// checkServerVersion refuses a server below pgmi's floor on the maintenance
+// connection, before anything is created or dropped, so exit 10 still means
+// nothing was touched.
+func (s *DeploymentService) checkServerVersion(ctx context.Context, conn db.DBConnection) error {
+	num, text, err := s.dbManager.ServerVersion(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return verifyServerVersion(num, text)
 }
 
 // createIfMissing checks whether the database exists and creates it if not.
 // Returns true if the database already existed.
-func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBConnection, dbName string) (existed bool, err error) {
+func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn db.DBConnection, dbName string) (existed bool, err error) {
 	exists, err := s.dbManager.Exists(ctx, dbConn, dbName)
 	if err != nil {
 		return false, err // manager.Exists already names the operation and database
@@ -311,37 +374,65 @@ func (s *DeploymentService) createIfMissing(ctx context.Context, dbConn pgmi.DBC
 }
 
 // handleOverwrite handles the database drop and recreate workflow.
-func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
+// handleOverwrite returns a release the caller holds until the deploy ends:
+// the overwrite lock is taken before the existence check and stays taken
+// until the deploy ends, so a second --overwrite cannot drop what this one
+// creates or deploys. Every maintenance step runs on the connection holding
+// it, so the deploy needs two connections: that one and the target session.
+func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *db.ConnectionConfig, config pgmi.DeploymentConfig) (release func(), err error) {
 	managementDB := config.MaintenanceDatabase
 	if managementDB == "" {
-		managementDB = pgmi.DefaultMaintenanceDB
+		managementDB = db.DefaultMaintenanceDB
 	}
 
 	if err := validateOverwriteTarget(config.DatabaseName, managementDB); err != nil {
-		return err
+		return nil, err
 	}
 
-	dbConn, cleanup, err := s.connectMaintenance(ctx, connConfig, managementDB)
+	maintenance, cleanup, err := s.connectMaintenance(ctx, connConfig, managementDB)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer cleanup()
+	dbConn, unlock, err := s.dbManager.LockOverwrite(ctx, maintenance, config.DatabaseName)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if dbConn == nil {
+		cleanup()
+		return nil, fmt.Errorf("%w: another pgmi --overwrite of %q is running", pgmi.ErrConcurrentDeploy, config.DatabaseName)
+	}
+	held := func() {
+		unlock()
+		cleanup()
+	}
+	defer func() {
+		if err != nil {
+			held()
+		}
+	}()
 
+	if err := s.checkServerVersion(ctx, dbConn); err != nil {
+		return nil, err
+	}
 	existed, err := s.createIfMissing(ctx, dbConn, config.DatabaseName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !existed {
-		return nil
+		return held, nil
 	}
 
 	s.logger.Verbose("Database %q exists; requesting approval", config.DatabaseName)
 	approved, err := s.approver.RequestApproval(ctx, config.DatabaseName)
+	if errors.Is(err, context.Canceled) {
+		return nil, pgmi.WithMessage(err, "overwrite cancelled")
+	}
 	if err != nil {
-		return fmt.Errorf("approval request failed: %w", err)
+		return nil, err
 	}
 	if !approved {
-		return pgmi.ErrApprovalDenied
+		return nil, pgmi.ErrApprovalDenied
 	}
 
 	// Read the encoding and locale before the database ceases to exist. Without
@@ -350,34 +441,61 @@ func (s *DeploymentService) handleOverwrite(ctx context.Context, connConfig *pgm
 	// how every index orders, from a flag that only promises to empty it.
 	settings, err := s.dbManager.Settings(ctx, dbConn, config.DatabaseName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if settings != nil {
 		s.logger.Verbose("Preserving encoding %s, collation %s across the recreate",
 			settings.Encoding, settings.Collate)
 	}
 
-	s.logger.Verbose("Terminating connections to %q", config.DatabaseName)
-	if err := s.dbManager.TerminateConnections(ctx, dbConn, config.DatabaseName); err != nil {
-		return err // manager.TerminateConnections already names the database
+	gaps, err := s.dbManager.RestoreGaps(ctx, dbConn, config.DatabaseName)
+	if err != nil {
+		return nil, err
+	}
+	if len(gaps) > 0 {
+		return nil, fmt.Errorf("%w: --overwrite would drop %q and could not restore, as the deploying role:\n  %s\n"+
+			"nothing was dropped; deploy as the database owner or a superuser, or remove these first",
+			pgmi.ErrInvalidConfig, config.DatabaseName, strings.Join(gaps, "\n  "))
 	}
 
+	running, err := s.dbManager.DeployInProgress(ctx, dbConn, config.DatabaseName)
+	if err != nil {
+		return nil, err
+	}
+	if running {
+		return nil, fmt.Errorf("%w: another pgmi deployment is running against %q; --overwrite would end it",
+			pgmi.ErrConcurrentDeploy, config.DatabaseName)
+	}
+
+	// DROP and CREATE DATABASE each refuse a transaction block, so the pair
+	// cannot be made atomic. Instead the window is made uninterruptible: a
+	// cancel arriving after the drop would otherwise leave the database gone,
+	// or back without its owner, ACL and options.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	recreateCtx, cancelRecreate := context.WithTimeout(context.WithoutCancel(ctx), overwriteRecreateTimeout)
+	defer cancelRecreate()
+
 	s.logger.Verbose("DROP DATABASE %q", config.DatabaseName)
-	if err := s.dbManager.Drop(ctx, dbConn, config.DatabaseName); err != nil {
-		return err // manager.Drop already names the database
+	if err := s.dbManager.Drop(recreateCtx, dbConn, config.DatabaseName); err != nil {
+		return nil, err // manager.Drop already names the database
 	}
 
 	s.logger.Verbose("CREATE DATABASE %q", config.DatabaseName)
-	if err := s.dbManager.Create(ctx, dbConn, config.DatabaseName, settings); err != nil {
-		return classifyCreateFailure(err)
+	if err := s.dbManager.Create(recreateCtx, dbConn, config.DatabaseName, settings); err != nil {
+		return nil, classifyCreateFailure(err)
 	}
 
+	if s.lastResult != nil {
+		s.lastResult.Recreated = true
+	}
 	s.logger.Info("Recreated database %q", config.DatabaseName)
-	return nil
+	return held, nil
 }
 
 // ensureDatabaseExists ensures the target database exists, creating it if necessary.
-func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig *pgmi.ConnectionConfig, config pgmi.DeploymentConfig) error {
+func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig *db.ConnectionConfig, config pgmi.DeploymentConfig) error {
 	// Probe the target directly. When it answers, the database exists and no
 	// maintenance connection is needed at all -- which is what lets a CI role
 	// holding CONNECT on only its own database deploy. The maintenance database
@@ -398,6 +516,9 @@ func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig
 	}
 	defer cleanup()
 
+	if err := s.checkServerVersion(ctx, dbConn); err != nil {
+		return err
+	}
 	if _, err := s.createIfMissing(ctx, dbConn, config.DatabaseName); err != nil {
 		return err
 	}
@@ -408,6 +529,23 @@ func (s *DeploymentService) ensureDatabaseExists(ctx context.Context, connConfig
 
 // isUndefinedDatabase reports whether err is PostgreSQL's invalid_catalog_name,
 // the response to connecting to a database that does not exist.
+// MissingMaintenanceDBError replaces the connector's "createdb or
+// --overwrite" hint, which is right for a missing target and wrong here:
+// --overwrite needs this very database to create anything. Its text names
+// the library's field; the CLI rewords it for its own flags and pgmi.yaml.
+type MissingMaintenanceDBError struct {
+	Name string
+	Err  error
+}
+
+func (e MissingMaintenanceDBError) Error() string {
+	return fmt.Sprintf("maintenance database %q does not exist\n"+
+		"pgmi connects to it to create or drop the target; set DeploymentConfig.MaintenanceDatabase "+
+		"to an existing database (empty means postgres)", e.Name)
+}
+
+func (e MissingMaintenanceDBError) Unwrap() []error { return []error{e.Err, pgmi.ErrConnectionFailed} }
+
 func isUndefinedDatabase(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "3D000"
@@ -436,5 +574,14 @@ func classifyCreateFailure(err error) error {
 		return fmt.Errorf("%w: the database was created by another deploy while this one was starting",
 			pgmi.ErrConcurrentDeploy)
 	}
+	if errors.As(err, &pgErr) && pgErr.Code == "42501" {
+		return fmt.Errorf("%w: %w; the database does not exist and this role cannot create it: check the -d name, or grant the role CREATEDB",
+			pgmi.ErrExecutionFailed, err)
+	}
 	return err
+}
+
+func isTemplateDatabase(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "template0" || lower == "template1"
 }

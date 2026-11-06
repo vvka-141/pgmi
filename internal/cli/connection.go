@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 
@@ -27,7 +28,7 @@ func hasEnvConnectionSource() bool {
 
 // resolveTargetDatabase resolves the deployment target: the -d/--database flag
 // always outranks the database in the connection string.
-func resolveTargetDatabase(flagDatabase, connConfigDatabase string, verbose bool) (string, error) {
+func resolveTargetDatabase(flagDatabase, connConfigDatabase, yamlDatabase string, verbose bool) (string, error) {
 	targetDB := flagDatabase
 
 	if targetDB != "" {
@@ -36,7 +37,7 @@ func resolveTargetDatabase(flagDatabase, connConfigDatabase string, verbose bool
 				targetDB, connConfigDatabase)
 		}
 	} else {
-		targetDB = connConfigDatabase
+		targetDB = cmp.Or(connConfigDatabase, yamlDatabase)
 	}
 
 	// Every line here must run as written: <project_path> is positional and
@@ -55,26 +56,20 @@ func resolveTargetDatabase(flagDatabase, connConfigDatabase string, verbose bool
 	return targetDB, nil
 }
 
-// determineMaintenanceDB determines the maintenance database for CREATE DATABASE operations.
-// When the database comes from the connection string (not -d flag) and it's not 'postgres',
-// we need to use 'postgres' as the maintenance DB for CREATE DATABASE operations.
-//
-// Parameters:
-//   - flagDatabase: Database from -d flag (empty string if not provided)
-//   - connStringDatabase: Database from connection string
-//   - currentMaintenanceDB: Current maintenance DB from resolver
-//
-// Returns:
-//   - Corrected maintenance database name
+// determineMaintenanceDB returns the maintenance database for CREATE DATABASE
+// and --overwrite: currentMaintenanceDB, the resolver's, unless the connection
+// came from a connection string whose database is the target because no -d
+// was given; then 'postgres'.
 func determineMaintenanceDB(
+	fromConnectionString bool,
 	flagDatabase string,
 	connStringDatabase string,
 	currentMaintenanceDB string,
 ) string {
-	// When database comes from connection string (not -d flag),
-	// AND it's not 'postgres', we need to update maintenanceDB
-	// to use 'postgres' for CREATE DATABASE operations
-	if flagDatabase == "" && connStringDatabase != "" && connStringDatabase != "postgres" {
+	// Without -d, a connection string's database is the target, so the
+	// maintenance database is 'postgres'. Flags, PG* variables and pgmi.yaml
+	// name the maintenance database themselves.
+	if fromConnectionString && flagDatabase == "" && connStringDatabase != "" && connStringDatabase != "postgres" {
 		return "postgres"
 	}
 	return currentMaintenanceDB

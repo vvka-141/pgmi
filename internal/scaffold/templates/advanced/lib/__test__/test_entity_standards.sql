@@ -53,7 +53,7 @@ BEGIN
     FROM pg_indexes
     WHERE schemaname = 'core' AND tablename = 'entity_standards_probe';
 
-    IF v_index_count > 1 THEN
+    IF coalesce(v_index_count, 0) > 1 THEN
         RAISE EXCEPTION 'Sweep created % indexes, expected only the PK', v_index_count;
     END IF;
 

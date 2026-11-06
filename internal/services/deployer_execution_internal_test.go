@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/loader"
+	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/internal/testinfra"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -113,7 +114,7 @@ func prepareSessionTables(t *testing.T, ctx context.Context, conn *pgxpool.Conn)
 
 func newExecService() *DeploymentService {
 	svc := NewDeploymentService(
-		func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) { return &mockConnector{}, nil },
+		func(_ *db.ConnectionConfig) (db.Connector, error) { return &mockConnector{}, nil },
 		&mockApprover{},
 		&mockLogger{},
 		&mockSessionPreparer{},
@@ -121,7 +122,7 @@ func newExecService() *DeploymentService {
 	)
 	// Deploy() allocates this before it reaches executeDeploySQL, which records
 	// unit counts into it. Calling the unexported method directly skips that.
-	svc.lastResult = &DeployResult{}
+	svc.lastResult = &pgmi.DeployResult{}
 	return svc
 }
 
@@ -149,7 +150,7 @@ func TestExecuteDeploySQL_DirectExecution_Internal(t *testing.T) {
 	`
 	svc := newExecService()
 
-	if _, err := svc.executeDeploySQL(ctx, conn, pgmi.FileScanResult{DeploySQL: deploySQL}); err != nil {
+	if _, err := svc.executeDeploySQL(ctx, conn, scanner.Result{DeploySQL: deploySQL}); err != nil {
 		t.Fatalf("executeDeploySQL failed: %v", err)
 	}
 
@@ -182,7 +183,7 @@ func TestExecuteDeploySQL_SyntaxError_Internal(t *testing.T) {
 
 	svc := newExecService()
 
-	_, err = svc.executeDeploySQL(ctx, conn, pgmi.FileScanResult{DeploySQL: "SELCT INVALID SYNTAX;"})
+	_, err = svc.executeDeploySQL(ctx, conn, scanner.Result{DeploySQL: "SELCT INVALID SYNTAX;"})
 	if err == nil {
 		t.Fatal("Expected error for invalid SQL")
 	}

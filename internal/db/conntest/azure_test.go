@@ -31,7 +31,7 @@ func TestAzure_ServicePrincipal(t *testing.T) {
 		t.Skip("Azure Service Principal env vars not set")
 	}
 
-	config := &pgmi.ConnectionConfig{
+	config := &db.ConnectionConfig{
 		Host:              host,
 		Port:              5432,
 		Username:          user,
@@ -43,7 +43,7 @@ func TestAzure_ServicePrincipal(t *testing.T) {
 		AzureClientSecret: os.Getenv("AZURE_CLIENT_SECRET"),
 	}
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	require.NoError(t, err)
 
 	pool, err := connector.Connect(context.Background())
@@ -63,7 +63,7 @@ func TestAzure_ServicePrincipal_Deploy(t *testing.T) {
 		t.Skip("Azure Service Principal env vars not set")
 	}
 
-	config := &pgmi.ConnectionConfig{
+	config := &db.ConnectionConfig{
 		Host:              host,
 		Port:              5432,
 		Username:          user,
@@ -108,7 +108,7 @@ func TestAzure_ManagedIdentity(t *testing.T) {
 
 	host, user, database := requireAzureEnv(t)
 
-	config := &pgmi.ConnectionConfig{
+	config := &db.ConnectionConfig{
 		Host:       host,
 		Port:       5432,
 		Username:   user,
@@ -117,7 +117,7 @@ func TestAzure_ManagedIdentity(t *testing.T) {
 		AuthMethod: pgmi.AuthMethodAzureEntraID,
 	}
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	require.NoError(t, err)
 
 	pool, err := connector.Connect(context.Background())

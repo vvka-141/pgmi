@@ -14,6 +14,9 @@ func TestCLIReferenceDocumentsTopLevelCommands(t *testing.T) {
 
 	reference := string(body)
 	for _, cmd := range rootCmd.Commands() {
+		if cmd.Name() == "help" {
+			continue // cobra adds it on the first Execute; any earlier test may have run one
+		}
 		heading := "## pgmi " + cmd.Name()
 		if cmd.Name() == "completion" {
 			heading = "## Shell Completion"

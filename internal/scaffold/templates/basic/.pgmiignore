@@ -1,0 +1,16 @@
+# Paths pgmi does not load into the deployment session (.gitignore syntax).
+# Dot-directories, node_modules and __pycache__ are always left out.
+# deploy.sql decides what runs; this file only decides what is loaded.
+
+# Parameter files hold secrets; never load them into the session
+*.params
+*.params.*
+*.env
+
+# Backup copies an editor or a person leaves next to the original
+* (copy)*
+* ([0-9]*)*
+* - Copy*
+* copy.*
+* copy [0-9]*
+*~

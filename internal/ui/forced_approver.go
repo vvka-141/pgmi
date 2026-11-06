@@ -60,7 +60,7 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 		fmt.Fprintln(a.output)
 	}
 
-	countdownSeconds := int(pgmi.DefaultForceApprovalCountdown.Seconds())
+	countdownSeconds := int(defaultForceApprovalCountdown.Seconds())
 	for i := countdownSeconds; i > 0; i-- {
 		fmt.Fprintf(a.output, "\r--force: DROP DATABASE %q in %ds. Ctrl-C aborts.", dbName, i)
 		// ctx-aware wait: a plain a.sleepFn would swallow Ctrl-C for up
@@ -92,3 +92,5 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 
 // Verify ForcedApprover implements the Approver interface at compile time
 var _ pgmi.Approver = (*ForcedApprover)(nil)
+
+const defaultForceApprovalCountdown = 5 * time.Second

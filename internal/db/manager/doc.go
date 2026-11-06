@@ -20,8 +20,7 @@
 //	// Create a new database
 //	err = mgr.Create(ctx, pool, "mydb")
 //
-//	// Drop a database (terminate connections first)
-//	err = mgr.TerminateConnections(ctx, pool, "mydb")
+//	// Drop a database, ending its connections
 //	err = mgr.Drop(ctx, pool, "mydb")
 //
 // # Thread Safety

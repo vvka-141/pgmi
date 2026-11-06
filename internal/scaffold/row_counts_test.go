@@ -10,8 +10,8 @@ import (
 )
 
 // appendOnlyOnRedeploy names the tables a second deploy is expected to grow,
-// with why. Measured against PG 17.10: deploying the advanced template twice
-// changes the exact row count of these three and nothing else.
+// with why. Deploying the advanced template twice changes the exact row count
+// of these and nothing else.
 //
 // Everything absent from this map must hold steady. That is what catches a
 // seed INSERT missing its ON CONFLICT — a bug this repository has actually had
@@ -19,8 +19,10 @@ import (
 // failing anything.
 var appendOnlyOnRedeploy = map[string]string{
 	"internal.deployment_script_execution_log": "audit log: one row per script per deploy, by design",
+	"internal.deployment":                      "deploy history: one row per deploy, by design",
 	"api.rest_exchange":                        "request/response log written by autoLog handlers",
-	"api.inbound_queue":                        "queue: the deploy enqueues a demonstration message",
+	"api.exchange":                             "base of the exchange log: counts the rows of api.rest_exchange",
+	"api.access_denial":                        "refusal log, one row per minute: the deploy's anonymous POST /echo demonstration is refused",
 }
 
 // rowCountQuery counts every base table in the project's own schemas exactly.

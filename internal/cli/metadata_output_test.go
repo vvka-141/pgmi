@@ -46,6 +46,7 @@ func TestMetadataCommands_FailuresExit10WithJSONEnvelope(t *testing.T) {
 		{"validate duplicate ids", duplicate, []string{"metadata", "validate", "--json"}},
 		{"validate malformed id", malformed, []string{"metadata", "validate", "--json"}},
 		{"plan malformed id", malformed, []string{"metadata", "plan", "--json"}},
+		{"plan duplicate ids", duplicate, []string{"metadata", "plan", "--json"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := createTestProject(t, tt.files)
@@ -57,9 +58,40 @@ func TestMetadataCommands_FailuresExit10WithJSONEnvelope(t *testing.T) {
 			if jerr := json.Unmarshal([]byte(out), &envelope); jerr != nil {
 				t.Fatalf("stdout is not a JSON envelope: %v\n%s", jerr, out)
 			}
-			if tt.name != "validate duplicate ids" && envelope["error"] == nil {
-				t.Errorf("envelope has no error field: %s", out)
+			if envelope["error"] == nil || envelope["exitCode"] != float64(pgmi.ExitConfigError) {
+				t.Errorf("envelope lacks error/exitCode: %s", out)
 			}
 		})
+	}
+}
+
+func TestMetadataPlanTextColumnsAlign(t *testing.T) {
+	resetMetadataFlags()
+	long := "005/a-rather-long-sort-key-prefix/with/levels.sql"
+	dir := createTestProject(t, map[string]string{
+		"deploy.sql":    "SELECT 1;",
+		"a/short.sql":   metaFile("11111111-1111-4111-8111-111111111111", "001/s.sql"),
+		"b/longer.sql":  metaFile("22222222-2222-4222-8222-222222222222", long),
+		"c/no_meta.sql": "SELECT 1;",
+	})
+	out, err := withRootArgs(t, "metadata", "plan", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	header := lines[0]
+	for _, col := range []string{"ORDER", "SORT KEY", "PATH", "IDEMPOTENT"} {
+		if !strings.Contains(header, col) {
+			t.Fatalf("header %q lacks %q", header, col)
+		}
+	}
+	pathCol := strings.Index(header, "PATH")
+	for _, line := range lines[1:] {
+		if i := strings.LastIndex(line, "  ./") + 2; i != pathCol {
+			t.Errorf("path starts at column %d, header PATH at %d:\n%s", i, pathCol, out)
+		}
+	}
+	if !strings.Contains(out, "true") {
+		t.Errorf("no idempotent value in the listing:\n%s", out)
 	}
 }

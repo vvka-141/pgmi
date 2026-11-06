@@ -1,7 +1,7 @@
 # Test-gated deployment
 
-The canonical pgmi demonstration: migrations, database tests, and the commit
-decision in **one PostgreSQL transaction**. A failing test means the deployment
+The canonical pgmi demonstration: schema changes, database tests, and the
+commit decision in **one PostgreSQL transaction**. A failing test means the deployment
 never happened.
 
 ![Test-gated deployment: apply files, test the changed database, commit only if tests pass](../../docs/diagrams/d00-test-gated-deploy.drawio.svg)
@@ -25,11 +25,12 @@ If either command prints an error (say, the port is already in use), stop: run
 export PGMI_CONNECTION_STRING="postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 # PowerShell: $env:PGMI_CONNECTION_STRING = "postgresql://postgres:postgres@127.0.0.1:5434/postgres"
 
-pgmi deploy . -d pgmi_example
+pgmi deploy . -d pgmi_example --param env=dev
 ```
 
-`deploy.sql` applies `migrations/` in order, then `CALL pgmi_test()` runs every
-test in `__test__/` inside the same transaction (each test isolated in its own
+`deploy.sql` runs `physical/` (tables, once per database) and `semantic/`
+(views and functions, every deploy) in path order, then `CALL pgmi_test()` runs
+every test in the `__test__/` directories inside the same transaction (each test isolated in its own
 savepoint, so its transactional test data is rolled back). Everything passes →
 the transaction commits. Exit code `0`. Sequence advances and external effects
 are not rolled back.
@@ -42,7 +43,7 @@ database to see the full rollback:
 
 ```bash
 cp break-it/test_audit_log.sql __test__/
-pgmi deploy . -d pgmi_example_broken
+pgmi deploy . -d pgmi_example_broken --param env=dev
 echo $?     # 13 — SQL execution failed
 ```
 
@@ -51,7 +52,7 @@ The failing test aborts the whole transaction. Verify nothing changed:
 ```bash
 docker exec pgmi-demo psql -U postgres -d pgmi_example_broken -tAc \
   "SELECT to_regclass('public.audit_log') IS NULL AS rolled_back"
-# t — the table from migrations/003_audit_log.sql does not exist
+# t — the table from physical/003_audit_log.sql does not exist
 ```
 
 The migration ran, the test failed, and PostgreSQL rolled both back together.
@@ -64,9 +65,10 @@ with `docker rm -f pgmi-demo`.
 
 | Path | Role |
 |------|------|
-| `deploy.sql` | The deployment program: applies migrations, runs tests, commits |
-| `migrations/` | Ordinary SQL files, applied in path order |
-| `__test__/` | Tests run by `CALL pgmi_test()` inside the deploy transaction |
+| `deploy.sql` | The deployment program: runs the files, runs the tests, commits |
+| `physical/` | Tables, keys and indexes in run-once files |
+| `semantic/` | Views and writer functions, re-run on every deploy |
+| `__test__/` directories | Tests run by `CALL pgmi_test()` inside the deploy transaction |
 | `break-it/` | A failing test to copy in when you want to see the rollback |
 
 See the [Testing Guide](../../docs/TESTING.md) for fixtures and hierarchical

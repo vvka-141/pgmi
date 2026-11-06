@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -18,7 +19,31 @@ import (
 //   - PostgreSQL URI: postgresql://user:pass@localhost:5432/dbname?sslmode=disable
 //   - libpq keyword/value: host=localhost port=5432 dbname=dbname user=user
 //   - ADO.NET: Host=localhost;Port=5432;Database=dbname;Username=user;Password=pass
-func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
+func ParseConnectionString(connStr string) (*ConnectionConfig, error) {
+	config, err := parseConnectionStringRaw(connStr)
+	if err != nil {
+		return nil, err
+	}
+	applyStaticDefaults(config)
+	return config, nil
+}
+
+// applyStaticDefaults fills what neither the string nor the environment gave.
+func applyStaticDefaults(config *ConnectionConfig) {
+	if config.Host == "" {
+		config.Host = "localhost"
+	}
+	if config.Port == 0 {
+		config.Port = 5432
+	}
+	if config.Database == "" {
+		config.Database = DefaultMaintenanceDB
+	}
+}
+
+// parseConnectionStringRaw leaves host, port and dbname empty when the string
+// omits them, so the caller can take them from the environment first.
+func parseConnectionStringRaw(connStr string) (*ConnectionConfig, error) {
 	if connStr == "" {
 		return nil, fmt.Errorf("connection string is empty")
 	}
@@ -40,17 +65,19 @@ func ParseConnectionString(connStr string) (*pgmi.ConnectionConfig, error) {
 
 // parsePostgreSQLURI parses a PostgreSQL URI format connection string.
 // Format: postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
-func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
+var errServiceFile = fmt.Errorf("service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE")
+
+func parsePostgreSQLURI(connStr string) (*ConnectionConfig, error) {
 	connStr, hostList := liftHostList(connStr)
 	u, err := url.Parse(connStr)
 	if err != nil {
+		if _, rest, ok := strings.Cut(connStr, "://"); ok && strings.Contains(rest, "@") {
+			return nil, errors.New("invalid PostgreSQL URI (not shown, it may hold a password): percent-encode a space, #, %, / or @ in the user or password")
+		}
 		return nil, fmt.Errorf("invalid PostgreSQL URI: %w", err)
 	}
 
-	config := &pgmi.ConnectionConfig{
-		Host:             "localhost",
-		Port:             5432,
-		Database:         "postgres",
+	config := &ConnectionConfig{
 		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
@@ -87,17 +114,21 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 		config.Database = strings.TrimPrefix(u.Path, "/")
 	}
 
-	// Parse query parameters
-	query := u.Query()
-	for key, values := range query {
-		if len(values) == 0 {
-			continue
-		}
-		value := values[0]
-
+	query, err := uriQuery(u.RawQuery)
+	if err != nil {
+		return nil, err
+	}
+	for _, kv := range query {
+		key, value := kv.key, kv.value
 		switch strings.ToLower(key) {
 		case "host":
 			config.Host = value
+		case "dbname":
+			config.Database = value
+		case "user":
+			config.Username = value
+		case "password":
+			config.Password = value
 		case "port":
 			port, err := strconv.Atoi(value)
 			if err != nil {
@@ -117,6 +148,8 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 			config.SSLRootCert = value
 		case "sslpassword":
 			config.SSLPassword = value
+		case "service":
+			return nil, errServiceFile
 		case "application_name", "applicationname":
 			config.AppName = value
 		case "connect_timeout", "connecttimeout":
@@ -133,18 +166,44 @@ func parsePostgreSQLURI(connStr string) (*pgmi.ConnectionConfig, error) {
 	return config, nil
 }
 
+// uriQuery reads a URI's query as libpq and pgx do: a '+' is a plus, not a
+// space (url.ParseQuery would turn it into one). The first value of a
+// repeated key wins, as before.
+func uriQuery(raw string) ([]adoPair, error) {
+	var pairs []adoPair
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, "&") {
+		if part == "" {
+			continue
+		}
+		rawKey, rawValue, _ := strings.Cut(part, "=")
+		key, err := url.PathUnescape(rawKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PostgreSQL URI query: %w", err)
+		}
+		value, err := url.PathUnescape(rawValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PostgreSQL URI query parameter %q: %w", key, err)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		pairs = append(pairs, adoPair{key: key, value: value})
+	}
+	return pairs, nil
+}
+
 // parseADONET parses an ADO.NET format connection string.
 // Format: Host=localhost;Port=5432;Database=dbname;Username=user;Password=pass;...
-func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
-	config := &pgmi.ConnectionConfig{
-		Host:             "localhost",
-		Port:             5432,
-		Database:         "postgres",
+func parseADONET(connStr string) (*ConnectionConfig, error) {
+	config := &ConnectionConfig{
 		SSLMode:          "",
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
 	}
 
+	hostPort := ""
 	for _, kv := range splitADONETPairs(connStr) {
 		key := kv.key
 		value := kv.value
@@ -152,6 +211,11 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 		switch strings.ToLower(key) {
 		case "host", "server":
 			config.Host = value
+			if !strings.Contains(value, ",") {
+				if host, port := splitHostMember(value, 0); port != "0" {
+					config.Host, hostPort = host, port
+				}
+			}
 		case "port":
 			port, err := strconv.Atoi(value)
 			if err != nil {
@@ -161,14 +225,17 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 				return nil, fmt.Errorf("invalid port in ADO.NET string: %w", err)
 			}
 			config.Port = port
-		case "database", "initial catalog":
+		case "database", "initial catalog", "dbname":
 			config.Database = value
-		case "username", "user id", "uid":
+		case "username", "user id", "uid", "user":
 			config.Username = value
 		case "password", "pwd":
 			config.Password = value
 		case "sslmode", "ssl mode":
-			config.SSLMode = value
+			config.SSLMode = npgsqlSSLModes[strings.ToLower(value)]
+			if config.SSLMode == "" {
+				config.SSLMode = value
+			}
 		case "sslcert", "ssl cert":
 			config.SSLCert = value
 		case "sslkey", "ssl key":
@@ -186,11 +253,28 @@ func parseADONET(connStr string) (*pgmi.ConnectionConfig, error) {
 			}
 			config.ConnectTimeout = time.Duration(timeout) * time.Second
 		default:
+			if !libpqKeywords[key] {
+				return nil, fmt.Errorf("invalid connection option %q: pgmi does not use Npgsql client options; remove it", key)
+			}
 			config.AdditionalParams[key] = value
 		}
 	}
+	// Npgsql: a port in Host overrides Port=, wherever Port= stands.
+	if hostPort != "" {
+		port, err := strconv.Atoi(hostPort)
+		if err != nil || validatePort(port) != nil {
+			return nil, fmt.Errorf("invalid port %q in ADO.NET Host", hostPort)
+		}
+		config.Port = port
+	}
 
 	return config, nil
+}
+
+// npgsqlSSLModes maps Npgsql's SslMode names, in any case, to libpq's sslmode.
+var npgsqlSSLModes = map[string]string{
+	"disable": "disable", "allow": "allow", "prefer": "prefer", "require": "require",
+	"verifyca": "verify-ca", "verify-ca": "verify-ca", "verifyfull": "verify-full", "verify-full": "verify-full",
 }
 
 type adoPair struct {
@@ -270,7 +354,7 @@ func splitADONETPairs(s string) []adoPair {
 // BuildConnectionString converts a ConnectionConfig back to a connection
 // string pgx accepts: a URI for one host, the keyword/value form for a host
 // list, since a URI cannot carry a port for hosts that do not name one.
-func BuildConnectionString(config *pgmi.ConnectionConfig) string {
+func BuildConnectionString(config *ConnectionConfig) string {
 	if strings.Contains(config.Host, ",") {
 		return buildKeywordValue(config)
 	}
@@ -286,12 +370,14 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 		u.Host = net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	}
 
-	if config.Username != "" {
-		if config.Password != "" {
-			u.User = url.UserPassword(config.Username, config.Password)
-		} else {
-			u.User = url.User(config.Username)
-		}
+	switch {
+	case config.Username != "" && config.Password != "":
+		u.User = url.UserPassword(config.Username, config.Password)
+	case config.Username != "":
+		u.User = url.User(config.Username)
+	case config.Password != "":
+		// url.UserPassword("", pw) would write an empty user before it.
+		query.Set("password", config.Password)
 	}
 
 	if config.SSLMode != "" {
@@ -320,7 +406,9 @@ func BuildConnectionString(config *pgmi.ConnectionConfig) string {
 		query.Set(key, value)
 	}
 
-	u.RawQuery = query.Encode()
+	// pgx decodes the query as libpq does, where '+' is a plus: a space
+	// must be %20, never Encode's '+'.
+	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 	return u.String()
 }
 
@@ -347,7 +435,7 @@ func liftHostList(connStr string) (string, string) {
 	return connStr[:start] + "multihost.invalid" + connStr[end:], hosts
 }
 
-func buildKeywordValue(config *pgmi.ConnectionConfig) string {
+func buildKeywordValue(config *ConnectionConfig) string {
 	members := strings.Split(config.Host, ",")
 	hosts := make([]string, len(members))
 	ports := make([]string, len(members))
@@ -390,7 +478,7 @@ func buildKeywordValue(config *pgmi.ConnectionConfig) string {
 }
 
 // DialTargets lists every host:port pgmi will try, for messages.
-func DialTargets(config *pgmi.ConnectionConfig) string {
+func DialTargets(config *ConnectionConfig) string {
 	members := strings.Split(config.Host, ",")
 	for i, m := range members {
 		members[i] = net.JoinHostPort(splitHostMember(m, config.Port))
@@ -421,3 +509,7 @@ func splitHostMember(member string, defaultPort int) (string, string) {
 	}
 	return member, port
 }
+
+// DefaultMaintenanceDB is the database pgmi connects to for maintenance
+// operations when nothing names one.
+const DefaultMaintenanceDB = "postgres"

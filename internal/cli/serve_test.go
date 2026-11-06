@@ -3,10 +3,14 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // callTool drives a single tools/call through the MCP server and returns the
@@ -86,8 +90,8 @@ func listTools(t *testing.T) map[string]map[string]any {
 func TestServeOutputSchemaMatchesStructuredOutput(t *testing.T) {
 	tools := listTools(t)
 
-	structured := []string{"ai_skills", "templates_list", "metadata_plan", "metadata_validate", "init", "deploy"}
-	textOnly := []string{"ai_overview", "ai_skill", "ai_contract"}
+	structured := []string{"templates_list", "metadata_plan", "metadata_validate", "init", "deploy"}
+	textOnly := []string{"ai_overview", "ai_contract"}
 
 	for _, name := range structured {
 		if tools[name] == nil {
@@ -226,7 +230,7 @@ func TestServeHandshakeReportsTheRealVersion(t *testing.T) {
 	}
 }
 
-func TestServeToolsListHasAllTools(t *testing.T) {
+func TestServeToolsListIsExactlyTheSevenTools(t *testing.T) {
 	srv := buildMCPServer()
 	var out strings.Builder
 	err := srv.Serve(context.Background(),
@@ -244,37 +248,14 @@ func TestServeToolsListHasAllTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(out.String()), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	got := map[string]bool{}
+	var got []string
 	for _, tool := range resp.Result.Tools {
-		got[tool.Name] = true
+		got = append(got, tool.Name)
 	}
-	for _, want := range []string{
-		"deploy", "init", "metadata_plan", "metadata_validate", "templates_list",
-		"ai_overview", "ai_skills", "ai_skill", "ai_contract",
-	} {
-		if !got[want] {
-			t.Errorf("tools/list missing %q (got %v)", want, got)
-		}
-	}
-}
-
-func TestServeAISkill(t *testing.T) {
-	result, isErr := callTool(t, "ai_skill", map[string]any{"name": "pgmi-sql"})
-	if isErr {
-		t.Fatalf("ai_skill errored: %s", resultText(t, result))
-	}
-	if !strings.Contains(resultText(t, result), "pgmi-sql") {
-		t.Errorf("ai_skill content unexpected: %.80s", resultText(t, result))
-	}
-}
-
-func TestServeAISkillMissingName(t *testing.T) {
-	result, isErr := callTool(t, "ai_skill", map[string]any{})
-	if !isErr {
-		t.Fatalf("expected error result for missing name")
-	}
-	if !strings.Contains(resultText(t, result), "name is required") {
-		t.Errorf("unexpected error text: %s", resultText(t, result))
+	slices.Sort(got)
+	want := []string{"ai_contract", "ai_overview", "deploy", "init", "metadata_plan", "metadata_validate", "templates_list"}
+	if !slices.Equal(got, want) {
+		t.Errorf("tools/list = %v, want exactly %v", got, want)
 	}
 }
 
@@ -340,22 +321,21 @@ func TestServeMetadataValidate(t *testing.T) {
 }
 
 func TestServeDeployRejectsMissingDatabase(t *testing.T) {
-	// No database → config validation fails before any connection attempt.
+	clearPGEnv(t)
 	result, isErr := callTool(t, "deploy", map[string]any{
-		"path":       "/tmp/whatever",
-		"connection": "postgresql://localhost/postgres",
+		"path": t.TempDir(),
 	})
 	if !isErr {
 		t.Fatalf("expected error result for missing database")
 	}
-	if !strings.Contains(resultText(t, result), "DatabaseName is required") {
+	if !strings.Contains(resultText(t, result), "database name is required") {
 		t.Errorf("unexpected error: %s", resultText(t, result))
 	}
 }
 
 func TestServeDeployRejectsBadTimeout(t *testing.T) {
 	result, isErr := callTool(t, "deploy", map[string]any{
-		"path":       "/tmp/whatever",
+		"path":       t.TempDir(),
 		"connection": "postgresql://localhost/postgres",
 		"database":   "x",
 		"timeout":    "not-a-duration",
@@ -371,7 +351,7 @@ func TestServeDeployRejectsBadTimeout(t *testing.T) {
 // MCP 2025-11-25 (SEP-1303): an argument that fails validation is a tool
 // execution error the model can read and correct, not a protocol error.
 func TestServeBadArgumentIsAToolError(t *testing.T) {
-	result, isErr := callTool(t, "ai_skill", map[string]any{"name": 5})
+	result, isErr := callTool(t, "metadata_plan", map[string]any{"path": 5})
 	if !isErr {
 		t.Fatalf("a wrong-type argument must be an isError result, got: %s", resultText(t, result))
 	}
@@ -404,5 +384,129 @@ func TestServeToolNamesFollowTheSpec(t *testing.T) {
 		if !valid.MatchString(tool.Name) {
 			t.Errorf("tool name %q breaks the 2025-11-25 naming rule", tool.Name)
 		}
+	}
+}
+
+func TestServeToolsDeclareTheirBehaviour(t *testing.T) {
+	tools := listTools(t)
+	for name, want := range map[string]map[string]bool{
+		"ai_overview":       {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"ai_contract":       {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"templates_list":    {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"metadata_plan":     {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"metadata_validate": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"init":              {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"deploy":            {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true},
+	} {
+		got, _ := tools[name]["annotations"].(map[string]any)
+		for hint, v := range want {
+			if got[hint] != v {
+				t.Errorf("%s %s = %v, want %v", name, hint, got[hint], v)
+			}
+		}
+	}
+	if description, _ := tools["deploy"]["description"].(string); !strings.Contains(description, ".env is not read") {
+		t.Errorf("the deploy tool must say the project .env is not read, unlike pgmi deploy: %q", description)
+	}
+	props, _ := tools["deploy"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := props["verbose"]; !ok {
+		t.Error("deploy must accept verbose, as pgmi deploy accepts -v")
+	}
+}
+
+func structuredExitCode(t *testing.T, result map[string]any) int {
+	t.Helper()
+	sc, _ := result["structuredContent"].(map[string]any)
+	code, ok := sc["exitCode"].(float64)
+	if !ok {
+		t.Fatalf("no structuredContent.exitCode in %v", result)
+	}
+	return int(code)
+}
+
+var toolsTakingPath = []string{"metadata_plan", "metadata_validate", "init", "deploy"}
+
+func TestServeUnknownArgumentIsNamed(t *testing.T) {
+	clearPGEnv(t)
+	for _, tool := range toolsTakingPath {
+		t.Run(tool, func(t *testing.T) {
+			result, isErr := callTool(t, tool, map[string]any{"project_path": t.TempDir()})
+			if !isErr {
+				t.Fatalf("an unknown argument must be refused, got: %s", resultText(t, result))
+			}
+			text := resultText(t, result)
+			if !strings.Contains(text, `"project_path"`) || !strings.Contains(text, "path") || !strings.Contains(text, "accepted:") {
+				t.Errorf("message must name the argument and list the accepted ones: %s", text)
+			}
+			if code := structuredExitCode(t, result); code != pgmi.ExitConfigError {
+				t.Errorf("exitCode %d, want %d", code, pgmi.ExitConfigError)
+			}
+		})
+	}
+}
+
+func TestServeMissingPathIsExit10(t *testing.T) {
+	clearPGEnv(t)
+	for _, tool := range toolsTakingPath {
+		t.Run(tool, func(t *testing.T) {
+			result, isErr := callTool(t, tool, map[string]any{})
+			if !isErr {
+				t.Fatalf("a missing path must be refused, got: %s", resultText(t, result))
+			}
+			if !strings.Contains(resultText(t, result), "path is required") {
+				t.Errorf("unexpected message: %s", resultText(t, result))
+			}
+			if code := structuredExitCode(t, result); code != pgmi.ExitConfigError {
+				t.Errorf("exitCode %d, want %d", code, pgmi.ExitConfigError)
+			}
+		})
+	}
+}
+
+func TestServeInputSchemasAreClosed(t *testing.T) {
+	for name, d := range listTools(t) {
+		in, _ := d["inputSchema"].(map[string]any)
+		if in["additionalProperties"] != false {
+			t.Errorf("%s: inputSchema is not closed: %v", name, in)
+		}
+		if out, ok := d["outputSchema"].(map[string]any); ok && out["additionalProperties"] == false {
+			t.Errorf("%s: outputSchema is closed, which breaks clients when a field is added", name)
+		}
+	}
+}
+
+func TestServeDeployRejectsConnectionStringWithoutDatabase(t *testing.T) {
+	clearPGEnv(t)
+	result, isErr := callTool(t, "deploy", map[string]any{
+		"path":       t.TempDir(),
+		"connection": "postgresql://u@127.0.0.1:1",
+	})
+	if !isErr || !strings.Contains(resultText(t, result), "database name is required") {
+		t.Fatalf("a dbname-less connection string must be refused, not sent to postgres: %s", resultText(t, result))
+	}
+}
+
+// The text block carries the summary and the warnings; every notice is in
+// structuredContent once, not repeated in the text.
+func TestDeploySummaryCarriesTheWarningsForATextOnlyClient(t *testing.T) {
+	text := deploySummary(map[string]any{
+		"database": "db", "filesLoaded": 3, "pathsIgnored": 0, "durationMs": 5,
+		"notices":          []notice{{Severity: "NOTICE", Message: "  + tests passed"}, {Severity: "WARNING", Message: "a default password"}},
+		"noticesTruncated": 4,
+	})
+	for _, want := range []string{"6 notices (1 warnings)", "\nWARNING: a default password"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("want %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "tests passed") {
+		t.Errorf("a NOTICE must stay in structuredContent only:\n%s", text)
+	}
+}
+
+func TestServeDeployReportsAMistypedPathFirst(t *testing.T) {
+	result, isErr := callTool(t, "deploy", map[string]any{"path": filepath.Join(t.TempDir(), "nope")})
+	if !isErr || !strings.Contains(resultText(t, result), "does not exist") {
+		t.Errorf("want the missing project path reported, got %s", resultText(t, result))
 	}
 }

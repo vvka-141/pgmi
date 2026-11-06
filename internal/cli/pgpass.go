@@ -5,10 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/tui"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // pgpassPath returns the platform-appropriate .pgpass file path.
@@ -32,7 +33,7 @@ func pgpassPath() string {
 
 // offerSavePgpass prompts the user to save the password to .pgpass after a successful wizard.
 // Does nothing if password is empty, terminal is non-interactive, or user declines.
-func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
+func offerSavePgpass(cfg *db.ConnectionConfig, maintenanceDB string) {
 	if cfg.Password == "" || !tui.IsInteractive() {
 		return
 	}
@@ -43,7 +44,7 @@ func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
 		return
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, maintenanceDB); err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: failed to save .pgpass: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Tip: provide password via $PGPASSWORD or connection string.")
 		return
@@ -53,8 +54,9 @@ func offerSavePgpass(cfg *pgmi.ConnectionConfig) {
 	fmt.Fprintf(os.Stderr, "Saved to %s\n", path)
 }
 
-// writePgpassEntry adds or updates a .pgpass entry for the given connection.
-func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
+// writePgpassEntry adds or updates the .pgpass entries for the target database
+// and the maintenance database pgmi connects to first (empty means the default).
+func writePgpassEntry(cfg *db.ConnectionConfig, maintenanceDB string) error {
 	path := pgpassPath()
 	if path == "" {
 		return fmt.Errorf("cannot determine where the password file goes; set PGPASSFILE")
@@ -64,14 +66,25 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 		return fmt.Errorf("create .pgpass directory: %w", err)
 	}
 
+	if maintenanceDB == "" {
+		maintenanceDB = db.DefaultMaintenanceDB
+	}
+	databases := []string{cfg.Database}
+	if maintenanceDB != cfg.Database {
+		databases = append(databases, maintenanceDB)
+	}
+
 	host := escapePgpass(cfg.Host)
 	port := fmt.Sprintf("%d", cfg.Port)
-	db := escapePgpass(cfg.Database)
 	user := escapePgpass(cfg.Username)
 	password := escapePgpass(cfg.Password)
 
-	newEntry := fmt.Sprintf("%s:%s:%s:%s:%s", host, port, db, user, password)
-	matchPrefix := fmt.Sprintf("%s:%s:%s:%s:", host, port, db, user)
+	var entries, prefixes []string
+	for _, db := range databases {
+		prefix := fmt.Sprintf("%s:%s:%s:%s:", host, port, escapePgpass(db), user)
+		prefixes = append(prefixes, prefix)
+		entries = append(entries, prefix+password)
+	}
 
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {
@@ -82,14 +95,13 @@ func writePgpassEntry(cfg *pgmi.ConnectionConfig) error {
 		return fmt.Errorf("failed to read existing .pgpass: %w", err)
 	}
 
-	// libpq uses the FIRST line that matches, so the entry the user just asked
-	// to save goes on top. Appending it looked right and did nothing whenever an
+	// libpq uses the FIRST line that matches, so the entries the user just asked
+	// to save go on top. Appending them looked right and did nothing whenever an
 	// earlier line already matched — `*:*:*:postgres:oldpw` is a common hand-
 	// written entry — and pgmi still reported the password as saved.
-	kept := make([]string, 0, len(lines)+1)
-	kept = append(kept, newEntry)
+	kept := append(make([]string, 0, len(lines)+len(entries)), entries...)
 	for _, line := range lines {
-		if !strings.HasPrefix(line, matchPrefix) {
+		if !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
 			kept = append(kept, line)
 		}
 	}

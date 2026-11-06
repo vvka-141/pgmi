@@ -2,9 +2,14 @@ package services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/db/manager"
+	"github.com/vvka-141/pgmi/internal/files/scanner"
+	"github.com/vvka-141/pgmi/internal/session"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -27,22 +32,22 @@ func (m *mockApprover) RequestApproval(_ context.Context, _ string) (bool, error
 }
 
 type mockSessionPreparer struct {
-	session *pgmi.Session
+	session *session.Session
 	err     error
 	scanErr error
 }
 
-func (m *mockSessionPreparer) ScanProject(_ string) (pgmi.FileScanResult, error) {
-	return pgmi.FileScanResult{}, m.scanErr
+func (m *mockSessionPreparer) ScanProject(_ string) (scanner.Result, error) {
+	return scanner.Result{}, m.scanErr
 }
 
-func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *pgmi.ConnectionConfig, _ pgmi.FileScanResult, _ map[string]string, _ string, _ bool) (*pgmi.Session, error) {
+func (m *mockSessionPreparer) PrepareSession(_ context.Context, _ *db.ConnectionConfig, _ scanner.Result, _ map[string]string, _ string, _ bool) (*session.Session, error) {
 	return m.session, m.err
 }
 
 type mockDBConnection struct {
 	execErr    error
-	queryRow   pgmi.Row
+	queryRow   db.Row
 	acquireErr error
 }
 
@@ -50,23 +55,23 @@ func (m *mockDBConnection) Exec(_ context.Context, _ string, _ ...any) (pgconn.C
 	return pgconn.CommandTag{}, m.execErr
 }
 
-func (m *mockDBConnection) QueryRow(_ context.Context, _ string, _ ...any) pgmi.Row {
+func (m *mockDBConnection) QueryRow(_ context.Context, _ string, _ ...any) db.Row {
 	return m.queryRow
 }
 
-func (m *mockDBConnection) Acquire(_ context.Context) (pgmi.PooledConnection, error) {
+func (m *mockDBConnection) Acquire(_ context.Context) (db.PooledConnection, error) {
 	return nil, m.acquireErr
 }
 
 type mockFileScanner struct {
-	scanResult  pgmi.FileScanResult
+	scanResult  scanner.Result
 	scanErr     error
 	validateErr error
 	readContent string
 	readErr     error
 }
 
-func (m *mockFileScanner) ScanDirectory(_ string) (pgmi.FileScanResult, error) {
+func (m *mockFileScanner) ScanDirectory(_ string) (scanner.Result, error) {
 	return m.scanResult, m.scanErr
 }
 
@@ -96,7 +101,10 @@ type mockDatabaseManager struct {
 	existsErr    error
 	createErr    error
 	dropErr      error
-	terminateErr error
+
+	deployInProgress bool
+	overwriteBusy    bool
+	unlocked         int
 
 	// Recorded so a test can assert the destructive call did NOT happen.
 	// Returning the right error is not the same as not dropping the database.
@@ -104,31 +112,55 @@ type mockDatabaseManager struct {
 
 	// What Settings reports, and what Create was actually handed — an
 	// --overwrite must recreate the database the way it found it.
-	settings    *pgmi.DatabaseSettings
+	settings    *manager.DatabaseSettings
 	settingsErr error
-	createdWith *pgmi.DatabaseSettings
+	restoreGaps []string
+	createdWith *manager.DatabaseSettings
+	created     int
+
+	// What the server reports; zero means a supported one.
+	serverVersionNum int
 }
 
-func (m *mockDatabaseManager) Exists(_ context.Context, _ pgmi.DBConnection, _ string) (bool, error) {
+func (m *mockDatabaseManager) Exists(_ context.Context, _ db.DBConnection, _ string) (bool, error) {
 	return m.existsResult, m.existsErr
 }
 
-func (m *mockDatabaseManager) Settings(_ context.Context, _ pgmi.DBConnection, _ string) (*pgmi.DatabaseSettings, error) {
+func (m *mockDatabaseManager) Settings(_ context.Context, _ db.DBConnection, _ string) (*manager.DatabaseSettings, error) {
 	return m.settings, m.settingsErr
 }
 
-func (m *mockDatabaseManager) Create(_ context.Context, _ pgmi.DBConnection, _ string, settings *pgmi.DatabaseSettings) error {
+func (m *mockDatabaseManager) Create(_ context.Context, _ db.DBConnection, _ string, settings *manager.DatabaseSettings) error {
 	m.createdWith = settings
+	m.created++
 	return m.createErr
 }
 
-func (m *mockDatabaseManager) Drop(_ context.Context, _ pgmi.DBConnection, name string) error {
+func (m *mockDatabaseManager) Drop(_ context.Context, _ db.DBConnection, name string) error {
 	m.dropped = append(m.dropped, name)
 	return m.dropErr
 }
 
-func (m *mockDatabaseManager) TerminateConnections(_ context.Context, _ pgmi.DBConnection, _ string) error {
-	return m.terminateErr
+func (m *mockDatabaseManager) LockOverwrite(_ context.Context, conn db.DBConnection, _ string) (db.DBConnection, func(), error) {
+	if m.overwriteBusy {
+		return nil, nil, nil
+	}
+	return conn, func() { m.unlocked++ }, nil
+}
+
+func (m *mockDatabaseManager) ServerVersion(_ context.Context, _ db.DBConnection) (int, string, error) {
+	if m.serverVersionNum == 0 {
+		return 180000, "18.0", nil
+	}
+	return m.serverVersionNum, fmt.Sprintf("%d.0", m.serverVersionNum/10000), nil
+}
+
+func (m *mockDatabaseManager) RestoreGaps(_ context.Context, _ db.DBConnection, _ string) ([]string, error) {
+	return m.restoreGaps, nil
+}
+
+func (m *mockDatabaseManager) DeployInProgress(_ context.Context, _ db.DBConnection, _ string) (bool, error) {
+	return m.deployInProgress, nil
 }
 
 type mockLogger struct{}

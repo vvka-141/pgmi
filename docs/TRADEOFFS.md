@@ -16,12 +16,12 @@ pgmi's `deploy.sql` is a PL/pgSQL program, not configuration. Your team needs to
 
 - `FOR v_file IN (SELECT ...) LOOP ... END LOOP`
 - `EXECUTE v_file.content`
-- `BEGIN ... EXCEPTION WHEN OTHERS THEN ... END`
 - `current_setting('pgmi.key', true)`
+- `RAISE EXCEPTION` with a condition, to refuse a deploy
 
-**Honest test:** If your team would struggle to write a PL/pgSQL function that loops over a query result, calls `EXECUTE` on each row, and handles exceptions — pgmi's power is inaccessible. The basic template works out of the box, but customizing deployment logic requires PL/pgSQL fluency.
+**Honest test:** If your team would struggle to write a PL/pgSQL block that loops over a query result and calls `EXECUTE` on each row, changing the deployment logic will be slow. The templates work out of the box, but customizing them is PL/pgSQL work.
 
-This is an intentional constraint, not an oversight. pgmi's flexibility comes from giving you a real programming language (PL/pgSQL) instead of a configuration DSL.
+The scaffold includes skills with the deploy.sql patterns, and `pgmi ai contract` prints the installed binary's session API. Your team still needs enough PL/pgSQL to review and maintain the deployment code, whoever writes it.
 
 ---
 
@@ -29,82 +29,53 @@ This is an intentional constraint, not an oversight. pgmi's flexibility comes fr
 
 There is no built-in `schema_version` table. pgmi does not track migrations, because pgmi does not decide what runs — your `deploy.sql` does.
 
-**Basic template, default:** every deployment re-runs every file. Your SQL must be idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Nothing to drift.
-
-**Basic template, apply-once:** `deploy.sql` ships with a three-line tracking block — a `_migration` ledger, a `NOT EXISTS` filter, an `INSERT` after each file. Uncomment the lines marked `(A)`, `(B)`, `(C)` and each migration runs once per path, with its checksum stored. That is all it does. It does not order by version, and it does not stop on a checksum mismatch: whether a changed file should warn, fail or be ignored is an `IF` you write in `deploy.sql`. The template README compares both models side by side, and [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) runs the apply-once model with drift detection in CI.
+**Basic template:** two kinds of file. A file marked run-once (`<pgmi-meta idempotent="false">`, the tables in `physical/`) runs once per database; `deploy.sql` records it in a `deployment.run_once` ledger by id, path and checksum. Every other file (the views and functions in `semantic/`) re-runs on every deploy, so it must be safe to repeat (`CREATE OR REPLACE`). When a run-once file that already ran is edited, moved, flipped to re-run or removed, the deploy fails before anything runs and names the file; a change to a table is a new run-once file. Comments, whitespace outside literals and keyword case do not count as edits. The whole mechanism is one `DO` block and a loop condition in `deploy.sql`: change it if you want a mismatch to warn instead. [`examples/apply-once-tracking`](https://github.com/vvka-141/pgmi/tree/main/examples/apply-once-tracking) shows a path-keyed variant.
 
 **Advanced template:** a fuller PL/pgSQL tracking system recording script UUIDs, checksums, and execution history. More capable, and more code you own.
 
-The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in three lines you can read.
+The honest tradeoff is not "pgmi has no tracking". It is that **you pick the model** — path-based? UUID-based? does a changed checksum warn, fail, or get ignored? Flyway makes that choice for you; pgmi makes you make it, in SQL you can read.
 
 ---
 
-## Debugging is raw PostgreSQL errors
+## A runtime error names the file, not the line
 
-When a migration fails, pgmi shows:
+A runtime error (a constraint violation, division by zero) names the project
+file but carries no line or column. An exception handler in deploy.sql that
+replaces the error with `RAISE EXCEPTION` loses the file too: it builds a new
+error and discards the text pgmi matches on. Let the error propagate, or
+re-raise with a bare `RAISE;` ([deploy.sql guide](DEPLOY-GUIDE.md#which-file-failed)).
 
-```
-execution failed: ERROR: relation "users" does not exist (SQLSTATE 42P01)
-```
-
-pgmi surfaces PostgreSQL's `DETAIL`, `HINT`, and `WHERE` fields when the server
-sends them, and names the project file the error came from by matching the
-text PostgreSQL was executing against the files it loaded. For parse and
-analysis errors (syntax, unknown column) PostgreSQL also reports a position, so
-pgmi prints the line and column in that file. Runtime errors (a constraint
-violation, division by zero) carry no position: you get the file, not the line.
-
-The limit is an exception handler in deploy.sql that re-raises with
-`RAISE EXCEPTION`: that builds a new error and discards the text and position.
-Let the error propagate, or re-raise with a bare `RAISE;`. See
-[deploy.sql guide](DEPLOY-GUIDE.md#which-file-failed).
+Parse and analysis errors (syntax, unknown column) carry a position, so pgmi
+prints the file, line and column, with PostgreSQL's `DETAIL`, `HINT` and
+`WHERE`.
 
 ---
 
-## CREATE INDEX CONCURRENTLY
+## CREATE INDEX CONCURRENTLY runs at top level only
 
-`CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. This is a PostgreSQL constraint, not a pgmi limitation — the same issue affects Flyway, Liquibase, Prisma, Goose, and Drizzle.
+A concurrent index cannot run through `EXECUTE` in a plan loop or a DO block:
+PostgreSQL refuses it from any function execution context ("cannot be executed
+from a function"). Write each one explicitly at the top level of deploy.sql,
+after its first top-level `COMMIT` ([how](HIGHLIGHTS.md#10-create-index-concurrently-works-inside-a-deploy)).
 
-pgmi's execution contract handles it directly: **before your first top-level `COMMIT`, pgmi's atomic mode; after it, psql mode.** The head of deploy.sql (through the first top-level transaction terminator) runs as one transaction; every top-level statement after it runs per-statement autocommit on the same session — which is exactly what `CREATE INDEX CONCURRENTLY` needs. pgmi's temp views survive the `COMMIT` (session-scoped) and stay queryable:
-
-```sql
--- Phase 1: transactional migrations (atomic head)
-BEGIN;
--- ... migrations ...
-COMMIT;
-
--- Phase 2: concurrent indexes, psql mode (per-statement autocommit)
-CREATE INDEX CONCURRENTLY idx_user_email ON users(email);
-
--- Phase 3: an atomic backfill says so explicitly
-BEGIN;
-UPDATE users SET email_normalized = lower(email) WHERE email_normalized IS NULL;
-COMMIT;
-
--- Phase 4: more concurrent work
-CREATE INDEX CONCURRENTLY idx_order_date ON orders(created_at);
-```
-
-The trade-offs to know:
-
-- After the first `COMMIT`, statements are **not** implicitly grouped — a later atomic phase writes its own `BEGIN ... COMMIT`. A mid-tail failure keeps earlier autocommitted statements applied, so tail statements should be idempotent. For a concurrent index that means reaping an `INVALID` leftover before `CREATE INDEX CONCURRENTLY IF NOT EXISTS` — `IF NOT EXISTS` alone matches on name and would skip the wreckage forever; see [making a concurrent index re-runnable](DEPLOY-GUIDE.md#making-a-concurrent-index-re-runnable).
-- Concurrent index statements cannot go through `EXECUTE` inside a DO block — PostgreSQL refuses `CREATE INDEX CONCURRENTLY` from any function execution context ("cannot be executed from a function"), even after a `COMMIT`. Write them explicitly at top level; there are no loops or variables there.
-
-See [deploy.sql guide](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) for the full contract and `examples/lock-safe-deploy/` for a runnable project.
+Statements there autocommit, so earlier ones stay applied if a later one
+fails. A rerun must also reap an `INVALID` index a failed build left behind;
+`IF NOT EXISTS` alone does not ([making a concurrent index
+re-runnable](DEPLOY-GUIDE.md#making-a-concurrent-index-re-runnable)).
 
 ---
 
-## No built-in test report format
+## The default test reporter is plain notices
 
 By default, pgmi tests produce NOTICE messages:
 
 ```
-NOTICE: [pgmi] Test: ./__test__/test_user_crud.sql
+NOTICE: [pgmi] Test: ./semantic/__test__/test_task.sql
 ```
 
 The default reporter has no JUnit XML, TAP, JSON report, or timing information. A test either succeeds (the suite continues) or fails (`RAISE EXCEPTION` aborts the transaction), and a full run ends with `[pgmi] Test suite passed`.
 
-Structured output is a callback you write or copy. `CALL pgmi_test('pattern', 'pg_temp.my_callback')` hands every test event to a PL/pgSQL function, which can emit any format. `examples/tap-reporter/` is a working TAP 14 reporter. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
+For a structured report you write or adapt a PL/pgSQL callback that receives the test event stream: `CALL pgmi_test('pattern', 'pg_temp.my_callback')` hands it every suite, fixture and test event as a `pg_temp.pgmi_test_event`. `examples/tap-reporter/` is a working TAP 14 reporter. See [Testing](TESTING.md#custom-test-callbacks) for the function signature.
 
 ---
 
@@ -120,7 +91,7 @@ pgmi is a CLI tool. There is no:
 - Commercial support or training programs
 - Web dashboard
 
-Documentation is `README.md`, these docs, `pgmi ai skills`, and the embedded AI documentation.
+Documentation is `README.md`, these docs, `pgmi ai`, and the agent skills `pgmi init` writes into each project.
 
 ---
 
@@ -148,7 +119,7 @@ pgmi is designed for schema deployment and reference data loading, not bulk data
 
 ---
 
-## Connection poolers are incompatible
+## Deploys cannot run through a transaction-mode pooler
 
 pgmi requires session-scoped temporary tables that survive for the entire deployment. Connection poolers in transaction or statement mode reassign backends between operations, destroying the temp tables.
 
@@ -169,17 +140,17 @@ See [Connections](CONNECTIONS.md#connection-pooler-compatibility) for details.
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
-The advanced template's `deploy.sql` is several hundred lines of PL/pgSQL that
-handles:
+The advanced template's `deploy.sql` is a PL/pgSQL program of over a thousand
+lines that handles:
 
 - XML parameter declaration and validation
-- Database role setup (owner, admin, api, customer)
+- Database role setup (owner, admin, api, kernel, and grants to an optional jobs login)
 - Migration tracking with UUID-based idempotency
 - Audit logging to `internal.deployment_script_execution_log`
 - Test execution gating
 - Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects
 
-If it breaks, you debug PL/pgSQL exception handling, not framework configuration. You own this code — pgmi scaffolds it, but you maintain it.
+If it breaks, you debug PL/pgSQL exception handling, not framework configuration. You own this code — pgmi scaffolds it, but you maintain it. It needs PostgreSQL 18, and a new template release can need a new database: v0.14 cannot upgrade a v0.13 advanced database in place ([upgrading](advanced/UPGRADING.md)).
 
 For teams comfortable with PL/pgSQL, this is a feature. For teams that want a tool to handle complexity, this is a cost.
 

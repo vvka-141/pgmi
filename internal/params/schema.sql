@@ -7,6 +7,7 @@
 --
 -- DATA FLOW:
 --   CLI flags ──► Go ──► _pgmi_parameter (--param key=value)
+--   Binary version ──► Go ──► _pgmi_runtime (pgmi and contract version)
 --   Project files ──► Go ──► _pgmi_source (via pgmi_register_file)
 --   Test files ──► Go ──► _pgmi_test_directory + _pgmi_test_source
 --   api-v1.sql ──► Creates public views (pgmi_source_view, pgmi_plan_view, etc.)
@@ -14,6 +15,7 @@
 --
 -- OBJECT INDEX (search: "§" + name):
 --   §_pgmi_parameter       - CLI parameters (key, value)
+--   §_pgmi_runtime         - pgmi binary and contract version (one row)
 --   §_pgmi_source          - Project files (non-test)
 --   §_pgmi_source_metadata - Parsed <pgmi-meta> XML blocks
 --   §_pgmi_test_directory  - Test directory hierarchy
@@ -47,6 +49,7 @@ BEGIN
         DROP TABLE IF EXISTS pg_temp._pgmi_source_metadata CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_parameter CASCADE;
+        DROP TABLE IF EXISTS pg_temp._pgmi_runtime CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_source CASCADE;
         DROP TABLE IF EXISTS pg_temp._pgmi_test_directory CASCADE;
         DROP TYPE IF EXISTS pg_temp.pgmi_test_event CASCADE;
@@ -67,15 +70,32 @@ CREATE TEMP TABLE pg_temp._pgmi_parameter
 GRANT SELECT ON TABLE pg_temp._pgmi_parameter TO PUBLIC;
 
 
+-- §_pgmi_runtime ─────────────────────────────────────────────────────────────
+-- Populated by: Go, one row per session (the binary's version, the applied contract)
+-- Used by: deploy.sql via pgmi_runtime_view
+CREATE TEMP TABLE pg_temp._pgmi_runtime
+(
+    pgmi_version     TEXT NOT NULL,
+    contract_version TEXT NOT NULL,
+    CONSTRAINT chk_pgmi_version_not_empty CHECK (pgmi_version <> ''),
+    CONSTRAINT chk_contract_version_not_empty CHECK (contract_version <> '')
+);
+
+CREATE UNIQUE INDEX ux_pgmi_runtime_one_row ON pg_temp._pgmi_runtime ((true));
+GRANT SELECT ON TABLE pg_temp._pgmi_runtime TO PUBLIC;
+
+
 -- §_pgmi_source ──────────────────────────────────────────────────────────────
 -- Populated by: Go via pgmi_register_file() for each discovered file
 -- Used by: pgmi_plan_view, deploy.sql queries
 -- Excludes: deploy.sql itself and __test__/ files (see chk_path_is_not_test)
+-- Path columns here and in the test tables are COLLATE "C": ORDER BY path is
+-- byte order on every server, whatever the database's locale.
 CREATE TEMP TABLE _pgmi_source
 (
-    path TEXT NOT NULL PRIMARY KEY,
-    name TEXT NOT NULL,
-    directory TEXT NOT NULL,
+    path TEXT COLLATE "C" NOT NULL PRIMARY KEY,
+    name TEXT COLLATE "C" NOT NULL,
+    directory TEXT COLLATE "C" NOT NULL,
     extension TEXT NOT NULL,
     depth INTEGER NOT NULL,
     content TEXT NOT NULL,
@@ -136,7 +156,7 @@ GRANT SELECT ON TABLE pg_temp._pgmi_source TO PUBLIC;
 -- Used by: pgmi_plan_view (LEFT JOIN for optional metadata)
 -- Files without metadata: use path as fallback sort key (see plan view)
 CREATE TEMP TABLE _pgmi_source_metadata (
-    path TEXT PRIMARY KEY REFERENCES pg_temp._pgmi_source(path),
+    path TEXT COLLATE "C" PRIMARY KEY REFERENCES pg_temp._pgmi_source(path),
     id UUID NOT NULL,
     idempotent BOOLEAN NOT NULL,
     sort_keys TEXT[] NOT NULL DEFAULT '{}',
@@ -159,8 +179,8 @@ GRANT SELECT ON TABLE pg_temp._pgmi_source_metadata TO PUBLIC;
 -- Used by: pgmi_test_plan() for depth-first traversal via parent_path
 CREATE TEMP TABLE pg_temp._pgmi_test_directory
 (
-    path         TEXT PRIMARY KEY,
-    parent_path  TEXT,
+    path         TEXT COLLATE "C" PRIMARY KEY,
+    parent_path  TEXT COLLATE "C",
     depth        INT NOT NULL DEFAULT 0,
     CONSTRAINT chk_test_dir_path_format CHECK (path ~ '^\./' AND path ~ '/__tests?__/'),
     CONSTRAINT chk_test_dir_ends_slash CHECK (path ~ '/$')
@@ -178,9 +198,9 @@ COMMENT ON TABLE pg_temp._pgmi_test_directory IS
 -- is_fixture: true for _setup.sql/_setup.psql (run before tests in same directory)
 CREATE TEMP TABLE pg_temp._pgmi_test_source
 (
-    path         TEXT NOT NULL PRIMARY KEY,
-    directory    TEXT NOT NULL,
-    filename     TEXT NOT NULL,
+    path         TEXT COLLATE "C" NOT NULL PRIMARY KEY,
+    directory    TEXT COLLATE "C" NOT NULL,
+    filename     TEXT COLLATE "C" NOT NULL,
     content      TEXT NOT NULL,
     is_fixture   BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT chk_test_source_path_format CHECK (path ~ '^\./'),
@@ -194,18 +214,6 @@ GRANT SELECT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
 COMMENT ON TABLE pg_temp._pgmi_test_source IS
     'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
 
-CREATE OR REPLACE FUNCTION pg_temp.pgmi_run_test_source(p_path text)
-RETURNS void LANGUAGE plpgsql AS $$
-DECLARE
-    v_detail text;
-BEGIN
-    EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = p_path);
-EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-    RAISE EXCEPTION 'Failed in %: %', p_path, SQLERRM
-        USING ERRCODE = SQLSTATE, DETAIL = COALESCE(v_detail, '');
-END;
-$$;
 
 -- §pgmi_test_event ────────────────────────────────────────────────────────────
 -- Composite type passed to test callbacks during pgmi_test() execution

@@ -1,5 +1,6 @@
 # pgmi project configuration
-# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
+# CLI flags override these values. Environment variables (PGHOST, PGDATABASE, ...)
+# override them too; pgmi names each one it applies over a value set here.
 
 connection:
   database: mydb              # Target database (change this!)
@@ -10,12 +11,13 @@ connection:
 
 # Parameters passed to deploy.sql
 # See session.xml for all declared parameters and their descriptions.
-# env is required and deliberately not set here, so a committed file can never
-# make a production deploy look like dev. Pass it per deploy:
+# env (dev, test or prod) is required and deliberately not set here, so a
+# committed file can never make a production deploy look like dev. The database
+# remembers its env and refuses a redeploy that names another. Pass it per deploy:
 #   local:  pgmi deploy . -d mydb --param env=dev
 #           (role passwords default to 'postgres': disposable databases only)
-#   shared: put env and database_admin_password in a params file kept out of
-#           version control, and pass it with --params-file
+#   shared: PGMI_PARAM_DATABASE_ADMIN_PASSWORD=... pgmi deploy . -d mydb --param env=prod
+#           (the environment, stdin or a params file; never --param for a secret)
 # params:
 #   some_setting: value
 

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-	"unicode"
 )
 
 // Calculator is an interface for computing file checksums.
@@ -49,27 +48,8 @@ func (c SHA256) CalculateNormalized(content []byte) string {
 }
 
 // normalize applies the normalization rules to content.
-// Uses strings.Builder for efficient string construction to avoid multiple allocations.
 func (c SHA256) normalize(content string) string {
-	cleaned := c.scan(content, true)
-
-	var b strings.Builder
-	b.Grow(len(cleaned))
-
-	lastWasSpace := false
-	for _, r := range cleaned {
-		if unicode.IsSpace(r) {
-			if !lastWasSpace {
-				b.WriteRune(' ')
-				lastWasSpace = true
-			}
-		} else {
-			b.WriteRune(r)
-			lastWasSpace = false
-		}
-	}
-
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(c.scan(content, true))
 }
 
 type commentState int
@@ -91,12 +71,14 @@ const (
 // A comment becomes one space rather than nothing: deleting it outright would
 // normalize a/*x*/b to ab, which collides with the different statement `ab`.
 //
-// It optionally folds case as it goes. Folding belongs here, not in a second
-// pass, because only this scan knows which bytes are outside a literal. SQL
+// With normalize it also folds case and collapses each whitespace run to one
+// space, as it goes. Both belong here, not in a second pass, because only
+// this scan knows which bytes are outside a literal. SQL
 // ignores case for keywords and unquoted identifiers alone: "Users" and "users" are different tables, and 'Production' and
 // 'production' are different data. Folding those made two scripts that deploy
-// differently share one checksum, so a change gated on it was skipped.
-func (c SHA256) scan(content string, foldCase bool) string {
+// differently share one checksum, so a change gated on it was skipped. The
+// same holds for whitespace: 'a  b' and 'a b' are different data.
+func (c SHA256) scan(content string, normalize bool) string {
 	var b strings.Builder
 	b.Grow(len(content))
 
@@ -104,6 +86,7 @@ func (c SHA256) scan(content string, foldCase bool) string {
 	blockDepth := 0
 	dollarTag := ""
 	escapeString := false
+	lastSpace := false
 	i := 0
 
 	for i < len(content) {
@@ -112,18 +95,32 @@ func (c SHA256) scan(content string, foldCase bool) string {
 		if i+1 < len(content) {
 			next = content[i+1]
 		}
+		written := b.Len()
+		spaced := false
+		space := func(raw string) {
+			spaced = true
+			if !normalize {
+				b.WriteString(raw)
+			} else if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
 
 		switch state {
 		case csNormal:
 			if ch == '-' && next == '-' {
 				state = csLineComment
-				b.WriteByte(' ')
+				space(" ")
 				i += 2
 			} else if ch == '/' && next == '*' {
 				state = csBlockComment
 				blockDepth = 1
-				b.WriteByte(' ')
+				space(" ")
 				i += 2
+			} else if normalize && isASCIISpace(ch) {
+				space(" ")
+				i++
 			} else if ch == '\'' {
 				state = csSingleQuote
 				escapeString = escapeStringPrefixed(content, i)
@@ -133,7 +130,7 @@ func (c SHA256) scan(content string, foldCase bool) string {
 				state = csQuotedIdentifier
 				b.WriteByte(ch)
 				i++
-			} else if ch == '$' {
+			} else if ch == '$' && !continuesIdentifier(content, i) {
 				tag := extractDollarTag(content, i)
 				if tag != "" {
 					state = csDollarQuote
@@ -145,7 +142,7 @@ func (c SHA256) scan(content string, foldCase bool) string {
 					i++
 				}
 			} else {
-				if foldCase {
+				if normalize {
 					ch = foldASCII(ch)
 				}
 				b.WriteByte(ch)
@@ -154,12 +151,11 @@ func (c SHA256) scan(content string, foldCase bool) string {
 
 		case csLineComment:
 			if ch == '\n' {
-				b.WriteByte(ch)
+				space("\n")
 				state = csNormal
 				i++
 			} else if ch == '\r' && next == '\n' {
-				b.WriteByte(ch)
-				b.WriteByte(next)
+				space("\r\n")
 				state = csNormal
 				i += 2
 			} else {
@@ -229,9 +225,16 @@ func (c SHA256) scan(content string, foldCase bool) string {
 				i++
 			}
 		}
+		if b.Len() != written && !spaced {
+			lastSpace = false
+		}
 	}
 
 	return b.String()
+}
+
+func isASCIISpace(ch byte) bool {
+	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f'
 }
 
 // extractDollarTag extracts a dollar-quote tag (e.g., "$$" or "$tag$") starting at position i.
@@ -282,6 +285,21 @@ func foldASCII(ch byte) byte {
 		return ch + ('a' - 'A')
 	}
 	return ch
+}
+
+// continuesIdentifier reports whether the $ at content[i] is part of an
+// unquoted identifier (foo$bar$), as PostgreSQL lexes it, rather than the
+// start of a dollar quote. After a parameter ($1) or a number it is not.
+func continuesIdentifier(content string, i int) bool {
+	j := i
+	for j > 0 && isIdentifierByte(content[j-1]) {
+		j--
+	}
+	if j == i {
+		return false
+	}
+	ch := content[j]
+	return ch == '_' || ch >= 0x80 || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
 func isIdentifierByte(ch byte) bool {

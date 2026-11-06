@@ -78,7 +78,7 @@ func TestRollbackClaimsStayWithinPostgreSQLGuarantees(t *testing.T) {
 		"../../docs/session-api.md",
 		"../../examples/test-gated-deploy/README.md",
 		"../../internal/ai/content/overview.md",
-		"../../internal/ai/content/skills/pgmi-sql.md",
+		"../../internal/scaffold/skills/pgmi-sql/SKILL.md",
 		"../../internal/scaffold/templates/advanced/README.md",
 		"../../internal/scaffold/templates/advanced/__test__/README.md",
 	}

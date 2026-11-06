@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestDeploy_SessionPrepErrorPropagates(t *testing.T) {
 	dbMgr := &mockDatabaseManager{existsResult: true}
 
-	connFactory := func(_ *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+	connFactory := func(_ *db.ConnectionConfig) (db.Connector, error) {
 		return &mockConnector{}, nil
 	}
 
@@ -98,8 +99,8 @@ func TestDeploy_EnsureDBExists_MgmtDefaultsToPostgres(t *testing.T) {
 	if len(dialed) != 2 {
 		t.Fatalf("Expected a probe of the target followed by the maintenance fallback, got %v", dialed)
 	}
-	if dialed[1] != pgmi.DefaultMaintenanceDB {
-		t.Fatalf("Expected default maintenance DB %q, got %q", pgmi.DefaultMaintenanceDB, dialed[1])
+	if dialed[1] != db.DefaultMaintenanceDB {
+		t.Fatalf("Expected default maintenance DB %q, got %q", db.DefaultMaintenanceDB, dialed[1])
 	}
 }
 
@@ -111,7 +112,7 @@ func TestDeploy_ExistingDatabase_SkipsMaintenanceConnection(t *testing.T) {
 	sessPreparer := &mockSessionPreparer{err: fmt.Errorf("mock stop")}
 
 	var dialed []string
-	mgmt := func(_ context.Context, _ *pgmi.ConnectionConfig, dbName string) (pgmi.DBConnection, func(), error) {
+	mgmt := func(_ context.Context, _ *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
 		dialed = append(dialed, dbName)
 		return &mockDBConnection{}, noop, nil
 	}

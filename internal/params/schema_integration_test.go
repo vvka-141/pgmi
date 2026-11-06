@@ -2,12 +2,16 @@ package params_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/internal/params"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func acquireSchemaConn(t *testing.T) (*pgxpool.Conn, func()) {
@@ -114,17 +118,80 @@ func TestIsSQLFile_GoAndSQLAgree(t *testing.T) {
 		t.Fatalf("CreateSchema: %v", err)
 	}
 
-	exts := []string{".md", ".json", ".sqlx", ".SQL", ".PgSql", "", ".sql.bak", ".txt"}
-	for ext := range pgmi.SQLExtensions {
-		exts = append(exts, ext)
+	exts := []string{
+		".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql",
+		".md", ".json", ".sqlx", ".SQL", ".PgSql", "", ".sql.bak", ".txt",
 	}
 	for _, ext := range exts {
 		var sqlSays bool
 		if err := conn.QueryRow(ctx, `SELECT pg_temp.pgmi_is_sql_file($1)`, "./f"+ext).Scan(&sqlSays); err != nil {
 			t.Fatalf("pgmi_is_sql_file(%q): %v", ext, err)
 		}
-		if goSays := pgmi.IsSQLExtension(ext); goSays != sqlSays {
+		if goSays := pathrule.IsSQLExtension(ext); goSays != sqlSays {
 			t.Errorf("extension %q: Go says %v, SQL says %v", ext, goSays, sqlSays)
 		}
+	}
+}
+
+// A role with CONNECT but not TEMPORARY cannot hold pgmi's session tables; the
+// error names the privilege, and the documented grants are enough.
+func TestCreateSchema_NamesTheMissingTemporaryPrivilege(t *testing.T) {
+	connStr := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+	const dbName, role = "pgmi_params_no_temp", "pgmi_params_no_temp_role"
+	cleanupDB := testhelpers.CreateTestDB(t, connStr, dbName)
+	defer cleanupDB()
+
+	admin, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	for _, stmt := range []string{
+		"DROP ROLE IF EXISTS " + role,
+		"CREATE ROLE " + role + " LOGIN PASSWORD 'pw'",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + role,
+	} {
+		if _, err := admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "REASSIGN OWNED BY "+role+" TO CURRENT_USER")
+		_, _ = admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+	})
+
+	cfg, err := db.ParseConnectionString(connStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Database, cfg.Username, cfg.Password = dbName, role, "pw"
+	createAsRole := func() error {
+		pool, err := pgxpool.New(ctx, db.BuildConnectionString(cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Release()
+		return params.CreateSchema(ctx, conn)
+	}
+
+	err = createAsRole()
+	var pgErr *pgconn.PgError
+	if err == nil || !strings.Contains(err.Error(), `GRANT TEMPORARY ON DATABASE "`+dbName+`" TO "`+role+`"`) ||
+		!errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("want a 42501 that names the TEMPORARY grant, got %v", err)
+	}
+
+	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE "+dbName+" TO "+role); err != nil {
+		t.Fatal(err)
+	}
+	if err := createAsRole(); err != nil {
+		t.Fatalf("CONNECT and TEMPORARY must be enough for the session tables: %v", err)
 	}
 }

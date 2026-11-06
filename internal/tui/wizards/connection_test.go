@@ -1,15 +1,21 @@
 package wizards
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -17,11 +23,13 @@ type mockTester struct {
 	info   string
 	err    error
 	called bool
-	gotCfg pgmi.ConnectionConfig
+	calls  int
+	gotCfg db.ConnectionConfig
 }
 
-func (m *mockTester) TestConnection(_ context.Context, cfg pgmi.ConnectionConfig) (string, error) {
+func (m *mockTester) TestConnection(_ context.Context, cfg db.ConnectionConfig) (string, error) {
 	m.called = true
+	m.calls++
 	m.gotCfg = cfg
 	return m.info, m.err
 }
@@ -53,22 +61,23 @@ func findTestResult(msgs []tea.Msg) (testResultMsg, bool) {
 	return testResultMsg{}, false
 }
 
-func keyMsg(k string) tea.KeyMsg {
+func keyMsg(k string) tea.KeyPressMsg {
 	switch k {
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		return tea.KeyPressMsg{Code: tea.KeyEsc}
 	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
+		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "shift+tab":
-		return tea.KeyMsg{Type: tea.KeyShiftTab}
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 	default:
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		r := []rune(k)
+		return tea.KeyPressMsg{Code: r[0], Text: k}
 	}
 }
 
@@ -302,22 +311,13 @@ func TestConnectionWizard_TestSuccessThenQuit(t *testing.T) {
 }
 
 func TestConnectionWizard_TestFailureGoesBackToEdit(t *testing.T) {
-	w := NewConnectionWizard()
-
-	m, _ := selectLocalAndFillDB(t, w)
-
-	// Simulate failed test
+	m, _ := selectLocalAndFillDB(t, NewConnectionWizard())
 	m, _ = update(t, m, testResultMsg{success: false, err: fmt.Errorf("connection refused")})
-	w = asWizard(t, m)
-	if w.testOK {
-		t.Fatal("testOK should be false for failure")
-	}
 
-	// Press Enter → should go back to edit form
-	m, cmd := update(t, m, keyMsg("enter"))
-	w = asWizard(t, m)
+	m, cmd := update(t, m, keyMsg("esc"))
+	w := asWizard(t, m)
 	if w.step != stepInputHost {
-		t.Errorf("after Enter on failure, step = %d, want stepInputHost (%d)", w.step, stepInputHost)
+		t.Errorf("after Esc on failure, step = %d, want stepInputHost (%d)", w.step, stepInputHost)
 	}
 	if isQuitCmd(cmd) {
 		t.Error("should NOT quit after test failure")
@@ -475,7 +475,7 @@ func TestConnectionWizard_MockTesterFailureFlow(t *testing.T) {
 		t.Error("testOK should be false")
 	}
 
-	m, cmd = update(t, m, keyMsg("enter"))
+	m, cmd = update(t, m, keyMsg("esc"))
 	wiz = asWizard(t, m)
 	if wiz.step != stepInputHost {
 		t.Errorf("step = %d, want stepInputHost", wiz.step)
@@ -581,55 +581,109 @@ func TestConnectionWizard_AzureEntraIDFlow(t *testing.T) {
 }
 
 func TestConnectionWizard_RetryAfterFailure(t *testing.T) {
-	failMock := &mockTester{err: fmt.Errorf("timeout")}
-	w := NewConnectionWizard(WithTester(failMock))
-
-	m, cmd := selectLocalAndFillDB(t, w)
-
-	msgs := drainCmds(cmd)
-	result, _ := findTestResult(msgs)
+	mock := &mockTester{err: fmt.Errorf("timeout")}
+	m, cmd := selectLocalAndFillDB(t, NewConnectionWizard(WithTester(mock)))
+	result, _ := findTestResult(drainCmds(cmd))
 	m, _ = update(t, m, result)
-	wiz := asWizard(t, m)
-	if wiz.testOK {
+	if asWizard(t, m).testOK {
 		t.Fatal("first attempt should fail")
 	}
 
-	m, _ = update(t, m, keyMsg("enter"))
-	wiz = asWizard(t, m)
-	if wiz.step != stepInputHost {
-		t.Fatalf("should return to input, got step %d", wiz.step)
-	}
-
-	// Now inject a success tester — simulate fixing the issue
-	// Re-submit the form (inputs are recreated fresh, must type database again)
-	wiz.tester = &mockTester{info: "PostgreSQL 16.1"}
-	m = wiz
-	m, _ = update(t, m, keyMsg("enter"))   // host
-	m, _ = update(t, m, keyMsg("enter"))   // port
-	m = typeString(t, m, "testdb")         // type database name
-	m, _ = update(t, m, keyMsg("enter"))   // database
-	m, _ = update(t, m, keyMsg("enter"))   // management db
-	m, _ = update(t, m, keyMsg("enter"))   // username
-	m, cmd = update(t, m, keyMsg("enter")) // password → submit
-	wiz = asWizard(t, m)
-	if wiz.step != stepTestConnection {
-		t.Fatalf("expected stepTestConnection, got %d", wiz.step)
-	}
-
-	msgs = drainCmds(cmd)
-	result, _ = findTestResult(msgs)
+	mock.err, mock.info = nil, "PostgreSQL 16.1"
+	m, cmd = update(t, m, keyMsg("enter"))
+	result, _ = findTestResult(drainCmds(cmd))
 	if !result.success {
 		t.Fatalf("second attempt should succeed, got err: %v", result.err)
 	}
 
 	m, _ = update(t, m, result)
 	m, cmd = update(t, m, keyMsg("enter"))
-	wiz = asWizard(t, m)
-	if wiz.step != stepDone {
-		t.Errorf("step = %d, want stepDone", wiz.step)
+	if w := asWizard(t, m); w.step != stepDone {
+		t.Errorf("step = %d, want stepDone", w.step)
 	}
 	if !isQuitCmd(cmd) {
 		t.Error("expected tea.Quit")
+	}
+}
+
+func TestConnectionWizard_EscAfterFailureKeepsValues(t *testing.T) {
+	m, _ := update(t, NewConnectionWizard(), keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m = typeString(t, m, "trialb")
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m = typeString(t, m, "nope")
+	m, _ = update(t, m, keyMsg("enter"))
+	before := asWizard(t, m)
+	var want []string
+	for _, in := range before.inputs {
+		want = append(want, in.Value())
+	}
+
+	m, _ = update(t, m, testResultMsg{success: false, err: fmt.Errorf("refused")})
+	m, _ = update(t, m, keyMsg("esc"))
+	w := asWizard(t, m)
+
+	for i, in := range w.inputs {
+		if in.Value() != want[i] {
+			t.Errorf("input %d = %q after Esc, want %q kept", i, in.Value(), want[i])
+		}
+	}
+	if w.focusIndex != 5 {
+		t.Errorf("focusIndex = %d, want 5 (password)", w.focusIndex)
+	}
+}
+
+func TestConnectionWizard_EnterAfterFailureRetries(t *testing.T) {
+	mock := &mockTester{err: fmt.Errorf("refused")}
+	m, cmd := selectLocalAndFillDB(t, NewConnectionWizard(WithTester(mock)))
+	result, _ := findTestResult(drainCmds(cmd))
+	m, _ = update(t, m, result)
+
+	m, cmd = update(t, m, keyMsg("enter"))
+	if w := asWizard(t, m); w.step != stepTestConnection || !w.testing {
+		t.Fatalf("Enter after a failure should re-run the test, step = %d testing = %v", w.step, w.testing)
+	}
+	if _, ok := findTestResult(drainCmds(cmd)); !ok || mock.calls != 2 {
+		t.Errorf("tester called %d time(s), want 2", mock.calls)
+	}
+	if mock.gotCfg.Database != "postgres" {
+		t.Errorf("retry tested database %q, want the same maintenance database", mock.gotCfg.Database)
+	}
+}
+
+func TestConnectionWizard_EmptyDatabaseFocusesIt(t *testing.T) {
+	m, _ := update(t, NewConnectionWizard(), keyMsg("enter"))
+	for range 5 {
+		m, _ = update(t, m, keyMsg("enter"))
+	}
+	m, _ = update(t, m, keyMsg("enter"))
+	w := asWizard(t, m)
+
+	if w.focusIndex != 2 {
+		t.Errorf("focusIndex = %d, want 2 (database)", w.focusIndex)
+	}
+	view := w.View().Content
+	i, j := strings.Index(view, "database name is required"), strings.Index(view, "Maintenance DB:")
+	if i < 0 || j < 0 || i > j {
+		t.Errorf("the error should sit under the database field, before Maintenance DB:\n%s", view)
+	}
+}
+
+func TestConnectionWizard_AuthFailureHidesTLSNoise(t *testing.T) {
+	mock := &mockTester{err: errors.Join(errors.New("tls error: server refused TLS connection"), &pgconn.PgError{Code: "28P01"})}
+	m, cmd := selectLocalAndFillDB(t, NewConnectionWizard(WithTester(mock)))
+	result, _ := findTestResult(drainCmds(cmd))
+	m, _ = update(t, m, result)
+
+	view := m.View().Content
+	if !strings.Contains(view, "password authentication failed") {
+		t.Errorf("view should name the password failure:\n%s", view)
+	}
+	if strings.Contains(view, "tls error") {
+		t.Errorf("view should not lead with pgx's TLS attempt:\n%s", view)
 	}
 }
 
@@ -654,7 +708,7 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 		t.Fatalf("expected initStepTemplate, got %d", iw.step)
 	}
 
-	// Step 2: select basic template (first, already selected)
+	// Step 2: select minimal template (first, already selected)
 	m, _ = update(t, m, keyMsg("enter"))
 	iw = asInitWizard(t, m)
 	if iw.step != initStepSetupChoice {
@@ -714,8 +768,8 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 	if result.Cancelled {
 		t.Error("should not be cancelled")
 	}
-	if result.Template != "basic" {
-		t.Errorf("template = %q, want basic", result.Template)
+	if result.Template != "minimal" {
+		t.Errorf("template = %q, want minimal", result.Template)
 	}
 	if !result.SetupConfig {
 		t.Error("SetupConfig should be true")
@@ -769,16 +823,50 @@ func TestInitWizard_ConnectionCancelledViaEsc(t *testing.T) {
 		t.Fatal("should be in connection wizard")
 	}
 
-	// Esc on provider selection cancels connection wizard
+	// Esc on provider selection returns to "Set up the connection now?"
 	m, cmd := update(t, m, keyMsg("esc"))
 	iw = asInitWizard(t, m)
 
-	if !isQuitCmd(cmd) {
-		t.Fatal("expected tea.Quit on Esc in connection wizard")
+	if isQuitCmd(cmd) {
+		t.Fatal("Esc in the connection wizard must not quit init")
 	}
-	result := iw.Result()
-	if !result.ConnResult.Cancelled {
-		t.Error("ConnResult should be cancelled")
+	if iw.connActive || iw.connWizard != nil {
+		t.Error("the connection wizard should be dropped")
+	}
+	if iw.step != initStepSetupChoice {
+		t.Errorf("step = %d, want initStepSetupChoice", iw.step)
+	}
+	if iw.Result().Cancelled {
+		t.Error("init should not be cancelled by Esc in the connection wizard")
+	}
+}
+
+func TestInitWizard_CtrlCInConnectionWizardInterrupts(t *testing.T) {
+	w := NewInitWizard(filepath.Join(t.TempDir(), "newproject"), DefaultTemplates())
+	m, _ := update(t, w, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("down"))
+	m, _ = update(t, m, keyMsg("enter"))
+	if !asInitWizard(t, m).connActive {
+		t.Fatal("should be in connection wizard")
+	}
+
+	m, cmd := update(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !isQuitCmd(cmd) {
+		t.Fatal("ctrl+c in the connection wizard should quit init")
+	}
+	if r := asInitWizard(t, m).Result(); !r.Interrupted || !r.Cancelled {
+		t.Errorf("result = %+v, want Interrupted and Cancelled", r)
+	}
+}
+
+func TestInitWizard_CtrlCInterrupts(t *testing.T) {
+	m, cmd := update(t, NewInitWizard("", DefaultTemplates()), tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !isQuitCmd(cmd) {
+		t.Fatal("ctrl+c should quit")
+	}
+	if r := asInitWizard(t, m).Result(); !r.Interrupted || !r.Cancelled {
+		t.Errorf("result = %+v, want Interrupted and Cancelled", r)
 	}
 }
 
@@ -1030,8 +1118,8 @@ func TestConnectionWizard_ConnStringFlow_ParsesRealValues(t *testing.T) {
 	if cfg.SSLMode != "require" {
 		t.Errorf("SSLMode = %q, want require", cfg.SSLMode)
 	}
-	if wiz.result.MaintenanceDatabase != pgmi.DefaultMaintenanceDB {
-		t.Errorf("MaintenanceDatabase = %q, want %q", wiz.result.MaintenanceDatabase, pgmi.DefaultMaintenanceDB)
+	if wiz.result.MaintenanceDatabase != db.DefaultMaintenanceDB {
+		t.Errorf("MaintenanceDatabase = %q, want %q", wiz.result.MaintenanceDatabase, db.DefaultMaintenanceDB)
 	}
 
 	msgs := drainCmds(cmd)
@@ -1064,10 +1152,34 @@ func TestConnectionWizard_ConnStringFlow_InvalidStringShowsError(t *testing.T) {
 
 func TestConnectionWizard_CtrlC_Cancels(t *testing.T) {
 	w := NewConnectionWizard()
-	_, cmd := update(t, w, tea.KeyMsg{Type: tea.KeyCtrlC})
+	m, cmd := update(t, w, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
 	if !isQuitCmd(cmd) {
 		t.Error("ctrl+c should produce tea.Quit")
+	}
+	if r := asWizard(t, m).Result(); !r.Interrupted || !r.Cancelled {
+		t.Errorf("result = %+v, want Interrupted and Cancelled", r)
+	}
+}
+
+func TestConnectionWizard_EscCancelsWithoutInterrupt(t *testing.T) {
+	m, cmd := update(t, NewConnectionWizard(), keyMsg("esc"))
+	if !isQuitCmd(cmd) {
+		t.Error("esc on the provider list should quit the standalone wizard")
+	}
+	if r := asWizard(t, m).Result(); !r.Cancelled || r.Interrupted {
+		t.Errorf("result = %+v, want Cancelled without Interrupted", r)
+	}
+}
+
+func TestConnectionWizard_FooterListsOnlyWorkingKeys(t *testing.T) {
+	w := NewConnectionWizard()
+	if view := w.View().Content; strings.Contains(view, "q quit") {
+		t.Errorf("provider list advertises q, which does nothing:\n%s", view)
+	}
+	m, _ := update(t, w, keyMsg("q"))
+	if asWizard(t, m).Result().Cancelled {
+		t.Error("q is not a key: it must not cancel")
 	}
 }
 
@@ -1075,7 +1187,7 @@ func TestConnectionWizard_CtrlC_Cancels(t *testing.T) {
 
 func TestConnectionWizard_View_ProviderStep(t *testing.T) {
 	w := NewConnectionWizard()
-	view := w.View()
+	view := w.View().Content
 
 	if !strings.Contains(view, "Connection Setup") {
 		t.Error("View at provider step should contain 'Connection Setup'")
@@ -1091,8 +1203,8 @@ func TestConnectionWizard_View_InputFormStep(t *testing.T) {
 	w := NewConnectionWizard()
 	m, _ := update(t, w, keyMsg("enter")) // select local → host form
 
-	view := m.View()
-	for _, label := range []string{"Host:", "Port:", "Database:"} {
+	view := m.View().Content
+	for _, label := range []string{"Host:", "Port:", "Database (required):"} {
 		if !strings.Contains(view, label) {
 			t.Errorf("View at input form should contain %q", label)
 		}
@@ -1105,7 +1217,7 @@ func TestConnectionWizard_View_TestConnectionStep(t *testing.T) {
 
 	// Simulate success
 	m, _ = update(t, m, testResultMsg{success: true, info: "PostgreSQL 16.1"})
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "✓ Connected") {
 		t.Error("View after success should contain '✓ Connected'")
 	}
@@ -1114,7 +1226,7 @@ func TestConnectionWizard_View_TestConnectionStep(t *testing.T) {
 	w2 := NewConnectionWizard()
 	m2, _ := selectLocalAndFillDB(t, w2)
 	m2, _ = update(t, m2, testResultMsg{success: false, err: fmt.Errorf("refused")})
-	view2 := m2.View()
+	view2 := m2.View().Content
 	if !strings.Contains(view2, "Connection failed") {
 		t.Error("View after failure should contain 'Connection failed'")
 	}
@@ -1268,7 +1380,7 @@ func TestInitWizard_View_DirectoryStep(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "newproject")
 	w := NewInitWizard(dir, templates)
 
-	view := w.View()
+	view := w.View().Content
 	if !strings.Contains(view, "pgmi init") {
 		t.Error("View at directory step should contain 'pgmi init'")
 	}
@@ -1284,7 +1396,7 @@ func TestInitWizard_View_TemplateStep(t *testing.T) {
 
 	// Confirm directory → template step
 	m, _ := update(t, w, keyMsg("enter"))
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "basic") {
 		t.Error("View at template step should contain 'basic'")
 	}
@@ -1342,29 +1454,183 @@ func TestConnectionWizard_ConnStringErrorRedactsThePassword(t *testing.T) {
 	w.inputs = w.createConnStringInputs()
 	w.inputs[0].SetValue("postgresql://user:" + secret + "@localhost:5432/db")
 
-	err := w.validateInputs()
-	if err == nil {
-		t.Fatal("a password with a bare % must fail to parse, or this proves nothing")
-	}
-	if !strings.Contains(err.Error(), secret) {
-		t.Fatalf("the raw parser error no longer carries the password, so this test "+
-			"can no longer distinguish a redacting wizard from a leaking one: %v", err)
-	}
-
 	m, _ := update(t, &w, keyMsg("enter"))
 	got := asWizard(t, m).validationErr
 
 	if got == "" {
 		t.Fatal("validationErr was not set for an unparseable connection string")
 	}
-	if strings.Contains(got, secret) {
+	if strings.Contains(got, secret) || strings.Contains(got, "SECRET") {
 		t.Errorf("the wizard displays the password: %q", got)
 	}
-	if !strings.Contains(got, "[redacted]") {
-		t.Errorf("expected the password replaced with [redacted], got %q", got)
+	if !strings.Contains(got, "percent-encode") {
+		t.Errorf("the message must say how to fix the string, got %q", got)
 	}
-	// The message still has to be diagnosable — host and reason survive.
-	if !strings.Contains(got, "localhost") {
-		t.Errorf("redaction removed the host too, leaving nothing to act on: %q", got)
+}
+
+func TestConnectionWizard_SuccessNamesMaintenanceDatabase(t *testing.T) {
+	m, _ := selectLocalAndFillDB(t, NewConnectionWizard())
+	m, _ = update(t, m, testResultMsg{success: true, info: "PostgreSQL 18.0"})
+	view := m.View().Content
+
+	if !strings.Contains(view, "✓ Connected to localhost:5432/postgres") {
+		t.Errorf("success screen should name the maintenance database it reached, got:\n%s", view)
+	}
+	if !strings.Contains(view, "testdb is created on the first deploy") {
+		t.Errorf("success screen should say the target database is created on deploy, got:\n%s", view)
+	}
+}
+
+func sized(t *testing.T, m tea.Model, width, height int) tea.Model {
+	t.Helper()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return m
+}
+
+func assertFits(t *testing.T, where, view string, width, height int) {
+	t.Helper()
+	if h := lipgloss.Height(view); h > height {
+		t.Errorf("%s: %d lines, want at most %d:\n%s", where, h, height, view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > width {
+			t.Errorf("%s: line wider than %d cells: %q", where, width, line)
+		}
+	}
+}
+
+func TestConnectionWizard_HostFormFits80x24(t *testing.T) {
+	labels := []string{"Host:", "Port:", "Database (required):", "Maintenance DB:", "Username:", "Password:"}
+	m, _ := update(t, sized(t, NewConnectionWizard(), 80, 24), keyMsg("enter"))
+	for i := range labels {
+		w := asWizard(t, m)
+		if w.focusIndex != i {
+			t.Fatalf("focusIndex = %d, want %d", w.focusIndex, i)
+		}
+		view := m.View().Content
+		assertFits(t, fmt.Sprintf("focus %d", i), view, 80, 24)
+		if !strings.Contains(view, labels[i]) {
+			t.Errorf("focus %d: focused label %q not visible", i, labels[i])
+		}
+		m, _ = update(t, m, keyMsg("tab"))
+	}
+
+	m, _ = update(t, sized(t, NewConnectionWizard(), 80, 24), keyMsg("enter"))
+	for range 6 {
+		m, _ = update(t, m, keyMsg("enter"))
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "database name is required") {
+		t.Fatal("validation error not shown")
+	}
+	assertFits(t, "validation error", view, 80, 24)
+}
+
+func TestConnectionWizard_EveryFormFits80x24(t *testing.T) {
+	for i, p := range providers {
+		m := sized(t, NewConnectionWizard(), 80, 24)
+		for range i {
+			m, _ = update(t, m, keyMsg("down"))
+		}
+		m, _ = update(t, m, keyMsg("enter"))
+		assertFits(t, p.Name, m.View().Content, 80, 24)
+		if w := asWizard(t, m); w.step == stepSelectAuth {
+			for j := range w.provider.AuthMethods {
+				mm := m
+				for range j {
+					mm, _ = update(t, mm, keyMsg("down"))
+				}
+				mm, _ = update(t, mm, keyMsg("enter"))
+				assertFits(t, p.Name+"/"+w.provider.AuthMethods[j].Name, mm.View().Content, 80, 24)
+			}
+		}
+	}
+}
+
+func TestConnectionWizard_WrapsAt60Columns(t *testing.T) {
+	m := sized(t, NewConnectionWizard(), 60, 40)
+	assertFits(t, "provider list", m.View().Content, 60, 40)
+
+	m, _ = update(t, m, keyMsg("enter"))
+	assertFits(t, "host form", m.View().Content, 60, 40)
+
+	m, _ = selectLocalAndFillDB(t, sized(t, NewConnectionWizard(), 60, 40).(ConnectionWizard))
+	m, _ = update(t, m, testResultMsg{success: false, err: errors.New(strings.Repeat("a long refusal from the server ", 6))})
+	assertFits(t, "failure screen", m.View().Content, 60, 40)
+}
+
+func TestInitWizard_StepsFit(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {60, 24}} {
+		dir := filepath.Join(t.TempDir(), strings.Repeat("a-rather-long-directory-name-", 3))
+		m := sized(t, NewInitWizard(dir, DefaultTemplates()), size[0], size[1])
+		for step := range 3 {
+			assertFits(t, fmt.Sprintf("%dx%d init step %d", size[0], size[1], step), m.View().Content, size[0], size[1])
+			m, _ = update(t, m, keyMsg("enter"))
+		}
+	}
+}
+
+func TestInitWizard_EmbeddedWizardGetsWindowSize(t *testing.T) {
+	m := sized(t, NewInitWizard(filepath.Join(t.TempDir(), "p"), DefaultTemplates()), 61, 31)
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("enter"))
+	m, _ = update(t, m, keyMsg("down"))
+	m, _ = update(t, m, keyMsg("enter"))
+	iw := asInitWizard(t, m)
+	if iw.connWizard == nil {
+		t.Fatal("connection wizard not started")
+	}
+	if iw.connWizard.width != 61 || iw.connWizard.height != 31 {
+		t.Errorf("embedded wizard size %dx%d, want 61x31", iw.connWizard.width, iw.connWizard.height)
+	}
+}
+
+func TestConnectionWizard_WithInitialConfigPrefillsHostForm(t *testing.T) {
+	initial := config.ConnectionConfig{Host: "127.0.0.1", Port: 55602, Database: "trialw1", MaintenanceDatabase: "template1", Username: "app"}
+	m, _ := update(t, NewConnectionWizard(WithInitialConfig(initial)), keyMsg("enter"))
+	w := asWizard(t, m)
+
+	want := []string{"127.0.0.1", "55602", "trialw1", "template1", "app", ""}
+	for i, in := range w.inputs {
+		if in.Value() != want[i] {
+			t.Errorf("input %d = %q, want %q", i, in.Value(), want[i])
+		}
+	}
+}
+
+func TestConnectionWizard_KeepsTheExistingTLSSettings(t *testing.T) {
+	initial := config.ConnectionConfig{Host: "db.example", Port: 5432, Database: "app", Username: "app",
+		SSLMode: "verify-full", SSLRootCert: "/ca.pem", SSLCert: "/client.crt", SSLKey: "/client.key"}
+	m, _ := update(t, NewConnectionWizard(WithInitialConfig(initial)), keyMsg("enter"))
+	w := asWizard(t, m)
+	w.buildConfig()
+	got := w.result.Config
+	if got.SSLMode != "verify-full" || got.SSLRootCert != "/ca.pem" || got.SSLCert != "/client.crt" || got.SSLKey != "/client.key" {
+		t.Errorf("re-running the wizard changed TLS: sslmode=%q root=%q cert=%q key=%q", got.SSLMode, got.SSLRootCert, got.SSLCert, got.SSLKey)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		initial *config.ConnectionConfig
+		step    wizardStep
+		want    string
+	}{
+		{"new host config", nil, stepInputHost, "prefer"},
+		{"new Azure config", nil, stepInputAzure, "require"},
+		{"Azure keeps a verifying mode", &config.ConnectionConfig{SSLMode: "verify-full"}, stepInputAzure, "verify-full"},
+		{"Azure never takes a plaintext-capable mode", &config.ConnectionConfig{SSLMode: "prefer"}, stepInputAzure, "require"},
+		{"AWS never takes a plaintext-capable mode", &config.ConnectionConfig{SSLMode: "disable"}, stepInputAWS, "require"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := NewConnectionWizard()
+			w.initial = tc.initial
+			w.authMethod = &AuthOption{}
+			w.inputs = make([]textinput.Model, 6)
+			w.step = tc.step
+			w.buildConfig()
+			if w.result.Config.SSLMode != tc.want {
+				t.Errorf("sslmode %q, want %q", w.result.Config.SSLMode, tc.want)
+			}
+		})
 	}
 }

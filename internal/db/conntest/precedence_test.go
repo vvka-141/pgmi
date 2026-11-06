@@ -106,7 +106,7 @@ func TestPrecedence_EnvFallback(t *testing.T) {
 
 	resolved.Database = config.Database
 
-	connector, err := db.NewConnector(resolved)
+	connector, err := db.NewConnector(resolved, db.Output{})
 	require.NoError(t, err)
 
 	pool, err := connector.Connect(context.Background())

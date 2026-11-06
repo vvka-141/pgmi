@@ -73,7 +73,7 @@ configuration, with no per-route floor, no client negotiation, no read-only rout
 declaration, no `DEFERRABLE` derivation and no replica hint. We are not aware of
 another framework that publishes a route's isolation policy in its OpenAPI document.
 
-→ [Transaction policy](advanced/TRANSACTION-POLICY.md) · [Advanced template overview](advanced/_index.md#declarative-per-route-transaction-policy) · [`lib/api/00-transaction-isolation.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/lib/api/00-transaction-isolation.sql)
+→ [Transaction policy](advanced/TRANSACTION-POLICY.md) · [Advanced template overview](advanced/README.md#declarative-per-route-transaction-policy) · [`lib/api/00-transaction-isolation.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/lib/api/00-transaction-isolation.sql)
 
 ## 3. An MCP server that *is* a database transaction, not a process in front of one
 
@@ -83,12 +83,16 @@ schema, analyze a plan. The advanced template implements the MCP JSON-RPC protoc
 **in SQL** and exposes **your domain operations** as tools:
 
 - Tools, resources and prompts register in the same `api.handler` registry as REST
-  routes and JSON-RPC methods — one declaration, four surfaces.
+  routes and JSON-RPC methods, one registration per protocol, and can share one
+  kernel with them.
 - One tool call is one transaction, at the isolation the tool declared (item 2).
-- **Tool discovery is auth-aware**: `api.mcp_list_tools` hides `requires_auth` tools
+- **Tool discovery is auth-aware**: `api.mcp_list_tools` hides tools the caller may not call
   from an unauthenticated session, so an agent's visible capability set is scoped to
   its identity.
 - Row-level security applies to the agent exactly as it applies to a human caller.
+- The agent has its own principal and an agent role its person chose; it holds the
+  role's permissions intersected with the person's, and every log records both, so an
+  agent's change is never mistaken for its person's.
 
 The difference is the blast radius. "Give the agent SQL access" and "give the agent
 seven audited, transactional, RLS-scoped operations" are not the same security
@@ -127,9 +131,9 @@ Every file arrives with two checksums:
 | column | content |
 |---|---|
 | `pgmi_source_view.checksum` | SHA-256 of the raw bytes |
-| `pgmi_source_view.pgmi_checksum` | SHA-256 of **normalized** content — comments stripped, case-folded, whitespace collapsed |
+| `pgmi_source_view.pgmi_checksum` | SHA-256 of **normalized** content — comments stripped, case folded and whitespace collapsed outside literals, quoted identifiers and dollar-quoted bodies |
 
-`pgmi_plan_view.checksum` is the normalized one.
+`pgmi_plan_view.pgmi_checksum` is the same normalized value.
 
 A raw-byte checksum treats "I added a comment explaining this migration" as a
 different migration. That is the single most common Flyway support thread —
@@ -206,17 +210,14 @@ pgmi's conventions from the tool it is already invoking:
 
 ```bash
 pgmi ai                 # llms.txt-style overview
-pgmi ai skill pgmi-sql  # a full skill, from the binary
 pgmi ai contract        # the session API contract, machine-readable
-pgmi ai setup           # write a self-gating skill into the project
-pgmi ai check           # is that skill still current with this binary?
 ```
 
-`pgmi ai setup` is the part that matters: it writes a **committed, self-gating** skill
-into the repository, so the next agent to open the project learns pgmi exists *before*
-it edits SQL — rather than inventing a migration framework that isn't there. Generated
-files carry a managed stamp, so re-runs are idempotent and hand-edits are detected
-instead of clobbered.
+`pgmi init` is the part that matters: every scaffolded project carries an `AGENTS.md`
+routing table and skills under `.agents/skills/`, committed with the code, so the next
+agent to open the project learns how it deploys *before* it edits SQL — rather than
+inventing a migration framework that isn't there. The skills include PostgreSQL recipes
+whose SQL pgmi's CI deploys on every supported release.
 
 → [AI assistant support](../README.md#ai-assistant-support) · [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt)
 

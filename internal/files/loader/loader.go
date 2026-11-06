@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -49,7 +51,7 @@ func (l *Loader) LoadFilesIntoSession(ctx context.Context, conn *pgxpool.Conn, f
 	// Separate test files from non-test files
 	var sourceFiles, testFiles []pgmi.FileMetadata
 	for _, f := range files {
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			testFiles = append(testFiles, f)
 		} else {
 			sourceFiles = append(sourceFiles, f)
@@ -108,7 +110,7 @@ func (l *Loader) insertTestFiles(ctx context.Context, conn *pgxpool.Conn, files 
 
 	var sqlFiles []pgmi.FileMetadata
 	for _, file := range files {
-		if pgmi.IsSQLExtension(file.Extension) {
+		if pathrule.IsSQLExtension(file.Extension) {
 			sqlFiles = append(sqlFiles, file)
 		}
 	}
@@ -400,18 +402,31 @@ var keyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 // ValidateParameters checks every key and value without a connection, so a
 // deploy rejects them before it creates or drops anything.
 func ValidateParameters(params map[string]string) error {
-	seen := make(map[string]string, len(params))
+	if err := CheckCaseCollisions(params); err != nil {
+		return err
+	}
 	for key, value := range params {
-		if other, dup := seen[strings.ToLower(key)]; dup {
-			return fmt.Errorf("%w: parameters %q and %q differ only in case; the session stores keys lowercased, so pass one", pgmi.ErrInvalidConfig, other, key)
-		}
-		seen[strings.ToLower(key)] = key
 		if err := validateParameterKey(key); err != nil {
 			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
 		}
 		if err := validateParameterValue(key, value); err != nil {
 			return fmt.Errorf("%w: %w", pgmi.ErrInvalidConfig, err)
 		}
+	}
+	return nil
+}
+
+// CheckCaseCollisions rejects two keys that differ only in case. Callers that
+// fold case while merging must run it on each source first, or the fold
+// keeps whichever spelling map iteration visits last.
+func CheckCaseCollisions(params map[string]string) error {
+	seen := make(map[string]string, len(params))
+	for _, key := range slices.Sorted(maps.Keys(params)) {
+		lower := strings.ToLower(key)
+		if other, dup := seen[lower]; dup {
+			return fmt.Errorf("%w: parameters %q and %q differ only in case; the session stores keys lowercased, so pass one", pgmi.ErrInvalidConfig, other, key)
+		}
+		seen[lower] = key
 	}
 	return nil
 }
@@ -437,6 +452,3 @@ func validateParameterValue(key, value string) error {
 	}
 	return nil
 }
-
-// Verify Loader implements the interface at compile time
-var _ pgmi.FileLoader = (*Loader)(nil)

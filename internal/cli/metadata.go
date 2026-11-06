@@ -2,16 +2,20 @@ package cli
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
-	"github.com/vvka-141/pgmi/internal/metadata"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -34,11 +38,17 @@ var metadataScaffoldCmd = &cobra.Command{
 	Use:   "scaffold <project_path>",
 	Short: "Add <pgmi-meta> blocks to files that lack one",
 	Long: `Add <pgmi-meta> blocks to SQL files that don't have one. Each new block
-gets a fallback UUID derived from the file path and the default settings.
+gets a random id and the sort key <prefix>/<file name>.
 
-  pgmi metadata scaffold ./project              Preview only
-  pgmi metadata scaffold ./project --write      Apply to files
-  pgmi metadata scaffold ./project --idempotent=false --write
+The prefix places the file in the execution order, so it comes from you:
+--sort-key, or else the prefix the files with metadata in the same directory
+already share. A directory path cannot supply it: layers do not run in
+alphabetical order (core before api), and an advanced project's keys belong
+in its numbered bands.
+
+  pgmi metadata scaffold ./project/core --sort-key 005/core/          Preview only
+  pgmi metadata scaffold ./project/core --sort-key 005/core/ --write  Apply to files
+  pgmi metadata scaffold ./project --write      Prefixes from existing metadata
 
 Without --write, no files are modified.`,
 	Args:              RequireProjectPath,
@@ -80,6 +90,7 @@ Use this to verify ordering before running ` + "`pgmi deploy`" + `.`,
 var (
 	// Scaffold flags
 	scaffoldIdempotent bool
+	scaffoldSortKey    string
 	scaffoldWrite      bool
 
 	// Validate flags
@@ -97,7 +108,8 @@ func init() {
 
 	// Scaffold flags
 	metadataScaffoldCmd.Flags().BoolVar(&scaffoldWrite, "write", false, "Write generated metadata to files (default: preview only)")
-	metadataScaffoldCmd.Flags().BoolVar(&scaffoldIdempotent, "idempotent", true, "Mark generated scripts as idempotent (default: true)")
+	metadataScaffoldCmd.Flags().BoolVar(&scaffoldIdempotent, "idempotent", true, "Mark generated scripts as idempotent")
+	metadataScaffoldCmd.Flags().StringVar(&scaffoldSortKey, "sort-key", "", "Sort-key prefix for the generated keys, e.g. 005/core/ (default: the prefix of existing metadata in the same directory)")
 
 	// Validate flags
 	metadataValidateCmd.Flags().BoolVar(&validateJSON, "json", false, "Output validation results as JSON")
@@ -110,8 +122,6 @@ func init() {
 func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 	projectPath := args[0]
 	verbose := getVerboseFlag(cmd)
-
-	// Preview mode unless --write is specified
 	previewOnly := !scaffoldWrite
 
 	if verbose {
@@ -120,103 +130,167 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Default idempotent: %v\n", scaffoldIdempotent)
 	}
 
-	// Create scanner
-	fileScanner := scanner.NewScanner(checksum.New())
-
-	// Scan directory
 	fmt.Fprintln(os.Stderr, "Scanning SQL files...")
-	scanResult, err := fileScanner.ScanDirectory(projectPath)
+	scanResult, err := scanner.NewScanner(checksum.New()).ScanDirectory(projectPath)
 	if err != nil {
 		return fmt.Errorf("failed to scan directory: %w", err)
 	}
 
-	// Filter files without metadata
-	var filesWithoutMetadata []string
+	var pending []string
 	for _, file := range scanResult.Files {
-		if file.Metadata == nil && pgmi.IsSQLExtension(file.Extension) && !pgmi.IsTestPath(file.Path) {
-			filesWithoutMetadata = append(filesWithoutMetadata, file.Path)
+		if file.Metadata == nil && pathrule.IsSQLExtension(file.Extension) && !pathrule.IsTestPath(file.Path) {
+			pending = append(pending, file.Path)
 		}
 	}
-
-	if len(filesWithoutMetadata) == 0 {
+	if len(pending) == 0 {
 		fmt.Fprintln(os.Stderr, "All SQL files already have metadata.")
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Found %d file(s) without metadata:\n\n", len(filesWithoutMetadata))
+	keys, err := scaffoldSortKeys(scanResult.Files, pending, scaffoldSortKey)
+	if err != nil {
+		return err
+	}
 
-	// Generate metadata for each file
-	for _, filePath := range filesWithoutMetadata {
-		relPath := filePath
-		if !filepath.IsAbs(filePath) {
-			relPath = "./" + strings.ReplaceAll(filePath, "\\", "/")
+	fmt.Fprintf(os.Stderr, "Found %d file(s) without metadata:\n\n", len(pending))
+	for _, filePath := range pending {
+		id := uuid.New()
+		sortKeys, shownKey := "", "(none, path order)"
+		if key := keys[filePath]; key != "" {
+			sortKeys = fmt.Sprintf("  <sortKeys>\n    <key>%s</key>\n  </sortKeys>\n", xmlText(key))
+			shownKey = key
 		}
-
-		// Generate fallback UUID
-		fallbackID := metadata.GenerateFallbackID(relPath)
-
-		// Build metadata block
 		metaBlock := fmt.Sprintf(`/*
 <pgmi-meta
     id="%s"
     idempotent="%v">
   <description>
-    Auto-generated metadata for %s
+    %s
   </description>
-  <sortKeys>
-    <key>generated/%s</key>
-  </sortKeys>
-</pgmi-meta>
+%s</pgmi-meta>
 */
 
-`, fallbackID, scaffoldIdempotent, filepath.Base(filePath), filepath.Base(filePath))
+`, id, scaffoldIdempotent, xmlText(path.Base(filePath)), sortKeys)
 
-		fmt.Fprintf(os.Stderr, "  %s\n", filePath)
-		fmt.Fprintf(os.Stderr, "    ID: %s (fallback)\n", fallbackID)
-		fmt.Fprintf(os.Stderr, "    Idempotent: %v\n", scaffoldIdempotent)
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "  %s\n", filePath)
+		fmt.Fprintf(out, "    ID: %s\n", id)
+		fmt.Fprintf(out, "    Sort key: %s\n", shownKey)
+		fmt.Fprintf(out, "    Idempotent: %v\n", scaffoldIdempotent)
 
 		if !previewOnly {
-			// Read existing file content
-			absPath := filePath
-			if !filepath.IsAbs(filePath) {
-				absPath = filepath.Join(projectPath, filePath)
-			}
-			content, err := os.ReadFile(absPath)
-			if err != nil {
-				return fmt.Errorf("failed to read file %s: %w", filePath, err)
-			}
-
-			// Prepend metadata block
-			newContent := metaBlock + string(content)
-
-			// Atomic write: write to a sibling .tmp then os.Rename. A crash
-			// between Write and Rename leaves the original intact; a crash
-			// during Rename is handled atomically by the OS. Preserves the
-			// source file's mode so we don't silently widen permissions.
-			origInfo, err := os.Stat(absPath)
-			if err != nil {
-				return fmt.Errorf("failed to stat file %s: %w", filePath, err)
-			}
-			tmpPath := absPath + ".pgmi-tmp"
-			if err := os.WriteFile(tmpPath, []byte(newContent), origInfo.Mode().Perm()); err != nil {
+			if err := prependToFile(filepath.Join(projectPath, filepath.FromSlash(filePath)), metaBlock); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
-			if err := os.Rename(tmpPath, absPath); err != nil {
-				_ = os.Remove(tmpPath)
-				return fmt.Errorf("failed to finalise write of %s: %w", filePath, err)
-			}
-
 			fmt.Fprintf(os.Stderr, "    Written to file\n")
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(out)
 	}
 
 	if previewOnly {
 		fmt.Fprintln(os.Stderr, "Preview mode: no files were modified. Use --write to apply changes.")
 	} else {
-		fmt.Fprintf(os.Stderr, "Generated metadata for %d file(s).\n", len(filesWithoutMetadata))
+		fmt.Fprintf(os.Stderr, "Generated metadata for %d file(s).\n", len(pending))
+	}
+	return nil
+}
+
+// scaffoldSortKeys gives each pending file the key <prefix>/<file name>. The
+// prefix is the caller's --sort-key, or else the one every sibling with
+// metadata in the same directory already uses. A path cannot supply it: the
+// order between layers (core before api) is not alphabetical, and an advanced
+// project's keys must land in its numbered bands. A directory whose metadata
+// gives no sortKeys at all (the basic template) runs in path order, so its
+// new files get no key either: an empty string.
+func scaffoldSortKeys(files []pgmi.FileMetadata, pending []string, flagPrefix string) (map[string]string, error) {
+	prefixes := map[string]map[string]bool{}
+	withMetadata := map[string]bool{}
+	for _, f := range files {
+		if f.Metadata == nil {
+			continue
+		}
+		dir := path.Dir(f.Path)
+		withMetadata[dir] = true
+		if len(f.Metadata.SortKeys) == 0 {
+			continue
+		}
+		if prefixes[dir] == nil {
+			prefixes[dir] = map[string]bool{}
+		}
+		key := f.Metadata.SortKeys[0]
+		prefixes[dir][key[:strings.LastIndex(key, "/")+1]] = true
 	}
 
+	keys := make(map[string]string, len(pending))
+	var noMetadata, disagree []string
+	for _, p := range pending {
+		dir := path.Dir(p)
+		siblings := prefixes[dir]
+		switch {
+		case flagPrefix != "":
+			keys[p] = strings.TrimSuffix(flagPrefix, "/") + "/" + path.Base(p)
+		case len(siblings) == 1:
+			for s := range siblings {
+				keys[p] = s + path.Base(p)
+			}
+		case len(siblings) > 1:
+			disagree = append(disagree, p)
+		case withMetadata[dir]:
+			keys[p] = ""
+		default:
+			noMetadata = append(noMetadata, p)
+		}
+	}
+	var reasons []string
+	if len(noMetadata) > 0 {
+		reasons = append(reasons, "no file in the same directory has metadata: "+strings.Join(noMetadata, ", "))
+	}
+	if len(disagree) > 0 {
+		reasons = append(reasons, "the files in the same directory use different sort-key prefixes: "+strings.Join(disagree, ", "))
+	}
+	if len(reasons) > 0 {
+		example := append(noMetadata, disagree...)[0]
+		return nil, fmt.Errorf("no sort-key prefix to derive; %s\n"+
+			"pass --sort-key with the layer, e.g. --sort-key 005/core/ (advanced), "+
+			"or --sort-key ./%s to keep path order: %w",
+			strings.Join(reasons, "; "), strings.TrimPrefix(path.Dir(example)+"/", "./"), pgmi.ErrUsage)
+	}
+	return keys, nil
+}
+
+// xmlText is s escaped for XML character data.
+func xmlText(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// prependToFile writes block ahead of the file's content through a sibling
+// temp file and a rename, so a crash leaves the original intact, and keeps
+// the file's mode.
+func prependToFile(absPath, block string) error {
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return err
+	}
+	// A BOM stays first, where the scanner strips it; behind the block it
+	// would reach PostgreSQL as part of the first statement.
+	bom, rest := "", string(content)
+	if strings.HasPrefix(rest, "\ufeff") {
+		bom, rest = "\ufeff", strings.TrimPrefix(rest, "\ufeff")
+	}
+	tmpPath := absPath + ".pgmi-tmp"
+	if err := os.WriteFile(tmpPath, []byte(bom+block+rest), info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	return nil
 }
 
@@ -233,11 +307,25 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 
 	result, err := validateProject(projectPath)
 	if err != nil {
+		fields := map[string]any{"validationPassed": false}
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			var each []string
+			for _, e := range joined.Unwrap() {
+				each = append(each, e.Error())
+			}
+			fields["errors"] = each
+		}
 		err = fmt.Errorf("validation failed: %w", err)
 		if validateJSON {
-			printMetadataJSONFailure(out, map[string]any{"validationPassed": false}, err)
+			printMetadataJSONFailure(out, fields, err)
 		}
 		return err
+	}
+
+	var failure error
+	if !result.ValidationPassed {
+		failure = fmt.Errorf("metadata validation failed: %d duplicate id(s): %w", len(result.DuplicateIDs), pgmi.ErrInvalidConfig)
+		result.Error, result.ExitCode = failure.Error(), pgmi.ExitCodeForError(failure)
 	}
 
 	if validateJSON {
@@ -251,12 +339,11 @@ func runMetadataValidate(cmd *cobra.Command, args []string) error {
 		for _, dup := range result.DuplicateIDs {
 			fmt.Fprintln(out, "Duplicate id: "+dup)
 		}
+		for _, w := range result.Warnings {
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+w)
+		}
 	}
-
-	if !result.ValidationPassed {
-		return fmt.Errorf("metadata validation failed: %d duplicate id(s): %w", len(result.DuplicateIDs), pgmi.ErrInvalidConfig)
-	}
-	return nil
+	return failure
 }
 
 // runMetadataPlan prints the rows pgmi_plan_view will hold, in execution order.
@@ -273,7 +360,6 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 
 	result, err := planProject(projectPath)
 	if err != nil {
-		err = fmt.Errorf("failed to scan directory: %w", err)
 		if planJSON {
 			printMetadataJSONFailure(out, map[string]any{}, err)
 		}
@@ -283,14 +369,16 @@ func runMetadataPlan(cmd *cobra.Command, args []string) error {
 	if planJSON {
 		return printJSON(out, result)
 	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ORDER\tSORT KEY\tPATH\tIDEMPOTENT")
 	for _, e := range result.Plan {
 		note := ""
 		if !e.IsSQLFile {
 			note = "  (not SQL)"
 		}
-		fmt.Fprintf(out, "%4d  %-28s %s%s\n", e.ExecutionOrder, e.SortKey, e.Path, note)
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%v%s\n", e.ExecutionOrder, e.SortKey, e.Path, e.Idempotent, note)
 	}
-	return nil
+	return tw.Flush()
 }
 
 func printJSON(w io.Writer, v any) error {

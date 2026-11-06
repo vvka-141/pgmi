@@ -61,5 +61,11 @@ func Load(sourcePath string) (*ProjectConfig, error) {
 		}
 		return nil, fmt.Errorf("parse %s: %w", configPath, err)
 	}
+	switch cfg.Connection.AuthMethod {
+	case "", "azure", "aws", "google":
+	default:
+		return nil, fmt.Errorf("auth_method %q is not one of azure, aws, google (omit it for password authentication)",
+			cfg.Connection.AuthMethod)
+	}
 	return &cfg, nil
 }

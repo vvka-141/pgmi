@@ -1,228 +1,124 @@
 -- ============================================================================
--- Test: Identity enforcement
+-- Test: identity enforcement
 -- ============================================================================
--- Deactivation must end access, and an API key must reach only its own
--- organization. Every predicate here is an RLS anchor: api.current_user_id()
--- and api.current_member_org_ids() are what core.apply_org_rls hangs off, so a
--- gap in either is a gap in every org-scoped table at once.
--- ============================================================================
+-- api.current_principal_id() and api.current_organization_id() are what
+-- core.apply_org_rls hangs off, so a gap in either is a gap in every
+-- organization-scoped table at once.
 
 DO $$
 DECLARE
-    v_alice_id UUID := current_setting('test.alice_id')::UUID;
+    v_alice uuid := current_setting('test.alice_id')::uuid;
+    v_corp  uuid := current_setting('test.corp_id')::uuid;
 BEGIN
-    RAISE NOTICE '→ Testing deactivating a user ends their session';
+    PERFORM pg_temp.test_as_kernel();
+    RAISE DEBUG '-> Identity: disabling a person ends their access';
 
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-
-    IF api.current_user_id() IS DISTINCT FROM v_alice_id THEN
-        RAISE EXCEPTION 'TEST FAILED: an active user must resolve, got %', api.current_user_id();
+    PERFORM pg_temp.test_act_as('test|alice-001', v_corp);
+    IF api.current_principal_id() IS DISTINCT FROM v_alice OR api.current_organization_id() IS DISTINCT FROM v_corp THEN
+        RAISE EXCEPTION 'TEST FAILED: an enabled member must resolve with her organization';
     END IF;
 
-    UPDATE membership."user" SET is_active = false WHERE object_id = v_alice_id;
-
-    -- 01-schema.sql states the invariant: "Inactive users cannot authenticate or
-    -- access any organization." validate_api_key enforced it; the OIDC path did
-    -- not, so deactivation did not end an existing session's access.
-    IF api.current_user_id() IS NOT NULL THEN
-        RAISE EXCEPTION
-            'TEST FAILED: a deactivated user still resolves an identity (%), so deactivation does not end access',
-            api.current_user_id();
+    PERFORM membership.fn_disable_principal(v_alice, 'compromised account');
+    IF api.current_principal_id() IS NOT NULL OR api.current_organization_id() IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a disabled person still resolves (%)', api.current_principal_id();
     END IF;
 
-    UPDATE membership."user" SET is_active = true WHERE object_id = v_alice_id;
+    PERFORM membership.fn_enable_principal(v_alice);
+    IF api.current_principal_id() IS DISTINCT FROM v_alice THEN
+        RAISE EXCEPTION 'TEST FAILED: enabling must restore the person';
+    END IF;
 
-    RAISE NOTICE '  ✓ deactivation ends identity resolution';
+    PERFORM pg_temp.test_act_as(NULL);
+
+    RAISE DEBUG '  + disabled people resolve to no one';
+    PERFORM pg_temp.test_as_owner();
 END $$;
 
-
 DO $$
 DECLARE
-    v_alice_id UUID := current_setting('test.alice_id')::UUID;
-    v_org_id UUID;
+    v_corp   uuid := current_setting('test.corp_id')::uuid;
+    v_member uuid := current_setting('test.alice_member_id')::uuid;
 BEGIN
-    RAISE NOTICE '→ Testing deactivating an organization removes it from the RLS anchor';
+    PERFORM pg_temp.test_as_kernel();
+    RAISE DEBUG '-> Identity: suspended organizations and ended memberships leave the anchor';
 
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_active)
-    VALUES ('Anchor Probe Org', 'anchor-probe-org', v_alice_id, true)
-    RETURNING object_id INTO v_org_id;
-
-    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
-    VALUES (v_org_id, v_alice_id, 'admin', 'active', now());
-
-    IF NOT (v_org_id = ANY (coalesce(api.current_member_org_ids(), '{}'::uuid[]))) THEN
-        RAISE EXCEPTION 'TEST FAILED: an active membership in an active org must appear in the anchor';
+    PERFORM membership.fn_update_organization(v_corp, 'Test Corp', 'suspended');
+    PERFORM pg_temp.test_act_as('test|alice-001', v_corp);
+    IF api.current_organization_id() IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a suspended organization is still in the anchor';
     END IF;
+    PERFORM pg_temp.test_act_as(NULL);
+    PERFORM membership.fn_update_organization(v_corp, 'Test Corp', 'active');
 
-    UPDATE membership.organization SET is_active = false WHERE object_id = v_org_id;
-
-    -- api.current_owner_org_ids() filtered is_active; this one did not, so a
-    -- soft-deleted org vanished from the views while every domain row inside it
-    -- stayed readable.
-    IF v_org_id = ANY (api.current_member_org_ids()) THEN
-        RAISE EXCEPTION
-            'TEST FAILED: a deactivated organization is still in the RLS anchor, so its rows stay readable';
+    IF (membership.fn_end_membership(v_member, 'removed')).end_reason IS DISTINCT FROM 'removed' THEN
+        RAISE EXCEPTION 'TEST FAILED: the membership must end';
     END IF;
+    PERFORM pg_temp.test_act_as('test|alice-001', v_corp);
+    IF api.current_organization_id() IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: an ended membership is still in the anchor';
+    END IF;
+    PERFORM pg_temp.test_act_as(NULL);
 
-    RAISE NOTICE '  ✓ deactivating an organization removes it from the anchor';
+    RAISE DEBUG '  + only current memberships of active organizations open rows';
+    PERFORM pg_temp.test_as_owner();
 END $$;
 
-
 DO $$
 DECLARE
-    v_alice_id UUID := current_setting('test.alice_id')::UUID;
-    v_org_a UUID;
-    v_org_b UUID;
-    v_key record;
-    v_orgs UUID[];
+    v_bob     uuid := current_setting('test.bob_id')::uuid;
+    v_mallory uuid;
 BEGIN
-    RAISE NOTICE '→ Testing an API key reaches only its own organization';
+    RAISE DEBUG '-> Identity: platform operators follow the parameter';
 
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_active)
-    VALUES ('Key Org A', 'key-org-a', v_alice_id, true) RETURNING object_id INTO v_org_a;
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_active)
-    VALUES ('Key Org B', 'key-org-b', v_alice_id, true) RETURNING object_id INTO v_org_b;
-
-    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
-    VALUES (v_org_a, v_alice_id, 'admin', 'active', now()),
-           (v_org_b, v_alice_id, 'admin', 'active', now());
-
-    SELECT * INTO v_key
-    FROM membership.create_api_key(v_alice_id, v_org_a, 'probe key', NULL);
-
-    -- Authenticate as the key, exactly as the gateway does.
-    PERFORM set_config('auth.idp_subject', 'apikey|' || v_key.out_key_id, true);
-
-    IF api.current_user_id() IS DISTINCT FROM v_alice_id THEN
-        RAISE EXCEPTION 'TEST FAILED: an active key must resolve to its user, got %', api.current_user_id();
+    PERFORM pg_temp.sync_platform_operators('[{"email": "bob@example.test"}, {"email": "ops@example.test", "displayName": "Ops"}]');
+    PERFORM pg_temp.test_as_kernel();
+    IF (membership.fn_is_platform_operator(v_bob)) IS NOT TRUE
+       OR NOT EXISTS (SELECT FROM membership.vw_user_principal WHERE email = 'ops@example.test' AND is_platform_operator AND is_email_verified) THEN
+        RAISE EXCEPTION 'TEST FAILED: listed people must become platform operators';
     END IF;
 
-    v_orgs := api.current_member_org_ids();
-
-    -- The key recorded organization_id at creation, but the credential the auth
-    -- path consumes is the user_identity row, which carries no org -- so the key
-    -- authorized every org its owner belonged to.
-    IF NOT (v_org_a = ANY (coalesce(v_orgs, '{}'::uuid[]))) THEN
-        RAISE EXCEPTION 'TEST FAILED: a key must reach its own organization';
-    END IF;
-    IF v_org_b = ANY (coalesce(v_orgs, '{}'::uuid[])) THEN
-        RAISE EXCEPTION
-            'TEST FAILED: a key issued for one organization also authorized another (%)', v_org_b;
+    PERFORM pg_temp.test_as_owner();
+    PERFORM pg_temp.sync_platform_operators('[{"email": "ops@example.test"}]');
+    PERFORM pg_temp.test_as_kernel();
+    IF membership.fn_is_platform_operator(v_bob) THEN
+        RAISE EXCEPTION 'TEST FAILED: a person dropped from the list must lose the status';
     END IF;
 
-    -- Disabling the key must end the session immediately. Only revoke deletes
-    -- the identity row, so a disabled key used to resolve a full identity
-    -- through the OIDC path, which never consults api_key state.
-    PERFORM membership.disable_api_key(v_key.out_key_id);
-    PERFORM set_config('auth.idp_subject', 'apikey|' || v_key.out_key_id, true);
-
-    IF api.current_user_id() IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: a disabled key still resolves an identity';
+    PERFORM pg_temp.test_as_owner();
+    v_mallory := pg_temp.test_login('test', 'mallory-001', 'boss@example.test', 'Mallory', false);
+    PERFORM pg_temp.sync_platform_operators('[{"email": "boss@example.test"}]');
+    PERFORM pg_temp.test_as_kernel();
+    IF membership.fn_is_platform_operator(v_mallory) THEN
+        RAISE EXCEPTION 'TEST FAILED: an unverified principal became platform operator';
+    END IF;
+    IF NOT EXISTS (SELECT FROM membership.vw_user_principal
+                   WHERE email = 'boss@example.test' AND is_platform_operator AND is_email_verified
+                     AND principal_object_id IS DISTINCT FROM v_mallory) THEN
+        RAISE EXCEPTION 'TEST FAILED: an operator listed by an address held only unverified must be a new verified person';
     END IF;
 
-    -- A disabled key cannot re-enable itself: its own session no longer resolves
-    -- an identity, so the tenant guard refuses. Re-enabling is the human's job.
-    BEGIN
-        PERFORM membership.enable_api_key(v_key.out_key_id);
-        RAISE EXCEPTION 'TEST FAILED: a disabled key must not be able to re-enable itself';
-    EXCEPTION WHEN SQLSTATE 'P0404' THEN
-        NULL;
-    END;
-
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-    PERFORM membership.enable_api_key(v_key.out_key_id);
-
-    PERFORM set_config('auth.idp_subject', 'apikey|' || v_key.out_key_id, true);
-    IF api.current_user_id() IS DISTINCT FROM v_alice_id THEN
-        RAISE EXCEPTION 'TEST FAILED: re-enabling a key must restore its identity';
-    END IF;
-
-    -- Expiry has no lifecycle event to hook, so it has to be checked at
-    -- resolution time rather than on a state transition.
-    UPDATE membership.api_key SET expires_at = now() - interval '1 second'
-    WHERE key_id = v_key.out_key_id;
-
-    IF api.current_user_id() IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: an expired key still resolves an identity';
-    END IF;
-
-    -- A key scheduled for later is not live yet: validate_api_key refuses it,
-    -- and the identity path must agree.
-    UPDATE membership.api_key SET expires_at = NULL, activated_at = now() + interval '1 day'
-    WHERE key_id = v_key.out_key_id;
-
-    IF api.current_user_id() IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: a key that is not active yet resolves an identity';
-    END IF;
-
-    RAISE NOTICE '  ✓ keys are org-scoped, and disabled or expired keys resolve nothing';
+    RAISE NOTICE '  + identity: disabled people, ended memberships and dropped operators lose access';
+    PERFORM pg_temp.test_as_owner();
 END $$;
 
-
 DO $$
 DECLARE
-    v_alice_id UUID := current_setting('test.alice_id')::UUID;
-    v_bob_id UUID := current_setting('test.bob_id')::UUID;
-    v_org UUID;
-    v_key record;
-    v_allowed boolean;
+    v_corp  uuid := current_setting('test.corp_id')::uuid;
+    v_owner uuid := current_setting('test.owner_id')::uuid;
 BEGIN
-    RAISE NOTICE '→ Testing a plain member cannot revoke another user''s keys';
+    RAISE DEBUG '-> Identity: an unverified address on a member is not that address''s person';
 
-    PERFORM set_config('auth.idp_subject', 'google|alice-001', true);
-
-    INSERT INTO membership.organization (name, slug, owner_user_id, is_active)
-    VALUES ('Manage Probe Org', 'manage-probe-org', v_alice_id, true) RETURNING object_id INTO v_org;
-
-    INSERT INTO membership.organization_member (organization_id, user_id, role, status, joined_at)
-    VALUES (v_org, v_alice_id, 'admin', 'active', now()),
-           (v_org, v_bob_id, 'reader', 'active', now());
-
-    SELECT * INTO v_key FROM membership.create_api_key(v_alice_id, v_org, 'owner key', NULL);
-
-    -- Bob is a reader in the same org. can_manage_api_key required only active
-    -- membership, so he could irreversibly revoke the owner's credential.
-    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
-    v_allowed := membership.can_manage_api_key(v_key.out_key_id);
-
-    IF v_allowed IS DISTINCT FROM false THEN
-        RAISE EXCEPTION
-            'TEST FAILED: a plain reader may manage another user''s API key';
+    PERFORM pg_temp.test_login('test', 'owner-001', 'bob@example.test', 'Owner', false);
+    PERFORM pg_temp.test_as_kernel();
+    IF (SELECT is_email_verified FROM membership.vw_member
+        WHERE organization_object_id = v_corp AND principal_object_id = v_owner) IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'TEST FAILED: the member list must flag an unverified address';
+    END IF;
+    IF membership.fn_invitation_problem(v_corp, 'bob@example.test', 'org.member') IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a member holding bob''s address unverified blocks bob''s invitation (%)',
+            membership.fn_invitation_problem(v_corp, 'bob@example.test', 'org.member');
     END IF;
 
-    RAISE NOTICE '  ✓ key management requires self, owner, or admin';
-END $$;
-
-
-DO $$
-DECLARE
-    v_alice_id UUID := current_setting('test.alice_id')::UUID;
-    v_visible bigint;
-BEGIN
-    RAISE NOTICE '→ Testing vw_user_owned_organizations is scoped to the caller';
-
-    PERFORM set_config('auth.idp_subject', 'github|bob-001', true);
-
-    -- The view is named for ownership and filtered only on is_active, so it
-    -- returned every active organization to every caller.
-    -- IS DISTINCT FROM, not <>: this is a leak test, so a NULL must count as a
-    -- difference. With <>, a row whose owner_user_id is NULL vanishes from the
-    -- count, and — worse — if api.current_user_id() ever returned NULL every
-    -- comparison would, so the test would pass while the view returned every
-    -- organization in the database.
-    SELECT count(*) INTO v_visible
-    FROM membership.vw_user_owned_organizations
-    WHERE owner_user_id IS DISTINCT FROM (SELECT api.current_user_id());
-
-    IF v_visible > 0 THEN
-        RAISE EXCEPTION
-            'TEST FAILED: vw_user_owned_organizations exposes % organization(s) the caller does not own',
-            v_visible;
-    END IF;
-
-    RAISE NOTICE '  ✓ the owned-organizations view shows only the caller''s own';
+    RAISE DEBUG '  + an unverified address neither names a member nor blocks an invitation';
+    PERFORM pg_temp.test_as_owner();
 END $$;

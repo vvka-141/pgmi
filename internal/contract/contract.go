@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -33,7 +34,11 @@ func Load(version string) (string, Version, error) {
 	case V1:
 		return apiV1SQL, v, nil
 	default:
-		return "", "", fmt.Errorf("%w: unsupported API version %q; supported: %v", pgmi.ErrInvalidConfig, version, SupportedVersions())
+		var supported []string
+		for _, sv := range SupportedVersions() {
+			supported = append(supported, string(sv))
+		}
+		return "", "", fmt.Errorf("%w: unsupported API version %q; supported: %s", pgmi.ErrInvalidConfig, version, strings.Join(supported, ", "))
 	}
 }
 

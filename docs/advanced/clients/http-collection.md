@@ -13,28 +13,32 @@ aliases:
 > pgmi deployment CLI.
 
 
-For ad-hoc API exploration without codegen, generate importable request files from `/openapi.json`.
+For ad-hoc API exploration without codegen, generate importable request files from `/openapi.json`. Download `openapi.json` with session handles first; see [Client generation](README.md).
 
 ## VS Code REST Client (.http files)
 
 Generate `.http` files from the spec using `jq`:
 
 ```bash
-curl -s http://localhost:3000/openapi.json | jq -r '
+jq -r '
   .paths | to_entries[] | .key as $path |
   .value | to_entries[] |
-  "\(.key | ascii_upcase) http://localhost:3000\($path)\n\n###\n"
-' > api-requests.http
+  "\(.key | ascii_upcase) http://localhost:8080/api\($path)\n\n###\n"
+' openapi.json > api-requests.http
 ```
 
 Open `api-requests.http` in VS Code with the REST Client extension. Click "Send Request" above any block.
 
-For authenticated endpoints, add a header block:
+For authenticated endpoints, add the session cookie. Sign in as the
+[client guide](README.md) shows (`POST /auth/dev-login` on a gateway started
+with `DEV_LOGIN=1`), send the `__Host-session` value in a `Cookie` header and,
+on a write, the `__Host-csrf` value as `X-CSRF-Token`. `POST
+/api/organization-sessions` opens an organization session.
 
 ```http
 ### Authenticated request
-GET http://localhost:3000/me
-x-user-id: google|your-subject-id
+GET http://localhost:8080/api/me
+Cookie: __Host-session=ls_your-login-session-handle
 
 ###
 ```
@@ -46,7 +50,7 @@ Import the OpenAPI spec directly into Bruno:
 1. Open Bruno
 2. **Collection** > **Import Collection**
 3. Select **OpenAPI V3** as the format
-4. Point at `http://localhost:3000/openapi.json` or paste the JSON
+4. Select the downloaded `openapi.json`
 
 Bruno creates a request for each operation, organized by path.
 
@@ -56,22 +60,23 @@ JetBrains IDEs natively support `.http` files. Use the same `jq` recipe above, o
 
 1. **File** > **New** > **HTTP Request**
 2. **Convert from** > **OpenAPI Specification**
-3. Enter `http://localhost:3000/openapi.json`
+3. Select the downloaded `openapi.json`
 
 ## Insomnia / Postman
 
 Both import OpenAPI specs directly:
 
-1. **Import** > **From URL**
-2. Enter `http://localhost:3000/openapi.json`
+1. **Import** > **File**
+2. Select the downloaded `openapi.json`
 
-The collection auto-updates when you re-import.
+Download the spec again and re-import when handlers change.
 
 ## curl one-liner
 
-Fetch the spec and list all endpoints:
+List every endpoint the session may call:
 
 ```bash
-curl -s http://localhost:3000/openapi.json | \
+curl -fsS -H "Cookie: __Host-session=$LOGIN_SESSION" -H "x-organization-session: $ORGANIZATION_SESSION" \
+  http://localhost:8080/api/openapi.json | \
   jq -r '.paths | to_entries[] | .key as $p | .value | keys[] | "\(. | ascii_upcase) \($p)"'
 ```

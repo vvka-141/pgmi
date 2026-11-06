@@ -5,22 +5,26 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// templateRank orders templates by what we recommend, not by name. basic is the
-// starting point; advanced is a reference app to read, not the default choice.
+// templateRank orders templates from the smallest up, not by name: minimal is
+// the default, basic the recommended structure, advanced a reference app to
+// read, not the default choice.
 func templateRank(name string) int {
 	switch name {
-	case "basic":
+	case "minimal":
 		return 0
-	case "advanced":
+	case "basic":
 		return 1
-	default:
+	case "advanced":
 		return 2
+	default:
+		return 3
 	}
 }
 
@@ -93,7 +97,7 @@ func runTemplatesDescribe(cmd *cobra.Command, args []string) error {
 
 	if !scaffold.IsValidTemplate(templateName) {
 		templates, _ := scaffold.ListTemplates()
-		return fmt.Errorf("%w: unknown template %q (available: %v)\nrun `pgmi templates list` for descriptions", pgmi.ErrUsage, templateName, templates)
+		return fmt.Errorf("%w: unknown template %q (available: %s)\nrun `pgmi templates list` for descriptions", pgmi.ErrUsage, templateName, strings.Join(templates, ", "))
 	}
 
 	descriptions := getTemplateDescriptions()
@@ -142,54 +146,78 @@ type templateDescription struct {
 // getTemplateDescriptions returns descriptions for all templates
 func getTemplateDescriptions() map[string]templateDescription {
 	return map[string]templateDescription{
+		"minimal": {
+			Short: scaffold.TemplateSummary("minimal"),
+			Long:  "The smallest pgmi project: deploy.sql loops over every SQL file in path order and executes it inside one transaction, hello_world.sql raises a notice, and .pgmiignore keeps parameter files and backup copies out of the session. No tables, ledger, tests, parameters, pgmi.yaml or agent skills. Start here to build everything your own way.",
+			Structure: []string{
+				"├── .pgmiignore",
+				"├── deploy.sql",
+				"└── hello_world.sql",
+			},
+			Features: []string{
+				"deploy.sql is the README's \"entire model in one file\" loop",
+				"Prints Executing: <path> before each file",
+			},
+			BestFor: "Building your own deployment from nothing",
+		},
 		"basic": {
-			Short: "Linear migrations, minimal structure",
-			Long:  "A small starter project: deploy.sql executes migrations in order, reads project.json for metadata, and branches on environment. No metadata system, no idempotency tracking, no advanced libraries.",
+			Short: scaffold.TemplateSummary("basic"),
+			Long:  "A small project in two layers. physical/ holds tables, keys and indexes in run-once files; semantic/ holds the views and writer functions, re-run on every deploy. deploy.sql is short enough to read in one sitting: it refuses a run-once file edited after it ran, runs the files in path order, seeds a demo project on env=dev and gates the commit on the tests.",
 			Structure: []string{
 				"├── deploy.sql",
 				"├── project.json",
 				"├── pgmi.yaml",
 				"├── README.md",
-				"├── migrations/",
-				"│   ├── 001_users.sql",
-				"│   └── 002_user_crud.sql",
+				"├── physical/",
+				"│   ├── 001_project.sql",
+				"│   ├── 002_task.sql",
+				"│   └── __test__/",
+				"├── semantic/",
+				"│   ├── project.sql",
+				"│   ├── task.sql",
+				"│   └── __test__/",
 				"└── __test__/",
-				"    ├── _setup.sql",
-				"    └── test_user_crud.sql",
+				"    └── test_function_privileges.sql",
 			},
 			Features: []string{
-				"Linear migration ordering by filename",
+				"Run-once structure with a ledger; a run-once file edited, moved or removed after it ran refuses the deploy",
+				"Views as the read surface, writer functions with refusal functions as the only writers",
 				"Environment-aware deployment (--param env=production skips dev seeding)",
-				"Non-SQL project data loading (project.json via pgmi_source_view)",
-				"Test scaffolding via __test__/ (CALL pgmi_test())",
+				"Tests per layer in __test__/ (CALL pgmi_test()) gate the commit",
 			},
 			BestFor: "Start here. Deploying SQL — small, explicit, any managed provider",
 		},
 		"advanced": {
-			Short: "Reference app: SQL-native REST/RPC/MCP, multi-tenant RLS, audit",
-			Long:  "A full SQL-native application built on pgmi, for you to read, trim, and own — not a framework to adopt wholesale. <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/customer), API-key and identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions. More infrastructure than basic, not a higher safety tier — either is production-capable.",
+			Short: scaffold.TemplateSummary("advanced"),
+			Long:  "A full SQL-native application built on pgmi, for you to read, trim, and own — not a framework to adopt wholesale. <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/kernel), identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions. More infrastructure than basic, not a higher safety tier — either is production-capable.",
 			Structure: []string{
 				"├── deploy.sql",
 				"├── pgmi.yaml",
-				"├── session.xml",
+				"├── session.xml      (deployment parameters and their defaults)",
 				"├── README.md",
 				"├── ARCHITECTURE.md",
+				"├── AGENTS.md        (routing table for coding agents)",
+				"├── .agents/",
+				"│   └── skills/      (project-owned agent skills)",
+				"├── data/            (permissions and roles: authorization.json)",
 				"├── lib/",
-				"│   ├── core/        (entity standards, foundation, attached properties)",
+				"│   ├── core/        (entity standards, catalogs, change tracking)",
 				"│   ├── common/      (cast, text, encoding helpers)",
-				"│   └── api/         (REST/RPC/MCP routing, handler registry, queue)",
-				"├── membership/      (users, organizations, identities, API keys, RLS)",
+				"│   ├── internal/    (environment, job run log, deployment views)",
+				"│   └── api/         (REST/RPC/MCP routing, handler registry, exchange log)",
+				"├── membership/      (users, organizations, identities, RLS)",
 				"├── api/             (your handler implementations + examples.sql)",
-				"└── tools/",
+				"├── gateways/        (reference gateways in five languages; never deployed)",
+				"└── __test__/",
 			},
 			Features: []string{
 				"<pgmi-meta> sortKeys for multi-phase execution ordering",
 				"Idempotency via script-UUID tracking in internal.deployment_script",
-				"Role hierarchy: owner → admin → api → customer",
-				"API-key and multi-provider identity authentication (JWT validated at gateway)",
+				"Roles: owner, admin, api and a NOLOGIN kernel role; each executes exactly its list",
+				"Sign-in through any OIDC provider at the gateway; the database keeps the sessions behind opaque handles",
 				"REST/RPC/MCP routing with handler registry (api.handler)",
 				"Row-level security policies on membership tables",
-				"Targets stock PostgreSQL — no superuser, no event trigger; needs CREATEROLE + CREATE EXTENSION",
+				"Targets stock PostgreSQL 18+ — no superuser, no event trigger; needs CREATEROLE + CREATE EXTENSION",
 			},
 			BestFor: "SQL-native application stack — scaffold, read, trim to fit",
 		},

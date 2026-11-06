@@ -64,7 +64,7 @@ Invoke-Gate "release notes for $Tag" {
 }
 
 Invoke-Gate "govulncheck" {
-    go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+    go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 }
 
 if (Get-Command goreleaser -ErrorAction SilentlyContinue) {

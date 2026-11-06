@@ -2,8 +2,8 @@
 
 # The version CI lints with. Kept identical in .github/workflows/{ci,release}.yml —
 # TestLintVersionPinsAgree fails if the three drift apart. Lint findings are
-# version-dependent, and golangci-lint v2 rejects this v1 config outright.
-GOLANGCI_VERSION := v1.64.8
+# version-dependent, and golangci-lint v1 rejects this v2 config outright.
+GOLANGCI_VERSION := v2.15.0
 
 test:                  ## Run unit tests only (no database, short mode)
 	go test -short -tags pgmi_testhooks ./...
@@ -56,7 +56,7 @@ release-ready:         ## Full pre-release gate: lint, full suite, connection te
 	@echo "  * the tag-is-on-main provenance check"
 
 vulncheck:             ## Scan dependencies for known vulnerabilities (blocks on reachable findings only)
-	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 doctor:                ## Smoke test development environment
 	@echo "=== pgmi Development Environment ==="
@@ -66,7 +66,7 @@ doctor:                ## Smoke test development environment
 	@printf "golangci-lint: "; \
 		if ! golangci-lint --version 2>/dev/null; then \
 			echo "NOT INSTALLED (lint will fail)"; \
-		elif ! golangci-lint --version 2>/dev/null | grep -q "version $(GOLANGCI_VERSION) "; then \
+		elif ! golangci-lint --version 2>/dev/null | grep -q "version $(patsubst v%,%,$(GOLANGCI_VERSION)) "; then \
 			echo "  ^ CI lints with $(GOLANGCI_VERSION); findings will differ from CI"; \
 		fi
 	@printf "PGMI_TEST_CONN: "; if [ -n "$$PGMI_TEST_CONN" ]; then echo "$$PGMI_TEST_CONN"; else echo "NOT SET (will use testcontainers)"; fi
@@ -77,7 +77,7 @@ build-clean:           ## Clean Go cache and rebuild (use after template changes
 	go clean -cache
 	go build -o pgmi ./cmd/pgmi
 
-sync-ai:               ## Refresh local .claude/skills/ from the tracked embedded skills
+sync-ai:               ## Refresh local .claude/skills/ from the scaffold skill trees
 	@echo "Refreshing local AI skills from tracked source..."
 	@bash scripts/sync-ai-content.sh
 

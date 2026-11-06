@@ -2,10 +2,13 @@ package scaffold
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestCreateProject_ProjectJsonSubstitution(t *testing.T) {
@@ -425,5 +428,132 @@ func TestCreateProject_RecordsVersionAndTemplateInDeploySQL(t *testing.T) {
 				t.Errorf("deploy.sql starts %q, want %q", strings.SplitN(string(body), "\n", 2)[0], want)
 			}
 		})
+	}
+}
+
+func TestTemplateSummary_EveryTemplateHasOne(t *testing.T) {
+	templates, err := ListTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range templates {
+		if TemplateSummary(name) == "" {
+			t.Errorf("template %q has no summary", name)
+		}
+	}
+}
+
+func TestBuildFileTree_SkillsAreOneLine(t *testing.T) {
+	root := t.TempDir()
+	for _, skill := range []string{"a", "b"} {
+		dir := filepath.Join(root, ".agents", "skills", skill, "references")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{filepath.Join(dir, "..", "SKILL.md"), filepath.Join(dir, "ref.md")} {
+			if err := os.WriteFile(f, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "deploy.sql"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tree, err := BuildFileTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tree, "skills/  (2 skills)") {
+		t.Errorf("skills not collapsed to one line:\n%s", tree)
+	}
+	for _, hidden := range []string{"SKILL.md", "ref.md", "references/"} {
+		if strings.Contains(tree, hidden) {
+			t.Errorf("tree descends into the skills (%s):\n%s", hidden, tree)
+		}
+	}
+	if !strings.Contains(tree, "deploy.sql") {
+		t.Errorf("project files missing:\n%s", tree)
+	}
+}
+
+func TestScaffoldSkipsBuildArtifacts(t *testing.T) {
+	src := fstest.MapFS{
+		"x/__pycache__/a.pyc":     {Data: []byte("pyc")},
+		"x/node_modules/p/i.js":   {Data: []byte("js")},
+		"x/target/debug/app":      {Data: []byte("bin")},
+		"x/gw/bin/Debug/app.dll":  {Data: []byte("dll")},
+		"x/gw/obj/project.assets": {Data: []byte("obj")},
+		"x/.venv/lib/site.py":     {Data: []byte("py")},
+		"x/stray.pyc":             {Data: []byte("pyc")},
+		"x/keep.py":               {Data: []byte("keep")},
+	}
+	s := NewScaffolder(false)
+	for name, copyTree := range map[string]func(dst string) error{
+		"template": func(dst string) error { return s.copyTemplateFiles(src, ".", dst, "p", "t") },
+		"skills":   func(dst string) error { return s.copySharedSkills(src, ".", dst) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := t.TempDir()
+			if err := copyTree(dst); err != nil {
+				t.Fatal(err)
+			}
+			var written []string
+			_ = filepath.WalkDir(dst, func(p string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					rel, _ := filepath.Rel(dst, p)
+					written = append(written, filepath.ToSlash(rel))
+				}
+				return err
+			})
+			want := "x/keep.py"
+			if name == "skills" {
+				want = ".agents/skills/x/keep.py"
+			}
+			if len(written) != 1 || written[0] != want {
+				t.Errorf("wrote %v, want only %s", written, want)
+			}
+		})
+	}
+}
+
+// "git init, then pgmi init ." is how a project starts: .git blocks nothing,
+// as a repository's directory or as a worktree's or submodule's file.
+func TestBlockingEntries_ToleratesGit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(dir string) error
+		want  []string
+	}{
+		{".git directory", func(dir string) error { return os.Mkdir(filepath.Join(dir, ".git"), 0o755) }, nil},
+		{".git file", func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: ../.git/worktrees/x\n"), 0o644)
+		}, nil},
+		{"another file", func(dir string) error {
+			if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(dir, "README.md"), []byte("x"), 0o644)
+		}, []string{"README.md"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := tc.setup(dir); err != nil {
+				t.Fatal(err)
+			}
+			if got := BlockingEntries(dir); !slices.Equal(got, tc.want) {
+				t.Errorf("BlockingEntries = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCreateProject_IntoAGitRepository(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if empty, err := isDirectoryEmpty(dir); err != nil || !empty {
+		t.Fatalf("a directory holding only .git must count as empty, got %v %v", empty, err)
 	}
 }

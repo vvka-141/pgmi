@@ -4,12 +4,15 @@
 -- Creates public views and functions for deploy.sql to use.
 -- Executed by Go after schema.sql and file loading.
 --
--- This file provides the stable public API that deploy.sql depends on.
--- Internal tables (_pgmi_*) may change; these views provide abstraction.
+-- This file is the public API that deploy.sql depends on. Every view names its
+-- columns, so a column added to an internal table (_pgmi_*) stays internal
+-- until it is listed here. internal/contract/testdata/session-api.snapshot
+-- records the published columns; a view change is a deliberate diff there.
 --
 -- PUBLIC VIEWS:
---   pgmi_source_view          - Source files (SELECT * FROM _pgmi_source)
+--   pgmi_source_view          - Source files
 --   pgmi_parameter_view       - CLI parameters
+--   pgmi_runtime_view         - pgmi binary and contract version (one row)
 --   pgmi_test_source_view     - Test file content
 --   pgmi_test_directory_view  - Test directory hierarchy
 --   pgmi_source_metadata_view - Parsed <pgmi-meta> blocks
@@ -21,7 +24,10 @@
 
 -- §pgmi_source_view ──────────────────────────────────────────────────────────
 CREATE TEMP VIEW pgmi_source_view AS
-SELECT * FROM pg_temp._pgmi_source;
+SELECT path, name, directory, extension, depth, content, size_bytes,
+       checksum, pgmi_checksum, path_parts, is_sql_file, is_test_file,
+       parent_folder_name
+FROM pg_temp._pgmi_source;
 
 COMMENT ON VIEW pg_temp.pgmi_source_view IS
     'Public view of source files. Use this in deploy.sql instead of _pgmi_source.';
@@ -31,7 +37,8 @@ GRANT SELECT ON pg_temp.pgmi_source_view TO PUBLIC;
 
 -- §pgmi_parameter_view ───────────────────────────────────────────────────────
 CREATE TEMP VIEW pgmi_parameter_view AS
-SELECT * FROM pg_temp._pgmi_parameter;
+SELECT "key", "value"
+FROM pg_temp._pgmi_parameter;
 
 COMMENT ON VIEW pg_temp.pgmi_parameter_view IS
     'Public view of CLI parameters. Use this in deploy.sql instead of _pgmi_parameter.';
@@ -39,9 +46,21 @@ COMMENT ON VIEW pg_temp.pgmi_parameter_view IS
 GRANT SELECT ON pg_temp.pgmi_parameter_view TO PUBLIC;
 
 
+-- §pgmi_runtime_view ─────────────────────────────────────────────────────────
+CREATE TEMP VIEW pgmi_runtime_view AS
+SELECT pgmi_version, contract_version
+FROM pg_temp._pgmi_runtime;
+
+COMMENT ON VIEW pg_temp.pgmi_runtime_view IS
+    'One row: the pgmi binary version running this deploy and the session-API contract version it applied.';
+
+GRANT SELECT ON pg_temp.pgmi_runtime_view TO PUBLIC;
+
+
 -- §pgmi_test_source_view ─────────────────────────────────────────────────────
 CREATE TEMP VIEW pgmi_test_source_view AS
-SELECT * FROM pg_temp._pgmi_test_source;
+SELECT path, directory, filename, content, is_fixture
+FROM pg_temp._pgmi_test_source;
 
 COMMENT ON VIEW pg_temp.pgmi_test_source_view IS
     'Public view of test file content. Use this in deploy.sql instead of _pgmi_test_source.';
@@ -51,7 +70,8 @@ GRANT SELECT ON pg_temp.pgmi_test_source_view TO PUBLIC;
 
 -- §pgmi_test_directory_view ──────────────────────────────────────────────────
 CREATE TEMP VIEW pgmi_test_directory_view AS
-SELECT * FROM pg_temp._pgmi_test_directory;
+SELECT path, parent_path, depth
+FROM pg_temp._pgmi_test_directory;
 
 COMMENT ON VIEW pg_temp.pgmi_test_directory_view IS
     'Public view of test directory hierarchy. Use this instead of _pgmi_test_directory.';
@@ -61,7 +81,8 @@ GRANT SELECT ON pg_temp.pgmi_test_directory_view TO PUBLIC;
 
 -- §pgmi_source_metadata_view ─────────────────────────────────────────────────
 CREATE TEMP VIEW pgmi_source_metadata_view AS
-SELECT * FROM pg_temp._pgmi_source_metadata;
+SELECT path, id, idempotent, sort_keys, description
+FROM pg_temp._pgmi_source_metadata;
 
 COMMENT ON VIEW pg_temp.pgmi_source_metadata_view IS
     'Public view of script metadata. Use this instead of _pgmi_source_metadata.';
@@ -79,7 +100,7 @@ SELECT
     -- File identity
     s.path,
     s.content,
-    s.pgmi_checksum AS checksum,
+    s.pgmi_checksum,
 
     -- Metadata (with fallback for files without metadata)
     -- Fallback uses MD5 hash cast to UUID (built-in, no extension required)
@@ -189,9 +210,11 @@ BEGIN
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
                 v_sql := v_sql || format(
-                    'SELECT pg_temp.pgmi_run_test_source(%L);',
+                    'SELECT set_config(''pgmi_test.path'', %L, true);',
                     v_step.script_path
-                ) || E'\n';
+                ) || E'\n'
+                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = current_setting(''pgmi_test.path'')); END $pgmi_test$;'
+                    || E'\n';
                 v_sql := v_sql || format(
                     'SELECT %s(ROW(''fixture_end'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
@@ -227,9 +250,11 @@ BEGIN
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
                 v_sql := v_sql || format(
-                    'SELECT pg_temp.pgmi_run_test_source(%L);',
+                    'SELECT set_config(''pgmi_test.path'', %L, true);',
                     v_step.script_path
-                ) || E'\n';
+                ) || E'\n'
+                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = current_setting(''pgmi_test.path'')); END $pgmi_test$;'
+                    || E'\n';
                 v_sql := v_sql || format(
                     'SELECT %s(ROW(''test_end'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal

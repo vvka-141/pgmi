@@ -18,8 +18,8 @@ The session contract consists of:
 
 | Layer | Objects |
 |-------|---------|
-| Internal tables | `_pgmi_parameter`, `_pgmi_source`, `_pgmi_source_metadata`, `_pgmi_test_directory`, `_pgmi_test_source` |
-| Public views | `pgmi_source_view`, `pgmi_parameter_view`, `pgmi_plan_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view` |
+| Internal tables | `_pgmi_parameter`, `_pgmi_runtime`, `_pgmi_source`, `_pgmi_source_metadata`, `_pgmi_test_directory`, `_pgmi_test_source` |
+| Public views | `pgmi_source_view`, `pgmi_parameter_view`, `pgmi_runtime_view`, `pgmi_plan_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view` |
 | Functions | `pgmi_test_plan(p_pattern)`, `pgmi_test_generate(p_pattern, p_callback)`, `pgmi_register_file(...)`, `pgmi_test_callback(event)` |
 | Preprocessor macro | `CALL pgmi_test()` — expanded by Go before SQL reaches PostgreSQL |
 | Types | `pgmi_test_event` composite type for test lifecycle callbacks |
@@ -28,11 +28,11 @@ The execution contract — atomic head, then psql tail — is also pgmi core: th
 
 ### The basic template
 
-A flat, explicit starting project copied by `pgmi init`. Contains `deploy.sql`, a `migrations/` directory, and a `__test__/` directory. Yours the moment it lands.
+A small two-layer starting project copied by `pgmi init`: `deploy.sql`, `physical/` (run-once tables), `semantic/` (re-run views and functions) and their `__test__/` directories. Yours the moment it lands.
 
 ### The advanced template
 
-A complete reference application: handler registry, REST/RPC/MCP gateways, OpenAPI generation, API keys, multi-tenant RLS, transaction policy, and audit trails. Also copied by `pgmi init --template advanced`. Also yours; also deletable.
+A complete reference application: handler registry, REST/RPC/MCP gateways, OpenAPI generation, multi-tenant RLS, transaction policy, and audit trails. Also copied by `pgmi init --template advanced`. Also yours; also deletable.
 
 ## The rule
 
@@ -42,7 +42,7 @@ Nothing in either template is upgraded, migrated, or overwritten when you upgrad
 
 ## What happens on upgrade
 
-**Core session API** — versioned and backward-compatible. The `--compat` flag lets your `deploy.sql` request a specific API version (see [API versioning design](design/api-versioning.md)). Within a contract version, views and functions keep their names and columns. Behavior (plan ordering, which files load, the execution contract) follows the binary version, so pin the binary too.
+**Core session API** — may change in a minor release before pgmi 1.0. A view, column or function can be added, renamed or removed; every such change is listed under **Upgrading** in that release's notes ([RELEASES.md](https://github.com/vvka-141/pgmi/blob/main/RELEASES.md)). `--compat` selects a contract version the binary ships (only `1` today) and rejects one it does not; it does not freeze columns across pgmi releases. Pin the pgmi binary version: that pins the session API and its behavior (plan ordering, which files load, the execution contract). Read Upgrading before you move the pin.
 
 **Your project SQL** — untouched. pgmi never reads, diffs, or modifies your `deploy.sql` or any file it discovers. The binary loads files into temp tables and hands control to your SQL.
 
@@ -52,6 +52,6 @@ Nothing in either template is upgraded, migrated, or overwritten when you upgrad
 |------------|-----------|
 | Any pgmi user | [Quickstart](QUICKSTART.md), [Session API](session-api.md), [deploy.sql guide](DEPLOY-GUIDE.md), [CLI reference](CLI.md), [Testing](TESTING.md) |
 | Using the basic template or your own project shape | The above, plus [Script metadata](METADATA.md) when you need execution ordering |
-| Using the advanced template | Everything above, plus [the advanced template section](advanced/_index.md) — REST, MCP, API keys, transaction policy, client generation |
+| Using the advanced template | Everything above, plus [the advanced template section](advanced/README.md) — REST, MCP, transaction policy, client generation |
 
-The [advanced template overview](advanced/_index.md) states the boundary in full detail and documents every subsystem you inherit.
+The [advanced template overview](advanced/README.md) states the boundary in full detail and documents every subsystem you inherit.

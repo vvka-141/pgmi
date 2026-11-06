@@ -6,7 +6,7 @@
     Bytea encoding types and casts for chainable type conversion (utf8, latin1, win1252)
   </description>
   <sortKeys>
-    <key>001/000</key>
+    <key>001/001</key>
   </sortKeys>
 </pgmi-meta>
 */
@@ -22,13 +22,6 @@
 --   my_bytea::latin1::text   -- Decode as Latin-1 to text
 --   my_bytea::win1252::text  -- Decode as Windows-1252 to text
 --
--- Implementation uses composite types (not domains) because:
---   - We own composite types we create
---   - CREATE CAST requires owning at least one type
---   - Domains don't work (PostgreSQL ignores casts TO domains)
---
--- The encoding type wraps decoded text, enabling cast chaining.
---
 -- Volatility: the convert_from-based functions are deliberately IMMUTABLE even
 -- though pg_proc marks convert_from STABLE (its result depends on the database
 -- encoding). The server encoding is fixed for a database's lifetime, so within
@@ -38,41 +31,11 @@
 -- deterministic as well.
 -- ============================================================================
 
-DO $$
-BEGIN
-    RAISE NOTICE '→ Installing encoding types and bytea casts';
-END $$;
-
 -- ============================================================================
 -- Encoding Types (Composite wrappers around text)
 -- ============================================================================
--- These types wrap decoded text, preserving encoding provenance.
--- As composite types we own, we can create casts from/to them.
-
--- The types are created once and never dropped. This file is idempotent, so a
--- DROP TYPE ... CASCADE here would run on every deploy and take every dependent
--- object with it -- including a user's column, view or function typed
--- common.utf8, which these types invite by being documented as a public
--- convenience. CASCADE cannot tell those apart from the casts below.
-DO $$
-BEGIN
-    IF to_regtype('common.utf8') IS NULL THEN
-        CREATE TYPE common.utf8 AS (v text);
-    END IF;
-    IF to_regtype('common.latin1') IS NULL THEN
-        CREATE TYPE common.latin1 AS (v text);
-    END IF;
-    IF to_regtype('common.win1252') IS NULL THEN
-        CREATE TYPE common.win1252 AS (v text);
-    END IF;
-END $$;
-
-COMMENT ON TYPE common.utf8 IS
-    'UTF-8 decoded text wrapper. Enables cast chaining: my_bytea::utf8::jsonb';
-COMMENT ON TYPE common.latin1 IS
-    'Latin-1 (ISO-8859-1) decoded text wrapper. Enables cast chaining: my_bytea::latin1::text';
-COMMENT ON TYPE common.win1252 IS
-    'Windows-1252 decoded text wrapper. Enables cast chaining: my_bytea::win1252::text';
+-- The types themselves (common.utf8, common.latin1, common.win1252) are
+-- structure and live in encoding-structure.sql, which runs once.
 
 -- CREATE CAST has no OR REPLACE, so each cast is dropped by name before being
 -- recreated. Naming them individually is what keeps the redeploy from touching
@@ -264,124 +227,33 @@ $$;
 COMMENT ON FUNCTION common.to_xml(bytea) IS
     'Decode bytea as UTF-8 and parse as XML document. One-step shortcut.';
 
--- ============================================================================
--- Inline Tests
--- ============================================================================
-
 DO $test$
 DECLARE
-    v_bytea_json bytea := convert_to('{"key": "value", "num": 42}', 'UTF8');
-    v_bytea_xml bytea := convert_to('<root><item>test</item></root>', 'UTF8');
-    v_bytea_latin1 bytea := convert_to('Héllo Wörld', 'LATIN1');
-    v_result_text text;
-    v_result_jsonb jsonb;
-    v_result_json json;
-    v_result_xml xml;
+    v_json bytea := convert_to('{"key": "value", "num": 42}', 'UTF8');
+    v_case record;
 BEGIN
-    RAISE NOTICE '→ Testing encoding types and casts';
-
-    -- Test 1: bytea::utf8::text chain
-    v_result_text := v_bytea_json::common.utf8::text;
-    IF v_result_text IS DISTINCT FROM '{"key": "value", "num": 42}' THEN
-        RAISE EXCEPTION 'bytea::utf8::text failed: got %', v_result_text;
-    END IF;
-    RAISE NOTICE '  ✓ bytea::utf8::text chain works';
-
-    -- Test 2: bytea::utf8::jsonb chain
-    v_result_jsonb := v_bytea_json::common.utf8::jsonb;
-    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
-        RAISE EXCEPTION 'bytea::utf8::jsonb failed: key extraction incorrect';
-    END IF;
-    IF (v_result_jsonb->>'num')::int IS DISTINCT FROM 42 THEN
-        RAISE EXCEPTION 'bytea::utf8::jsonb failed: num extraction incorrect';
-    END IF;
-    RAISE NOTICE '  ✓ bytea::utf8::jsonb chain works';
-
-    -- Test 3: bytea::utf8::json chain
-    v_result_json := v_bytea_json::common.utf8::json;
-    IF v_result_json->>'key' IS DISTINCT FROM 'value' THEN
-        RAISE EXCEPTION 'bytea::utf8::json failed: key extraction incorrect';
-    END IF;
-    RAISE NOTICE '  ✓ bytea::utf8::json chain works';
-
-    -- Test 4: bytea::utf8::xml chain
-    v_result_xml := v_bytea_xml::common.utf8::xml;
-    IF (xpath('/root/item/text()', v_result_xml))[1]::text IS DISTINCT FROM 'test' THEN
-        RAISE EXCEPTION 'bytea::utf8::xml failed: xpath extraction incorrect';
-    END IF;
-    RAISE NOTICE '  ✓ bytea::utf8::xml chain works';
-
-    -- Test 5: bytea::latin1::text chain
-    v_result_text := v_bytea_latin1::common.latin1::text;
-    IF v_result_text IS DISTINCT FROM 'Héllo Wörld' THEN
-        RAISE EXCEPTION 'bytea::latin1::text failed: got %', v_result_text;
-    END IF;
-    RAISE NOTICE '  ✓ bytea::latin1::text chain works';
-
-    -- Test 6: Convenience function utf8()::jsonb
-    v_result_jsonb := common.utf8(v_bytea_json)::jsonb;
-    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
-        RAISE EXCEPTION 'utf8()::jsonb failed';
-    END IF;
-    RAISE NOTICE '  ✓ utf8() function with cast chain works';
-
-    -- Test 7: One-step to_jsonb()
-    v_result_jsonb := common.to_jsonb(v_bytea_json);
-    IF v_result_jsonb->>'key' IS DISTINCT FROM 'value' THEN
-        RAISE EXCEPTION 'to_jsonb() failed';
-    END IF;
-    RAISE NOTICE '  ✓ to_jsonb() one-step function works';
-
-    -- Test 8: NULL handling
-    IF (NULL::bytea)::common.utf8 IS NOT NULL THEN
-        RAISE EXCEPTION 'NULL::bytea::utf8 should be NULL';
-    END IF;
-    RAISE NOTICE '  ✓ NULL handling correct';
-
-    RAISE NOTICE '→ All encoding type and cast tests passed';
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('bytea::utf8::text', (v_json::common.utf8::text), '{"key": "value", "num": 42}'),
+            ('bytea::utf8::jsonb', ((v_json::common.utf8::jsonb)->>'key') || ((v_json::common.utf8::jsonb)->>'num'), 'value42'),
+            ('bytea::utf8::json', (v_json::common.utf8::json)->>'key', 'value'),
+            ('bytea::utf8::xml', (xpath('/root/item/text()', convert_to('<root><item>test</item></root>', 'UTF8')::common.utf8::xml))[1]::text, 'test'),
+            ('bytea::latin1::text', convert_to('Héllo Wörld', 'LATIN1')::common.latin1::text, 'Héllo Wörld'),
+            ('utf8()::jsonb', common.utf8(v_json)::jsonb->>'key', 'value'),
+            ('to_jsonb()', common.to_jsonb(v_json)->>'key', 'value'),
+            ('NULL::bytea::utf8', (NULL::bytea)::common.utf8::text, NULL)
+        ) AS c(name, got, want)
+    LOOP
+        IF v_case.got IS DISTINCT FROM v_case.want THEN
+            RAISE EXCEPTION '% failed: got %, want %', v_case.name, v_case.got, v_case.want;
+        END IF;
+    END LOOP;
 END $test$;
-
--- ============================================================================
--- Grant Permissions
--- ============================================================================
 
 DO $$
 DECLARE
     v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
     v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
 BEGIN
-    -- Grant usage on types
-    EXECUTE format('GRANT USAGE ON TYPE common.utf8 TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT USAGE ON TYPE common.latin1 TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT USAGE ON TYPE common.win1252 TO %I, %I', v_admin_role, v_api_role);
-
-    -- Grant execute on all functions
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.bytea_to_win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_text(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1_to_text(common.latin1) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252_to_text(common.win1252) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_jsonb(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_json(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8_to_xml(common.utf8) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.utf8(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.latin1(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.win1252(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_jsonb(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_json(bytea) TO %I, %I', v_admin_role, v_api_role);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION common.to_xml(bytea) TO %I, %I', v_admin_role, v_api_role);
-END $$;
-
-DO $$
-BEGIN
-    RAISE NOTICE '  ✓ common.utf8 type - UTF-8 encoding wrapper';
-    RAISE NOTICE '  ✓ common.latin1 type - Latin-1 encoding wrapper';
-    RAISE NOTICE '  ✓ common.win1252 type - Windows-1252 encoding wrapper';
-    RAISE NOTICE '  ✓ bytea::utf8 cast - decode as UTF-8';
-    RAISE NOTICE '  ✓ bytea::latin1 cast - decode as Latin-1';
-    RAISE NOTICE '  ✓ bytea::win1252 cast - decode as Windows-1252';
-    RAISE NOTICE '  ✓ utf8::text, utf8::jsonb, utf8::json, utf8::xml casts';
-    RAISE NOTICE '  ✓ latin1::text, win1252::text casts';
-    RAISE NOTICE '  ✓ Convenience functions: utf8(), latin1(), win1252(), to_jsonb(), to_json(), to_xml()';
+    EXECUTE format('GRANT USAGE ON TYPE common.utf8, common.latin1, common.win1252 TO %I, %I', v_admin_role, v_api_role);
 END $$;

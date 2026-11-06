@@ -52,31 +52,58 @@ func (p *AzureServicePrincipalProvider) String() string {
 	return fmt.Sprintf("AzureServicePrincipal(tenant=%s, client=%s)", p.tenantID, p.clientID)
 }
 
-// AzureDefaultCredentialProvider uses Azure's DefaultAzureCredential chain.
-// This automatically tries multiple authentication methods in order:
-// 1. Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
-// 2. Workload Identity (for Kubernetes)
-// 3. Managed Identity (for Azure VMs, App Service, etc.)
-// 4. Azure CLI (for local development)
-// 5. Azure Developer CLI
-// 6. Azure PowerShell
-type AzureDefaultCredentialProvider struct {
+// AzureIdentityProvider acquires tokens through an azidentity chain.
+// Without a client ID it is DefaultAzureCredential (environment, workload
+// identity, managed identity, Azure CLI, ...), scoped to the tenant when one is
+// given. With a client ID the caller named one identity, so the chain holds
+// only the credentials that can be it: workload identity and the user-assigned
+// managed identity with that ID; the Azure CLI's signed-in user is not that
+// identity.
+type AzureIdentityProvider struct {
 	credential azcore.TokenCredential
+	name       string
 }
 
-// NewAzureDefaultCredentialProvider creates a provider using the default credential chain.
-func NewAzureDefaultCredentialProvider() (*AzureDefaultCredentialProvider, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Azure default credential: %w", err)
+var (
+	newDefaultAzureCredential = func(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+		return azidentity.NewDefaultAzureCredential(o)
+	}
+	newWorkloadIdentityCredential = func(o *azidentity.WorkloadIdentityCredentialOptions) (azcore.TokenCredential, error) {
+		return azidentity.NewWorkloadIdentityCredential(o)
+	}
+	newManagedIdentityCredential = func(o *azidentity.ManagedIdentityCredentialOptions) (azcore.TokenCredential, error) {
+		return azidentity.NewManagedIdentityCredential(o)
+	}
+)
+
+// NewAzureIdentityProvider creates a provider for the resolved tenant
+// and client IDs; either may be empty.
+func NewAzureIdentityProvider(tenantID, clientID string) (*AzureIdentityProvider, error) {
+	if clientID == "" {
+		cred, err := newDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{TenantID: tenantID})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Azure default credential: %w", err)
+		}
+		return &AzureIdentityProvider{credential: cred, name: fmt.Sprintf("AzureDefaultCredential(tenant=%s)", tenantID)}, nil
 	}
 
-	return &AzureDefaultCredentialProvider{
-		credential: cred,
-	}, nil
+	var sources []azcore.TokenCredential
+	if wi, err := newWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{ClientID: clientID, TenantID: tenantID}); err == nil {
+		sources = append(sources, wi)
+	}
+	mi, err := newManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{ID: azidentity.ClientID(clientID)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure managed identity credential for client %s: %w", clientID, err)
+	}
+	sources = append(sources, mi)
+	chain, err := azidentity.NewChainedTokenCredential(sources, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure credential chain: %w", err)
+	}
+	return &AzureIdentityProvider{credential: chain, name: fmt.Sprintf("AzureManagedIdentity(client=%s)", clientID)}, nil
 }
 
-func (p *AzureDefaultCredentialProvider) GetToken(ctx context.Context) (string, time.Time, error) {
+func (p *AzureIdentityProvider) GetToken(ctx context.Context) (string, time.Time, error) {
 	token, err := p.credential.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{AzurePostgreSQLScope},
 	})
@@ -86,6 +113,6 @@ func (p *AzureDefaultCredentialProvider) GetToken(ctx context.Context) (string, 
 	return token.Token, token.ExpiresOn, nil
 }
 
-func (p *AzureDefaultCredentialProvider) String() string {
-	return "AzureDefaultCredential"
+func (p *AzureIdentityProvider) String() string {
+	return p.name
 }

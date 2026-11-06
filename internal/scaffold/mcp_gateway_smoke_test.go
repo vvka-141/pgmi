@@ -27,13 +27,13 @@ func TestMCPGateway_StatusLineIsHTTP(t *testing.T) {
 
 	workDir := t.TempDir()
 
-	writePsycopgStub(t, workDir)
+	writeGatewayDependencies(t, workDir)
 
-	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "tools", "mcp-gateway.py"))
+	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", "gateway.py"))
 	if err != nil {
 		t.Fatalf("read gateway source: %v", err)
 	}
-	gatewayPath := filepath.Join(workDir, "mcp-gateway.py")
+	gatewayPath := filepath.Join(workDir, "gateway.py")
 	if err := os.WriteFile(gatewayPath, gateway, 0o600); err != nil {
 		t.Fatalf("write gateway copy: %v", err)
 	}
@@ -96,13 +96,15 @@ func TestMCPGateway_StatusLineIsHTTP(t *testing.T) {
 	}
 }
 
-// writePsycopgStub drops a psycopg substitute into dir. The gateway resolves
-// psycopg at import time, so booting it for a test that never reaches the
-// database still needs the names it touches on the way up.
-func writePsycopgStub(t *testing.T, dir string) {
+// writeGatewayDependencies drops what the gateway imports beside it into dir:
+// login_transport.py, channel.py, interceptors.py, and stand-ins for psycopg, psycopg_pool and jwt. The gateway resolves
+// them at import time, so booting it for a test that never reaches the
+// database or a provider still needs the names it touches on the way up.
+func writeGatewayDependencies(t *testing.T, dir string) {
 	t.Helper()
 
-	stub := `import enum
+	stubs := map[string]string{
+		"psycopg.py": `import enum
 
 
 class _Err(Exception):
@@ -113,6 +115,16 @@ class errors:
     SerializationFailure = _Err
     DeadlockDetected = _Err
     OperationalError = _Err
+    QueryCanceled = _Err
+
+
+ProgrammingError = _Err
+
+
+class conninfo:
+    @staticmethod
+    def conninfo_to_dict(conninfo):
+        return {}
 
 
 class IsolationLevel(enum.IntEnum):
@@ -123,9 +135,40 @@ class IsolationLevel(enum.IntEnum):
 
 def connect(*args, **kwargs):
     raise RuntimeError("stub psycopg: this test must not reach the database")
-`
-	if err := os.WriteFile(filepath.Join(dir, "psycopg.py"), []byte(stub), 0o600); err != nil {
-		t.Fatalf("write psycopg stub: %v", err)
+`,
+		"jwt.py": `class PyJWTError(Exception):
+    pass
+`,
+		"psycopg_pool.py": `class PoolTimeout(Exception):
+    pass
+
+
+class ConnectionPool:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @staticmethod
+    def check_connection(conn):
+        pass
+
+    def connection(self):
+        raise RuntimeError("stub psycopg_pool: this test must not reach the database")
+
+    def close(self):
+        pass
+`,
+	}
+	for _, name := range []string{"login_transport.py", "channel.py", "interceptors.py", "resource_server.py"} {
+		source, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		stubs[name] = string(source)
+	}
+	for name, content := range stubs {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
 }
 

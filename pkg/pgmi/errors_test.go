@@ -170,16 +170,16 @@ func TestLocateError(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "script attached but no position (most runtime errors)",
-			err: pgmi.NewScriptError(
+			name: "no position, no DO block: deploy.sql without a line",
+			err: newScriptError(
 				&pgconn.PgError{Code: "23505", Message: "duplicate key"},
 				"deploy.sql", script, false,
 			),
-			want: nil,
+			want: &pgmi.SQLLocation{Script: "deploy.sql"},
 		},
 		{
 			name: "position resolves to line, column, and the offending line",
-			err:  pgmi.NewScriptError(pgErr, "deploy.sql", script, false),
+			err:  newScriptError(pgErr, "deploy.sql", script, false),
 			want: &pgmi.SQLLocation{
 				Script: "deploy.sql", Line: 3, Column: 1, SourceLine: "SELEC 3;", Expanded: false,
 			},
@@ -187,14 +187,14 @@ func TestLocateError(t *testing.T) {
 		{
 			name: "expanded script is flagged so the line is not mistaken for the file on disk",
 			err: fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed,
-				pgmi.NewScriptError(pgErr, "deploy.sql", script, true)),
+				newScriptError(pgErr, "deploy.sql", script, true)),
 			want: &pgmi.SQLLocation{
 				Script: "deploy.sql", Line: 3, Column: 1, SourceLine: "SELEC 3;", Expanded: true,
 			},
 		},
 		{
 			name: "position past the end of the script is rejected, not guessed",
-			err: pgmi.NewScriptError(
+			err: newScriptError(
 				&pgconn.PgError{Code: "42601", Position: 9999}, "deploy.sql", script, false,
 			),
 			want: nil,
@@ -227,7 +227,7 @@ func TestLocateError_MultibyteCharactersDoNotSkewTheLine(t *testing.T) {
 
 	// Line 1 is 31 characters plus the newline, so line 2 begins at character 33.
 	// Counted in bytes it would be 39 — the drift this test exists to catch.
-	err := pgmi.NewScriptError(
+	err := newScriptError(
 		&pgconn.PgError{Code: "42601", Position: 33}, "deploy.sql", script, false,
 	)
 
@@ -254,7 +254,7 @@ func TestFailedFile_AttributedByExecutedText(t *testing.T) {
 		{Path: "./migrations/002.sql", Content: migration},
 	}
 	attach := func(pgErr *pgconn.PgError) error {
-		err := pgmi.NewScriptError(pgErr, "deploy.sql", "DO $$ ... $$;", false)
+		err := newScriptError(pgErr, "deploy.sql", "DO $$ ... $$;", false)
 		err.(*pgmi.ScriptError).Files = files
 		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
 	}
@@ -287,6 +287,18 @@ func TestFailedFile_AttributedByExecutedText(t *testing.T) {
 		}
 	})
 
+	t.Run("human output names the file instead of quoting it", func(t *testing.T) {
+		where := "SQL statement \"" + migration + "\"\nPL/pgSQL function inline_code_block line 1 at EXECUTE"
+		err := attach(&pgconn.PgError{Code: "22012", Message: "division by zero", Where: where})
+		out := pgmi.FormatError(err)
+		if strings.Contains(out, "SELEC 1;") || !strings.Contains(out, "WHERE: SQL statement in ./migrations/002.sql\n") {
+			t.Errorf("WHERE must name the file rather than print its text:\n%s", out)
+		}
+		if d := pgmi.NewErrorDetail(err); d.Where != "SQL statement in ./migrations/002.sql\nPL/pgSQL function inline_code_block line 1 at EXECUTE" {
+			t.Errorf("--json names the file instead of quoting it, got %q", d.Where)
+		}
+	})
+
 	t.Run("message convention still works without matching text", func(t *testing.T) {
 		err := attach(&pgconn.PgError{Code: "P0001", Message: "Failed in ./x.sql: boom"})
 		if got := pgmi.FailedFile(err); got != "./x.sql" {
@@ -296,7 +308,7 @@ func TestFailedFile_AttributedByExecutedText(t *testing.T) {
 }
 
 func TestFormatError_IncludesLocationAndPointsAtTheOffendingLine(t *testing.T) {
-	err := pgmi.NewScriptError(
+	err := newScriptError(
 		&pgconn.PgError{
 			Code:     "42601",
 			Message:  `syntax error at or near "SELEC"`,
@@ -320,7 +332,7 @@ func TestFormatError_IncludesLocationAndPointsAtTheOffendingLine(t *testing.T) {
 }
 
 func TestNewErrorDetail_CarriesLocationForJSON(t *testing.T) {
-	err := pgmi.NewScriptError(
+	err := newScriptError(
 		&pgconn.PgError{Code: "42601", Message: "syntax error", Position: 11},
 		"deploy.sql", "SELECT 1;\nSELEC 2;\n", true,
 	)
@@ -343,7 +355,7 @@ func TestNewErrorDetail(t *testing.T) {
 
 	t.Run("plain error carries message and exit code", func(t *testing.T) {
 		d := pgmi.NewErrorDetail(fmt.Errorf("boom: %w", pgmi.ErrConnectionFailed))
-		if d.Message != "boom: connection failed" {
+		if d.Message != "boom" {
 			t.Errorf("Message = %q", d.Message)
 		}
 		if d.ExitCode != pgmi.ExitConnectionError {
@@ -451,6 +463,46 @@ func TestFormatError_RedactsAwkwardPasswordForms(t *testing.T) {
 			text:    `parse "postgresql://u:pw@h/db?sslpassword=a@b": bad`,
 			secrets: []string{"a@b", "a@", "@b"},
 		},
+		{
+			name:    "ADO.NET Pwd keyword",
+			text:    `invalid connection string: Host=h;Pwd=s3cret;Database=x`,
+			secrets: []string{"s3cret"},
+		},
+		{
+			name:    "PWD with spaces around the separator",
+			text:    `invalid connection string: Host=h;PWD = s3cret;Database=x`,
+			secrets: []string{"s3cret"},
+		},
+		{
+			name:    "ADO.NET doubled quote inside the value",
+			text:    `invalid connection string: Password='it''s-secret';Host=h`,
+			secrets: []string{"it", "s-secret"},
+		},
+		{
+			name:    "libpq backslash-escaped quote inside the value",
+			text:    `cannot parse: password='a\'bsecret' host=h`,
+			secrets: []string{"bsecret"},
+		},
+		{
+			name:    "double-quoted value with a doubled quote",
+			text:    `invalid connection string: Password="x""ysecret";Host=h`,
+			secrets: []string{"ysecret"},
+		},
+		{
+			name:    "SQL PASSWORD literal in a statement context",
+			text:    `SQL statement "ALTER ROLE app_admin WITH PASSWORD 'TopSecret 123' CONNECTION LIMIT 10"`,
+			secrets: []string{"TopSecret 123", "TopSecret"},
+		},
+		{
+			name:    "SQL PASSWORD literal with a doubled quote",
+			text:    `SQL statement "CREATE ROLE a LOGIN password 'it''s secret' CONNECTION LIMIT 10"`,
+			secrets: []string{"it''s secret", "s secret"},
+		},
+		{
+			name:    "SQL PASSWORD as the E-string format('%L') writes for a backslash",
+			text:    `SQL statement "ALTER ROLE a WITH PASSWORD E'back\\slash '' quote' CONNECTION LIMIT 10"`,
+			secrets: []string{"back", "slash", "quote'"},
+		},
 		// On the Azure and AWS paths the password IS a bearer token, and every
 		// case above uses a short simple word. A stricter character class in
 		// passwordURIPattern would keep passing all of them while publishing a
@@ -542,6 +594,25 @@ func TestExitCodeForError_StatementTimeoutStaysExecutionFailure(t *testing.T) {
 	}
 }
 
+// pgmi stops a deploy whose context ended with a cancel request, so the server
+// answers 57014 as it does for statement_timeout. The context in the chain is
+// what tells them apart.
+func TestExitCodeForError_CancelledStatementFollowsTheContext(t *testing.T) {
+	cancelled := fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed,
+		&pgconn.PgError{Code: "57014", Message: "canceling statement due to user request"})
+	for _, tc := range []struct {
+		cause error
+		want  int
+	}{
+		{context.DeadlineExceeded, pgmi.ExitTimeout},
+		{context.Canceled, pgmi.ExitInterrupted},
+	} {
+		if got := pgmi.ExitCodeForError(errors.Join(cancelled, tc.cause)); got != tc.want {
+			t.Errorf("57014 with %v: exit code %d, want %d", tc.cause, got, tc.want)
+		}
+	}
+}
+
 // A connect timeout must keep 11. pgx's dial timeout wraps DeadlineExceeded, so
 // this is the case the sentinel ordering exists to protect, and moving the
 // deadline check earlier must not disturb it.
@@ -551,5 +622,234 @@ func TestExitCodeForError_ConnectTimeoutStaysConnectionError(t *testing.T) {
 	if got := pgmi.ExitCodeForError(connTimeout); got != pgmi.ExitConnectionError {
 		t.Errorf("exit code %d, want %d: a connect timeout is a connection failure",
 			got, pgmi.ExitConnectionError)
+	}
+}
+
+// An editor autosave (#task.sql#) is loaded but never runs; attributing to it
+// sent an agent to edit a file that does not matter. Two SQL files with the
+// same text cannot be told apart, so both are named.
+func TestFailedFile_OnlySQLFilesAndEveryIdenticalCandidate(t *testing.T) {
+	content := "SELEC broken;\n"
+	parseErr := func() *pgconn.PgError {
+		return &pgconn.PgError{
+			Code: "42601", Message: `syntax error at or near "SELEC"`,
+			InternalQuery: content, InternalPosition: 1,
+			Where: "PL/pgSQL function inline_code_block line 1 at EXECUTE",
+		}
+	}
+	attach := func(files []pgmi.FileMetadata, pgErr *pgconn.PgError) error {
+		err := newScriptError(pgErr, "deploy.sql", "DO $$ ... $$;", false)
+		err.(*pgmi.ScriptError).Files = files
+		return fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, err)
+	}
+
+	t.Run("a non-SQL file with the same text is not blamed", func(t *testing.T) {
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/#task.sql#", Extension: ".sql#", Content: content},
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+		}, parseErr())
+		d := pgmi.NewErrorDetail(err)
+		if d.FailedFile != "./semantic/task.sql" || d.Script != "./semantic/task.sql" {
+			t.Fatalf("want ./semantic/task.sql, got failedFile=%q script=%q", d.FailedFile, d.Script)
+		}
+		if len(d.FailedFileCandidates) != 0 {
+			t.Errorf("one SQL file matched, yet candidates = %v", d.FailedFileCandidates)
+		}
+		if strings.Contains(pgmi.FormatError(err), "#task.sql#") {
+			t.Errorf("FormatError names the autosave:\n%s", pgmi.FormatError(err))
+		}
+	})
+
+	t.Run("two SQL files with the same text are both named", func(t *testing.T) {
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+			{Path: "./semantic/task copy.sql", Extension: ".sql", Content: content},
+		}, parseErr())
+		d := pgmi.NewErrorDetail(err)
+		want := []string{"./semantic/task.sql", "./semantic/task copy.sql"}
+		if fmt.Sprint(d.FailedFileCandidates) != fmt.Sprint(want) {
+			t.Fatalf("candidates = %v, want %v", d.FailedFileCandidates, want)
+		}
+		if out := pgmi.FormatError(err); !strings.Contains(out, "./semantic/task copy.sql") {
+			t.Errorf("FormatError does not name the second candidate:\n%s", out)
+		}
+	})
+
+	t.Run("a runtime error quoted in WHERE skips non-SQL files too", func(t *testing.T) {
+		pgErr := &pgconn.PgError{
+			Code: "P0001", Message: "boom",
+			Where: `PL/pgSQL function inline_code_block line 1 at RAISE` + "\n" +
+				`SQL statement "` + content + `"`,
+		}
+		err := attach([]pgmi.FileMetadata{
+			{Path: "./semantic/#task.sql#", Extension: ".sql#", Content: content},
+			{Path: "./semantic/task.sql", Extension: ".sql", Content: content},
+		}, pgErr)
+		if got := pgmi.FailedFile(err); got != "./semantic/task.sql" {
+			t.Fatalf("FailedFile = %q, want ./semantic/task.sql", got)
+		}
+	})
+}
+
+func TestFailureRecord_ErrorInDeploySQLItself(t *testing.T) {
+	head := "BEGIN;\n\nDO $$\nDECLARE\n    v int;\nBEGIN\n    v := current_setting('pgmi.owner_role');\nEND $$;\n\nCOMMIT;\n"
+	err := fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, newScriptError(&pgconn.PgError{
+		Code: "42704", Message: `unrecognized configuration parameter "pgmi.owner_role"`,
+		Where: "PL/pgSQL function inline_code_block line 5 at assignment",
+	}, "deploy.sql", head, false))
+	d := pgmi.NewErrorDetail(err)
+	if d.Script != "deploy.sql" || d.Line != 7 || !strings.Contains(d.SourceLine, "current_setting") || d.Phase != "deploy" {
+		t.Errorf("want deploy.sql line 7, phase deploy; got script=%q line=%d source=%q phase=%q", d.Script, d.Line, d.SourceLine, d.Phase)
+	}
+
+	twoBlocks := head + "DO $$ BEGIN PERFORM 1; END $$;\n"
+	err = newScriptError(&pgconn.PgError{Code: "42704", Where: "PL/pgSQL function inline_code_block line 5 at assignment"},
+		"deploy.sql", twoBlocks, false)
+	if d := pgmi.NewErrorDetail(err); d.Script != "deploy.sql" || d.Line != 0 {
+		t.Errorf("two DO blocks: name deploy.sql, guess no line; got script=%q line=%d", d.Script, d.Line)
+	}
+}
+
+func TestFailureRecord_ATestFailureIsMarkedAndLocated(t *testing.T) {
+	test := "DO $$\nBEGIN\n    IF true THEN\n        RAISE EXCEPTION 'TEST FAILED: x';\n    END IF;\nEND $$;\n"
+	files := []pgmi.FileMetadata{{Path: "./semantic/__test__/test_project.sql", Content: test}}
+	scriptErr := newScriptError(&pgconn.PgError{
+		Code: "P0001", Message: "TEST FAILED: x",
+		Where: "PL/pgSQL function inline_code_block line 4 at RAISE\nSQL statement \"" + test + "\"\nPL/pgSQL function inline_code_block line 9 at EXECUTE",
+	}, "deploy.sql", "DO $$ ... $$;", false)
+	scriptErr.(*pgmi.ScriptError).Files = files
+	d := pgmi.NewErrorDetail(fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr))
+	if d.Phase != "test" || d.Script != "./semantic/__test__/test_project.sql" || d.Line != 4 {
+		t.Errorf("want phase test at the RAISE on line 4 of the test file; got phase=%q script=%q line=%d", d.Phase, d.Script, d.Line)
+	}
+	if strings.Contains(d.Where, "TEST FAILED: x';") {
+		t.Errorf("where must name the test file, not inline it: %q", d.Where)
+	}
+}
+
+func TestFormatErrorHidesSentinels(t *testing.T) {
+	banned := []string{"usage error", "invalid configuration", "execution failed", "approval denied",
+		"approval request failed", "overwrite workflow failed", "context canceled", "context deadline exceeded", "[", "]"}
+	sentinels := []error{pgmi.ErrUsage, pgmi.ErrInvalidConfig, pgmi.ErrExecutionFailed, pgmi.ErrApprovalDenied,
+		pgmi.ErrConnectionFailed, pgmi.ErrConcurrentDeploy, pgmi.ErrDeploySQLNotFound, pgmi.ErrUnsupportedAuthMethod}
+	for _, s := range sentinels {
+		for name, err := range map[string]error{
+			"prefix":           fmt.Errorf("%w: the thing broke", s),
+			"suffix":           fmt.Errorf("the thing broke: %w", s),
+			"suffix then line": fmt.Errorf("%w\n(connection from PGMI_CONNECTION_STRING)", fmt.Errorf("the thing broke: %w", s)),
+			"nested prefix":    fmt.Errorf("%w: %w: the thing broke", s, s),
+		} {
+			t.Run(s.Error()+"/"+name, func(t *testing.T) {
+				got := pgmi.FormatError(err)
+				if !strings.Contains(got, "the thing broke") {
+					t.Errorf("message lost: %q", got)
+				}
+				for _, word := range []string{"usage error", "invalid configuration", "execution failed", s.Error()} {
+					if strings.Contains(got, word) {
+						t.Errorf("%q shows the sentinel %q", got, word)
+					}
+				}
+				if pgmi.ExitCodeForError(err) != pgmi.ExitCodeForError(s) {
+					t.Errorf("exit code changed")
+				}
+			})
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+		code int
+	}{
+		"interrupt":         {fmt.Errorf("%w: %w", context.Canceled, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, context.Canceled)), "interrupted", pgmi.ExitInterrupted},
+		"bare interrupt":    {context.Canceled, "interrupted", pgmi.ExitInterrupted},
+		"reworded":          {pgmi.WithMessage(context.Canceled, "overwrite cancelled"), "overwrite cancelled", pgmi.ExitInterrupted},
+		"reworded deadline": {pgmi.WithMessage(fmt.Errorf("%w: timeout: %w", pgmi.ErrExecutionFailed, context.DeadlineExceeded), "the deploy exceeded --timeout 2s"), "the deploy exceeded --timeout 2s", pgmi.ExitCodeForError(context.DeadlineExceeded)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := pgmi.FormatError(tc.err)
+			if got != tc.want {
+				t.Errorf("FormatError = %q, want %q", got, tc.want)
+			}
+			for _, word := range banned {
+				if strings.Contains(got, word) {
+					t.Errorf("%q contains %q", got, word)
+				}
+			}
+			if c := pgmi.ExitCodeForError(tc.err); c != tc.code {
+				t.Errorf("exit code %d, want %d", c, tc.code)
+			}
+		})
+	}
+}
+
+func TestFailureRecord_ACommentHeaderAboveATestKeepsTheLine(t *testing.T) {
+	test := "-- Test: the header most tests carry\n/* and a block\n   comment */\nDO $$\nBEGIN\n    RAISE EXCEPTION 'TEST FAILED: x';\nEND $$;\n"
+	scriptErr := newScriptError(&pgconn.PgError{
+		Code: "P0001", Message: "TEST FAILED: x",
+		Where: "PL/pgSQL function inline_code_block line 3 at RAISE\nSQL statement \"" + test + "\"\nPL/pgSQL function inline_code_block line 9 at EXECUTE",
+	}, "deploy.sql", "DO $$ ... $$;", false)
+	scriptErr.(*pgmi.ScriptError).Files = []pgmi.FileMetadata{{Path: "./__test__/test_x.sql", Content: test}}
+	err := fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr)
+	d := pgmi.NewErrorDetail(err)
+	if d.Line != 6 || d.SourceLine != "    RAISE EXCEPTION 'TEST FAILED: x';" {
+		t.Fatalf("want the RAISE on line 6, got line %d %q", d.Line, d.SourceLine)
+	}
+	if out := pgmi.FormatError(err); !strings.Contains(out, "LOCATION: ./__test__/test_x.sql line 6") {
+		t.Errorf("LOCATION must carry the line:\n%s", out)
+	}
+}
+
+func TestFailureRecord_AParseErrorInsideAFunctionBodyHasItsFileLine(t *testing.T) {
+	body := "\n    SELECT 1\n    FRM t;\n"
+	file := "-- semantic/task.sql\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $f$" + body + "$f$;\n"
+	scriptErr := newScriptError(&pgconn.PgError{
+		Code: "42601", Message: `syntax error at or near "FRM"`,
+		InternalQuery: body, InternalPosition: int32(strings.Index(body, "FRM") + 1),
+		Where: "SQL statement \"" + file + "\"\nPL/pgSQL function inline_code_block line 5 at EXECUTE",
+	}, "deploy.sql", "DO $$ ... $$;", false)
+	scriptErr.(*pgmi.ScriptError).Files = []pgmi.FileMetadata{{Path: "./semantic/task.sql", Content: file}}
+	d := pgmi.NewErrorDetail(fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr))
+	if d.Script != "./semantic/task.sql" || d.Line != 4 || d.Column != 5 || d.SourceLine != "    FRM t;" {
+		t.Fatalf("want ./semantic/task.sql line 4 column 5, got %+v", d)
+	}
+}
+
+func TestFailureRecord_FailedFileNamesDeploySQLToo(t *testing.T) {
+	script := "DO $$\nBEGIN\n    RAISE EXCEPTION 'missing parameter';\nEND $$;\n"
+	scriptErr := newScriptError(&pgconn.PgError{
+		Code: "P0001", Message: "missing parameter", Where: "PL/pgSQL function inline_code_block line 3 at RAISE",
+	}, "deploy.sql", script, false)
+	d := pgmi.NewErrorDetail(fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr))
+	if d.FailedFile != "deploy.sql" || d.Script != "deploy.sql" || d.Phase != "deploy" {
+		t.Fatalf("a failure in deploy.sql must name it in failedFile too, got %+v", d)
+	}
+}
+
+func newScriptError(err error, name, script string, expanded bool) error {
+	return &pgmi.ScriptError{Err: err, Name: name, Script: script, Expanded: expanded}
+}
+
+func TestFailureRecord_AFileThatStartsWithADoBlock(t *testing.T) {
+	content := "DO $$ BEGIN RAISE WARNING 'w'; END $$; SELECT 1/0;"
+	files := []pgmi.FileMetadata{{Path: "./zzz.sql", Extension: ".sql", Content: content}}
+	for _, c := range []struct {
+		name  string
+		where string
+		line  int
+	}{
+		{"the error is outside the file's DO block", `SQL statement "` + content + `"` + "\nPL/pgSQL function inline_code_block line 10 at EXECUTE", 0},
+		{"the error is inside it", "PL/pgSQL function inline_code_block line 1 at RAISE\n" +
+			`SQL statement "` + content + `"` + "\nPL/pgSQL function inline_code_block line 10 at EXECUTE", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			scriptErr := newScriptError(&pgconn.PgError{Code: "22012", Message: "division by zero", Where: c.where},
+				"deploy.sql", "BEGIN;\n"+strings.Repeat("\n", 8)+"DO $$ ... $$;\n", false)
+			scriptErr.(*pgmi.ScriptError).Files = files
+			d := pgmi.NewErrorDetail(fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, scriptErr))
+			if d.FailedFile != "./zzz.sql" || d.Line != c.line {
+				t.Errorf("want ./zzz.sql line %d, got %q line %d", c.line, d.FailedFile, d.Line)
+			}
+		})
 	}
 }

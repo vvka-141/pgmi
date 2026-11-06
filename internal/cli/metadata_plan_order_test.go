@@ -54,3 +54,17 @@ func TestMetadataPlanFallbackOrderMatchesPlanView(t *testing.T) {
 		}
 	}
 }
+
+func TestMetadataPlanReadsAnUnterminatedCommentToTheEnd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.sql"), []byte("/*"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := planProject(dir)
+	if err != nil {
+		t.Fatalf("planProject: %v", err)
+	}
+	if len(result.Plan) != 1 || result.Plan[0].Path != "./a.sql" {
+		t.Fatalf("plan = %+v, want ./a.sql alone", result.Plan)
+	}
+}

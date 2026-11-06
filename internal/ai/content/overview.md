@@ -18,8 +18,10 @@ pgmi init myproject --template basic
 # CALL pgmi_test(), so they run inside the same transaction and a failing
 # test rolls the whole deployment back. pgmi reads the connection string from
 # PGMI_CONNECTION_STRING or DATABASE_URL, which keeps the password out of argv.
-export PGMI_CONNECTION_STRING="postgresql://user:pass@host/db"
-pgmi deploy ./myproject
+# Name the target with -d: a database in the string otherwise replaces
+# pgmi.yaml's (pgmi names the override), and the templates require env.
+export PGMI_CONNECTION_STRING="postgresql://user:pass@host/postgres"
+pgmi deploy ./myproject -d myproject_db --param env=dev
 ```
 
 There is no `--test`, `--skip-tests`, or `--dry-run` flag, and no parameter pgmi
@@ -36,16 +38,20 @@ pgmi creates temporary tables in `pg_temp` schema:
 | `pgmi_source_view` | All project files with path, content, metadata, `is_sql_file` (excludes deploy.sql and `__test__/`) |
 | `pgmi_plan_view` | All project files in execution order, derived from `<pgmi-meta>` sortKeys |
 | `pgmi_parameter_view` | CLI parameters (`--param key=value`) |
+| `pgmi_runtime_view` | One row: `pgmi_version`, `contract_version` of the running binary |
 | `pgmi_test_source_view` | Test files from `__test__/` directories |
 | `pgmi_test_directory_view` | Test directory hierarchy |
 | `pgmi_source_metadata_view` | Parsed `<pgmi-meta>` blocks |
 
-All names end in `_view` — they are the stable public API. Do not query the
-`_pgmi_*` internal tables directly; they are implementation details.
+All names end in `_view` — they are the public API. Do not query the
+`_pgmi_*` internal tables directly; they are implementation details. Before
+pgmi 1.0 the public API may change in a minor release; every change is listed
+under Upgrading in that release's notes. `pgmi ai contract` prints the exact
+columns of the binary you run.
 
 ### What Gets Loaded
 
-Every file under the project path enters the session, not just SQL. Four things
+Every file under the project path enters the session, not just SQL. Five things
 never arrive:
 
 | Never loaded | Note |
@@ -54,11 +60,17 @@ never arrive:
 | `__test__/`, `__tests__/` | Go to `pgmi_test_source_view`, not `pgmi_source_view` |
 | Any path segment starting with `.` | `.git`, `.venv`, `.claude`, `.env`. SQL you park in a dot-directory is invisible |
 | `node_modules/`, `__pycache__/` | Exact names only — pgmi's own `__test__` is not affected |
+| Paths matched by `.pgmiignore` | Root file, `.gitignore` syntax; `pgmi deploy --verbose` lists what each rule ignored |
 
-Everything else is read as text; a binary file fails the deploy before pgmi
-connects. `is_sql_file` is true only for `.sql .ddl .dml .dql .dcl .psql .pgsql
-.plpgsql` — `001.sql.bak` and `notes.txt` load with `is_sql_file` false, which
-is what makes the guard below matter.
+Everything else is read as text. A binary file (one with a NUL byte) or one
+over the size limit (10 MiB; `PGMI_MAX_FILE_SIZE` overrides it) fails the
+deploy with exit 10 before pgmi connects. A Python `venv/` or a build output
+folder inside the project is the usual cause (a venv's symlinks fail the deploy
+too): add it to `.pgmiignore`, or name the venv `.venv`.
+
+`is_sql_file` is true only for `.sql .ddl .dml .dql .dcl .psql .pgsql
+.plpgsql` — `001.sql.bak` and `notes.txt` load with `is_sql_file` false,
+which is what makes the guard below matter.
 
 ### deploy.sql Pattern
 
@@ -69,7 +81,11 @@ BEGIN
     -- pgmi_plan_view carries EVERY loaded file, not only SQL — README.md,
     -- pgmi.yaml and editor leftovers (001.sql~, .bak) are all in it.
     -- is_sql_file is the execution guard; without it a stale backup of a
-    -- migration runs as a migration.
+    -- migration runs as a migration. A copy that keeps the extension
+    -- ("task (copy).sql") IS an SQL file and runs unless .pgmiignore keeps
+    -- it out (every template's .pgmiignore excludes "* (copy)*",
+    -- "* ([0-9]*)*", "* - Copy*", "* copy.*", "* copy [0-9]*" and "*~");
+    -- RAISE NOTICE each path you execute.
     FOR v_file IN (
         SELECT p.path, p.content
         FROM pg_temp.pgmi_plan_view p
@@ -123,12 +139,15 @@ Parameters are passed with `--param key=value` and read back with
 whatever your `deploy.sql` decides they mean.
 
 ```sql
--- Access parameters with defaults
-v_env := COALESCE(current_setting('pgmi.env', true), 'development');
+-- Read a parameter; refuse a missing env rather than default it
+v_env := current_setting('pgmi.env', true);
+IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+    RAISE EXCEPTION 'Parameter env must be dev, test or prod' USING HINT = 'Pass --param env=dev, test or prod.';
+END IF;
 
 -- Conditional logic based on parameters (this branch exists because deploy.sql
 -- wrote it, not because pgmi knows what "env" is)
-IF v_env <> 'production' THEN
+IF v_env <> 'prod' THEN
     PERFORM seed_dev_data();
 END IF;
 ```
@@ -142,8 +161,8 @@ The three most relevant to agents:
    deployment transaction; a failing test aborts the commit and rolls back its
    transactional schema and data changes. Sequence advances and effects outside
    the transaction are not rolled back.
-2. **Reformat-proof checksums** — `pgmi_checksum` strips comments, case-folds,
-   and collapses whitespace before hashing, so reformatting a file doesn't
+2. **Reformat-proof checksums** — `pgmi_checksum` strips comments, and folds case
+   and collapses whitespace outside literals before hashing, so reformatting a file doesn't
    trigger a checksum mismatch (the most common Flyway support-thread class).
 3. **Agent-native tooling** — the binary you're already calling (`pgmi ai`,
    `pgmi ai contract`, `pgmi serve`) embeds machine-readable guidance and a
@@ -152,28 +171,19 @@ The three most relevant to agents:
 Full list with honest competitor lines and code links:
 [Highlights](https://vvka-141.github.io/pgmi/docs/highlights/)
 
-## Available Skills
+## Project Skills
 
-Use `pgmi ai skill <name>` to get detailed guidance:
-
-| Skill | Use When |
-|-------|----------|
-| `pgmi-sql` | Writing SQL/PL/pgSQL or deploy.sql |
-| `pgmi-debug-deploy` | A deploy failed — map the exit code to a diagnosis |
-| `pgmi-philosophy` | Understanding architectural decisions |
-| `pgmi-system-design` | Designing features the pgmi way (physical/logical/API layering) |
-| `pgmi-templates` | Creating or modifying scaffold templates |
-| `pgmi-testing-review` | Writing, organizing, or debugging tests |
-| `pgmi-postgres-review` | Writing SQL with correctness and performance guidance |
-| `pgmi-security-review` | Reviewing for SQL injection, RLS, or secret handling |
-| `pgmi-metadata-system` | Working with `<pgmi-meta>` blocks, sortKeys, execution ordering |
-| `pgmi-test-architecture` | Organizing `__test__/` directories and test strategy |
-| `postgresql-patterns` | EXECUTE, format(), composite types, dynamic SQL |
-| `advanced-template` | Looking up the scaffolded framework's SQL API (advanced template) |
-| `pgmi-api-architecture` | REST/RPC/MCP protocol design (advanced template) |
-| `pgmi-handler-patterns` | Writing REST/RPC handler bodies — the four-phase defensive doctrine (advanced template) |
-| `pgmi-endpoint-quickstart` | End-to-end recipe: add an entity + REST endpoint + test (advanced template) |
-| `pgmi-mcp` | MCP handler implementation (advanced template) |
+`pgmi init -t basic` and `-t advanced` write the project's agent guidance:
+`AGENTS.md` and skills in `.agents/skills/` (the default minimal template writes
+none). Both get `pgmi-workflow`, `pgmi-sql`,
+`pgmi-testing`, `pgmi-metadata`, `pgmi-debug-deploy`, `pgmi-design`,
+`pgmi-layers` and the PostgreSQL recipes `postgres-analytics`,
+`postgres-change-capture`, `postgres-concurrency`, `postgres-indexing`,
+`postgres-integrity`, `postgres-security` and `postgres-time`. The advanced
+template adds `pgmi-api-layer`, `pgmi-endpoint`, `pgmi-handlers`, `pgmi-api`
+and `pgmi-mcp`. They belong to the project: read them there, and edit them as its
+conventions change. An advanced-template project also carries reference
+gateways in `gateways/`.
 
 ## SQL Conventions
 
@@ -248,26 +258,27 @@ TLS:
 
 Parameters:
   --param KEY=VALUE      Pass parameter (repeatable, available as current_setting('pgmi.key'))
-  --params-file PATH     Load from .env file (repeatable, later wins)
+  --params-file PATH     Load from .env file (repeatable, later wins; - reads stdin)
+  PGMI_PARAM_<NAME>      Environment variable read as parameter <name>; use for secrets
 
 Workflow:
   --overwrite            Drop and recreate the database
   --force                Non-interactive 5s countdown (CI/CD)
   --timeout DURATION     Catastrophic failure timeout (default 3m)
-  --compat VERSION       Pin session interface version
+  --compat VERSION       Refuse a binary that does not ship this session API version
   --json                 Emit structured JSON to stdout after deployment
 ```
 
 ### pgmi init \[path\]
 
 ```
-  -t, --template NAME    basic (default) or advanced
+  -t, --template NAME    minimal (default), basic or advanced
 ```
 
 ### pgmi metadata \<subcommand\> \<path\>
 
 ```
-  scaffold [--write] [--idempotent=BOOL]  Generate <pgmi-meta> blocks
+  scaffold [--write] [--sort-key PREFIX] [--idempotent=BOOL]  Generate <pgmi-meta> blocks
   validate [--json]                       Check XML validity + uniqueness
   plan [--json]                           Show execution order from sortKeys
 ```
@@ -276,18 +287,7 @@ Workflow:
 
 ```
   (no subcommand)        Overview (this document)
-  skills                 List embedded skills
-  skill <name>           Print skill content
-  client [lang]          API client guidance (typescript, python, go, csharp, rust)
   contract               Session API contract (views, functions)
-  setup                  Write guidance files for an assistant
-    --assistant X        claude, agents, codex, opencode, codex-skills, antigravity,
-                         cursor, copilot, windsurf, cline, gemini
-    --all                Every supported assistant
-    --global             Write to ~/.claude/ instead of the project
-    --dry-run            Print planned changes, write nothing
-    --force              Overwrite a hand-edited file
-  check [--assistant X]  Report if guidance is current (--global checks ~/.claude/)
 ```
 
 ### pgmi info \[path\]
@@ -311,7 +311,10 @@ template type, deploy.sql/pgmi.yaml presence, test coverage, metadata usage.
 Run pgmi as an MCP (Model Context Protocol) server over stdio. MCP-capable
 assistants use pgmi's commands natively as tools instead of spawning a
 subprocess and parsing text. Tools map 1:1 to CLI commands — no new deployment
-semantics; connection and parameters are passed per call, never stored.
+semantics. `deploy` resolves like `pgmi deploy` (arguments, then environment,
+then pgmi.yaml; only `path` is required); nothing is stored between calls.
+`pgmi deploy` loads the project `.env` into its environment; `pgmi serve` does not,
+so pass params in the call or set them in the server's environment.
 
 ```
   pgmi serve             Start the MCP server (reads JSON-RPC on stdin)
@@ -319,7 +322,7 @@ semantics; connection and parameters are passed per call, never stored.
 ```
 
 Tools: `deploy`, `init`, `metadata_plan`, `metadata_validate`, `templates_list`,
-`ai_overview`, `ai_skills`, `ai_skill`, `ai_contract`. Results are structured
+`ai_overview`, `ai_contract`. Results are structured
 JSON (the same data as each command's `--json` output). Diagnostics go to
 stderr; the server exits cleanly on EOF or SIGINT.
 
@@ -345,7 +348,6 @@ The CLI never decides what SQL to run; your deploy.sql orchestrates everything i
 
 ## Learn More
 
-- `pgmi ai skill pgmi-sql` - Complete SQL conventions
-- `pgmi ai skill pgmi-philosophy` - Architectural principles
-- `pgmi ai skill pgmi-templates` - Production template guide
-- `pgmi ai client [lang]` - Consuming the API from code? Client guidance for TypeScript, Python, Go, C#, Rust
+- `.agents/skills/` in a scaffolded project — SQL, testing and design conventions
+- `pgmi ai contract` — the exact session API of this binary
+- [Documentation](https://vvka-141.github.io/pgmi/docs/readme/)

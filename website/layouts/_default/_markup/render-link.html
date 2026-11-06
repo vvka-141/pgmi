@@ -18,6 +18,11 @@
          too high, so they silently became GitHub source links. */ -}}
   {{- $baseDir := cond (eq .Page.Kind "page") (path.Dir .Page.Path) .Page.Path -}}
   {{- $abs := path.Join $baseDir $rel -}}
+  {{- /* A folder's README.md is published as its section page (hugo.toml
+         mounts it as _index.md), so a link to it resolves to the folder. */ -}}
+  {{- if and (eq (path.Base $abs) "readme") (not (site.GetPage $abs)) -}}
+    {{- $abs = path.Dir $abs -}}
+  {{- end -}}
   {{- with site.GetPage $abs -}}
     {{- $dest = .RelPermalink -}}
     {{- with $frag }}{{ $dest = printf "%s#%s" $dest . }}{{ end -}}

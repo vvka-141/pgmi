@@ -5,27 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
-	"github.com/vvka-141/pgmi/internal/db/manager"
-	"github.com/vvka-141/pgmi/internal/files/loader"
-	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/internal/tui/wizards"
 	"github.com/vvka-141/pgmi/internal/ui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/pkg/pgmi/deploy"
 )
 
 var deployCmd = &cobra.Command{
@@ -39,20 +41,28 @@ by deploy.sql, not by pgmi.
 
   pgmi deploy . -d mydb
   pgmi deploy . -d mydb --overwrite --force
-  pgmi deploy . -d mydb --params-file prod.env
+  pgmi deploy . -d mydb --params-file prod.params
   pgmi deploy . -d mydb --param env=prod --param version=1.2.3
+  ./fetch-secrets | pgmi deploy . -d mydb --params-file -
 
 Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
 string. Cloud auth: --azure, --aws, --google (no password needed).
 
-Parameter precedence: --param > --params-file (later wins) > pgmi.yaml.
+A project .env is loaded into the environment first (variables already set
+win); pgmi serve does not read it.
+
+Parameter precedence: --param > --params-file (later wins) > PGMI_PARAM_*
+environment variables > pgmi.yaml. PGMI_PARAM_DB_PASSWORD=x becomes
+current_setting('pgmi.db_password'); other environment variables are not read.
+Secrets go in the environment or a params file, never in --param.
 
 Exit codes:
   0   success
   10  invalid configuration       13  SQL execution failed
   11  connection failed           14  deploy.sql not found
   12  user denied overwrite       15  concurrent deploy in progress
-  16  timeout exceeded            130 interrupted (SIGINT)`,
+  16  timeout exceeded            130 interrupted (SIGINT, SIGTERM)
+A --timeout that runs out while connecting is 11: the server was not reached.`,
 	Args:              RequireProjectPath,
 	ValidArgsFunction: completeDirectories,
 	RunE:              runDeploy,
@@ -74,16 +84,34 @@ var deployFlags deployFlagValues
 // under `go test`, so without these the branch — and the exit-12 a cancelled
 // wizard produces — cannot be reached from a test at all.
 var (
-	isInteractive       = tui.IsInteractive
-	canPrompt           = tui.CanPrompt
-	runConnectionWizard = runDeployWizard
+	isInteractive         = tui.IsInteractive
+	canPrompt             = tui.CanPrompt
+	runConnectionWizard   = runDeployWizard
+	startConnectionWizard = wizards.RunConnectionWizard
+	runInitWizard         = wizards.RunInitWizard
+	promptContinue        = tui.PromptContinue
 )
+
+// wizardStopped reports a wizard the user left without finishing: Ctrl-C is
+// an interrupt (exit 130), any other cancel a refusal (exit 12). The message
+// stays one short line; the cause is only for the exit code.
+type wizardStopped struct {
+	msg   string
+	cause error
+}
+
+func (e wizardStopped) Error() string { return e.msg }
+func (e wizardStopped) Unwrap() error { return e.cause }
+
+func wizardCancelled(what string, interrupted bool) error {
+	if interrupted {
+		return wizardStopped{what + " interrupted", context.Canceled}
+	}
+	return wizardStopped{what + " cancelled", pgmi.ErrApprovalDenied}
+}
 
 func init() {
 	rootCmd.AddCommand(deployCmd)
-
-	// Register shell completions for flag values
-	_ = deployCmd.RegisterFlagCompletionFunc("sslmode", completeSSLModes)
 
 	// Connection string flag (mutually exclusive with granular flags)
 	deployCmd.Flags().StringVar(&deployFlags.connection, "connection", "",
@@ -91,6 +119,9 @@ func init() {
 			"Its database is the maintenance database for CREATE DATABASE, and also the\n"+
 			"deploy target unless -d says otherwise. It outranks pgmi.yaml's\n"+
 			"connection.database, so a string ending in /postgres deploys into postgres.\n"+
+			"Fields it omits come from $PGHOST, $PGPORT, $PGDATABASE, $PGUSER, $PGAPPNAME\n"+
+			"and $PGCONNECT_TIMEOUT, as in libpq, then from the defaults (localhost:5432/postgres).\n"+
+			"service= and $PGSERVICE are refused: pgmi reads no service files.\n"+
 			"Mutually exclusive with granular flags (--host, --port, --username).\n"+
 			"Alternative: Use PGMI_CONNECTION_STRING or DATABASE_URL environment variable.\n"+
 			"Example: postgresql://user:pass@localhost:5432/postgres")
@@ -166,8 +197,8 @@ func init() {
 			"Available as session variables: current_setting('pgmi.key') during deployment\n"+
 			"Example: --param env=prod --param region=us-west")
 	deployCmd.Flags().StringArrayVar(&deployFlags.paramsFiles, "params-file", nil,
-		"Load parameters from .env files (can be specified multiple times)\n"+
-			"Later files override earlier ones, CLI --param overrides all")
+		"Load parameters from key=value files, e.g. prod.params (can be specified multiple times)\n"+
+			"Use - to read stdin (once). Later files override earlier ones, CLI --param overrides all")
 
 	// Timeout flag - catastrophic failure protection, not normal timeout control
 	deployCmd.Flags().DurationVar(&deployFlags.timeout, "timeout", 3*time.Minute,
@@ -185,6 +216,17 @@ func init() {
 	// JSON output flag
 	deployCmd.Flags().BoolVar(&deployFlags.jsonOutput, "json", false,
 		"Emit structured JSON to stdout after deployment")
+
+	mustRegisterCompletion(deployCmd, "sslmode", completeSSLModes)
+}
+
+// timeoutExceeded names --timeout when the deploy's own deadline ended it. A
+// driver's connect_timeout also reads as a deadline, but not as ctx's.
+func timeoutExceeded(ctx context.Context, err error, timeout time.Duration) error {
+	if err == nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	return pgmi.WithMessage(err, fmt.Sprintf("the deploy exceeded --timeout %s; raise it, or pass --timeout 0 for no limit", timeout))
 }
 
 func deadlineContext(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
@@ -194,61 +236,135 @@ func deadlineContext(parent context.Context, d time.Duration) (context.Context, 
 	return context.WithTimeout(parent, d)
 }
 
-// buildDeploymentConfig builds a DeploymentConfig from CLI flags and environment.
-func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, verbose bool) (pgmi.DeploymentConfig, error) {
-	if err := validateSSLMode(deployFlags.sslMode); err != nil {
-		return pgmi.DeploymentConfig{}, err
+// deployRequest is everything a deploy caller supplies on top of pgmi.yaml and
+// the environment. The CLI fills it from flags, pgmi serve from tool arguments;
+// both resolve through resolveDeploymentConfig so they cannot drift.
+type deployRequest struct {
+	conn                connectionFlags
+	overwrite, force    bool
+	params              []string
+	paramsFiles         []string
+	environ             []string
+	stdin               io.Reader
+	timeout             time.Duration
+	timeoutSet          bool
+	maintenanceDatabase string
+	compat              string
+	verbose             bool
+	dotenv              dotenvReport
+}
+
+// deployJob is a resolved deploy: the library's config plus the --timeout
+// the CLI and pgmi serve bound it with. The library takes its deadline from
+// the context alone.
+type deployJob struct {
+	pgmi.DeploymentConfig
+	timeout time.Duration
+}
+
+// buildDeploymentConfig builds a deployJob from CLI flags and environment.
+func buildDeploymentConfig(cmd *cobra.Command, sourcePath string, projectCfg *config.ProjectConfig, dotenv dotenvReport, verbose bool) (deployJob, error) {
+	return resolveDeploymentConfig(sourcePath, projectCfg, deployRequest{
+		conn:        deployFlags.connectionFlags,
+		overwrite:   deployFlags.overwrite,
+		force:       deployFlags.force,
+		params:      deployFlags.params,
+		paramsFiles: deployFlags.paramsFiles,
+		environ:     os.Environ(),
+		stdin:       os.Stdin,
+		timeout:     deployFlags.timeout,
+		timeoutSet:  cmd.Flags().Changed("timeout"),
+		compat:      deployFlags.compat,
+		verbose:     verbose,
+		dotenv:      dotenv,
+	})
+}
+
+// connectionConfigError marks a failure while resolving the connection, the
+// only configuration errors the "(connection from ...)" line is about.
+type connectionConfigError struct{ error }
+
+func (e connectionConfigError) Unwrap() error { return e.error }
+
+func resolveDeploymentConfig(sourcePath string, projectCfg *config.ProjectConfig, req deployRequest) (deployJob, error) {
+	if err := validateSSLMode(req.conn.sslMode); err != nil {
+		return deployJob{}, connectionConfigError{err}
 	}
 
-	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(deployFlags.connectionFlags, projectCfg)
+	connConfig, resolvedMaintenanceDB, err := resolveConnectionFromFlags(req.conn, projectCfg)
 	if err != nil {
-		return pgmi.DeploymentConfig{}, err
+		return deployJob{}, connectionConfigError{err}
+	}
+	if connConfig.SSLMode != "" && !slices.Contains(sslModes, connConfig.SSLMode) {
+		return deployJob{}, connectionConfigError{fmt.Errorf("%w: invalid sslmode %q in the connection (valid: %s)",
+			pgmi.ErrInvalidConfig, connConfig.SSLMode, strings.Join(sslModes, ", "))}
 	}
 
-	targetDB, err := resolveTargetDatabase(deployFlags.database, connConfig.Database, verbose)
+	var yamlDatabase string
+	if projectCfg != nil {
+		yamlDatabase = projectCfg.Connection.Database
+	}
+	targetDB, err := resolveTargetDatabase(req.conn.database, connConfig.Database, yamlDatabase, req.verbose)
 	if err != nil {
-		return pgmi.DeploymentConfig{}, err
+		return deployJob{}, connectionConfigError{err}
 	}
 
-	maintenanceDB := determineMaintenanceDB(deployFlags.database, connConfig.Database, resolvedMaintenanceDB)
+	_, connSource := db.SelectConnectionString(req.conn.connection, req.conn.granular(), db.LoadFromEnvironment())
+	maintenanceDB := determineMaintenanceDB(connSource != "", req.conn.database, connConfig.Database, resolvedMaintenanceDB)
+	if req.maintenanceDatabase != "" {
+		maintenanceDB = req.maintenanceDatabase
+	}
 	connConfig.Database = targetDB
 
-	if source := envConnectionSource(deployFlags.connectionFlags); source != "" && !deployFlags.jsonOutput {
-		fmt.Fprintf(os.Stderr, "connection: from %s (%s)\n", source, db.DialTargets(connConfig))
+	report := reportConnection(req.conn, projectCfg)
+	if report.announced() {
+		described := report.describe()
+		if req.dotenv.fromDotenv(report.source) {
+			described += " (set by " + req.dotenv.path + ")"
+		}
+		fmt.Fprintf(os.Stderr, "connection: %s (%s/%s)\n", described, db.DialTargets(connConfig), targetDB)
+	}
+	if len(req.dotenv.keys) > 0 {
+		fmt.Fprintf(os.Stderr, "%s applied: %s\n", req.dotenv.path, strings.Join(req.dotenv.keys, ", "))
+	}
+	for _, o := range report.overrides {
+		fmt.Fprintln(os.Stderr, o)
+	}
+	if os.Getenv("PGOPTIONS") != "" {
+		fmt.Fprintln(os.Stderr, "session options: from PGOPTIONS")
 	}
 
-	if verbose {
+	if req.verbose {
 		logConnectionVerbose(connConfig, maintenanceDB, true)
 	}
 
-	parameters, err := loadMergedParameters(projectCfg, deployFlags.paramsFiles, deployFlags.params, verbose)
+	parameters, err := loadMergedParameters(projectCfg, paramSources{environ: req.environ, stdin: req.stdin, files: req.paramsFiles, pairs: req.params}, req.verbose)
 	if err != nil {
-		return pgmi.DeploymentConfig{}, err
+		return deployJob{}, err
 	}
 
-	timeout, err := resolveEffectiveTimeout(cmd, projectCfg, deployFlags.timeout)
+	timeout, err := resolveEffectiveTimeout(req.timeoutSet, projectCfg, req.timeout)
 	if err != nil {
-		return pgmi.DeploymentConfig{}, err
+		return deployJob{}, err
 	}
 
-	return pgmi.DeploymentConfig{
+	return deployJob{timeout: timeout, DeploymentConfig: pgmi.DeploymentConfig{
 		SourcePath:          sourcePath,
 		DatabaseName:        connConfig.Database,
 		MaintenanceDatabase: maintenanceDB,
 		ConnectionString:    db.BuildConnectionString(connConfig),
-		Overwrite:           deployFlags.overwrite,
-		Force:               deployFlags.force,
+		Overwrite:           req.overwrite,
+		Force:               req.force,
 		Parameters:          parameters,
-		Compat:              deployFlags.compat,
-		Timeout:             timeout,
-		Verbose:             verbose,
+		Compat:              req.compat,
+		Verbose:             req.verbose,
 		AuthMethod:          connConfig.AuthMethod,
 		AzureTenantID:       connConfig.AzureTenantID,
 		AzureClientID:       connConfig.AzureClientID,
 		AzureClientSecret:   connConfig.AzureClientSecret,
 		AWSRegion:           connConfig.AWSRegion,
 		GoogleInstance:      connConfig.GoogleInstance,
-	}, nil
+	}}, nil
 }
 
 func runDeploy(cmd *cobra.Command, args []string) (err error) {
@@ -258,13 +374,18 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 	// --json is a contract: emit the failure envelope even when the error
 	// occurs before Deploy() runs (bad connection string, bad params file)
 	jsonEmitted := false
+	prov := deployProvenance{startedAt: time.Now(), compat: deployFlags.compat, notices: newNoticeBuffer()}
 	defer func() {
 		if err != nil && deployFlags.jsonOutput && !jsonEmitted {
-			printDeployJSON(nil, err)
+			printDeployJSON(nil, err, prov)
 		}
 	}()
 
-	projectCfg, err := loadProjectConfig(sourcePath)
+	if err := checkProjectDir(sourcePath); err != nil {
+		return err
+	}
+	prov.dotenv = loadDotenv(sourcePath)
+	projectCfg, err := loadProjectYAML(sourcePath)
 	if err != nil {
 		return err
 	}
@@ -284,44 +405,37 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 		applyWizardConfig(wizardConfig)
 	}
 
-	if source := envConnectionSource(deployFlags.connectionFlags); source != "" {
+	prov.connection = reportConnection(deployFlags.connectionFlags, projectCfg)
+	if report := prov.connection; report.announced() {
 		defer func() {
-			if errors.Is(err, pgmi.ErrConnectionFailed) || errors.Is(err, pgmi.ErrInvalidConfig) {
-				err = fmt.Errorf("%w\n(connection from %s)", err, source)
+			var connConfig connectionConfigError
+			if errors.Is(err, pgmi.ErrConnectionFailed) || errors.As(err, &connConfig) {
+				err = fmt.Errorf("%w\n(connection %s)", err, report.describe())
 			}
 		}()
 	}
 
-	config, err := buildDeploymentConfig(cmd, sourcePath, projectCfg, verbose)
+	config, err := buildDeploymentConfig(cmd, sourcePath, projectCfg, prov.dotenv, verbose)
 	if err != nil {
 		return err
 	}
+	prov.target = targetOf(config.DeploymentConfig)
 
 	approver := selectApprover(deployFlags.force, canPrompt(), verbose)
 
-	logger := logging.NewConsoleLogger(verbose)
-	fileScanner := scanner.NewScanner(checksum.New())
-	fileLoader := loader.NewLoader()
-	dbManager := manager.New()
-
-	// Create session manager for shared session initialization logic
-	sessionManager := services.NewSessionManager(
-		db.NewConnector,
-		fileScanner,
-		fileLoader,
-		logger,
+	pgmiVersion, _, _ := resolveVersionInfo()
+	stderr := stderrNotices(verbose)
+	deployer := deploy.New(
+		deploy.WithApprover(approver),
+		deploy.WithLogger(logging.NewConsoleLogger(verbose)),
+		deploy.WithNoticeHandler(func(severity, message, detail, hint string) {
+			stderr(severity, message, detail, hint)
+			prov.notices.record(severity, message, detail, hint)
+		}),
+		deploy.WithVersion(pgmiVersion),
 	)
 
-	// Create deployer with all dependencies injected
-	deployer := services.NewDeploymentService(
-		db.NewConnector,
-		approver,
-		logger,
-		sessionManager,
-		dbManager,
-	)
-
-	ctx, cancel := deadlineContext(context.Background(), config.Timeout)
+	ctx, cancel := deadlineContext(context.Background(), config.timeout)
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
@@ -337,35 +451,62 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 	go func() {
 		select {
 		case <-sigChan:
-			fmt.Fprintln(os.Stderr, "pgmi: interrupted, cancelling deployment...")
+			fmt.Fprintln(os.Stderr, "pgmi: interrupted, cancelling deployment... (again to quit at once)")
 			interrupted.Store(true)
 			cancel()
+			<-sigChan
+			fmt.Fprintln(os.Stderr, "pgmi: interrupted again, quitting")
+			os.Exit(pgmi.ExitInterrupted)
 		case <-ctx.Done():
 			// Context cancelled (deployment completed or timeout), exit goroutine cleanly
 		}
 	}()
 
-	// Set up verbose timing handler for notices
-	if verbose {
-		deployStart := time.Now()
-		origHandler := db.NoticeHandler
-		db.NoticeHandler = func(_, message, detail, hint string) {
-			prefix := fmt.Sprintf("[%.2fs] ", time.Since(deployStart).Seconds())
-			fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
-			if detail != "" {
-				fmt.Fprintf(os.Stderr, "%sDETAIL: %s\n", prefix, detail)
-			}
-			if hint != "" {
-				fmt.Fprintf(os.Stderr, "%sHINT: %s\n", prefix, hint)
-			}
-		}
-		defer func() { db.NoticeHandler = origHandler }()
+	result, err := deployer.Deploy(ctx, config.DeploymentConfig)
+	err = timeoutExceeded(ctx, err, config.timeout)
+	err = cliWording(err)
+	err, jsonEmitted = finishDeploy(result, err,
+		interrupted.Load(), deployFlags.jsonOutput, prov)
+	if verbose && !deployFlags.jsonOutput && result != nil {
+		printIgnoredPaths(result)
 	}
-
-	err = deployer.Deploy(ctx, config)
-	err, jsonEmitted = finishDeploy(deployer.LastResult(), err,
-		interrupted.Load(), deployFlags.jsonOutput)
 	return err
+}
+
+// cliMissingMaintenanceDB is the library's missing-maintenance-database error
+// in the CLI's terms: there the maintenance database comes from the
+// connection string or pgmi.yaml, not from DeploymentConfig.
+type cliMissingMaintenanceDB struct {
+	services.MissingMaintenanceDBError
+}
+
+func (e cliMissingMaintenanceDB) Error() string {
+	return fmt.Sprintf("maintenance database %q does not exist\n"+
+		"pgmi connects to it to create or drop the target; point it at an existing database such as postgres: "+
+		"the database in the connection string, or connection.maintenance_database in pgmi.yaml", e.Name)
+}
+
+func cliWording(err error) error {
+	var missing services.MissingMaintenanceDBError
+	if errors.As(err, &missing) {
+		return cliMissingMaintenanceDB{missing}
+	}
+	return err
+}
+
+// stderrNotices prints notices the way psql does; verbose prefixes each line
+// with the seconds since the deploy started.
+func stderrNotices(verbose bool) func(severity, message, detail, hint string) {
+	if !verbose {
+		return func(severity, message, detail, hint string) {
+			db.WriteNotice(os.Stderr, "", severity, message, detail, hint)
+		}
+	}
+	start := time.Now()
+	return func(severity, message, detail, hint string) {
+		prefix := fmt.Sprintf("[%.2fs] ", time.Since(start).Seconds())
+		db.WriteNotice(os.Stderr, prefix, severity, message, detail, hint)
+	}
 }
 
 // finishDeploy resolves the error the process will exit on, then reports the
@@ -376,7 +517,7 @@ func runDeploy(cmd *cobra.Command, args []string) (err error) {
 // On SIGINT it surfaces context.Canceled so ExitCodeForError maps to 130. The
 // deployer may return nil or an unrelated wrap; either way a user Ctrl-C must
 // not exit 0.
-func finishDeploy(result *services.DeployResult, deployErr error, interrupted, jsonOutput bool) (err error, jsonEmitted bool) {
+func finishDeploy(result *pgmi.DeployResult, deployErr error, interrupted, jsonOutput bool, prov deployProvenance) (err error, jsonEmitted bool) {
 	err = deployErr
 	if interrupted {
 		switch {
@@ -388,14 +529,21 @@ func finishDeploy(result *services.DeployResult, deployErr error, interrupted, j
 	}
 
 	if result != nil {
+		printDeploySummary(result, err)
 		if jsonOutput {
-			printDeployJSON(result, err)
+			printDeployJSON(result, err, prov)
 			jsonEmitted = true
-		} else {
-			printDeploySummary(result, err)
 		}
 	}
 	return err, jsonEmitted
+}
+
+// printIgnoredPaths lists what discovery left out and which rule did it, so a
+// file missing from the session is explained rather than guessed at.
+func printIgnoredPaths(result *pgmi.DeployResult) {
+	for _, ig := range result.Ignored {
+		fmt.Fprintf(os.Stderr, "  ignored %s (%s)\n", ig.Path, ig.Rule)
+	}
 }
 
 // printDeploySummary names the target database on every run, not only when it
@@ -403,26 +551,54 @@ func finishDeploy(result *services.DeployResult, deployErr error, interrupted, j
 // line mentioning a database, so a deploy that landed somewhere the user did not
 // intend — a connection string ending in /postgres outranking pgmi.yaml — said
 // nothing to contradict the wrong mental model.
-func printDeploySummary(result *services.DeployResult, deployErr error) {
+func printDeploySummary(result *pgmi.DeployResult, deployErr error) {
 	d := fmt.Sprintf("%.2fs", result.Duration.Seconds())
 	target := result.Database
 	if target == "" {
 		target = "?"
 	}
 	if deployErr == nil {
-		fmt.Fprintf(os.Stderr, "%s %s: %d files loaded in %s\n", ui.SuccessIcon(), target, result.FilesLoaded, d)
+		loaded := fmt.Sprintf("%d files loaded", result.FilesLoaded)
+		if n := len(result.Ignored); n > 0 {
+			loaded += fmt.Sprintf(", %d paths ignored", n)
+		}
+		fmt.Fprintf(os.Stderr, "%s %s: %s in %s\n", ui.SuccessIcon(), target, loaded, d)
 	} else {
 		msg := fmt.Sprintf("failed after %s", d)
-		if result.ExecutionMode == "psql" {
+		var left []string
+		switch result.ExecutionMode {
+		case "psql":
 			msg += fmt.Sprintf(" (unit %d of %d failed; %d earlier unit(s) already committed)",
-				result.UnitsCommitted+1, result.ExecutionUnits, result.UnitsCommitted)
+				result.FailedUnit, result.ExecutionUnits, result.UnitsCommitted)
+		case "atomic":
+			left = append(left, "nothing committed")
+		}
+		if result.Created || result.Recreated {
+			verb := "created"
+			if result.Recreated {
+				verb = "recreated"
+			}
+			created := fmt.Sprintf("%s database %q", verb, target)
+			if result.ExecutionMode != "psql" {
+				created += ", left empty"
+			}
+			left = append(left, created)
+		}
+		if len(left) > 0 {
+			msg += " — " + strings.Join(left, "; ")
 		}
 		fmt.Fprintf(os.Stderr, "%s %s: %s\n", ui.FailIcon(), target, msg)
 	}
 }
 
-func printDeployJSON(result *services.DeployResult, deployErr error) {
-	jsonBytes, err := json.MarshalIndent(deployResultFields(result, deployErr), "", "  ")
+func printDeployJSON(result *pgmi.DeployResult, deployErr error, prov deployProvenance) {
+	out := deployResultFields(result, deployErr, prov)
+	notices := prov.notices
+	if notices == nil {
+		notices = newNoticeBuffer()
+	}
+	maps.Copy(out, notices.fields())
+	jsonBytes, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "json marshal error: %v\n", err)
 		return
@@ -430,19 +606,95 @@ func printDeployJSON(result *services.DeployResult, deployErr error) {
 	fmt.Println(string(jsonBytes))
 }
 
+// deployJSONSchemaVersion versions the shape of the --json record itself.
+// Bump it when a key is renamed or removed, not when one is added.
+const deployJSONSchemaVersion = 1
+
+// deployTarget is where a deploy went. It never carries the user, password or
+// token: the record is meant to be kept as CI output.
+type deployTarget struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+}
+
+// deployProvenance is what identifies a run in the --json record. A failed
+// deploy rolls back, so that record is often the only one that survives.
+type deployProvenance struct {
+	startedAt  time.Time
+	compat     string
+	target     *deployTarget
+	connection connectionReport
+	dotenv     dotenvReport
+	notices    *noticeBuffer
+}
+
+func targetOf(cfg pgmi.DeploymentConfig) *deployTarget {
+	c, err := db.ParseConnectionString(cfg.ConnectionString)
+	if err != nil {
+		return nil
+	}
+	return &deployTarget{Host: c.Host, Port: c.Port, Database: cfg.DatabaseName}
+}
+
 // deployResultFields is the machine-readable deploy result, shared by
 // `deploy --json` and the MCP deploy tool so the two cannot drift.
-func deployResultFields(result *services.DeployResult, deployErr error) map[string]any {
+// Provenance keys are always present; a fact the run never reached is null.
+func deployResultFields(result *pgmi.DeployResult, deployErr error, prov deployProvenance) map[string]any {
+	pgmiVersion, _, _ := resolveVersionInfo()
 	out := map[string]any{
-		"status":   "success",
-		"exitCode": 0,
+		"status":           "success",
+		"exitCode":         0,
+		"schemaVersion":    deployJSONSchemaVersion,
+		"pgmiVersion":      pgmiVersion,
+		"contractVersion":  nil,
+		"serverVersion":    nil,
+		"tls":              nil,
+		"target":           nil,
+		"connectionSource": nil,
+		"overrides":        []db.Override{},
+		"dotenvKeys":       []string{},
+		"startedAt":        prov.startedAt.UTC().Format(time.RFC3339Nano),
+		"finishedAt":       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if _, v, err := contract.Load(prov.compat); err == nil {
+		out["contractVersion"] = string(v)
+	}
+	if prov.target != nil {
+		out["target"] = prov.target
+	}
+	if prov.connection.source != "" {
+		out["connectionSource"] = prov.connection.source
+	}
+	if prov.connection.overrides != nil {
+		out["overrides"] = prov.connection.overrides
+	}
+	if prov.dotenv.keys != nil {
+		out["dotenvKeys"] = prov.dotenv.keys
+	}
+	if result != nil && result.TLS != nil {
+		var version any
+		if result.TLS.Version != "" {
+			version = result.TLS.Version
+		}
+		out["tls"] = map[string]any{"enabled": result.TLS.Enabled, "version": version, "sslmode": result.TLS.SSLMode}
+	}
+	if result != nil && result.ServerVersion != "" {
+		out["serverVersion"] = result.ServerVersion
 	}
 	if result != nil {
 		out["filesLoaded"] = result.FilesLoaded
+		out["pathsIgnored"] = len(result.Ignored)
+		ignored := make([]map[string]string, 0, len(result.Ignored))
+		for _, ig := range result.Ignored {
+			ignored = append(ignored, map[string]string{"path": ig.Path, "rule": ig.Rule})
+		}
+		out["ignoredPaths"] = ignored
 		out["testMacros"] = result.TestMacros
 		out["durationMs"] = result.Duration.Milliseconds()
 		out["database"] = result.Database
 		out["created"] = result.Created
+		out["recreated"] = result.Recreated
 		if result.ExecutionUnits > 0 {
 			out["executionUnits"] = result.ExecutionUnits
 			out["unitsCommitted"] = result.UnitsCommitted
@@ -461,12 +713,16 @@ func deployResultFields(result *services.DeployResult, deployErr error) map[stri
 			"hint":       d.Hint,
 			"where":      d.Where,
 			"failedFile": d.FailedFile,
+			"phase":      d.Phase,
 			"script":     d.Script,
 			"sourceLine": d.SourceLine,
 		} {
 			if v != "" {
 				out[k] = v
 			}
+		}
+		if len(d.FailedFileCandidates) > 0 {
+			out["failedFileCandidates"] = d.FailedFileCandidates
 		}
 		if d.Line > 0 {
 			out["line"] = d.Line
@@ -515,15 +771,18 @@ func selectApprover(force, interactive, verbose bool) pgmi.Approver {
 
 // runDeployWizard runs the interactive connection wizard for deploy.
 // Returns the config to use, or nil if user cancelled.
-func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
+func runDeployWizard(sourcePath string) (*db.ConnectionConfig, error) {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "No database connection configured.")
 	fmt.Fprintln(os.Stderr, "")
 
 	// Run connection wizard
-	connResult, err := wizards.RunConnectionWizard()
+	connResult, err := startConnectionWizard()
 	if err != nil {
 		return nil, fmt.Errorf("connection wizard failed: %w", err)
+	}
+	if connResult.Interrupted {
+		return nil, wizardCancelled("connection setup", true)
 	}
 	if connResult.Cancelled {
 		fmt.Fprintln(os.Stderr, "Cancelled.")
@@ -540,7 +799,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 				fmt.Fprintf(os.Stderr, "WARNING: failed to save config: %v\n", err)
 			} else {
 				fmt.Fprintf(os.Stderr, "Saved to %s\n", filepath.Join(sourcePath, "pgmi.yaml"))
-				offerSavePgpass(&connResult.Config)
+				offerSavePgpass(&connResult.Config, connResult.MaintenanceDatabase)
 			}
 		}
 	}
@@ -549,7 +808,7 @@ func runDeployWizard(sourcePath string) (*pgmi.ConnectionConfig, error) {
 }
 
 // applyWizardConfig applies wizard results to deploy flags.
-func applyWizardConfig(cfg *pgmi.ConnectionConfig) {
+func applyWizardConfig(cfg *db.ConnectionConfig) {
 	if cfg == nil {
 		return
 	}

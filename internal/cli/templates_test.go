@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/internal/scaffold"
+	"github.com/vvka-141/pgmi/internal/tui/wizards"
 )
 
 func TestGetTemplateDescriptions(t *testing.T) {
@@ -79,7 +84,7 @@ func TestTemplateDescriptionContent(t *testing.T) {
 	}{
 		{
 			name:                "basic",
-			expectedShort:       "Linear migrations, minimal structure",
+			expectedShort:       "Two layers: run-once tables, re-run views and functions",
 			minFeatures:         3,
 			minStructureEntries: 2,
 		},
@@ -111,6 +116,67 @@ func TestTemplateDescriptionContent(t *testing.T) {
 			if len(desc.Structure) < tt.minStructureEntries {
 				t.Errorf("template '%s' has %d structure entries, expected at least %d",
 					tt.name, len(desc.Structure), tt.minStructureEntries)
+			}
+		})
+	}
+}
+
+func TestTemplateSummary_OneSource(t *testing.T) {
+	templates, err := scaffold.ListTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wizard := map[string]string{}
+	for _, tpl := range wizards.DefaultTemplates() {
+		wizard[tpl.Name] = tpl.Description
+	}
+	for _, name := range templates {
+		short := getTemplateDescriptions()[name].Short
+		if short == "" {
+			t.Errorf("%s: `pgmi templates list` has no description", name)
+		}
+		if wizard[name] != short {
+			t.Errorf("%s: wizard says %q, templates list says %q", name, wizard[name], short)
+		}
+		if !strings.Contains(initCmd.Long, short) {
+			t.Errorf("%s: `pgmi init --help` does not show %q", name, short)
+		}
+	}
+}
+
+// structurePaths turns a Structure tree ("├── lib/", "│   └── core/  (note)")
+// into the paths it names, relative to the project root.
+func structurePaths(lines []string) []string {
+	var paths, stack []string
+	for _, line := range lines {
+		runes := []rune(line)
+		i := strings.Index(line, "── ")
+		if i < 0 {
+			continue
+		}
+		depth := len([]rune(line[:i])) / 4
+		name := strings.Fields(string(runes[len([]rune(line[:i]))+3:]))[0]
+		stack = append(stack[:depth], strings.TrimSuffix(name, "/"))
+		paths = append(paths, strings.Join(stack, "/"))
+	}
+	return paths
+}
+
+func TestTemplateStructureNamesOnlyRealPaths(t *testing.T) {
+	for name, desc := range getTemplateDescriptions() {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name)
+			if err := scaffold.NewScaffolder(false).CreateProject("p", name, dir); err != nil {
+				t.Fatal(err)
+			}
+			paths := structurePaths(desc.Structure)
+			if len(paths) == 0 {
+				t.Fatal("no paths parsed from Structure")
+			}
+			for _, p := range paths {
+				if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(p))); err != nil {
+					t.Errorf("`pgmi templates describe %s` names %s, which a scaffolded project does not have", name, p)
+				}
 			}
 		})
 	}

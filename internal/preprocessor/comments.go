@@ -130,7 +130,7 @@ func (c *CommentStripper) scan(sql string, spans *[]CommentSpan) string {
 				state = stateQuotedIdentifier
 				result.WriteRune(r)
 				i++
-			} else if r == '$' {
+			} else if r == '$' && !continuesIdentifier(runes, i) {
 				tag := c.extractDollarTag(runes, i)
 				if tag != "" {
 					state = stateDollarQuote
@@ -254,6 +254,17 @@ func escapeStringPrefixed(runes []rune, i int) bool {
 		return false
 	}
 	return i == 1 || !isIdentifierRune(runes[i-2])
+}
+
+// continuesIdentifier reports whether the $ at runes[i] is part of an unquoted
+// identifier (foo$bar$), as PostgreSQL lexes it, rather than the start of a
+// dollar quote. After a parameter ($1) or a number it is not.
+func continuesIdentifier(runes []rune, i int) bool {
+	j := i
+	for j > 0 && isIdentifierRune(runes[j-1]) {
+		j--
+	}
+	return j < i && (runes[j] == '_' || unicode.IsLetter(runes[j]))
 }
 
 // isIdentifierRune reports whether r may appear inside an unquoted SQL

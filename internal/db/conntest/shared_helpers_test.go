@@ -17,7 +17,6 @@ import (
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 type forceApprover struct{}
@@ -26,7 +25,7 @@ func (a *forceApprover) RequestApproval(_ context.Context, _ string) (bool, erro
 	return true, nil
 }
 
-func newTestDeployer(t *testing.T) pgmi.Deployer {
+func newTestDeployer(t *testing.T) *services.DeploymentService {
 	t.Helper()
 	logger := logging.NewNullLogger()
 	fileScanner := scanner.NewScanner(checksum.New())
@@ -34,14 +33,15 @@ func newTestDeployer(t *testing.T) pgmi.Deployer {
 	dbManager := manager.New()
 
 	sessionManager := services.NewSessionManager(
-		db.NewConnector,
+		db.ConnectorFactory(db.Output{}),
 		fileScanner,
 		fileLoader,
 		logger,
+		"test",
 	)
 
 	return services.NewDeploymentService(
-		db.NewConnector,
+		db.ConnectorFactory(db.Output{}),
 		&forceApprover{},
 		logger,
 		sessionManager,

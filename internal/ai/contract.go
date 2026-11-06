@@ -58,6 +58,7 @@ type ContractExecution struct {
 }
 
 type Contract struct {
+	Stability         string             `json:"stability"`
 	Views             []ContractView     `json:"views"`
 	Functions         []ContractFunction `json:"functions"`
 	Types             []ContractType     `json:"types"`
@@ -70,10 +71,12 @@ type Contract struct {
 
 func GetContract() Contract {
 	return Contract{
+		Stability: "Before pgmi 1.0 this contract may change in a minor release: a view, column or function can be added, renamed or removed. Every change is listed under Upgrading in that release's notes (RELEASES.md). --compat selects a contract version the binary ships (only 1 today) and rejects one it does not; it does not freeze columns across pgmi releases. Pin the pgmi binary version to pin the contract.",
 		Views: []ContractView{
 			{
 				Name:    "pgmi_source_view",
 				Columns: []string{"path", "name", "directory", "extension", "depth", "content", "size_bytes", "checksum", "pgmi_checksum", "path_parts", "is_sql_file", "is_test_file", "parent_folder_name"},
+				Note:    "path, name and directory are COLLATE \"C\" (as are the path columns of the test views): ORDER BY path runs files in byte order on every server, whatever the database's locale.",
 			},
 			{
 				Name:    "pgmi_parameter_view",
@@ -81,8 +84,13 @@ func GetContract() Contract {
 				Note:    "key is lower-cased on load, matching the session variable it mirrors: --param apiVersion=2 is stored as 'apiversion'. WHERE key = 'apiVersion' returns no row, silently, while current_setting('pgmi.apiVersion', true) still works because GUC names are case-insensitive. Compare lower-cased.",
 			},
 			{
+				Name:    "pgmi_runtime_view",
+				Columns: []string{"pgmi_version", "contract_version"},
+				Note:    "One row: the pgmi binary version running this deploy (as `pgmi version` prints it) and the session-API contract version applied. Lets deploy.sql refuse a binary it was not written for. The PostgreSQL version is current_setting('server_version_num').",
+			},
+			{
 				Name:    "pgmi_plan_view",
-				Columns: []string{"path", "content", "checksum", "generic_id", "id", "idempotent", "description", "sort_key", "execution_order"},
+				Columns: []string{"path", "content", "pgmi_checksum", "generic_id", "id", "idempotent", "description", "sort_key", "execution_order"},
 			},
 			{
 				Name:    "pgmi_source_metadata_view",

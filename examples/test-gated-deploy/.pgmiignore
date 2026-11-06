@@ -1,0 +1,2 @@
+# A failing test to copy into __test__/ by hand; never loaded from here
+break-it/

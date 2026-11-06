@@ -30,9 +30,9 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8001-4000-8000-000000000001',
-            'uri', '^/policy-ro$', 'httpMethod', '^GET$',
-            'name', 'policy_ro', 'requiresAuth', false,
-            'readOnly', true
+            'path', '/policy-ro', 'httpMethod', '^GET$',
+            'name', 'policy_ro', 'access', 'public',
+            'readOnly', true, 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -53,8 +53,8 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8002-4000-8000-000000000001',
-            'uri', '^/policy-rw$', 'httpMethod', '^GET$',
-            'name', 'policy_rw', 'requiresAuth', false
+            'path', '/policy-rw', 'httpMethod', '^GET$',
+            'name', 'policy_rw', 'access', 'public'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -76,18 +76,18 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8101-4000-8000-000000000001',
-            'uri', '^/policy-rr$', 'httpMethod', '^GET$',
-            'name', 'policy_rr', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'repeatable read'
+            'path', '/policy-rr', 'httpMethod', '^GET$',
+            'name', 'policy_rr', 'access', 'public',
+            'readOnly', true, 'autoLog', false, 'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8102-4000-8000-000000000001',
-            'uri', '^/policy-ser$', 'httpMethod', '^GET$',
-            'name', 'policy_ser', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'serializable'
+            'path', '/policy-ser', 'httpMethod', '^GET$',
+            'name', 'policy_ser', 'access', 'public',
+            'readOnly', true, 'autoLog', false, 'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -146,8 +146,8 @@ BEGIN
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', 'ffffffff-8103-4000-8000-000000000001',
-            'methodName', 'policy.report', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'repeatable read'
+            'methodName', 'policy.report', 'access', 'public',
+            'readOnly', true, 'autoLog', false, 'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
     );
@@ -164,21 +164,21 @@ BEGIN
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-8104-4000-8000-000000000001',
-            'type', 'tool', 'name', 'policy_tool', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'serializable',
+            'type', 'tool', 'effect', 'read', 'name', 'policy_tool', 'access', 'public',
+            'minTransactionIsolation', 'serializable',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
         ),
         $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$
     );
     SELECT * INTO v_policy FROM api.mcp_request_policy(
         jsonb_build_object('method', 'tools/call',
-                           'params', jsonb_build_object('name', 'policy_tool')));
+                           'params', jsonb_build_object('name', 'policy_tool'))::text);
     IF NOT FOUND THEN
         RAISE EXCEPTION 'TEST FAILED: policy lookup resolved zero rows — every assertion below would compare against NULL and skip';
     END IF;
     IF v_policy.transaction_isolation IS DISTINCT FROM 'serializable'
-       OR v_policy.transaction_read_only IS DISTINCT FROM true
-       OR v_policy.transaction_deferrable IS DISTINCT FROM true THEN
+       OR v_policy.transaction_read_only IS DISTINCT FROM false
+       OR v_policy.transaction_deferrable IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'TEST FAILED: mcp_request_policy should resolve the tool policy, got (%, %, %)',
             v_policy.transaction_isolation, v_policy.transaction_read_only, v_policy.transaction_deferrable;
     END IF;
@@ -186,7 +186,7 @@ BEGIN
     -- Non-dispatch methods and unknown names resolve to the no-policy row,
     -- still honoring a requested escalation.
     SELECT * INTO v_policy FROM api.mcp_request_policy(
-        jsonb_build_object('method', 'tools/list'), 'serializable');
+        jsonb_build_object('method', 'tools/list')::text, 'serializable');
     IF NOT FOUND THEN
         RAISE EXCEPTION 'TEST FAILED: policy lookup resolved zero rows — every assertion below would compare against NULL and skip';
     END IF;
@@ -197,7 +197,7 @@ BEGIN
     END IF;
     SELECT * INTO v_policy FROM api.mcp_request_policy(
         jsonb_build_object('method', 'tools/call',
-                           'params', jsonb_build_object('name', 'no_such_tool')));
+                           'params', jsonb_build_object('name', 'no_such_tool'))::text);
     IF NOT FOUND THEN
         RAISE EXCEPTION 'TEST FAILED: policy lookup resolved zero rows — every assertion below would compare against NULL and skip';
     END IF;
@@ -207,6 +207,59 @@ BEGIN
     END IF;
 
     RAISE NOTICE '  ✓ rest/rpc/mcp policy lookups resolve max(floor, requested) + READ ONLY [DEFERRABLE]';
+END $$;
+
+-- The policy names the handler and the x-* annotations of its inputSchema
+-- properties: what the gateway's interceptors select on.
+DO $$
+DECLARE
+    v_schema jsonb := '{"type": "object", "properties": {
+        "text": {"type": "string", "x-embed": true},
+        "text_embedding": {"type": "array"},
+        "tag": {"type": "string", "x-source": "catalog", "x-embed": false}}}';
+    v_expected jsonb := '{"text": {"x-embed": true}, "tag": {"x-source": "catalog", "x-embed": false}}';
+    v_policy record;
+BEGIN
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object('id', 'ffffffff-8105-4000-8000-000000000001', 'path', '/policy-annotated',
+                           'httpMethod', '^POST$', 'name', 'policy_annotated', 'access', 'public',
+                           'inputSchema', v_schema),
+        $body$ BEGIN RETURN api.json_response(200, '{}'); END; $body$);
+    PERFORM api.create_or_replace_rpc_handler(
+        jsonb_build_object('id', 'ffffffff-8105-4000-8000-000000000002', 'methodName', 'policy.annotated',
+                           'access', 'public', 'inputSchema', v_schema),
+        $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$);
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'ffffffff-8105-4000-8000-000000000003', 'type', 'tool', 'effect', 'read',
+                           'name', 'policy_annotated', 'access', 'public', 'inputSchema', v_schema),
+        $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$);
+
+    SELECT * INTO STRICT v_policy FROM api.rest_route_policy('POST', '/policy-annotated');
+    IF v_policy.input_annotations IS DISTINCT FROM v_expected OR v_policy.handler_name IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: rest_route_policy annotations: got % (handler %)',
+            v_policy.input_annotations, v_policy.handler_name;
+    END IF;
+    SELECT * INTO STRICT v_policy FROM api.rpc_route_policy('policy.annotated');
+    IF v_policy.input_annotations IS DISTINCT FROM v_expected OR v_policy.handler_name IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: rpc_route_policy annotations: got %', v_policy.input_annotations;
+    END IF;
+    SELECT * INTO STRICT v_policy FROM api.mcp_request_policy(
+        '{"method": "tools/call", "params": {"name": "policy_annotated"}}');
+    IF v_policy.input_annotations IS DISTINCT FROM v_expected OR v_policy.handler_name IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: mcp_request_policy annotations: got %', v_policy.input_annotations;
+    END IF;
+
+    SELECT * INTO STRICT v_policy FROM api.rest_route_policy('GET', '/policy-rr');
+    IF v_policy.input_annotations IS NOT NULL OR v_policy.handler_name IS NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a route without annotations must name its handler and return NULL annotations, got %',
+            v_policy.input_annotations;
+    END IF;
+    SELECT * INTO STRICT v_policy FROM api.mcp_request_policy('{"method": "tools/list"}');
+    IF v_policy.input_annotations IS NOT NULL OR v_policy.handler_name IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST FAILED: a method without a handler must return no handler and no annotations';
+    END IF;
+
+    RAISE NOTICE '  ✓ policy lookups name the handler and its inputSchema annotations';
 END $$;
 
 DO $$
@@ -223,8 +276,8 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8201-4000-8000-000000000001',
-            'uri', '^/ro-rest$', 'httpMethod', '^GET$',
-            'name', 'ro_rest', 'requiresAuth', false, 'readOnly', true
+            'path', '/ro-rest', 'httpMethod', '^GET$',
+            'name', 'ro_rest', 'access', 'public', 'readOnly', true, 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -234,14 +287,15 @@ BEGIN
             (v_response).status_code;
     END IF;
     v_content := api.content_json((v_response).content);
-    IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required' THEN
+    IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required'
+       OR v_content->'requiredReadOnly' IS DISTINCT FROM 'true'::jsonb THEN
         RAISE EXCEPTION 'TEST FAILED: REST rejection missing machine code, got %', v_content->>'code';
     END IF;
 
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', 'ffffffff-8202-4000-8000-000000000001',
-            'methodName', 'ro.rpc', 'requiresAuth', false, 'readOnly', true
+            'methodName', 'ro.rpc', 'access', 'public', 'readOnly', true, 'autoLog', false
         ),
         $body$ BEGIN RETURN api.jsonrpc_success('{}'::jsonb, api.content_json((request).content)->'id'); END; $body$
     );
@@ -253,28 +307,12 @@ BEGIN
     END IF;
     v_content := api.content_json((v_response).content);
     IF v_content->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required'
+       OR v_content->'error'->'data'->'requiredReadOnly' IS DISTINCT FROM 'true'::jsonb
        OR v_content->>'id' IS DISTINCT FROM '7' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC rejection must carry the machine code and echo the id';
     END IF;
 
-    PERFORM api.create_or_replace_mcp_handler(
-        jsonb_build_object(
-            'id', 'ffffffff-8203-4000-8000-000000000001',
-            'type', 'tool', 'name', 'ro_tool', 'requiresAuth', false, 'readOnly', true,
-            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
-        ),
-        $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$
-    );
-    v_mcp := api.mcp_call_tool('ro_tool', '{}'::jsonb, NULL, '"req-ro"'::jsonb);
-    v_envelope := (v_mcp).envelope;
-    IF v_envelope->'error' IS NULL
-       OR (v_envelope->'error'->>'code')::int IS DISTINCT FROM -32600
-       OR v_envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required' THEN
-        RAISE EXCEPTION 'TEST FAILED: MCP read-only rejection should be -32600 with the machine code, got %',
-            v_envelope;
-    END IF;
-
-    RAISE NOTICE '  ✓ all three gateways reject 428/-32600 with pgmi.transaction_read_only_required';
+    RAISE NOTICE '  ✓ REST and RPC reject 428/-32600 with pgmi.transaction_read_only_required';
 END $$;
 
 DO $$
@@ -289,26 +327,26 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8301-4000-8000-000000000001',
-            'uri', '^/oa-ro-rr$', 'httpMethod', '^GET$',
-            'name', 'oa_ro_rr', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'repeatable read'
+            'path', '/oa-ro-rr', 'httpMethod', '^GET$',
+            'name', 'oa_ro_rr', 'access', 'public',
+            'readOnly', true, 'autoLog', false, 'minTransactionIsolation', 'repeatable read'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8302-4000-8000-000000000001',
-            'uri', '^/oa-ro-ser$', 'httpMethod', '^GET$',
-            'name', 'oa_ro_ser', 'requiresAuth', false,
-            'readOnly', true, 'minTransactionIsolation', 'serializable'
+            'path', '/oa-ro-ser', 'httpMethod', '^GET$',
+            'name', 'oa_ro_ser', 'access', 'public',
+            'readOnly', true, 'autoLog', false, 'minTransactionIsolation', 'serializable'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8303-4000-8000-000000000001',
-            'uri', '^/oa-rw$', 'httpMethod', '^GET$',
-            'name', 'oa_rw', 'requiresAuth', false
+            'path', '/oa-rw', 'httpMethod', '^GET$',
+            'name', 'oa_rw', 'access', 'public'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
@@ -340,14 +378,14 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8303-4000-8000-000000000001',
-            'uri', '^/oa-rw$', 'httpMethod', '^GET$',
-            'name', 'oa_rw', 'requiresAuth', false,
-            'readOnly', true
+            'path', '/oa-rw', 'httpMethod', '^GET$',
+            'name', 'oa_rw', 'access', 'public',
+            'readOnly', true, 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     v_v2 := api.catalog_version();
-    IF v_v1 = v_v2 THEN
+    IF (v_v1 = v_v2) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: flipping readOnly must change api.catalog_version()';
     END IF;
 
@@ -368,8 +406,8 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8401-4000-8000-000000000001',
-            'uri', '^/ro-accept$', 'httpMethod', '^GET$',
-            'name', 'ro_accept', 'requiresAuth', false, 'readOnly', true
+            'path', '/ro-accept', 'httpMethod', '^GET$',
+            'name', 'ro_accept', 'access', 'public', 'readOnly', true, 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );

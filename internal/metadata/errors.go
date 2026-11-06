@@ -4,10 +4,15 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
+
+// Every pointer must be reachable from a user's project, not from pgmi's own
+// repository: the skill pgmi init scaffolds, and the published guide.
+const reference = "Format reference: .agents/skills/pgmi-metadata/SKILL.md (scaffolded by pgmi init) or https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md"
 
 // MetadataError represents a structured error with context and helpful hints.
 // It includes file path, an optional line number, and actionable suggestions.
@@ -53,18 +58,32 @@ func wrapXMLError(err error, filePath string) error {
 			Message:  syntaxErr.Msg,
 			Hint: "Check that all XML tags are properly closed and attributes are quoted.\n\n" +
 				"Expected format:\n" +
-				"  <pgmi-meta id=\"UUID\" idempotent=\"true|false\" sortKey=\"...\">\n" +
+				"  <pgmi-meta id=\"UUID\" idempotent=\"true|false\">\n" +
 				"    <description>...</description>\n" +
+				"    <sortKeys><key>...</key></sortKeys>\n" +
 				"  </pgmi-meta>",
 		}
 	}
 
-	// Generic XML unmarshaling error
+	var numErr *strconv.NumError
+	switch {
+	case errors.As(err, &numErr) && numErr.Func == "ParseBool":
+		return &MetadataError{
+			FilePath: filePath,
+			Message:  fmt.Sprintf("idempotent attribute must be true or false, got %q", numErr.Num),
+			Hint:     reference,
+		}
+	case strings.Contains(err.Error(), "UUID"):
+		return &MetadataError{
+			FilePath: filePath,
+			Message:  "id attribute is not a UUID: " + err.Error(),
+			Hint:     "Generate one with SELECT gen_random_uuid();\n" + reference,
+		}
+	}
 	return &MetadataError{
 		FilePath: filePath,
 		Message:  err.Error(),
-		Hint: "Verify the metadata XML structure matches the expected format.\n" +
-			"See: internal/metadata/schema.xsd for complete specification.",
+		Hint:     reference,
 	}
 }
 
@@ -81,11 +100,8 @@ func formatValidationErrors(result ValidationResult, filePath string) error {
 		fmt.Fprintf(&msg, "  %d. %s\n", i+1, err)
 	}
 
-	// Both pointers have to be reachable by the person reading this. The old
-	// first line named internal/metadata/schema.xsd, a path inside pgmi's own
-	// repository that nobody deploying a project can open.
 	msg.WriteString("\nSee metadata format documentation:\n")
-	msg.WriteString("  Reference: run `pgmi ai skill pgmi-metadata-system`\n")
+	msg.WriteString("  " + reference + "\n")
 	msg.WriteString("  Generate template: pgmi metadata scaffold <path>\n")
 
 	// ErrInvalidConfig so this exits 10 like every other project error caught

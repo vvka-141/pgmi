@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/internal/db"
 )
 
 func TestEscapePgpass(t *testing.T) {
@@ -40,7 +40,7 @@ func TestWritePgpassEntry_NewFile(t *testing.T) {
 	path := filepath.Join(dir, "pgpass.conf")
 	t.Setenv("PGPASSFILE", path)
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "testdb",
@@ -48,7 +48,7 @@ func TestWritePgpassEntry_NewFile(t *testing.T) {
 		Password: "secret",
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestWritePgpassEntry_UpdatesExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "testdb",
@@ -81,7 +81,7 @@ func TestWritePgpassEntry_UpdatesExisting(t *testing.T) {
 		Password: "newpass",
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestWritePgpassEntry_NewEntryGoesFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host:     "newhost",
 		Port:     5433,
 		Database: "newdb",
@@ -121,7 +121,7 @@ func TestWritePgpassEntry_NewEntryGoesFirst(t *testing.T) {
 		Password: "newpass",
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestWritePgpassEntry_EscapesPassword(t *testing.T) {
 	path := filepath.Join(dir, "pgpass.conf")
 	t.Setenv("PGPASSFILE", path)
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "db",
@@ -155,7 +155,7 @@ func TestWritePgpassEntry_EscapesPassword(t *testing.T) {
 		Password: `p:a\ss`,
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -175,7 +175,7 @@ func TestWritePgpassEntry_CreatesParentDir(t *testing.T) {
 	path := filepath.Join(dir, "subdir", "pgpass.conf")
 	t.Setenv("PGPASSFILE", path)
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "db",
@@ -183,7 +183,7 @@ func TestWritePgpassEntry_CreatesParentDir(t *testing.T) {
 		Password: "pass",
 	}
 
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -229,10 +229,10 @@ func TestWritePgpassEntry_IsOwnerReadableOnly(t *testing.T) {
 		path := filepath.Join(dir, "pgpass.conf")
 		t.Setenv("PGPASSFILE", path)
 
-		cfg := &pgmi.ConnectionConfig{
+		cfg := &db.ConnectionConfig{
 			Host: "h", Port: 5432, Database: "d", Username: "u", Password: "p",
 		}
-		if err := writePgpassEntry(cfg); err != nil {
+		if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 			t.Fatalf("writePgpassEntry() error = %v", err)
 		}
 
@@ -255,10 +255,10 @@ func TestWritePgpassEntry_IsOwnerReadableOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cfg := &pgmi.ConnectionConfig{
+		cfg := &db.ConnectionConfig{
 			Host: "h", Port: 5432, Database: "d", Username: "u", Password: "p",
 		}
-		if err := writePgpassEntry(cfg); err != nil {
+		if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 			t.Fatalf("writePgpassEntry() error = %v", err)
 		}
 
@@ -291,11 +291,11 @@ func TestWritePgpassEntry_OutranksAMatchingWildcard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host: "localhost", Port: 5432, Database: "testdb",
 		Username: "user", Password: "freshpass",
 	}
-	if err := writePgpassEntry(cfg); err != nil {
+	if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 		t.Fatalf("writePgpassEntry() error = %v", err)
 	}
 
@@ -325,12 +325,12 @@ func TestWritePgpassEntry_DoesNotAccumulateDuplicates(t *testing.T) {
 	path := filepath.Join(dir, "pgpass.conf")
 	t.Setenv("PGPASSFILE", path)
 
-	cfg := &pgmi.ConnectionConfig{
+	cfg := &db.ConnectionConfig{
 		Host: "h", Port: 1, Database: "d", Username: "u", Password: "p1",
 	}
 	for _, pw := range []string{"p1", "p2", "p3"} {
 		cfg.Password = pw
-		if err := writePgpassEntry(cfg); err != nil {
+		if err := writePgpassEntry(cfg, cfg.Database); err != nil {
 			t.Fatalf("writePgpassEntry(%s) error = %v", pw, err)
 		}
 	}
@@ -345,5 +345,60 @@ func TestWritePgpassEntry_DoesNotAccumulateDuplicates(t *testing.T) {
 	}
 	if lines[0] != "h:1:d:u:p3" {
 		t.Errorf("line = %q, want the last password saved", lines[0])
+	}
+}
+
+func TestWritePgpassEntry_WritesMaintenanceAndTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pgpass.conf")
+	t.Setenv("PGPASSFILE", path)
+
+	cfg := &db.ConnectionConfig{Host: "127.0.0.1", Port: 55601, Database: "appdb", Username: "postgres", Password: "trial"}
+	want := "127.0.0.1:55601:appdb:postgres:trial\n127.0.0.1:55601:postgres:postgres:trial\n"
+
+	for range 2 {
+		if err := writePgpassEntry(cfg, "postgres"); err != nil {
+			t.Fatalf("writePgpassEntry() error = %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("file content = %q, want %q", string(data), want)
+		}
+	}
+}
+
+func TestWritePgpassEntry_EmptyMaintenanceMeansDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pgpass.conf")
+	t.Setenv("PGPASSFILE", path)
+
+	cfg := &db.ConnectionConfig{Host: "h", Port: 5432, Database: "appdb", Username: "u", Password: "pw"}
+	if err := writePgpassEntry(cfg, ""); err != nil {
+		t.Fatalf("writePgpassEntry() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "h:5432:appdb:u:pw\nh:5432:" + db.DefaultMaintenanceDB + ":u:pw\n"; string(data) != want {
+		t.Errorf("file content = %q, want %q", string(data), want)
+	}
+}
+
+func TestWritePgpassEntry_SameTargetAndMaintenanceIsOneLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pgpass.conf")
+	t.Setenv("PGPASSFILE", path)
+
+	cfg := &db.ConnectionConfig{Host: "h", Port: 5432, Database: "postgres", Username: "u", Password: "pw"}
+	if err := writePgpassEntry(cfg, "postgres"); err != nil {
+		t.Fatalf("writePgpassEntry() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "h:5432:postgres:u:pw\n"; string(data) != want {
+		t.Errorf("file content = %q, want %q", string(data), want)
 	}
 }

@@ -12,13 +12,28 @@ import "encoding/json"
 // 2025-11-25 is the revision the advanced template's SQL surface also speaks.
 // Its two tool-surface rules are tested in internal/cli: tool names fit
 // SEP-986's character set, and a bad argument is a tool execution error, not a
-// protocol error (SEP-1303). 2026-07-28 drops the initialize handshake; a
-// client that speaks it falls back to initialize when server/discover fails.
-var SupportedVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
+// protocol error (SEP-1303). These are the initialize-era revisions; the
+// stateless 2026-07-28 revision is served alongside them (ModernVersions).
+var SupportedVersions = []string{"2025-11-25", "2025-06-18", "2024-11-05"}
 
-// ProtocolVersion is the newest revision this server speaks — what it answers
+// ProtocolVersion is the newest revision initialize negotiates — what it answers
 // with when the client asks for something it does not know.
 const ProtocolVersion = "2025-11-25"
+
+// ModernVersions are the stateless revisions a request names in its _meta
+// instead of an initialize handshake. server/discover advertises only these:
+// a legacy revision cannot be served without initialize.
+var ModernVersions = []string{"2026-07-28"}
+
+const (
+	metaProtocolVersion    = "io.modelcontextprotocol/protocolVersion"
+	metaClientCapabilities = "io.modelcontextprotocol/clientCapabilities"
+	metaServerInfo         = "io.modelcontextprotocol/serverInfo"
+
+	// discoverTTLMs is how long a client may cache server/discover: the tool
+	// set is fixed for the life of the stdio process.
+	discoverTTLMs = 3_600_000
+)
 
 // negotiateVersion implements the spec's rule: echo the client's version when we
 // support it, otherwise answer with our latest. An unknown version is not an
@@ -39,7 +54,16 @@ const (
 	codeInvalidRequest = -32600
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
+
+	// codeUnsupportedProtocolVersion answers a _meta version this server does
+	// not speak; data names the supported and the requested versions.
+	codeUnsupportedProtocolVersion = -32022
 )
+
+// requestMeta is the per-request _meta of the 2026-07-28 revision.
+type requestMeta struct {
+	Meta map[string]json.RawMessage `json:"_meta"`
+}
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -110,10 +134,20 @@ type initializeParams struct {
 // present only for tools that return structuredContent — the spec requires a
 // tool declaring one to actually produce conforming structured output.
 type toolDescriptor struct {
-	Name         string         `json:"name"`
-	Description  string         `json:"description"`
-	InputSchema  map[string]any `json:"inputSchema"`
-	OutputSchema map[string]any `json:"outputSchema,omitempty"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	InputSchema  map[string]any   `json:"inputSchema"`
+	OutputSchema map[string]any   `json:"outputSchema,omitempty"`
+	Annotations  *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations are the MCP behaviour hints. Every field is sent: the spec
+// defaults destructiveHint and openWorldHint to true when absent.
+type ToolAnnotations struct {
+	ReadOnlyHint    bool `json:"readOnlyHint"`
+	DestructiveHint bool `json:"destructiveHint"`
+	IdempotentHint  bool `json:"idempotentHint"`
+	OpenWorldHint   bool `json:"openWorldHint"`
 }
 
 type toolsListResult struct {

@@ -31,7 +31,12 @@ type Tool struct {
 	// an output schema to produce conforming structuredContent, and a tool
 	// returning plain text (a skill, a markdown overview) produces none.
 	OutputSchema map[string]any
-	Handler      func(ctx context.Context, args json.RawMessage) (any, error)
+	Annotations  *ToolAnnotations
+	// Summary, when set, replaces the serialized result as the text of a
+	// success. The spec only RECOMMENDS repeating structuredContent as text;
+	// a deploy's result is tens of kilobytes the model would read twice.
+	Summary func(result any) string
+	Handler func(ctx context.Context, args json.RawMessage) (any, error)
 }
 
 // Server dispatches JSON-RPC 2.0 / MCP messages to registered tools.
@@ -52,7 +57,7 @@ func NewServer(name, version string) *Server {
 // earlier one.
 func (s *Server) Register(t Tool) {
 	if t.InputSchema == nil {
-		t.InputSchema = map[string]any{"type": "object"}
+		t.InputSchema = map[string]any{"type": "object", "additionalProperties": false}
 	}
 	s.tools[t.Name] = t
 }
@@ -117,12 +122,15 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (err er
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			// Per-message, per JSON-RPC 2.0: report the parse error with a null
-			// id and keep reading. The next newline is a known-good boundary.
-			if writeErr := ss.write(nil, nil, &rpcError{
-				Code:    codeParseError,
-				Message: "parse error: " + err.Error(),
-			}); writeErr != nil {
+			// Per-message, per JSON-RPC 2.0, with a null id, and keep reading:
+			// the next newline is a known-good boundary. Only text that is not
+			// JSON is a parse error; JSON that is no request object (a batch
+			// array, a scalar, a member of the wrong type) is an invalid request.
+			rpcErr := &rpcError{Code: codeInvalidRequest, Message: "invalid request: " + err.Error()}
+			if !json.Valid([]byte(line)) {
+				rpcErr = &rpcError{Code: codeParseError, Message: "parse error: " + err.Error()}
+			}
+			if writeErr := ss.write(nil, nil, rpcErr); writeErr != nil {
 				return writeErr
 			}
 			if atEOF {
@@ -132,7 +140,14 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (err er
 		}
 
 		if req.Method == "tools/call" && req.JSONRPC == "2.0" && !req.isNotification() && req.hasWellFormedID() {
-			ss.startCall(callCtx, s, req)
+			modern, eraErr := era(req)
+			if eraErr != nil {
+				if err := ss.write(req.ID, nil, eraErr); err != nil {
+					return err
+				}
+			} else {
+				ss.startCall(callCtx, s, req, modern)
+			}
 			if atEOF {
 				return nil
 			}
@@ -186,7 +201,7 @@ func (ss *session) write(id json.RawMessage, result any, rpcErr *rpcError) error
 	return nil
 }
 
-func (ss *session) startCall(ctx context.Context, s *Server, req rpcRequest) {
+func (ss *session) startCall(ctx context.Context, s *Server, req rpcRequest, modern bool) {
 	key := string(bytes.TrimSpace(req.ID))
 	reqCtx, cancel := context.WithCancelCause(ctx)
 	ss.mu.Lock()
@@ -195,6 +210,9 @@ func (ss *session) startCall(ctx context.Context, s *Server, req rpcRequest) {
 
 	ss.wg.Go(func() {
 		resp := s.handleToolsCall(reqCtx, req.Params)
+		if modern {
+			resp = s.complete(resp)
+		}
 
 		ss.mu.Lock()
 		delete(ss.inflight, key)
@@ -241,7 +259,29 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (rpcResponse, boo
 		return rpcResponse{Error: &rpcError{Code: codeInvalidRequest, Message: "id must be a string or number"}}, false
 	}
 
+	modern, eraErr := era(req)
+	if eraErr != nil {
+		return rpcResponse{Error: eraErr}, req.isNotification()
+	}
+	if modern && (req.Method == "initialize" || req.Method == "ping") {
+		return rpcResponse{Error: &rpcError{Code: codeMethodNotFound, Message: "method not found: " + req.Method}}, req.isNotification()
+	}
+	resp, isNotification := s.route(ctx, req)
+	if modern {
+		resp = s.complete(resp)
+		if req.Method == "tools/list" && resp.Error == nil {
+			m := resp.Result.(map[string]any)
+			m["ttlMs"] = discoverTTLMs
+			m["cacheScope"] = "public"
+		}
+	}
+	return resp, isNotification
+}
+
+func (s *Server) route(ctx context.Context, req rpcRequest) (rpcResponse, bool) {
 	switch req.Method {
+	case "server/discover":
+		return rpcResponse{Result: s.discoverResult()}, req.isNotification()
 	case "initialize":
 		return s.handleInitialize(req.Params), req.isNotification()
 	case "notifications/initialized", "notifications/cancelled":
@@ -260,6 +300,64 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (rpcResponse, boo
 			return rpcResponse{}, true
 		}
 		return rpcResponse{Error: &rpcError{Code: codeMethodNotFound, Message: "method not found: " + req.Method}}, false
+	}
+}
+
+// era selects the revision a request is served under, per request as the
+// 2026-07-28 versioning rules allow a dual-era server: a request whose _meta
+// names a protocol version is served statelessly under that revision (and
+// server/discover always is); anything else keeps the initialize-era rules. A
+// modern request must name a version this server speaks and declare the
+// client's capabilities.
+func era(req rpcRequest) (modern bool, rpcErr *rpcError) {
+	var p requestMeta
+	if len(req.Params) > 0 {
+		_ = json.Unmarshal(req.Params, &p)
+	}
+	raw, named := p.Meta[metaProtocolVersion]
+	if !named {
+		return req.Method == "server/discover", nil
+	}
+	var version string
+	if err := json.Unmarshal(raw, &version); err != nil || !slices.Contains(ModernVersions, version) {
+		return true, &rpcError{
+			Code:    codeUnsupportedProtocolVersion,
+			Message: "Unsupported protocol version",
+			Data:    map[string]any{"supported": ModernVersions, "requested": strings.Trim(string(raw), `"`)},
+		}
+	}
+	if _, ok := p.Meta[metaClientCapabilities]; !ok && req.Method != "server/discover" {
+		return true, &rpcError{Code: codeInvalidParams, Message: "missing required _meta field: " + metaClientCapabilities}
+	}
+	return true, nil
+}
+
+// complete marks a 2026-07-28 result as final and names the server in its
+// _meta (SEP-2575). pgmi tools answer in one round trip, because the request
+// is the transaction boundary, so there is no other resultType to send.
+func (s *Server) complete(resp rpcResponse) rpcResponse {
+	if resp.Error != nil || resp.Result == nil {
+		return resp
+	}
+	m := structToMap(resp.Result)
+	m["resultType"] = "complete"
+	meta, _ := m["_meta"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta[metaServerInfo] = s.info
+	m["_meta"] = meta
+	resp.Result = m
+	return resp
+}
+
+func (s *Server) discoverResult() map[string]any {
+	return map[string]any{
+		"supportedVersions": ModernVersions,
+		"capabilities":      map[string]any{"tools": map[string]any{}},
+		"ttlMs":             discoverTTLMs,
+		"cacheScope":        "public",
+		"_meta":             map[string]any{metaServerInfo: s.info},
 	}
 }
 
@@ -299,6 +397,7 @@ func (s *Server) handleToolsList() toolsListResult {
 			Description:  t.Description,
 			InputSchema:  t.InputSchema,
 			OutputSchema: t.OutputSchema,
+			Annotations:  t.Annotations,
 		})
 	}
 	return toolsListResult{Tools: tools}
@@ -319,7 +418,11 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) rp
 	if err != nil {
 		return rpcResponse{Result: errorResult(err)}
 	}
-	return rpcResponse{Result: successResult(result)}
+	success := successResult(result)
+	if tool.Summary != nil && !success.IsError {
+		success.Content = []contentBlock{{Type: "text", Text: tool.Summary(result)}}
+	}
+	return rpcResponse{Result: success}
 }
 
 // callTool turns a panicking handler into an ordinary error result. Without the
@@ -365,6 +468,8 @@ func successResult(result any) callToolResult {
 type FieldsError struct {
 	Err    error
 	Fields map[string]any
+	// Text is appended to the error's text block.
+	Text string
 }
 
 func (e *FieldsError) Error() string { return e.Err.Error() }
@@ -374,15 +479,25 @@ func (e *FieldsError) Unwrap() error { return e.Err }
 // The text carries the DETAIL/HINT/WHERE diagnostics psql would show; the
 // structured form lets the client branch on sqlstate/exitCode without parsing.
 func errorResult(err error) callToolResult {
-	var sc any = pgmi.NewErrorDetail(err)
+	detail := pgmi.NewErrorDetail(err)
+	var sc any = detail
+	text := pgmi.FormatError(err) + fmt.Sprintf("\nexit code %d", detail.ExitCode)
+	if detail.Phase != "" {
+		text += ", phase " + detail.Phase
+	}
 	var fe *FieldsError
-	if errors.As(err, &fe) && len(fe.Fields) > 0 {
-		m := structToMap(sc)
-		maps.Copy(m, fe.Fields)
-		sc = m
+	if errors.As(err, &fe) {
+		if len(fe.Fields) > 0 {
+			m := structToMap(sc)
+			maps.Copy(m, fe.Fields)
+			sc = m
+		}
+		if fe.Text != "" {
+			text += "\n" + fe.Text
+		}
 	}
 	return callToolResult{
-		Content:           []contentBlock{{Type: "text", Text: pgmi.FormatError(err)}},
+		Content:           []contentBlock{{Type: "text", Text: text}},
 		StructuredContent: sc,
 		IsError:           true,
 	}

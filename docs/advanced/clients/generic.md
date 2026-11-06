@@ -13,7 +13,7 @@ aliases:
 > pgmi deployment CLI.
 
 
-The OpenAPI Generator project supports 50+ languages and frameworks. Use it when no language-specific tool is a better fit.
+The OpenAPI Generator project supports 50+ languages and frameworks. Use it when no language-specific tool is a better fit. Download `openapi.json` with session handles first; see [Client generation](README.md).
 
 ## openapi-generator
 
@@ -26,7 +26,7 @@ openapi-generator-cli list
 
 # Generate a client
 openapi-generator-cli generate \
-  -i http://localhost:3000/openapi.json \
+  -i openapi.json \
   -g <generator-name> \
   -o ./generated-client
 ```
@@ -51,10 +51,10 @@ Common generators:
 ## Docker (no local install)
 
 ```bash
-docker run --rm --network host \
+docker run --rm \
   -v "${PWD}:/out" \
   openapitools/openapi-generator-cli generate \
-  -i http://host.docker.internal:3000/openapi.json \
+  -i /out/openapi.json \
   -g typescript-fetch \
   -o /out/generated
 ```
@@ -66,7 +66,7 @@ Customize generation with a config file:
 ```yaml
 # openapi-generator-config.yaml
 generatorName: typescript-fetch
-inputSpec: http://localhost:3000/openapi.json
+inputSpec: openapi.json
 outputDir: ./generated
 additionalProperties:
   supportsES6: true

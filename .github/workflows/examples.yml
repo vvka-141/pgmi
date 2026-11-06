@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -25,24 +25,24 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5434/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
 
       - name: Success path — tests pass, deployment commits
         working-directory: examples/test-gated-deploy
-        run: ../../pgmi deploy . -d pgmi_example --force
+        run: ../../pgmi deploy . -d pgmi_example --force --param env=dev
 
       - name: Failure path — failing test rolls the whole deployment back
         working-directory: examples/test-gated-deploy
         run: |
           cp break-it/test_audit_log.sql __test__/
           set +e
-          ../../pgmi deploy . -d pgmi_example_broken --force
+          ../../pgmi deploy . -d pgmi_example_broken --force --param env=dev
           code=$?
           set -e
           test "$code" -eq 13 || { echo "expected exit 13, got $code"; exit 1; }
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -71,10 +71,10 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5435/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -122,7 +122,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -135,10 +135,10 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5437/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -178,10 +178,10 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5436/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -267,7 +267,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -280,10 +280,10 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5438/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -306,10 +306,10 @@ jobs:
     name: Docs — README and Quickstart walkthrough
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -322,7 +322,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -335,10 +335,10 @@ jobs:
     env:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5439/postgres
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build pgmi
         run: go build -o pgmi ./cmd/pgmi
@@ -382,3 +382,306 @@ jobs:
           cols=$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 5439 -U postgres -d apply_once_demo -tAc \
             "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'customer' AND column_name = 'email'")
           test "$cols" = "0" || { echo "the rejected migration added its column"; exit 1; }
+
+
+  # Each client job runs the gateway's own tests, then the language-neutral
+  # end-to-end harness (internal/scaffold/testdata/gateways/e2e) against the
+  # running gateway. A suite a gateway does not implement yet is listed in
+  # EXPECTED_MISSING: it still runs and is reported, and the job fails once
+  # it passes, so the list is shortened as each port lands.
+  client-python:
+    name: Client — Python reference gateway
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5441:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5441/postgres
+      DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5441/clients_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Scaffold the advanced template and deploy it with env=dev
+        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+
+      - name: Install the client's and the end-to-end harness's requirements
+        run: |
+          pip install -r "$RUNNER_TEMP/project/gateways/python/requirements.txt"
+          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+
+      - name: Audit the client's pinned dependencies
+        working-directory: ${{ runner.temp }}/project/gateways/python
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
+
+      - name: The scaffolded client's tests against the deployed template
+        working-directory: ${{ runner.temp }}/project/gateways/python
+        run: python -m unittest -v test_gateway
+
+      - name: The end-to-end harness (REST, MCP, OIDC sign-in, interceptors) against the running gateway
+        env:
+          PGMI_BIN: ${{ github.workspace }}/pgmi
+          EXPECTED_MISSING: rpc
+          GATEWAY_DIR: ${{ runner.temp }}/project/gateways/python
+          GATEWAY_COMMAND: python gateway.py
+        run: python internal/scaffold/testdata/gateways/e2e/run.py
+
+      - name: The database tests ran (a skipped run signs nobody in)
+        run: internal/scaffold/testdata/gateways/signed-in.sh client-python
+
+  client-typescript:
+    name: Client — TypeScript reference gateway
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5442:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5442/postgres
+      DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5442/clients_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Scaffold the advanced template and deploy it with env=dev
+        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+
+      - name: Build and test the scaffolded client against the deployed template
+        working-directory: ${{ runner.temp }}/project/gateways/typescript
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit
+          npm test
+
+      - name: The end-to-end harness (REST, MCP, OIDC sign-in, interceptors, OAuth) against the running gateway
+        env:
+          PGMI_BIN: ${{ github.workspace }}/pgmi
+          EXPECTED_MISSING: rpc
+          GATEWAY_DIR: ${{ runner.temp }}/project/gateways/typescript
+          GATEWAY_COMMAND: node dist/main.js
+        run: |
+          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+          python internal/scaffold/testdata/gateways/e2e/run.py
+
+      - name: The database tests ran (a skipped run signs nobody in)
+        run: internal/scaffold/testdata/gateways/signed-in.sh client-typescript
+
+  client-go:
+    name: Client — Go reference gateway
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5443:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5443/postgres
+      DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5443/clients_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Scaffold the advanced template and deploy it with env=dev
+        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+
+      - name: Build and test the scaffolded client, its own module, against the deployed template
+        working-directory: ${{ runner.temp }}/project/gateways/go
+        run: |
+          go vet ./...
+          go test -race -v -count=1 ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+          go build -race -o gateway .
+
+      - name: The end-to-end harness (REST, MCP, OIDC sign-in, interceptors, OAuth) against the running gateway, built with the race detector
+        env:
+          PGMI_BIN: ${{ github.workspace }}/pgmi
+          GATEWAY_DIR: ${{ runner.temp }}/project/gateways/go
+          GATEWAY_COMMAND: ./gateway
+          GORACE: halt_on_error=1
+        run: |
+          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+          python internal/scaffold/testdata/gateways/e2e/run.py
+
+      - name: The database tests ran (a skipped run signs nobody in)
+        run: internal/scaffold/testdata/gateways/signed-in.sh client-go
+
+  client-csharp:
+    name: Client — C# reference gateway
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5444:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5444/postgres
+      DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5444/clients_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Scaffold the advanced template and deploy it with env=dev
+        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+
+      - name: Start a TLS-only PostgreSQL for the sslmode test
+        run: internal/scaffold/testdata/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
+
+      - name: Build and test the scaffolded client against the deployed template (official .NET SDK image)
+        working-directory: ${{ runner.temp }}/project/gateways/csharp
+        run: |
+          docker run --rm --network host -e DATABASE_URL -v "$PWD:/src" -w /src \
+            -v "$RUNNER_TEMP/tls:$RUNNER_TEMP/tls:ro" -e REQUIRE_TLS_TEST=1 \
+            -e TLS_DATABASE_URL="postgresql://postgres:postgres@localhost:5460/postgres?sslmode=require" \
+            -e TLS_CA="$RUNNER_TEMP/tls/ca.pem" -e TLS_WRONG_CA="$RUNNER_TEMP/tls/wrong-ca.pem" \
+            mcr.microsoft.com/dotnet/sdk:10.0.403 \
+            sh -c 'dotnet test Gateway.Tests && dotnet list Gateway package --vulnerable --include-transitive | tee /tmp/vulnerable && ! grep -q "has the following vulnerable packages" /tmp/vulnerable && dotnet publish Gateway -c Release -o out'
+
+      - name: The end-to-end harness (REST, MCP, OIDC sign-in, interceptors, OAuth) against the running gateway
+        env:
+          PGMI_BIN: ${{ github.workspace }}/pgmi
+          EXPECTED_MISSING: rpc
+          GATEWAY_DIR: ${{ runner.temp }}/project/gateways/csharp
+          GATEWAY_COMMAND: >-
+            docker run --rm --name pgmi-gateway-{port} --network host --env-file {env_file}
+            -v ${{ runner.temp }}/project/gateways/csharp:/src -w /src
+            mcr.microsoft.com/dotnet/sdk:10.0.403 dotnet out/Gateway.dll
+          GATEWAY_STOP: docker rm -f pgmi-gateway-{port}
+        run: |
+          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+          python internal/scaffold/testdata/gateways/e2e/run.py
+
+      - name: The database tests ran (a skipped run signs nobody in)
+        run: internal/scaffold/testdata/gateways/signed-in.sh client-csharp
+
+  client-rust:
+    name: Client — Rust reference gateway
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5445:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5445/postgres
+      DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5445/clients_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o pgmi ./cmd/pgmi
+
+      - name: Scaffold the advanced template and deploy it with env=dev
+        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+
+      - name: Start a TLS-only PostgreSQL for the sslmode test
+        run: internal/scaffold/testdata/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
+
+      - name: Build and test the scaffolded client against the deployed template (official Rust image)
+        working-directory: ${{ runner.temp }}/project/gateways/rust
+        run: |
+          docker run --rm --network host -e DATABASE_URL -v "$PWD:/src" -w /src \
+            -v "$RUNNER_TEMP/tls:$RUNNER_TEMP/tls:ro" -e REQUIRE_TLS_TEST=1 \
+            -e TLS_DATABASE_URL="postgresql://postgres:postgres@localhost:5460/postgres?sslmode=require" \
+            -e TLS_CA="$RUNNER_TEMP/tls/ca.pem" -e TLS_WRONG_CA="$RUNNER_TEMP/tls/wrong-ca.pem" \
+            rust:1.99.0-trixie sh -c 'cargo install cargo-audit --locked --version 0.22.2 && cargo audit \
+              && cargo test --locked \
+              && REQUIRE_SYSTEM_ROOTS_TEST=1 SSL_CERT_FILE="$TLS_CA" cargo test --locked --offline --test tls_system_roots \
+              && cargo build --locked'
+
+      - name: The end-to-end harness (REST, MCP, OIDC sign-in, interceptors, OAuth) against the running gateway
+        env:
+          PGMI_BIN: ${{ github.workspace }}/pgmi
+          EXPECTED_MISSING: rpc
+          GATEWAY_DIR: ${{ runner.temp }}/project/gateways/rust
+          GATEWAY_COMMAND: >-
+            docker run --rm --name pgmi-gateway-{port} --network host --env-file {env_file}
+            -v ${{ runner.temp }}/project/gateways/rust:/src -w /src
+            rust:1.99.0-trixie target/debug/pgmi-gateway
+          GATEWAY_STOP: docker rm -f pgmi-gateway-{port}
+        run: |
+          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+          python internal/scaffold/testdata/gateways/e2e/run.py
+
+      - name: The database tests ran (a skipped run signs nobody in)
+        run: internal/scaffold/testdata/gateways/signed-in.sh client-rust

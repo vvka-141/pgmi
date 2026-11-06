@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -102,23 +103,38 @@ func TestCompleteTemplateNames(t *testing.T) {
 	})
 }
 
-func TestCompleteSkillNames(t *testing.T) {
-	cmd := &cobra.Command{}
+func TestCompletionTemplateFlag(t *testing.T) {
+	out, err := withRootArgs(t, "__complete", "init", "x", "--template", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"advanced", "basic"} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("--template completion lacks %s:\n%s", want, out)
+		}
+	}
+}
 
-	t.Run("returns skill names", func(t *testing.T) {
-		completions, directive := completeSkillNames(cmd, nil, "")
-		if len(completions) == 0 {
-			t.Error("expected at least one skill completion")
-		}
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("expected ShellCompDirectiveNoFileComp, got %v", directive)
-		}
-	})
+func TestCompletionSSLModeFlag(t *testing.T) {
+	out, err := withRootArgs(t, "__complete", "deploy", ".", "--sslmode", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "verify-full\n") {
+		t.Errorf("--sslmode completion lacks verify-full:\n%s", out)
+	}
+}
 
-	t.Run("returns NoFileComp when args already provided", func(t *testing.T) {
-		_, directive := completeSkillNames(cmd, []string{"pgmi-sql"}, "")
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("expected ShellCompDirectiveNoFileComp, got %v", directive)
+func TestHelpPrintsEachDefaultOnce(t *testing.T) {
+	for _, args := range [][]string{{"help", "deploy"}, {"metadata", "scaffold", "--help"}} {
+		out, err := withRootArgs(t, args...)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Count(line, "default") > 1 {
+				t.Errorf("%v: a default printed twice: %s", args, strings.TrimSpace(line))
+			}
+		}
+	}
 }

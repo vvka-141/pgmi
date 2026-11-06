@@ -19,9 +19,9 @@ The difference: **you write the deployment logic in SQL, not configuration.**
 ## A concrete example
 
 Suppose you need environment-specific deployment behavior:
-- In development: drop and recreate everything
-- In staging: run migrations only if checksums changed
-- In production: require explicit approval for destructive changes
+- In development (`dev`): drop and recreate the application schema
+- In every environment (`dev`, `test`, `prod`): run the files under `./physical/` in plan order
+- In production (`prod`): record the deployment in an audit table
 
 **With traditional tools**, you'd need:
 - Multiple configuration files
@@ -34,21 +34,23 @@ Suppose you need environment-specific deployment behavior:
 -- deploy.sql
 DO $$
 DECLARE
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
     v_file RECORD;
 BEGIN
-    IF v_env = 'development' THEN
-        -- Recreate everything
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
+    IF v_env = 'dev' THEN
         EXECUTE 'DROP SCHEMA IF EXISTS app CASCADE';
         EXECUTE 'CREATE SCHEMA app';
     END IF;
 
-    -- Always run migrations
     FOR v_file IN (
         SELECT p.path, p.content
         FROM pg_temp.pgmi_plan_view p
         JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+        WHERE s.is_sql_file AND p.path LIKE './physical/%'
         ORDER BY p.execution_order
     )
     LOOP
@@ -56,8 +58,9 @@ BEGIN
         EXECUTE v_file.content;
     END LOOP;
 
-    IF v_env = 'production' THEN
-        -- Log deployment for audit
+    IF v_env = 'prod' THEN
+        CREATE SCHEMA IF NOT EXISTS audit;
+        CREATE TABLE IF NOT EXISTS audit.deployments (deployed_at timestamptz NOT NULL, env text NOT NULL);
         INSERT INTO audit.deployments (deployed_at, env) VALUES (now(), v_env);
     END IF;
 END $$;
@@ -79,7 +82,7 @@ pgmi is a good fit when:
 **You want explicit transaction control.**
 - Some migrations need individual transactions (to allow partial progress)
 - Some need a single transaction (all-or-nothing)
-- Traditional tools make you choose one approach globally
+- Migration tools expose transaction settings per script, such as Flyway's `executeInTransaction=false`. In pgmi, `deploy.sql` also defines which scripts share a transaction and where deployment phases commit
 
 **Your team is fluent in SQL/PL/pgSQL.**
 - pgmi's power comes from writing deployment logic in PostgreSQL's native language
@@ -92,7 +95,7 @@ pgmi is a good fit when:
 
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
-- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the [advanced template](advanced/_index.md) does this automatically)
+- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the [advanced template](advanced/README.md) does this automatically)
 - See [deploy.sql guide](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
@@ -107,7 +110,7 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template does exactly this). pgmi ships with two templates — **basic**, a small, explicit migration scaffold, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — either can be production depending on your project. See [Choosing a Template](QUICKSTART.md#choosing-a-template) for the canonical comparison.
+pgmi handles linear migrations out of the box (the basic template runs its tables once each, in path order). pgmi ships with three templates — **minimal**, a bare `deploy.sql` to build on, **basic**, a small two-layer project, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — any of them can be production depending on your project. See [Templates](templates.md) for the canonical comparison.
 
 But consider simpler tools if:
 
@@ -133,7 +136,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |
 | Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
-| Cloud auth | Native (Azure, AWS, GCP IAM) | Varies by tool |
+| Cloud auth | Native (Azure, AWS, GCP IAM); Azure tested by hand against a real cloud, AWS and GCP not ([connections](CONNECTIONS.md)) | Varies by tool |
 | File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
 | Test gate location | Inside the deploy transaction, against the target, post-migration — a failing test aborts the commit | A separate command against a dev database, before the apply (Atlas [`migrate test`](https://atlasgo.io/testing/migrate)); or assertions embedded in migration files (Flyway [transaction testing](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions)) |
@@ -141,7 +144,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Plan inspectability | `pgmi_plan_view` is a SQL view — assertable by project-authored queries | Atlas [`migrate lint`](https://atlasgo.io/versioned/lint) ships 50+ vendor-supplied analyzers (requires a dev database); Flyway validates checksums against history |
 | Same file at multiple positions | Yes — `UNNEST(sort_keys)` places one idempotent file at several stages | One file, one ordinal |
 | Database-free CI validation | Structure, metadata, UUID uniqueness, and full execution order computable offline (`--json`) | Atlas lint and Flyway validate both require a database connection |
-| Coding-agent support | Guidance embedded in the binary and versioned with it (`pgmi ai`); `pgmi ai setup` commits a self-gating skill to the project, and `pgmi ai check` reports when it drifts from the binary | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
+| Coding-agent support | Every scaffolded project carries an `AGENTS.md` and skills, including PostgreSQL recipes whose SQL runs in pgmi's CI; facts that change with the binary come from the binary (`pgmi ai contract`) | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
 
 For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md). For the
 other side — the capabilities that are hard to reproduce with another tool at all —

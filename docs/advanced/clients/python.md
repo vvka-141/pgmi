@@ -13,7 +13,7 @@ aliases:
 > pgmi deployment CLI.
 
 
-Generate a typed Python client from your deployment's `/openapi.json`.
+Generate a typed Python client from your deployment's `/openapi.json`. Download `openapi.json` with session handles first; see [Client generation](README.md).
 
 ## openapi-python-client
 
@@ -24,7 +24,7 @@ pip install openapi-python-client
 
 # Generate client package
 openapi-python-client generate \
-  --url http://localhost:3000/openapi.json \
+  --path openapi.json \
   --output-path ./api-client
 ```
 
@@ -34,7 +34,11 @@ Usage:
 from api_client import Client
 from api_client.api.default import hello_world
 
-client = Client(base_url="http://localhost:3000")
+client = Client(
+    base_url="http://localhost:8080/api",
+    headers={"Cookie": f"__Host-session={login_session}; __Host-csrf={csrf_token}",
+             "X-CSRF-Token": csrf_token, "x-organization-session": organization_session},
+)
 response = hello_world.sync(client=client, name="World")
 print(response.message)
 
@@ -44,11 +48,11 @@ response = await hello_world.asyncio(client=client, name="World")
 
 ## Updating
 
-When handlers change, regenerate:
+When handlers change, download the spec again and regenerate:
 
 ```bash
-openapi-python-client update \
-  --url http://localhost:3000/openapi.json \
+openapi-python-client generate --overwrite \
+  --path openapi.json \
   --output-path ./api-client
 ```
 
@@ -56,7 +60,7 @@ openapi-python-client update \
 
 ```bash
 openapi-generator generate \
-  -i http://localhost:3000/openapi.json \
+  -i openapi.json \
   -g python \
   -o ./api-client
 ```

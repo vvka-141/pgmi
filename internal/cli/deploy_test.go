@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,7 +251,7 @@ func TestBuildDeploymentConfig(t *testing.T) {
 			tt.setupFlags()
 
 			// Build deployment config
-			config, err := buildDeploymentConfig(deployCmd, tt.sourcePath, nil, tt.verbose)
+			config, err := buildDeploymentConfig(deployCmd, tt.sourcePath, nil, dotenvReport{}, tt.verbose)
 
 			// Check error expectations
 			if (err != nil) != tt.wantErr {
@@ -281,8 +282,8 @@ func TestBuildDeploymentConfig(t *testing.T) {
 			if len(config.Parameters) != tt.wantParamCount {
 				t.Errorf("buildDeploymentConfig() parameter count = %v, want %v", len(config.Parameters), tt.wantParamCount)
 			}
-			if config.Timeout != tt.wantTimeout {
-				t.Errorf("buildDeploymentConfig() Timeout = %v, want %v", config.Timeout, tt.wantTimeout)
+			if config.timeout != tt.wantTimeout {
+				t.Errorf("buildDeploymentConfig() Timeout = %v, want %v", config.timeout, tt.wantTimeout)
 			}
 			if config.Verbose != tt.verbose {
 				t.Errorf("buildDeploymentConfig() Verbose = %v, want %v", config.Verbose, tt.verbose)
@@ -305,7 +306,7 @@ func TestBuildDeploymentConfig_AzureAuth(t *testing.T) {
 	deployFlags.azure = true
 	deployFlags.timeout = 3 * time.Minute
 
-	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, dotenvReport{}, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -344,7 +345,7 @@ api_key=file_secret
 	deployFlags.timeout = 3 * time.Minute
 
 	// Build config
-	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, dotenvReport{}, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -433,7 +434,7 @@ func TestBuildDeploymentConfig_ValidationErrors(t *testing.T) {
 			resetDeployFlags()
 			tt.setupFlags()
 
-			_, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
+			_, err := buildDeploymentConfig(deployCmd, tempDir, nil, dotenvReport{}, false)
 
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -463,7 +464,7 @@ func TestBuildDeploymentConfig_Validate(t *testing.T) {
 	deployFlags.paramsFiles = nil
 	deployFlags.timeout = 3 * time.Minute
 
-	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, false)
+	config, err := buildDeploymentConfig(deployCmd, tempDir, nil, dotenvReport{}, false)
 	if err != nil {
 		t.Fatalf("buildDeploymentConfig() unexpected error: %v", err)
 	}
@@ -536,4 +537,24 @@ func TestDeadlineContext(t *testing.T) {
 			t.Errorf("deadline too soon: %v", deadline)
 		}
 	})
+}
+
+func TestDeployCmd_AMistypedProjectPathIsReportedBeforeTheDatabase(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, want string }{
+		{filepath.Join(t.TempDir(), "nope"), "does not exist"},
+		{file, "is a file; pass the project directory"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			resetDeployFlags()
+			clearPGEnv(t)
+			err := runDeploy(deployCmd, []string{tc.path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !errors.Is(err, pgmi.ErrInvalidConfig) {
+				t.Fatalf("runDeploy(%q) = %v, want %q wrapping ErrInvalidConfig", tc.path, err, tc.want)
+			}
+		})
+	}
 }

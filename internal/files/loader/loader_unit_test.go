@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -186,7 +187,7 @@ func TestInsertTestFiles_Empty(t *testing.T) {
 	}
 }
 
-// These three exercise pgmi.IsTestPath, the classification the loader uses to
+// These three exercise pathrule.IsTestPath, the classification the loader uses to
 // split files between _pgmi_source and _pgmi_test_source; the split itself
 // runs against a database in loader_internal_integration_test.go.
 func TestIsTestPath_SeparatesTestFiles(t *testing.T) {
@@ -201,7 +202,7 @@ func TestIsTestPath_SeparatesTestFiles(t *testing.T) {
 	testFiles := 0
 	sourceFiles := 0
 	for _, f := range files {
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			testFiles++
 		} else {
 			sourceFiles++
@@ -369,7 +370,7 @@ func TestIsTestPath_OnlyTestFiles(t *testing.T) {
 	testFiles := 0
 	sourceFiles := 0
 	for _, f := range files {
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			testFiles++
 		} else {
 			sourceFiles++
@@ -522,9 +523,9 @@ func TestIsTestPath_NonSQLTestFiles(t *testing.T) {
 
 	var testPaths, sqlTestPaths int
 	for _, f := range files {
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			testPaths++
-			if pgmi.IsSQLExtension(f.Extension) {
+			if pathrule.IsSQLExtension(f.Extension) {
 				sqlTestPaths++
 			}
 		}

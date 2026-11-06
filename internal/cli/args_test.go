@@ -32,14 +32,6 @@ func TestRequireArgValidators(t *testing.T) {
 			missingMsg: "missing required argument: <template_name>",
 			helpMsg:    "pgmi templates list",
 		},
-		{
-			name:       "RequireSkillName",
-			fn:         RequireSkillName,
-			cmdUse:     "skill <name>",
-			validArg:   "pgmi-sql",
-			missingMsg: "missing required argument: <name>",
-			helpMsg:    "pgmi ai skills",
-		},
 	}
 
 	for _, tt := range tests {
@@ -94,5 +86,18 @@ func TestRequireArgValidators(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestRequireProjectPath_ExampleOnlyShowsFlagsTheCommandHas(t *testing.T) {
+	plan := &cobra.Command{Use: "plan <project_path>"}
+	if err := RequireProjectPath(plan, nil); err == nil || strings.Contains(err.Error(), "-d mydb") {
+		t.Errorf("a command without --database must not suggest -d: %v", err)
+	}
+
+	deploy := &cobra.Command{Use: "deploy <project_path>"}
+	deploy.Flags().StringP("database", "d", "", "")
+	if err := RequireProjectPath(deploy, nil); err == nil || !strings.Contains(err.Error(), "-d mydb") {
+		t.Errorf("deploy's example should still show -d mydb: %v", err)
 	}
 }

@@ -15,10 +15,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5001-4000-8000-000000000001',
-            'uri', '^/parse-probe$',
+            'path', '/parse-probe',
             'httpMethod', '^POST$',
             'name', 'parse_probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -52,10 +52,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5002-4000-8000-000000000001',
-            'uri', '^/method-probe$',
+            'path', '/method-probe',
             'httpMethod', '^POST$',
             'name', 'method_probe_405',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -75,7 +75,7 @@ $body$
     IF ((v_response).headers->'allow') IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: RFC 9110 15.5.6 makes Allow mandatory on a 405';
     END IF;
-    IF ((v_response).headers->'allow') !~ 'POST' THEN
+    IF (((v_response).headers->'allow') !~ 'POST') IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: Allow must list the methods that do apply, got %',
             (v_response).headers->'allow';
     END IF;
@@ -92,10 +92,10 @@ $body$
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5003-4000-8000-000000000001',
-            'uri', '^/head-probe$',
+            'path', '/head-probe',
             'httpMethod', '^GET$',
             'name', 'head_probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -114,7 +114,7 @@ $body$
     END IF;
     -- content-length keeps the value GET would have sent; that is what makes
     -- HEAD useful for probing size.
-    IF COALESCE(((v_response).headers->'content-length')::int, 0) = 0 THEN
+    IF (COALESCE(((v_response).headers->'content-length')::int, 0) = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: HEAD must report the content-length GET would send, got %',
             COALESCE((v_response).headers->'content-length', '<none>');
     END IF;
@@ -132,10 +132,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5004-4000-8000-000000000001',
-            'uri', '^/guarded$',
+            'path', '/guarded',
             'httpMethod', '^GET$',
             'name', 'guarded_probe',
-            'requiresAuth', true
+            'access', 'authenticated'
         ),
         $body$
 BEGIN
@@ -161,12 +161,13 @@ $body$
         RAISE EXCEPTION 'TEST FAILED: error responses must carry x-pgmi-catalog-version';
     END IF;
 
-    -- Identity travels in x-user-id, not Authorization, so RFC 9111 §3.5's
+    -- Identity travels in the session cookie, not Authorization, so RFC 9111 §3.5's
     -- shared-cache prohibition never engages. Without Vary a caching
-    -- intermediary may replay one user''s response to another.
-    IF ((v_response).headers->'vary') IS NULL
-       OR ((v_response).headers->'vary') !~ 'x-user-id' THEN
-        RAISE EXCEPTION 'TEST FAILED: responses must Vary on x-user-id, got %',
+    -- intermediary may replay one user''s response to another. Clients never
+    -- send x-login-session (the gateway derives it), so Vary names cookie.
+    IF ((v_response).headers->'vary' ~ '\mcookie\M') IS NOT TRUE
+       OR ((v_response).headers->'vary' ~ 'x-login-session') IS NOT FALSE THEN
+        RAISE EXCEPTION 'TEST FAILED: responses must Vary on cookie, not x-login-session, got %',
             COALESCE((v_response).headers->'vary', '<none>');
     END IF;
 
@@ -260,7 +261,7 @@ BEGIN
             'id', 'ffffffff-5005-4000-8000-000000000001',
             'methodName', 'probe.echo',
             'description', 'RPC parse-error probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -294,11 +295,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5379-4000-8000-000000000001',
-            'uri', '^/gateway-probe$',
+            'path', '/gateway-probe',
             'httpMethod', '^GET$',
             'name', 'gateway_probe',
             'produces', jsonb_build_array('application/json'),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -309,10 +310,10 @@ $body$
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5379-4000-8000-000000000002',
-            'uri', '^/decode-probe$',
+            'path', '/decode-probe',
             'httpMethod', '^GET$',
             'name', 'decode_probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -346,7 +347,7 @@ $body$
     -- RFC 9111 4.1: the handler's own Vary members must survive the gateway's.
     v_response := api.rest_invoke('GET', '/gateway-probe', ''::extensions.hstore, NULL::bytea);
     v_vary := (v_response).headers->'vary';
-    IF COALESCE(v_vary, '') NOT LIKE '%accept-language%' OR COALESCE(v_vary, '') NOT LIKE '%x-user-id%' THEN
+    IF COALESCE(v_vary, '') NOT LIKE '%accept-language%' OR COALESCE(v_vary, '') NOT LIKE '%cookie%' THEN
         RAISE EXCEPTION 'TEST FAILED: Vary must union handler and gateway members, got %', v_vary;
     END IF;
 
@@ -360,30 +361,38 @@ END $$;
 DO $$
 DECLARE
     v_response api.http_response;
-    v_subject  text := 'test|http-semantics-options';
-    v_headers  extensions.hstore := extensions.hstore('x-user-id', 'test|http-semantics-options');
+    v_headers  extensions.hstore;
 BEGIN
-    RAISE NOTICE '→ Testing OPTIONS preflight and the anonymous 405';
+    RAISE NOTICE '→ Testing OPTIONS preflight and the public method set';
 
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5004-4000-8000-000000000001',
-            'uri', '^/private-probe$',
+            'path', '/private-probe',
             'httpMethod', '^GET$',
-            'name', 'private_probe',
-            'requiresAuth', true
+            'name', 'private_probe_read',
+            'access', 'public'
+        ),
+        $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
+    );
+    PERFORM api.create_or_replace_rest_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-5004-4000-8000-000000000002',
+            'path', '/private-probe',
+            'httpMethod', '^DELETE$',
+            'name', 'private_probe_delete',
+            'access', 'authenticated'
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
 
-    PERFORM set_config('auth.idp_subject', '', true);
     v_response := api.rest_invoke('OPTIONS', '/private-probe', ''::extensions.hstore, NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 204 THEN
         RAISE EXCEPTION 'TEST FAILED: OPTIONS on a matched path must be 204 without credentials, got %',
             (v_response).status_code;
     END IF;
-    IF coalesce((v_response).headers->'allow', '') !~ 'GET' OR coalesce((v_response).headers->'allow', '') !~ 'OPTIONS' THEN
-        RAISE EXCEPTION 'TEST FAILED: OPTIONS must advertise GET and OPTIONS, got %',
+    IF (v_response).headers->'allow' IS DISTINCT FROM 'DELETE, GET, HEAD, OPTIONS' THEN
+        RAISE EXCEPTION 'TEST FAILED: anonymous OPTIONS must list every method of the path, got %',
             coalesce((v_response).headers->'allow', '<none>');
     END IF;
 
@@ -392,27 +401,84 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: OPTIONS on an unmatched path must stay 404, got %', (v_response).status_code;
     END IF;
 
-    v_response := api.rest_invoke('POST', '/private-probe', ''::extensions.hstore, NULL::bytea);
+    v_response := api.rest_invoke('PUT', '/private-probe', ''::extensions.hstore, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 405
+       OR (v_response).headers->'allow' IS DISTINCT FROM 'DELETE, GET, HEAD, OPTIONS' THEN
+        RAISE EXCEPTION 'TEST FAILED: an anonymous 405 must list the same full method set as OPTIONS, got % Allow: %',
+            (v_response).status_code, coalesce((v_response).headers->'allow', '<none>');
+    END IF;
+
+    v_response := api.rest_invoke('DELETE', '/private-probe', ''::extensions.hstore, NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: an anonymous wrong method on an authenticated resource must be 401, got %',
+        RAISE EXCEPTION 'TEST FAILED: an anonymous call to the protected method must be 401, got %',
             (v_response).status_code;
     END IF;
-    IF (v_response).headers ? 'allow' THEN
-        RAISE EXCEPTION 'TEST FAILED: the anonymous answer must not list methods, got Allow: %',
-            (v_response).headers->'allow';
+
+    PERFORM pg_temp.test_login('test', 'http-semantics-options', 'http-semantics-options@example.test', NULL, true);
+    v_headers := pg_temp.test_session_headers('test|http-semantics-options');
+    v_response := api.rest_invoke('PUT', '/private-probe', v_headers, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 405
+       OR (v_response).headers->'allow' IS DISTINCT FROM 'DELETE, GET, HEAD, OPTIONS' THEN
+        RAISE EXCEPTION 'TEST FAILED: an authenticated 405 must list the same method set, got % Allow: %',
+            (v_response).status_code, coalesce((v_response).headers->'allow', '<none>');
     END IF;
 
-    PERFORM membership.upsert_user('test', 'http-semantics-options', 'http-semantics-options@example.com');
-    PERFORM set_config('auth.idp_subject', v_subject, true);
-    v_response := api.rest_invoke('POST', '/private-probe', v_headers, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 405 THEN
-        RAISE EXCEPTION 'TEST FAILED: an authenticated wrong method must be 405, got %', (v_response).status_code;
-    END IF;
-    IF coalesce((v_response).headers->'allow', '') !~ 'GET' THEN
-        RAISE EXCEPTION 'TEST FAILED: the authenticated 405 must list GET, got %',
-            coalesce((v_response).headers->'allow', '<none>');
-    END IF;
-    PERFORM set_config('auth.idp_subject', '', true);
+    RAISE NOTICE '  ✓ OPTIONS answers pre-auth; 405 and OPTIONS list the full method set';
+END $$;
 
-    RAISE NOTICE '  ✓ OPTIONS answers pre-auth; an anonymous 405 reveals nothing';
+-- Client mistakes in the URL are 4xx, never a 500 or another code: invalid
+-- UTF-8 once decoded (a typed path parameter, a query checked against a
+-- querySchema), an {n:int} past integer, and digits that are not ASCII.
+DO $$
+DECLARE
+    v_response api.http_response;
+    v_case     record;
+    v_icu_ok   boolean;
+BEGIN
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'f6380000-0000-4000-8000-000000000001', 'path', '/url-probe/{n:int}', 'httpMethod', '^GET$',
+        'name', 'url_probe_int', 'access', 'public', 'outputSchema', jsonb_build_object('type', 'object')),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'f6380000-0000-4000-8000-000000000002', 'path', '/url-probe-id/{id:uuid}', 'httpMethod', '^GET$',
+        'name', 'url_probe_uuid', 'access', 'public', 'outputSchema', jsonb_build_object('type', 'object')),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+    PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
+        'id', 'f6380000-0000-4000-8000-000000000003', 'path', '/url-probe-query', 'httpMethod', '^GET$',
+        'name', 'url_probe_query', 'access', 'public', 'outputSchema', jsonb_build_object('type', 'object'),
+        'querySchema', jsonb_build_object('type', 'object',
+            'properties', jsonb_build_object('x', jsonb_build_object('type', 'string')))),
+        $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$);
+
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('/url-probe-id/%FF',           400, 'pgmi.invalid_encoding'),
+            ('/url-probe-query?x=%FF',      400, 'pgmi.invalid_encoding'),
+            ('/url-probe/99999999999999',   400, 'pgmi.invalid_path_parameter'),
+            ('/url-probe/%FF',              400, 'pgmi.invalid_encoding'),
+            ('/url-probe/12',               200, NULL)
+        ) AS t(url, status, code)
+    LOOP
+        v_response := api.rest_invoke('GET', v_case.url);
+        IF (v_response).status_code IS DISTINCT FROM v_case.status
+           OR api.content_json((v_response).content)->>'code' IS DISTINCT FROM v_case.code THEN
+            RAISE EXCEPTION 'TEST FAILED: GET % should answer % %, got % %', v_case.url, v_case.status, v_case.code,
+                (v_response).status_code, convert_from((v_response).content, 'UTF8');
+        END IF;
+    END LOOP;
+
+    IF common.try_cast('١٢', NULL::integer) IS NOT NULL OR common.try_cast('١٢', NULL::bigint) IS NOT NULL
+       OR common.try_cast('١٢', 7) IS DISTINCT FROM 7 THEN
+        RAISE EXCEPTION 'TEST FAILED: non-ASCII digits are not an integer for try_cast';
+    END IF;
+    -- Under an ICU collation \d takes Arabic-Indic digits; the default
+    -- database collation may not show it.
+    IF EXISTS (SELECT FROM pg_collation WHERE collname = 'und-x-icu') THEN
+        EXECUTE $q$SELECT common.try_cast('١٢' COLLATE "und-x-icu", NULL::integer) IS NULL
+                      AND common.try_cast('١٢' COLLATE "und-x-icu", NULL::bigint) IS NULL$q$ INTO v_icu_ok;
+        IF v_icu_ok IS NOT TRUE THEN
+            RAISE EXCEPTION 'TEST FAILED: under ICU, non-ASCII digits are not an integer for try_cast';
+        END IF;
+    END IF;
+    RAISE NOTICE '  ✓ URL mistakes are 400s: invalid UTF-8, an overflowing int, non-ASCII digits';
 END $$;

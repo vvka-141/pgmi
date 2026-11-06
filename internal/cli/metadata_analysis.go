@@ -2,13 +2,13 @@ package cli
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 
-	"github.com/google/uuid"
 	"github.com/vvka-141/pgmi/internal/checksum"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/metadata"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // MetadataPlanEntry is one row of the plan: a file at one of its sort keys.
@@ -35,6 +35,9 @@ type MetadataValidateResult struct {
 	FilesWithoutMetadata int      `json:"filesWithoutMetadata"`
 	ValidationPassed     bool     `json:"validationPassed"`
 	DuplicateIDs         []string `json:"duplicateIds"`
+	Warnings             []string `json:"warnings"`
+	Error                string   `json:"error,omitempty"`
+	ExitCode             int      `json:"exitCode,omitempty"`
 }
 
 // planProject computes, without a database, the rows pgmi_plan_view will hold:
@@ -43,13 +46,16 @@ type MetadataValidateResult struct {
 func planProject(projectPath string) (MetadataPlanResult, error) {
 	scanResult, err := scanner.NewScanner(checksum.New()).ScanDirectory(projectPath)
 	if err != nil {
+		return MetadataPlanResult{}, fmt.Errorf("failed to scan directory: %w", err)
+	}
+	if err := metadata.CheckUniqueIDs(scanResult.Files); err != nil {
 		return MetadataPlanResult{}, err
 	}
 
 	files := 0
 	var plan []MetadataPlanEntry
 	for _, file := range scanResult.Files {
-		if pgmi.IsTestPath(file.Path) {
+		if pathrule.IsTestPath(file.Path) {
 			continue
 		}
 		files++
@@ -57,7 +63,7 @@ func planProject(projectPath string) (MetadataPlanResult, error) {
 			Path:       file.Path,
 			ID:         metadata.GenerateFallbackID(file.Path).String(),
 			Idempotent: true,
-			IsSQLFile:  pgmi.IsSQLExtension(file.Extension),
+			IsSQLFile:  pathrule.IsSQLExtension(file.Extension),
 		}
 		keys := []string{file.Path}
 		if m := file.Metadata; m != nil {
@@ -98,20 +104,19 @@ func validateProject(projectPath string) (MetadataValidateResult, error) {
 		return MetadataValidateResult{}, err
 	}
 
-	idToPath := make(map[uuid.UUID]string)
-	duplicates := []string{}
 	withMetadata := 0
+	warnings := []string{}
 	for _, file := range scanResult.Files {
-		if file.Metadata == nil {
+		if file.Metadata != nil {
+			withMetadata++
 			continue
 		}
-		withMetadata++
-		if existing, dup := idToPath[file.Metadata.ID]; dup {
-			duplicates = append(duplicates, file.Metadata.ID.String()+": "+existing+", "+file.Path)
-		} else {
-			idToPath[file.Metadata.ID] = file.Path
+		if pathrule.IsSQLExtension(file.Extension) && !pathrule.IsTestPath(file.Path) && metadata.MentionsMetaTag(file.Content) {
+			warnings = append(warnings, file.Path+": <pgmi-meta> outside a /* */ block comment is not read; "+
+				"a -- line comment or a string is ignored, so this file has no metadata")
 		}
 	}
+	duplicates := metadata.DuplicateIDs(scanResult.Files)
 
 	return MetadataValidateResult{
 		TotalFiles:           len(scanResult.Files),
@@ -119,5 +124,6 @@ func validateProject(projectPath string) (MetadataValidateResult, error) {
 		FilesWithoutMetadata: len(scanResult.Files) - withMetadata,
 		ValidationPassed:     len(duplicates) == 0,
 		DuplicateIDs:         duplicates,
+		Warnings:             warnings,
 	}, nil
 }

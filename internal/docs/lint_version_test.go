@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Lint findings are version-dependent, and golangci-lint v2 rejects the repo's
-// v1 .golangci.yml outright. If the Makefile and the two workflows drift apart,
+// Lint findings are version-dependent, and golangci-lint v1 rejects the repo's
+// v2 .golangci.yml outright. If the Makefile and the two workflows drift apart,
 // `make lint` passing locally stops meaning the release gate will pass.
 func TestLintVersionPinsAgree(t *testing.T) {
 	makefileRe := regexp.MustCompile(`(?m)^GOLANGCI_VERSION := (\S+)`)

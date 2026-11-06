@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/testinfra"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-func parseMTLSConnString(t *testing.T) *pgmi.ConnectionConfig {
+func parseMTLSConnString(t *testing.T) *db.ConnectionConfig {
 	t.Helper()
 	config, err := db.ParseConnectionString(mtlsContainer.ConnString)
 	if err != nil {
@@ -41,7 +40,7 @@ func TestMTLS_NoClientCert(t *testing.T) {
 	config := parseMTLSConnString(t)
 	config.SSLMode = "require"
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	require.NoError(t, err)
 
 	_, err = connector.Connect(context.Background())
@@ -62,7 +61,7 @@ func TestMTLS_InvalidClientCert(t *testing.T) {
 	config.SSLKey = otherPaths.ClientKey
 	config.SSLRootCert = certPaths.CACert
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	require.NoError(t, err)
 
 	_, err = connector.Connect(context.Background())

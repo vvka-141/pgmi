@@ -24,11 +24,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-e001-4000-8000-000000000001',
-            'uri', '^/test-error-rest$',
+            'path', '/test-error-rest',
             'httpMethod', '^GET$',
             'name', 'test_error_rest',
             'description', 'Handler that throws for testing',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -42,7 +42,7 @@ END;
             'id', 'ffffffff-e002-4000-8000-000000000001',
             'methodName', 'test.error',
             'description', 'RPC handler that throws for testing',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -54,11 +54,11 @@ END;
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-e003-4000-8000-000000000001',
-            'type', 'tool',
+            'type', 'tool', 'effect', 'read',
             'name', 'test_error_tool',
             'description', 'MCP tool that throws for testing',
             'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object()),
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -210,11 +210,11 @@ END;
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-e004-4000-8000-000000000001',
-            'uri', '^/test-conflict-rest$',
+            'path', '/test-conflict-rest',
             'httpMethod', '^GET$',
             'name', 'test_conflict_rest',
             'description', 'Handler that raises unique_violation',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -228,7 +228,7 @@ END;
             'id', 'ffffffff-e005-4000-8000-000000000001',
             'methodName', 'test.conflict',
             'description', 'RPC handler that raises unique_violation',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN

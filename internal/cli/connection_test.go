@@ -15,6 +15,7 @@ func TestResolveTargetDatabase(t *testing.T) {
 		name               string
 		flagDatabase       string
 		connConfigDatabase string
+		yamlDatabase       string
 		verbose            bool
 		wantDatabase       string
 		wantErr            bool
@@ -30,6 +31,17 @@ func TestResolveTargetDatabase(t *testing.T) {
 			flagDatabase:       "",
 			connConfigDatabase: "myapp",
 			wantDatabase:       "myapp",
+		},
+		{
+			name:         "pgmi.yaml database fills a connection without one",
+			yamlDatabase: "myapp",
+			wantDatabase: "myapp",
+		},
+		{
+			name:               "connection database outranks pgmi.yaml",
+			connConfigDatabase: "fromstring",
+			yamlDatabase:       "myapp",
+			wantDatabase:       "fromstring",
 		},
 		{
 			name:               "error when neither source supplies a database",
@@ -54,7 +66,7 @@ func TestResolveTargetDatabase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDatabase, err := resolveTargetDatabase(tt.flagDatabase, tt.connConfigDatabase, tt.verbose)
+			gotDatabase, err := resolveTargetDatabase(tt.flagDatabase, tt.connConfigDatabase, tt.yamlDatabase, tt.verbose)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveTargetDatabase() error = %v, wantErr %v", err, tt.wantErr)
@@ -72,6 +84,7 @@ func TestResolveTargetDatabase(t *testing.T) {
 func TestDetermineMaintenanceDB(t *testing.T) {
 	tests := []struct {
 		name                 string
+		fromString           bool
 		flagDatabase         string
 		connStringDatabase   string
 		currentMaintenanceDB string
@@ -79,6 +92,7 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 	}{
 		{
 			name:                 "use postgres when database from connection string and not postgres",
+			fromString:           true,
 			flagDatabase:         "",
 			connStringDatabase:   "myapp",
 			currentMaintenanceDB: "myapp",
@@ -86,6 +100,7 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 		},
 		{
 			name:                 "preserve maintenance DB when database from flag",
+			fromString:           true,
 			flagDatabase:         "myapp",
 			connStringDatabase:   "myapp",
 			currentMaintenanceDB: "template1",
@@ -93,6 +108,7 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 		},
 		{
 			name:                 "preserve maintenance DB when connection string is postgres",
+			fromString:           true,
 			flagDatabase:         "",
 			connStringDatabase:   "postgres",
 			currentMaintenanceDB: "postgres",
@@ -100,6 +116,7 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 		},
 		{
 			name:                 "preserve maintenance DB when no connection string database",
+			fromString:           true,
 			flagDatabase:         "",
 			connStringDatabase:   "",
 			currentMaintenanceDB: "postgres",
@@ -107,6 +124,7 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 		},
 		{
 			name:                 "use postgres for non-postgres connection string database",
+			fromString:           true,
 			flagDatabase:         "",
 			connStringDatabase:   "production_db",
 			currentMaintenanceDB: "template0",
@@ -114,16 +132,37 @@ func TestDetermineMaintenanceDB(t *testing.T) {
 		},
 		{
 			name:                 "preserve when flag overrides connection string",
+			fromString:           true,
 			flagDatabase:         "override",
 			connStringDatabase:   "original",
 			currentMaintenanceDB: "maintenance",
 			wantMaintenanceDB:    "maintenance",
+		},
+		{
+			name:                 "pgmi.yaml database without -d keeps pgmi.yaml's maintenance database",
+			connStringDatabase:   "app",
+			currentMaintenanceDB: "admin_db",
+			wantMaintenanceDB:    "admin_db",
+		},
+		{
+			name:                 "PGDATABASE without -d keeps the resolved maintenance database",
+			connStringDatabase:   "from_pgdatabase",
+			currentMaintenanceDB: "postgres",
+			wantMaintenanceDB:    "postgres",
+		},
+		{
+			name:                 "pgmi.yaml database with -d keeps pgmi.yaml's maintenance database",
+			flagDatabase:         "app",
+			connStringDatabase:   "app",
+			currentMaintenanceDB: "admin_db",
+			wantMaintenanceDB:    "admin_db",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotMaintenanceDB := determineMaintenanceDB(
+				tt.fromString,
 				tt.flagDatabase,
 				tt.connStringDatabase,
 				tt.currentMaintenanceDB,
@@ -174,12 +213,11 @@ func TestResolveConnection_WithEnvironment(t *testing.T) {
 			wantErr:        false,
 		},
 		{
-			name:           "granular flags win over environment string without conflict",
+			name:           "a server flag next to an environment string is refused",
 			connStringFlag: "",
 			envConnString:  "postgresql://user@envhost:5433/envdb",
 			granularFlags:  &db.GranularConnFlags{Host: "127.0.0.1", Port: 5471},
-			wantHost:       "127.0.0.1",
-			wantErr:        false,
+			wantErr:        true,
 		},
 		{
 			name:           "use defaults when neither flag nor env provided",
@@ -306,7 +344,7 @@ func TestResolveConnection_GranularFlags(t *testing.T) {
 
 // TestResolveTargetDatabase_ErrorMessages tests that helpful error messages are returned.
 func TestResolveTargetDatabase_ErrorMessages(t *testing.T) {
-	_, err := resolveTargetDatabase("", "", false)
+	_, err := resolveTargetDatabase("", "", "", false)
 
 	if err == nil {
 		t.Fatal("expected error when no database provided, got nil")

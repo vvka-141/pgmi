@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
-	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/fakefs"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
@@ -16,18 +17,30 @@ import (
 
 // Floors, not exact counts: adding a test file to a template must not break
 // this, but losing the whole tree to a discovery regression must.
-var minExecutedTests = map[string]int{"basic": 1, "advanced": 25}
+var minExecutedTests = map[string]int{"minimal": 0, "basic": 1, "advanced": 25}
 
 // Emitted per test by both the default callback and the advanced template's
 // own observer, so counting them measures tests that actually ran.
 var testStartPattern = regexp.MustCompile(`^\[pgmi\] Test: `)
 
+// NOTICE lines a green non-verbose deploy may print outside its plan and test
+// step headers: parameters, roles, catalog sync, the suite frame, the banner.
+// Measured on a fresh cluster, where the role-creation lines appear; a reused
+// cluster prints fewer, so a budget tuned there fails in CI.
+var frameworkNoticeBudget = map[string]int{"minimal": 2, "basic": 6, "advanced": 40}
+
+var (
+	planStepPattern = regexp.MustCompile(`^\[pgmi\] Executing: `)
+	testStepPattern = regexp.MustCompile(`^\[pgmi\] (?:Fixture|Test): (.+)$`)
+	suiteEndPattern = regexp.MustCompile(`^\[pgmi\] Test suite passed`)
+)
+
 // TestTemplateDeployment tests all templates by initializing and deploying them
-// using the Deployer interface (not CLI).
+// through services.DeploymentService (not the CLI).
 func TestTemplateDeployment(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
-	templates := []string{"basic", "advanced"}
+	templates := []string{"minimal", "basic", "advanced"}
 
 	for _, templateName := range templates {
 		t.Run(templateName, func(t *testing.T) {
@@ -50,11 +63,11 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 
 	t.Logf("Deploying to database %s with overwrite=true, force=true...", testDB)
 
-	notices := captureNotices(t)
-	deployer := testhelpers.NewTestDeployerWithFS(t, efs)
+	notice, notices := captureNotices()
+	deployer := testhelpers.NewTestDeployerWithNotices(t, efs, notice)
 
 	// Template-specific parameters
-	params := make(map[string]string)
+	params := map[string]string{"env": "dev"}
 	if templateName == "advanced" {
 		params["database_admin_password"] = "TestPassword123!"
 		params["env"] = "test"
@@ -76,10 +89,15 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	t.Logf("✓ First deployment completed successfully")
 
 	assertTestsExecuted(t, templateName, notices())
-	// A green run is read by humans and agents alike; the advanced template's
-	// framework used to print ~650 NOTICE lines per deploy (PGMI-386).
-	if n := len(notices()); !testing.Verbose() && n > 150 {
-		t.Errorf("%s deploy printed %d NOTICE lines, want <= 150", templateName, n)
+	if templateName == "basic" {
+		for _, path := range []string{"./physical/001_project.sql", "./semantic/task.sql"} {
+			if !slices.Contains(notices(), "[pgmi] Executing: "+path) {
+				t.Errorf("a basic deploy must name every file it runs at NOTICE; %s missing", path)
+			}
+		}
+	}
+	if !testing.Verbose() {
+		assertQuietDeploy(t, templateName, notices())
 	}
 
 	// Fingerprint the schema before redeploying. Asserting only that the second
@@ -87,11 +105,16 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 	// instead of erroring. An ADD CONSTRAINT without a name, a re-run CREATE
 	// POLICY, an index created under a generated name — each quietly doubles on
 	// every deploy while the deploy stays green.
-	before := schemaFingerprint(t, connString, testDB)
-	countsBefore := rowCounts(t, connString, testDB)
+	var before string
+	var countsBefore map[string]int64
+	if templateName != "minimal" {
+		before = schemaFingerprint(t, connString, testDB)
+		countsBefore = rowCounts(t, connString, testDB)
+	}
 
 	// Step 2: Redeploy WITHOUT overwrite (idempotent test)
 	t.Logf("Redeploying without overwrite (idempotent test)...")
+	firstDeployNotices := len(notices())
 	err = deployer.Deploy(ctx, pgmi.DeploymentConfig{
 		ConnectionString: connString,
 		DatabaseName:     testDB,
@@ -106,37 +129,49 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 		t.Fatalf("Idempotent redeployment failed for %s: %v", templateName, err)
 	}
 	t.Logf("✓ Idempotent redeployment completed successfully")
-
-	if after := schemaFingerprint(t, connString, testDB); after != before {
-		t.Errorf("redeploying changed the schema, so the second deploy is not idempotent\nbefore:\n%s\nafter:\n%s",
-			before, after)
+	if !testing.Verbose() {
+		for _, n := range notices()[firstDeployNotices:] {
+			if strings.Contains(n, "already exists, skipping") {
+				t.Errorf("a converged redeploy should be quiet, got: %s", n)
+			}
+		}
 	}
-	assertNoDataDrift(t, countsBefore, rowCounts(t, connString, testDB))
+
+	if templateName != "minimal" {
+		if after := schemaFingerprint(t, connString, testDB); after != before {
+			t.Errorf("redeploying changed the schema, so the second deploy is not idempotent\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+		assertNoDataDrift(t, countsBefore, rowCounts(t, connString, testDB))
+	}
+
+	if templateName == "minimal" {
+		all := notices()
+		for i, deploy := range [][]string{all[:firstDeployNotices], all[firstDeployNotices:]} {
+			if !slices.Equal(deploy, []string{"Executing: ./hello_world.sql", "Hello, world!"}) {
+				t.Errorf("minimal deploy %d printed %q, want the Executing line, then Hello, world!", i+1, deploy)
+			}
+		}
+	}
 
 	// Step 3: Verify deployment by querying the database
 	defer testhelpers.CleanupTestDB(t, connString, testDB)
 	verifyTemplateDeployment(t, connString, testDB, templateName)
 }
 
-// captureNotices redirects the PostgreSQL NOTICE stream for the duration of the
-// test and returns an accessor for what has arrived so far.
-func captureNotices(t *testing.T) func() []string {
-	t.Helper()
-
+// captureNotices returns a notice handler and an accessor for what it has
+// received so far.
+func captureNotices() (func(severity, message, detail, hint string), func() []string) {
 	var (
 		mu  sync.Mutex
 		got []string
 	)
-
-	orig := db.NoticeHandler
-	db.NoticeHandler = func(_, message, _, _ string) {
+	notice := func(_, message, _, _ string) {
 		mu.Lock()
 		got = append(got, message)
 		mu.Unlock()
 	}
-	t.Cleanup(func() { db.NoticeHandler = orig })
-
-	return func() []string {
+	return notice, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), got...)
@@ -166,6 +201,77 @@ func assertTestsExecuted(t *testing.T, templateName string, notices []string) {
 	t.Logf("✓ %s template ran %d test(s)", templateName, count)
 }
 
+// assertQuietDeploy keeps a green run readable by humans and agents; the
+// advanced framework used to print ~650 NOTICE lines (PGMI-386). Step headers
+// are free, a test step may add one line, the rest counts against the budget.
+func assertQuietDeploy(t *testing.T, templateName string, notices []string) {
+	t.Helper()
+
+	budget, ok := frameworkNoticeBudget[templateName]
+	if !ok {
+		t.Fatalf("no framework NOTICE budget for template %q: add it to frameworkNoticeBudget", templateName)
+	}
+	framework, chatty := tallyNotices(notices)
+	if framework > budget {
+		t.Errorf("%s deploy printed %d framework NOTICE lines, want <= %d", templateName, framework, budget)
+	}
+	for _, step := range chatty {
+		t.Errorf("%s printed more than one NOTICE line; demote the rest to DEBUG", step)
+	}
+}
+
+// tallyNotices counts the lines that are neither a step header nor a test
+// step's one line of its own, and names the test steps that printed more.
+func tallyNotices(notices []string) (framework int, chatty []string) {
+	var step string
+	var lines int
+	for _, n := range notices {
+		switch {
+		case planStepPattern.MatchString(n):
+			step = ""
+		case testStepPattern.MatchString(n):
+			step, lines = testStepPattern.FindStringSubmatch(n)[1], 0
+		case suiteEndPattern.MatchString(n):
+			step = ""
+			framework++
+		case step != "":
+			lines++
+			if lines == 2 {
+				chatty = append(chatty, step)
+			}
+		default:
+			framework++
+		}
+	}
+	return framework, chatty
+}
+
+func TestTallyNotices(t *testing.T) {
+	run := func(extra ...string) []string {
+		return append([]string{
+			"[pgmi] Parameter: env = test",
+			"[pgmi] Executing: ./lib/a.sql",
+			"[pgmi] Executing: ./lib/b.sql",
+			"[pgmi] Catalog data/x.json: 1 row(s)",
+			"[pgmi] Test suite started",
+			"[pgmi] Fixture: ./__test__/_setup.sql",
+			"[pgmi] Test: ./__test__/test_a.sql",
+			"  + a holds",
+			"[pgmi] Test: ./__test__/test_b.sql",
+		}, append(extra, "[pgmi] Test suite passed", "DONE")...)
+	}
+
+	framework, chatty := tallyNotices(run())
+	if framework != 5 || len(chatty) != 0 {
+		t.Errorf("quiet run: framework=%d chatty=%v, want 5 and none", framework, chatty)
+	}
+
+	_, chatty = tallyNotices(run("  + b holds", "  + b also holds"))
+	if len(chatty) != 1 || chatty[0] != "./__test__/test_b.sql" {
+		t.Errorf("a test step printing two lines: chatty=%v, want [./__test__/test_b.sql]", chatty)
+	}
+}
+
 // verifyTemplateDeployment performs template-specific verification queries
 func verifyTemplateDeployment(t *testing.T, connString, dbName, templateName string) {
 	t.Helper()
@@ -186,16 +292,15 @@ func verifyTemplateDeployment(t *testing.T, connString, dbName, templateName str
 	// Template-specific verification
 	switch templateName {
 	case "basic":
-		// Verify user table and upsert_user function were created
-		var adminEmail string
-		err = pool.QueryRow(ctx, `SELECT email FROM "user" WHERE name = 'Administrator'`).Scan(&adminEmail)
+		var state string
+		var runOnce int
+		err = pool.QueryRow(ctx, `SELECT (SELECT state FROM project_view WHERE name = 'Demo'), (SELECT count(*) FROM deployment.run_once)`).Scan(&state, &runOnce)
 		if err != nil {
-			t.Fatalf("Failed to query admin user: %v", err)
+			t.Fatalf("query the basic deploy: %v", err)
 		}
-		if adminEmail != "admin@example.com" {
-			t.Errorf("Expected admin email 'admin@example.com', got '%s'", adminEmail)
+		if state != "empty" || runOnce != 2 {
+			t.Errorf("basic deploy: Demo project state %q and %d run-once file(s) recorded, want \"empty\" and 2", state, runOnce)
 		}
-		t.Logf("✓ Basic template deployment verified: admin user exists with email '%s'", adminEmail)
 
 	case "advanced":
 		if _, err := pool.Exec(ctx, advancedPostconditions); err != nil {
@@ -229,7 +334,7 @@ BEGIN
 
     v_problems := v_problems || ARRAY(
         SELECT format('role %s uncreated', current_database() || s)
-        FROM unnest(ARRAY['_owner', '_admin', '_api', '_customer']) AS s
+        FROM unnest(ARRAY['_owner', '_admin', '_api', '_kernel']) AS s
         WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_database() || s)
     );
 

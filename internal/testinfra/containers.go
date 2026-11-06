@@ -16,7 +16,7 @@ const (
 	// Official image only. The whole integration gate resolves through this
 	// name, so a personal namespace being renamed or rate-limited would turn
 	// every DB test into a skip. Nothing here needs more than contrib.
-	PostgresImage    = "postgres:17"
+	PostgresImage    = "postgres:18"
 	PostgresUser     = "postgres"
 	PostgresPassword = "postgres"
 	PostgresDB       = "postgres"
@@ -107,8 +107,12 @@ func StartMTLSPostgres(ctx context.Context, certPaths *CertPaths) (*PostgresCont
 }
 
 func StartSimplePostgres(ctx context.Context) (*PostgresContainer, error) {
+	return StartSimplePostgresImage(ctx, PostgresImage)
+}
+
+func StartSimplePostgresImage(ctx context.Context, image string) (*PostgresContainer, error) {
 	ctr, err := postgres.Run(ctx,
-		PostgresImage,
+		image,
 		postgres.WithUsername(PostgresUser),
 		postgres.WithPassword(PostgresPassword),
 		postgres.WithDatabase(PostgresDB),

@@ -13,7 +13,7 @@ import (
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// The scaffolded basic template, with one extra failing migration, must report
+// The scaffolded basic template, with one extra failing file, must report
 // the migration's original SQLSTATE and DETAIL and name the failing file and
 // line. A retry classifier cannot tell a retryable 40001 from a permanent 23505
 // if every failure reports P0001, and a failure that names neither file nor
@@ -46,8 +46,8 @@ func TestBasicTemplate_FailingMigrationKeepsSQLSTATEAndLocation(t *testing.T) {
 			if err := scaffold.NewScaffolder(false).CreateProject("proj", "basic", projectPath); err != nil {
 				t.Fatalf("scaffold: %v", err)
 			}
-			const failing = "./migrations/999_failing.sql"
-			if err := os.WriteFile(filepath.Join(projectPath, "migrations", "999_failing.sql"), []byte(tt.migration), 0o644); err != nil {
+			const failing = "./semantic/999_failing.sql"
+			if err := os.WriteFile(filepath.Join(projectPath, "semantic", "999_failing.sql"), []byte(tt.migration), 0o644); err != nil {
 				t.Fatalf("write migration: %v", err)
 			}
 
@@ -59,6 +59,7 @@ func TestBasicTemplate_FailingMigrationKeepsSQLSTATEAndLocation(t *testing.T) {
 				MaintenanceDatabase: "postgres",
 				DatabaseName:        testDB,
 				SourcePath:          projectPath,
+				Parameters:          map[string]string{"env": "dev"},
 				Overwrite:           true,
 				Force:               true,
 			})

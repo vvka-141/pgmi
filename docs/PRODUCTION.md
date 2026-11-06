@@ -8,6 +8,8 @@ weight: 120
 
 This guide covers considerations for running pgmi in production environments: performance, rollback strategies, monitoring, and operational patterns.
 
+> **Example layout.** The examples on this page assume SQL files under `migrations/`, `extensions/`, `setup/` and `rollback/`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
+
 ## Connection requirements
 
 pgmi requires a **direct PostgreSQL connection** or a connection pooler in **session mode**.
@@ -22,6 +24,8 @@ pgmi uses session-scoped temporary tables (`pg_temp`) that exist only for the li
 
 This applies to PgBouncer, Pgpool-II, AWS RDS Proxy, Azure PgBouncer, and any other connection pooler. Direct connections are always safe. If you use a pooler, either configure session mode for pgmi deployments or bypass the pooler with a direct connection string.
 
+Deploy with a password over `sslmode=verify-full` and an `sslrootcert`: the libpq default `prefer` falls back to plaintext, which an attacker on the path can force, and then the password and every `PGMI_PARAM_*` value cross the wire unencrypted. `--json` records what the session negotiated in `tls`.
+
 ---
 
 ## PostgreSQL compatibility
@@ -30,51 +34,51 @@ The minimum PostgreSQL version depends on which layer you use:
 
 | Layer | Min PostgreSQL | What drives the floor |
 |-------|----------------|-----------------------|
-| pgmi core / CLI | 11+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
-| basic template | 11+ | Plain SQL migrations — no extensions, roles, or version-specific syntax. |
-| advanced template | 15+ | `WITH (security_invoker = true)` views (PostgreSQL 15) underpin the RLS model. Also needs a role that can **create roles, schemas, and extensions** (`CREATEROLE` + `CREATE EXTENSION`) and the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` extensions. **No superuser required.** |
-| API / MCP features | 15+ | Ship inside the advanced template, so they share its floor. |
+| pgmi core / CLI | 15+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
+| basic template | 15+ | Plain SQL tables, views and functions — no extensions, roles, or version-specific syntax. |
+| advanced template | 18+ | `deploy.sql` refuses an older server before any schema work. The template relies on PostgreSQL 18 features: `uuidv7()`, temporal keys (`WITHOUT OVERLAPS`, `PERIOD` foreign keys), virtual generated columns and `RETURNING OLD`. Also needs the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` / `btree_gist` extensions, and a role with `CREATEROLE` + `CREATEDB`; `deploy.sql` grants itself the roles it creates. **No superuser required** (tested in CI). |
+| API / MCP features | 18+ | Ship inside the advanced template, so they share its floor. |
 
-The 11+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **15+**: `security_invoker` views, which the membership/RLS model relies on, were introduced in PostgreSQL 15.
+The 15+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `The advanced template requires PostgreSQL 18 or newer; this server is PostgreSQL <version>.` and exit code 13, before it creates anything.
 
 Both floors are tested, not asserted. CI runs the core suite and the basic
-template against PostgreSQL 11, 15 and 17, and the advanced template against 15
-and 17, so a construct that raises either floor fails the build. A server below
-11 is refused before any schema work with `invalid configuration: this server
-reports PostgreSQL <version>, and pgmi requires 11 or newer` and exit code 10 —
-`hashtextextended`, which the deploy advisory lock needs, is what sets that
-floor.
+template against PostgreSQL 15, and everything against 18, so a construct that
+raises either floor fails the build. A server below 15 is refused before any
+schema work with `invalid configuration: this server reports PostgreSQL
+<version>, and pgmi requires 15 or newer` and exit code 10. 15 is the oldest
+release PostgreSQL supports once 14 reaches end of life on 2026-11-12; a
+project on an older server stays on pgmi v0.13.
 
 ---
 
 ## Managed cloud PostgreSQL
 
-The **basic** template works on PostgreSQL 11+; the **advanced** template requires 15+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
+The **basic** template works on PostgreSQL 15+; the **advanced** template requires 18+ (see the [compatibility matrix](#postgresql-compatibility) above). Where they differ further is what the **advanced template** requires from the deployment connection — **none of which is superuser**:
 
-1. **`CREATEROLE`** — the advanced template creates the `<db>_owner`, `<db>_admin`, `<db>_api` and `<db>_customer` roles. Verify that the provider's deployment role can create them.
-2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`. Extension availability and the role allowed to install each one vary by provider and service tier.
+1. **`CREATEROLE`** — the advanced template creates the `<db>_owner`, `<db>_admin`, `<db>_api` and `<db>_kernel` roles. Verify that the provider's deployment role can create them.
+2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`, `btree_gist`. Extension availability and the role allowed to install each one vary by provider and service tier.
 3. **`CREATE SCHEMA`** — the template creates five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects.
 
 Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
 | Provider | Basic template | Advanced template | Verification |
 |----------|----------------|-------------------|--------------|
-| Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 11, 15, and 17 for core/basic and 15 and 17 for advanced. |
+| Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 15 for core/basic and 18 for everything. |
 | AWS RDS for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | AWS Aurora PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
 | Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Google AlloyDB | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
-| Supabase | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Supabase | Expected | Not supported | No PostgreSQL 18 offering found, and the advanced template refuses older servers. |
 | Neon | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Railway / Render / Fly.io managed PostgreSQL | Expected | Capability-dependent | Not continuously tested against these services. Verify role and extension capabilities. |
 
 `Tested` means the repository exercises the combination in CI. `Expected` means
 the core requirements are standard PostgreSQL features, but the provider is not
 part of continuous integration. `Capability-dependent` means the advanced
-template works only when the actual deploy role can create roles and schemas and
-install all four required extensions. Verify those capabilities on the selected
+template works only when the service offers PostgreSQL 18 and the actual deploy
+role can create roles and schemas and install all four required extensions. Verify those capabilities on the selected
 service and tier before production use.
 
 ---
@@ -121,39 +125,9 @@ COMMIT;
 - Long-running migrations block other operations
 - Failure in any file rolls back everything
 
-### Error context with exception blocks
+### Error context: which file failed
 
-Wrap each file execution in an exception block to capture which file failed. The outer transaction still rolls back entirely on failure, but you get clear diagnostics.
-
-```sql
--- deploy.sql
-BEGIN;
-
-DO $$
-DECLARE
-    v_file RECORD;
-BEGIN
-    FOR v_file IN (
-        SELECT p.path, p.content
-        FROM pg_temp.pgmi_plan_view p
-        JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-        WHERE s.is_sql_file
-        ORDER BY p.execution_order
-    )
-    LOOP
-        RAISE NOTICE 'Executing: %', v_file.path;
-        EXECUTE v_file.content;
-    END LOOP;
-END $$;
-
-COMMIT;
-```
-
-**When to use:**
-- Any deployment where you need clear error context
-- Debugging which file caused a failure
-
-**Note:** This is still all-or-nothing. The `BEGIN...EXCEPTION...END` block creates an implicit savepoint for error recovery, not separate transactions. If any file fails, the entire deployment rolls back.
+pgmi names the failing file and line from the error PostgreSQL raised (`failedFile`, `line` in `--json`), and the `RAISE NOTICE` in the loop above shows how far the deploy got. Do not wrap `EXECUTE` in an exception handler for diagnostics: a handler that re-raises with a new message hides the file and turns every SQLSTATE into `P0001`. If a handler is needed for another reason, end it with a bare `RAISE;`.
 
 ### Committing in phases
 
@@ -418,6 +392,7 @@ see [Committing in phases](#committing-in-phases).
 pgmi outputs PostgreSQL `RAISE NOTICE` messages. Capture them in your CI/CD:
 
 ```bash
+set -o pipefail   # the pipeline's status is pgmi's, not tee's
 pgmi deploy . -d mydb 2>&1 | tee deployment.log
 ```
 
@@ -495,18 +470,18 @@ END $$;
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
-Deployments scaffolded from the [advanced template](advanced/_index.md) carry
-a layered runtime defense for the APIs they serve — trusted-gateway identity,
-session GUCs that fail closed, JIT-provisioned membership, and row-level
-security:
+Deployments scaffolded from the [advanced template](advanced/README.md) carry
+a layered runtime defense for the APIs they serve — opaque session handles
+resolved in the database, a request context only the api role can state,
+membership, and row-level security:
 
-![The layered security stack: identity providers and API keys converge on the auth.idp_subject session GUC, resolve through membership, and end at row-level security](diagrams/d13-security-stack.drawio.svg)
+![The layered security stack: identity providers sign people in to login sessions, the session handles resolve through membership into the request context, and row-level security ends the chain](diagrams/d13-security-stack.drawio.svg)
 
 ### Advanced template: built-in tracking
 
 > **Scope: advanced template only.** This is SQL that `pgmi init --template advanced` copied into your project, not behaviour of the pgmi binary.
 
-The [advanced template](advanced/_index.md) maintains a persistent execution log in `internal.deployment_script_execution_log`:
+The [advanced template](advanced/README.md) maintains a persistent execution log in `internal.deployment_script_execution_log`:
 
 | Column | Description |
 |--------|-------------|
@@ -514,18 +489,19 @@ The [advanced template](advanced/_index.md) maintains a persistent execution log
 | `file_path` | File path at execution time |
 | `idempotent` | Whether script was re-runnable |
 | `deployment_script_content_checksum` | Content hash at execution time |
+| `pgmi_checksum` | Normalized content hash (comments, whitespace, keyword case ignored) |
 | `sort_key` | Execution ordering key |
 | `xact_id` | PostgreSQL transaction ID (correlates with WAL) |
 | `executed_at` | Timestamp |
 | `executed_by` | Database role that ran the script |
 
-Non-idempotent scripts are skipped on subsequent deployments. The companion view `internal.vw_deployment_script` provides last execution and execution count per script.
+Non-idempotent scripts are skipped on subsequent deployments. One that was edited, moved, re-sorted or removed after it ran refuses the deploy before any file runs. The advanced template reads this history through `internal.vw_deployment` (one row per deploy: when, login role, environment, scripts run, new and changed) and `internal.vw_deployed_script` (one row per script: path, first and last run, run count, checksum).
 
-### Basic template: stateless
+### Basic template: a run-once ledger
 
 > **Scope: basic template only.** This describes the `deploy.sql` that `pgmi init --template basic` copied into your project, not behaviour of the pgmi binary.
 
-The basic template does not persist execution history. Every deployment re-executes all files (using `CREATE OR REPLACE` / `IF NOT EXISTS` for safety). Implement your own tracking in deploy.sql if needed — see the [Audit logging](#audit-logging) section below.
+The basic template records each run-once file (`<pgmi-meta idempotent="false">`, its `physical/` tables) in `deployment.run_once`: id, path, checksum and when it ran. Those files are skipped afterwards; every other file re-runs on every deploy (`CREATE OR REPLACE`). A run-once file edited, moved, flipped to re-run or removed after it ran refuses the deploy before any file runs. It keeps no per-deploy history; add that in deploy.sql if you need it — see the [Audit logging](#audit-logging) section below.
 
 ### Session transparency
 
@@ -568,17 +544,116 @@ See [Connection Requirements](#connection-requirements) above. Use a direct conn
 
 ```bash
 # Direct connection for deployment (bypasses pooler)
-pgmi deploy . --connection "postgresql://user:pass@db-server:5432/mydb"
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb" pgmi deploy .
 
 # Application traffic goes through pooler
 # postgresql://user:pass@pgbouncer:6432/mydb
 ```
 
+## Running unattended
+
+What `pgmi deploy` guarantees when nobody is watching: in CI, from a
+scheduler, or under an agent. pgmi handles stopping, concurrency, the checks
+before connecting, connection retries and the run's record. deploy.sql
+decides the transaction boundaries, so it decides what a failure leaves
+applied.
+
+**Timeouts and signals cancel the running statement.**
+
+- `--timeout` (default 3m; `0` means no limit; `timeout:` in `pgmi.yaml`)
+  bounds the whole deploy, the autocommit tail included. When it runs out,
+  pgmi sends PostgreSQL a cancel request for the running statement, waits up
+  to two seconds for the server to stop it, and exits 16. A query is not left
+  running on the server after pgmi has gone.
+- SIGINT and SIGTERM (the signal a CI job cancel sends) do the same and exit
+  130. A second signal quits at once.
+- Either way the open transaction rolls back. What deploy.sql already
+  committed, such as statements in the autocommit tail after its first
+  `COMMIT`, stays applied
+  ([the execution contract](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
+- An `--overwrite` drop and re-create runs to completion even if a timeout or
+  signal arrives meanwhile, so a deploy never leaves the database dropped and
+  not re-created.
+
+**Two deploys never interleave.** Each deploy takes a session advisory lock
+per database before it runs anything. A second deploy against the same
+database does not wait: it exits 15 at once. `--overwrite` refuses a database
+another deploy holds, and two deploys that both create the same missing
+database also exit 15. Queue deploys in the CI system
+([CI/CD](CICD.md#concurrent-deploys-and-timeouts)).
+
+**Configuration checks run before connecting.** The project path, parameter
+syntax, `--compat` and `pgmi.yaml` are checked before pgmi opens a
+connection. So are an empty `PGMI_PARAM_<NAME>` (what an unset CI secret
+becomes), a malformed `PGMI_MAX_FILE_SIZE`, and an `sslmode` that would send
+a cloud token without TLS. Any of these exits 10; a missing `deploy.sql` is
+caught then too and exits 14. In none of these cases is a database created,
+dropped or changed. Required parameters, such as the templates' `env`, are
+deploy.sql's to check once connected: a missing one exits 13 (SQLSTATE 22023),
+after a new target database was created.
+
+**Connecting is retried; deploying is not.** A connection that fails with a
+transient error (connection exceptions, too many connections, the server
+starting up, network errors) is retried three times, up to four attempts in
+all, with exponential backoff from 100 ms. Each retry is printed on stderr.
+The count is fixed: no flag or setting changes it. The Google Cloud SQL
+connector does not retry. pgmi never retries a deploy or a statement:
+re-running a failed deploy is the pipeline's job, and retrying inside a
+deploy (a serialization failure, a lock timeout) is deploy.sql's.
+
+**`--json` reports each run's result.** With `--json`, pgmi prints one JSON
+object on stdout for a success and for a failure, including failures before
+the deploy starts. It gives the exit code, SQLSTATE, the failing file and
+line, the phase (`deploy` or `test`), and `unitsCommitted`: how many of
+deploy.sql's execution units (the transactional head, then each statement of
+the autocommit tail) committed before the failure, which tells you whether a
+re-run starts from a clean slate. It also names where the connection came
+from (`connectionSource`), which `pgmi.yaml` values an environment variable
+replaced (`overrides`), and the pgmi, contract and server versions. Keep it
+as a build artifact: a database table written by deploy.sql loses the
+failed run's rows when the transaction rolls back, so this is often the only
+record of a failure ([Reading the result](CICD.md#reading-the-result)).
+
+**pgmi redacts connection passwords and SQL `PASSWORD '...'` literals from
+its output.** That covers every error message and the JSON record, whose
+target never carries the user, password or token. A secret your SQL expands
+inside `EXECUTE` can still reach an error's context: catch errors around such
+statements and raise your own message
+([Security](SECURITY.md#your-sql-controls-its-own-logging)). Where secrets go
+in a pipeline: the [environment reference](CICD.md#environment-reference).
+
+**Cloud authentication supports long deploys.** With `--azure` or `--aws`, pgmi gets
+a fresh token for each new connection and caps a connection's lifetime at its
+token's, so a deploy can outlast the token (15 minutes for RDS). It refuses
+an `sslmode` that could send the token in plain text.
+
+**`--overwrite` restores what it drops.** The re-created database keeps its
+encoding and locale, owner, connection limit, per-database and per-role
+settings, comment and privileges. If the deploying role could not restore
+one of them, pgmi refuses before dropping anything (exit 10). It never drops
+the maintenance database or a template. Without a terminal, `--overwrite`
+needs `--force`, or it exits 12 instead of waiting for an answer.
+
+**A least-privilege role can deploy.** pgmi connects to the target first and
+uses the maintenance database only to create a target that does not exist.
+For an existing database, pgmi itself needs `CONNECT` and `TEMPORARY` on it
+(its session tables live in `pg_temp`; PUBLIC has both by default, so grant
+`TEMPORARY` back if you revoked it); the role still needs whatever privileges
+your deploy.sql uses. Give a
+production deploy role no `CREATEDB`, so a mistyped `-d` fails instead of
+creating an empty database ([CI/CD](#cicd)).
+
+**Agent deploys through `pgmi serve`.** `pgmi serve` exposes deploy over MCP. A deploy with
+`overwrite` must also repeat the resolved database name in
+`confirmDatabaseName`, checked before connecting; a second deploy to a database another one holds
+exits 15, and `serve` does not read a project's `.env`
+([pgmi serve](CLI.md#pgmi-serve)).
+
 ## CI/CD
 
 The complete pipeline pattern lives in [CI/CD](CICD.md): install a pinned,
-checksum-verified binary; use a direct connection from the CI secret store; pin
-the session contract with `--compat 1`; and use `--force` only to bypass an
+checksum-verified binary, which also pins the session contract; use a direct
+connection from the CI secret store; pass `--compat 1`; and use `--force` only to bypass an
 interactive confirmation. Provider authentication examples are in
 [Connections](CONNECTIONS.md).
 
@@ -615,17 +690,23 @@ Deploy to multiple databases in sequence:
 ```bash
 for db in db1 db2 db3; do
     echo "Deploying to $db..."
-    pgmi deploy . -d $db --param env=production || exit 1
+    pgmi deploy . -d $db --param env=prod || exit 1
 done
 ```
 
 ### Parallel deployment (with caution)
 
 ```bash
-pgmi deploy . -d db1 --param env=production &
-pgmi deploy . -d db2 --param env=production &
-pgmi deploy . -d db3 --param env=production &
-wait
+pids=()
+for db in db1 db2 db3; do
+    pgmi deploy . -d "$db" --param env=prod &
+    pids+=($!)
+done
+rc=0
+for pid in "${pids[@]}"; do
+    wait "$pid" || rc=1   # a bare wait returns 0 whatever the deploys did
+done
+exit $rc
 ```
 
 **Warning:** Parallel deployment requires that migrations don't depend on cross-database state.
@@ -657,7 +738,7 @@ Deploy to a standby database, then switch:
 
 ```bash
 # 1. Deploy to blue (standby) with tests gating the commit
-pgmi deploy . -d mydb_blue --param env=production
+pgmi deploy . -d mydb_blue --param env=prod
 
 # 2. If deployment succeeds (tests passed), switch traffic (application config or DNS)
 

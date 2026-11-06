@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 	"gopkg.in/yaml.v3"
 )
@@ -123,7 +125,7 @@ func TestAuthMethodToString(t *testing.T) {
 func TestSaveConnectionToConfig_CloudAuth(t *testing.T) {
 	dir := t.TempDir()
 
-	connConfig := &pgmi.ConnectionConfig{
+	connConfig := &db.ConnectionConfig{
 		Host:           "myhost.postgres.database.azure.com",
 		Port:           5432,
 		Username:       "admin@myhost",
@@ -177,7 +179,7 @@ func TestSaveConnectionToConfig_CloudAuth(t *testing.T) {
 func TestSaveConnectionToConfig_AWSAuth(t *testing.T) {
 	dir := t.TempDir()
 
-	connConfig := &pgmi.ConnectionConfig{
+	connConfig := &db.ConnectionConfig{
 		Host:       "myhost.rds.amazonaws.com",
 		Port:       5432,
 		Username:   "admin",
@@ -213,7 +215,7 @@ func TestSaveConnectionToConfig_AWSAuth(t *testing.T) {
 func TestSaveConnectionToConfig_GoogleAuth(t *testing.T) {
 	dir := t.TempDir()
 
-	connConfig := &pgmi.ConnectionConfig{
+	connConfig := &db.ConnectionConfig{
 		Host:           "10.0.0.1",
 		Port:           5432,
 		Username:       "admin",
@@ -249,7 +251,7 @@ func TestSaveConnectionToConfig_GoogleAuth(t *testing.T) {
 func TestSaveConnectionToConfig_StandardAuth_OmitsCloudFields(t *testing.T) {
 	dir := t.TempDir()
 
-	connConfig := &pgmi.ConnectionConfig{
+	connConfig := &db.ConnectionConfig{
 		Host:       "localhost",
 		Port:       5432,
 		Username:   "postgres",
@@ -287,7 +289,7 @@ func TestVerboseOutputNeverContainsSecrets(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 
-	logConnectionVerbose(&pgmi.ConnectionConfig{
+	logConnectionVerbose(&db.ConnectionConfig{
 		Host:              "testhost",
 		Port:              5432,
 		Username:          "testuser",
@@ -327,7 +329,7 @@ func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 
-	_, err := loadMergedParameters(nil, []string{envFile}, nil, true)
+	_, err := loadMergedParameters(nil, paramSources{files: []string{envFile}}, true)
 	w.Close()
 	os.Stderr = oldStderr
 
@@ -351,18 +353,29 @@ func TestVerboseParamLoadingNeverContainsValues(t *testing.T) {
 	}
 }
 
-// The session stores keys lowercased, so keys differing only in case are one
-// parameter: the later source wins instead of a 23505 on the session table
-// (PGMI-382).
+// The session stores keys lowercased, so keys differing only in case across
+// sources are one parameter: the later source wins instead of a 23505 on the
+// session table. Within --param they are refused, as within one source.
 func TestLoadMergedParameters_CaseInsensitivePrecedence(t *testing.T) {
 	cfg := &config.ProjectConfig{Params: map[string]string{"DB_Url": "yaml"}}
-	got, err := loadMergedParameters(cfg, nil, []string{"db_url=cli", "Env=a", "env=b"}, false)
+	got, err := loadMergedParameters(cfg, paramSources{pairs: []string{"db_url=cli", "env=b"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{"db_url": "cli", "env": "b"}
 	if !maps.Equal(got, want) {
 		t.Errorf("merged = %v, want %v", got, want)
+	}
+}
+
+func TestLoadMergedParameters_CaseVariantsInYamlAreInvalidConfig(t *testing.T) {
+	cfg := &config.ProjectConfig{Params: map[string]string{"Region": "eu", "region": "us"}}
+	_, err := loadMergedParameters(cfg, paramSources{}, false)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Fatalf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+	if !strings.Contains(err.Error(), "pgmi.yaml") {
+		t.Errorf("error should name pgmi.yaml: %v", err)
 	}
 }
 
@@ -380,4 +393,144 @@ func TestValidateSSLMode(t *testing.T) {
 	if !errors.Is(err, pgmi.ErrInvalidConfig) {
 		t.Errorf("error should wrap ErrInvalidConfig, got %v", err)
 	}
+}
+
+func writeYAML(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readYAML(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "pgmi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// commentsOutsideConnection returns every comment line that does not sit
+// inside the indented body of the top-level connection: block.
+func commentsOutsideConnection(content string) []string {
+	var out []string
+	inConnection := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "connection:"):
+			inConnection = true
+			continue
+		case line != "" && !strings.HasPrefix(line, " "):
+			inConnection = false
+		}
+		if inConnection {
+			continue
+		}
+		if i := strings.Index(line, "#"); i >= 0 {
+			out = append(out, strings.TrimSpace(line[i:]))
+		} else if strings.HasPrefix(trimmed, "#") {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func TestSaveConnectionToConfig_KeepsCommentsAndOtherKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `# my team's notes: never deploy prod from a laptop
+connection:
+  host: 127.0.0.1
+  port: 55602
+  database: trialw1
+params:
+  exchange_retention_days: "14"   # legal asked for 14
+timeout: 10m
+`)
+	conn := &db.ConnectionConfig{Host: "db.internal", Port: 5433, Username: "app", Database: "trialw2", SSLMode: "prefer"}
+	if err := saveConnectionToConfig(dir, conn, "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	got := readYAML(t, dir)
+
+	for _, want := range []string{"# my team's notes: never deploy prod from a laptop", "# legal asked for 14"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("comment %q lost:\n%s", want, got)
+		}
+	}
+	cfg, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Params["exchange_retention_days"] != "14" || cfg.Timeout != "10m" {
+		t.Errorf("params or timeout changed: %+v", cfg)
+	}
+	want := config.ConnectionConfig{Host: "db.internal", Port: 5433, Username: "app", Database: "trialw2", MaintenanceDatabase: "postgres", SSLMode: "prefer"}
+	if cfg.Connection != want {
+		t.Errorf("connection = %+v, want %+v", cfg.Connection, want)
+	}
+}
+
+func TestSaveConnectionToConfig_KeepsTemplateGuidance(t *testing.T) {
+	for _, template := range []string{"basic", "advanced"} {
+		t.Run(template, func(t *testing.T) {
+			original, err := scaffold.GetTemplatesFS().ReadFile("templates/" + template + "/pgmi.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			writeYAML(t, dir, string(original))
+
+			conn := &db.ConnectionConfig{Host: "127.0.0.1", Port: 55601, Username: "postgres", Database: "appdb", SSLMode: "prefer"}
+			if err := saveConnectionToConfig(dir, conn, "postgres"); err != nil {
+				t.Fatal(err)
+			}
+			got := readYAML(t, dir)
+
+			wantComments := commentsOutsideConnection(string(original))
+			if len(wantComments) == 0 {
+				t.Fatal("the template has no comments outside connection:, so this proves nothing")
+			}
+			for _, c := range wantComments {
+				if !strings.Contains(got, c) {
+					t.Errorf("comment %q lost:\n%s", c, got)
+				}
+			}
+			cfg, err := config.Load(dir)
+			if err != nil {
+				t.Fatalf("saved file does not load: %v\n%s", err, got)
+			}
+			if cfg.Connection.Database != "appdb" || cfg.Connection.Port != 55601 {
+				t.Errorf("connection not saved: %+v", cfg.Connection)
+			}
+			if strings.Contains(got, "change this!") {
+				t.Errorf("the line comment of a changed value should go:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestSaveConnectionToConfig_SwitchingAuthDropsStaleKeys(t *testing.T) {
+	dir := t.TempDir()
+	aws := &db.ConnectionConfig{Host: "x.rds.amazonaws.com", Port: 5432, Username: "iam", Database: "app", SSLMode: "require",
+		AuthMethod: pgmi.AuthMethodAWSIAM, AWSRegion: "eu-west-1"}
+	if err := saveConnectionToConfig(dir, aws, "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	pw := &db.ConnectionConfig{Host: "localhost", Port: 5432, Username: "postgres", Database: "app", SSLMode: "prefer", AuthMethod: pgmi.AuthMethodStandard}
+	if err := saveConnectionToConfig(dir, pw, "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	got := readYAML(t, dir)
+	for _, stale := range []string{"aws_region", "auth_method"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("%s survived the switch to password auth:\n%s", stale, got)
+		}
+	}
+}
+
+func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
+	loadDotenv(sourcePath)
+	return loadProjectYAML(sourcePath)
 }

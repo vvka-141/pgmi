@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/vvka-141/pgmi/internal/ai"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 )
 
@@ -65,25 +64,19 @@ func completeTemplateNames(cmd *cobra.Command, args []string, toComplete string)
 	return matches, cobra.ShellCompDirectiveNoFileComp
 }
 
-// completeSkillNames provides shell completion for skill names.
-func completeSkillNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) > 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
+// completeTemplateFlag completes --template values; unlike the positional
+// completer it ignores the arguments already given (pgmi init x --template).
+func completeTemplateFlag(cmd *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return completeTemplateNames(cmd, nil, toComplete)
+}
 
-	names, err := ai.GetSkillNames()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
+// mustRegisterCompletion panics on a flag that does not exist (yet): Cobra
+// reports it as an error, and discarding that error left completion silently
+// empty.
+func mustRegisterCompletion(cmd *cobra.Command, flag string, fn cobra.CompletionFunc) {
+	if err := cmd.RegisterFlagCompletionFunc(flag, fn); err != nil {
+		panic(err)
 	}
-
-	var matches []string
-	for _, name := range names {
-		if strings.HasPrefix(name, toComplete) {
-			matches = append(matches, name)
-		}
-	}
-
-	return matches, cobra.ShellCompDirectiveNoFileComp
 }
 
 // completeSSLModes provides shell completion for SSL mode flag values.

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -145,7 +144,7 @@ func TestDeploy_ReportsWhetherItCreatedTheDatabase(t *testing.T) {
 	project := writeProject(t, map[string]string{"deploy.sql": "SELECT 1;"})
 	deploy := func() bool {
 		t.Helper()
-		d := testhelpers.NewTestDeployer(t).(*services.DeploymentService)
+		d := testhelpers.NewTestDeployer(t)
 		if err := d.Deploy(context.Background(), pgmi.DeploymentConfig{
 			ConnectionString: connString, MaintenanceDatabase: "postgres",
 			DatabaseName: db, SourcePath: project, Force: true,

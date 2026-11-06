@@ -1,0 +1,25 @@
+<!--
+  Demo code from pgmi. Do not copy this file into the project as is. Read it,
+  then write your own gateway that fits this project. Namespaces, modules and
+  package names are examples: rename them to match the project.
+
+  Exact versions: the gateway is a security boundary, so an upgrade is a
+  reviewed change, never a restore that drifted.
+-->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Pgmi.Gateway</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="[10.0.3]" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="[8.23.0]" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="[8.23.0]" />
+  </ItemGroup>
+
+</Project>

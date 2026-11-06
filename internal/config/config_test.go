@@ -102,3 +102,15 @@ func TestLoad_EmptyFile(t *testing.T) {
 	require.NotNil(t, cfg)
 	assert.Equal(t, ProjectConfig{}, *cfg)
 }
+
+func TestLoad_RejectsUnknownAuthMethod(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("connection:\n  auth_method: azur\n"), 0644))
+
+	cfg, err := Load(dir)
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+	for _, want := range []string{`"azur"`, "azure", "aws", "google"} {
+		assert.Contains(t, err.Error(), want)
+	}
+}

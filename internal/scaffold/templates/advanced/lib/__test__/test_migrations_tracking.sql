@@ -40,14 +40,14 @@ BEGIN
     RAISE DEBUG '  Scripts tracked correctly';
 
     -- Test 3: Owner role exists
-    v_owner_role := current_database()::TEXT || '_owner';
+    v_owner_role := pg_temp.deployment_setting('database_owner_role');
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_owner_role) THEN
         RAISE EXCEPTION 'TEST FAILED: Owner role % does not exist', v_owner_role;
     END IF;
     RAISE DEBUG '  Owner role exists: %', v_owner_role;
 
     -- Test 4: Internal schema owned by owner role
-    IF (SELECT nspowner::regrole::TEXT FROM pg_namespace WHERE nspname = 'internal') IS DISTINCT FROM v_owner_role THEN
+    IF (SELECT nspowner FROM pg_namespace WHERE nspname = 'internal') IS DISTINCT FROM to_regrole(quote_ident(v_owner_role)) THEN
         RAISE EXCEPTION 'TEST FAILED: Internal schema not owned by owner role';
     END IF;
     RAISE DEBUG '  Internal schema owned by owner role';

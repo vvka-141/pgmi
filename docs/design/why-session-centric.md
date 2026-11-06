@@ -39,7 +39,7 @@ to the project's own `deploy.sql`:
 zero persistent pgmi state in the target database.
 
 **Paid for** (recorded honestly in [Trade-offs](../TRADEOFFS.md)):
-[session-mode connection requirements](../TRADEOFFS.md#connection-poolers-are-incompatible)
+[session-mode connection requirements](../TRADEOFFS.md#deploys-cannot-run-through-a-transaction-mode-pooler)
 — transaction-mode poolers destroy `pg_temp` between statements — and
 [practical file-loading limits](../TRADEOFFS.md#file-loading-has-practical-limits),
 because everything rides through one session.
@@ -51,7 +51,7 @@ because everything rides through one session.
   you inherit, with the tool's semantics baked in. pgmi rejected it: tracking
   is [a choice you make](../TRADEOFFS.md#migration-tracking-is-a-choice-you-make-not-a-default-you-inherit),
   implemented in your schema if you want it (the
-  [advanced template](../advanced/_index.md) shows a complete implementation).
+  [advanced template](../advanced/README.md) shows a complete implementation).
 - **State files outside the database.** Plan files, lock files, and journals
   on disk create a second source of truth that can disagree with the
   database. Everything pgmi knows during a deployment lives in the session,

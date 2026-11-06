@@ -192,6 +192,24 @@ func leadingSpaceOnly(s string) bool {
 // isTransactionTerminator reports whether a masked top-level statement is a
 // transaction terminator. The mask has already blanked strings and comments,
 // so plain word extraction is reliable.
+// HeadCommits reports whether a head unit SplitExecutionUnits returned ends
+// with COMMIT or END, with or without AND CHAIN: it committed, even when AND
+// CHAIN left a transaction open for the tail. ROLLBACK and ABORT commit
+// nothing.
+func HeadCommits(head string) bool {
+	mask := NewCommentStripper().RedactForMacros(head)
+	if len(mask) != len(head) {
+		return false
+	}
+	end := strings.LastIndexByte(mask, ';')
+	if end < 0 || !isBlank(mask[end+1:]) {
+		end = len(mask)
+	}
+	stmt := mask[strings.LastIndexByte(mask[:end], ';')+1 : end]
+	first, _ := firstWord(stmt)
+	return (first == "COMMIT" || first == "END") && isTransactionTerminator(stmt)
+}
+
 func isTransactionTerminator(stmt string) bool {
 	first, rest := firstWord(stmt)
 	switch first {

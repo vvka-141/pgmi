@@ -76,6 +76,7 @@ func TestInitializeNegotiatesProtocolVersion(t *testing.T) {
 		{"supported version is echoed back", "2025-11-25", "2025-11-25"},
 		{"previous supported version is echoed back", "2025-06-18", "2025-06-18"},
 		{"older supported version is echoed back", "2024-11-05", "2024-11-05"},
+		{"2025-03-26 (batches) is not spoken", "2025-03-26", ProtocolVersion},
 		{"unknown version falls back to our latest", "1.0.0", ProtocolVersion},
 		{"absent version falls back to our latest", "", ProtocolVersion},
 	}
@@ -780,5 +781,58 @@ func TestToolsCallHandlerPanicIsErrorResult(t *testing.T) {
 	// The second request still got an answer.
 	if string(resp[1].ID) != "2" {
 		t.Errorf("the request after the panic was not answered; got id %s", resp[1].ID)
+	}
+}
+
+func TestToolsListCarriesAnnotations(t *testing.T) {
+	s := NewServer("pgmi", "x")
+	tool := echoTool()
+	tool.Annotations = &ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
+	s.Register(tool)
+	var list toolsListResult
+	mustRemarshal(t, s.handleToolsList(), &list)
+	a := list.Tools[0].Annotations
+	if a == nil || !a.ReadOnlyHint || a.DestructiveHint || !a.IdempotentHint || a.OpenWorldHint {
+		t.Errorf("annotations = %+v", a)
+	}
+	var raw map[string]any
+	mustRemarshal(t, list.Tools[0], &raw)
+	if _, ok := raw["annotations"].(map[string]any)["destructiveHint"]; !ok {
+		t.Errorf("destructiveHint must be explicit (the spec defaults it to true): %v", raw["annotations"])
+	}
+}
+
+func TestASummarizedToolKeepsTheTextShort(t *testing.T) {
+	s := NewServer("pgmi", "x")
+	tool := echoTool()
+	tool.Summary = func(any) string { return "done" }
+	s.Register(tool)
+	resp := s.handleToolsCall(context.Background(), json.RawMessage(`{"name":"echo","arguments":{"big":"`+strings.Repeat("x", 5000)+`"}}`))
+	var call callToolResult
+	mustRemarshal(t, resp.Result, &call)
+	if len(call.Content) != 1 || call.Content[0].Text != "done" || call.StructuredContent == nil {
+		t.Errorf("want the summary as text and the value as structuredContent, got %+v", call)
+	}
+}
+
+// JSON-RPC 2.0: -32700 is for text that is not JSON; valid JSON that is not a
+// request object, a batch array included, is -32600 with a null id.
+func TestNonRequestJSONIsAnInvalidRequest(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want int
+	}{
+		{`[]`, codeInvalidRequest},
+		{`[{"jsonrpc":"2.0","id":1,"method":"ping"}]`, codeInvalidRequest},
+		{`42`, codeInvalidRequest},
+		{`{"jsonrpc":"2.0","id":1,"method":7}`, codeInvalidRequest},
+		{`{bad json`, codeParseError},
+	} {
+		t.Run(tc.line, func(t *testing.T) {
+			resp := runSession(t, NewServer("pgmi", "v"), tc.line)
+			if len(resp) != 1 || resp[0].Error == nil || resp[0].Error.Code != tc.want {
+				t.Fatalf("got %+v, want error %d", resp, tc.want)
+			}
+		})
 	}
 }

@@ -13,16 +13,13 @@ import (
 // parseKeywordValue parses the libpq keyword/value form psql and the
 // PostgreSQL docs use: host=db1 port=5432 dbname=app user=me.
 // See https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING-KEYWORD-VALUE
-func parseKeywordValue(connStr string) (*pgmi.ConnectionConfig, error) {
+func parseKeywordValue(connStr string) (*ConnectionConfig, error) {
 	pairs, err := splitKeywordValuePairs(connStr)
 	if err != nil {
 		return nil, err
 	}
 
-	config := &pgmi.ConnectionConfig{
-		Host:             "localhost",
-		Port:             5432,
-		Database:         "postgres",
+	config := &ConnectionConfig{
 		AuthMethod:       pgmi.AuthMethodStandard,
 		AdditionalParams: make(map[string]string),
 	}
@@ -52,6 +49,8 @@ func parseKeywordValue(connStr string) (*pgmi.ConnectionConfig, error) {
 			config.SSLRootCert = kv.value
 		case "sslpassword":
 			config.SSLPassword = kv.value
+		case "service":
+			return nil, errServiceFile
 		case "application_name":
 			config.AppName = kv.value
 		case "connect_timeout":
@@ -61,6 +60,9 @@ func parseKeywordValue(connStr string) (*pgmi.ConnectionConfig, error) {
 			}
 			config.ConnectTimeout = time.Duration(seconds) * time.Second
 		default:
+			if !libpqKeywords[kv.key] {
+				return nil, fmt.Errorf("invalid connection option %q", kv.key)
+			}
 			config.AdditionalParams[kv.key] = kv.value
 		}
 	}
@@ -115,6 +117,30 @@ func joinHostList(hosts, ports []string) (string, error) {
 		}
 	}
 	return strings.Join(parts, ","), nil
+}
+
+// libpqKeywords is libpq's connection keyword set (PostgreSQL 18). Like
+// libpq, the keyword/value form refuses anything else: an unknown key would
+// otherwise reach the server as a startup parameter.
+// See https://www.postgresql.org/docs/18/libpq-connect.html#LIBPQ-PARAMKEYWORDS
+var libpqKeywords = map[string]bool{
+	"host": true, "hostaddr": true, "port": true, "dbname": true, "user": true,
+	"password": true, "passfile": true, "require_auth": true, "channel_binding": true,
+	"connect_timeout": true, "client_encoding": true, "options": true,
+	"application_name": true, "fallback_application_name": true,
+	"keepalives": true, "keepalives_idle": true, "keepalives_interval": true,
+	"keepalives_count": true, "tcp_user_timeout": true, "replication": true,
+	"gssencmode": true, "sslmode": true, "requiressl": true, "sslnegotiation": true,
+	"sslcompression": true, "sslcert": true, "sslkey": true, "sslkeylogfile": true,
+	"sslpassword": true, "sslcertmode": true, "sslrootcert": true, "sslcrl": true,
+	"sslcrldir": true, "sslsni": true, "requirepeer": true,
+	"ssl_min_protocol_version": true, "ssl_max_protocol_version": true,
+	"min_protocol_version": true, "max_protocol_version": true,
+	"krbsrvname": true, "gsslib": true, "gssdelegation": true,
+	"scram_client_key": true, "scram_server_key": true, "service": true,
+	"target_session_attrs": true, "load_balance_hosts": true,
+	"oauth_issuer": true, "oauth_client_id": true, "oauth_client_secret": true,
+	"oauth_scope": true,
 }
 
 type keywordPair struct {
@@ -193,18 +219,34 @@ func isSpace(c byte) bool {
 
 // hasUnquotedSemicolon reports whether s contains ';' outside libpq single
 // quotes, which is what separates the ADO.NET form from the keyword/value form
-// when a quoted password happens to contain ';'.
+// when a quoted password happens to contain ';'. As in libpq, a quote opens
+// only at the start of a value: the ' in Password=it's is a plain character.
 func hasUnquotedSemicolon(s string) bool {
-	quoted := false
+	quoted, valueStart := false, false
 	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			i++
-		case '\'':
-			quoted = !quoted
-		case ';':
-			if !quoted {
-				return true
+		c := s[i]
+		if quoted {
+			switch c {
+			case '\\':
+				i++
+			case '\'':
+				quoted = false
+			}
+			continue
+		}
+		switch {
+		case c == ';':
+			return true
+		case c == '=':
+			valueStart = true
+		case c == '\'' && valueStart:
+			quoted = true
+			valueStart = false
+		case isSpace(c):
+		default:
+			valueStart = false
+			if c == '\\' {
+				i++
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -27,7 +28,7 @@ func TestSavedConfigNeverContainsSecrets(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	err := saveConnectionToConfig(dir, &pgmi.ConnectionConfig{
+	err := saveConnectionToConfig(dir, &db.ConnectionConfig{
 		Host:              "db.example.com",
 		Port:              5432,
 		Username:          "deploy",

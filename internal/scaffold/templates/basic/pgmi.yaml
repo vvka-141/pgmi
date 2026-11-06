@@ -1,5 +1,6 @@
 # pgmi project configuration
-# CLI flags override these values. Environment variables (PGHOST, etc.) also apply.
+# CLI flags override these values. Environment variables (PGHOST, PGDATABASE, ...)
+# override them too; pgmi names each one it applies over a value set here.
 
 connection:
   database: mydb              # Target database (change this!)
@@ -9,7 +10,11 @@ connection:
   # username: postgres        # PostgreSQL user (default: current OS user)
 
 # Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
-params:
-  env: development
+# env (dev, test or prod) is required and deliberately not set here: only dev
+# seeds the Demo project, so a CI deploy that forgets env must fail, not seed.
+#   local:  pgmi deploy . -d mydb --param env=dev
+#   CI:     PGMI_PARAM_ENV=prod pgmi deploy . -d mydb
+# params:
+#   some_setting: value
 
 timeout: 3m                   # Deployment timeout

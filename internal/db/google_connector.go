@@ -16,17 +16,19 @@ import (
 // Implements io.Closer — caller must call Close() after the pool is closed
 // to release the Cloud SQL dialer resources.
 type GoogleCloudSQLConnector struct {
-	config   *pgmi.ConnectionConfig
+	config   *ConnectionConfig
 	instance string
 	dialer   *cloudsqlconn.Dialer
+	out      Output
 }
 
 // NewGoogleCloudSQLConnector creates a connector for Google Cloud SQL IAM authentication.
 // instance is the instance connection name in format: project:region:instance
-func NewGoogleCloudSQLConnector(config *pgmi.ConnectionConfig, instance string) *GoogleCloudSQLConnector {
+func NewGoogleCloudSQLConnector(config *ConnectionConfig, instance string, out Output) *GoogleCloudSQLConnector {
 	return &GoogleCloudSQLConnector{
 		config:   config,
 		instance: instance,
+		out:      out,
 	}
 }
 
@@ -48,39 +50,46 @@ func (c *GoogleCloudSQLConnector) Connect(ctx context.Context) (*pgxpool.Pool, e
 		return nil, fmt.Errorf("failed to create Cloud SQL dialer: %w", err)
 	}
 
-	dsn := fmt.Sprintf(
-		"host=%s user=%s dbname=%s sslmode=disable",
-		c.instance,
-		c.config.Username,
-		c.config.Database,
-	)
-
-	poolConfig, err := pgxpool.ParseConfig(dsn)
+	poolConfig, err := c.poolConfig()
 	if err != nil {
 		dialer.Close()
-		return nil, fmt.Errorf("failed to parse connection config: %w", err)
+		return nil, err
 	}
 
 	poolConfig.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return dialer.Dial(ctx, c.instance)
 	}
 
-	configurePool(poolConfig)
+	configurePool(poolConfig, c.out)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		dialer.Close()
-		return nil, wrapConnectionError(err, c.instance, c.config.Port, c.config.Database, c.config.Username)
+		return nil, WrapConnectionError(err, c.instance, c.config.Port, c.config.Database, c.config.Username)
 	}
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		dialer.Close()
-		return nil, wrapConnectionError(err, c.instance, c.config.Port, c.config.Database, c.config.Username)
+		return nil, WrapConnectionError(err, c.instance, c.config.Port, c.config.Database, c.config.Username)
 	}
 
 	c.dialer = dialer
 	return pool, nil
+}
+
+// poolConfig sets host, user and database as values, never by formatting
+// them into a keyword string, where a name holding a space and "dbname="
+// would choose another database. The dialer brings TLS, so sslmode=disable.
+func (c *GoogleCloudSQLConnector) poolConfig() (*pgxpool.Config, error) {
+	poolConfig, err := pgxpool.ParseConfig("sslmode=disable")
+	if err != nil {
+		return nil, fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
+	}
+	poolConfig.ConnConfig.Host = c.instance
+	poolConfig.ConnConfig.User = c.config.Username
+	poolConfig.ConnConfig.Database = c.config.Database
+	return poolConfig, nil
 }
 
 // Close releases the Cloud SQL dialer resources.

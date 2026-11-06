@@ -54,13 +54,13 @@
         <div class="hero-visual" aria-hidden="true">
           <div class="terminal-window">
             <div class="terminal-bar"><span></span><span></span><span></span></div>
-            <pre><code>$ pgmi deploy . -d demo_db
-Loaded 7 files
+            <pre><code>$ pgmi deploy . --param env=dev
+Loaded 14 files
 Executing deploy.sql
 [pgmi] Test suite started
-[pgmi] Test: ./__test__/test_user_crud.sql
-[pgmi] Test suite completed (3 steps)
-✓ 7 files loaded, 1 test macro(s) expanded in 0.91s</code></pre>
+[pgmi] Test: ./semantic/__test__/test_task.sql
+[pgmi] Test suite passed
+✓ demo: 14 files loaded in 0.09s</code></pre>
           </div>
           <div class="flow-row">
             <span>files</span>
@@ -74,7 +74,7 @@ Executing deploy.sql
           <img class="hero-pg" src="{{ "postgresql-elephant.svg" | relURL }}" alt="PostgreSQL" width="46" height="48">
           <p class="eyebrow">Programmable PostgreSQL deployments</p>
           <h1>pgmi</h1>
-          <p class="lede">Test the deployed database before you commit it. pgmi loads your project into one PostgreSQL session — your deploy.sql selects files, controls transactions, runs database tests, and decides whether to commit.</p>
+          <p class="lede">Your deploy.sql applies changes, runs database tests before COMMIT, and aborts the deployment if a test fails. pgmi loads your project into one PostgreSQL session; your SQL decides what runs and when it commits.</p>
           <div class="hero-actions">
             <a class="button primary" data-goatcounter-click="cta-quickstart" href="{{ "docs/quickstart/" | relURL }}">See a complete deployment</a>
             <a class="button secondary" data-goatcounter-click="cta-coming-from" href="{{ "docs/coming-from/" | relURL }}">Coming from Flyway or Sqitch?</a>
@@ -82,6 +82,30 @@ Executing deploy.sql
         </div>
       </section>
 
+      <section class="shell paths-section" aria-labelledby="paths-title">
+        <div class="section-heading">
+          <p class="eyebrow">Start here</p>
+          <h2 id="paths-title">Three ways to start a project.</h2>
+        </div>
+        <div class="path-grid">
+          <article>
+            <h3>Minimal <span class="path-note">— the default</span></h3>
+            <p>Two files: a <code>deploy.sql</code> loop that runs every SQL file in path order, and <code>hello_world.sql</code>. No test gate yet: a starting point for writing your own deploy.sql.</p>
+            <a href="{{ "docs/cli/#templates" | relURL }}">What each template writes</a>
+          </article>
+          <article>
+            <h3>The basic template</h3>
+            <p>Tables in <code>physical/</code> run once, tracked in a ledger that rejects changes to files already applied; views and functions in <code>semantic/</code> re-run on every deploy; tests run before the commit. PostgreSQL 15+.</p>
+            <a href="{{ "docs/quickstart/" | relURL }}">See a failing test abort the deployment</a>
+          </article>
+          <article>
+            <h3>The advanced template</h3>
+            <p>Your application's backend in PostgreSQL, as code you own: HTTP API, sign-in, tenancy and audit, served by reference gateways in five languages. Tests run before the commit. PostgreSQL 18+.</p>
+            <a href="{{ "docs/advanced/" | relURL }}">Read the guide before choosing it</a>
+          </article>
+        </div>
+        <p class="paths-note">The basic and advanced templates also write an <code>AGENTS.md</code> and skills, so a coding agent learns the project's conventions before it edits.</p>
+      </section>
       <section class="shell model-section" aria-labelledby="model-title">
         <div>
           <p class="eyebrow">Execution model</p>
@@ -98,7 +122,7 @@ Executing deploy.sql
           </article>
           <article>
             <strong>Execute</strong>
-            <p>The generated plan runs in the same PostgreSQL session, with notices and errors coming directly from PostgreSQL.</p>
+            <p>pgmi runs what your deploy.sql selects in the same PostgreSQL session. PostgreSQL reports notices and errors directly.</p>
           </article>
         </div>
       </section>
@@ -107,41 +131,22 @@ Executing deploy.sql
         <div class="shell split-section">
           <div>
             <p class="eyebrow">Where it fits</p>
-            <h2>For database work that needs real control.</h2>
+            <h2>Deployment behavior written in SQL.</h2>
             <p>Use pgmi when deployment logic belongs close to the database: environment-aware changes, test gates, data loads, generated APIs, or application behavior expressed in SQL.</p>
           </div>
           <ul class="check-list">
             <li>CLI flags stay focused on infrastructure: connections, parameters, compatibility, observability.</li>
             <li>Deployment behavior stays in <code>deploy.sql</code>, where it can be reviewed and tested with the rest of the database code.</li>
-            <li>The advanced template can expose PostgreSQL-backed REST, RPC, and MCP APIs without changing the core model.</li>
           </ul>
         </div>
       </section>
 
-      <section class="shell paths-section" aria-labelledby="paths-title">
-        <div class="section-heading">
-          <p class="eyebrow">Start here</p>
-          <h2 id="paths-title">One small scaffold. Then whatever you build on it.</h2>
-        </div>
-        <div class="path-grid">
-          <article>
-            <h3>The basic template</h3>
-            <p>A compact migration scaffold: path-based ordering, tests inside the deployment transaction, and a <code>deploy.sql</code> you can read in one sitting. This is the recommended starting point.</p>
-            <a href="{{ "docs/quickstart/" | relURL }}">Deploy it in 60 seconds</a>
-          </article>
-          <article>
-            <h3>Reference app <span class="path-note">— scaffold and trim</span></h3>
-            <p>A full SQL-native application built on pgmi: REST, RPC and MCP endpoints, multi-tenant row-level security, audit logging. It exists to show what the model enables — read it, take the parts you need. Either template is production-capable; this one is simply more infrastructure.</p>
-            <a href="{{ "docs/quickstart/#choosing-a-template" | relURL }}">See what pgmi enables</a>
-          </article>
-        </div>
-      </section>
     </main>
 
     <footer class="site-footer">
       <div class="shell footer-inner">
-        <span>pgmi is an execution fabric, not a migration framework.</span>
-        <a href="{{ "docs/" | relURL }}">Documentation</a>
+        <span>Try it: the <a href="{{ "docs/quickstart/" | relURL }}">Quickstart</a> deploys the basic template and shows a failing test rolling it back.</span>
+        <a href="https://github.com/vvka-141/pgmi">Source on GitHub</a>
       </div>
     </footer>
   </body>

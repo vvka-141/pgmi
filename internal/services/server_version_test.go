@@ -11,7 +11,7 @@ import (
 // A server below the floor must be rejected with a pgmi diagnostic naming the
 // requirement, classified as a configuration error so it exits 10 — not with
 // whatever the first unsupported construct happens to raise. Before this guard
-// a PostgreSQL 10 server answered "function hashtextextended does not exist",
+// a server below the floor could answer "function hashtextextended does not exist",
 // which names neither pgmi nor the version it needs.
 func TestVerifyServerVersion(t *testing.T) {
 	tests := []struct {
@@ -20,11 +20,11 @@ func TestVerifyServerVersion(t *testing.T) {
 		versionText string
 		wantErr     bool
 	}{
-		{"below the floor", 100023, "10.23", true},
-		{"one release below", 90624, "9.6.24", true},
-		{"exactly the floor", 110000, "11.0", false},
-		{"the floor, patched", 110016, "11.16 (Debian 11.16-1.pgdg90+1)", false},
-		{"current release", 170010, "17.10", false},
+		{"old floor", 110016, "11.16 (Debian 11.16-1.pgdg90+1)", true},
+		{"one release below", 140023, "14.23", true},
+		{"exactly the floor", 150000, "15.0", false},
+		{"the floor, patched", 150018, "15.18 (Debian 15.18-1.pgdg120+1)", false},
+		{"current release", 180004, "18.4", false},
 	}
 
 	for _, tt := range tests {
@@ -48,7 +48,7 @@ func TestVerifyServerVersion(t *testing.T) {
 				t.Errorf("expected an ErrInvalidConfig chain, got %v", err)
 			}
 			// The message has to be actionable on its own.
-			for _, want := range []string{tt.versionText, "11"} {
+			for _, want := range []string{tt.versionText, "15"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the diagnostic omits %q: %v", want, err)
 				}

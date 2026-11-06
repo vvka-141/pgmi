@@ -6,7 +6,9 @@ weight: 80
 
 # deploy.sql Authoring Guide
 
-This guide covers patterns for writing `deploy.sql` — from basic file execution to data ingestion, environment branching, and multi-phase deployments. Every example is copy-paste ready.
+This guide covers patterns for writing `deploy.sql` — from basic file execution to data ingestion, environment branching, and multi-phase deployments.
+
+> **Example layout.** The examples on this page assume SQL files under `migrations/`, `seeds/` and `post-deploy/`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
 
 For the session API reference (views, columns, functions), see [Session API](session-api.md).
 
@@ -24,7 +26,7 @@ pgmi loads **every file** under the project path into the session — not just
 SQL. Use `is_sql_file` in `pgmi_source_view` to filter, or read a `.json`,
 `.csv` or `.xml` file as data (see the loading recipes below).
 
-Four things are excluded:
+These are always excluded:
 
 | Excluded | Why |
 |---|---|
@@ -34,12 +36,43 @@ Four things are excluded:
 | `node_modules/` and `__pycache__/` | Dependency and build caches. |
 
 Everything else is read as **text**. A binary file inside the project path
-(and outside the exclusions above) fails the deploy before any connection is
-made, naming the file — move it out of the project path or into a hidden
-directory.
+(and outside the exclusions) fails the deploy before any connection is made,
+naming the file. Exclude it in `.pgmiignore`, or move it out of the project
+path.
+
+### `.pgmiignore`
+
+A `.pgmiignore` file at the project root adds exclusions in `.gitignore`
+syntax: comments, globs, `**`, directory patterns ending in `/`, and `!` to
+re-include. Use it for content that lives in the project but is not a
+deployment resource, such as client code and build output:
+
+```gitignore
+gateways/
+target/
+bin/
+obj/
+dist/
+```
+
+The advanced template ships this file. The rules above always apply on top of
+it, and `.pgmiignore` itself is never loaded (it starts with a dot). A pattern
+set that would hide the root `deploy.sql` is refused (exit 10); add
+`!deploy.sql` after a broad pattern such as `*.sql`. As in git, a file inside
+an ignored directory cannot be re-included.
+
+The summary line counts what was left out
+(`✓ mydb: 12 files loaded, 3 paths ignored in 0.41s`). `--verbose` lists each
+ignored path and the rule that excluded it, and `--json` reports
+`pathsIgnored`. An ignored directory counts once; pgmi does not walk into it.
+
+Ignoring a file changes what the project contains. On the advanced template,
+hiding a run-once file that already ran makes the next deploy fail with
+"removed from the project", which is the drift check doing its job. Prefer
+folder patterns (`gateways/`) over broad globs.
 
 Each file is capped at 10 MiB. A larger file fails the deploy the same way.
-Set `PGMI_MAX_FILE_SIZE` to a byte count to change the cap.
+Set `PGMI_MAX_FILE_SIZE` to a whole number of bytes to change the cap; any other value (`10MB`, `0`) exits 10 before connecting.
 
 Discovery decides what enters the session; it never decides what runs. Your
 `deploy.sql` still selects and orders everything it executes.
@@ -81,10 +114,14 @@ Use `current_setting('pgmi.env', true)` to branch deployment logic by environmen
 ```sql
 DO $$
 DECLARE
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
     v_file RECORD;
 BEGIN
-    IF v_env = 'development' THEN
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
+    IF v_env = 'dev' THEN
         EXECUTE 'DROP SCHEMA IF EXISTS app CASCADE';
         EXECUTE 'CREATE SCHEMA app';
     END IF;
@@ -97,14 +134,14 @@ BEGIN
         EXECUTE v_file.content;
     END LOOP;
 
-    IF v_env = 'production' THEN
+    IF v_env = 'prod' THEN
         INSERT INTO audit.deployments (deployed_at, env) VALUES (now(), v_env);
     END IF;
 END $$;
 ```
 
 ```bash
-pgmi deploy . -d myapp --param env=production
+pgmi deploy . -d myapp --param env=prod
 ```
 
 ---
@@ -122,6 +159,14 @@ LOCATION: ./migrations/004_orders.sql line 4, column 1
 LINE 4: SELEC 1;
         ^
 ```
+
+Test files are located the same way, so a failing test names its file and,
+for a parse error, its line. A runtime error in a `deploy.sql` statement after
+the first top-level `COMMIT` reports that statement's line in the file on disk
+(for a `DO` block, the failing line inside it); in the atomic head PostgreSQL
+cannot say which statement failed, so only a parse error there has a line.
+When PostgreSQL's context quotes a whole project file, the CLI prints
+`SQL statement in <path>` instead of the text; `--json` keeps the raw `where`.
 
 So the loop needs no exception handler:
 
@@ -189,7 +234,7 @@ BEGIN
 END $$;
 ```
 
-`pgmi_source_view` carries two checksums: `checksum` (raw SHA-256) and `pgmi_checksum` (normalized — comments stripped, case-folded, whitespace collapsed). Track against whichever fits — see [Checksum-based change detection](#checksum-based-change-detection).
+`pgmi_source_view` carries two checksums: `checksum` (raw SHA-256) and `pgmi_checksum` (normalized — comments stripped, case folded and whitespace collapsed outside literals, quoted identifiers and dollar-quoted bodies). Track against whichever fits — see [Checksum-based change detection](#checksum-based-change-detection).
 
 ---
 
@@ -241,10 +286,14 @@ END $$;
 ```sql
 DO $$
 DECLARE
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
     v_file RECORD;
     v_config JSONB;
 BEGIN
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
     FOR v_file IN (
         SELECT content FROM pg_temp.pgmi_source_view
         WHERE path = './config/' || v_env || '.json'
@@ -349,9 +398,8 @@ so a real data change can leave it unchanged and the file is skipped.
 `pgmi_checksum` fits SQL files, where reformatting and comment edits should not
 force a re-run.
 
-> **Column name warning:** `pgmi_source_view.checksum` is the raw SHA-256;
-> `pgmi_plan_view.checksum` is the normalized one. Same column name, different
-> value. See [Session API — Two checksums](session-api.md#two-checksums-and-which-to-track-against).
+> **Which column:** `checksum` is the raw SHA-256 and exists only on
+> `pgmi_source_view`; `pgmi_checksum` is the normalized one, on both views. See [Session API — Two checksums](session-api.md#two-checksums-and-which-to-track-against).
 
 ```sql
 CREATE TABLE IF NOT EXISTS loaded_data_file (
@@ -579,8 +627,7 @@ A head that ends its implicit transaction with a bare `COMMIT` (no `BEGIN`)
 works too — PostgreSQL prints a harmless "there is no transaction in progress"
 warning and commits the work — but write the `BEGIN` for clarity.
 
-See [Trade-offs](TRADEOFFS.md#create-index-concurrently) for how this compares
-to other tools, and `examples/lock-safe-deploy/` for a complete runnable
+See [Trade-offs](TRADEOFFS.md#create-index-concurrently-runs-at-top-level-only) for the limit, and `examples/lock-safe-deploy/` for a complete runnable
 project.
 
 ---
@@ -685,9 +732,13 @@ BEGIN;
 
 DO $$
 DECLARE
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
     v_file RECORD;
 BEGIN
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
     -- Schema migrations
     RAISE NOTICE '=== Applying migrations ===';
     FOR v_file IN (
@@ -731,7 +782,7 @@ BEGIN
     END LOOP;
 
     -- Development-only seed data
-    IF v_env = 'development' THEN
+    IF v_env = 'dev' THEN
         RAISE NOTICE '=== Loading dev seed data ===';
         FOR v_file IN (
             SELECT content FROM pg_temp.pgmi_source_view
@@ -754,10 +805,10 @@ COMMIT;
 
 ```bash
 # Development
-pgmi deploy . -d myapp_dev --overwrite --force --param env=development
+pgmi deploy . -d myapp_dev --overwrite --force --param env=dev
 
 # Production
-pgmi deploy . -d myapp --param env=production --force
+pgmi deploy . -d myapp --param env=prod --force
 ```
 
 ---

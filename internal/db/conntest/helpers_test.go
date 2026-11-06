@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/testinfra"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var (
@@ -67,11 +66,11 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func connectWithConfig(t *testing.T, config *pgmi.ConnectionConfig) *pgxpool.Pool {
+func connectWithConfig(t *testing.T, config *db.ConnectionConfig) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	if err != nil {
 		t.Fatalf("create connector: %v", err)
 	}
@@ -103,7 +102,7 @@ func queryVersion(t *testing.T, pool *pgxpool.Pool) string {
 	return version
 }
 
-func parseStdConnString(t *testing.T) *pgmi.ConnectionConfig {
+func parseStdConnString(t *testing.T) *db.ConnectionConfig {
 	t.Helper()
 	config, err := db.ParseConnectionString(stdContainer.ConnString)
 	if err != nil {

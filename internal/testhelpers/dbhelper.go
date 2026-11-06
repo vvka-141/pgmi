@@ -19,7 +19,6 @@ import (
 	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/testinfra"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var (
@@ -111,59 +110,68 @@ func RequireDatabase(t *testing.T) string {
 	return GetTestConnectionString(t)
 }
 
-// NewTestDeployer creates a Deployer instance configured for testing.
-// Uses the standard connector factory and a force-approving test approver.
-func NewTestDeployer(t *testing.T) pgmi.Deployer {
+// RequirePostgresImage starts a dedicated container from image, for tests that
+// need a server version other than the shared one. It skips or fails exactly
+// like GetTestConnectionString when Docker is unavailable.
+func RequirePostgresImage(t *testing.T, image string) string {
 	t.Helper()
 
-	approver := &ForceApprover{}
-	logger := logging.NewNullLogger()
-	fileScanner := scanner.NewScanner(checksum.New())
-	fileLoader := loader.NewLoader()
-	dbManager := manager.New()
+	SkipIfShort(t)
+	var ctr *testinfra.PostgresContainer
+	conn, msg, fatal := resolveTestConnection("", os.Getenv("PGMI_REQUIRE_DB"), func() (string, error) {
+		var err error
+		ctr, err = testinfra.StartSimplePostgresImage(context.Background(), image)
+		if err != nil {
+			return "", err
+		}
+		return ctr.ConnString, nil
+	})
+	switch {
+	case msg == "":
+		t.Cleanup(func() { ctr.Terminate(context.Background()) }) //nolint:errcheck
+		return conn
+	case fatal:
+		t.Fatal(msg)
+	default:
+		t.Skip(msg)
+	}
+	return ""
+}
 
-	// Create session manager for shared session initialization logic
-	sessionManager := services.NewSessionManager(
-		db.NewConnector,
-		fileScanner,
-		fileLoader,
-		logger,
-	)
-
-	return services.NewDeploymentService(
-		db.NewConnector,
-		approver,
-		logger,
-		sessionManager,
-		dbManager,
-	)
+// NewTestDeployer creates a Deployer instance configured for testing.
+// Uses the standard connector factory and a force-approving test approver.
+func NewTestDeployer(t *testing.T) *services.DeploymentService {
+	t.Helper()
+	return NewTestDeployerWithNotices(t, filesystem.NewOSFileSystem(), nil)
 }
 
 // NewTestDeployerWithFS creates a Deployer instance configured for testing with a custom filesystem provider.
 // This allows testing with embedded filesystems or in-memory filesystems.
-func NewTestDeployerWithFS(t *testing.T, fsProvider filesystem.FileSystemProvider) pgmi.Deployer {
+func NewTestDeployerWithFS(t *testing.T, fsProvider filesystem.FileSystemProvider) *services.DeploymentService {
+	t.Helper()
+	return NewTestDeployerWithNotices(t, fsProvider, nil)
+}
+
+// NewTestDeployerWithNotices is NewTestDeployerWithFS whose PostgreSQL
+// notices go to notice.
+func NewTestDeployerWithNotices(t *testing.T, fsProvider filesystem.FileSystemProvider, notice func(severity, message, detail, hint string)) *services.DeploymentService {
 	t.Helper()
 
-	approver := &ForceApprover{}
 	logger := logging.NewNullLogger()
-	fileScanner := scanner.NewScannerWithFS(checksum.New(), fsProvider)
-	fileLoader := loader.NewLoader()
-	dbManager := manager.New()
-
-	// Create session manager for shared session initialization logic
+	connectors := db.ConnectorFactory(db.Output{Notice: notice, Logger: logger})
 	sessionManager := services.NewSessionManager(
-		db.NewConnector,
-		fileScanner,
-		fileLoader,
+		connectors,
+		scanner.NewScannerWithFS(checksum.New(), fsProvider),
+		loader.NewLoader(),
 		logger,
+		"test",
 	)
-
 	return services.NewDeploymentService(
-		db.NewConnector,
-		approver,
+		connectors,
+		&ForceApprover{},
 		logger,
 		sessionManager,
-		dbManager,
+		manager.New(),
 	)
 }
 

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/files/filesystem"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -399,11 +399,11 @@ COMMIT;
 	}
 }
 
-// TestDeployError_ReportsLineAfterMacroExpansion proves the reported line is the
-// line of the script pgmi actually sent, not of the file on disk. CALL pgmi_test()
-// expands into many lines before the syntax error, so a naive line count against
-// deploy.sql would point at the wrong statement.
-func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
+// TestDeployError_ReportsFileLineAfterMacroExpansion proves the reported line is
+// the line of deploy.sql on disk. CALL pgmi_test() expands into many lines
+// before the syntax error, so the position PostgreSQL reports must be mapped
+// back through the expansion, or it points far below the file's last line.
+func TestDeployError_ReportsFileLineAfterMacroExpansion(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
 	ctx := context.Background()
@@ -454,12 +454,12 @@ func TestDeployError_ReportsLineAfterMacroExpansion(t *testing.T) {
 		t.Errorf("reported line %d does not hold the offending statement: got %q, want %q",
 			loc.Line, loc.SourceLine, "SELEC 1;")
 	}
-	if !loc.Expanded {
-		t.Error("expected the location to be flagged as expanded — deploy.sql contained a pgmi_test() macro")
+	if loc.Expanded {
+		t.Error("a line mapped back to the file must not be flagged as an expanded-script line")
 	}
-	if loc.Line <= rawLine {
-		t.Errorf("expected macro expansion to push the error past line %d of the file on disk, got line %d",
-			rawLine, loc.Line)
+	if loc.Script != "deploy.sql" || loc.Line != rawLine || loc.Column != 1 {
+		t.Errorf("want deploy.sql line %d column 1 of the file on disk, got %s line %d column %d",
+			rawLine, loc.Script, loc.Line, loc.Column)
 	}
 
 	if out := pgmi.FormatError(err); !strings.Contains(out, "LINE ") {
@@ -476,7 +476,6 @@ func TestDeploy_SessionPreparationIsSilent(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
 	ctx := context.Background()
-	deployer := testhelpers.NewTestDeployer(t)
 
 	projectPath := t.TempDir()
 	if err := os.WriteFile(
@@ -489,13 +488,11 @@ func TestDeploy_SessionPreparationIsSilent(t *testing.T) {
 	var mu sync.Mutex
 	var notices []string
 
-	orig := db.NoticeHandler
-	db.NoticeHandler = func(_, message, _, _ string) {
+	deployer := testhelpers.NewTestDeployerWithNotices(t, filesystem.NewOSFileSystem(), func(_, message, _, _ string) {
 		mu.Lock()
 		notices = append(notices, message)
 		mu.Unlock()
-	}
-	defer func() { db.NoticeHandler = orig }()
+	})
 
 	testDB := "pgmi_silent_prep"
 	defer testhelpers.CleanupTestDB(t, connString, testDB)
@@ -686,5 +683,50 @@ COMMIT;
 `
 	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
 		t.Fatalf("Failed to create deploy.sql: %v", err)
+	}
+}
+
+// TestSourceViewPathOrder_IsByteOrdered pins ORDER BY path over
+// pgmi_source_view to C byte order: the loop every minimal deploy.sql and
+// most hand-written ones use must run files in the same order on any server.
+func TestSourceViewPathOrder_IsByteOrdered(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	projectPath := t.TempDir()
+	for _, name := range []string{"A.sql", "a_c.sql", "ab.sql", "b.sql"} {
+		if err := os.WriteFile(filepath.Join(projectPath, name), []byte("SELECT 1;"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deploySQL := `CREATE TABLE source_order (n serial, path text);
+INSERT INTO source_order (path) SELECT path FROM pg_temp.pgmi_source_view WHERE is_sql_file ORDER BY path;`
+	if err := os.WriteFile(filepath.Join(projectPath, "deploy.sql"), []byte(deploySQL), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	testDB := "pgmi_source_collation"
+	defer testhelpers.CleanupTestDB(t, connString, testDB)
+	if err := testhelpers.NewTestDeployer(t).Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString: connString, MaintenanceDatabase: "postgres", DatabaseName: testDB,
+		SourcePath: projectPath, Overwrite: true, Force: true,
+	}); err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+
+	pool := testhelpers.GetTestPool(t, connString, testDB)
+	var dbCollate, defaultOrder, got string
+	if err := pool.QueryRow(ctx, `SELECT (SELECT datcollate FROM pg_database WHERE datname = current_database()),
+		(SELECT string_agg(p, ' ' ORDER BY p) FROM unnest(ARRAY['./A.sql', './a_c.sql', './ab.sql', './b.sql']) p),
+		string_agg(path, ' ' ORDER BY n) FROM source_order`).Scan(&dbCollate, &defaultOrder, &got); err != nil {
+		t.Fatal(err)
+	}
+	const want = "./A.sql ./a_c.sql ./ab.sql ./b.sql"
+	if defaultOrder == want {
+		t.Fatalf("this server's collation (%s) orders the fixture as C does, so the test cannot tell; "+
+			"run against a linguistic-collation database (the project's test image is en_US.utf8)", dbCollate)
+	}
+	if got != want {
+		t.Errorf("ORDER BY path over pgmi_source_view is not byte order on %s\ngot:  %s\nwant: %s", dbCollate, got, want)
 	}
 }

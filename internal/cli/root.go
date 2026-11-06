@@ -78,7 +78,11 @@ func init() {
 	// deployed nothing.
 	rootCmd.PersistentFlags().Bool("help", false, "Show help for this command")
 
-	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		if host := cmd.Flags().ShorthandLookup("h"); host != nil && host.Name == "host" &&
+			strings.Contains(err.Error(), "'h' in -h") {
+			return fmt.Errorf("%w: %w (-h is --host here; use --help)", pgmi.ErrUsage, err)
+		}
 		return fmt.Errorf("%w: %w", pgmi.ErrUsage, err)
 	})
 }

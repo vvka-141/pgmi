@@ -10,7 +10,10 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Testing OpenAPI 3.1 generator';
 
+    PERFORM pg_temp.test_login('test', 'openapi-reader', 'openapi-reader@example.test', NULL, true);
+    PERFORM pg_temp.test_act_as('test|openapi-reader');
     v_doc := api.openapi_document();
+    PERFORM pg_temp.test_act_as(NULL);
 
     -- ========================================================================
     -- Basic structure
@@ -28,23 +31,33 @@ BEGIN
         RAISE EXCEPTION 'paths should not be null';
     END IF;
 
-    IF v_doc->'components'->'securitySchemes'->'apiKeyAuth' IS NULL THEN
-        RAISE EXCEPTION 'apiKeyAuth security scheme should be defined';
+    IF v_doc->'components'->'securitySchemes'->'loginSession' IS DISTINCT FROM
+           v_doc->'components'->'securitySchemes'->'loginSession'
+           || '{"type": "apiKey", "in": "cookie", "name": "__Host-session"}'::jsonb
+       OR v_doc->'components'->'securitySchemes'->'organizationSession' IS DISTINCT FROM
+           v_doc->'components'->'securitySchemes'->'organizationSession'
+           || '{"type": "apiKey", "in": "header", "name": "x-organization-session"}'::jsonb
+       OR (SELECT count(*) FROM jsonb_object_keys(v_doc->'components'->'securitySchemes')) IS DISTINCT FROM 2::bigint THEN
+        RAISE EXCEPTION 'the security schemes should be exactly the session cookie and the organization header, got %',
+            v_doc->'components'->'securitySchemes';
     END IF;
 
-    IF v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'type' IS DISTINCT FROM 'apiKey' THEN
-        RAISE EXCEPTION 'apiKeyAuth type should be apiKey, got %',
-            v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'type';
+    -- A write carrying the session cookie needs X-CSRF-Token: required on
+    -- every unsafe operation of a non-public route, optional on a public one.
+    IF EXISTS (
+        SELECT FROM jsonb_each(v_doc->'paths') p(path, ops)
+        CROSS JOIN LATERAL jsonb_each(p.ops) o(method, op)
+        WHERE (o.method IN ('post', 'put', 'patch', 'delete'))
+              IS DISTINCT FROM EXISTS (SELECT FROM jsonb_array_elements(o.op->'parameters') prm
+                                       WHERE prm->>'name' = 'X-CSRF-Token' AND prm->>'in' = 'header'
+                                         AND (prm->'required') = to_jsonb(o.op ? 'security')))
+    THEN
+        RAISE EXCEPTION 'every unsafe operation, and only those, should declare the X-CSRF-Token header, required when it has security';
     END IF;
-
-    IF v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'name' IS DISTINCT FROM 'x-user-id' THEN
-        RAISE EXCEPTION 'apiKeyAuth name should be x-user-id, got %',
-            v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'name';
-    END IF;
-
-    IF v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'in' IS DISTINCT FROM 'header' THEN
-        RAISE EXCEPTION 'apiKeyAuth in should be header, got %',
-            v_doc->'components'->'securitySchemes'->'apiKeyAuth'->>'in';
+    IF NOT EXISTS (SELECT FROM jsonb_each(v_doc->'paths') p(path, ops)
+                   CROSS JOIN LATERAL jsonb_each(p.ops) o(method, op)
+                   WHERE o.method IN ('post', 'put', 'patch', 'delete')) THEN
+        RAISE EXCEPTION 'the document should hold an unsafe operation for the X-CSRF-Token check to mean anything';
     END IF;
 
     RAISE NOTICE '  + Document structure valid (3.1.0, info, paths, components)';
@@ -71,7 +84,7 @@ BEGIN
     RAISE NOTICE '  + /openapi.json path present with GET operation';
 
     -- ========================================================================
-    -- Auth requirement: openapi_spec has no security (requiresAuth=false)
+    -- Auth requirement: openapi_spec has no security (access public)
     -- ========================================================================
 
     IF v_paths->'/openapi.json'->'get'->'security' IS NOT NULL THEN
@@ -81,34 +94,28 @@ BEGIN
     RAISE NOTICE '  + No-auth handler omits security requirement';
 
     -- ========================================================================
-    -- Handlers with requires_auth have security requirement
+    -- Non-public handlers have security requirement
     -- ========================================================================
 
-    IF v_paths->'/me' IS NOT NULL AND v_paths->'/me'->'get'->'security' IS NULL THEN
-        RAISE EXCEPTION '/me should have security requirement';
+    IF v_paths->'/me'->'get'->'security' IS DISTINCT FROM '[{"loginSession": []}]'::jsonb THEN
+        RAISE EXCEPTION '/me should require the login session, got %', v_paths->'/me'->'get'->'security';
     END IF;
 
-    IF v_paths->'/me' IS NOT NULL
-       AND v_paths->'/me'->'get'->'security'->0 ? 'apiKeyAuth' IS DISTINCT FROM true THEN
-        RAISE EXCEPTION '/me security should reference apiKeyAuth, got %',
-            v_paths->'/me'->'get'->'security';
-    END IF;
-
-    RAISE NOTICE '  + Auth handlers include apiKeyAuth security requirement';
+    RAISE NOTICE '  + Authenticated handlers require the login session';
 
     -- ========================================================================
     -- Response codes: every operation documents gateway error responses
     -- ========================================================================
 
-    IF NOT (v_paths->'/openapi.json'->'get'->'responses' ? '404') THEN
+    IF (v_paths->'/openapi.json'->'get'->'responses' ? '404') IS NOT TRUE THEN
         RAISE EXCEPTION 'operation should document 404 response';
     END IF;
-    IF NOT (v_paths->'/openapi.json'->'get'->'responses' ? '405') THEN
+    IF (v_paths->'/openapi.json'->'get'->'responses' ? '405') IS NOT TRUE THEN
         RAISE EXCEPTION 'operation should document 405 response';
     END IF;
 
     IF v_paths->'/me' IS NOT NULL THEN
-        IF NOT (v_paths->'/me'->'get'->'responses' ? '401') THEN
+        IF (v_paths->'/me'->'get'->'responses' ? '401') IS NOT TRUE THEN
             RAISE EXCEPTION 'authenticated operation should document 401 response';
         END IF;
     END IF;
@@ -145,9 +152,10 @@ BEGIN
             api.path_template_to_regex('/orgs/{orgId}/users/{userId}');
     END IF;
 
-    IF api.path_template_params('/orgs/{orgId}/users/{userId}') IS DISTINCT FROM ARRAY['orgId', 'userId'] THEN
-        RAISE EXCEPTION 'path_template_params failed: got %',
-            api.path_template_params('/orgs/{orgId}/users/{userId}');
+    IF api.path_template_param_spec('/orgs/{orgId:uuid}/users/{userId:int}')
+       IS DISTINCT FROM '[{"name": "orgId", "type": "uuid"}, {"name": "userId", "type": "int"}]'::jsonb THEN
+        RAISE EXCEPTION 'path_template_param_spec failed: got %',
+            api.path_template_param_spec('/orgs/{orgId:uuid}/users/{userId:int}');
     END IF;
 
     IF api.openapi_methods('^GET$') IS DISTINCT FROM ARRAY['get'] THEN
@@ -178,9 +186,15 @@ BEGIN
     -- OpenAPI document includes declared schemas (not fallback object)
     -- ========================================================================
 
-    IF v_paths->'/hello'->'get'->'responses'->'200'->'content'->'application/json'->'schema'->>'type' = 'object'
+    IF (v_paths->'/hello'->'get'->'responses'->'200'->'content'->'application/json'->'schema'->>'type' = 'object') IS NOT FALSE
        AND v_paths->'/hello'->'get'->'responses'->'200'->'content'->'application/json'->'schema'->'properties' IS NULL THEN
         RAISE EXCEPTION '/hello response schema should have properties (not bare object fallback)';
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM jsonb_array_elements(coalesce(v_paths->'/hello'->'get'->'parameters', '[]')) p
+                   WHERE p->>'name' = 'name' AND p->>'in' = 'query' AND p->'schema'->>'type' = 'string') THEN
+        RAISE EXCEPTION 'TEST FAILED: GET /hello must declare its optional query parameter name, got %',
+            v_paths->'/hello'->'get'->'parameters';
     END IF;
 
     RAISE NOTICE '  + Declared schemas appear in OpenAPI document';
@@ -201,10 +215,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-0b11-4000-8000-000000000001',
-            'uri', '^/iso-openapi-test$',
+            'path', '/iso-openapi-test',
             'httpMethod', '^GET$',
             'name', 'iso_openapi_test',
-            'requiresAuth', false,
+            'access', 'public',
             'autoLog', false,
             'minTransactionIsolation', 'serializable'
         ),
@@ -236,8 +250,8 @@ END $$;
 
 -- ============================================================================
 -- Test: multi-parameter routes emit valid OpenAPI
--- A path may not repeat a template variable name. Every capture group must get
--- a distinct {name}, and each must be declared in the operation's parameters.
+-- A path may not repeat a template variable name. Every variable must be
+-- declared in the operation's parameters.
 -- ============================================================================
 
 DO $$
@@ -257,7 +271,7 @@ BEGIN
             'path', '/orgs/{orgId}/users/{userId}',
             'httpMethod', '^GET$',
             'name', 'multi_param_openapi_test',
-            'requiresAuth', false,
+            'access', 'public',
             'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
@@ -266,11 +280,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-0b11-4000-8000-000000000003',
-            'uri', '^/things/([^/]+)/parts/([^/]+)$',
-            'example', '/things/t1/parts/p1',
+            'path', '/things/{thingId}/parts/{partId}',
             'httpMethod', '^GET$',
-            'name', 'positional_param_openapi_test',
-            'requiresAuth', false,
+            'name', 'second_multi_param_openapi_test',
+            'access', 'public',
             'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
@@ -283,12 +296,12 @@ BEGIN
             (SELECT string_agg(k, ', ') FROM jsonb_object_keys(v_doc->'paths') k);
     END IF;
 
-    IF v_doc->'paths'->'/things/{p1}/parts/{p2}' IS NULL THEN
-        RAISE EXCEPTION 'positional fallback route missing; paths: %',
+    IF v_doc->'paths'->'/things/{thingId}/parts/{partId}' IS NULL THEN
+        RAISE EXCEPTION 'second multi-param route missing; paths: %',
             (SELECT string_agg(k, ', ') FROM jsonb_object_keys(v_doc->'paths') k);
     END IF;
 
-    RAISE NOTICE '  + Each capture group gets a distinct template variable';
+    RAISE NOTICE '  + Each path variable keeps its declared name';
 
     -- No path may repeat a template variable name (the actual defect).
     FOR v_path IN SELECT jsonb_object_keys(v_doc->'paths')
@@ -355,7 +368,7 @@ BEGIN
             'path', '/items/{itemId}',
             'httpMethod', '^GET$',
             'name', 'path_template_test',
-            'requiresAuth', false,
+            'access', 'public',
             'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
@@ -385,8 +398,8 @@ BEGIN
             jsonb_build_object(
                 'id', 'ffffffff-0b11-4000-8000-000000000005',
                 'httpMethod', '^GET$',
-                'name', 'no_path_no_uri_test',
-                'requiresAuth', false
+                'name', 'no_path_test',
+                'access', 'public'
             ),
             $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
         );
@@ -395,10 +408,10 @@ BEGIN
     END;
 
     IF v_raised IS DISTINCT FROM true THEN
-        RAISE EXCEPTION 'registering without path or uri should have been rejected';
+        RAISE EXCEPTION 'registering without path should have been rejected';
     END IF;
 
-    RAISE NOTICE '  + registration rejects handler with neither path nor uri';
+    RAISE NOTICE '  + registration rejects a handler without path';
     RAISE NOTICE '✓ path-template registration tests passed';
 END $$;
 
@@ -425,7 +438,7 @@ BEGIN
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
         RAISE EXCEPTION 'TEST FAILED: GET /openapi.json returned %', (v_response).status_code;
     END IF;
-    IF v_etag IS NULL OR v_etag !~ '^"[0-9a-f]{64}-anon"$' THEN
+    IF v_etag IS NULL OR (v_etag !~ '^"[0-9a-f]{64}-anon"$') IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: /openapi.json must return a strong quoted ETag, got %', v_etag;
     END IF;
     IF api.header((v_response).headers, 'Cache-Control') IS DISTINCT FROM 'no-cache' THEN
@@ -485,14 +498,14 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-0b11-4000-8000-000000000005',
-            'uri', '^/etag-probe$', 'httpMethod', '^GET$',
-            'name', 'etag_probe', 'requiresAuth', false, 'autoLog', false
+            'path', '/etag-probe', 'httpMethod', '^GET$',
+            'name', 'etag_probe', 'access', 'public', 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
     );
 
     v_etag_after := api.header((api.rest_invoke('GET', '/openapi.json')).headers, 'ETag');
-    IF v_etag_after = v_etag THEN
+    IF (v_etag_after = v_etag) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: adding a route must change the ETag';
     END IF;
 
@@ -504,14 +517,14 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-0b11-4000-8000-000000000005',
-            'uri', '^/etag-probe-renamed$', 'httpMethod', '^GET$',
-            'name', 'etag_probe', 'requiresAuth', false, 'autoLog', false
+            'path', '/etag-probe-renamed', 'httpMethod', '^GET$',
+            'name', 'etag_probe', 'access', 'public', 'autoLog', false
         ),
         $body$ BEGIN RETURN api.json_response(200, '{}'::jsonb); END; $body$
     );
 
     v_etag_after := api.header((api.rest_invoke('GET', '/openapi.json')).headers, 'ETag');
-    IF v_etag_after = v_etag THEN
+    IF (v_etag_after = v_etag) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: changing a route uri must change the ETag (an unchanged '
             'handler body must not be mistaken for an unchanged contract)';
     END IF;
@@ -546,8 +559,8 @@ BEGIN
         RAISE EXCEPTION 'GET /docs should contain Scalar API reference script tag';
     END IF;
 
-    IF coalesce(v_html, '') NOT LIKE '%/openapi.json%' THEN
-        RAISE EXCEPTION 'GET /docs should reference /openapi.json';
+    IF coalesce(v_html, '') NOT LIKE '%openapi.json%' THEN
+        RAISE EXCEPTION 'GET /docs should reference openapi.json';
     END IF;
 
     RAISE NOTICE '  + GET /docs returns HTML with Scalar API reference';
@@ -566,16 +579,14 @@ DECLARE
 BEGIN
     RAISE NOTICE '→ Testing that the OpenAPI validator carries the caller class';
 
-    PERFORM membership.upsert_user('test', 'openapi-etag', 'openapi-etag@example.com');
-    PERFORM set_config('auth.idp_subject', 'test|openapi-etag', true);
+    PERFORM pg_temp.test_login('test', 'openapi-etag', 'openapi-etag@example.test', NULL, true);
     v_response := api.rest_invoke('GET', '/openapi.json',
-        extensions.hstore('x-user-id', 'test|openapi-etag'), NULL::bytea);
+        pg_temp.test_session_headers('test|openapi-etag'), NULL::bytea);
     v_etag := (v_response).headers->'etag';
     IF v_etag IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: /openapi.json must carry an ETag';
     END IF;
 
-    PERFORM set_config('auth.idp_subject', '', true);
     v_response := api.rest_invoke('GET', '/openapi.json',
         extensions.hstore('if-none-match', v_etag), NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 200 THEN
@@ -591,8 +602,16 @@ BEGIN
     END IF;
 
     v_html := convert_from((api.rest_invoke('GET', '/docs')).content, 'UTF8');
-    IF v_html !~ 'api-reference@[0-9]+\.[0-9]+\.[0-9]+/' OR v_html !~ 'integrity="sha384-' THEN
+    IF (v_html !~ 'api-reference@[0-9]+\.[0-9]+\.[0-9]+/') IS NOT FALSE OR (v_html !~ 'integrity="sha384-') IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: /docs must load a version-pinned script with SRI';
+    END IF;
+
+    IF (v_html !~ 'data-url="openapi\.json"') IS NOT FALSE THEN
+        RAISE EXCEPTION 'TEST FAILED: /docs must name openapi.json relative to itself, so it works under any mount prefix';
+    END IF;
+    IF api.openapi_document()->'servers' IS DISTINCT FROM '[{"url": "/api"}]'::jsonb THEN
+        RAISE EXCEPTION 'TEST FAILED: servers must name the gateway mount (api_base_path, /api by default), got %',
+            api.openapi_document()->'servers';
     END IF;
 
     RAISE NOTICE '  + The validator separates anonymous and authenticated documents; /docs is pinned';

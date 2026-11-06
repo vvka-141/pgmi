@@ -79,10 +79,10 @@ func TestWrapConnectionErrorPrefersSQLSTATE(t *testing.T) {
 			pgErr := &pgconn.PgError{Severity: "FATAL", Code: tt.code, Message: tt.message}
 			original := pgxMultiAttemptError(pgErr)
 
-			wrapped := wrapConnectionError(original, "127.0.0.1", 5442, "mydb", "u")
+			wrapped := WrapConnectionError(original, "127.0.0.1", 5442, "mydb", "u")
 
 			if !strings.Contains(wrapped.Error(), tt.wantContains) {
-				t.Errorf("wrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
+				t.Errorf("WrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
 			}
 			if strings.Contains(wrapped.Error(), "SSL/TLS connection error") {
 				t.Errorf("SQLSTATE %s misreported as an SSL/TLS error: %q", tt.code, wrapped.Error())
@@ -114,6 +114,14 @@ func TestWrapConnectionError(t *testing.T) {
 			port:         5432,
 			database:     "mydb",
 			wantContains: "connection refused to 127.0.0.1:5432",
+		},
+		{
+			name:         "refused names where else to point",
+			errMsg:       "dial tcp 127.0.0.1:5432: connection refused",
+			host:         "127.0.0.1",
+			port:         5432,
+			database:     "mydb",
+			wantContains: "or point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml",
 		},
 		{
 			name:         "actively refused (Windows)",
@@ -243,10 +251,10 @@ func TestWrapConnectionError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			originalErr := errors.New(tt.errMsg)
-			wrapped := wrapConnectionError(originalErr, tt.host, tt.port, tt.database, tt.username)
+			wrapped := WrapConnectionError(originalErr, tt.host, tt.port, tt.database, tt.username)
 
 			if !strings.Contains(wrapped.Error(), tt.wantContains) {
-				t.Errorf("wrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
+				t.Errorf("WrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
 			}
 
 			// Verify original error is wrapped (unwrappable)
@@ -262,7 +270,7 @@ func TestWrapConnectionError(t *testing.T) {
 	}
 }
 
-// The retry executor classifies the error wrapConnectionError returns, whose
+// The retry executor classifies the error WrapConnectionError returns, whose
 // Error() is the friendly text alone. A server closing the connection during
 // startup must stay retryable after it is reworded.
 func TestWrapConnectionErrorKeepsClosedConnectionRetryable(t *testing.T) {
@@ -273,9 +281,9 @@ func TestWrapConnectionErrorKeepsClosedConnectionRetryable(t *testing.T) {
 		"wrapped io.ErrUnexpectedEOF": fmt.Errorf("failed to receive message: %w", io.ErrUnexpectedEOF),
 	} {
 		t.Run(name, func(t *testing.T) {
-			wrapped := wrapConnectionError(original, "127.0.0.1", 5441, "demo_db", "postgres")
+			wrapped := WrapConnectionError(original, "127.0.0.1", 5441, "demo_db", "postgres")
 			if !strings.Contains(wrapped.Error(), "server closed the connection") {
-				t.Errorf("wrapConnectionError() = %q, want the closed-connection hint", wrapped.Error())
+				t.Errorf("WrapConnectionError() = %q, want the closed-connection hint", wrapped.Error())
 			}
 			if !classifier.IsTransient(wrapped) {
 				t.Errorf("%q is not retried; a server still starting up must be", wrapped.Error())
@@ -291,8 +299,8 @@ func TestWrapConnectionErrorPrefersCertificateFailureOverEOF(t *testing.T) {
 		errors.New("[::1]:5432 (localhost): tls error: x509: certificate signed by unknown authority"),
 		fmt.Errorf("127.0.0.1:5432 (localhost): failed to receive message: %w", io.ErrUnexpectedEOF),
 	)
-	wrapped := wrapConnectionError(joined, "localhost", 5432, "mydb", "postgres")
+	wrapped := WrapConnectionError(joined, "localhost", 5432, "mydb", "postgres")
 	if !strings.Contains(wrapped.Error(), "SSL/TLS connection error") {
-		t.Errorf("wrapConnectionError() = %q, want the SSL/TLS hint", wrapped.Error())
+		t.Errorf("WrapConnectionError() = %q, want the SSL/TLS hint", wrapped.Error())
 	}
 }

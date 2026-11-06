@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,20 +15,22 @@ import (
 // that authenticate via short-lived tokens (AWS IAM, Azure Entra ID).
 // The token is acquired from a TokenProvider and used as the PostgreSQL password.
 type TokenBasedConnector struct {
-	config        *pgmi.ConnectionConfig
+	config        *ConnectionConfig
 	tokenProvider TokenProvider
 	retryExecutor *retry.Executor
 	providerName  string
+	out           Output
 }
 
 // NewTokenBasedConnector creates a connector that uses a TokenProvider for authentication.
 // providerName is used in error/warning messages (e.g., "AWS IAM", "Azure").
-func NewTokenBasedConnector(config *pgmi.ConnectionConfig, tokenProvider TokenProvider, providerName string) *TokenBasedConnector {
+func NewTokenBasedConnector(config *ConnectionConfig, tokenProvider TokenProvider, providerName string, out Output) *TokenBasedConnector {
 	return &TokenBasedConnector{
 		config:        config,
 		tokenProvider: tokenProvider,
-		retryExecutor: newConnectExecutor(),
+		retryExecutor: newConnectExecutor(out),
 		providerName:  providerName,
+		out:           out,
 	}
 }
 
@@ -40,11 +41,11 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 		// Initial token — also doubles as a reachability check before pool construction.
 		token, expiresOn, err := c.tokenProvider.GetToken(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to acquire %s token: %w", c.providerName, err)
+			return &connError{msg: fmt.Sprintf("failed to acquire %s token: %v", c.providerName, err), err: err}
 		}
 
 		if time.Until(expiresOn) < 5*time.Minute {
-			fmt.Fprintf(os.Stderr, "Warning: %s token expires in %v\n", c.providerName, time.Until(expiresOn).Round(time.Second))
+			c.out.info("Warning: %s token expires in %v", c.providerName, time.Until(expiresOn).Round(time.Second))
 		}
 
 		configWithToken := *c.config
@@ -54,10 +55,10 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
-			return fmt.Errorf("failed to parse connection config: %w", err)
+			return fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
 		}
 
-		configurePool(poolConfig)
+		configurePool(poolConfig, c.out)
 
 		// Cloud auth tokens are short-lived (AWS RDS IAM: 15 min; Azure/GCP
 		// ~1h). Every time pgx dials a NEW backend (initial fill, growth,
@@ -87,13 +88,13 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		if err := pool.Ping(ctx); err != nil {
 			pool.Close()
 			pool = nil
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		return nil

@@ -8,6 +8,8 @@ weight: 160
 
 > **Core model:** pgmi doesn't interpret your SQL — it loads your files into PostgreSQL session tables and hands control to `deploy.sql`, which decides what to do with them.
 
+> **Example layout.** The examples on this page assume SQL files under `migrations/`, `schemas/` and `seeds/`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
+
 ![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
 
 ## How pgmi Actually Works
@@ -43,15 +45,16 @@ pgmi uses a two-tier naming convention for session objects:
 | **Public** | `*_view` suffix | Stable API for deploy.sql | `pgmi_source_view`, `pgmi_plan_view` |
 
 **Why this matters:**
-- Internal tables may change between versions
-- Public views provide a stable contract for deploy.sql
+- Internal tables change without notice
+- Public views name their columns explicitly, so an internal change reaches them only on purpose
+- Before pgmi 1.0 a public view or function may still change in a minor release; every such change is listed under Upgrading in that release's notes
 - Always use views (`pgmi_source_view`, `pgmi_plan_view`) in your SQL
 
 ---
 
-## Public Interface (Stable API)
+## Public Interface
 
-These views and functions are the stable API for deploy.sql. Use these instead of querying internal tables directly.
+These views and functions are the API for deploy.sql. Use these instead of querying internal tables directly.
 
 ### Which View Should I Use?
 
@@ -63,6 +66,35 @@ These views and functions are the stable API for deploy.sql. Use these instead o
 | **Metadata-driven deployment** | `pgmi_plan_view` | Respects `<pgmi-meta>` sort keys |
 
 **Rule of thumb:** Use `pgmi_plan_view` for deployment loops. Use `pgmi_source_view` when you need raw access or custom filtering beyond what the plan provides.
+
+### Runtime
+
+#### pgmi_runtime_view
+
+**One row: which pgmi binary runs this deploy, and which session-API contract it applied.**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `pgmi_version` | text | The binary's version, as `pgmi version` prints it (`0.14.0`; `dev` for an untagged build) |
+| `contract_version` | text | Session API version applied: `--compat`, or the latest the binary ships |
+
+The PostgreSQL version is already in SQL: `current_setting('server_version_num')`.
+These are not session settings, so no `--param` can overwrite them by accident.
+
+```sql
+-- Refuse a binary this deploy.sql was not written for, and record the one that ran.
+DO $$
+DECLARE
+    v_runtime pg_temp.pgmi_runtime_view;
+BEGIN
+    SELECT * INTO STRICT v_runtime FROM pg_temp.pgmi_runtime_view;
+    IF v_runtime.contract_version IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'deploy.sql targets session API v1, pgmi % applied v%',
+            v_runtime.pgmi_version, v_runtime.contract_version;
+    END IF;
+    RAISE NOTICE 'pgmi %, session API v%', v_runtime.pgmi_version, v_runtime.contract_version;
+END $$;
+```
 
 ### File Access
 
@@ -76,14 +108,15 @@ This view provides direct access to all discovered files. For most use cases, pr
 > it never appears here. A `deploy.sql` anywhere else — `examples/deploy.sql`,
 > `sub-project/deploy.sql` — loads like any other file, with `is_sql_file = true`,
 > and a plan loop will execute it. If you keep nested projects inside a project,
-> filter them out by path. See
+> filter them out by path, or keep them out of the session with
+> [`.pgmiignore`](DEPLOY-GUIDE.md#pgmiignore). See
 > [what gets loaded](DEPLOY-GUIDE.md#what-gets-loaded).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `path` | text | Normalized path (always starts with `./`) |
-| `name` | text | Filename without directory |
-| `directory` | text | Directory path ending with `/` |
+| `path` | text | Normalized path (always starts with `./`); `COLLATE "C"`, so `ORDER BY path` is byte order on every server |
+| `name` | text | Filename without directory; `COLLATE "C"` |
+| `directory` | text | Directory path ending with `/`; `COLLATE "C"` |
 | `extension` | text | File extension (e.g., `.sql`) |
 | `depth` | integer | Nesting level (0 = root) |
 | `content` | text | Full file content |
@@ -112,7 +145,7 @@ This view joins `_pgmi_source` with `_pgmi_source_metadata` and provides a clean
 |--------|------|-------------|
 | `path` | text | File path |
 | `content` | text | File content |
-| `checksum` | text | **Normalized** checksum (≠ `pgmi_source_view.checksum` which is raw) — see [Two checksums](#two-checksums-and-which-to-track-against) |
+| `pgmi_checksum` | text | Normalized checksum, the same value as `pgmi_source_view.pgmi_checksum` — see [Two checksums](#two-checksums-and-which-to-track-against) |
 | `generic_id` | uuid | Auto-generated UUID from path |
 | `id` | uuid | Explicit ID from [`<pgmi-meta>`](METADATA.md) (NULL if none) |
 | `idempotent` | boolean | Whether file can be re-executed (defaults to `true` for files without metadata) |
@@ -149,20 +182,18 @@ END $$;
 
 ### Two checksums, and which to track against
 
-`pgmi_source_view` carries two checksum columns per file:
+`pgmi_source_view` carries two checksum columns per file; `pgmi_plan_view` carries the normalized one, under the same name:
 
 | Column | Algorithm |
 |--------|-----------|
 | `checksum` | SHA-256 of the raw file bytes |
-| `pgmi_checksum` | SHA-256 after normalization: comments stripped, whitespace collapsed, and case folded only where SQL ignores it — keywords and unquoted identifiers. Literals, quoted identifiers and dollar-quoted bodies keep their case, so `"Users"`/`"users"` and `'Production'`/`'production'` stay distinct |
-
-**The naming trap:** `pgmi_plan_view.checksum` is the **normalized** checksum, not the raw one. The column name is the same, the value is different. Code that tracks `pgmi_source_view.checksum` into a history table and later compares against `pgmi_plan_view.checksum` will never match.
+| `pgmi_checksum` | SHA-256 after normalization: comments stripped, and whitespace collapsed and case folded only where SQL ignores them — between tokens, in keywords and unquoted identifiers. Literals, quoted identifiers and dollar-quoted bodies keep their whitespace and case, so `"Users"`/`"users"` and `'Production'`/`'production'` stay distinct |
 
 **Which to use:**
 
-- Track against `pgmi_checksum` (or `pgmi_plan_view.checksum`) when you want reformatting, re-indentation, and comment edits to be free — a touched-up file won't re-execute.
+- Track against `pgmi_checksum` when you want reformatting, re-indentation, and comment edits to be free — a touched-up file won't re-execute.
 - Track against `pgmi_source_view.checksum` when you need byte-exact provenance — any edit, including a comment, triggers re-execution.
-- Track data files (`.json`, `.csv`, `.xml`) against `pgmi_source_view.checksum`. The normalization is SQL-aware: it collapses whitespace inside JSON strings and strips anything after `--` in a CSV line, so a real data change can leave `pgmi_checksum` unchanged.
+- Track data files (`.json`, `.csv`, `.xml`) against `pgmi_source_view.checksum`. The normalization is SQL-aware: it folds case and strips anything after `--` or between `/* */` outside quotes, so a real data change, such as a CSV line edited after `--`, can leave `pgmi_checksum` unchanged.
 
 **Honest cost:** a change that touches *only* comments is invisible to `pgmi_checksum`. If your comments carry operational meaning (e.g., planner hints via `pg_hint_plan`, or `<pgmi-meta>` blocks that don't affect the normalized body), the normalized checksum won't catch the edit.
 
@@ -177,11 +208,15 @@ CLI parameters (passed via `--param key=value`) are accessible in multiple ways.
 pgmi automatically sets session variables with the `pgmi.` prefix. This is the simplest and most common approach:
 
 ```sql
--- Get parameter with default (the true argument prevents errors if not set)
-v_env := COALESCE(current_setting('pgmi.env', true), 'development');
+-- Read a parameter (true: NULL instead of an error when it is not set);
+-- refuse a missing env rather than default it
+v_env := current_setting('pgmi.env', true);
+IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+    RAISE EXCEPTION 'Parameter env must be dev, test or prod' USING HINT = 'Pass --param env=dev, test or prod.';
+END IF;
 
 -- In conditional logic
-IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+IF current_setting('pgmi.env') = 'prod' THEN
     -- Production-specific logic
 END IF;
 
@@ -263,8 +298,12 @@ v_optional := pg_temp.deployment_setting('optional_key', false);
 Parameters merge from multiple sources (later wins):
 
 ```
-pgmi.yaml params < --params-file < --param CLI flag
+pgmi.yaml params < PGMI_PARAM_* environment variables < --params-file < --param CLI flag
 ```
+
+`PGMI_PARAM_DB_PASSWORD` arrives as `pgmi.db_password`. Keys compare
+case-insensitively. Across sources the later wins; two keys differing only in
+case inside one source exit 10.
 
 See [Configuration Reference](CONFIGURATION.md) for details.
 
@@ -356,8 +395,12 @@ END $$;
 DO $$
 DECLARE
     v_file RECORD;
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
 BEGIN
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
     FOR v_file IN (
         SELECT p.path, p.content
         FROM pg_temp.pgmi_plan_view p
@@ -369,7 +412,7 @@ BEGIN
     END LOOP;
 
     -- Only seed data in development
-    IF v_env = 'development' THEN
+    IF v_env = 'dev' THEN
         FOR v_file IN (
             SELECT p.path, p.content
             FROM pg_temp.pgmi_plan_view p
@@ -530,15 +573,17 @@ SELECT pg_temp.pgmi_test_generate('.*/auth/.*', 'pg_temp.my_callback');
 The generated structure, with the callback calls left out:
 ```sql
 SAVEPOINT __pgmi_d1__;                                    -- Directory savepoint (top-level SQL)
-SELECT pg_temp.pgmi_run_test_source('./__test__/_setup.sql');  -- Fixture
+RUN ./__test__/_setup.sql  -- Fixture
 SAVEPOINT __pgmi_t2__;                                    -- Per-directory test savepoint (top-level SQL)
-SELECT pg_temp.pgmi_run_test_source('./__test__/test_a.sql');  -- Test
+RUN ./__test__/test_a.sql  -- Test
 ROLLBACK TO SAVEPOINT __pgmi_t2__;                        -- Undoes test side effects
-SELECT pg_temp.pgmi_run_test_source('./__test__/test_b.sql');  -- Next test in same directory
+RUN ./__test__/test_b.sql  -- Next test in same directory
 ROLLBACK TO SAVEPOINT __pgmi_t2__;                        -- Undoes test_b side effects
 ROLLBACK TO SAVEPOINT __pgmi_d1__;                        -- Teardown: undoes fixture
 RELEASE SAVEPOINT __pgmi_d1__;                            -- Clean up savepoint
 ```
+
+`RUN <file>` stands for `SELECT set_config('pgmi_test.path', '<file>', true);` and a constant `DO $pgmi_test$ … $pgmi_test$` block that `EXECUTE`s the file's content from `pg_temp._pgmi_test_source`. The path never appears inside the dollar-quoted body, so no file name can break out of it.
 
 This is why `CALL pgmi_test()` must appear at the top level of your deploy.sql, not inside a DO block.
 
@@ -678,8 +723,12 @@ BEGIN;
 DO $$
 DECLARE
     v_file RECORD;
-    v_env TEXT := COALESCE(current_setting('pgmi.env', true), 'development');
+    v_env TEXT := current_setting('pgmi.env', true);
 BEGIN
+    IF v_env IS NULL OR v_env NOT IN ('dev', 'test', 'prod') THEN
+        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', coalesce(quote_literal(v_env), 'nothing')
+            USING HINT = 'Pass --param env=dev, test or prod; there is no default.';
+    END IF;
     -- Always run migrations
     FOR v_file IN (
         SELECT p.path, p.content
@@ -692,7 +741,7 @@ BEGIN
     END LOOP;
 
     -- Only seed data in development
-    IF v_env = 'development' THEN
+    IF v_env = 'dev' THEN
         FOR v_file IN (
             SELECT p.path, p.content
             FROM pg_temp.pgmi_plan_view p
@@ -784,9 +833,9 @@ These tables are the underlying storage for the session API. Users should use th
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `path` | text | Normalized path (always starts with `./`) |
-| `name` | text | Filename without directory |
-| `directory` | text | Directory path ending with `/` |
+| `path` | text | Normalized path (always starts with `./`); `COLLATE "C"`, so `ORDER BY path` is byte order on every server |
+| `name` | text | Filename without directory; `COLLATE "C"` |
+| `directory` | text | Directory path ending with `/`; `COLLATE "C"` |
 | `extension` | text | File extension (e.g., `.sql`) |
 | `depth` | integer | Nesting level (0 = root) |
 | `content` | text | Full file content |

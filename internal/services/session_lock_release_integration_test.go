@@ -29,7 +29,7 @@ func countReleases(t *testing.T, n *int) {
 	t.Cleanup(func() { services.ReleaseDeployLock = original })
 }
 
-func lockTestManager(t *testing.T, connString, testDB string) (*services.SessionManager, *pgmi.ConnectionConfig, pgmi.FileScanResult) {
+func lockTestManager(t *testing.T, connString, testDB string) (*services.SessionManager, *db.ConnectionConfig, scanner.Result) {
 	t.Helper()
 
 	connConfig, err := db.ParseConnectionString(connString)
@@ -39,7 +39,7 @@ func lockTestManager(t *testing.T, connString, testDB string) (*services.Session
 	connConfig.Database = testDB
 
 	fileScanner := scanner.NewScannerWithFS(checksum.New(), fixtures.StandardMultiLevel())
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, loader.NewLoader(), logging.NewNullLogger())
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{}), fileScanner, loader.NewLoader(), logging.NewNullLogger(), "test")
 	return sm, connConfig, mustScanProject(t, sm)
 }
 
@@ -80,7 +80,7 @@ func TestPrepareSession_ReleasesLockOnFailureAfterAcquire(t *testing.T) {
 		t.Fatalf("Retry after a failed preparation should succeed: %v", err)
 	}
 	// Still 1: a successful preparation hands the lock to the Session, and
-	// Session.Close releases it through pkg/pgmi, not through this seam.
+	// Session.Close releases it through internal/session, not through this seam.
 	// TestReleaseDeployLock_* in pkg/pgmi covers that half.
 	if released != 1 {
 		t.Errorf("A successful preparation released the lock; want the handover to Close, got %d releases", released)

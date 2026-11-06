@@ -15,9 +15,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/config"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/ui"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var infoFlags struct {
@@ -104,10 +104,10 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		}
 		info.Directories[dir]++
 
-		if pgmi.IsSQLExtension(f.Extension) {
+		if pathrule.IsSQLExtension(f.Extension) {
 			info.SQLFiles++
 		}
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			info.TestFiles++
 		}
 		if f.Metadata != nil {
@@ -193,6 +193,3 @@ func printProjectInfo(info projectInfo) {
 		}
 	}
 }
-
-// ensure FileScanner is compatible
-var _ pgmi.FileScanner = (*scanner.Scanner)(nil)

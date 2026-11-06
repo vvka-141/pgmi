@@ -4,7 +4,7 @@
     Sets up a Windows development environment for pgmi with dockerized PostgreSQL.
 .DESCRIPTION
     Checks and installs: Git, Go, container runtime (Docker Desktop or Rancher Desktop),
-    then pulls the Azure Flex PostgreSQL 17 image and starts a ready-to-use container.
+    then pulls the official PostgreSQL 18 image and starts a ready-to-use container.
 #>
 
 # ============================================================================
@@ -12,12 +12,12 @@
 # ============================================================================
 
 $ContainerRuntime  = "DockerDesktop"   # "DockerDesktop" or "RancherDesktop"
-$ContainerName     = "pgmi-postgres17"
-$PostgresImage     = "postgres:17"   # official image; must match internal/testinfra PostgresImage
+$ContainerName     = "pgmi-postgres18"
+$PostgresImage     = "postgres:18"   # official image; must match internal/testinfra PostgresImage
 $PostgresPort      = 5432
 $PostgresUser      = "postgres"
 $PostgresPassword  = "postgres"
-$DataVolumePath    = "$env:USERPROFILE\.pgmi\pgdata17"
+$DataVolumePath    = "$env:USERPROFILE\.pgmi\pgdata18"
 $PgmiRepo          = "github.com/vvka-141/pgmi/cmd/pgmi@latest"
 
 # ============================================================================
@@ -277,7 +277,7 @@ function Assert-PostgresContainer {
             "-e", "POSTGRES_USER=$PostgresUser",
             "-e", "POSTGRES_PASSWORD=$PostgresPassword",
             "-p", "${PostgresPort}:5432",
-            "-v", "${DataVolumePath}:/var/lib/postgresql/data",
+            "-v", "${DataVolumePath}:/var/lib/postgresql",
             "--restart", "unless-stopped",
             $PostgresImage
         )

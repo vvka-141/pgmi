@@ -14,8 +14,8 @@ import (
 // calling apply_entity_standards_all(), and nothing else in the suite would
 // notice its absence:
 //
-//   - both shipped entity tables (api.handler, membership.api_key) call
-//     apply_entity_table_standards inline, so they are unaffected;
+//   - the shipped entity table (api.handler) calls
+//     apply_entity_table_standards inline, so it is unaffected;
 //   - test_entity_standards.sql invokes the sweep itself, so it passes either
 //     way.
 //

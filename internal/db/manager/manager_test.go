@@ -3,20 +3,22 @@ package manager_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/db/manager"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
-// mockDBConnection is a test double for pgmi.DBConnection
+// mockDBConnection is a test double for db.DBConnection
 type mockDBConnection struct {
 	execFunc     func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	queryRowFunc func(ctx context.Context, sql string, args ...any) pgmi.Row
-	acquireFunc  func(ctx context.Context) (pgmi.PooledConnection, error)
+	queryRowFunc func(ctx context.Context, sql string, args ...any) db.Row
+	acquireFunc  func(ctx context.Context) (db.PooledConnection, error)
 }
 
 func (m *mockDBConnection) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -26,21 +28,21 @@ func (m *mockDBConnection) Exec(ctx context.Context, sql string, args ...any) (p
 	return pgconn.CommandTag{}, nil
 }
 
-func (m *mockDBConnection) QueryRow(ctx context.Context, sql string, args ...any) pgmi.Row {
+func (m *mockDBConnection) QueryRow(ctx context.Context, sql string, args ...any) db.Row {
 	if m.queryRowFunc != nil {
 		return m.queryRowFunc(ctx, sql, args...)
 	}
 	return &mockRow{}
 }
 
-func (m *mockDBConnection) Acquire(ctx context.Context) (pgmi.PooledConnection, error) {
+func (m *mockDBConnection) Acquire(ctx context.Context) (db.PooledConnection, error) {
 	if m.acquireFunc != nil {
 		return m.acquireFunc(ctx)
 	}
 	return &mockPooledConnection{}, nil
 }
 
-// mockRow is a test double for pgmi.Row
+// mockRow is a test double for db.Row
 type mockRow struct {
 	scanFunc func(dest ...any) error
 }
@@ -52,7 +54,7 @@ func (m *mockRow) Scan(dest ...any) error {
 	return nil
 }
 
-// mockPooledConnection is a test double for pgmi.PooledConnection
+// mockPooledConnection is a test double for db.PooledConnection
 type mockPooledConnection struct {
 	execFunc    func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	releaseFunc func()
@@ -63,6 +65,10 @@ func (m *mockPooledConnection) Exec(ctx context.Context, sql string, args ...any
 		return m.execFunc(ctx, sql, args...)
 	}
 	return pgconn.CommandTag{}, nil
+}
+
+func (m *mockPooledConnection) QueryRow(_ context.Context, _ string, _ ...any) db.Row {
+	return nil
 }
 
 func (m *mockPooledConnection) Release() {
@@ -94,7 +100,7 @@ func TestManager_Create_WithSpecialCharsInName(t *testing.T) {
 			// Track what SQL was executed
 			var executedSQL string
 			mockConn := &mockDBConnection{
-				acquireFunc: func(ctx context.Context) (pgmi.PooledConnection, error) {
+				acquireFunc: func(ctx context.Context) (db.PooledConnection, error) {
 					return &mockPooledConnection{
 						execFunc: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 							executedSQL = sql
@@ -154,7 +160,7 @@ func TestManager_Create_SQLInjectionAttempt(t *testing.T) {
 
 			var executedSQL string
 			mockConn := &mockDBConnection{
-				acquireFunc: func(ctx context.Context) (pgmi.PooledConnection, error) {
+				acquireFunc: func(ctx context.Context) (db.PooledConnection, error) {
 					return &mockPooledConnection{
 						execFunc: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 							executedSQL = sql
@@ -184,49 +190,13 @@ func TestManager_Create_SQLInjectionAttempt(t *testing.T) {
 	}
 }
 
-func TestManager_TerminateConnections_NoActiveConnections(t *testing.T) {
-	ctx := context.Background()
-	mgr := manager.New()
-
-	var executedSQL string
-	var executedArgs []any
-
-	mockConn := &mockDBConnection{
-		execFunc: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			executedSQL = sql
-			executedArgs = args
-			return pgconn.CommandTag{}, nil
-		},
-	}
-
-	err := mgr.TerminateConnections(ctx, mockConn, "testdb")
-	if err != nil {
-		t.Fatalf("TerminateConnections failed: %v", err)
-	}
-
-	// Verify SQL was executed
-	if executedSQL == "" {
-		t.Fatal("Expected SQL to be executed")
-	}
-
-	// Verify correct database name was passed
-	if len(executedArgs) != 1 || executedArgs[0] != "testdb" {
-		t.Errorf("Expected args [testdb], got %v", executedArgs)
-	}
-
-	// The name travels as a bind parameter, never inside the SQL text.
-	if !strings.Contains(executedSQL, "pg_terminate_backend") || !strings.Contains(executedSQL, "$1") || strings.Contains(executedSQL, "testdb") {
-		t.Errorf("expected a parameterised pg_terminate_backend query, got: %s", executedSQL)
-	}
-}
-
 func TestManager_Drop_NonExistentDatabase(t *testing.T) {
 	ctx := context.Background()
 	mgr := manager.New()
 
 	// Simulate DROP DATABASE failing because database doesn't exist
 	mockConn := &mockDBConnection{
-		acquireFunc: func(ctx context.Context) (pgmi.PooledConnection, error) {
+		acquireFunc: func(ctx context.Context) (db.PooledConnection, error) {
 			return &mockPooledConnection{
 				execFunc: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 					// Simulate PostgreSQL error
@@ -251,7 +221,7 @@ func TestManager_Exists_DatabaseExists(t *testing.T) {
 	mgr := manager.New()
 
 	mockConn := &mockDBConnection{
-		queryRowFunc: func(ctx context.Context, sql string, args ...any) pgmi.Row {
+		queryRowFunc: func(ctx context.Context, sql string, args ...any) db.Row {
 			return &mockRow{
 				scanFunc: func(dest ...any) error {
 					// Set the result to true (database exists)
@@ -281,7 +251,7 @@ func TestManager_Exists_DatabaseDoesNotExist(t *testing.T) {
 	mgr := manager.New()
 
 	mockConn := &mockDBConnection{
-		queryRowFunc: func(ctx context.Context, sql string, args ...any) pgmi.Row {
+		queryRowFunc: func(ctx context.Context, sql string, args ...any) db.Row {
 			return &mockRow{
 				scanFunc: func(dest ...any) error {
 					// Set the result to false (database doesn't exist)
@@ -312,7 +282,7 @@ func TestManager_Exists_QueryError(t *testing.T) {
 
 	expectedErr := errors.New("connection lost")
 	mockConn := &mockDBConnection{
-		queryRowFunc: func(ctx context.Context, sql string, args ...any) pgmi.Row {
+		queryRowFunc: func(ctx context.Context, sql string, args ...any) db.Row {
 			return &mockRow{
 				scanFunc: func(dest ...any) error {
 					return expectedErr
@@ -338,7 +308,7 @@ func TestManager_Create_ConnectionAcquireFailure(t *testing.T) {
 
 	expectedErr := errors.New("pool exhausted")
 	mockConn := &mockDBConnection{
-		acquireFunc: func(ctx context.Context) (pgmi.PooledConnection, error) {
+		acquireFunc: func(ctx context.Context) (db.PooledConnection, error) {
 			return nil, expectedErr
 		},
 	}
@@ -359,7 +329,7 @@ func TestManager_Drop_ConnectionAcquireFailure(t *testing.T) {
 
 	expectedErr := errors.New("pool exhausted")
 	mockConn := &mockDBConnection{
-		acquireFunc: func(ctx context.Context) (pgmi.PooledConnection, error) {
+		acquireFunc: func(ctx context.Context) (db.PooledConnection, error) {
 			return nil, expectedErr
 		},
 	}
@@ -371,5 +341,41 @@ func TestManager_Drop_ConnectionAcquireFailure(t *testing.T) {
 
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("Expected wrapped error, got: %v", err)
+	}
+}
+
+func TestManager_Create_AttemptsEveryRestoreAndReportsAllFailures(t *testing.T) {
+	var executed []string
+	conn := &mockDBConnection{acquireFunc: func(context.Context) (db.PooledConnection, error) {
+		return &mockPooledConnection{execFunc: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+			executed = append(executed, sql)
+			if strings.Contains(sql, "log_min_duration_statement") || strings.Contains(sql, "lock_timeout") {
+				return pgconn.CommandTag{}, &pgconn.PgError{Code: "42501", Message: "permission denied to set parameter"}
+			}
+			return pgconn.CommandTag{}, nil
+		}}, nil
+	}}
+	comment := "kept"
+	settings := &manager.DatabaseSettings{
+		ConnectionLimit: -1,
+		Options:         []string{"log_min_duration_statement=100", "work_mem=8MB"},
+		RoleOptions:     []manager.DatabaseRoleOptions{{Role: "app", Options: []string{"lock_timeout=1s", "search_path=app"}}},
+		Comment:         &comment,
+	}
+
+	err := manager.New().Create(context.Background(), conn, "db", settings)
+
+	if !errors.Is(err, pgmi.ErrExecutionFailed) {
+		t.Fatalf("error %v, want ErrExecutionFailed (exit 13)", err)
+	}
+	for _, want := range []string{`"log_min_duration_statement"`, `"lock_timeout" of role "app"`, "2 of its settings"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %s: %v", want, err)
+		}
+	}
+	for _, want := range []string{"work_mem", "search_path", "COMMENT ON DATABASE"} {
+		if !slices.ContainsFunc(executed, func(s string) bool { return strings.Contains(s, want) }) {
+			t.Errorf("%s was not attempted after an earlier failure; executed: %q", want, executed)
+		}
 	}
 }

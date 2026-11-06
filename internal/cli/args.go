@@ -28,12 +28,16 @@ func showHelp(cmd *cobra.Command, _ []string) error {
 // RequireProjectPath validates that exactly one project_path argument is provided.
 func RequireProjectPath(cmd *cobra.Command, args []string) error {
 	if len(args) < 1 {
+		example := cmd.CommandPath() + " ."
+		if cmd.Flags().Lookup("database") != nil {
+			example += " -d mydb"
+		}
 		return fmt.Errorf(`%w: missing required argument: <project_path>
 
 Usage: %s
 
 Example:
-  %s . -d mydb`, pgmi.ErrUsage, cmd.UseLine(), cmd.CommandPath())
+  %s`, pgmi.ErrUsage, cmd.UseLine(), example)
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("%w: accepts 1 arg(s), received %d", pgmi.ErrUsage, len(args))
@@ -52,24 +56,6 @@ Example:
   %s basic
 
 Use 'pgmi templates list' to see available templates.`, pgmi.ErrUsage, cmd.UseLine(), cmd.CommandPath())
-	}
-	if len(args) > 1 {
-		return fmt.Errorf("%w: accepts 1 arg(s), received %d", pgmi.ErrUsage, len(args))
-	}
-	return nil
-}
-
-// RequireSkillName validates that exactly one skill_name argument is provided.
-func RequireSkillName(cmd *cobra.Command, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf(`%w: missing required argument: <name>
-
-Usage: %s
-
-Example:
-  %s pgmi-sql
-
-Use 'pgmi ai skills' to see available skills.`, pgmi.ErrUsage, cmd.UseLine(), cmd.CommandPath())
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("%w: accepts 1 arg(s), received %d", pgmi.ErrUsage, len(args))

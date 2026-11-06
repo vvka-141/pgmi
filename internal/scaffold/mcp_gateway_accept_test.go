@@ -17,7 +17,7 @@ func TestMCPGateway_AcceptQValues(t *testing.T) {
 	python := findPython(t)
 
 	workDir := t.TempDir()
-	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "tools", "mcp-gateway.py"))
+	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", "gateway.py"))
 	if err != nil {
 		t.Fatalf("read gateway source: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestMCPGateway_AcceptQValues(t *testing.T) {
 		t.Fatalf("write gateway copy: %v", err)
 	}
 	// _accepts_json is pure, but the module resolves psycopg at import time.
-	writePsycopgStub(t, workDir)
+	writeGatewayDependencies(t, workDir)
 
 	cases := []struct {
 		accept string
@@ -45,6 +45,8 @@ func TestMCPGateway_AcceptQValues(t *testing.T) {
 		{"text/html", false},
 		{"application/json-patch+json", false},
 		{"text/html, application/json;q=0", false},
+		{"application/json;q=0, */*", false},
+		{"application/*;q=0, application/json", true},
 	}
 
 	inputs := make([]string, len(cases))

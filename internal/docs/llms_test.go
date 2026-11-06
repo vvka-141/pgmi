@@ -26,8 +26,9 @@ func TestLLMSTxtLinksResolve(t *testing.T) {
 	}
 
 	// Available site paths for every page under docs/ (recursive): the Hugo
-	// default — docs/<relative path, lowercased, .md stripped; _index.md maps
-	// to its directory> — unless the page pins an explicit `url:` in front
+	// default — docs/<relative path, lowercased, .md stripped; _index.md, and
+	// a subfolder's README.md that hugo.toml mounts as one, map to the
+	// directory> — unless the page pins an explicit `url:` in front
 	// matter (used to keep historical URLs stable after a file moves into a
 	// subdirectory).
 	slugSrc := map[string]string{}
@@ -42,9 +43,12 @@ func TestLLMSTxtLinksResolve(t *testing.T) {
 		}
 		rel = strings.ToLower(filepath.ToSlash(rel))
 		var slug string
-		if strings.HasSuffix(rel, "/_index.md") {
+		switch {
+		case strings.HasSuffix(rel, "/_index.md"):
 			slug = strings.TrimSuffix(rel, "/_index.md")
-		} else {
+		case strings.HasSuffix(rel, "/readme.md"):
+			slug = strings.TrimSuffix(rel, "/readme.md")
+		default:
 			slug = strings.TrimSuffix(rel, ".md")
 		}
 		slugSrc[slug] = path

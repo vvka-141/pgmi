@@ -333,13 +333,14 @@ shallower curve and a larger ecosystem. This matters enough to be a decision rul
 inverted model earns its cost when the deployment has *shape* — phases, conditions, gates,
 data-dependent branching — and not before.
 
-**A durable ledger is a real property, given up by default.** An external tool's history
+**A durable ledger is a real property, and the project now owns it.** An external tool's history
 table survives the session, the operator, and the tool itself. A model where the deployment
 program decides what has run means an environment's history is exactly as good as the
-program that maintains it, and a team that writes no tracking gets none. Three lines in the
-scaffolded starter recover apply-once semantics, and the advanced template ships a full
-tracking system — but the choice is now something a team makes, badly or well, rather than
-something they inherit.
+program that maintains it, and a team that deletes the tracking gets none. The scaffolded
+starter ships a small ledger: each run-once file runs once, and a deploy that finds one
+edited after it ran is refused, with the file named. The advanced template ships a full
+tracking system. But both are project code: the choice is now something a team keeps,
+changes or removes, badly or well, rather than something they inherit.
 
 **One session is the model, and transaction pooling breaks it.** The handover lives in
 session-local objects. A transaction-mode pooler does not hold a client to one backend
@@ -410,3 +411,7 @@ contains no explicit transaction control, PostgreSQL executes its statements as 
 transaction. An explicit `BEGIN` without a terminator instead leaves a regular transaction
 open — which is worth knowing before writing a deployment that opens one and never closes
 it.
+
+---
+
+*Updated November 2026 for pgmi v0.14: the scaffolded starter now ships a run-once ledger that refuses to redeploy a file edited after it ran, and the paragraph on durable ledgers reflects it.*

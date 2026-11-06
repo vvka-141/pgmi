@@ -26,13 +26,13 @@ the SQL side:
 
 - **No version/history table.** Tracking is
   [a choice you implement](../TRADEOFFS.md#migration-tracking-is-a-choice-you-make-not-a-default-you-inherit)
-  (the [advanced template](../advanced/_index.md) ships a complete one).
+  (the [advanced template](../advanced/README.md) ships a complete one).
 - **No tool-imposed execution order.** The
   [plan is a derived, queryable view](../METADATA.md#execution-order-sort-keys);
   your deploy.sql decides what to run and in which order.
-- **No retry logic or error taxonomy.** Errors are
-  [raw PostgreSQL errors](../TRADEOFFS.md#debugging-is-raw-postgresql-errors)
-  with [numbered exit codes](../CLI.md); retry policy belongs to the layer
+- **No retry logic or error taxonomy.** Errors are PostgreSQL's own, with the
+  failing file named ([limits](../TRADEOFFS.md#a-runtime-error-names-the-file-not-the-line))
+  and [numbered exit codes](../CLI.md); retry policy belongs to the layer
   that owns the transaction.
 - **No implicit idempotency.** `CREATE OR REPLACE`, `IF NOT EXISTS`, and
   checksum-tracking patterns are yours to apply — pgmi will faithfully re-run

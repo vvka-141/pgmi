@@ -1,7 +1,10 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/vvka-141/pgmi/internal/config"
@@ -238,11 +241,11 @@ func TestResolveConnectionParams_FromConnectionString(t *testing.T) {
 			wantError:         false,
 		},
 		{
-			name:              "URI without database - uses default",
+			name:              "URI without database - target left unset, maintenance postgres",
 			connString:        "postgresql://testuser@testhost:5433",
 			wantHost:          "testhost",
 			wantPort:          5433,
-			wantDatabase:      "postgres",
+			wantDatabase:      "",
 			wantMaintenanceDB: "postgres",
 			wantError:         false,
 		},
@@ -411,27 +414,6 @@ func TestResolveConnectionParams_DatabaseURL(t *testing.T) {
 			wantMaintDB:  "mydb",
 		},
 		{
-			name: "granular flags override DATABASE_URL",
-			flags: &GranularConnFlags{
-				Host: "flaghost",
-			},
-			envVars: &EnvVars{
-				DATABASE_URL: "postgresql://user:pass@envhost:5433/envdb",
-			},
-			wantHost:    "flaghost",
-			wantMaintDB: "postgres",
-		},
-		{
-			name:  "PGHOST overrides DATABASE_URL when granular flag present",
-			flags: &GranularConnFlags{Port: 5433},
-			envVars: &EnvVars{
-				PGHOST:       "pghost",
-				DATABASE_URL: "postgresql://user:pass@urlhost:5432/urldb",
-			},
-			wantHost:    "pghost",
-			wantMaintDB: "postgres",
-		},
-		{
 			name:  "PGMI_CONNECTION_STRING beats DATABASE_URL",
 			flags: &GranularConnFlags{},
 			envVars: &EnvVars{
@@ -441,15 +423,6 @@ func TestResolveConnectionParams_DatabaseURL(t *testing.T) {
 			wantHost:     "pgmihost",
 			wantDatabase: "pgmidb",
 			wantMaintDB:  "pgmidb",
-		},
-		{
-			name:  "granular flags override PGMI_CONNECTION_STRING without conflict",
-			flags: &GranularConnFlags{Host: "flaghost", Port: 5471},
-			envVars: &EnvVars{
-				PGMI_CONNECTION_STRING: "postgresql://user:secret@envhost:5433/envdb",
-			},
-			wantHost:    "flaghost",
-			wantMaintDB: "postgres",
 		},
 	}
 
@@ -693,7 +666,7 @@ func TestApplyCertParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &pgmi.ConnectionConfig{}
+			cfg := &ConnectionConfig{}
 			applyCertParams(cfg, tt.flags, tt.env, tt.pc)
 
 			if cfg.SSLCert != tt.wantSSLCert {
@@ -813,7 +786,7 @@ func TestApplyAWSAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			cfg := &ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
 			applyAWSAuth(cfg, tt.flags, tt.env, tt.pc)
 
 			if cfg.AuthMethod != tt.wantAuthMethod {
@@ -869,7 +842,7 @@ func TestApplyGoogleAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			cfg := &ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
 			applyGoogleAuth(cfg, tt.flags, tt.pc)
 
 			if cfg.AuthMethod != tt.wantAuthMethod {
@@ -935,7 +908,7 @@ func TestApplyAzureAuth_YamlFallback(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &pgmi.ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
+			cfg := &ConnectionConfig{AuthMethod: pgmi.AuthMethodStandard}
 			applyAzureAuth(cfg, tt.flags, tt.env, tt.pc)
 
 			if cfg.AuthMethod != tt.wantAuthMethod {
@@ -1134,11 +1107,11 @@ func TestResolveConnectionParams_ConnectionStringReplacesProjectConfig(t *testin
 		if cfg.Port == 5434 {
 			t.Error("Port = 5434, taken from pgmi.yaml rather than the default")
 		}
-		// The consequence users hit: pgmi.yaml names a database, the string does
-		// not, and the deploy targets postgres.
-		if cfg.Database != "postgres" {
-			t.Errorf("Database = %q, want postgres — a string without a dbname falls to "+
-				"the built-in default, documented in CONFIGURATION.md", cfg.Database)
+		// A string without a dbname leaves the target unset, never postgres:
+		// the deploy then takes pgmi.yaml's database or refuses (exit 10).
+		if cfg.Database != "" {
+			t.Errorf("Database = %q, want it unset — a dbname-less string used to "+
+				"deploy into the postgres maintenance database", cfg.Database)
 		}
 	})
 
@@ -1153,4 +1126,131 @@ func TestResolveConnectionParams_ConnectionStringReplacesProjectConfig(t *testin
 			t.Errorf("pgmi.yaml was not applied without a connection string: %+v", cfg)
 		}
 	})
+}
+
+// A server flag next to an environment connection string is refused: using
+// the flag alone would drop the string and connect to localhost as the OS
+// user; merging would send the string's password to the flag's host.
+func TestResolveConnectionParams_ServerFlagWithEnvironmentStringIsRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		flags *GranularConnFlags
+		env   *EnvVars
+		want  string
+	}{
+		{"host", &GranularConnFlags{Host: "flaghost"}, &EnvVars{DATABASE_URL: "postgresql://u:p@envhost/envdb"}, "-h with DATABASE_URL"},
+		{"port and PGHOST", &GranularConnFlags{Port: 5433}, &EnvVars{PGHOST: "pghost", DATABASE_URL: "postgresql://u:p@urlhost/urldb"}, "-p with DATABASE_URL"},
+		{"several", &GranularConnFlags{Host: "h", Port: 5471, Username: "u", SSLMode: "require"},
+			&EnvVars{PGMI_CONNECTION_STRING: "postgresql://u:secret@envhost:5433/envdb"}, "-h, -p, -U with PGMI_CONNECTION_STRING"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := ResolveConnectionParams("", tt.flags, nil, nil, nil, nil, tt.env, nil)
+			if !errors.Is(err, pgmi.ErrInvalidConfig) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("want ErrInvalidConfig naming %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestResolveConnectionParams_SSLModeFlagAppliesToEnvironmentString(t *testing.T) {
+	cfg, maintenanceDB, err := ResolveConnectionParams("", &GranularConnFlags{SSLMode: "disable"}, nil, nil, nil, nil,
+		&EnvVars{DATABASE_URL: "postgresql://u:p@envhost:5433/envdb?sslmode=require"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "envhost" || cfg.Port != 5433 || cfg.Database != "envdb" || maintenanceDB != "envdb" || cfg.SSLMode != "disable" {
+		t.Fatalf("got %s:%d/%s (maintenance %s) sslmode %s; want envhost:5433/envdb, sslmode disable",
+			cfg.Host, cfg.Port, cfg.Database, maintenanceDB, cfg.SSLMode)
+	}
+	notes := EnvOverrides("postgresql://u:p@envhost:5433/envdb?sslmode=require", "DATABASE_URL",
+		&GranularConnFlags{SSLMode: "disable"}, nil, &EnvVars{}, nil)
+	if len(notes) != 1 || notes[0].String() != "sslmode: from --sslmode (disable), not DATABASE_URL (require)" {
+		t.Fatalf("the replaced sslmode must be announced, got %v", notes)
+	}
+}
+
+func TestResolveConnectionParams_ConnectionConflictNamesTheFlags(t *testing.T) {
+	_, _, err := ResolveConnectionParams("postgresql://u@h/db", &GranularConnFlags{SSLMode: "require"}, nil, nil, nil, nil, nil, nil)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) || !strings.Contains(err.Error(), "--connection with --sslmode") ||
+		!strings.Contains(err.Error(), "sslmode=require") || strings.Contains(err.Error(), "(-h, -p, -U)") {
+		t.Fatalf("want the conflict to name --sslmode and hint sslmode=require in the string, got %v", err)
+	}
+}
+
+// An explicit auth flag outranks pgmi.yaml's auth_method, as every other flag
+// outranks pgmi.yaml.
+func TestResolveConnectionParams_AuthFlagOverridesYAMLAuthMethod(t *testing.T) {
+	flagsFor := map[string]func() (*AzureFlags, *AWSFlags, *GoogleFlags){
+		"":      func() (*AzureFlags, *AWSFlags, *GoogleFlags) { return nil, nil, nil },
+		"azure": func() (*AzureFlags, *AWSFlags, *GoogleFlags) { return &AzureFlags{Enabled: true}, nil, nil },
+		"aws": func() (*AzureFlags, *AWSFlags, *GoogleFlags) {
+			return nil, &AWSFlags{Enabled: true, Region: "eu-west-1"}, nil
+		},
+		"google": func() (*AzureFlags, *AWSFlags, *GoogleFlags) {
+			return nil, nil, &GoogleFlags{Enabled: true, Instance: "p:r:i"}
+		},
+	}
+	want := map[string]pgmi.AuthMethod{"": pgmi.AuthMethodStandard, "azure": pgmi.AuthMethodAzureEntraID,
+		"aws": pgmi.AuthMethodAWSIAM, "google": pgmi.AuthMethodGoogleIAM}
+	for flag := range flagsFor {
+		for _, yaml := range []string{"", "azure", "aws", "google"} {
+			t.Run(fmt.Sprintf("flag=%q yaml=%q", flag, yaml), func(t *testing.T) {
+				azure, aws, google := flagsFor[flag]()
+				pc := &config.ProjectConfig{Connection: config.ConnectionConfig{
+					Host: "db.example", Database: "app", AuthMethod: yaml, GoogleInstance: "proj:eu:other", AWSRegion: "us-east-1"}}
+				cfg, _, err := ResolveConnectionParams("", nil, azure, aws, google, nil, &EnvVars{}, pc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := want[flag]
+				if flag == "" {
+					expected = want[yaml]
+				}
+				if cfg.AuthMethod != expected {
+					t.Errorf("auth method %v, want %v", cfg.AuthMethod, expected)
+				}
+				if flag != "" && flag != "google" && cfg.GoogleInstance != "" {
+					t.Errorf("a --%s deploy carries pgmi.yaml's Google instance %q", flag, cfg.GoogleInstance)
+				}
+			})
+		}
+	}
+}
+
+func TestResolveConnectionParams_DetailFlagRefinesYAMLAuthMethod(t *testing.T) {
+	tests := []struct {
+		yaml   string
+		azure  *AzureFlags
+		aws    *AWSFlags
+		google *GoogleFlags
+		want   pgmi.AuthMethod
+		check  func(*ConnectionConfig) string
+	}{
+		{yaml: "aws", aws: &AWSFlags{Region: "us-east-1"}, want: pgmi.AuthMethodAWSIAM,
+			check: func(c *ConnectionConfig) string { return c.AWSRegion }},
+		{yaml: "azure", azure: &AzureFlags{TenantID: "tenant-flag"}, want: pgmi.AuthMethodAzureEntraID,
+			check: func(c *ConnectionConfig) string { return c.AzureTenantID }},
+		{yaml: "azure", azure: &AzureFlags{ClientID: "client-flag"}, want: pgmi.AuthMethodAzureEntraID,
+			check: func(c *ConnectionConfig) string { return c.AzureClientID }},
+		{yaml: "google", google: &GoogleFlags{Instance: "p:r:flag"}, want: pgmi.AuthMethodGoogleIAM,
+			check: func(c *ConnectionConfig) string { return c.GoogleInstance }},
+	}
+	wantDetail := []string{"us-east-1", "tenant-flag", "client-flag", "p:r:flag"}
+	for i, tt := range tests {
+		t.Run(fmt.Sprintf("%s/%s", tt.yaml, wantDetail[i]), func(t *testing.T) {
+			pc := &config.ProjectConfig{Connection: config.ConnectionConfig{
+				Host: "db.example", Database: "app", AuthMethod: tt.yaml,
+				AWSRegion: "eu-west-1", AzureTenantID: "tenant-yaml", GoogleInstance: "p:r:yaml"}}
+			cfg, _, err := ResolveConnectionParams("", nil, tt.azure, tt.aws, tt.google, nil, &EnvVars{}, pc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.AuthMethod != tt.want {
+				t.Errorf("auth method %v, want %v", cfg.AuthMethod, tt.want)
+			}
+			if got := tt.check(cfg); got != wantDetail[i] {
+				t.Errorf("detail %q, want the flag's %q", got, wantDetail[i])
+			}
+		})
+	}
 }

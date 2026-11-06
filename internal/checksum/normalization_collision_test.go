@@ -37,6 +37,21 @@ func TestNormalizationDistinguishesStatementsThatDiffer(t *testing.T) {
 			a:    `SELECT "a""--b" , 1 FROM t;`,
 			b:    `SELECT "a""--b" , 2 FROM t;`,
 		},
+		{
+			name: "whitespace inside a string literal is data",
+			a:    `SELECT 'a  b';`,
+			b:    `SELECT 'a b';`,
+		},
+		{
+			name: "whitespace inside a dollar-quoted body is kept",
+			a:    "DO $$ BEGIN RAISE NOTICE 'x   y'; END $$;",
+			b:    "DO $$ BEGIN RAISE NOTICE 'x y'; END $$;",
+		},
+		{
+			name: "whitespace inside a quoted identifier is part of the name",
+			a:    `SELECT 1 AS "a  b";`,
+			b:    `SELECT 1 AS "a b";`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -62,6 +77,7 @@ func TestNormalizationStillIgnoresCommentsAndLayout(t *testing.T) {
 		{`SELECT 'a';`, "SELECT 'a'; /* note */"},
 		{`SELECT E'a\'b';`, "SELECT E'a\\'b';   -- note"},
 		{"DO $$ BEGIN END $$;", "DO $$ BEGIN END $$; -- note"},
+		{"create table foo$bar$(id int);\nselect 1;", "CREATE TABLE foo$bar$(ID int); -- note\nSELECT 1;"},
 	}
 
 	for _, pair := range same {

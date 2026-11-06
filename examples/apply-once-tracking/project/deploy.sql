@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS app.migration_log (
 );
 
 -- Drift policy: an applied migration whose content changed fails the deploy.
--- pgmi_checksum ignores comments, whitespace and keyword case, so
+-- pgmi_checksum ignores comments, keyword case and whitespace outside literals, so
 -- reformatting a file is not drift; changing what it does is. Warn instead
 -- of failing, or ignore drift entirely, by editing this block.
 DO $$

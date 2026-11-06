@@ -1,5 +1,5 @@
 -- ============================================================================
--- Test: Exchange retention (purge procedure + admin endpoint)
+-- Test: Exchange retention (the purge_exchanges job + admin endpoint)
 -- ============================================================================
 
 DO $$
@@ -11,17 +11,14 @@ DECLARE
     v_response api.http_response;
     v_body jsonb;
     v_admin_id uuid;
-    v_superuser uuid;
     v_admin_headers extensions.hstore;
 BEGIN
     RAISE NOTICE '-> Testing exchange retention';
 
-    -- Provision a platform admin (system-wide superuser) — purge is admin-only
-    v_admin_id := membership.upsert_user('test', 'maint-admin', 'maint-admin@example.com', 'Maint Admin', true);
-    SELECT object_id INTO v_superuser FROM membership.role WHERE name = 'superuser';
-    INSERT INTO membership.user_role (user_object_id, role_object_id)
-    VALUES (v_admin_id, v_superuser) ON CONFLICT DO NOTHING;
-    v_admin_headers := ('x-user-id=>test|maint-admin')::extensions.hstore;
+    -- Purge is for platform operators only
+    v_admin_id := pg_temp.test_login('test', 'maint-admin', 'maint-admin@example.test', 'Maint Admin', true);
+    PERFORM pg_temp.test_operator(v_admin_id);
+    v_admin_headers := pg_temp.test_session_headers('test|maint-admin', NULL, ARRAY['mfa']);
 
     -- ========================================================================
     -- Setup: insert fixture exchanges with old enqueued_at
@@ -34,7 +31,7 @@ BEGIN
     INSERT INTO api.rest_exchange (object_id, enqueued_at, handler_object_id, request, response, completed_at)
     SELECT gen_random_uuid(), v_old_ts - (n || ' hours')::interval,
            v_handler_id,
-           ROW('GET', '/test', ''::extensions.hstore, null::bytea)::api.rest_request,
+           ROW('GET', '/test', ''::extensions.hstore, null::bytea, '{}'::jsonb)::api.rest_request,
            ROW(200, ''::extensions.hstore, null::bytea)::api.http_response,
            v_old_ts
     FROM generate_series(1, 10) AS n;
@@ -42,7 +39,7 @@ BEGIN
     SELECT COUNT(*) INTO v_count_before
     FROM api.rest_exchange WHERE enqueued_at < now() - interval '30 days';
 
-    IF v_count_before < 10 THEN
+    IF coalesce(v_count_before, 0) < 10 THEN
         RAISE EXCEPTION 'Setup failed: expected >= 10 old exchanges, got %', v_count_before;
     END IF;
 
@@ -84,46 +81,20 @@ BEGIN
         v_body->>'totalDeleted', v_body->'deleted'->>'rest';
 
     -- ========================================================================
-    -- Test: procedure exists with expected signature
+    -- Test: retention reads enqueued_at through a btree on every exchange table
     -- ========================================================================
 
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'api' AND p.proname = 'purge_exchanges'
-          AND p.prokind = 'p'
-    ) THEN
-        RAISE EXCEPTION 'api.purge_exchanges PROCEDURE not found';
+    IF (SELECT count(*)
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_am am ON am.oid = c.relam
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+        WHERE i.indrelid IN ('api.rest_exchange'::regclass, 'api.rpc_exchange'::regclass, 'api.mcp_exchange'::regclass)
+          AND am.amname = 'btree' AND a.attname = 'enqueued_at') IS DISTINCT FROM 3::bigint THEN
+        RAISE EXCEPTION 'Each exchange table needs a btree index leading on enqueued_at';
     END IF;
 
-    RAISE NOTICE '  + api.purge_exchanges procedure exists';
-
-    -- ========================================================================
-    -- Test: BRIN indexes exist
-    -- ========================================================================
-
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes
-        WHERE indexname = 'bx_rest_exchange_enqueued'
-    ) THEN
-        RAISE EXCEPTION 'BRIN index bx_rest_exchange_enqueued not found';
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes
-        WHERE indexname = 'bx_rpc_exchange_enqueued'
-    ) THEN
-        RAISE EXCEPTION 'BRIN index bx_rpc_exchange_enqueued not found';
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes
-        WHERE indexname = 'bx_mcp_exchange_enqueued'
-    ) THEN
-        RAISE EXCEPTION 'BRIN index bx_mcp_exchange_enqueued not found';
-    END IF;
-
-    RAISE NOTICE '  + BRIN indexes on enqueued_at exist for all exchange tables';
+    RAISE NOTICE '  + btree indexes on enqueued_at exist for all exchange tables';
 
     -- ========================================================================
     -- Test: validation rejects bad params
@@ -132,11 +103,117 @@ BEGIN
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=0',
         v_admin_headers, null::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 422 THEN
-        RAISE EXCEPTION 'Expected 422 for retention_days=0, got %', (v_response).status_code;
+    IF (v_response).status_code IS DISTINCT FROM 400
+       OR api.content_json((v_response).content)->>'code' IS DISTINCT FROM 'pgmi.invalid_query' THEN
+        RAISE EXCEPTION 'Expected 400 pgmi.invalid_query for retention_days=0, got % %',
+            (v_response).status_code, convert_from((v_response).content, 'UTF8');
     END IF;
 
     RAISE NOTICE '  + Validation rejects retention_days < 1';
 
     RAISE NOTICE '+ Exchange retention tests passed';
+END $$;
+
+-- The default window is the deploy parameter exchange_retention_days (30 in
+-- the test deploy): without retention_days the endpoint keeps a 29-day-old
+-- row and purges a 31-day-old one.
+DO $$
+DECLARE
+    v_handler_id uuid := (SELECT object_id FROM api.handler WHERE handler_function_name = 'hello_world');
+    v_kept uuid := gen_random_uuid();
+    v_gone uuid := gen_random_uuid();
+    v_response api.http_response;
+BEGIN
+    RAISE NOTICE '-> Testing the default retention window';
+
+    IF api.exchange_retention() IS DISTINCT FROM interval '30 days' THEN
+        RAISE EXCEPTION 'TEST FAILED: api.exchange_retention() should be the deploy default of 30 days, got %', api.exchange_retention();
+    END IF;
+
+    INSERT INTO api.rest_exchange (object_id, enqueued_at, handler_object_id, request, response, completed_at)
+    VALUES (v_kept, now() - interval '29 days', v_handler_id,
+            ROW('GET', '/test', ''::extensions.hstore, null::bytea, '{}'::jsonb)::api.rest_request,
+            ROW(200, ''::extensions.hstore, null::bytea)::api.http_response, now()),
+           (v_gone, now() - interval '31 days', v_handler_id,
+            ROW('GET', '/test', ''::extensions.hstore, null::bytea, '{}'::jsonb)::api.rest_request,
+            ROW(200, ''::extensions.hstore, null::bytea)::api.http_response, now());
+
+    PERFORM pg_temp.test_operator(pg_temp.test_login('test', 'maint-default', 'maint-default@example.test', NULL, true));
+    v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges',
+        pg_temp.test_session_headers('test|maint-default', NULL, ARRAY['mfa']), null::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 200 THEN
+        RAISE EXCEPTION 'TEST FAILED: default purge answered %', (v_response).status_code;
+    END IF;
+    IF NOT EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_kept)
+       OR EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_gone) THEN
+        RAISE EXCEPTION 'TEST FAILED: the default purge must keep 29 days and drop 31';
+    END IF;
+END $$;
+
+-- Argument checks are IF ... RAISE: they hold with plpgsql.check_asserts off,
+-- where an ASSERT would be skipped.
+DO $$
+DECLARE
+    v_case text;
+    v_state text;
+BEGIN
+    RAISE NOTICE '-> Testing the purge refuses bad arguments with asserts off';
+    SET LOCAL plpgsql.check_asserts = off;
+
+    FOREACH v_case IN ARRAY ARRAY[
+        $q$CALL api.job_purge_exchanges(NULL)$q$,
+        $q$CALL api.job_purge_exchanges(0)$q$,
+        $q$CALL api.job_purge_exchanges(10, 0)$q$,
+        $q$SELECT api.purge_exchanges_batch(NULL, 10)$q$,
+        $q$SELECT api.purge_exchanges_batch(now() + interval '1 day', 10)$q$,
+        $q$SELECT api.purge_exchanges_batch(now() - interval '1 day', NULL)$q$,
+        $q$SELECT api.purge_exchanges_batch(now() - interval '1 day', 0)$q$]
+    LOOP
+        v_state := NULL;
+        BEGIN
+            EXECUTE v_case;
+        EXCEPTION WHEN OTHERS THEN
+            v_state := SQLSTATE;
+        END;
+        IF v_state IS DISTINCT FROM '22023' THEN
+            RAISE EXCEPTION 'TEST FAILED: % must raise 22023, got %', v_case, coalesce(v_state, 'success');
+        END IF;
+    END LOOP;
+END $$;
+
+-- One batch of the job deletes only exchanges past the window, at most the
+-- batch size from each protocol table.
+DO $$
+DECLARE
+    v_handler_id uuid := (SELECT object_id FROM api.handler WHERE handler_function_name = 'hello_world');
+    v_deleted    int;
+    v_old        int;
+    v_recent     int;
+BEGIN
+    RAISE DEBUG '-> Testing one batch of the purge_exchanges job';
+
+    INSERT INTO api.rest_exchange (object_id, enqueued_at, handler_object_id, request, response, completed_at)
+    SELECT gen_random_uuid(), now() - api.exchange_retention() - make_interval(hours => n), v_handler_id,
+           ROW('GET', '/test', ''::extensions.hstore, null::bytea, '{}'::jsonb)::api.rest_request,
+           ROW(200, ''::extensions.hstore, null::bytea)::api.http_response, now()
+    FROM generate_series(1, 5) n
+    UNION ALL
+    SELECT gen_random_uuid(), now() - api.exchange_retention() + interval '1 hour', v_handler_id,
+           ROW('GET', '/test', ''::extensions.hstore, null::bytea, '{}'::jsonb)::api.rest_request,
+           ROW(200, ''::extensions.hstore, null::bytea)::api.http_response, now();
+
+    SELECT count(*) INTO v_old FROM api.rest_exchange WHERE enqueued_at < now() - api.exchange_retention();
+    SELECT count(*) INTO v_recent FROM api.rest_exchange WHERE enqueued_at >= now() - api.exchange_retention();
+
+    v_deleted := api.job_purge_exchanges_batch(3);
+    IF coalesce(v_deleted, 0) NOT BETWEEN 3 AND 9
+       OR (SELECT count(*) FROM api.rest_exchange WHERE enqueued_at < now() - api.exchange_retention()) IS DISTINCT FROM v_old - 3 THEN
+        RAISE EXCEPTION 'TEST FAILED: a batch of 3 must delete exactly 3 of % expired REST exchanges, reported % in all', v_old, v_deleted;
+    END IF;
+
+    WHILE api.job_purge_exchanges_batch(3) > 0 LOOP END LOOP;
+    IF EXISTS (SELECT FROM api.rest_exchange WHERE enqueued_at < now() - api.exchange_retention())
+       OR (SELECT count(*) FROM api.rest_exchange) IS DISTINCT FROM v_recent THEN
+        RAISE EXCEPTION 'TEST FAILED: the batches must delete every expired exchange and keep the % recent ones', v_recent;
+    END IF;
 END $$;

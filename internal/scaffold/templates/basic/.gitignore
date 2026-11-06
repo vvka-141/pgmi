@@ -1,6 +1,7 @@
 # Parameter files hold secrets — pass them with --params-file, never commit them
 *.params
 *.params.*
+*.env
 .env
 
 # Editor and OS noise

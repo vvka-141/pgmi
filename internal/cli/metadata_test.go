@@ -1,15 +1,20 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func resetMetadataFlags() {
 	scaffoldWrite = false
 	scaffoldIdempotent = true
+	scaffoldSortKey = "005/"
 	validateJSON = false
 	planJSON = false
 }
@@ -454,5 +459,42 @@ CREATE TABLE t2(id int);`,
 	err := runMetadataValidate(metadataValidateCmd, []string{projectPath})
 	if err == nil {
 		t.Fatal("Expected error for duplicate IDs in JSON mode")
+	}
+}
+
+// Every bad <pgmi-meta> block is reported in one run, each in --json errors.
+func TestMetadataValidate_ReportsEveryBadFile(t *testing.T) {
+	resetMetadataFlags()
+	validateJSON = true
+	bad := "/*\n<pgmi-meta id=\"not-a-uuid\" idempotent=\"true\"></pgmi-meta>\n*/\nSELECT 1;"
+	projectPath := createTestProject(t, map[string]string{
+		"deploy.sql":         "SELECT 1;",
+		"migrations/001.sql": bad,
+		"migrations/002.sql": bad,
+	})
+	var out bytes.Buffer
+	metadataValidateCmd.SetOut(&out)
+	t.Cleanup(func() { metadataValidateCmd.SetOut(nil) })
+
+	err := runMetadataValidate(metadataValidateCmd, []string{projectPath})
+	if pgmi.ExitCodeForError(err) != pgmi.ExitConfigError {
+		t.Fatalf("want exit %d, got %v", pgmi.ExitConfigError, err)
+	}
+	var env struct {
+		Errors   []string `json:"errors"`
+		ExitCode int      `json:"exitCode"`
+	}
+	if jerr := json.Unmarshal(out.Bytes(), &env); jerr != nil {
+		t.Fatalf("parse %q: %v", out.String(), jerr)
+	}
+	if len(env.Errors) != 2 || !strings.Contains(strings.Join(env.Errors, "\n"), "001.sql") ||
+		!strings.Contains(strings.Join(env.Errors, "\n"), "002.sql") || env.ExitCode != pgmi.ExitConfigError {
+		t.Errorf("want both files in errors and exit %d, got %+v", pgmi.ExitConfigError, env)
+	}
+}
+
+func TestDeployHelpNamesTheProjectDotEnv(t *testing.T) {
+	if !strings.Contains(deployCmd.Long, "A project .env is loaded") || !strings.Contains(deployCmd.Long, "pgmi serve does not read it") {
+		t.Errorf("pgmi help deploy must say a project .env is loaded and serve ignores it:\n%s", deployCmd.Long)
 	}
 }

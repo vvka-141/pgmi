@@ -6,7 +6,7 @@
 --   1. autoLog=false was honored on success and ignored on failure.
 --   2. Soft-deleting a handler removed it from the contract but not from
 --      dispatch.
---   3. An idempotent file dropped its types with CASCADE on every deploy.
+--   3. A re-run file dropped its types with CASCADE on every deploy.
 -- ============================================================================
 
 DO $$
@@ -19,11 +19,11 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3001-4000-8000-000000000001',
-            'uri', '^/secret-login$',
+            'path', '/secret-login',
             'httpMethod', '^POST$',
             'name', 'secret_login_probe',
             'description', 'Raises, and must never persist its request body',
-            'requiresAuth', false,
+            'access', 'public',
             'autoLog', false
         ),
         $body$
@@ -65,10 +65,10 @@ BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3002-4000-8000-000000000001',
-            'uri', '^/retired$',
+            'path', '/retired',
             'httpMethod', '^GET$',
             'name', 'retired_probe',
-            'requiresAuth', false
+            'access', 'public'
         ),
         $body$
 BEGIN
@@ -107,9 +107,9 @@ BEGIN
 
     CREATE TEMP TABLE encoding_dependent (payload common.utf8);
 
-    -- Re-run the shipped definition exactly as a redeploy would. The types are
+    -- Re-run the shipped casts exactly as a redeploy would. The types are
     -- documented as a public convenience, so a user column typed common.utf8 is
-    -- an invited dependency -- and DROP TYPE ... CASCADE destroyed it silently.
+    -- an invited dependency that a re-run file must never take with it.
     EXECUTE (SELECT content FROM pg_temp.pgmi_plan_view WHERE path LIKE '%/lib/common/encoding.sql');
 
     SELECT EXISTS (
@@ -143,7 +143,7 @@ DECLARE
 BEGIN
     RAISE NOTICE '→ Testing view convergence';
 
-    IF NOT core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a missing view must be created';
     END IF;
     IF core.ensure_view('public.ensure_view_probe', v_stmt) THEN
@@ -151,18 +151,29 @@ BEGIN
     END IF;
 
     EXECUTE 'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 2 AS n';
-    IF NOT core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a view replaced by hand must be converged back';
     END IF;
     IF (SELECT n FROM public.ensure_view_probe) IS DISTINCT FROM 1 THEN
         RAISE EXCEPTION 'TEST FAILED: the converged view must carry the requested definition';
     END IF;
 
-    IF NOT core.ensure_view('public.ensure_view_probe',
-            'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n, 3 AS m') THEN
+    IF (core.ensure_view('public.ensure_view_probe',
+            'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n, 3 AS m')) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a changed statement must replace the view';
     END IF;
 
+    v_stmt := 'CREATE OR REPLACE VIEW public.ensure_view_probe WITH (security_invoker = true) AS SELECT 1 AS n, 3 AS m';
+    PERFORM core.ensure_view('public.ensure_view_probe', v_stmt);
+    ALTER VIEW public.ensure_view_probe RESET (security_invoker);
+    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: a view whose options were altered by hand must be replaced';
+    END IF;
+    IF (SELECT 'security_invoker=true' = ANY (reloptions) FROM pg_class
+            WHERE oid = 'public.ensure_view_probe'::regclass) IS NOT TRUE THEN
+        RAISE EXCEPTION 'TEST FAILED: the replaced view must carry security_invoker again';
+    END IF;
+
     DROP VIEW public.ensure_view_probe;
-    RAISE NOTICE '  ✓ unchanged views are skipped; changed or hand-edited ones are replaced';
+    RAISE NOTICE '  ✓ unchanged views are skipped; changed or hand-edited ones (options too) are replaced';
 END $$;

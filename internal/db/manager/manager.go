@@ -2,21 +2,37 @@ package manager
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 const (
-	queryDatabaseExists       = "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
-	queryTerminateConnections = `
-		SELECT pg_terminate_backend(pid)
-		FROM pg_stat_activity
-		WHERE datname = $1 AND pid <> pg_backend_pid()
-	`
+	queryDatabaseExists  = "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
+	queryServerVersion   = "SELECT current_setting('server_version_num')::int, current_setting('server_version')"
+	queryLockOverwrite   = "SELECT pg_try_advisory_lock(hashtextextended('pgmi.overwrite.' || $1, 0))"
+	queryUnlockOverwrite = "SELECT pg_advisory_unlock(hashtextextended('pgmi.overwrite.' || $1, 0))"
+)
+
+var (
+	//go:embed queries/settings.sql
+	querySettings string
+	//go:embed queries/role_settings.sql
+	queryRoleSettings string
+	//go:embed queries/acl.sql
+	queryACL string
+	//go:embed queries/deploy_locked.sql
+	queryDeployLocked string
+	//go:embed queries/restore_gaps.sql
+	queryRestoreGaps string
 )
 
 // Manager implements database lifecycle operations using the DBConnection abstraction.
@@ -28,12 +44,20 @@ func New() *Manager {
 	return &Manager{}
 }
 
+// ServerVersion reports the server's version as server_version_num and as text.
+func (m *Manager) ServerVersion(ctx context.Context, conn db.DBConnection) (num int, text string, err error) {
+	if err := conn.QueryRow(ctx, queryServerVersion).Scan(&num, &text); err != nil {
+		return 0, "", fmt.Errorf("failed to read the server version: %w", err)
+	}
+	return num, text, nil
+}
+
 // Exists checks if a database exists.
-func (m *Manager) Exists(ctx context.Context, conn pgmi.DBConnection, dbName string) (bool, error) {
+func (m *Manager) Exists(ctx context.Context, conn db.DBConnection, dbName string) (bool, error) {
 	var exists bool
 	err := conn.QueryRow(ctx, queryDatabaseExists, dbName).Scan(&exists)
 	if err != nil {
-		// Named like its siblings: Create, Drop and TerminateConnections all
+		// Named like its siblings: Create and Drop both
 		// report which database they were working on, and the caller adds no
 		// wrapper of its own.
 		return false, fmt.Errorf("failed to check existence of database %q: %w", dbName, err)
@@ -48,54 +72,42 @@ func (m *Manager) Exists(ctx context.Context, conn pgmi.DBConnection, dbName str
 // copies by default, so a database matching it needs nothing preserved and
 // keeps inheriting whatever a site has installed there. Only a database that
 // differs has to be recreated explicitly, and that forces template0.
-func (m *Manager) Settings(ctx context.Context, conn pgmi.DBConnection, dbName string) (*pgmi.DatabaseSettings, error) {
-	const q = `
-		SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype,
-		       pg_get_userbyid(d.datdba), d.datconnlimit,
-		       coalesce((SELECT s.setconfig FROM pg_db_role_setting s
-		                 WHERE s.setdatabase = d.oid AND s.setrole = 0), '{}'),
-		       shobj_description(d.oid, 'pg_database'),
-		       pg_encoding_to_char(t.encoding), t.datcollate, t.datctype
-		FROM pg_database d, pg_database t
-		WHERE d.datname = $1 AND t.datname = 'template1'`
-
-	var s, def pgmi.DatabaseSettings
-	err := conn.QueryRow(ctx, q, dbName).Scan(
-		&s.Encoding, &s.Collate, &s.CType,
+func (m *Manager) Settings(ctx context.Context, conn db.DBConnection, dbName string) (*DatabaseSettings, error) {
+	var s, def DatabaseSettings
+	err := conn.QueryRow(ctx, querySettings, dbName).Scan(
+		&s.Encoding, &s.Collate, &s.CType, &s.LocaleProvider, &s.Locale, &s.ICURules,
 		&s.Owner, &s.ConnectionLimit, &s.Options, &s.Comment,
-		&def.Encoding, &def.Collate, &def.CType)
+		&def.Encoding, &def.Collate, &def.CType, &def.LocaleProvider, &def.Locale, &def.ICURules)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // absent, so there is nothing to preserve
 		}
 		return nil, fmt.Errorf("failed to read settings of database %q: %w", dbName, err)
 	}
-	s.PreserveLocale = s.Encoding != def.Encoding || s.Collate != def.Collate || s.CType != def.CType
+	s.PreserveLocale = s.Encoding != def.Encoding || s.Collate != def.Collate || s.CType != def.CType ||
+		s.LocaleProvider != def.LocaleProvider || s.Locale != def.Locale || s.ICURules != def.ICURules
 
-	const aclQ = `
-		SELECT d.datacl IS NOT NULL, coalesce(g.grantees, '{}'), coalesce(g.privileges, '{}'), coalesce(g.grantable, '{}')
-		FROM pg_database d
-		CROSS JOIN LATERAL (
-			SELECT array_agg(coalesce(pg_get_userbyid(nullif(a.grantee, 0)), '') ORDER BY a.grantee, a.privilege_type) AS grantees,
-			       array_agg(a.privilege_type ORDER BY a.grantee, a.privilege_type) AS privileges,
-			       array_agg(a.is_grantable ORDER BY a.grantee, a.privilege_type) AS grantable
-			FROM aclexplode(d.datacl) a
-			WHERE a.grantee <> d.datdba
-		) g
-		WHERE d.datname = $1`
+	var roleOptions []byte
+	if err := conn.QueryRow(ctx, queryRoleSettings, dbName).Scan(&roleOptions); err != nil {
+		return nil, fmt.Errorf("failed to read the role settings of database %q: %w", dbName, err)
+	}
+	if err := json.Unmarshal(roleOptions, &s.RoleOptions); err != nil {
+		return nil, fmt.Errorf("failed to read the role settings of database %q: %w", dbName, err)
+	}
+
 	var grantees, privileges []string
 	var grantable []bool
-	if err := conn.QueryRow(ctx, aclQ, dbName).Scan(&s.CustomACL, &grantees, &privileges, &grantable); err != nil {
+	if err := conn.QueryRow(ctx, queryACL, dbName).Scan(&s.CustomACL, &grantees, &privileges, &grantable); err != nil {
 		return nil, fmt.Errorf("failed to read the ACL of database %q: %w", dbName, err)
 	}
 	for i := range privileges {
-		s.Grants = append(s.Grants, pgmi.DatabaseGrant{Grantee: grantees[i], Privilege: privileges[i], Grantable: grantable[i]})
+		s.Grants = append(s.Grants, DatabaseGrant{Grantee: grantees[i], Privilege: privileges[i], Grantable: grantable[i]})
 	}
 	return &s, nil
 }
 
 // Create creates a new database, preserving settings when given.
-func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName string, settings *pgmi.DatabaseSettings) error {
+func (m *Manager) Create(ctx context.Context, conn db.DBConnection, dbName string, settings *DatabaseSettings) error {
 	pooledConn, err := conn.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
@@ -111,6 +123,7 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 			// whatever a site installed there may not survive the conversion.
 			query += fmt.Sprintf(" TEMPLATE template0 ENCODING %s LC_COLLATE %s LC_CTYPE %s",
 				quoteLiteral(settings.Encoding), quoteLiteral(settings.Collate), quoteLiteral(settings.CType))
+			query += localeProviderClause(settings)
 		}
 		if settings.Owner != "" {
 			query += " OWNER " + pgx.Identifier{settings.Owner}.Sanitize()
@@ -130,22 +143,36 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 	// The rest cannot ride along on CREATE DATABASE and have to be reapplied.
 	// Each is something the operator set deliberately — a per-database
 	// statement_timeout is a safeguard, and losing it silently is worse than
-	// never having had it.
+	// never having had it. Every one is attempted, so one failure loses no other.
+	var failures []error
 	for _, opt := range settings.Options {
 		name, value, found := strings.Cut(opt, "=")
 		if !found {
 			continue
 		}
 		alter := fmt.Sprintf("ALTER DATABASE %s SET %s = %s",
-			ident, pgx.Identifier{name}.Sanitize(), quoteLiteral(value))
+			ident, pgx.Identifier{name}.Sanitize(), settingValue(name, value))
 		if _, err := pooledConn.Exec(ctx, alter); err != nil {
-			return fmt.Errorf("failed to restore setting %q on database %q: %w", name, dbName, err)
+			failures = append(failures, fmt.Errorf("setting %q: %w", name, err))
+		}
+	}
+	for _, r := range settings.RoleOptions {
+		for _, opt := range r.Options {
+			name, value, found := strings.Cut(opt, "=")
+			if !found {
+				continue
+			}
+			alter := fmt.Sprintf("ALTER ROLE %s IN DATABASE %s SET %s = %s",
+				pgx.Identifier{r.Role}.Sanitize(), ident, pgx.Identifier{name}.Sanitize(), settingValue(name, value))
+			if _, err := pooledConn.Exec(ctx, alter); err != nil {
+				failures = append(failures, fmt.Errorf("setting %q of role %q: %w", name, r.Role, err))
+			}
 		}
 	}
 	if settings.Comment != nil {
 		comment := fmt.Sprintf("COMMENT ON DATABASE %s IS %s", ident, quoteLiteral(*settings.Comment))
 		if _, err := pooledConn.Exec(ctx, comment); err != nil {
-			return fmt.Errorf("failed to restore the comment on database %q: %w", dbName, err)
+			failures = append(failures, fmt.Errorf("the comment: %w", err))
 		}
 	}
 	if settings.CustomACL {
@@ -163,11 +190,80 @@ func (m *Manager) Create(ctx context.Context, conn pgmi.DBConnection, dbName str
 		}
 		for _, stmt := range stmts {
 			if _, err := pooledConn.Exec(ctx, stmt); err != nil {
-				return fmt.Errorf("failed to restore the privileges on database %q: %w", dbName, err)
+				failures = append(failures, fmt.Errorf("the privileges: %w", err))
+				break
 			}
 		}
 	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%w: database %q was recreated, but %d of its settings could not be restored: %w",
+			pgmi.ErrExecutionFailed, dbName, len(failures), errors.Join(failures...))
+	}
 	return nil
+}
+
+// RestoreGaps names everything Create could not restore on dbName as the
+// connecting role, read before anything is dropped: settings only a
+// superuser may set, other roles' settings, and an owner it cannot become.
+func (m *Manager) RestoreGaps(ctx context.Context, conn db.DBConnection, dbName string) ([]string, error) {
+	var gaps []string
+	if err := conn.QueryRow(ctx, queryRestoreGaps, dbName).Scan(&gaps); err != nil {
+		return nil, fmt.Errorf("failed to check what database %q needs restored: %w", dbName, err)
+	}
+	return gaps, nil
+}
+
+func localeProviderClause(s *DatabaseSettings) string {
+	switch s.LocaleProvider {
+	case "i":
+		clause := " LOCALE_PROVIDER icu ICU_LOCALE " + quoteLiteral(s.Locale)
+		if s.ICURules != "" {
+			clause += " ICU_RULES " + quoteLiteral(s.ICURules)
+		}
+		return clause
+	case "b":
+		return " LOCALE_PROVIDER builtin BUILTIN_LOCALE " + quoteLiteral(s.Locale)
+	case "c":
+		return " LOCALE_PROVIDER libc"
+	}
+	return ""
+}
+
+// listQuoted are the settings PostgreSQL stores as a list of quoted
+// identifiers ("$user", public). Restored as one literal, the whole list
+// would become a single element.
+var listQuoted = map[string]bool{
+	"search_path":               true,
+	"temp_tablespaces":          true,
+	"session_preload_libraries": true,
+	"local_preload_libraries":   true,
+}
+
+var identifierList = regexp.MustCompile(`^(?:[a-z_][a-z0-9_$]*|"(?:[^"]|"")+")(?:, (?:[a-z_][a-z0-9_$]*|"(?:[^"]|"")+"))*$`)
+
+// settingValue renders a stored setting for ALTER ... SET. A quoted list is
+// passed through as the identifiers PostgreSQL stored, and only when it is
+// nothing but identifiers; everything else is a string literal.
+func settingValue(name, value string) string {
+	if listQuoted[strings.ToLower(name)] {
+		if value == `""` {
+			return "''"
+		}
+		if identifierList.MatchString(value) {
+			return value
+		}
+	}
+	return quoteLiteral(value)
+}
+
+// DeployInProgress reports whether a pgmi deploy holds its advisory lock on
+// dbName, read from the maintenance database before connections are ended.
+func (m *Manager) DeployInProgress(ctx context.Context, conn db.DBConnection, dbName string) (bool, error) {
+	var locked bool
+	if err := conn.QueryRow(ctx, queryDeployLocked, dbName).Scan(&locked); err != nil {
+		return false, fmt.Errorf("failed to check for a deploy in progress on database %q: %w", dbName, err)
+	}
+	return locked, nil
 }
 
 // quoteLiteral renders a SQL string literal. CREATE DATABASE takes no
@@ -178,14 +274,14 @@ func quoteLiteral(s string) string {
 }
 
 // Drop drops the specified database.
-func (m *Manager) Drop(ctx context.Context, conn pgmi.DBConnection, dbName string) error {
+func (m *Manager) Drop(ctx context.Context, conn db.DBConnection, dbName string) error {
 	pooledConn, err := conn.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer pooledConn.Release()
 
-	query := fmt.Sprintf("DROP DATABASE %s", pgx.Identifier{dbName}.Sanitize())
+	query := fmt.Sprintf("DROP DATABASE %s WITH (FORCE)", pgx.Identifier{dbName}.Sanitize())
 	_, err = pooledConn.Exec(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop database %q: %w", dbName, err)
@@ -193,14 +289,29 @@ func (m *Manager) Drop(ctx context.Context, conn pgmi.DBConnection, dbName strin
 	return nil
 }
 
-// TerminateConnections terminates all connections to the specified database.
-func (m *Manager) TerminateConnections(ctx context.Context, conn pgmi.DBConnection, dbName string) error {
-	_, err := conn.Exec(ctx, queryTerminateConnections, dbName)
+// LockOverwrite takes the lock that serialises --overwrite runs on dbName,
+// on one connection of the maintenance database, for as long as the caller
+// holds it. held runs everything on that connection, so the whole overwrite
+// costs one maintenance connection. Advisory locks are per database, so it
+// serialises overwrite against overwrite only; a plain deploy locks inside
+// its target. held is nil when another run holds the lock.
+func (m *Manager) LockOverwrite(ctx context.Context, conn db.DBConnection, dbName string) (held db.DBConnection, unlock func(), err error) {
+	pc, err := conn.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to terminate connections to database %q: %w", dbName, err)
+		return nil, nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
-	return nil
+	var locked bool
+	if err := pc.QueryRow(ctx, queryLockOverwrite, dbName).Scan(&locked); err != nil || !locked {
+		pc.Release()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to lock database %q for --overwrite: %w", dbName, err)
+		}
+		return nil, nil, nil
+	}
+	return db.Pinned(pc), func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = pc.Exec(unlockCtx, queryUnlockOverwrite, dbName)
+		pc.Release()
+	}, nil
 }
-
-// Verify Manager implements the DatabaseManager interface at compile time
-var _ pgmi.DatabaseManager = (*Manager)(nil)

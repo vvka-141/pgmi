@@ -13,7 +13,6 @@ import (
 	"github.com/vvka-141/pgmi/internal/services"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
 	"github.com/vvka-141/pgmi/internal/testhelpers/fixtures"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestPrepareSession_FullLifecycle(t *testing.T) {
@@ -35,7 +34,7 @@ func TestPrepareSession_FullLifecycle(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{}), fileScanner, fileLoader, logger, "test")
 
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), map[string]string{"env": "test"}, "", false)
 	if err != nil {
@@ -78,7 +77,7 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{}), fileScanner, fileLoader, logger, "test")
 
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
 	if err != nil {
@@ -92,6 +91,78 @@ func TestPrepareSession_VerboseMode(t *testing.T) {
 	}
 	if !strings.HasPrefix(msgLevel, "debug") {
 		t.Errorf("Expected debug-level client_min_messages, got %q", msgLevel)
+	}
+}
+
+func TestPrepareSession_VerboseSetupIsQuiet(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_session_verbose_quiet"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	connConfig, err := db.ParseConnectionString(connString)
+	if err != nil {
+		t.Fatalf("Failed to parse connection string: %v", err)
+	}
+	connConfig.Database = testDB
+
+	var debugLines []string
+	notice := func(severity, message, _, _ string) {
+		if severity == "DEBUG" {
+			debugLines = append(debugLines, message)
+		}
+	}
+
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{Notice: notice}), scanner.NewScannerWithFS(checksum.New(), fixtures.EmptyProject()),
+		loader.NewLoader(), logging.NewNullLogger(), "test")
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
+	if err != nil {
+		t.Fatalf("PrepareSession with verbose failed: %v", err)
+	}
+	defer session.Close()
+
+	if len(debugLines) != 0 {
+		t.Errorf("pgmi's own session setup sent %d server DEBUG lines under --verbose, first: %q", len(debugLines), debugLines[0])
+	}
+}
+
+func TestPrepareSession_VerboseForwardsOnlyRaiseDebug(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+
+	testDB := "pgmi_test_session_verbose_raise_debug"
+	cleanup := testhelpers.CreateTestDB(t, connString, testDB)
+	defer cleanup()
+
+	connConfig, err := db.ParseConnectionString(connString)
+	if err != nil {
+		t.Fatalf("Failed to parse connection string: %v", err)
+	}
+	connConfig.Database = testDB
+
+	var debugLines []string
+	notice := func(severity, message, _, _ string) {
+		if severity == "DEBUG" {
+			debugLines = append(debugLines, message)
+		}
+	}
+
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{Notice: notice}), scanner.NewScannerWithFS(checksum.New(), fixtures.EmptyProject()),
+		loader.NewLoader(), logging.NewNullLogger(), "test")
+	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), nil, "", true)
+	if err != nil {
+		t.Fatalf("PrepareSession with verbose failed: %v", err)
+	}
+	defer session.Close()
+
+	if _, err := session.Conn().Exec(ctx, "DO $$ BEGIN RAISE DEBUG 'mine'; END $$; CREATE TABLE t (id int PRIMARY KEY)"); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+
+	if len(debugLines) != 1 || debugLines[0] != "mine" {
+		t.Errorf("DEBUG lines under --verbose = %q, want only the RAISE DEBUG line \"mine\"", debugLines)
 	}
 }
 
@@ -114,7 +185,7 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{}), fileScanner, fileLoader, logger, "test")
 
 	params := map[string]string{"env": "staging", "version": "3.0"}
 	session, err := sm.PrepareSession(ctx, connConfig, mustScanProject(t, sm), params, "", false)
@@ -151,7 +222,7 @@ func TestPrepareSession_FilesAndParamsLoaded(t *testing.T) {
 func TestPrepareSession_CleanupOnError(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 
-	connConfig := &pgmi.ConnectionConfig{
+	connConfig := &db.ConnectionConfig{
 		Host:     "127.0.0.1",
 		Port:     1, // invalid port
 		Username: "invalid",
@@ -165,7 +236,7 @@ func TestPrepareSession_CleanupOnError(t *testing.T) {
 	fileLoader := loader.NewLoader()
 	logger := logging.NewNullLogger()
 
-	sm := services.NewSessionManager(db.NewConnector, fileScanner, fileLoader, logger)
+	sm := services.NewSessionManager(db.ConnectorFactory(db.Output{}), fileScanner, fileLoader, logger, "test")
 
 	_, err := sm.PrepareSession(context.Background(), connConfig, mustScanProject(t, sm), nil, "", false)
 	if err == nil {
@@ -177,7 +248,7 @@ func TestPrepareSession_CleanupOnError(t *testing.T) {
 
 // mustScanProject scans the fixture project or fails the test; PrepareSession
 // takes the scan result so callers can validate before creating a database.
-func mustScanProject(t *testing.T, sm *services.SessionManager) pgmi.FileScanResult {
+func mustScanProject(t *testing.T, sm *services.SessionManager) scanner.Result {
 	t.Helper()
 	result, err := sm.ScanProject("/")
 	if err != nil {

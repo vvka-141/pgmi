@@ -174,14 +174,13 @@ func TestResolveConnectionParams_DatabaseURL_Precedence(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:    "granular flags take precedence over DATABASE_URL",
+			name:    "a host flag next to DATABASE_URL is refused",
 			connStr: "",
 			flags: &GranularConnFlags{
 				Host: "flaghost",
 			},
 			databaseURL: "postgresql://user:pass@urlhost:5433/mydb",
-			wantHost:    "flaghost", // granular flag wins
-			expectError: false,
+			expectError: true,
 		},
 	}
 

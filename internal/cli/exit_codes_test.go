@@ -53,6 +53,31 @@ func TestExitCode_ConfigurationErrors(t *testing.T) {
 			},
 			sourcePath: sourcePath,
 		},
+		{
+			name: "--aws with --sslmode prefer",
+			setupFlags: func() {
+				deployFlags.database = "myapp"
+				deployFlags.host = "mydb.abc123.us-east-1.rds.amazonaws.com"
+				deployFlags.username = "deployer"
+				deployFlags.aws = true
+				deployFlags.awsRegion = "us-east-1"
+				deployFlags.sslMode = "prefer"
+				deployFlags.timeout = 3 * time.Minute
+			},
+			sourcePath: sourcePath,
+		},
+		{
+			name: "--azure with PGSSLMODE=prefer",
+			setupFlags: func() {
+				t.Setenv("PGSSLMODE", "prefer")
+				deployFlags.database = "myapp"
+				deployFlags.host = "myserver.postgres.database.azure.com"
+				deployFlags.username = "deployer"
+				deployFlags.azure = true
+				deployFlags.timeout = 3 * time.Minute
+			},
+			sourcePath: sourcePath,
+		},
 	}
 
 	for _, tt := range tests {
@@ -61,7 +86,7 @@ func TestExitCode_ConfigurationErrors(t *testing.T) {
 			tt.setupFlags()
 			t.Cleanup(resetDeployFlags)
 
-			_, err := buildDeploymentConfig(deployCmd, tt.sourcePath, nil, false)
+			_, err := buildDeploymentConfig(deployCmd, tt.sourcePath, nil, dotenvReport{}, false)
 			if err == nil {
 				t.Fatal("expected an error")
 			}

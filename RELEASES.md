@@ -13,9 +13,143 @@
 > job publishes with: the README "See it work" blocks as written, its failure
 > demo, and the Quickstart steps. Run it locally with
 > `scripts/verify-walkthrough.sh <binary>` (Docker required). About ten minutes
-> after the release publishes, and nightly, `verify-install.yml` installs it
+> after the release publishes, and weekly, `verify-install.yml` installs it
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
+
+## v0.14.0 — 2026-11-06
+
+**A project you scaffold with `pgmi init` now teaches the AI assistant working in it how to build a PostgreSQL application: `AGENTS.md` and a set of skills ship inside the project, next to the code they describe.** Every user also gets secrets passed through the environment instead of the command line, a deploy failure that names its file and line, and pgmi as a Go library. The basic template is redesigned around two layers. The advanced template is rebuilt as a complete application stack, in which an AI agent calling the API over MCP has its own identity.
+
+**Decide before you upgrade an advanced-template project: v0.14 needs a new database.** It refuses a database built by v0.13 or earlier, and there is no in-place upgrade. Read [the upgrade guide](docs/advanced/UPGRADING.md#from-v013-to-v014-a-new-database) first. The advanced template is pre-1.0, so a later release may need a new database again, and template fixes reach your project by manual merge. pgmi itself and the basic template need no new database.
+
+### Security
+
+- **Upgrade if you deploy with Azure or AWS token authentication.** v0.13 could send the IAM token over a connection without TLS, because token authentication inherited `sslmode=prefer`. v0.14 refuses that before connecting, in the CLI and in the Go library ([connections](docs/CONNECTIONS.md)).
+- **Passwords stay out of pgmi's output.** pgmi redacts SQL `PASSWORD '...'` literals, ADO.NET `Pwd=` values and quoted passwords from its errors, `--json` and the MCP tools, and `DeploymentConfig` prints without its secrets. The advanced template's admin-role password no longer reaches stderr, `--json` or the server log when its role statement fails ([security](docs/SECURITY.md#your-sql-controls-its-own-logging)).
+- **A password file others can read is ignored**, with libpq's warning. pgmi checks the file the driver actually read: `passfile=`, then `PGPASSFILE`, then `~/.pgpass`.
+- **Built with pgx 5.12.0**, which fixes two upstream advisories (GHSA-j38q-h3ph-jjpq, GHSA-95fj-3fxw-g62g). govulncheck found pgmi unaffected before and after, but the second matters if you rely on `require_auth` or `channel_binding=require`.
+
+### What you can do now
+
+Scaffold a project, open it in your coding assistant and ask for a feature:
+
+```bash
+pgmi init myapp --template basic
+cd myapp
+ls AGENTS.md .agents/skills
+# AGENTS.md  pgmi-debug-deploy  pgmi-design  pgmi-layers  pgmi-metadata  pgmi-sql
+#            pgmi-testing  pgmi-workflow  postgres-analytics  postgres-concurrency  ...
+pgmi deploy . -d myapp --param env=dev
+```
+
+`AGENTS.md` tells the assistant which skill to read before which change: tables and business rules, deploy.sql, tests, a failed deploy, sort keys. The `postgres-*` skills are a recipe library for PostgreSQL's own features (partial unique and exclusion constraints, `SKIP LOCKED` queues, `GROUPING SETS`, row-level security, time ranges, change capture), and every SQL block in them deploys in CI. The skills belong to the project: edit them as your conventions change.
+
+Secrets no longer need a file or the command line. Every `PGMI_PARAM_<NAME>` environment variable becomes parameter `<name>`, and `--params-file -` reads from stdin:
+
+```bash
+PGMI_PARAM_DB_PASSWORD="$DB_PASSWORD" pgmi deploy . -d myapp --param env=prod
+```
+
+A failed deploy says where it failed. `--json` names the file, `deploy.sql` included, and the line, a line inside a test included; `phase` tells a failing test from a failing schema change, and the human line says what the failure left behind: nothing committed, or a database created and left empty ([CLI](docs/CLI.md)).
+
+A Go program can run a deploy itself. `pkg/pgmi/deploy` is the same entry point the CLI and `pgmi serve` use; it returns a `pgmi.DeployResult` and hands that deploy's PostgreSQL notices to your handler ([Go library](docs/GO-LIBRARY.md)). The library API is pre-1.0.
+
+Pick the starting point that fits. `pgmi init` alone writes the smallest project: a `deploy.sql` loop, one SQL file and a `.pgmiignore`. `--template basic` adds two layers, run-once tables and re-run views and functions, with tests. `--template advanced` is the application stack below ([templates](docs/templates.md)).
+
+**The advanced template.** One handler registry serves REST, JSON-RPC and MCP 2026-07-28 and publishes a live OpenAPI 3.1 document. Identity comes from sign-in sessions and organization sessions, with permissions from a catalogue in `data/authorization.json`. Row-level security is forced on every table, and the deploy refuses a foreign key that could cross from one organization's rows to another's. Background jobs, change tracking and an outbox come with it ([advanced template](docs/advanced/README.md)).
+
+An MCP client no longer acts as the person who connected it. It acts *for* them, as an agent with its own principal and one of three agent roles (`agent.reader`, `agent.contributor`, `agent.delegate`), and it can never do more than its person. The audit log, change tracking and the exchange log record both, so an agent's change is never mistaken for its person's. The client signs in with OAuth at your identity provider; its first call answers a short pairing code, and the person approves it on the web:
+
+```bash
+curl -X POST https://app.example.com/api/connections/approve \
+  -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" --cookie "__Host-session=$SESSION" \
+  -d '{"pairingCode": "K7M2QX", "organizationId": "'"$ORG"'", "roleId": "agent.reader"}'
+```
+
+People pause, resume and revoke their agents, managers do the same for their organization, and the owner can switch every agent off.
+
+Reference gateways in Python, TypeScript, Go, C# and Rust serve all of it: REST, MCP, OIDC sign-in, the OAuth resource server and rate limits. Each is written the way its language is usually written, for people and coding agents to read and port. They follow one written protocol and pass one end-to-end suite in CI. Each has two extension seams: a database channel for retries, tracing or caching, and interceptors that see the caller's headers and change a request before its transaction or a response after its commit, such as adding an embedding or signing a storage URL ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
+
+### Upgrading
+
+**pgmi itself and the basic template**
+
+- **PostgreSQL 15 or newer.** The advanced template needs 18. Building pgmi from source needs Go 1.27; releases are built with Go 1.27.3.
+- **`pgmi init` without `--template` writes the minimal project** (`deploy.sql`, `hello_world.sql` and `.pgmiignore`), not the basic template. A script that relied on the old default must pass `--template basic` ([templates](docs/CLI.md#templates)).
+- **`pgmi ai setup`, `check`, `skill`, `skills` and `client` are removed.** Skills ship in the scaffold instead: `pgmi init` writes `AGENTS.md`, `CLAUDE.md` and `.agents/skills/`. To add them to an existing project, scaffold a new one and copy those three. `pgmi ai` keeps the overview and `pgmi ai contract`.
+- **Session API: `pgmi_plan_view.checksum` is now `pgmi_checksum`.** Rename it in your deploy.sql. The contract version stays `1`: before 1.0, `--compat 1` does not catch a renamed column, so pin the pgmi binary. Every public view now has an explicit column list, and the new `pgmi_runtime_view` names the pgmi and contract version running the deploy ([core versus template](docs/core-vs-template.md)).
+- **Session API: file paths sort in byte order.** `path`, `name` and `directory` in `pgmi_source_view`, and the path columns of the test views, are now `COLLATE "C"`, so `ORDER BY path` runs files in the same order on every server; it used to follow the database's locale (`./ab.sql` before `./A.sql` under `en_US.utf8`). A deploy.sql that ordered by path on such a server may now run its files in a different order ([session API](docs/session-api.md)).
+- **`pgmi_checksum` keeps whitespace inside string literals, quoted identifiers and dollar-quoted bodies**, as it already kept their case: `'a  b'` and `'a b'` are different data. The normalized checksum changes once for a file with a whitespace run inside one, so a run-once file of that kind already applied is refused once as changed ([session API](docs/session-api.md)).
+- **A connection string without a database never deploys into `postgres`.** The target comes from `-d`, then the string, then `PGDATABASE`, then `pgmi.yaml`; with none of them the deploy exits 10. It used to deploy into `postgres` and exit 0 ([configuration](docs/CONFIGURATION.md)).
+- **Connection strings.** Fields a `--connection` string leaves out now come from `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGAPPNAME` and `PGCONNECT_TIMEOUT`, as in libpq, instead of `localhost:5432/postgres`. Keywords libpq does not know are refused instead of being passed to the server. `service=` and `PGSERVICE` are refused. ADO.NET strings read as Npgsql reads them: a single `Host=h:port` connects, `SSL Mode` takes Npgsql's names, and a client option such as `Pooling` is refused ([connections](docs/CONNECTIONS.md)).
+- **Environment variables that replace `pgmi.yaml` values are named.** Each `PG*` variable, TLS setting or connection-string field that replaces a `pgmi.yaml` value prints one line on stderr, such as `sslmode: from PGSSLMODE (disable), not pgmi.yaml (verify-full)`, and `--json` records it under `overrides`. A connection string never takes `sslmode` from `pgmi.yaml`, and pgmi says so. A set `PGOPTIONS` and the keys the project `.env` applied are named too, never their values ([configuration](docs/CONFIGURATION.md)).
+- **`-h`, `-p` or `-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL` exits 10.** It used to drop the variable silently and connect to localhost as the OS user. `--sslmode` now applies on top of the variable instead of dropping it, and the replaced value is announced.
+- **A `--azure`, `--aws` or `--google` flag overrides `pgmi.yaml`'s `auth_method`** instead of losing to it, a detail flag such as `--aws-region` refines `pgmi.yaml`'s method, and an unknown `auth_method` exits 10 instead of falling back to a password. `--azure-client-id` without a secret now signs in as that managed identity, and `--azure-tenant-id` alone sets the tenant of the default chain ([configuration](docs/CONFIGURATION.md#auth_method), [Azure](docs/CONNECTIONS.md#azure-entra-id)).
+- **Parameters.** `--param` keys that differ only in case are refused. `--params-file` reads a line as the project `.env` does, or exits 10 naming the line and never the value: `pw=secret  # rotated` no longer sends `secret  # rotated`, and a `$`, or a `\` in double quotes, must be single-quoted ([configuration](docs/CONFIGURATION.md#parameter-file-format)).
+- **Exit codes.** More failures now exit with the code for their cause instead of 1:
+  - **2:** `pgmi config` without a terminal.
+  - **10:** a symlinked, unreadable or non-regular project file; a NUL byte or invalid UTF-8 in deploy.sql; an invalid `pgmi_test()` callback name; an invalid `sslmode`; a malformed `PGMI_MAX_FILE_SIZE`.
+  - **11:** a cloud token that cannot be obtained.
+  - **13:** a `pgmi_test()` pattern the server refuses; a server that refuses pgmi's session preparation; a deploy role without `CREATEDB` naming a missing database.
+
+  A named pipe in the project used to hang the deploy past `--timeout` and Ctrl-C.
+- **`--overwrite` waits for nobody.** It exits 15 while another deploy runs against the target, where it used to end that deploy, and two `--overwrite` runs of one database can no longer destroy each other. It refuses before the drop what it cannot restore, and the recreated database keeps its locale provider, its `search_path` and other list settings, and its per-role settings ([the overwrite lifecycle](docs/CONNECTIONS.md#the---overwrite-lifecycle)).
+- **`pgmi serve` no longer negotiates MCP 2025-03-26**, whose JSON-RPC batches pgmi never implemented. It speaks 2026-07-28, 2025-11-25, 2025-06-18 and 2024-11-05.
+- **Go library.** `pkg/pgmi` exports only what `deploy.New` takes and returns: `pgmi.Deployer`, `ConnectionConfig`, `NewScriptError`, `ValidateDunderDirectories`, `IsTemplateDatabase`, `IsSQLExtension`, `IsTestPath`, `PgmiignoreFile`, `MinimumServerVersionNum` and the `Default*` constants are no longer public. `DeploymentConfig.Timeout` is removed, since the library never read it: bound a deploy with the context you pass to `Deploy` ([Go library](docs/GO-LIBRARY.md)).
+- **The basic template is new.** `physical/` holds run-once table files, tracked in `deployment.run_once`; a deploy refuses one that changed after it ran, and one without `<pgmi-meta idempotent="false">`, and, in both templates, a run-once file with more than one sort key. `semantic/` holds views and functions, re-run on every deploy. An SQL file anywhere else, outside `__test__/`, is refused before anything runs. `env` is required (`dev`, `test` or `prod`) and the scaffolded `pgmi.yaml` no longer sets it, so a CI deploy that forgets it fails with SQLSTATE 22023 before any change instead of seeding demo data: pass `--param env=dev` locally and `PGMI_PARAM_ENV` in CI. Only `dev` seeds the demo project. Existing basic projects keep working; the new layout is for new projects ([basic template](docs/basic/README.md)).
+- **`--verbose` is quieter.** It no longer floods the console with server DEBUG lines from pgmi's own setup; `RAISE DEBUG` from your deploy.sql and tests still shows.
+
+**The advanced template**
+
+- **A new database.** See [the upgrade guide](docs/advanced/UPGRADING.md#from-v013-to-v014-a-new-database), which also translates the old handler declarations. `membership/` cannot be removed yet: the deploy fails at the first `lib/` file without it.
+- **Identity.** `requiresAuth` is replaced by `access` (`public`, `authenticated`, `organization`) or `permissions`; `organization` admits any signed-in member in an organization session. API keys are removed. A request's identity comes from its login session and organization session, never from a header naming a user.
+- **MCP clients.** The gateway ignores `X-User-Id` and `X-Tenant-Id`. A person approves each client on the web, naming `organizationId` and an agent `roleId`, and the client then sends the handle as `Authorization: Bearer cn_...` or `X-Connection`, or signs in with OAuth (`MCP_RESOURCE`, `MCP_AUTHORIZATION_SERVERS`). With OAuth on, an anonymous `/mcp` call is 401; an unknown, revoked or expired handle is 401 either way. If you add permissions to `data/authorization.json`, add them to the agent roles that should hold them.
+- **Routes and registration.** Path templates are the only route declaration (`/projects/{id:uuid}`), route versioning is removed, and `querySchema` declares and enforces query parameters. Registration refuses an unknown metadata key and names the near match (`readonly`: did you mean `readOnly`?), so a project with a mistyped key now fails its deploy. A 201 route declares `locationTemplate`, or `noLocation` with the reason, and `successStatus` lists every 2xx the body can answer ([metadata keys](internal/scaffold/templates/advanced/.agents/skills/pgmi-endpoint/references/metadata.md)).
+- **Declared schemas are enforced.** An `inputSchema` holds its types, required fields, bounds, sizes and `const` at every depth, for REST bodies, RPC params and MCP tool arguments; a schema using a keyword the database does not enforce (`oneOf`, `if`, `multipleOf`, ...) is refused at registration, so a published schema is an enforced one ([MCP handlers](docs/advanced/MCP-HANDLERS.md)).
+- **Errors.** REST, JSON-RPC and MCP share one error contract. Every problem answer carries a namespaced `code`: `pgmi.*` for the framework, `<schema>.<entity>.<reason>` for the application, such as `membership.connection.role_too_broad`, and `pgmi.login.*` for gateway sign-in. A client matching on the old unprefixed codes must change. A field the caller can fix is 422 with `invalid-params` naming it. An error answer rolls back the handler's writes; its exchange row still commits.
+- **MCP 2026-07-28** beside the legacy `initialize` handshake. Tools declare their effect, and a tool's result is checked against its `outputSchema`. A missing resource answers `-32602`. pgmi's MCP error codes leave the JSON-RPC reserved range: no permission or no organization is `-31003` (was `-32003`), retries exhausted and no database connection `-31000` (was `-32000`), a client that cannot act yet `-31001`, and a transaction below the isolation floor `-32603` (was `-32600`). Branch on `data.code`. The MCP header checks (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`) run in the database, so a gateway you ported must forward those headers ([MCP protocol](docs/advanced/MCP-PROTOCOL.md)).
+- **Gateway.** `tools/mcp-gateway.py` is now `gateways/python/gateway.py`, beside gateways in four other languages; the old `clients/` folder is `gateways/`. Settings are renamed and shared by every gateway: `MCP_ALLOWED_ORIGINS` is `ALLOWED_ORIGINS`, `MCP_MAX_RETRY_ATTEMPTS` is `RETRY_MAX_ATTEMPTS`, `MCP_RETRY_BASE_DELAY` is `RETRY_BASE_DELAY`, and `MCP_RETRY_MAX_DELAY` and `MCP_RETRY_AFTER` are gone. The gateway now also serves REST under `/api`; the deploy parameter `api_base_path` (default `/api`) names that mount in the OpenAPI document. Keep the gateway's `DATABASE_URL` as secret as a token-signing key: that login asserts who is signed in.
+- **Exchange log.** The exchange views and `GET /admin/exchanges` drop the pending fields, which could never be true (`is_pending`, `pending_count`, `oldest_pending_at`, `isPending`, `pendingCount`, `oldestPendingAt`). `statusCode` and `summary` are nullable, and the log is indexed by id, request id, time and acting principal.
+- **Parameter refusals are SQLSTATE 22023**, so CI tells a missing secret from a failed migration, and they tell you to pass a missing password as `PGMI_PARAM_<NAME>` or through `--params-file -`, never `--param`.
+
+### Also in this release
+
+**pgmi**
+
+- **`.pgmiignore`** keeps files out of the deploy session with gitignore patterns ([what gets loaded](docs/DEPLOY-GUIDE.md#what-gets-loaded)). `--verbose` and `--json` list every ignored path and the rule that ignored it. The `.pgmiignore` of all three templates, and the basic and advanced `.gitignore`, keep out parameter files (`*.params`, `*.env`) and editor, Windows and macOS copies such as `x (1).sql` and `x - Copy.sql`, which would otherwise sort and run before the original.
+- **`--json` carries provenance:** the pgmi, contract and server versions, the target, the start and finish times, `connectionSource`, `overrides`, `dotenvKeys`, the deploy's notices with their DETAIL and HINT, and `tls` (whether the session was encrypted, the TLS version and the effective `sslmode`). The human summary and the override lines still reach stderr, so a CI log shows a recreated empty database either way ([CLI reference](docs/CLI.md), [production](docs/PRODUCTION.md#connection-requirements)).
+- **Failure locations hold in harder cases.** A comment header, a function body or a leading `DO` block no longer hides the failing line, a line past the end of the file is never reported, an editor backup with the same text is never blamed, and a deploy stopped by `--timeout` or Ctrl-C is cancelled on the server, so the error names the file that was running.
+- **`COMMIT AND CHAIN` counts as a commit**, so `unitsCommitted` and `executionMode` are right for a deploy.sql that ends its head with it, and a `$` inside an unquoted identifier such as `foo$bar$` no longer opens a dollar quote and swallows the `COMMIT` after it ([the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
+- **Checks run before anything is touched.** The server version is checked before `--overwrite` or create-if-missing drops or creates a database, a mistyped project path is reported as a missing path (exit 10) before anything asks for a database name, and a missing maintenance database says so instead of suggesting `--overwrite`. `pgmi.yaml`'s `maintenance_database` now holds without `-d`.
+- **pgmi's own suggestions run as printed.** The run-once drift hints name the failing database with `-d`, shell-quoted when it needs it, and leave out `--force`; they and `pgmi init`'s next step pass `--param env=dev`. Errors read as plain words, name the database a connection failed on, and name the `--timeout` that ran out with how to lift it. On a stderr that is no terminal pgmi prints no glyphs or colours.
+- **`pgmi serve`** speaks MCP 2026-07-28, resolves its connection exactly like `pgmi deploy`, and ignores `.env` (pass parameters or set them in the server's environment). A deploy answers one line with its notices, plus the exit code and phase on failure, so a text-only MCP client sees what happened; unknown tool arguments are refused by name, every tool marks whether it is read-only, and deploys to different databases run at the same time.
+- **CLI and wizards.** No command stalls 5 s querying the terminal. Cancelling `init`, `config` or the deploy wizard writes nothing and exits 130 (Ctrl-C) or 12. A failed connection test keeps the form and names the SQLSTATE. Saving a connection edits only `pgmi.yaml`'s connection block, keeps its comments and keeps its `sslmode` and certificate paths. `.pgpass` is saved for the maintenance database too. `pgmi init` works in a directory that holds only `.git`. Wizards fit 80x24. `--template` and `--sslmode` complete in the shell.
+- **`pgmi metadata`.** `scaffold` keeps path order, escapes keys and descriptions as XML and keeps a BOM first; `plan` prints a table; `validate` reports every bad `<pgmi-meta>` block at once; an unterminated `/*` comment no longer crashes the scan.
+- **Go library.** `deploy.WithNoticeHandler` receives one deploy's notices only, so concurrent deploys never mix them, and nothing in the library writes to stderr. `Session.Close` no longer waits 15 s on a connection broken by a timeout.
+- **Connection strings reach the server as written.** A space in `options` or `application_name` is no longer turned into `+`, a `?dbname=` names the target instead of overriding it, and a password without a user is kept.
+- **Documentation.** One page compares the minimal, basic and advanced templates; the basic and advanced templates each have a story-first entry page and new diagrams of their layers and tables; one page lists every environment variable pgmi, the driver and the cloud SDKs read, with complete GitHub Actions and GitLab jobs ([environment reference](docs/CICD.md#environment-reference)); and one section says what pgmi guarantees in an unattended run ([Running unattended](docs/PRODUCTION.md#running-unattended)). Azure sign-in is tested by hand against a real Flexible Server; AWS and Google sign-in are unit-tested only, and the docs say so.
+- **Dependencies.** Built with Go 1.27.3; pgx 5.12.0, Bubble Tea 2.1.1, and current Azure, AWS and Cloud SQL SDKs.
+- **The Cloudsmith APT repository is gone.** Nobody installed pgmi from it. Debian and Ubuntu users install the `.deb` package attached to each [GitHub release](https://github.com/vvka-141/pgmi/releases) instead: `sudo apt install ./pgmi_<version>_linux_amd64.deb`. If you added the Cloudsmith source, remove it from `/etc/apt/sources.list.d/`.
+
+**The advanced template**
+
+- **The deploy trusts no role it did not create.** An existing admin, owner, kernel, api or jobs role that another login holds ADMIN on, or that has a member the deploy did not grant, is refused (22023), so a login that may create roles cannot pre-create them and take over the new database. The jobs login gets its jobs only once it is registered as a service principal. A role name longer than PostgreSQL allows is refused before any role is created. The template deploys as a plain `CREATEROLE` + `CREATEDB` role, to a database whose name needs quoting, and with a custom owner role ([templates](docs/templates.md), [the jobs login](internal/scaffold/templates/advanced/README.md#the-jobs-login-optional)).
+- **Tenant isolation.** A signed-in person without an organization session reaches no organization's data, through a kernel either; a database relabelled from dev loses dev sign-in; an unverified login holding an operator's email is not made platform operator and never reserves its address; a catalog sync never cascades into rows its check could not see; the gateway's login can no longer write the exchange log, and routes that return a credential never write it there. Two simultaneous first sign-ins no longer fail with a duplicate key, and requests on one session no longer queue behind each other.
+- **HTTP behaves as clients expect.** The most specific `Accept` range decides (`application/json;q=0, */*` refuses JSON). URL mistakes such as invalid UTF-8 or an overflowing integer are 400s, not 500s. A handler that answers no status or one outside 100–599 is a 500 and keeps none of its writes. Lists report their total from the same snapshot as the page, and an oversized offset is a 400. `POST /invitations` answers 201 only when it creates the invitation, and 200 for a repeat. `POST /organization-sessions` answers 200, since it returns a handle rather than a resource, and `PUT /members/{id}/roles/{roleId}` answers 201 when the grant is new. `GET /admin/handlers` and `/admin/routes` answer the whole registry.
+- **JSON-RPC is a first-class surface.** It enforces a handler's `inputSchema`, `accepts` and `produces` as REST does, refuses an invalid envelope with `-32600` before the method lookup, and refuses with `-32010` (409) and `-32011` (422) as a REST body refuses. The template ships one action, `organization.transfer_ownership`, and the Go gateway routes `POST /rpc` ([protocols](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
+- **MCP.** `resources/read` routes a URI to the template with the most literal characters; every complete read carries `ttlMs` and `cacheScope`; tool errors count as errors in the exchange views, and an MCP exchange replays as its logged caller. A body PostgreSQL cannot store, such as one holding `\u0000`, is 400 `-32700` instead of a 500.
+- **Jobs and the outbox.** A job run that fails no longer leaves the job locked, a skipped run says so, and `CALL api.job_run` inside a transaction block is refused without holding the lock. The `pgmi-handlers` skill ships a tested outbox that a job drains through a kernel under forced row-level security.
+- **The reference gateways agree on the wire** ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)):
+  - Every gateway serves `GET /health` and `POST /auth/logout`, answers an unknown path 404 `pgmi.not_found`, a body over 1 MiB 413, request headers over 64 KiB 431, a stalled body 408, and an unreachable database or an exhausted pool 503 `pgmi.unavailable` with `Retry-After`. No 1xx, 204 or 304 carries `Content-Length`.
+  - Each transaction gets what is left of `REQUEST_DEADLINE_SECONDS` (default 30) as its `statement_timeout`, a slow handler is answered 504 `pgmi.deadline_exceeded`, and a client that hangs up cancels its query.
+  - Tokens are accepted when signed with RS256, PS256 or ES256, and every other algorithm, EdDSA included, is refused; `exp`, `iat` and `nbf` must be numbers, and a present `client_id` wins over `azp`. The Python gateway verifies a PS256 key without `alg`, as Microsoft Entra ID publishes them, and refetches signing keys at once after a rotation.
+  - The session and CSRF cookies are `SameSite=Strict`; `/auth` is rate-limited per address; the published OpenAPI document describes the session cookie and `X-CSRF-Token`; a sign-in without `returnTo` lands on the API explorer at `/api/docs`.
+  - `sslmode` is read as libpq reads it in every gateway: `verify-ca` or `verify-full` without `sslrootcert`, or an unknown mode, stops the gateway at startup, and Rust trusts only `sslrootcert`. A malformed `DATABASE_URL`, or one with an unencoded `@` in its password, stops the gateway with a line that never prints the password. Tracing lines log the path, never the query string.
+  - The Python gateway never writes a header holding CR or LF and refuses a chunked body 411; the Rust gateway survives a failed accept; the TypeScript gateway refuses a `DATABASE_URL` parameter node-postgres would ignore, such as `require_auth`.
+- **Agents manage their connections.** A repeated revoke answers 200, pausing a revoked connection 409, a member cannot undo a manager's pause by revoking or reconnecting, and `GET /admin/exchanges` filters by the acting principal.
+- **Quieter, tidier deploys.** A converged redeploy prints no "already exists, skipping"; permission-guarded MCP tools deploy; a `readOnly` route is unlogged by default (`autoLog` defaults to `false` there, [transaction policy](docs/advanced/TRANSACTION-POLICY.md)); a handler body that calls a `pg_temp` function, which ends with the deploy session, fails the deploy's tests; a new project never contains gateway build output; `echo_note` ships as an MCP example.
+- **Documentation and skills.** The Quick Start starts a gateway and calls `/api/hello`; the advanced entry page and `ARCHITECTURE.md` describe the template as shipped, with diagrams of its three layers, its main tables and a request's path; the shipped skills and `AGENTS.md` agree with the code and with each other, and route audit, API tests and job queues to the template's own mechanisms first.
 
 ## v0.13.1 — 2026-10-31
 
@@ -51,6 +185,7 @@ SELECT api.create_or_replace_rest_handler(
         'path', '/reports',
         'httpMethod', '^GET$',
         'name', 'list_reports',
+        'requiresAuth', false,
         'outputSchema', jsonb_build_object('type', 'object'),
         'query', jsonb_build_array(
             jsonb_build_object('name', 'format', 'required', true,
@@ -68,20 +203,12 @@ PGMI_CONNECTION_STRING="host=db1 port=5432 dbname=app user=deploy" pgmi deploy .
 
 ### Upgrading
 
-- **Advanced-template projects** — the template is your code, so take the changes into your project from a fresh copy:
-
-  ```bash
-  pgmi init /tmp/pgmi-0.13.0 --template advanced
-  diff -ru /tmp/pgmi-0.13.0/lib lib
-  diff -ru /tmp/pgmi-0.13.0/membership membership
-  diff -u /tmp/pgmi-0.13.0/deploy.sql deploy.sql
-  diff -u /tmp/pgmi-0.13.0/pgmi.yaml pgmi.yaml
-  ```
+- **Advanced-template projects** — the template is your code, so merge the changes into your project three ways, against the template you started from: [Upgrading an advanced-template project](docs/advanced/UPGRADING.md).
 
   Then, before redeploying:
   - **Pass `env` on every deploy.** A missing `env` used to mean `dev`, and `dev` fills missing passwords with `postgres`. With `env: dev` committed in `pgmi.yaml`, a production deploy whose params file forgot the admin password created an admin login with password `postgres` and exited 0. `env` now has no default. Use `--param env=dev` locally, and put `env` and `database_admin_password` in a params file everywhere else. Remove `env: dev` from your committed `pgmi.yaml`.
   - **Every SQL file needs a `<pgmi-meta>` header with a sort key.** A file without one ran before the framework and failed with an unrelated error such as `type "core.entity_id" does not exist`. The deploy now stops and names it. Give your files a sort key of `005/...` or later.
-  - **Request bodies and query values are checked before your handler.** A `POST`, `PUT` or `PATCH` body that does not match the route's `inputSchema` at the top level, or a query value of the wrong type, now gets `400` from the gateway. If a handler relied on receiving such a request, relax the declaration.
+  - **Request bodies and query values are checked before your handler.** A `POST`, `PUT` or `PATCH` body that does not match the route's `inputSchema`, or a query value of the wrong type, now gets `400` from the gateway. If a handler relied on receiving such a request, relax the declaration.
   - **Two routes that can claim one address no longer both register**, for example `/shops/{shop}/orders` beside `/shops/main/{section}`. Make one of them more specific.
   - **`/openapi.json` shows each caller only the routes it may call**, so fetch it with the identity header when you generate a client. Its `ETag` values changed format.
   - **MCP callers without identity** get `-32602` "not found … (or it requires authentication)" for a protected tool, resource or prompt, instead of `-32001`.
@@ -123,15 +250,7 @@ It also fixes the API keys v0.12.0 stopped accepting: any key id other than exac
 
 ### Upgrading
 
-- **Advanced-template projects:** scaffold a fresh copy and take the changes into your project:
-
-  ```bash
-  pgmi init /tmp/pgmi-0.12.1 --template advanced
-  diff -ru /tmp/pgmi-0.12.1/membership membership
-  diff -ru /tmp/pgmi-0.12.1/lib lib
-  diff -u /tmp/pgmi-0.12.1/deploy.sql deploy.sql
-  diff -u /tmp/pgmi-0.12.1/session.xml session.xml
-  ```
+- **Advanced-template projects:** merge the changes into your project three ways, against the template you started from: [Upgrading an advanced-template project](docs/advanced/UPGRADING.md).
 
   Then, before redeploying:
   - Remove `database_customer_password` from your parameters or params file: the parameter no longer exists and the deploy rejects unknown parameters. Anything that logs in as the customer role directly must go through the gateway; the deploy turns the role's login off.

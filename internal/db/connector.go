@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/internal/retry"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -27,57 +27,99 @@ const (
 	// DefaultMaxConnIdleTime keeps connections alive during long deployments
 	// to avoid reconnection overhead.
 	DefaultMaxConnIdleTime = 30 * time.Minute
+
+	// cancelGrace is how long a cancelled query has to come back with
+	// PostgreSQL's error before the socket deadline ends it anyway.
+	cancelGrace = 2 * time.Second
 )
 
-// NoticeHandler is called for each PostgreSQL NOTICE/WARNING during execution.
-// Replaceable to support timing prefixes in verbose mode.
-var NoticeHandler func(severity, message, detail, hint string) = DefaultNoticeHandler
+// Output receives what a connector reports while it works: PostgreSQL
+// notices and pgmi's own messages (connection retries, warnings). A nil field
+// discards what it would receive.
+type Output struct {
+	Notice func(severity, message, detail, hint string)
+	Logger pgmi.Logger
+}
 
-// DefaultNoticeHandler prints notices to stderr without decoration.
-func DefaultNoticeHandler(_, message, detail, hint string) {
-	fmt.Fprintln(os.Stderr, message)
-	if detail != "" {
-		fmt.Fprintf(os.Stderr, "DETAIL: %s\n", detail)
-	}
-	if hint != "" {
-		fmt.Fprintf(os.Stderr, "HINT: %s\n", hint)
+func (o Output) info(format string, args ...any) {
+	if o.Logger != nil {
+		o.Logger.Info(format, args...)
 	}
 }
 
-func configurePool(poolConfig *pgxpool.Config) {
+// WriteNotice prints a notice the way psql does, except that NOTICE, INFO,
+// LOG and DEBUG lines carry no severity label: only WARNING and above stand
+// out. Every line starts with linePrefix.
+func WriteNotice(w io.Writer, linePrefix, severity, message, detail, hint string) {
+	switch severity {
+	case "WARNING", "ERROR", "FATAL", "PANIC":
+		fmt.Fprintf(w, "%s%s:  %s\n", linePrefix, severity, message)
+	default:
+		fmt.Fprintf(w, "%s%s\n", linePrefix, message)
+	}
+	if detail != "" {
+		fmt.Fprintf(w, "%sDETAIL:  %s\n", linePrefix, detail)
+	}
+	if hint != "" {
+		fmt.Fprintf(w, "%sHINT:  %s\n", linePrefix, hint)
+	}
+}
+
+func configurePool(poolConfig *pgxpool.Config, out Output) {
 	poolConfig.MaxConns = DefaultMaxConns
 	poolConfig.MinConns = DefaultMinConns
 	poolConfig.MaxConnIdleTime = DefaultMaxConnIdleTime
 	poolConfig.ConnConfig.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		NoticeHandler(notice.Severity, notice.Message, notice.Detail, notice.Hint)
+		if out.Notice != nil && shouldForward(notice) {
+			out.Notice(notice.SeverityUnlocalized, notice.Message, notice.Detail, notice.Hint)
+		}
 	}
+	poolConfig.ConnConfig.BuildContextWatcherHandler = cancelOnServer
+}
+
+// cancelOnServer stops a query whose context ends with a cancel request, so the
+// 57014 PostgreSQL returns says where it stopped.
+func cancelOnServer(conn *pgconn.PgConn) ctxwatch.Handler {
+	return &pgconn.CancelRequestContextWatcherHandler{Conn: conn, DeadlineDelay: cancelGrace}
+}
+
+func shouldForward(notice *pgconn.Notice) bool {
+	return notice.SeverityUnlocalized != "DEBUG" || notice.Routine == "exec_stmt_raise"
+}
+
+// Connector opens a connection pool; each implementation handles one
+// authentication method. The caller closes the pool.
+type Connector interface {
+	Connect(ctx context.Context) (*pgxpool.Pool, error)
 }
 
 // StandardConnector implements the Connector interface for standard
 // username/password authentication with automatic retry on transient failures.
 type StandardConnector struct {
-	config        *pgmi.ConnectionConfig
+	config        *ConnectionConfig
 	retryExecutor *retry.Executor
+	out           Output
 }
 
 // NewStandardConnector creates a new StandardConnector with the given configuration.
-func NewStandardConnector(config *pgmi.ConnectionConfig) *StandardConnector {
+func NewStandardConnector(config *ConnectionConfig, out Output) *StandardConnector {
 	return &StandardConnector{
 		config:        config,
-		retryExecutor: newConnectExecutor(),
+		retryExecutor: newConnectExecutor(out),
+		out:           out,
 	}
 }
 
 // newConnectExecutor retries connection establishment with pgmi's defaults and
-// says so on stderr, so a slow connect is visible rather than a silent stall.
-func newConnectExecutor() *retry.Executor {
-	strategy := retry.NewExponentialBackoff(pgmi.DefaultConnectRetries,
-		retry.WithInitialDelay(pgmi.DefaultRetryInitialDelay),
-		retry.WithMaxDelay(pgmi.DefaultRetryMaxDelay),
+// says so through out, so a slow connect is visible rather than a silent stall.
+func newConnectExecutor(out Output) *retry.Executor {
+	strategy := retry.NewExponentialBackoff(defaultConnectRetries,
+		retry.WithInitialDelay(defaultRetryInitialDelay),
+		retry.WithMaxDelay(defaultRetryMaxDelay),
 	)
 	return retry.NewExecutor(retry.NewPostgreSQLErrorClassifier(), strategy).
 		WithOnRetry(func(attempt int, err error, delay time.Duration) {
-			fmt.Fprintf(os.Stderr, "Connection attempt %d failed: %v; retrying in %s\n",
+			out.info("Connection attempt %d failed: %v; retrying in %s",
 				attempt+1, err, delay.Round(time.Millisecond))
 		})
 }
@@ -95,22 +137,23 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 		poolConfig, err := pgxpool.ParseConfig(connStr)
 		if err != nil {
 			pool = nil
-			return fmt.Errorf("failed to parse connection config: %w", err)
+			return fmt.Errorf("%w: connection settings: %w", pgmi.ErrInvalidConfig, err)
 		}
 
-		configurePool(poolConfig)
+		configurePool(poolConfig, c.out)
+		IgnoreExposedPassfile(&poolConfig.ConnConfig.Config, c.config.Password, c.config.AdditionalParams["passfile"], c.out.info)
 
 		newPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			pool = nil
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		// Test the connection
 		if err := newPool.Ping(ctx); err != nil {
 			newPool.Close()
 			pool = nil
-			return wrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		pool = newPool
@@ -130,20 +173,27 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 	return pool, nil
 }
 
-// NewConnector is a factory function that creates the appropriate Connector
-// based on the ConnectionConfig's AuthMethod.
-func NewConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+// NewConnector creates the Connector for the ConnectionConfig's AuthMethod;
+// what it reports goes to out.
+func NewConnector(config *ConnectionConfig, out Output) (Connector, error) {
 	switch config.AuthMethod {
 	case pgmi.AuthMethodStandard:
-		return NewStandardConnector(config), nil
+		return NewStandardConnector(config, out), nil
 	case pgmi.AuthMethodAWSIAM:
-		return newAWSConnector(config)
+		return newAWSConnector(config, out)
 	case pgmi.AuthMethodGoogleIAM:
-		return newGoogleConnector(config)
+		return newGoogleConnector(config, out)
 	case pgmi.AuthMethodAzureEntraID:
-		return newAzureConnector(config)
+		return newAzureConnector(config, out)
 	default:
 		return nil, fmt.Errorf("unsupported auth method %v: %w", config.AuthMethod, pgmi.ErrUnsupportedAuthMethod)
+	}
+}
+
+// ConnectorFactory returns NewConnector bound to out.
+func ConnectorFactory(out Output) func(*ConnectionConfig) (Connector, error) {
+	return func(config *ConnectionConfig) (Connector, error) {
+		return NewConnector(config, out)
 	}
 }
 
@@ -173,10 +223,10 @@ const (
 	sqlStateCannotConnectNow   = "57P03"
 )
 
-// wrapConnectionError wraps raw pgx connection errors with actionable guidance.
+// WrapConnectionError wraps raw pgx connection errors with actionable guidance.
 // All returned errors satisfy errors.Is(err, pgmi.ErrConnectionFailed) and
 // errors.Is(err, originalErr).
-func wrapConnectionError(err error, host string, port int, database, username string) error {
+func WrapConnectionError(err error, host string, port int, database, username string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// The server's own SQLSTATE decides, never the prose: pgx reports every
@@ -215,7 +265,7 @@ func wrapConnectionError(err error, host string, port int, database, username st
 
 	switch {
 	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "actively refused"):
-		return newConnError(err, "connection refused to %s\nis PostgreSQL running? check: pg_isready -h %s -p %d", addr, host, port)
+		return newConnError(err, "connection refused to %s\nis PostgreSQL running? check: pg_isready -h %s -p %d\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml", addr, host, port)
 
 	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "no host"):
 		return newConnError(err, "cannot resolve host %q\ncheck hostname spelling, DNS, and $PGHOST", host)
@@ -253,7 +303,7 @@ func wrapConnectionError(err error, host string, port int, database, username st
 }
 
 // newAWSConnector creates a token-based connector with the AWS IAM token provider.
-func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+func newAWSConnector(config *ConnectionConfig, out Output) (Connector, error) {
 	endpoint := fmt.Sprintf("%s:%d", config.Host, config.Port)
 
 	tokenProvider, err := NewAWSIAMTokenProvider(endpoint, config.AWSRegion, config.Username)
@@ -261,11 +311,11 @@ func newAWSConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return nil, fmt.Errorf("failed to create AWS IAM token provider: %w", err)
 	}
 
-	return NewTokenBasedConnector(config, tokenProvider, "AWS IAM"), nil
+	return NewTokenBasedConnector(config, tokenProvider, "AWS IAM", out), nil
 }
 
 // newGoogleConnector creates a GoogleCloudSQLConnector for Google Cloud SQL IAM authentication.
-func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+func newGoogleConnector(config *ConnectionConfig, out Output) (Connector, error) {
 	if config.GoogleInstance == "" {
 		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires --google-instance (project:region:instance): %w", pgmi.ErrInvalidConfig)
 	}
@@ -273,13 +323,13 @@ func newGoogleConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 		return nil, fmt.Errorf("Google Cloud SQL IAM auth requires username (-U): %w", pgmi.ErrInvalidConfig)
 	}
 
-	return NewGoogleCloudSQLConnector(config, config.GoogleInstance), nil
+	return NewGoogleCloudSQLConnector(config, config.GoogleInstance, out), nil
 }
 
 // newAzureConnector creates a token-based connector with the Azure Entra ID token provider.
 // If explicit credentials (tenant, client, secret) are provided, uses Service Principal auth.
 // Otherwise, falls back to DefaultAzureCredential chain.
-func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
+func newAzureConnector(config *ConnectionConfig, out Output) (Connector, error) {
 	var tokenProvider TokenProvider
 	var err error
 
@@ -293,11 +343,19 @@ func newAzureConnector(config *pgmi.ConnectionConfig) (pgmi.Connector, error) {
 			return nil, fmt.Errorf("failed to create Azure Service Principal provider: %w", err)
 		}
 	} else {
-		tokenProvider, err = NewAzureDefaultCredentialProvider()
+		tokenProvider, err = NewAzureIdentityProvider(config.AzureTenantID, config.AzureClientID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Azure Default Credential provider: %w", err)
 		}
 	}
 
-	return NewTokenBasedConnector(config, tokenProvider, "Azure"), nil
+	return NewTokenBasedConnector(config, tokenProvider, "Azure", out), nil
 }
+
+const (
+	// defaultConnectRetries is how many times a failed connection is retried
+	// after the first attempt, so up to four attempts in all.
+	defaultConnectRetries    = 3
+	defaultRetryInitialDelay = 100 * time.Millisecond
+	defaultRetryMaxDelay     = time.Minute
+)

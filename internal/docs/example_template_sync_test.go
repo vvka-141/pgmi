@@ -7,19 +7,25 @@ import (
 	"testing"
 )
 
-// examples/test-gated-deploy is a copy of the basic template's domain code,
-// kept byte-identical so the README example and `pgmi init` teach the same
-// SQL. Nothing enforced that, and a data-loss bug in upsert_user was fixed in
-// the template while the example — which CI runs on every push — kept it.
+// examples/test-gated-deploy is a copy of the basic template's deploy.sql and
+// domain code, kept byte-identical so the README example and `pgmi init` teach
+// the same SQL. Nothing enforced that, and a data-loss bug was once fixed in
+// the template while the example, which CI runs on every push, kept it.
 //
-// deploy.sql and README.md are deliberately NOT listed: the template's
-// deploy.sql carries the migration-tracking teaching block the example omits.
-// To let one of these diverge on purpose, delete its line and say why.
+// README.md is deliberately NOT listed, nor the example's own
+// physical/003_audit_log.sql that its break-it test needs. To let one of these
+// diverge on purpose, delete its line and say why.
 var exampleTemplateCopies = []string{
-	"migrations/001_users.sql",
-	"migrations/002_user_crud.sql",
-	"__test__/_setup.sql",
-	"__test__/test_user_crud.sql",
+	"deploy.sql",
+	"physical/001_project.sql",
+	"physical/002_task.sql",
+	"physical/__test__/test_constraints.sql",
+	"semantic/project.sql",
+	"semantic/task.sql",
+	"semantic/__test__/_setup.sql",
+	"semantic/__test__/test_project.sql",
+	"semantic/__test__/test_task.sql",
+	"__test__/test_function_privileges.sql",
 }
 
 func TestExampleMatchesBasicTemplate(t *testing.T) {

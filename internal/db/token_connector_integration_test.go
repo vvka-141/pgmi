@@ -1,7 +1,6 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/vvka-141/pgmi/internal/testinfra"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var (
@@ -56,7 +54,7 @@ func requireTokenTestDB(t *testing.T) string {
 	return ""
 }
 
-func parseTestConnConfig(t *testing.T, connStr string) *pgmi.ConnectionConfig {
+func parseTestConnConfig(t *testing.T, connStr string) *ConnectionConfig {
 	t.Helper()
 	u, err := url.Parse(connStr)
 	if err != nil {
@@ -70,7 +68,7 @@ func parseTestConnConfig(t *testing.T, connStr string) *pgmi.ConnectionConfig {
 		}
 	}
 	password, _ := u.User.Password()
-	return &pgmi.ConnectionConfig{
+	return &ConnectionConfig{
 		Host:     u.Hostname(),
 		Port:     port,
 		Database: strings.TrimPrefix(u.Path, "/"),
@@ -106,14 +104,14 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 			Token:     realConfig.Password,
 			ExpiresOn: time.Now().Add(1 * time.Hour),
 		}
-		config := &pgmi.ConnectionConfig{
+		config := &ConnectionConfig{
 			Host:     realConfig.Host,
 			Port:     realConfig.Port,
 			Database: realConfig.Database,
 			Username: realConfig.Username,
 			SSLMode:  realConfig.SSLMode,
 		}
-		connector := NewTokenBasedConnector(config, provider, "Test")
+		connector := NewTokenBasedConnector(config, provider, "Test", Output{})
 		pool, err := connector.Connect(context.Background())
 		if err != nil {
 			t.Fatalf("Connect() error = %v", err)
@@ -133,14 +131,14 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 		provider := &MockTokenProvider{
 			Err: fmt.Errorf("credential expired"),
 		}
-		config := &pgmi.ConnectionConfig{
+		config := &ConnectionConfig{
 			Host:     realConfig.Host,
 			Port:     realConfig.Port,
 			Database: realConfig.Database,
 			Username: realConfig.Username,
 			SSLMode:  realConfig.SSLMode,
 		}
-		connector := NewTokenBasedConnector(config, provider, "Test")
+		connector := NewTokenBasedConnector(config, provider, "Test", Output{})
 		pool, err := connector.Connect(context.Background())
 		if err == nil {
 			pool.Close()
@@ -159,14 +157,14 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 			token:     realConfig.Password,
 			expiresOn: time.Now().Add(1 * time.Hour),
 		}
-		config := &pgmi.ConnectionConfig{
+		config := &ConnectionConfig{
 			Host:     realConfig.Host,
 			Port:     realConfig.Port,
 			Database: realConfig.Database,
 			Username: realConfig.Username,
 			SSLMode:  realConfig.SSLMode,
 		}
-		connector := NewTokenBasedConnector(config, provider, "Test")
+		connector := NewTokenBasedConnector(config, provider, "Test", Output{})
 		pool, err := connector.Connect(context.Background())
 		if err != nil {
 			t.Fatalf("Connect() error = %v", err)
@@ -184,7 +182,7 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 			Token:     realConfig.Password,
 			ExpiresOn: time.Now().Add(3 * time.Minute),
 		}
-		config := &pgmi.ConnectionConfig{
+		config := &ConnectionConfig{
 			Host:     realConfig.Host,
 			Port:     realConfig.Port,
 			Database: realConfig.Database,
@@ -192,26 +190,17 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 			SSLMode:  realConfig.SSLMode,
 		}
 
-		var buf bytes.Buffer
-		origStderr := os.Stderr
-		r, w, _ := os.Pipe()
-		os.Stderr = w
-
-		connector := NewTokenBasedConnector(config, provider, "Test")
+		var log infoLog
+		connector := NewTokenBasedConnector(config, provider, "Test", Output{Logger: &log})
 		pool, err := connector.Connect(context.Background())
-
-		w.Close()
-		os.Stderr = origStderr
-		buf.ReadFrom(r)
-
 		if err != nil {
 			t.Fatalf("Connect() error = %v", err)
 		}
 		defer pool.Close()
 
-		output := buf.String()
+		output := strings.Join(log.lines, "\n")
 		if !strings.Contains(output, "Warning") || !strings.Contains(output, "Test token expires") {
-			t.Errorf("expected expiry warning on stderr, got: %q", output)
+			t.Errorf("expected an expiry warning through the logger, got: %q", output)
 		}
 	})
 
@@ -221,14 +210,14 @@ func TestTokenBasedConnector_Connect(t *testing.T) {
 			Token:     realConfig.Password,
 			ExpiresOn: time.Now().Add(shortTTL),
 		}
-		config := &pgmi.ConnectionConfig{
+		config := &ConnectionConfig{
 			Host:     realConfig.Host,
 			Port:     realConfig.Port,
 			Database: realConfig.Database,
 			Username: realConfig.Username,
 			SSLMode:  realConfig.SSLMode,
 		}
-		connector := NewTokenBasedConnector(config, provider, "Test")
+		connector := NewTokenBasedConnector(config, provider, "Test", Output{})
 		pool, err := connector.Connect(context.Background())
 		if err != nil {
 			t.Fatalf("Connect() error = %v", err)

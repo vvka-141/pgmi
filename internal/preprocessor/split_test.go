@@ -245,6 +245,11 @@ func TestSplitExecutionUnits(t *testing.T) {
 			want: []string{"SELECT 'a\\';\nCOMMIT;", "SELECT 2;"},
 		},
 		{
+			name: "a $ inside an identifier opens no dollar quote",
+			sql:  "CREATE TABLE foo$bar$(id int);\nCOMMIT;\nVACUUM foo$bar$;\n",
+			want: []string{"CREATE TABLE foo$bar$(id int);\nCOMMIT;", "VACUUM foo$bar$;"},
+		},
+		{
 			// date'...' is a type-prefixed literal, not an escape string: the
 			// e belongs to the type name, so the backslash stays literal.
 			name: "identifier ending in e does not make the next literal an escape string",
@@ -425,5 +430,28 @@ func TestSplitExecutionUnitsTemplateShape(t *testing.T) {
 	}
 	if !strings.Contains(units[1], "RAISE NOTICE") {
 		t.Errorf("banner DO block should be the tail unit, got %q", units[1])
+	}
+}
+
+func TestHeadCommits(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"BEGIN; CREATE TABLE t(id int); COMMIT; SELECT 1;", true},
+		{"BEGIN; INSERT INTO t VALUES (1); COMMIT AND CHAIN; SELECT 1/0;", true},
+		{"BEGIN; INSERT INTO t VALUES (1); END AND CHAIN; SELECT 1;", true},
+		{"BEGIN; INSERT INTO t VALUES (1); END; SELECT 1;", true},
+		{"BEGIN; INSERT INTO t VALUES (1); ROLLBACK AND CHAIN; SELECT 1;", false},
+		{"BEGIN; INSERT INTO t VALUES (1); ABORT; SELECT 1;", false},
+		{"BEGIN;\nINSERT INTO t VALUES (1); -- a comment; COMMIT\nCOMMIT WORK AND CHAIN;\nSELECT 1;", true},
+	} {
+		units := SplitExecutionUnits(tc.sql)
+		if len(units) < 2 {
+			t.Fatalf("%q: expected a head and a tail, got %q", tc.sql, units)
+		}
+		if got := HeadCommits(units[0]); got != tc.want {
+			t.Errorf("HeadCommits(%q) = %v, want %v", units[0], got, tc.want)
+		}
 	}
 }

@@ -69,7 +69,9 @@ WALK_ENV="$work/env.sh" bash -e readme.sh 2>&1 | tee "$logs/readme.log" \
 # shellcheck disable=SC1091
 source "$work/env.sh"
 grep -q "Test suite passed" "$logs/readme.log" || fail "README deploy did not complete its test suite"
-grep -q "demo_db: 7 files loaded" "$logs/readme.log" || fail "README deploy summary line missing"
+summary="$(grep -o 'demo_db: [0-9]* files loaded' "$repo/README.md" | head -n1)"
+[ -n "$summary" ] || fail "no 'demo_db: N files loaded' line in README.md"
+grep -q "$summary" "$logs/readme.log" || fail "README deploy did not print '$summary'"
 
 step "README: failure demo"
 awk '
@@ -79,17 +81,23 @@ awk '
     inside && /^```/ { inside = 0; next }
     inside && first {
         first = 0
-        path = (sub(/^-- /, "") && $0 ~ /^(migrations|__test__)\//) ? "demo/" $0 : ""
+        path = (sub(/^-- /, "") && $0 ~ /^(physical|semantic|__test__)\//) ? "demo/" $0 : ""
         next
     }
     inside && path != "" { print > path }
 ' "$repo/README.md"
-[ -f demo/migrations/003_audit_log.sql ] && [ -f demo/__test__/test_audit_log.sql ] \
+[ -f demo/physical/003_audit_log.sql ] && [ -f demo/__test__/test_audit_log.sql ] \
     || fail "README failure-demo files not found"
-expect_exit 13 "$logs/fail.log" pgmi deploy demo -d demo_db
+expect_exit 13 "$logs/fail.log" pgmi deploy demo -d demo_db --param env=dev
 grep -q "audit_log must contain a deploy event" "$logs/fail.log" || fail "failure demo did not report the test"
 [ "$(sql demo_db "SELECT to_regclass('audit_log') IS NULL")" = t ] \
     || fail "audit_log exists after a failed deploy: the rollback did not happen"
+
+# doc_sql <query>: the query must appear verbatim in QUICKSTART.md, then runs it.
+doc_sql() {
+    grep -qF "$1" "$repo/docs/QUICKSTART.md" || fail "QUICKSTART.md no longer shows: $1"
+    sql myapp "$1"
+}
 
 step "Quickstart: deploy with pgmi.yaml"
 unset PGMI_CONNECTION_STRING
@@ -100,32 +108,52 @@ block_after "$repo/docs/QUICKSTART.md" "Update the database name" yaml \
 grep -q "database: myapp" myapp/pgmi.yaml || fail "no pgmi.yaml block after 'Update the database name' in QUICKSTART.md"
 cat myapp/pgmi.yaml
 cd myapp
-expect_exit 0 "$logs/deploy.log" pgmi deploy . --overwrite --force
+expect_exit 0 "$logs/deploy.log" pgmi deploy . --overwrite --force --param env=dev
 grep -q "Test suite passed" "$logs/deploy.log" || fail "Quickstart deploy did not complete its test suite"
-[ "$(sql myapp "SELECT count(*) FROM get_user('admin@example.com')")" = 1 ] \
-    || fail "get_user('admin@example.com') did not return the seeded admin"
 
-step "Quickstart: --param admin_email"
-expect_exit 0 "$logs/param.log" pgmi deploy . --overwrite --force --param admin_email=you@example.com
-[ "$(sql myapp "SELECT count(*) FROM get_user('you@example.com')")" = 1 ] \
-    || fail "--param admin_email did not reach deploy.sql"
+step "Quickstart: verify through the view and the writer"
+view="SELECT name, open_task_count, state FROM project_view;"
+[ "$(doc_sql "$view")" = "Demo|0|empty" ] || fail "project_view does not show the empty Demo project"
+add="SELECT title, status FROM fn_add_task((SELECT project_id FROM project WHERE name = 'Demo'), 'Write the plan');"
+[ "$(doc_sql "$add")" = "Write the plan|open" ] || fail "fn_add_task did not add the task"
+[ "$(doc_sql "$view")" = "Demo|1|active" ] || fail "project_view does not show the Demo project as active"
+[ "$(sql myapp "SELECT count(*) FILTER (WHERE task_id IS NULL) || '/' || count(*) FROM fn_add_task((SELECT project_id FROM project WHERE name = 'Demo'), 'Write the plan')")" = 1/1 ] \
+    || fail "a duplicate fn_add_task did not return NULL, as the Quickstart says"
+grep -qF "fn_task_problems(<project_id>, 'Write the plan')" "$repo/docs/QUICKSTART.md" \
+    || fail "QUICKSTART.md no longer shows the fn_task_problems call"
+[ "$(sql myapp "SELECT * FROM fn_task_problems((SELECT project_id FROM project WHERE name = 'Demo'), 'Write the plan')")" = "title|duplicate" ] \
+    || fail "fn_task_problems does not explain the duplicate as (title, duplicate)"
 
-step "Quickstart: add migrations/003_orders.sql"
-block_after "$repo/docs/QUICKSTART.md" "migrations/003_orders.sql" sql >migrations/003_orders.sql
-[ -s migrations/003_orders.sql ] || fail "no sql block after 'migrations/003_orders.sql' in QUICKSTART.md"
-expect_exit 0 "$logs/orders.log" pgmi deploy . --overwrite --force
-[ "$(sql myapp "SELECT to_regclass('\"order\"') IS NOT NULL")" = t ] || fail "order table missing"
+step "Quickstart: an edited run-once file is refused"
+cp physical/002_task.sql "$work/002_task.sql"
+awk '{ print } /^CREATE TABLE task \(/ { print "    due_on date," }' "$work/002_task.sql" >physical/002_task.sql
+grep -q "due_on date," physical/002_task.sql || fail "could not add due_on to physical/002_task.sql"
+expect_exit 13 "$logs/drift.log" pgmi deploy . --force --param env=dev
+grep -q "./physical/002_task.sql: content edited" "$logs/drift.log" || fail "the edited run-once file was not named"
+[ "$(sql myapp "SELECT count(*) FROM information_schema.columns WHERE table_name = 'task' AND column_name = 'due_on'")" = 0 ] \
+    || fail "due_on exists after a refused deploy"
 
-step "Quickstart: incremental deploy and the CI form"
-expect_exit 0 "$logs/incr.log" pgmi deploy .
-expect_exit 0 "$logs/ci.log" pgmi deploy . -d myapp --compat 1 --force
+step "Quickstart: the change as a new run-once file"
+cp "$work/002_task.sql" physical/002_task.sql
+block_after "$repo/docs/QUICKSTART.md" "physical/003_task_due_on.sql" sql \
+    | sed "s/<your new uuid>/$(cat /proc/sys/kernel/random/uuid)/" >physical/003_task_due_on.sql
+grep -q "ADD COLUMN due_on" physical/003_task_due_on.sql || fail "no sql block after 'physical/003_task_due_on.sql' in QUICKSTART.md"
+expect_exit 0 "$logs/due_on.log" pgmi deploy . --force --param env=dev
+[ "$(sql myapp "SELECT count(*) FROM information_schema.columns WHERE table_name = 'task' AND column_name = 'due_on'")" = 1 ] \
+    || fail "due_on missing after the new run-once file"
+ledger="SELECT path, ran_at FROM deployment.run_once ORDER BY ran_at;"
+doc_sql "$ledger" | grep -q '^\./physical/003_task_due_on\.sql|' || fail "deployment.run_once does not record the new file"
+expect_exit 0 "$logs/again.log" pgmi deploy . --force --param env=dev
+
+step "Quickstart: the CI form"
+expect_exit 0 "$logs/ci.log" pgmi deploy . -d myapp --compat 1 --force --param env=prod
 
 step "Quickstart: a failing test aborts the deploy"
 awk '!done && /^BEGIN/ { print; print "    RAISE EXCEPTION '\''forced failure'\'';"; done = 1; next } { print }' \
-    __test__/test_user_crud.sql >"$work/forced.sql"
-mv "$work/forced.sql" __test__/test_user_crud.sql
-grep -q "forced failure" __test__/test_user_crud.sql || fail "could not inject the forced failure"
-expect_exit 13 "$logs/forced.log" pgmi deploy .
+    semantic/__test__/test_task.sql >"$work/forced.sql"
+mv "$work/forced.sql" semantic/__test__/test_task.sql
+grep -q "forced failure" semantic/__test__/test_task.sql || fail "could not inject the forced failure"
+expect_exit 13 "$logs/forced.log" pgmi deploy . --force --param env=dev
 grep -q "forced failure" "$logs/forced.log" || fail "forced failure not reported"
 
 echo

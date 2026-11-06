@@ -1,12 +1,5 @@
 package pgmi
 
-import (
-	"fmt"
-	"regexp"
-	"strings"
-	"time"
-)
-
 // Exit codes for semantic error classification.
 // These follow Unix/GNU conventions:
 //   - 0: Success
@@ -18,102 +11,12 @@ const (
 	ExitGeneralError     = 1   // Unknown or unclassified error
 	ExitUsageError       = 2   // CLI usage error (missing args, invalid flags)
 	ExitPanic            = 3   // Internal panic (unexpected crash)
-	ExitConfigError      = 10  // Invalid pgmi configuration, rejected before connecting
+	ExitConfigError      = 10  // Invalid pgmi configuration, rejected before anything is created, dropped or deployed
 	ExitConnectionError  = 11  // Failed to connect to database
 	ExitApprovalDenied   = 12  // User denied overwrite approval
 	ExitExecutionFailed  = 13  // SQL execution failed
 	ExitDeploySQLMissing = 14  // deploy.sql not found
 	ExitConcurrentDeploy = 15  // Another pgmi deployment is in progress against the same database
 	ExitTimeout          = 16  // Operation exceeded --timeout (context deadline exceeded)
-	ExitInterrupted      = 130 // Process interrupted by SIGINT (Ctrl-C) — Unix convention 128+SIGINT
+	ExitInterrupted      = 130 // Process interrupted by SIGINT (Ctrl-C) or SIGTERM — Unix convention 128+SIGINT
 )
-
-// MinimumServerVersionNum is the oldest PostgreSQL pgmi runs on, in
-// server_version_num form (110000 == 11.0). The floor is set by
-// hashtextextended, which the deploy advisory lock needs and which arrived in
-// PostgreSQL 11. Verified: the core suite and the basic template are green on
-// 11. The advanced template needs more — xid8 (13) and security_invoker views
-// (15) — and documents 15+ separately; that floor is the template's, not pgmi's.
-const MinimumServerVersionNum = 110000
-
-const (
-	// DefaultForceApprovalCountdown is the countdown duration before force approval proceeds.
-	DefaultForceApprovalCountdown = 5 * time.Second
-
-	// DefaultRetryInitialDelay is the default initial delay before the first retry attempt.
-	DefaultRetryInitialDelay = 100 * time.Millisecond
-
-	// DefaultRetryMaxDelay is the default maximum delay between retry attempts.
-	DefaultRetryMaxDelay = 1 * time.Minute
-
-	// DefaultConnectRetries is how many times a failed connection is retried
-	// after the first attempt, so up to four attempts in all.
-	DefaultConnectRetries = 3
-
-	// DefaultMaintenanceDB is the default database to connect to for maintenance operations.
-	DefaultMaintenanceDB = "postgres"
-)
-
-var (
-	// DunderDirRegexp matches dunder directories (e.g., /__test__/, /__tests__/) in paths.
-	DunderDirRegexp = regexp.MustCompile(`/__([^/]+)__/`)
-
-	// AllowedDunderDirs lists the dunder directory names that pgmi recognizes.
-	AllowedDunderDirs = map[string]bool{
-		"test":  true,
-		"tests": true,
-	}
-)
-
-// IsTestPath returns true if the path contains a recognized test directory (/__test__/ or /__tests__/).
-func IsTestPath(path string) bool {
-	matches := DunderDirRegexp.FindAllStringSubmatch(path, -1)
-	for _, m := range matches {
-		if m[1] == "test" || m[1] == "tests" {
-			return true
-		}
-	}
-	return false
-}
-
-// ValidateDunderDirectories checks that all dunder directories in the path are recognized.
-// Returns an error if an unsupported dunder directory is found.
-func ValidateDunderDirectories(path string) error {
-	matches := DunderDirRegexp.FindAllStringSubmatch(path, -1)
-	for _, m := range matches {
-		if !AllowedDunderDirs[m[1]] {
-			// ErrInvalidConfig so this exits 10 like every other project error
-			// caught before connecting — a path that does not exist, a path
-			// that is a file, a duplicate <pgmi-meta id>. It exited 1, which
-			// documents nothing.
-			return fmt.Errorf("unsupported directory \"__%s__\" in path %q; only __test__ and __tests__ are allowed: %w",
-				m[1], path, ErrInvalidConfig)
-		}
-	}
-	return nil
-}
-
-// SQLExtensions lists recognized SQL file extensions.
-// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
-var SQLExtensions = map[string]bool{
-	".sql":     true,
-	".ddl":     true,
-	".dml":     true,
-	".dql":     true,
-	".dcl":     true,
-	".psql":    true,
-	".pgsql":   true,
-	".plpgsql": true,
-}
-
-// IsSQLExtension returns true if the extension indicates a SQL file.
-// Must stay consistent with pg_temp.pgmi_is_sql_file() in schema.sql.
-func IsSQLExtension(ext string) bool {
-	return SQLExtensions[strings.ToLower(ext)]
-}
-
-// IsTemplateDatabase returns true if the name is a PostgreSQL template database.
-func IsTemplateDatabase(name string) bool {
-	lower := strings.ToLower(name)
-	return lower == "template0" || lower == "template1"
-}

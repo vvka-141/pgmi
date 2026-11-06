@@ -97,10 +97,10 @@ release:
     brew install --cask vvka-141/pgmi/pgmi
     ```
 
-    **Debian / Ubuntu (APT):**
+    **Debian / Ubuntu (.deb):**
     ```
-    curl -1sLf 'https://dl.cloudsmith.io/public/vvka-141/pgmi/setup.deb.sh' | sudo bash
-    sudo apt install pgmi
+    curl -sSLO https://github.com/vvka-141/pgmi/releases/download/{{.Tag}}/pgmi_{{.Version}}_linux_amd64.deb
+    sudo apt install ./pgmi_{{.Version}}_linux_amd64.deb
     ```
 
     **Go (all platforms):**
@@ -150,9 +150,9 @@ homebrew_casks:
     description: "PostgreSQL-native deployment driver"
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/pgmi"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/pgmi"]
           end
 
 nfpms:
@@ -171,12 +171,3 @@ nfpms:
         dst: /usr/share/doc/pgmi/LICENSE
       - src: README.md
         dst: /usr/share/doc/pgmi/README.md
-
-publishers:
-  - name: cloudsmith
-    ids:
-      - pgmi
-    cmd: |
-      cloudsmith push deb vvka-141/pgmi/any-distro/any-version {{ .ArtifactPath }}
-    env:
-      - CLOUDSMITH_API_KEY={{ .Env.CLOUDSMITH_API_KEY }}

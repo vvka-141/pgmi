@@ -55,33 +55,28 @@ If your transactions are well-tested:
 - Issues surfacing after deployment are "minor" (UI glitches, service integration) not "fundamental" (data corruption)
 - You can reason about system correctness by examining transactions alone
 
+## The Deploy Contract
+
+A deploy is itself a transaction over the dataset, so `deploy.sql` refuses anything that would leave the database different from what the files say.
+
+- **Two kinds of file.** Structure (tables, indexes, types, domains, policies, operators, constraint triggers) lives in run-once files written as plain DDL. Code (functions, views, registrations, catalog sync) lives in re-run files and is replaced on every deploy. A file holding the wrong kind stops the deploy before anything runs.
+- **Run-once means fixed.** Editing, moving, re-sorting or removing a run-once file that already ran is refused, naming the file. The change goes in a new run-once file, so every database, old or new, reaches the same state by the same steps.
+- **The database knows what it is.** It carries an environment label (`dev`, `test`, `prod`) and a deploy naming another is refused; relabelling is an explicit parameter. Files under `dev/` deploy only to dev databases.
+- **Access is part of the state.** Privileges start closed, and grants, policies and triggers may not disappear unless a file declares the removal (below).
+- **Reference data is a file.** `data/catalogs/<schema>.<table>.json` is the whole content of a lookup table; every deploy makes the table equal it.
+- **Atomic head, then a tail.** Everything up to the `COMMIT` is one transaction. After it, `deploy.sql` builds concurrent indexes and fails on any invalid index.
+
+The history of every deploy and script is readable in `internal.vw_deployment` and `internal.vw_deployed_script`. README "Extending the Framework" has the details.
+
 ## Layered Schema Architecture
 
 The template has five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects. Within them it uses a three-layer design:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      API Layer (api schema)                  │
-│  HTTP handlers, protocol compliance, request/response        │
-│  Calls virtual layer, focuses on interface concerns          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Virtual Layer (core schema)                │
-│  Views, functions, stored procedures                         │
-│  Business-aligned queries, reusable across handlers          │
-│  Window functions, CTEs, rollups, aggregations               │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Physical Layer (core schema)                │
-│  Normalized tables with constraints                          │
-│  Focused on data integrity and query performance             │
-│  Indexes, partitioning, foreign keys                         │
-└─────────────────────────────────────────────────────────────┘
-```
+- **API layer** (`api` schema): handler registrations. A handler shapes input and output and calls one kernel. A gateway calls only this layer.
+- **Semantic layer** (`core` schema): views, kernels and problem functions. Kernels are the only writers.
+- **Physical layer** (`core` schema): tables, keys, constraints, indexes and row-level security, in run-once files.
+
+The [advanced template page](https://vvka-141.github.io/pgmi/docs/advanced/) draws the three layers with the sort-key bands.
 
 ### Physical Layer
 
@@ -94,111 +89,120 @@ The template has five application schemas (`internal`, `core`, `api`, `common`, 
 - No business logic - pure data modeling
 
 ```sql
--- Physical: Normalized, constrained, indexed
+-- Physical: one organization's rows, constrained, indexed, row-level secured
 CREATE TABLE core.order (
-    order_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_id UUID NOT NULL REFERENCES core.customer(customer_id),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'shipped', 'delivered')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    object_id          core.entity_id PRIMARY KEY DEFAULT extensions.gen_random_uuid(),
+    organization_id    uuid NOT NULL,
+    created_by_user_id uuid NOT NULL,
+    status             text NOT NULL DEFAULT 'pending'
+                       CONSTRAINT order_status_check CHECK (status IN ('pending', 'confirmed', 'shipped', 'delivered')),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT order_organization_object_key UNIQUE (organization_id, object_id)
 );
 
 CREATE TABLE core.order_line (
-    order_line_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_id UUID NOT NULL REFERENCES core.order(order_id),
-    product_id UUID NOT NULL REFERENCES core.product(product_id),
-    quantity INT NOT NULL CHECK (quantity > 0),
-    unit_price NUMERIC(10,2) NOT NULL CHECK (unit_price >= 0)
+    object_id       core.entity_id PRIMARY KEY DEFAULT extensions.gen_random_uuid(),
+    organization_id uuid NOT NULL,
+    order_id        uuid NOT NULL,
+    sku             text NOT NULL CONSTRAINT order_line_sku_check CHECK (btrim(sku) <> ''),
+    quantity        int NOT NULL CONSTRAINT order_line_quantity_check CHECK (quantity > 0),
+    unit_price      numeric(10,2) NOT NULL CONSTRAINT order_line_unit_price_check CHECK (unit_price >= 0),
+    CONSTRAINT order_line_order_fkey FOREIGN KEY (organization_id, order_id)
+        REFERENCES core.order (organization_id, object_id)
 );
+
+CREATE INDEX ix_order_line_order ON core.order_line (organization_id, order_id);
+
+SELECT pg_temp.apply_entity_table_standards('core.order');
+SELECT pg_temp.apply_entity_table_standards('core.order_line');
+SELECT core.apply_org_rls('core.order');
+SELECT core.apply_org_rls('core.order_line', p_has_created_by => false);
 ```
 
-### Virtual Layer
+An order line names its order by `(organization_id, order_id)`, so it can never
+point at another organization's order, and that pair leads an index. The
+pgmi-endpoint skill walks through each line.
 
-**Focus**: Business-aligned data access
+### Semantic Layer
 
-- Views that denormalize for business queries
-- Functions that encapsulate business operations
-- Reusable across multiple API handlers
-- Complex queries (window functions, CTEs, rollups)
+**Focus**: Business rules and the only writes
+
+- Kernels are the only writers: a handler or job never runs `INSERT`, `UPDATE` or `DELETE` on a table
+- A kernel returns the whole row; one that must reach every organization is `SECURITY DEFINER`
+- `*_problem` functions hold each rule once; the kernel and the handler both read them
+- Views, created through `core.ensure_view`, are what handlers read
 
 ```sql
--- Virtual: Denormalized view for business queries
-CREATE VIEW core.order_summary AS
-SELECT
-    o.order_id,
-    o.customer_id,
-    c.email AS customer_email,
-    o.status,
-    COUNT(ol.order_line_id) AS line_count,
-    SUM(ol.quantity * ol.unit_price) AS total_amount,
-    o.created_at,
-    o.updated_at
-FROM core.order o
-JOIN core.customer c USING (customer_id)
-LEFT JOIN core.order_line ol USING (order_id)
-GROUP BY o.order_id, o.customer_id, c.email, o.status, o.created_at, o.updated_at;
+CREATE OR REPLACE FUNCTION core.fn_order_problem(p_order_id uuid, p_operation text)
+RETURNS text
+LANGUAGE sql STABLE AS $$
+    SELECT CASE
+        WHEN o.object_id IS NULL THEN 'core.order.not_found'
+        WHEN p_operation = 'confirm' AND o.status <> 'pending' THEN 'core.order.not_pending'
+    END
+    FROM (SELECT p_order_id) AS k(id)
+    LEFT JOIN core.order o ON o.object_id = k.id;
+$$;
 
--- Virtual: Business operation
-CREATE FUNCTION core.confirm_order(p_order_id UUID)
-RETURNS void AS $$
-BEGIN
-    UPDATE core.order
-    SET status = 'confirmed', updated_at = now()
-    WHERE order_id = p_order_id AND status = 'pending';
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Order % not found or not pending', p_order_id;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION core.fn_confirm_order(p_order_id uuid)
+RETURNS core.order
+LANGUAGE sql AS $$
+    UPDATE core.order SET status = 'confirmed', updated_at = now()
+    WHERE object_id = p_order_id AND status = 'pending'
+    RETURNING *;
+$$;
 ```
 
 ### API Layer
 
 **Focus**: Protocol compliance and interface concerns
 
-- HTTP handlers call virtual layer functions
-- JSON schema validation
-- Status code mapping
-- Authentication enforcement
-- Minimal business logic
+- A handler declares who may call it (`access` or `permissions`); the dispatcher refuses everyone else before the body runs
+- The body reads its input, asks the problem function, calls one kernel and shapes the answer
+- A refusal is a coded problem answer (404, 409, 422), never an exception
 
 ```sql
--- API: Protocol-focused handler
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
-        'id', 'confirm-order-handler-uuid',
-        'path', '/orders/{orderId}/confirm',
-        'httpMethod', '^POST$',
+        'id', '3f6c2d1e-8a4b-4c7d-9e2f-1b5a6c7d8e9f',
         'name', 'confirm_order',
-        'requiresAuth', true
-    ),
+        'path', '/orders/{id:uuid}/confirm',
+        'httpMethod', '^POST$',
+        'access', 'organization',
+        'outputSchema', '{"type": "object"}'::jsonb),
     $body$
 DECLARE
-    v_order_id UUID;
+    v_id      uuid := ((request).path_params->>'id')::uuid;
+    v_problem text := core.fn_order_problem(v_id, 'confirm');
 BEGIN
-    -- Extract and validate
-    v_order_id := (regexp_matches((request).url, '/orders/([0-9a-f-]+)/confirm'))[1]::uuid;
-
-    -- Call virtual layer
-    PERFORM core.confirm_order(v_order_id);
-
-    -- Return protocol-compliant response
-    RETURN api.json_response(200, jsonb_build_object(
-        'message', 'Order confirmed',
-        'orderId', v_order_id
-    ));
+    IF v_problem IS NOT NULL THEN
+        RETURN CASE v_problem
+            WHEN 'core.order.not_found' THEN api.problem_response(404, 'Not Found', 'Order not found', code => 'core.order.not_found')
+            WHEN 'core.order.not_pending' THEN api.problem_response(409, 'Conflict', 'The order is not pending', code => 'core.order.not_pending')
+        END;
+    END IF;
+    IF (core.fn_confirm_order(v_id)).object_id IS NULL THEN
+        RETURN api.problem_response(409, 'Conflict', 'The order changed meanwhile; try again', code => 'core.order.changed');
+    END IF;
+    RETURN api.json_response(200, jsonb_build_object('orderId', v_id, 'status', 'confirmed'));
 END;
-    $body$
-);
+    $body$);
 ```
 
 ### Why Layers Matter
 
-1. **Separation of concerns**: Physical handles storage, virtual handles business, API handles protocols
-2. **Reusability**: Multiple API handlers can use the same virtual layer views/functions
+1. **Separation of concerns**: Physical handles storage, semantic handles business rules and writes, API handles protocols
+2. **Reusability**: REST, RPC and MCP handlers call the same kernels and views
 3. **Testability**: Test each layer independently
 4. **Maintainability**: Change API protocol without touching business logic
+
+### Access Is Declared, Not Inherited
+
+Layers are only a boundary if a role cannot reach past them. No routine is callable by `PUBLIC`: default privileges close every function the owner creates, and an end-of-deploy sweep closes the rest in every application schema the catalog shows. Only the template's roles may connect. Every grant, policy and trigger the database had before a deploy must still be there after it, unless a file declares the removal (`pg_temp.access_removal`). See README "Privileges: closed by default".
+
+### Identity Is Resolved, Not Claimed
+
+A request never states who calls. The transport signs the person in and opens a login session (`api.open_login_session`); after that a request carries only opaque handles (`x-login-session`, `x-organization-session`, or an MCP connection handle), or, for an MCP client with OAuth, the issuer, subject and client id the gateway verified in its token. The database resolves them, once per request, into one person, at most one organization and that membership's permissions, and only for a login in the api role. Handlers read the result through typed readers (`api.current_principal_id()`, `api.current_organization_id()`, `api.has_permission()`), never through a header or a setting. An MCP connection has its own agent principal: the request acts for the person (effective principal) and is made by the agent (`api.current_actual_principal_id()`, `api.current_actor_kind()` = `agent`), and every log records both. The agent holds its connection's `agent.*` role's permissions intersected with the person's, recomputed per request; it acts only while its connection is live (not paused, revoked or expired, its membership current, its organization's agents switched on). A handler declares `access` or `permissions`; the gateway refuses everyone else with 401 or 403 before the body runs, with one decision for REST, RPC and MCP. See README "Sign-in, sessions and connections".
 
 ## Testing Philosophy
 
@@ -229,7 +233,7 @@ These are important but not fundamental - the dataset remains valid.
 | Layer | Test Type | Example |
 |-------|-----------|---------|
 | Physical | Constraint validation | Duplicate email rejected |
-| Virtual | Business logic | Order total calculated correctly |
+| Semantic | Business logic | A kernel refuses to confirm a shipped order |
 | API | Protocol compliance | 404 returned for missing resource |
 | Integration | End-to-end flows | User registration creates profile and sends email |
 
@@ -245,71 +249,42 @@ The tests define the contract. Implementation fulfills it.
 
 ## When to Choose This Template
 
-### Choose Advanced Template If:
-
-- You believe business logic belongs in the database
-- You want transactional guarantees for all state changes
-- You need multi-protocol support (REST, RPC, MCP)
-- Your team has strong PostgreSQL skills
-- You value testability over rapid prototyping
-- You're building systems where data integrity is critical
-
-### Prerequisites
-
-- Solid PostgreSQL knowledge (functions, views, transactions)
-- Understanding of SQL vs PL/pgSQL trade-offs
-- Familiarity with HTTP semantics (if using REST)
-- Comfort with pgmi's deployment model
-
-### Maybe Choose Basic Template If:
-
-- Learning pgmi for the first time
-- Simple migration-only use case
-- Team is new to PostgreSQL
-- Rapid prototyping is the priority
+Choose it when business rules belong in the database and its transactions, and your team writes PostgreSQL functions comfortably. [Choosing a template](https://vvka-141.github.io/pgmi/docs/templates/) compares it with the basic template.
 
 ## Advanced Patterns
 
-### Stored Procedures for Batch Processing
+### Background Jobs: Batches That Commit
 
-Reduce client-server roundtrips by processing batches server-side:
+Backlog work (retention, closing stale tasks, re-indexing documents) runs in
+the database as a job a scheduler CALLs. The worker holds no logic: it opens a
+session, sends one CALL and closes the session.
 
 ```sql
-CREATE PROCEDURE core.process_pending_orders(p_batch_size INT DEFAULT 100)
+-- the batch: (int) RETURNS int, rows processed, 0 when done
+CREATE FUNCTION api.job_close_stale_tasks_batch(p_batch_size int) RETURNS int ...;
+
+-- the job: hands the batch to the driver
+CREATE PROCEDURE api.job_close_stale_tasks(p_batch_size int DEFAULT 5000, p_max_batches int DEFAULT NULL)
 LANGUAGE plpgsql AS $$
-DECLARE
-    v_processed INT := 0;
-    v_order RECORD;
 BEGIN
-    LOOP
-        -- Process one batch
-        FOR v_order IN
-            SELECT order_id FROM core.order
-            WHERE status = 'pending'
-            ORDER BY created_at
-            LIMIT p_batch_size
-            FOR UPDATE SKIP LOCKED
-        LOOP
-            PERFORM core.confirm_order(v_order.order_id);
-            v_processed := v_processed + 1;
-        END LOOP;
-
-        -- Commit this batch
-        COMMIT;
-
-        -- Exit if no more work
-        EXIT WHEN v_processed = 0;
-        v_processed := 0;
-    END LOOP;
-END;
-$$;
+    CALL api.job_run('close_stale_tasks', 'api.job_close_stale_tasks_batch(int)', p_batch_size, p_max_batches);
+END $$;
 ```
 
-**Benefits:**
-- Single connection processes entire backlog
-- Commits per batch limit transaction size
-- `SKIP LOCKED` enables parallel workers
-- No client involvement during processing
+`api.job_run` is the one driver. It refuses bad arguments (22023) before any
+lock, takes the job's session-level advisory lock (a second run returns
+quietly), logs the run in `internal.job_run_log`, and commits after every
+batch, so a long backlog never holds one long transaction or one long lock.
+Batch functions select `FOR UPDATE SKIP LOCKED` so work they touch stays
+available to the application.
+
+**Why these rules.** A procedure may COMMIT only when it is CALLed at top
+level, outside a transaction block, and has no `SECURITY DEFINER` and no `SET`
+clause; the jobs follow from that. A session-level lock survives a rollback,
+so a failed run keeps it until its session ends: the worker uses one session
+per run, and the next run marks the failed one `abandoned`. The README's
+Background jobs section has the contract, the run log and cron and `pg_cron`
+examples.
 
 ### Near Real-Time Notifications
 
@@ -323,7 +298,7 @@ BEGIN
     IF NEW.status = 'confirmed' AND OLD.status = 'pending' THEN
         PERFORM pg_notify('order_events', json_build_object(
             'event', 'order_confirmed',
-            'order_id', NEW.order_id
+            'order_id', NEW.object_id
         )::text);
     END IF;
     RETURN NEW;
@@ -342,8 +317,8 @@ $$ LANGUAGE plpgsql;
 Leverage PostgreSQL's rich index ecosystem:
 
 ```sql
+-- In a run-once file. pg_trgm is installed by deploy.sql in schema extensions.
 -- Trigram index for search-as-you-type
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX ix_customer_name_trgm ON core.customer USING gin (name gin_trgm_ops);
 
 -- Full-text search
@@ -360,7 +335,7 @@ The advanced template embodies a specific architectural philosophy:
 
 1. **Application = Dataset**: PostgreSQL IS the application
 2. **Transactions First**: Design state transitions before triggers
-3. **Layered Architecture**: Physical → Virtual → API
+3. **Layered Architecture**: Physical → Semantic → API
 4. **Test Everything**: All dataset transitions must be verified
 5. **PostgreSQL Native**: Leverage the full power of PostgreSQL
 

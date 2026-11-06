@@ -41,6 +41,17 @@ disableKinds = ["taxonomy", "term"]
   [[module.mounts]]
     source = "../docs"
     target = "content/docs"
+    files = ["! advanced/README.md", "! advanced/clients/README.md", "! basic/README.md"]
+  # A folder's README.md is its GitHub landing page and the site's section page.
+  [[module.mounts]]
+    source = "../docs/advanced/README.md"
+    target = "content/docs/advanced/_index.md"
+  [[module.mounts]]
+    source = "../docs/advanced/clients/README.md"
+    target = "content/docs/advanced/clients/_index.md"
+  [[module.mounts]]
+    source = "../docs/basic/README.md"
+    target = "content/docs/basic/_index.md"
   [[module.mounts]]
     source = "static"
     target = "static"

@@ -11,14 +11,12 @@
 </pgmi-meta>
 */
 
-DO $$ BEGIN RAISE NOTICE '→ Installing API views'; END $$;
-
 -- ============================================================================
 -- Handler Analysis View
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_handler_info', $view$
-CREATE OR REPLACE VIEW api.vw_handler_info AS
+CREATE OR REPLACE VIEW api.vw_handler_info WITH (security_invoker = true) AS
 SELECT
     h.object_id,
     h.handler_type,
@@ -37,18 +35,21 @@ SELECT
         )
     END AS definition_drifted,
 
-    EXISTS (SELECT 1 FROM api.rest_route r WHERE r.handler_object_id = h.object_id) AS has_rest_route,
-    EXISTS (SELECT 1 FROM api.rpc_route r WHERE r.handler_object_id = h.object_id) AS has_rpc_route,
-    EXISTS (SELECT 1 FROM api.mcp_route r WHERE r.handler_object_id = h.object_id) AS has_mcp_route,
+    rr.handler_object_id IS NOT NULL AS has_rest_route,
+    pr.handler_object_id IS NOT NULL AS has_rpc_route,
+    mr.handler_object_id IS NOT NULL AS has_mcp_route,
+    rr.handler_object_id IS NULL AND pr.handler_object_id IS NULL AND mr.handler_object_id IS NULL AS is_unrouted,
 
-    (SELECT address_regexp FROM api.rest_route WHERE handler_object_id = h.object_id) AS rest_pattern,
-    (SELECT method_name FROM api.rpc_route WHERE handler_object_id = h.object_id) AS rpc_method,
-    (SELECT mcp_name FROM api.mcp_route WHERE handler_object_id = h.object_id) AS mcp_name,
-    (SELECT mcp_type FROM api.mcp_route WHERE handler_object_id = h.object_id) AS mcp_type,
+    rr.canonical_path AS rest_path,
+    rr.method_regexp AS rest_method_regexp,
+    rr.address_regexp AS rest_pattern,
+    pr.method_name AS rpc_method,
+    mr.mcp_name,
+    mr.mcp_type,
 
     array_to_string(h.accepts, ', ') AS accepts_formatted,
     array_to_string(h.produces, ', ') AS produces_formatted,
-    h.requires_auth,
+    h.access,
 
     h.input_json_schema IS NOT NULL AS has_input_schema,
     h.output_json_schema IS NOT NULL AS has_output_schema,
@@ -62,30 +63,37 @@ SELECT
     h.security,
     h.language_name,
     h.owner_name,
-
-    -- Appended last: CREATE OR REPLACE VIEW may only add columns at the end.
     h.min_transaction_isolation,
     h.read_only
 
 FROM api.handler h
+LEFT JOIN api.rest_route rr ON rr.handler_object_id = h.object_id
+LEFT JOIN api.rpc_route pr ON pr.handler_object_id = h.object_id
+LEFT JOIN api.mcp_route mr ON mr.handler_object_id = h.object_id
 $view$);
 
 COMMENT ON VIEW api.vw_handler_info IS
-    'Power-user analysis view for handlers. Includes lifecycle age, health checks (function_exists, definition_drifted), and route bindings.';
+    'One row per registered handler: lifecycle age, health checks (function_exists, definition_drifted) and its route as values, each NULL when the handler has no route of that kind.';
+COMMENT ON COLUMN api.vw_handler_info.rest_path IS
+    'The REST route''s path template without parameter types (api.rest_route.canonical_path); NULL without a REST route.';
+COMMENT ON COLUMN api.vw_handler_info.rest_method_regexp IS
+    'The REST route''s method pattern, e.g. ^GET$; NULL without a REST route.';
+COMMENT ON COLUMN api.vw_handler_info.is_unrouted IS
+    'True when the handler has no REST, RPC or MCP route, so no request reaches it. It may be deliberate; a human decides.';
 
 -- ============================================================================
 -- Handler Statistics View (GROUPING SETS)
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_handler_stats', $view$
-CREATE OR REPLACE VIEW api.vw_handler_stats AS
+CREATE OR REPLACE VIEW api.vw_handler_stats WITH (security_invoker = true) AS
 SELECT
     handler_type,
     volatility,
     leakproof,
     security,
     language_name,
-    requires_auth,
+    access,
     count(*) AS handler_count,
 
     GROUPING(handler_type) AS _grp_type,
@@ -93,7 +101,7 @@ SELECT
     GROUPING(leakproof) AS _grp_leakproof,
     GROUPING(security) AS _grp_security,
     GROUPING(language_name) AS _grp_language,
-    GROUPING(requires_auth) AS _grp_auth
+    GROUPING(access) AS _grp_access
 FROM api.handler
 GROUP BY GROUPING SETS (
     (),
@@ -101,11 +109,11 @@ GROUP BY GROUPING SETS (
     (volatility),
     (language_name),
     (security),
-    (requires_auth),
+    (access),
     (leakproof),
     (handler_type, volatility),
     (handler_type, language_name),
-    (handler_type, requires_auth)
+    (handler_type, access)
 )
 $view$);
 
@@ -117,7 +125,7 @@ COMMENT ON VIEW api.vw_handler_stats IS
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_handler_summary', $view$
-CREATE OR REPLACE VIEW api.vw_handler_summary AS
+CREATE OR REPLACE VIEW api.vw_handler_summary WITH (security_invoker = true) AS
 SELECT
     count(*) AS total_handlers,
     count(*) FILTER (WHERE handler_type = 'rest') AS rest_handlers,
@@ -129,44 +137,39 @@ SELECT
     count(*) FILTER (WHERE leakproof) AS leakproof_count,
     count(*) FILTER (WHERE security = 'definer') AS security_definer_count,
     count(*) FILTER (WHERE security = 'invoker') AS security_invoker_count,
-    count(*) FILTER (WHERE requires_auth) AS requires_auth_count,
+    count(*) FILTER (WHERE access = 'public') AS public_count,
+    count(*) FILTER (WHERE access = 'authenticated') AS authenticated_count,
+    count(*) FILTER (WHERE access = 'permission') AS permission_count,
     count(DISTINCT language_name) AS language_count,
     count(DISTINCT owner_name) AS owner_count,
     min(created_at) AS oldest_handler_at,
-    max(created_at) AS newest_handler_at
+    max(created_at) AS newest_handler_at,
+    count(*) FILTER (WHERE access = 'organization') AS organization_count
 FROM api.handler
 $view$);
 
 COMMENT ON VIEW api.vw_handler_summary IS
     'Single-row dashboard showing handler counts by type, volatility, security model, and other characteristics.';
 
-DO $$ BEGIN
-    RAISE NOTICE '  ✓ api.vw_handler_info - power-user analysis view';
-    RAISE NOTICE '  ✓ api.vw_handler_stats - multi-dimensional statistics';
-    RAISE NOTICE '  ✓ api.vw_handler_summary - dashboard summary';
-END $$;
-
 -- ============================================================================
 -- Route Views
 -- ============================================================================
-
-DO $$ BEGIN RAISE NOTICE '→ Installing route views'; END $$;
 
 -- ============================================================================
 -- Unified Route Analysis View
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_route_info', $view$
-CREATE OR REPLACE VIEW api.vw_route_info AS
+CREATE OR REPLACE VIEW api.vw_route_info WITH (security_invoker = true) AS
 -- REST routes
 SELECT
     r.handler_object_id AS object_id,
     'rest'::text AS route_type,
-    r.address_regexp AS pattern,
+    r.canonical_path AS pattern,
     r.method_regexp,
     NULL::text AS mcp_type,
     h.handler_function_name,
-    h.requires_auth,
+    h.access,
     r.auto_log,
     r.sequence_number,
     h.volatility,
@@ -185,7 +188,7 @@ SELECT
     NULL,
     NULL,
     h.handler_function_name,
-    h.requires_auth,
+    h.access,
     r.auto_log,
     NULL,
     h.volatility,
@@ -204,7 +207,7 @@ SELECT
     NULL,
     r.mcp_type,
     h.handler_function_name,
-    h.requires_auth,
+    h.access,
     true,
     NULL,
     h.volatility,
@@ -222,29 +225,29 @@ COMMENT ON VIEW api.vw_route_info IS
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_route_stats', $view$
-CREATE OR REPLACE VIEW api.vw_route_stats AS
+CREATE OR REPLACE VIEW api.vw_route_stats WITH (security_invoker = true) AS
 WITH route_base AS (
-    SELECT route_type, requires_auth, auto_log, volatility
+    SELECT route_type, access, auto_log, volatility
     FROM api.vw_route_info
 )
 SELECT
     route_type,
-    requires_auth,
+    access,
     auto_log,
     volatility,
     count(*) AS route_count,
     GROUPING(route_type) AS _grp_type,
-    GROUPING(requires_auth) AS _grp_auth,
+    GROUPING(access) AS _grp_access,
     GROUPING(auto_log) AS _grp_log,
     GROUPING(volatility) AS _grp_volatility
 FROM route_base
 GROUP BY GROUPING SETS (
     (),
     (route_type),
-    (requires_auth),
+    (access),
     (auto_log),
     (volatility),
-    (route_type, requires_auth),
+    (route_type, access),
     (route_type, volatility)
 )
 $view$);
@@ -257,13 +260,13 @@ COMMENT ON VIEW api.vw_route_stats IS
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_route_summary', $view$
-CREATE OR REPLACE VIEW api.vw_route_summary AS
+CREATE OR REPLACE VIEW api.vw_route_summary WITH (security_invoker = true) AS
 SELECT
     count(*) AS total_routes,
     count(*) FILTER (WHERE route_type = 'rest') AS rest_routes,
     count(*) FILTER (WHERE route_type = 'rpc') AS rpc_routes,
     count(*) FILTER (WHERE route_type LIKE 'mcp_%') AS mcp_routes,
-    count(*) FILTER (WHERE requires_auth) AS auth_required_count,
+    count(*) FILTER (WHERE access <> 'public') AS auth_required_count,
     count(*) FILTER (WHERE auto_log) AS auto_log_count,
     min(created_at) AS oldest_route_at,
     max(created_at) AS newest_route_at
@@ -273,24 +276,41 @@ $view$);
 COMMENT ON VIEW api.vw_route_summary IS
     'Single-row dashboard showing route counts by protocol type and configuration.';
 
-DO $$ BEGIN
-    RAISE NOTICE '  ✓ api.vw_route_info - unified route analysis view';
-    RAISE NOTICE '  ✓ api.vw_route_stats - multi-dimensional statistics';
-    RAISE NOTICE '  ✓ api.vw_route_summary - dashboard summary';
-END $$;
-
 -- ============================================================================
 -- Exchange Views (Request/Response Logging with Replay SQL)
 -- ============================================================================
 
-DO $$ BEGIN RAISE NOTICE '→ Installing exchange views'; END $$;
+-- ============================================================================
+-- Exchange View
+-- ============================================================================
+
+SELECT core.ensure_view('api.vw_exchange', $view$
+CREATE OR REPLACE VIEW api.vw_exchange WITH (security_invoker = true) AS
+SELECT 'rest' AS protocol, e.sequence_number, e.object_id AS exchange_id, e.enqueued_at, e.completed_at,
+       e.handler_object_id, e.context, (e.request).headers OPERATOR(extensions.->) 'x-request-id' AS request_id,
+       (e.response).status_code AS response_status
+FROM api.rest_exchange e
+UNION ALL
+SELECT 'rpc', e.sequence_number, e.object_id, e.enqueued_at, e.completed_at,
+       e.handler_object_id, e.context, (e.request).headers OPERATOR(extensions.->) 'x-request-id',
+       (e.response).status_code
+FROM api.rpc_exchange e
+UNION ALL
+SELECT 'mcp', e.sequence_number, e.object_id, e.enqueued_at, e.completed_at,
+       e.handler_object_id, e.context, NULL,
+       NULL
+FROM api.mcp_exchange e
+$view$);
+
+COMMENT ON VIEW api.vw_exchange IS
+    'Every logged exchange across protocols: the logged context, the transport''s x-request-id (REST, RPC) and the HTTP status. Find the row a caller quotes with WHERE request_id = ...';
 
 -- ============================================================================
 -- REST Exchange Analysis View
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_rest_exchange_info', $view$
-CREATE OR REPLACE VIEW api.vw_rest_exchange_info AS
+CREATE OR REPLACE VIEW api.vw_rest_exchange_info WITH (security_invoker = true) AS
 SELECT
     e.sequence_number,
     e.object_id AS exchange_id,
@@ -298,7 +318,6 @@ SELECT
     now() - e.enqueued_at AS age,
     e.completed_at,
     e.completed_at - e.enqueued_at AS duration,
-    e.response IS NULL AS is_pending,
 
     (e.request).method AS request_method,
     (e.request).url AS request_url,
@@ -309,29 +328,21 @@ SELECT
     e.handler_object_id,
     h.handler_function_name,
 
-    format(
-        $f$SELECT api.rest_invoke(%L, %L, %L::extensions.hstore, %s);$f$,
-        (e.request).method,
-        (e.request).url,
-        COALESCE((e.request).headers::text, ''),
-        CASE WHEN (e.request).content IS NULL THEN 'NULL'
-             ELSE format('decode(%L, ''hex'')', encode((e.request).content, 'hex'))
-        END
-    ) AS replay_sql
+    format($f$SELECT * FROM api.replay_exchange(%L);$f$, e.object_id) AS replay_sql
 
 FROM api.rest_exchange e
 LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
 $view$);
 
 COMMENT ON VIEW api.vw_rest_exchange_info IS
-    'REST exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
+    'REST exchange analysis with age, duration, error status, and replay_sql: api.replay_exchange re-runs the request in its logged context and rolls it back.';
 
 -- ============================================================================
 -- RPC Exchange Analysis View
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_rpc_exchange_info', $view$
-CREATE OR REPLACE VIEW api.vw_rpc_exchange_info AS
+CREATE OR REPLACE VIEW api.vw_rpc_exchange_info WITH (security_invoker = true) AS
 SELECT
     e.sequence_number,
     e.object_id AS exchange_id,
@@ -339,7 +350,6 @@ SELECT
     now() - e.enqueued_at AS age,
     e.completed_at,
     e.completed_at - e.enqueued_at AS duration,
-    e.response IS NULL AS is_pending,
 
     r.method_name AS rpc_method,
 
@@ -349,14 +359,7 @@ SELECT
     e.handler_object_id,
     h.handler_function_name,
 
-    format(
-        $f$SELECT api.rpc_invoke(%L::uuid, %L::extensions.hstore, %s);$f$,
-        e.handler_object_id,
-        COALESCE((e.request).headers::text, ''),
-        CASE WHEN (e.request).content IS NULL THEN 'NULL'
-             ELSE format('decode(%L, ''hex'')', encode((e.request).content, 'hex'))
-        END
-    ) AS replay_sql
+    format($f$SELECT * FROM api.replay_exchange(%L);$f$, e.object_id) AS replay_sql
 
 FROM api.rpc_exchange e
 LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
@@ -364,14 +367,14 @@ LEFT JOIN api.rpc_route r ON r.handler_object_id = e.handler_object_id
 $view$);
 
 COMMENT ON VIEW api.vw_rpc_exchange_info IS
-    'RPC exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
+    'RPC exchange analysis with age, duration, error status, and replay_sql: api.replay_exchange re-runs the request in its logged context and rolls it back.';
 
 -- ============================================================================
 -- MCP Exchange Analysis View
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_mcp_exchange_info', $view$
-CREATE OR REPLACE VIEW api.vw_mcp_exchange_info AS
+CREATE OR REPLACE VIEW api.vw_mcp_exchange_info WITH (security_invoker = true) AS
 SELECT
     e.sequence_number,
     e.object_id AS exchange_id,
@@ -383,83 +386,57 @@ SELECT
     e.mcp_type,
     e.mcp_name,
 
-    ((e.response).envelope->>'error') IS NOT NULL AS is_error,
+    COALESCE(((e.response).envelope->>'error') IS NOT NULL
+             OR (e.response).envelope->'result'->'isError' = 'true'::jsonb, false) AS is_error,
 
     e.handler_object_id,
     h.handler_function_name,
 
-    CASE e.mcp_type
-        WHEN 'tool' THEN format(
-            $f$SELECT api.mcp_call_tool(%L, %L::jsonb, %L::jsonb, %L);$f$,
-            e.mcp_name,
-            COALESCE((e.request).arguments, '{}'::jsonb),
-            (e.request).context,
-            (e.request).request_id
-        )
-        WHEN 'resource' THEN format(
-            $f$SELECT api.mcp_read_resource(%L, %L::jsonb, %L);$f$,
-            (e.request).uri,
-            (e.request).context,
-            (e.request).request_id
-        )
-        WHEN 'prompt' THEN format(
-            $f$SELECT api.mcp_get_prompt(%L, %L::jsonb, %L::jsonb, %L);$f$,
-            e.mcp_name,
-            COALESCE((e.request).arguments, '{}'::jsonb),
-            (e.request).context,
-            (e.request).request_id
-        )
-    END AS replay_sql
+    format($f$SELECT * FROM api.replay_exchange(%L);$f$, e.object_id) AS replay_sql
 
 FROM api.mcp_exchange e
 LEFT JOIN api.handler h ON h.object_id = e.handler_object_id
 $view$);
 
 COMMENT ON VIEW api.vw_mcp_exchange_info IS
-    'MCP exchange analysis with age, duration, error status, and replay_sql for troubleshooting.';
+    'MCP exchange analysis with age, duration, error status (a JSON-RPC error or a tool result with isError), and replay_sql: api.replay_exchange re-runs the call in its logged context and rolls it back.';
 
 -- ============================================================================
 -- Exchange Statistics View (GROUPING SETS)
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_exchange_stats', $view$
-CREATE OR REPLACE VIEW api.vw_exchange_stats AS
+CREATE OR REPLACE VIEW api.vw_exchange_stats WITH (security_invoker = true) AS
 WITH exchange_base AS (
     SELECT 'rest'::text AS protocol,
            (response).status_code,
-           COALESCE((response).status_code >= 400, false) AS is_error,
-           response IS NULL AS is_pending
+           COALESCE((response).status_code >= 400, false) AS is_error
     FROM api.rest_exchange
     UNION ALL
     SELECT 'rpc', (response).status_code,
-           COALESCE((response).status_code >= 400, false),
-           response IS NULL
+           COALESCE((response).status_code >= 400, false)
     FROM api.rpc_exchange
     UNION ALL
     SELECT 'mcp_' || mcp_type, NULL,
-           ((response).envelope->>'error') IS NOT NULL,
-           false
+           COALESCE(((response).envelope->>'error') IS NOT NULL
+                    OR (response).envelope->'result'->'isError' = 'true'::jsonb, false)
     FROM api.mcp_exchange
 )
 SELECT
     protocol,
     status_code,
     is_error,
-    is_pending,
     count(*) AS exchange_count,
     GROUPING(protocol) AS _grp_protocol,
     GROUPING(status_code) AS _grp_status,
-    GROUPING(is_error) AS _grp_error,
-    GROUPING(is_pending) AS _grp_pending
+    GROUPING(is_error) AS _grp_error
 FROM exchange_base
 GROUP BY GROUPING SETS (
     (),
     (protocol),
     (status_code),
     (is_error),
-    (is_pending),
     (protocol, is_error),
-    (protocol, is_pending),
     (protocol, status_code)
 )
 $view$);
@@ -472,30 +449,27 @@ COMMENT ON VIEW api.vw_exchange_stats IS
 -- ============================================================================
 
 SELECT core.ensure_view('api.vw_exchange_summary', $view$
-CREATE OR REPLACE VIEW api.vw_exchange_summary AS
+CREATE OR REPLACE VIEW api.vw_exchange_summary WITH (security_invoker = true) AS
 WITH
     rest_stats AS (
         SELECT
             count(*) AS total,
-            count(*) FILTER (WHERE response IS NULL) AS pending,
             count(*) FILTER (WHERE (response).status_code >= 400) AS errors,
-            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration,
-            min(enqueued_at) FILTER (WHERE response IS NULL) AS oldest_pending
+            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration
         FROM api.rest_exchange
     ),
     rpc_stats AS (
         SELECT
             count(*) AS total,
-            count(*) FILTER (WHERE response IS NULL) AS pending,
             count(*) FILTER (WHERE (response).status_code >= 400) AS errors,
-            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration,
-            min(enqueued_at) FILTER (WHERE response IS NULL) AS oldest_pending
+            avg(completed_at - enqueued_at) FILTER (WHERE completed_at IS NOT NULL) AS avg_duration
         FROM api.rpc_exchange
     ),
     mcp_stats AS (
         SELECT
             count(*) AS total,
-            count(*) FILTER (WHERE (response).envelope->>'error' IS NOT NULL) AS errors,
+            count(*) FILTER (WHERE (response).envelope->>'error' IS NOT NULL
+                                OR (response).envelope->'result'->'isError' = 'true'::jsonb) AS errors,
             avg(completed_at - enqueued_at) AS avg_duration
         FROM api.mcp_exchange
     )
@@ -504,24 +478,14 @@ SELECT
     (SELECT total FROM rest_stats) AS rest_exchanges,
     (SELECT total FROM rpc_stats) AS rpc_exchanges,
     (SELECT total FROM mcp_stats) AS mcp_exchanges,
-    (SELECT pending FROM rest_stats) + (SELECT pending FROM rpc_stats) AS pending_count,
     (SELECT errors FROM rest_stats) + (SELECT errors FROM rpc_stats) + (SELECT errors FROM mcp_stats) AS error_count,
     (SELECT avg_duration FROM rest_stats) AS rest_avg_duration,
     (SELECT avg_duration FROM rpc_stats) AS rpc_avg_duration,
-    (SELECT avg_duration FROM mcp_stats) AS mcp_avg_duration,
-    LEAST((SELECT oldest_pending FROM rest_stats), (SELECT oldest_pending FROM rpc_stats)) AS oldest_pending_at
+    (SELECT avg_duration FROM mcp_stats) AS mcp_avg_duration
 $view$);
 
 COMMENT ON VIEW api.vw_exchange_summary IS
-    'Single-row dashboard showing exchange counts, pending/error counts, and average durations by protocol.';
-
-DO $$ BEGIN
-    RAISE NOTICE '  ✓ api.vw_rest_exchange_info - REST exchanges with replay_sql';
-    RAISE NOTICE '  ✓ api.vw_rpc_exchange_info - RPC exchanges with replay_sql';
-    RAISE NOTICE '  ✓ api.vw_mcp_exchange_info - MCP exchanges with replay_sql';
-    RAISE NOTICE '  ✓ api.vw_exchange_stats - multi-dimensional statistics';
-    RAISE NOTICE '  ✓ api.vw_exchange_summary - dashboard summary';
-END $$;
+    'Single-row dashboard showing exchange counts, error counts, and average durations by protocol.';
 
 -- ============================================================================
 -- Grant Permissions
@@ -529,38 +493,10 @@ END $$;
 
 DO $$
 DECLARE
-    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
-    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_admin_role text := pg_temp.deployment_setting('database_admin_role');
 BEGIN
-    -- Handler views
-    EXECUTE format('GRANT SELECT ON api.vw_handler_info TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_handler_stats TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_handler_summary TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_handler_info TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_handler_stats TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_handler_summary TO %I', v_admin_role);
-
-    -- Route views
-    EXECUTE format('GRANT SELECT ON api.vw_route_info TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_route_stats TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_route_summary TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_route_info TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_route_stats TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_route_summary TO %I', v_admin_role);
-
-    -- Exchange views project from rest/rpc/mcp_exchange (which include
-    -- truncated SQLERRM). Default-grant to admin only; aggregate
-    -- vw_exchange_stats/summary may be shared with api since they don't
-    -- expose individual error messages. Idempotent against earlier deploys
-    -- that granted detail views to api.
-    EXECUTE format('REVOKE SELECT ON api.vw_rest_exchange_info FROM %I', v_api_role);
-    EXECUTE format('REVOKE SELECT ON api.vw_rpc_exchange_info FROM %I', v_api_role);
-    EXECUTE format('REVOKE SELECT ON api.vw_mcp_exchange_info FROM %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_exchange_stats TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_exchange_summary TO %I', v_api_role);
-    EXECUTE format('GRANT SELECT ON api.vw_rest_exchange_info TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_rpc_exchange_info TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_mcp_exchange_info TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_exchange_stats TO %I', v_admin_role);
-    EXECUTE format('GRANT SELECT ON api.vw_exchange_summary TO %I', v_admin_role);
+    EXECUTE format('GRANT SELECT ON api.vw_handler_info, api.vw_handler_stats, api.vw_handler_summary, '
+                   'api.vw_route_info, api.vw_route_stats, api.vw_route_summary, '
+                   'api.vw_exchange, api.vw_rest_exchange_info, api.vw_rpc_exchange_info, api.vw_mcp_exchange_info, '
+                   'api.vw_exchange_stats, api.vw_exchange_summary TO %I', v_admin_role);
 END $$;

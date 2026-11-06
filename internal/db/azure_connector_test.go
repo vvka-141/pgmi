@@ -27,7 +27,7 @@ func (m *MockTokenProvider) String() string {
 }
 
 func TestTokenBasedConnector_Creation(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:       "testserver.postgres.database.azure.com",
 		Port:       5432,
 		Database:   "testdb",
@@ -40,7 +40,7 @@ func TestTokenBasedConnector_Creation(t *testing.T) {
 		ExpiresOn: time.Now().Add(1 * time.Hour),
 	}
 
-	connector := NewTokenBasedConnector(config, mockProvider, "Azure")
+	connector := NewTokenBasedConnector(config, mockProvider, "Azure", Output{})
 
 	if connector == nil {
 		t.Fatal("expected non-nil connector")
@@ -104,7 +104,7 @@ func TestNewAzureServicePrincipalProvider_RequiresAllParams(t *testing.T) {
 }
 
 func TestNewConnector_AzureEntraID(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:              "testserver.postgres.database.azure.com",
 		Port:              5432,
 		Database:          "testdb",
@@ -115,9 +115,9 @@ func TestNewConnector_AzureEntraID(t *testing.T) {
 		AzureClientSecret: "test-secret",
 	}
 
-	connector, err := NewConnector(config)
+	connector, err := NewConnector(config, Output{})
 	if err != nil {
-		t.Fatalf("NewConnector() error = %v", err)
+		t.Fatalf("NewConnector(, Output{}) error = %v", err)
 	}
 
 	if connector == nil {
@@ -232,7 +232,7 @@ func TestApplyAzureAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &pgmi.ConnectionConfig{
+			config := &ConnectionConfig{
 				AuthMethod: pgmi.AuthMethodStandard,
 			}
 

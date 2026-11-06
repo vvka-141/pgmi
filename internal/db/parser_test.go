@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,13 +17,13 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 	tests := []struct {
 		name    string
 		connStr string
-		want    *pgmi.ConnectionConfig
+		want    *ConnectionConfig
 		wantErr bool
 	}{
 		{
 			name:    "Full URI with all components",
 			connStr: "postgresql://user:pass@localhost:5432/mydb?sslmode=disable",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -37,7 +38,7 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 		{
 			name:    "URI without password",
 			connStr: "postgresql://user@localhost:5432/mydb",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -52,7 +53,7 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 		{
 			name:    "URI with default values",
 			connStr: "postgresql://",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "postgres",
@@ -65,7 +66,7 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 		{
 			name:    "URI with custom port",
 			connStr: "postgresql://localhost:5433/mydb",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5433,
 				Database:         "mydb",
@@ -78,7 +79,7 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 		{
 			name:    "URI with application_name",
 			connStr: "postgresql://localhost:5432/mydb?application_name=pgmi",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -92,7 +93,7 @@ func TestParseConnectionString_PostgreSQLURI(t *testing.T) {
 		{
 			name:    "URI with SSL cert params",
 			connStr: "postgresql://user@localhost:5432/mydb?sslmode=verify-full&sslcert=/path/client.crt&sslkey=/path/client.key&sslrootcert=/path/ca.crt&sslpassword=keypass",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -127,13 +128,13 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 	tests := []struct {
 		name    string
 		connStr string
-		want    *pgmi.ConnectionConfig
+		want    *ConnectionConfig
 		wantErr bool
 	}{
 		{
 			name:    "Full ADO.NET connection string",
 			connStr: "Host=localhost;Port=5433;Database=postgres;Username=postgres;Password=postgres",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5433,
 				Database:         "postgres",
@@ -148,7 +149,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with quoted password containing a semicolon",
 			connStr: "Host=localhost;Database=mydb;Username=user;Password='p;a=ss'",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -163,7 +164,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with double-quoted password and doubled quote",
 			connStr: `Host=localhost;Database=mydb;Username=user;Password="a""b;c"`,
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -178,7 +179,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with Server instead of Host",
 			connStr: "Server=localhost;Port=5432;Database=mydb;User Id=user;Pwd=pass",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -193,7 +194,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with SSL Mode",
 			connStr: "Host=localhost;Database=mydb;Username=user;SSL Mode=require",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -207,7 +208,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with spaces and case variations",
 			connStr: "Host = localhost ; Port = 5432 ; Database = mydb ; Username = user",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -221,7 +222,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with SSL cert params",
 			connStr: "Host=localhost;Database=mydb;Username=user;sslcert=/path/client.crt;sslkey=/path/client.key;sslrootcert=/path/ca.crt;sslpassword=keypass",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -238,7 +239,7 @@ func TestParseConnectionString_ADONET(t *testing.T) {
 		{
 			name:    "ADO.NET with spaced SSL cert params",
 			connStr: "Host=localhost;Database=mydb;SSL Cert=/path/client.crt;SSL Key=/path/client.key;SSL Root Cert=/path/ca.crt;SSL Password=keypass",
-			want: &pgmi.ConnectionConfig{
+			want: &ConnectionConfig{
 				Host:             "localhost",
 				Port:             5432,
 				Database:         "mydb",
@@ -305,7 +306,7 @@ func TestParseConnectionString_Errors(t *testing.T) {
 }
 
 func TestBuildConnectionString(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:     "localhost",
 		Port:     5433,
 		Database: "mydb",
@@ -328,7 +329,7 @@ func TestBuildConnectionString(t *testing.T) {
 func TestBuildConnectionString_HostForms(t *testing.T) {
 	for _, host := range []string{"::1", "2001:db8::5", "/var/run/postgresql", "db.example.com"} {
 		t.Run(host, func(t *testing.T) {
-			config := &pgmi.ConnectionConfig{Host: host, Port: 5471, Database: "mydb", Username: "user"}
+			config := &ConnectionConfig{Host: host, Port: 5471, Database: "mydb", Username: "user"}
 			connStr := BuildConnectionString(config)
 
 			parsed, err := ParseConnectionString(connStr)
@@ -349,7 +350,7 @@ func TestBuildConnectionString_HostForms(t *testing.T) {
 }
 
 func TestBuildConnectionString_WithCertParams(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:        "localhost",
 		Port:        5432,
 		Database:    "mydb",
@@ -371,7 +372,7 @@ func TestBuildConnectionString_WithCertParams(t *testing.T) {
 	compareConfigs(t, parsed, config)
 }
 
-func compareConfigs(t *testing.T, got, want *pgmi.ConnectionConfig) {
+func compareConfigs(t *testing.T, got, want *ConnectionConfig) {
 	t.Helper()
 
 	if got.Host != want.Host {
@@ -478,7 +479,7 @@ func TestConnectionString_HostListKeepsPort(t *testing.T) {
 		}
 	}
 
-	fromFlags := &pgmi.ConnectionConfig{Host: "db1,db2", Port: 6000, Database: "app", Username: "u", Password: "p w'd"}
+	fromFlags := &ConnectionConfig{Host: "db1,db2", Port: 6000, Database: "app", Username: "u", Password: "p w'd"}
 	out := BuildConnectionString(fromFlags)
 	if got := dialed(t, out); got != "db1:6000,db2:6000" {
 		t.Errorf("-h db1,db2 -p 6000 dials %s, want db1:6000,db2:6000", got)
@@ -502,7 +503,7 @@ func TestDialTargets(t *testing.T) {
 		{"db1,db2:5433", "db1:6000,db2:5433"},
 		{"[::1]:5432,/tmp", "[::1]:5432,/tmp:6000"},
 	} {
-		if got := DialTargets(&pgmi.ConnectionConfig{Host: tt.host, Port: 6000}); got != tt.want {
+		if got := DialTargets(&ConnectionConfig{Host: tt.host, Port: 6000}); got != tt.want {
 			t.Errorf("DialTargets(%q) = %s, want %s", tt.host, got, tt.want)
 		}
 	}
@@ -522,18 +523,18 @@ func TestParseConnectionString_KeywordValue(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
-		want pgmi.ConnectionConfig
+		want ConnectionConfig
 	}{
 		{"plain", "host=db1 port=5433 dbname=app user=me password=secret sslmode=require",
-			pgmi.ConnectionConfig{Host: "db1", Port: 5433, Database: "app", Username: "me", Password: "secret", SSLMode: "require"}},
+			ConnectionConfig{Host: "db1", Port: 5433, Database: "app", Username: "me", Password: "secret", SSLMode: "require"}},
 		{"spaces around equals and defaults", "host = db1   dbname = app",
-			pgmi.ConnectionConfig{Host: "db1", Port: 5432, Database: "app"}},
+			ConnectionConfig{Host: "db1", Port: 5432, Database: "app"}},
 		{"quoted value with space, quote and semicolon", `host=db1 password='a b\'c;d' dbname=app`,
-			pgmi.ConnectionConfig{Host: "db1", Port: 5432, Database: "app", Password: "a b'c;d"}},
+			ConnectionConfig{Host: "db1", Port: 5432, Database: "app", Password: "a b'c;d"}},
 		{"host list with one port", "host=db1,db2 port=5433 dbname=app",
-			pgmi.ConnectionConfig{Host: "db1:5433,db2:5433", Port: 5432, Database: "app"}},
+			ConnectionConfig{Host: "db1:5433,db2:5433", Port: 5432, Database: "app"}},
 		{"host list with a port each", "host=db1,db2 port=5432,5433 dbname=app",
-			pgmi.ConnectionConfig{Host: "db1:5432,db2:5433", Port: 5432, Database: "app"}},
+			ConnectionConfig{Host: "db1:5432,db2:5433", Port: 5432, Database: "app"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -560,5 +561,187 @@ func TestParseConnectionString_KeywordValue(t *testing.T) {
 	ado, err := ParseConnectionString("Host=db1;Database=app;Username=me")
 	if err != nil || ado.Host != "db1" || ado.Database != "app" {
 		t.Errorf("ADO.NET form must still parse: %+v, %v", ado, err)
+	}
+}
+
+// An apostrophe inside an ADO.NET value hid every ';' after it, so the whole
+// string went to the keyword/value parser and its tail reached localhost as a
+// startup parameter named "Password".
+func TestParseConnectionString_ApostropheInADONETValue(t *testing.T) {
+	got, err := ParseConnectionString("Password=it's;Host=db;Database=app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != "db" || got.Database != "app" || got.Password != "it's" {
+		t.Errorf("got host=%q db=%q pass=%q", got.Host, got.Database, got.Password)
+	}
+	if len(got.AdditionalParams) != 0 {
+		t.Errorf("unexpected pass-through params: %v", got.AdditionalParams)
+	}
+}
+
+func TestParseConnectionString_KeywordValueRejectsUnknownKey(t *testing.T) {
+	for _, tt := range []struct{ in, key string }{
+		{"host=db bogus=1", "bogus"},
+		{"host=db Password=x", "Password"},
+		{"host=db dbanme=app", "dbanme"},
+	} {
+		_, err := ParseConnectionString(tt.in)
+		if err == nil {
+			t.Errorf("%q must be rejected", tt.in)
+			continue
+		}
+		if want := fmt.Sprintf("invalid connection option %q", tt.key); !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %q does not name the key", tt.in, err)
+		}
+	}
+
+	_, _, err := ResolveConnectionParams("host=db bogus=1", nil, nil, nil, nil, nil, nil, nil)
+	if !errors.Is(err, pgmi.ErrInvalidConfig) {
+		t.Errorf("want ErrInvalidConfig (exit 10), got %v", err)
+	}
+}
+
+func TestParseConnectionString_KeywordValuePassesLibpqKeywords(t *testing.T) {
+	got, err := ParseConnectionString("host=a,b target_session_attrs=read-write options='-c search_path=app' gssencmode=disable channel_binding=require keepalives_idle=30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"target_session_attrs": "read-write",
+		"options":              "-c search_path=app",
+		"gssencmode":           "disable",
+		"channel_binding":      "require",
+		"keepalives_idle":      "30",
+	}
+	for k, v := range want {
+		if got.AdditionalParams[k] != v {
+			t.Errorf("%s = %q, want %q", k, got.AdditionalParams[k], v)
+		}
+	}
+	if got.Host != "a,b" {
+		t.Errorf("Host = %q, want a,b", got.Host)
+	}
+}
+
+// url.Parse errors quote the raw string, and some quote a slice of the
+// password ("invalid port \":p\"" for p#ss), so a URI with userinfo that fails
+// to parse is reported without either.
+func TestParseConnectionString_UnparsableURINeverEchoesThePassword(t *testing.T) {
+	for _, pw := range []string{"p ss", "p#ss", "p%zz", "top secret#1"} {
+		_, err := ParseConnectionString("postgresql://u:" + pw + "@h/db")
+		if err == nil {
+			t.Fatalf("%q: want a parse error", pw)
+		}
+		for _, leak := range []string{pw, strings.Fields(pw)[0][1:], ":p"} {
+			if leak != "" && strings.Contains(err.Error(), leak) {
+				t.Errorf("%q: the error shows %q: %v", pw, leak, err)
+			}
+		}
+	}
+	if _, err := ParseConnectionString("postgresql://h:port/db"); err == nil || !strings.Contains(err.Error(), "invalid port") {
+		t.Errorf("without userinfo the parse error keeps its detail, got %v", err)
+	}
+}
+
+// What the user wrote reaches pgx unchanged: parse, rebuild, then
+// pgx.ParseConfig, as a deploy does.
+func TestConnectionString_RoundTripKeepsWhatWasWritten(t *testing.T) {
+	t.Setenv("PGAPPNAME", "")
+	t.Setenv("PGOPTIONS", "")
+	reach := func(t *testing.T, connStr string) *pgx.ConnConfig {
+		t.Helper()
+		config, err := ParseConnectionString(connStr)
+		if err != nil {
+			t.Fatalf("parse %q: %v", connStr, err)
+		}
+		built, err := pgx.ParseConfig(BuildConnectionString(config))
+		if err != nil {
+			t.Fatalf("pgx parse of %q: %v", BuildConnectionString(config), err)
+		}
+		return built
+	}
+	for _, tc := range []struct {
+		name, connStr, param, want string
+	}{
+		{"options with a space, URI", "postgresql://u@h/d?options=-c%20search_path%3Dfoo", "options", "-c search_path=foo"},
+		{"options with a space, keyword", "host=h user=u dbname=d options='-c search_path=foo'", "options", "-c search_path=foo"},
+		{"application_name with a space", "postgresql://u@h/d?application_name=my%20app", "application_name", "my app"},
+		{"a literal plus stays a plus", "postgresql://u@h/d?application_name=a+b", "application_name", "a+b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reach(t, tc.connStr).RuntimeParams[tc.param]; got != tc.want {
+				t.Errorf("%s = %q, want %q", tc.param, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a query dbname, user and password are the target, not passed on to override it", func(t *testing.T) {
+		config, err := ParseConnectionString("postgresql://u:p@h/postgres?dbname=vgo_b&user=q&password=s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.Database != "vgo_b" || config.Username != "q" || config.Password != "s" || len(config.AdditionalParams) != 0 {
+			t.Fatalf("got %+v", config)
+		}
+		config.Database = "vgo_a"
+		built, err := pgx.ParseConfig(BuildConnectionString(config))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if built.Database != "vgo_a" {
+			t.Errorf("-d vgo_a connected to %q", built.Database)
+		}
+	})
+
+	t.Run("an ADO.NET dbname is the database", func(t *testing.T) {
+		config, err := ParseConnectionString("Host=h;Database=a;dbname=b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.Database != "b" || len(config.AdditionalParams) != 0 {
+			t.Errorf("got %+v", config)
+		}
+	})
+
+	t.Run("a password without a user is kept", func(t *testing.T) {
+		built := reach(t, "host=h password=pw dbname=d")
+		if built.Password != "pw" || built.Database != "d" {
+			t.Errorf("password %q, database %q", built.Password, built.Database)
+		}
+	})
+}
+
+func TestGoogleConnector_NamesAreValuesNotKeywords(t *testing.T) {
+	c := NewGoogleCloudSQLConnector(&ConnectionConfig{Username: "svc@p.iam", Database: "staging dbname=production"}, "p:r:i", Output{})
+	cfg, err := c.poolConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnConfig.Database != "staging dbname=production" || cfg.ConnConfig.User != "svc@p.iam" || cfg.ConnConfig.Host != "p:r:i" {
+		t.Errorf("got host %q user %q database %q", cfg.ConnConfig.Host, cfg.ConnConfig.User, cfg.ConnConfig.Database)
+	}
+}
+
+func TestParseConnectionString_ADONETAsNpgsqlReadsIt(t *testing.T) {
+	c, err := ParseConnectionString("Host=127.0.0.1:5433;Port=5999;Database=d;Username=u")
+	if err != nil || c.Host != "127.0.0.1" || c.Port != 5433 {
+		t.Fatalf("a single Host=h:port must split, its port winning: %+v %v", c, err)
+	}
+	if got := BuildConnectionString(c); !strings.Contains(got, "127.0.0.1:5433") {
+		t.Errorf("built %q, want host 127.0.0.1 port 5433", got)
+	}
+	for in, want := range map[string]string{"Require": "require", "VerifyFull": "verify-full", "VerifyCA": "verify-ca",
+		"Disable": "disable", "verify-full": "verify-full"} {
+		c, err := ParseConnectionString("Host=h;Database=d;SSL Mode=" + in)
+		if err != nil || c.SSLMode != want {
+			t.Errorf("SSL Mode=%s: got %q, %v; want %q", in, c.SSLMode, err, want)
+		}
+	}
+	for _, key := range []string{"Pooling", "Trust Server Certificate"} {
+		_, err := ParseConnectionString("Host=h;Database=d;" + key + "=true")
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s must be refused by name, got %v", key, err)
+		}
 	}
 }

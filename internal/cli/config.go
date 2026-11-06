@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vvka-141/pgmi/internal/config"
-	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/internal/tui/wizards"
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 var configCmd = &cobra.Command{
@@ -37,8 +37,8 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		targetDir = args[0]
 	}
 
-	if !tui.IsInteractive() {
-		return fmt.Errorf("config requires an interactive terminal\nfor CI, write pgmi.yaml by hand or use PG* environment variables")
+	if !isInteractive() {
+		return fmt.Errorf("%w: config requires an interactive terminal\nfor CI, write pgmi.yaml by hand or use PG* environment variables", pgmi.ErrUsage)
 	}
 
 	existingCfg, err := config.Load(targetDir)
@@ -49,25 +49,26 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		// pgmi.yaml exists but is malformed; prompt before clobbering it
 		// rather than silently overwriting (and losing) the user's file.
 		fmt.Fprintf(os.Stderr, "pgmi.yaml exists but could not be parsed: %v\n", err)
-		if !tui.PromptContinue("Overwrite the unparseable pgmi.yaml?") {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
+		if !promptContinue("Overwrite the unparseable pgmi.yaml?") {
+			return wizardCancelled("config", false)
 		}
 	case existingCfg != nil:
 		fmt.Fprintln(os.Stderr, "pgmi.yaml exists.")
-		if !tui.PromptContinue("Overwrite connection settings?") {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
+		if !promptContinue("Overwrite connection settings?") {
+			return wizardCancelled("config", false)
 		}
 	}
 
-	connResult, err := wizards.RunConnectionWizard()
+	var opts []wizards.WizardOption
+	if existingCfg != nil {
+		opts = append(opts, wizards.WithInitialConfig(existingCfg.Connection))
+	}
+	connResult, err := startConnectionWizard(opts...)
 	if err != nil {
 		return fmt.Errorf("connection wizard failed: %w", err)
 	}
 	if connResult.Cancelled {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
-		return nil
+		return wizardCancelled("config", connResult.Interrupted)
 	}
 
 	if err := saveConnectionToConfig(targetDir, &connResult.Config, connResult.MaintenanceDatabase); err != nil {
@@ -75,6 +76,6 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(targetDir, "pgmi.yaml"))
-	offerSavePgpass(&connResult.Config)
+	offerSavePgpass(&connResult.Config, connResult.MaintenanceDatabase)
 	return nil
 }

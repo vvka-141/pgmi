@@ -369,3 +369,20 @@ func TestExtractAndValidate_ValidationFailure(t *testing.T) {
 		t.Errorf("Expected validation error message, got: %v", err)
 	}
 }
+
+func TestExtract_UnterminatedComment(t *testing.T) {
+	for _, content := range []string{"/*", "/*x", "/*/", "/* <pgmi-meta id=\"x\">"} {
+		t.Run(content, func(t *testing.T) {
+			_, err := Extract(content, "half.sql")
+			if strings.Contains(content, "pgmi-meta") {
+				if err == nil || errors.Is(err, ErrNoMetadata) {
+					t.Fatalf("an unterminated <pgmi-meta> must fail to parse, got %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrNoMetadata) {
+				t.Fatalf("want ErrNoMetadata, got %v", err)
+			}
+		})
+	}
+}

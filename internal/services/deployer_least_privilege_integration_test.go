@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -136,5 +137,46 @@ func TestDeploy_MissingDatabase_StillCreatedViaMaintenanceConnection(t *testing.
 	var one int
 	if err := pool.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
 		t.Fatalf("query the created database: %v", err)
+	}
+}
+
+// A deploy role without CREATEDB that names a database which does not exist
+// most likely mistyped -d: exit 13, naming -d and CREATEDB.
+func TestDeploy_MissingDatabase_WithoutCreateDB(t *testing.T) {
+	adminConn := testhelpers.RequireDatabase(t)
+	ctx := context.Background()
+	const (
+		roleName = "pgmi728_ci"
+		password = "pgmi728_ci_pw"
+		dbName   = "pgmi728_typo"
+	)
+	adminPool, err := pgxpool.New(ctx, adminConn)
+	if err != nil {
+		t.Fatalf("connect as admin: %v", err)
+	}
+	defer adminPool.Close()
+	for _, sql := range []string{`DROP DATABASE IF EXISTS ` + dbName, `DROP ROLE IF EXISTS ` + roleName,
+		`CREATE ROLE ` + roleName + ` LOGIN NOCREATEDB PASSWORD '` + password + `'`} {
+		if _, err := adminPool.Exec(ctx, sql); err != nil {
+			t.Fatalf("admin exec %q: %v", sql, err)
+		}
+	}
+	t.Cleanup(func() { _, _ = adminPool.Exec(context.Background(), `DROP ROLE IF EXISTS `+roleName) })
+
+	roleConfig, err := db.ParseConnectionString(adminConn)
+	if err != nil {
+		t.Fatalf("parse connection string: %v", err)
+	}
+	roleConfig.Username, roleConfig.Password, roleConfig.Database = roleName, password, dbName
+	roleConn := db.BuildConnectionString(roleConfig)
+
+	projectPath := t.TempDir()
+	createMinimalProject(t, projectPath)
+	err = testhelpers.NewTestDeployer(t).Deploy(ctx, pgmi.DeploymentConfig{
+		ConnectionString: roleConn, MaintenanceDatabase: "postgres", DatabaseName: dbName, SourcePath: projectPath,
+	})
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitExecutionFailed || err == nil ||
+		!strings.Contains(err.Error(), "-d") || !strings.Contains(err.Error(), "CREATEDB") {
+		t.Fatalf("want exit %d naming -d and CREATEDB, got %d: %v", pgmi.ExitExecutionFailed, got, err)
 	}
 }

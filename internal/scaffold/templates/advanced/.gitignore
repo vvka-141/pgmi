@@ -1,7 +1,16 @@
 # Parameter files hold secrets — pass them with --params-file, never commit them
 *.params
 *.params.*
+*.env
 .env
+
+# Build output of the gateways/ examples
+node_modules/
+dist/
+target/
+bin/
+obj/
+__pycache__/
 
 # Editor and OS noise
 .DS_Store

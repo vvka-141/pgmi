@@ -1,9 +1,13 @@
 package filesystem
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestOSFileSystem_Open_ValidDirectory(t *testing.T) {
@@ -190,5 +194,19 @@ func TestOSFile_ReadContent(t *testing.T) {
 
 	if fileContent != expected {
 		t.Errorf("ReadContent() = %q, want %q", fileContent, expected)
+	}
+}
+
+func TestParseMaxFileSize(t *testing.T) {
+	for raw, want := range map[string]int64{"": DefaultMaxFileSize, "20971520": 20971520} {
+		if got, err := parseMaxFileSize(raw); err != nil || got != want {
+			t.Errorf("%q: got %d, %v; want %d", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"10MB", "0", "-1", "1.5"} {
+		_, err := parseMaxFileSize(raw)
+		if !errors.Is(err, pgmi.ErrInvalidConfig) || !strings.Contains(err.Error(), "PGMI_MAX_FILE_SIZE") {
+			t.Errorf("%q: want an invalid-config error naming the variable, got %v", raw, err)
+		}
 	}
 }

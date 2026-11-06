@@ -7,7 +7,7 @@ Key facts:
 - The session API is a set of temp views the deploy.sql queries: pgmi_source_view (files), pgmi_parameter_view (CLI params), pgmi_plan_view (metadata-driven ordering), plus pgmi_test_plan()/pgmi_test_generate() for tests
 - `CALL pgmi_test()` runs `__test__/` tests inside the deployment transaction with savepoint isolation; a failing test aborts the whole deploy (exit code 13)
 - Requires a direct connection or session-mode pooler; transaction-mode poolers (PgBouncer txn mode, RDS Proxy) are incompatible
-- The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai`, `pgmi ai skills`, `pgmi ai contract`; `pgmi serve` exposes pgmi commands over MCP (stdio)
+- The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai` and `pgmi ai contract`; `pgmi init` writes AGENTS.md and project skills in `.agents/skills/`; `pgmi serve` exposes pgmi commands over MCP (stdio)
 
 ## Docs
 
@@ -25,13 +25,13 @@ Key facts:
 - [Security](https://vvka-141.github.io/pgmi/docs/security/): secrets handling and CI/CD patterns
 - [Production guide](https://vvka-141.github.io/pgmi/docs/production/): compatibility matrix, rollback, monitoring
 - [pgmi serve](https://vvka-141.github.io/pgmi/docs/cli/#pgmi-serve): core CLI MCP server over stdio; exposes pgmi's commands, including `init` and `deploy`, to coding agents as tools
-- [Advanced template overview](https://vvka-141.github.io/pgmi/docs/advanced/): the scaffolded application stack (REST/RPC/MCP framework, membership, API keys, transaction policy) and the basic/advanced boundary
+- [Advanced template overview](https://vvka-141.github.io/pgmi/docs/advanced/): the scaffolded application stack (REST/RPC/MCP framework, membership, transaction policy) and the basic/advanced boundary
 - [Advanced-template MCP gateway](https://vvka-141.github.io/pgmi/docs/mcp/): optional scaffolded application subsystem; exposes your deployed PostgreSQL application's tools, resources, and prompts over HTTP
+- [Login transport contract](https://vvka-141.github.io/pgmi/docs/advanced/login-transport/): what the web server in front of an advanced-template database must do — OIDC sign-in, the session cookie, session and connection headers, logout, roles
 - [Run the MCP gateway](https://vvka-141.github.io/pgmi/docs/advanced/mcp-gateway/): deploy, start, connect an AI client, transaction policy, production notes
 - [Author MCP handlers](https://vvka-141.github.io/pgmi/docs/advanced/mcp-handlers/): write MCP tools, resources, and prompts in SQL; schemas, tags, auth, testing
 - [MCP SQL API reference](https://vvka-141.github.io/pgmi/docs/advanced/mcp-sql-api/): dispatcher functions, method routing, response builders
 - [MCP protocol compliance](https://vvka-141.github.io/pgmi/docs/advanced/mcp-protocol/): supported versions, transport behavior, error semantics, limitations
-- [Advanced-template API keys](https://vvka-141.github.io/pgmi/docs/api-keys/): authentication for callers of generated REST/RPC/MCP APIs; unrelated to pgmi CLI or PostgreSQL connection authentication
 - [Per-route transaction policy](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/): declare isolation level, read-only, DEFERRABLE and replica-safety per route in handler metadata; the gateway derives the transaction and the retry contract from the declaration
 
 ## Optional

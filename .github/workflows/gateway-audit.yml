@@ -1,0 +1,84 @@
+name: Gateway audit
+
+# The reference gateways ship pinned dependencies into users' projects, and a
+# CVE can be published between releases, so their audits also run weekly. They
+# read the template tree directly: no database, no scaffold.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      advisory:
+        description: A finding is reported but does not fail the caller (CI on a branch)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GATEWAYS: internal/scaffold/templates/advanced/gateways
+
+jobs:
+  python:
+    name: Python (pip-audit)
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.advisory == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r "$GATEWAYS/python/requirements.txt"
+
+  typescript:
+    name: TypeScript (npm audit)
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.advisory == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - working-directory: ${{ env.GATEWAYS }}/typescript
+        run: npm audit --package-lock-only
+
+  rust:
+    name: Rust (cargo audit)
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.advisory == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - working-directory: ${{ env.GATEWAYS }}/rust
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src rust:1.99.0-trixie \
+            sh -c 'cargo install cargo-audit --locked --version 0.22.2 && cargo audit'
+
+  csharp:
+    name: C# (dotnet list package --vulnerable)
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.advisory == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - working-directory: ${{ env.GATEWAYS }}/csharp
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:10.0.403 \
+            sh -c 'for p in Gateway Gateway.Tests; do dotnet restore $p && dotnet list $p package --vulnerable --include-transitive; done | tee /tmp/vulnerable && ! grep -q "has the following vulnerable packages" /tmp/vulnerable'
+
+  go:
+    name: Go (govulncheck)
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.advisory == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - run: |
+          cp -r "$GATEWAYS/go" "$RUNNER_TEMP/gateway-go"
+          cd "$RUNNER_TEMP/gateway-go"
+          mv go.mod.scaffold go.mod
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

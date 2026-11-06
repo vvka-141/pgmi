@@ -16,21 +16,23 @@ import (
 //go:embed all:templates
 var templatesFS embed.FS
 
+// Skills every template ships. They live outside templates/ because each
+// directory there is a template.
+//
+//go:embed all:skills
+var sharedSkillsFS embed.FS
+
+const sharedSkillsDir = "skills"
+
+// scaffoldSuffix is dropped from a template file's name when it is written. A
+// file named go.mod would make its directory another module, which go:embed
+// leaves out without a word.
+const scaffoldSuffix = ".scaffold"
+
 // GetTemplatesFS returns the embedded templates filesystem for testing purposes.
 // This allows tests to access embedded templates without filesystem I/O.
 func GetTemplatesFS() embed.FS {
 	return templatesFS
-}
-
-// GetAdvancedLibReadme returns the advanced template's lib/README.md content.
-// Used by `pgmi ai skill advanced-template` to surface the framework API
-// without duplicating the document.
-func GetAdvancedLibReadme() (string, error) {
-	content, err := templatesFS.ReadFile("templates/advanced/lib/README.md")
-	if err != nil {
-		return "", fmt.Errorf("advanced template lib/README.md not found: %w", err)
-	}
-	return string(content), nil
 }
 
 // Scaffolder handles project initialization from templates
@@ -84,18 +86,52 @@ func (s *Scaffolder) CreateProject(projectName, templateName, targetPath string)
 	s.logVerbose("Creating project '%s' at %s with template '%s'", projectName, targetPath, templateName)
 
 	// Copy template files
-	if err := s.copyTemplateFiles(templatePath, targetPath, projectName, templateName); err != nil {
+	if err := s.copyTemplateFiles(templatesFS, templatePath, targetPath, projectName, templateName); err != nil {
 		return fmt.Errorf("failed to copy template files: %w", err)
+	}
+	if !opinionFree[templateName] {
+		if err := s.copySharedSkills(sharedSkillsFS, sharedSkillsDir, targetPath); err != nil {
+			return fmt.Errorf("failed to copy shared skills: %w", err)
+		}
 	}
 
 	s.logVerbose("Project created successfully")
 	return nil
 }
 
-// copyTemplateFiles recursively copies files from embedded template to target directory
-func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, templateName string) error {
-	return fs.WalkDir(templatesFS, templatePath, func(path string, d fs.DirEntry, err error) error {
+// buildArtifacts are what a gateway's tests leave in a checkout. go:embed
+// all: takes them along, so a binary built from that tree would write them
+// into every new project.
+var buildArtifacts = map[string]bool{
+	"__pycache__": true, "node_modules": true, "target": true, "bin": true, "obj": true, ".venv": true,
+}
+
+func isBuildArtifact(d fs.DirEntry) bool {
+	if d.IsDir() {
+		return buildArtifacts[d.Name()]
+	}
+	return strings.HasSuffix(d.Name(), ".pyc")
+}
+
+// skipArtifact returns fs.SkipDir for an artifact directory, and reports
+// whether the walk should pass over the entry.
+func skipArtifact(d fs.DirEntry) (bool, error) {
+	if !isBuildArtifact(d) {
+		return false, nil
+	}
+	if d.IsDir() {
+		return true, fs.SkipDir
+	}
+	return true, nil
+}
+
+// copyTemplateFiles recursively copies files from the template tree to target directory
+func (s *Scaffolder) copyTemplateFiles(fsys fs.FS, templatePath, targetPath, projectName, templateName string) error {
+	return fs.WalkDir(fsys, templatePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if skip, err := skipArtifact(d); skip {
 			return err
 		}
 
@@ -110,7 +146,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, te
 			return err
 		}
 
-		targetFilePath := filepath.Join(targetPath, relPath)
+		targetFilePath := filepath.Join(targetPath, strings.TrimSuffix(relPath, scaffoldSuffix))
 
 		if d.IsDir() {
 			// Create directory
@@ -119,7 +155,7 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, te
 		}
 
 		// Read file from embedded FS
-		content, err := templatesFS.ReadFile(path)
+		content, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return fmt.Errorf("failed to read template file %s: %w", path, err)
 		}
@@ -151,6 +187,37 @@ func (s *Scaffolder) copyTemplateFiles(templatePath, targetPath, projectName, te
 	})
 }
 
+// copySharedSkills writes the shared skills into .agents/skills/. A template
+// skill of the same name is refused, so neither silently replaces the other.
+func (s *Scaffolder) copySharedSkills(fsys fs.FS, root, targetPath string) error {
+	skillsRoot := filepath.Join(targetPath, ".agents", "skills")
+	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		if skip, err := skipArtifact(d); skip {
+			return err
+		}
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(skillsRoot, relPath)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("the template already ships %s, which is also a shared skill", filepath.Join(".agents", "skills", relPath))
+		}
+		content, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return err
+		}
+		s.logVerbose("Creating file: %s", filepath.Join(".agents", "skills", relPath))
+		return os.WriteFile(target, content, 0644)
+	})
+}
+
 // processTemplate replaces template variables in content
 func (s *Scaffolder) processTemplate(content, projectName, filePath string) string {
 	name := projectName
@@ -166,6 +233,21 @@ func (s *Scaffolder) logVerbose(format string, args ...any) {
 	if s.verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
 	}
+}
+
+var templateSummaries = map[string]string{
+	"minimal":  "A deploy.sql loop, hello_world.sql and a .pgmiignore; nothing else",
+	"basic":    "Two layers: run-once tables, re-run views and functions",
+	"advanced": "Reference app: SQL-native REST/RPC/MCP, multi-tenant RLS, audit",
+}
+
+// opinionFree templates ship nothing beyond their own files: no agent skills.
+var opinionFree = map[string]bool{"minimal": true}
+
+// TemplateSummary is the one-line description every surface shows for a
+// template: the init wizard, `pgmi templates list` and `pgmi init --help`.
+func TemplateSummary(name string) string {
+	return templateSummaries[name]
 }
 
 // ListTemplates returns available template names
@@ -201,6 +283,24 @@ var ManagedFiles = map[string]bool{
 	".env":      true,
 }
 
+// BlockingEntries names what in dir stops a scaffold: everything except the
+// pgmi-managed files and .git (a repository's directory, or the file of a
+// worktree or submodule), which no template file can overwrite. A directory
+// that cannot be read blocks nothing; the caller creates or reports it.
+func BlockingEntries(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var blocking []string
+	for _, entry := range entries {
+		if !ManagedFiles[entry.Name()] && entry.Name() != ".git" {
+			blocking = append(blocking, entry.Name())
+		}
+	}
+	return blocking
+}
+
 // isDirectoryEmpty checks if a directory is empty or contains only pgmi-managed files.
 // Returns (true, nil) if directory doesn't exist, is empty, or only contains pgmi-managed files.
 // Returns (false, nil) if directory exists and contains non-pgmi files.
@@ -221,23 +321,26 @@ func isDirectoryEmpty(path string) (bool, error) {
 		return false, fmt.Errorf("path exists but is not a directory")
 	}
 
-	// Read directory contents
-	entries, err := os.ReadDir(path)
-	if err != nil {
+	if _, err := os.ReadDir(path); err != nil {
 		return false, fmt.Errorf("failed to read directory: %w", err)
 	}
-
-	for _, entry := range entries {
-		if !ManagedFiles[entry.Name()] {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return len(BlockingEntries(path)) == 0, nil
 }
 
-// buildFileTree creates a visual tree representation of the directory structure.
-// Returns a formatted string showing files and directories in tree format.
+// countSkills counts the directories under dir that hold a SKILL.md.
+func countSkills(dir string) int {
+	entries, _ := os.ReadDir(dir)
+	n := 0
+	for _, e := range entries {
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "SKILL.md")); e.IsDir() && err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// BuildFileTree draws the directory as a tree; .agents/skills/ is one line
+// with its skill count, since a project carries a dozen or more.
 func BuildFileTree(rootPath string) (string, error) {
 	var sb strings.Builder
 
@@ -309,6 +412,11 @@ func BuildFileTree(rootPath string) (string, error) {
 		name := entry.Name()
 		if entry.IsDir() {
 			name += "/"
+		}
+
+		if entry.IsDir() && relPath == filepath.Join(".agents", "skills") {
+			fmt.Fprintf(&sb, "%s%s%s  (%d skills)\n", indent.String(), branch, name, countSkills(path))
+			return fs.SkipDir
 		}
 
 		sb.WriteString(indent.String() + branch + name + "\n")

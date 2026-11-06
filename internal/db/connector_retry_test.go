@@ -3,19 +3,17 @@ package db
 import (
 	"context"
 	"errors"
-	"io"
-	"os"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/internal/retry"
-	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 func TestStandardConnector_RetryConfiguration(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "testdb",
@@ -23,7 +21,7 @@ func TestStandardConnector_RetryConfiguration(t *testing.T) {
 		Password: "testpass",
 	}
 
-	connector := NewStandardConnector(config)
+	connector := NewStandardConnector(config, Output{})
 
 	if connector.retryExecutor == nil {
 		t.Fatal("Expected retryExecutor to be initialized")
@@ -35,7 +33,7 @@ func TestStandardConnector_RetryConfiguration(t *testing.T) {
 }
 
 func TestStandardConnector_RetryDefaults(t *testing.T) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "testdb",
@@ -43,7 +41,7 @@ func TestStandardConnector_RetryDefaults(t *testing.T) {
 		Password: "testpass",
 	}
 
-	connector := NewStandardConnector(config)
+	connector := NewStandardConnector(config, Output{})
 
 	// Verify retry executor is configured (non-nil check)
 	if connector.retryExecutor == nil {
@@ -129,7 +127,7 @@ func TestBackoffStrategy_Integration(t *testing.T) {
 
 // Benchmark retry overhead
 func BenchmarkStandardConnector_NoRetry(b *testing.B) {
-	config := &pgmi.ConnectionConfig{
+	config := &ConnectionConfig{
 		Host:     "localhost",
 		Port:     5432,
 		Database: "testdb",
@@ -137,7 +135,7 @@ func BenchmarkStandardConnector_NoRetry(b *testing.B) {
 		Password: "testpass",
 	}
 
-	connector := NewStandardConnector(config)
+	connector := NewStandardConnector(config, Output{})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -147,29 +145,29 @@ func BenchmarkStandardConnector_NoRetry(b *testing.B) {
 }
 
 func TestConnectExecutor_LogsEachRetry(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	orig := os.Stderr
-	os.Stderr = w
-	defer func() { os.Stderr = orig }()
-
+	var log infoLog
 	calls := 0
-	err = newConnectExecutor().Execute(context.Background(), func(context.Context) error {
+	err := newConnectExecutor(Output{Logger: &log}).Execute(context.Background(), func(context.Context) error {
 		calls++
 		if calls == 1 {
 			return &pgconn.PgError{Code: "57P03", Message: "the database system is starting up"}
 		}
 		return nil
 	})
-	w.Close()
-	out, _ := io.ReadAll(r)
 
 	if err != nil || calls != 2 {
 		t.Fatalf("Execute() = %v after %d calls, want success on the second", err, calls)
 	}
-	if !strings.Contains(string(out), "Connection attempt 1 failed") || !strings.Contains(string(out), "starting up") {
-		t.Errorf("stderr = %q, want a line naming the failed attempt and its cause", out)
+	out := strings.Join(log.lines, "\n")
+	if !strings.Contains(out, "Connection attempt 1 failed") || !strings.Contains(out, "starting up") {
+		t.Errorf("logged %q, want a line naming the failed attempt and its cause", out)
 	}
+}
+
+type infoLog struct{ lines []string }
+
+func (l *infoLog) Verbose(string, ...any) {}
+func (l *infoLog) Error(string, ...any)   {}
+func (l *infoLog) Info(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
 }

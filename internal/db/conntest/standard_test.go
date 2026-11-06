@@ -27,7 +27,7 @@ func TestStandardConnection_WrongPassword(t *testing.T) {
 	config := parseStdConnString(t)
 	config.Password = "definitely-wrong-password"
 
-	connector, err := db.NewConnector(config)
+	connector, err := db.NewConnector(config, db.Output{})
 	require.NoError(t, err)
 
 	_, err = connector.Connect(context.Background())

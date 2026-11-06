@@ -49,10 +49,10 @@ func TestTemplateTransactionIsolation(t *testing.T) {
 	// __test__ handlers roll back after each step, so a driver test that opens
 	// its own transactions needs handlers that persist.)
 	body := "BEGIN\n RETURN api.json_response(200, jsonb_build_object('ok', true));\nEND;"
-	register := func(id, uri, name, floor string) {
+	register := func(id, path, name, floor string) {
 		t.Helper()
-		meta := `{"id":"` + id + `","uri":"^` + uri + `$","httpMethod":"^GET$","name":"` + name +
-			`","requiresAuth":false,"minTransactionIsolation":"` + floor + `"}`
+		meta := `{"id":"` + id + `","path":"` + path + `","httpMethod":"^GET$","name":"` + name +
+			`","access":"public","minTransactionIsolation":"` + floor + `"}`
 		if _, err := pool.Exec(ctx, "SELECT api.create_or_replace_rest_handler($1::jsonb, $2)", meta, body); err != nil {
 			t.Fatalf("register handler %s: %v", name, err)
 		}

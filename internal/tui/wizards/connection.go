@@ -1,31 +1,35 @@
 package wizards
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/vvka-141/pgmi/internal/config"
 	"github.com/vvka-141/pgmi/internal/db"
+	"github.com/vvka-141/pgmi/internal/logging"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
 // ConnectionTester tests database connectivity.
 type ConnectionTester interface {
-	TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) (info string, err error)
+	TestConnection(ctx context.Context, cfg db.ConnectionConfig) (info string, err error)
 }
 
 type pgxTester struct{}
 
-func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) (string, error) {
+func (pgxTester) TestConnection(ctx context.Context, cfg db.ConnectionConfig) (string, error) {
 	if cfg.AuthMethod != pgmi.AuthMethodStandard {
 		return fmt.Sprintf("%s authentication configured (not tested — token is fetched at deploy time)", cfg.AuthMethod.String()), nil
 	}
@@ -37,7 +41,12 @@ func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) 
 		connStr = db.BuildConnectionString(&cfg)
 	}
 
-	conn, err := pgx.Connect(ctx, connStr)
+	connConfig, err := pgx.ParseConfig(connStr)
+	if err != nil {
+		return "", err
+	}
+	db.IgnoreExposedPassfile(&connConfig.Config, cfg.Password, cfg.AdditionalParams["passfile"], logging.NewConsoleLogger(false).Info)
+	conn, err := pgx.ConnectConfig(ctx, connConfig)
 	if err != nil {
 		return "", err
 	}
@@ -56,6 +65,11 @@ func (pgxTester) TestConnection(ctx context.Context, cfg pgmi.ConnectionConfig) 
 
 // WizardOption configures a ConnectionWizard.
 type WizardOption func(*ConnectionWizard)
+
+// WithInitialConfig seeds the host form from an existing pgmi.yaml.
+func WithInitialConfig(c config.ConnectionConfig) WizardOption {
+	return func(w *ConnectionWizard) { w.initial = &c }
+}
 
 // WithTester injects a ConnectionTester (for testing/mocking).
 func WithTester(t ConnectionTester) WizardOption {
@@ -84,7 +98,8 @@ const (
 // ConnectionResult holds the result of the connection wizard.
 type ConnectionResult struct {
 	Cancelled           bool
-	Config              pgmi.ConnectionConfig
+	Interrupted         bool
+	Config              db.ConnectionConfig
 	Tested              bool
 	MaintenanceDatabase string
 }
@@ -194,8 +209,10 @@ type ConnectionWizard struct {
 	// Connection tester (injectable for testing)
 	tester ConnectionTester
 
+	initial *config.ConnectionConfig
+
 	// Parsed connection string (set by validateInputs for stepInputConnString)
-	parsedConnString *pgmi.ConnectionConfig
+	parsedConnString *db.ConnectionConfig
 }
 
 type wizardStep int
@@ -231,7 +248,6 @@ type wizardKeys struct {
 	Down   key.Binding
 	Select key.Binding
 	Back   key.Binding
-	Quit   key.Binding
 	Tab    key.Binding
 }
 
@@ -251,13 +267,26 @@ func defaultWizardStyles() wizardStyles {
 	}
 }
 
+// sized wraps the prose styles to the terminal width. Width applies before
+// margins, so Description, indented by MarginLeft(4), gets four cells less.
+func (s wizardStyles) sized(width int) wizardStyles {
+	if width <= 4 {
+		return s
+	}
+	s.Title = s.Title.Width(width)
+	s.Subtitle = s.Subtitle.Width(width)
+	s.Description = s.Description.Width(width - 4)
+	s.Success = s.Success.Width(width)
+	s.Error = s.Error.Width(width)
+	return s
+}
+
 func defaultWizardKeys() wizardKeys {
 	return wizardKeys{
 		Up:     key.NewBinding(key.WithKeys("up", "k")),
 		Down:   key.NewBinding(key.WithKeys("down", "j")),
 		Select: key.NewBinding(key.WithKeys("enter")),
 		Back:   key.NewBinding(key.WithKeys("esc")),
-		Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q")),
 		Tab:    key.NewBinding(key.WithKeys("tab")),
 	}
 }
@@ -296,10 +325,10 @@ func (w ConnectionWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.height = msg.Height
 		return w, nil
 
-	case tea.KeyMsg:
-		// ctrl+c always quits
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
+			w.result.Interrupted = true
 			return w, tea.Quit
 		}
 
@@ -345,7 +374,7 @@ func (w ConnectionWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return w, nil
 }
 
-func (w ConnectionWizard) updateProviderSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w ConnectionWizard) updateProviderSelection(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Up):
 		if w.providerIdx > 0 {
@@ -372,7 +401,7 @@ func (w ConnectionWizard) updateProviderSelection(msg tea.KeyMsg) (tea.Model, te
 	return w, nil
 }
 
-func (w ConnectionWizard) updateAuthSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w ConnectionWizard) updateAuthSelection(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Up):
 		if w.authIdx > 0 {
@@ -442,7 +471,7 @@ func (w *ConnectionWizard) initInputs() tea.Cmd {
 func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	host := textinput.New()
 	host.CharLimit = 256
-	host.Width = 40
+	host.SetWidth(40)
 	if w.provider != nil && w.provider.ID == providerLocal {
 		host.SetValue("localhost")
 	} else {
@@ -452,29 +481,39 @@ func (w *ConnectionWizard) createHostInputs() []textinput.Model {
 	port := textinput.New()
 	port.SetValue("5432")
 	port.CharLimit = 5
-	port.Width = 10
+	port.SetWidth(10)
 
 	database := textinput.New()
-	database.Placeholder = "mydb"
 	database.CharLimit = 64
-	database.Width = 40
+	database.SetWidth(40)
 
 	mgmtDB := textinput.New()
-	mgmtDB.SetValue(pgmi.DefaultMaintenanceDB)
+	mgmtDB.SetValue(db.DefaultMaintenanceDB)
 	mgmtDB.CharLimit = 64
-	mgmtDB.Width = 40
+	mgmtDB.SetWidth(40)
 
 	username := textinput.New()
 	username.SetValue("postgres")
 	username.CharLimit = 64
-	username.Width = 40
+	username.SetWidth(40)
 
 	password := textinput.New()
 	password.Placeholder = "Enter password"
 	password.EchoMode = textinput.EchoPassword
 	password.EchoCharacter = '•'
 	password.CharLimit = 256
-	password.Width = 40
+	password.SetWidth(40)
+
+	if c := w.initial; c != nil {
+		for input, value := range map[*textinput.Model]string{&host: c.Host, &database: c.Database, &mgmtDB: c.MaintenanceDatabase, &username: c.Username} {
+			if value != "" {
+				input.SetValue(value)
+			}
+		}
+		if c.Port > 0 {
+			port.SetValue(strconv.Itoa(c.Port))
+		}
+	}
 
 	return []textinput.Model{host, port, database, mgmtDB, username, password}
 }
@@ -483,17 +522,17 @@ func (w *ConnectionWizard) createAzureInputs() []textinput.Model {
 	server := textinput.New()
 	server.Placeholder = "myserver.postgres.database.azure.com"
 	server.CharLimit = 256
-	server.Width = 50
+	server.SetWidth(50)
 
 	database := textinput.New()
 	database.Placeholder = "mydb"
 	database.CharLimit = 64
-	database.Width = 40
+	database.SetWidth(40)
 
 	username := textinput.New()
 	username.Placeholder = "user@myserver"
 	username.CharLimit = 128
-	username.Width = 40
+	username.SetWidth(40)
 
 	return []textinput.Model{server, database, username}
 }
@@ -502,27 +541,27 @@ func (w *ConnectionWizard) createAWSInputs() []textinput.Model {
 	host := textinput.New()
 	host.Placeholder = "mydb.xxx.us-east-1.rds.amazonaws.com"
 	host.CharLimit = 256
-	host.Width = 50
+	host.SetWidth(50)
 
 	port := textinput.New()
 	port.SetValue("5432")
 	port.CharLimit = 5
-	port.Width = 10
+	port.SetWidth(10)
 
 	database := textinput.New()
 	database.Placeholder = "mydb"
 	database.CharLimit = 64
-	database.Width = 40
+	database.SetWidth(40)
 
 	username := textinput.New()
 	username.Placeholder = "iam_user"
 	username.CharLimit = 64
-	username.Width = 40
+	username.SetWidth(40)
 
 	region := textinput.New()
 	region.Placeholder = "us-east-1"
 	region.CharLimit = 32
-	region.Width = 20
+	region.SetWidth(20)
 
 	return []textinput.Model{host, port, database, username, region}
 }
@@ -531,17 +570,17 @@ func (w *ConnectionWizard) createGoogleInputs() []textinput.Model {
 	instance := textinput.New()
 	instance.Placeholder = "project:region:instance"
 	instance.CharLimit = 256
-	instance.Width = 50
+	instance.SetWidth(50)
 
 	database := textinput.New()
 	database.Placeholder = "mydb"
 	database.CharLimit = 64
-	database.Width = 40
+	database.SetWidth(40)
 
 	username := textinput.New()
 	username.Placeholder = "iam_user@project.iam"
 	username.CharLimit = 128
-	username.Width = 50
+	username.SetWidth(50)
 
 	return []textinput.Model{instance, database, username}
 }
@@ -550,12 +589,12 @@ func (w *ConnectionWizard) createConnStringInputs() []textinput.Model {
 	connStr := textinput.New()
 	connStr.Placeholder = "postgresql://user:password@host:5432/database"
 	connStr.CharLimit = 512
-	connStr.Width = 60
+	connStr.SetWidth(60)
 
 	return []textinput.Model{connStr}
 }
 
-func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w ConnectionWizard) updateInputForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Tab), msg.String() == "down":
 		if w.focusIndex < len(w.inputs)-1 {
@@ -577,14 +616,14 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return w, w.inputs[w.focusIndex].Focus()
 		}
 		// Enter on last field submits the form
-		if err := w.validateInputs(); err != nil {
+		if field, err := w.validateInputs(); err != nil {
 			// FormatError, not err.Error(): on the paste-a-connection-string
 			// step this message is the parser's, and net/url quotes the whole
 			// string back when it rejects one — a password containing a bare %
 			// is enough. FormatError redacts that; it leaves an ordinary
 			// validation message untouched.
 			w.validationErr = pgmi.FormatError(err)
-			return w, nil
+			return w, w.focusInput(field)
 		}
 		w.validationErr = ""
 		w.buildConfig()
@@ -608,49 +647,49 @@ func (w ConnectionWizard) updateInputForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return w, nil
 }
 
-func (w *ConnectionWizard) validateInputs() error {
-	// Basic validation - check required fields
+// validateInputs returns the index of the first field that is not valid.
+func (w *ConnectionWizard) validateInputs() (int, error) {
 	switch w.step {
 	case stepInputHost:
 		if w.inputs[2].Value() == "" { // database
-			return fmt.Errorf("database name is required")
+			return 2, fmt.Errorf("database name is required")
 		}
 	case stepInputAzure:
 		if w.inputs[0].Value() == "" {
-			return fmt.Errorf("server name is required")
+			return 0, fmt.Errorf("server name is required")
 		}
 		if w.inputs[1].Value() == "" {
-			return fmt.Errorf("database name is required")
+			return 1, fmt.Errorf("database name is required")
 		}
 	case stepInputAWS:
 		if w.inputs[0].Value() == "" {
-			return fmt.Errorf("host is required")
+			return 0, fmt.Errorf("host is required")
 		}
 		if w.inputs[2].Value() == "" {
-			return fmt.Errorf("database name is required")
+			return 2, fmt.Errorf("database name is required")
 		}
 	case stepInputGoogle:
 		if w.inputs[0].Value() == "" {
-			return fmt.Errorf("instance connection name is required")
+			return 0, fmt.Errorf("instance connection name is required")
 		}
 		if w.inputs[1].Value() == "" {
-			return fmt.Errorf("database name is required")
+			return 1, fmt.Errorf("database name is required")
 		}
 	case stepInputConnString:
 		if w.inputs[0].Value() == "" {
-			return fmt.Errorf("connection string is required")
+			return 0, fmt.Errorf("connection string is required")
 		}
 		parsed, err := db.ParseConnectionString(w.inputs[0].Value())
 		if err != nil {
-			return fmt.Errorf("invalid connection string: %w", err)
+			return 0, fmt.Errorf("invalid connection string: %w", err)
 		}
 		w.parsedConnString = parsed
 	}
-	return nil
+	return 0, nil
 }
 
 func (w *ConnectionWizard) buildConfig() {
-	cfg := pgmi.ConnectionConfig{
+	cfg := db.ConnectionConfig{
 		AuthMethod:       w.authMethod.AuthMethod,
 		AdditionalParams: make(map[string]string),
 	}
@@ -669,7 +708,7 @@ func (w *ConnectionWizard) buildConfig() {
 		cfg.Database = w.inputs[2].Value()
 		w.result.MaintenanceDatabase = w.inputs[3].Value()
 		if w.result.MaintenanceDatabase == "" {
-			w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
+			w.result.MaintenanceDatabase = db.DefaultMaintenanceDB
 		}
 		cfg.Username = w.inputs[4].Value()
 		if cfg.Username == "" {
@@ -682,7 +721,7 @@ func (w *ConnectionWizard) buildConfig() {
 		cfg.Host = w.inputs[0].Value()
 		cfg.Port = 5432
 		cfg.Database = w.inputs[1].Value()
-		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
+		w.result.MaintenanceDatabase = db.DefaultMaintenanceDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.SSLMode = "require"
 		cfg.AuthMethod = pgmi.AuthMethodAzureEntraID
@@ -695,7 +734,7 @@ func (w *ConnectionWizard) buildConfig() {
 			cfg.Port = 5432
 		}
 		cfg.Database = w.inputs[2].Value()
-		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
+		w.result.MaintenanceDatabase = db.DefaultMaintenanceDB
 		cfg.Username = w.inputs[3].Value()
 		cfg.AWSRegion = w.inputs[4].Value()
 		cfg.SSLMode = "require"
@@ -704,17 +743,34 @@ func (w *ConnectionWizard) buildConfig() {
 	case stepInputGoogle:
 		cfg.GoogleInstance = w.inputs[0].Value()
 		cfg.Database = w.inputs[1].Value()
-		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
+		w.result.MaintenanceDatabase = db.DefaultMaintenanceDB
 		cfg.Username = w.inputs[2].Value()
 		cfg.AuthMethod = pgmi.AuthMethodGoogleIAM
 
 	case stepInputConnString:
 		cfg = *w.parsedConnString
 		cfg.AdditionalParams = make(map[string]string)
-		w.result.MaintenanceDatabase = pgmi.DefaultMaintenanceDB
+		w.result.MaintenanceDatabase = db.DefaultMaintenanceDB
 	}
 
+	if w.initial != nil && w.step != stepInputConnString {
+		w.keepInitialTLS(&cfg)
+	}
 	w.result.Config = cfg
+}
+
+// keepInitialTLS carries the TLS settings of the pgmi.yaml being edited, which
+// the wizard shows no field for, so re-running it never downgrades them. The
+// step's default stays only when the file names no sslmode, or names one a
+// token must not travel with.
+func (w *ConnectionWizard) keepInitialTLS(cfg *db.ConnectionConfig) {
+	tokenAuth := w.step == stepInputAzure || w.step == stepInputAWS
+	if mode := w.initial.SSLMode; mode != "" && (!tokenAuth || slices.Contains([]string{"require", "verify-ca", "verify-full"}, mode)) {
+		cfg.SSLMode = mode
+	}
+	cfg.SSLCert = cmp.Or(cfg.SSLCert, w.initial.SSLCert)
+	cfg.SSLKey = cmp.Or(cfg.SSLKey, w.initial.SSLKey)
+	cfg.SSLRootCert = cmp.Or(cfg.SSLRootCert, w.initial.SSLRootCert)
 }
 
 type testResultMsg struct {
@@ -735,13 +791,13 @@ func (w *ConnectionWizard) testConnection() tea.Cmd {
 		defer cancel()
 		info, err := tester.TestConnection(ctx, testCfg)
 		if err != nil {
-			return testResultMsg{success: false, err: err}
+			return testResultMsg{success: false, err: db.WrapConnectionError(err, testCfg.Host, testCfg.Port, testCfg.Database, testCfg.Username)}
 		}
 		return testResultMsg{success: true, info: info}
 	}
 }
 
-func (w ConnectionWizard) updateTestConnection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w ConnectionWizard) updateTestConnection(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !w.testDone {
 		return w, nil // Still testing
 	}
@@ -753,18 +809,42 @@ func (w ConnectionWizard) updateTestConnection(msg tea.KeyMsg) (tea.Model, tea.C
 			w.step = stepDone
 			return w, tea.Quit
 		}
-		// Test failed — go back to edit
-		w.step = w.getInputStep()
-		return w, w.initInputs()
+		w.testing = true
+		w.testDone = false
+		return w, tea.Batch(w.spinner.Tick, w.testConnection())
 	case key.Matches(msg, w.keys.Back):
 		w.step = w.getInputStep()
-		return w, w.initInputs()
+		return w, w.focusInput(w.editFieldAfterTest())
 	}
 	return w, nil
 }
 
+// editFieldAfterTest is where a failed login is usually fixed: the password
+// on the host form, the first field elsewhere.
+func (w ConnectionWizard) editFieldAfterTest() int {
+	if w.step == stepInputHost {
+		return len(w.inputs) - 1
+	}
+	return 0
+}
+
+func (w *ConnectionWizard) focusInput(i int) tea.Cmd {
+	for j := range w.inputs {
+		w.inputs[j].Blur()
+	}
+	w.focusIndex = i
+	return w.inputs[i].Focus()
+}
+
 // View implements tea.Model.
-func (w ConnectionWizard) View() string {
+func (w ConnectionWizard) View() tea.View {
+	v := tea.NewView(w.content())
+	v.AltScreen = true
+	return v
+}
+
+func (w ConnectionWizard) content() string {
+	w.styles = w.styles.sized(w.width)
 	var b strings.Builder
 
 	// Header
@@ -817,7 +897,7 @@ func (w ConnectionWizard) viewProviderSelection() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • q quit"))
+	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • esc back • ctrl+c quit"))
 
 	return b.String()
 }
@@ -864,20 +944,37 @@ func (w ConnectionWizard) viewForm(fc formConfig) string {
 	b.WriteString(w.styles.Subtitle.Render(fc.subtitle))
 	b.WriteString("\n\n")
 
-	for i, input := range w.inputs {
-		style := w.styles.Box
-		if i == w.focusIndex {
-			style = w.styles.FocusedBox
-		}
-		b.WriteString(w.styles.Label.Render(fc.labels[i]))
-		b.WriteString("\n")
-		b.WriteString(style.Render(input.View()))
-		if hint, ok := fc.hints[i]; ok {
-			b.WriteString("\n")
-			b.WriteString(w.styles.Description.Render(hint))
-		}
-		b.WriteString("\n\n")
+	labelWidth := 0
+	for _, l := range fc.labels {
+		labelWidth = max(labelWidth, lipgloss.Width(l))
 	}
+	inputWidth := min(40, w.width-labelWidth-5)
+
+	for i, input := range w.inputs {
+		input.Prompt = ""
+		input.SetWidth(max(inputWidth, 8))
+		label := fmt.Sprintf("%-*s", labelWidth, fc.labels[i])
+		if i == w.focusIndex {
+			b.WriteString(w.styles.Selected.Render("› " + label))
+		} else {
+			b.WriteString(w.styles.Label.Render("  " + label))
+		}
+		b.WriteString(" ")
+		b.WriteString(input.View())
+		b.WriteString("\n")
+		if i != w.focusIndex {
+			continue
+		}
+		if hint, ok := fc.hints[i]; ok {
+			b.WriteString(w.styles.Description.Render(hint))
+			b.WriteString("\n")
+		}
+		if w.validationErr != "" {
+			b.WriteString(w.styles.Error.Render("  Error: " + w.validationErr))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
 
 	for _, desc := range fc.description {
 		b.WriteString(w.styles.Description.Render(desc))
@@ -885,11 +982,6 @@ func (w ConnectionWizard) viewForm(fc formConfig) string {
 	}
 	if len(fc.description) > 0 {
 		b.WriteString("\n")
-	}
-
-	if w.validationErr != "" {
-		b.WriteString(w.styles.Error.Render("Error: " + w.validationErr))
-		b.WriteString("\n\n")
 	}
 
 	b.WriteString(w.styles.Help.Render("tab/↓ next • shift+tab/↑ prev • enter submit • esc back"))
@@ -900,10 +992,11 @@ func (w ConnectionWizard) viewForm(fc formConfig) string {
 func (w ConnectionWizard) viewHostForm() string {
 	return w.viewForm(formConfig{
 		subtitle: "Connection Details",
-		labels:   []string{"Host:", "Port:", "Database:", "Maintenance DB:", "Username:", "Password:"},
+		labels:   []string{"Host:", "Port:", "Database (required):", "Maintenance DB:", "Username:", "Password:"},
 		hints: map[int]string{
 			2: "target database — created automatically if it doesn't exist",
 			3: "existing database pgmi connects to for server-level operations",
+			5: "leave empty to use ~/.pgpass or $PGPASSWORD",
 		},
 	})
 }
@@ -980,8 +1073,17 @@ func (w ConnectionWizard) viewTestConnection() string {
 		b.WriteString(" Connecting...")
 	} else if w.testDone {
 		if w.testOK {
-			b.WriteString(w.styles.Success.Render("✓ Connected"))
-			b.WriteString("\n")
+			if cfg.AuthMethod == pgmi.AuthMethodStandard {
+				b.WriteString(w.styles.Success.Render(fmt.Sprintf("✓ Connected to %s:%d/%s", cfg.Host, cfg.Port, w.result.MaintenanceDatabase)))
+				b.WriteString("\n")
+				if cfg.Database != "" && cfg.Database != w.result.MaintenanceDatabase {
+					b.WriteString(w.styles.Description.Render(cfg.Database + " is created on the first deploy if it does not exist"))
+					b.WriteString("\n")
+				}
+			} else {
+				b.WriteString(w.styles.Success.Render("✓ Connected"))
+				b.WriteString("\n")
+			}
 			b.WriteString(w.styles.Description.Render(w.testInfo))
 			b.WriteString("\n\n")
 			b.WriteString(w.styles.Help.Render("enter continue • esc go back"))
@@ -1011,7 +1113,7 @@ func (w ConnectionWizard) Result() ConnectionResult {
 // Run executes the connection wizard and returns the result.
 func RunConnectionWizard(opts ...WizardOption) (ConnectionResult, error) {
 	wizard := NewConnectionWizard(opts...)
-	p := tea.NewProgram(wizard, tea.WithAltScreen())
+	p := tea.NewProgram(wizard)
 
 	model, err := p.Run()
 	if err != nil {

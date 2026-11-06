@@ -10,9 +10,13 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
+	"github.com/vvka-141/pgmi/internal/tui/wizards"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -190,7 +194,7 @@ func TestRunDeploy_CancelledWizardIsExit12(t *testing.T) {
 
 	isInteractive = func() bool { return true }
 	wizardCalled := false
-	runConnectionWizard = func(string) (*pgmi.ConnectionConfig, error) {
+	runConnectionWizard = func(string) (*db.ConnectionConfig, error) {
 		wizardCalled = true
 		return nil, nil // cancelled
 	}
@@ -327,5 +331,241 @@ func TestDeployCmd_OverwriteWithoutForceIsExit12WhenNonInteractive(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("the error does not name the fix: %v", err)
+	}
+}
+
+// Each cause of a refused deploy has its own exit code, so a pipeline can tell
+// a broken project (10) from an unreachable server (11) from broken SQL (13).
+func TestDeployCmd_ExitCodesByCause(t *testing.T) {
+	offline := func(t *testing.T, dir string, connection string) error {
+		t.Helper()
+		resetDeployFlags()
+		clearPGEnv(t)
+		deployFlags.connection = connection
+		deployFlags.database = "app"
+		deployFlags.force = true
+		deployFlags.timeout = 5 * time.Second
+		done := make(chan error, 1)
+		go func() { done <- runDeploy(deployCmd, []string{dir}) }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(20 * time.Second):
+			t.Fatal("the deploy did not return within 20s")
+			return nil
+		}
+	}
+	unreachable := "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=1"
+	project := func(t *testing.T, deploySQL []byte) string {
+		dir := t.TempDir()
+		if deploySQL != nil {
+			if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), deploySQL, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T) (dir, connection string)
+		want  int
+	}{
+		{"deploy.sql is a directory", func(t *testing.T) (string, string) {
+			dir := project(t, nil)
+			if err := os.Mkdir(filepath.Join(dir, "deploy.sql"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return dir, unreachable
+		}, pgmi.ExitConfigError},
+		{"deploy.sql holds a NUL byte", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT 1;\x00\n")), unreachable
+		}, pgmi.ExitConfigError},
+		{"deploy.sql is not UTF-8", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT '\xff';\n")), unreachable
+		}, pgmi.ExitConfigError},
+		{"a bad sslmode in the connection string", func(t *testing.T) (string, string) {
+			return project(t, []byte("SELECT 1;\n")), "postgresql://nobody@127.0.0.1:1/postgres?sslmode=bogus"
+		}, pgmi.ExitConfigError},
+		{"a named pipe in the project", func(t *testing.T) (string, string) {
+			dir := project(t, []byte("SELECT 1;\n"))
+			if err := mkfifo(filepath.Join(dir, "pipe.sql")); err != nil {
+				t.Skipf("no named pipes here: %v", err)
+			}
+			return dir, unreachable
+		}, pgmi.ExitConfigError},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir, connection := c.setup(t)
+			err := offline(t, dir, connection)
+			if got := pgmi.ExitCodeForError(err); got != c.want {
+				t.Errorf("exit code %d, want %d: %v", got, c.want, err)
+			}
+		})
+	}
+
+	t.Run("a pgmi_test macro the server refuses", func(t *testing.T) {
+		connString := testhelpers.RequireDatabase(t)
+		for name, tc := range map[string]struct {
+			sql  string
+			want int
+		}{
+			"bad pattern":       {"BEGIN;\nCALL pgmi_test('[');\nCOMMIT;\n", pgmi.ExitExecutionFailed},
+			"bad callback name": {"BEGIN;\nCALL pgmi_test('.*', 'not a name!');\nCOMMIT;\n", pgmi.ExitConfigError},
+		} {
+			t.Run(name, func(t *testing.T) {
+				const db = "pgmi_cli_exit_macro"
+				defer testhelpers.CleanupTestDB(t, connString, db)
+				resetDeployFlags()
+				clearPGEnv(t)
+				deployFlags.connection = connString
+				deployFlags.database = db
+				deployFlags.overwrite = true
+				deployFlags.force = true
+				deployFlags.timeout = 60 * time.Second
+				err := runDeploy(deployCmd, []string{project(t, []byte(tc.sql))})
+				if got := pgmi.ExitCodeForError(err); got != tc.want {
+					t.Errorf("exit code %d, want %d: %v", got, tc.want, err)
+				}
+			})
+		}
+	})
+}
+
+func stubConnectionWizard(t *testing.T, result wizards.ConnectionResult) *bool {
+	t.Helper()
+	origInteractive, origStart := isInteractive, startConnectionWizard
+	t.Cleanup(func() { isInteractive, startConnectionWizard = origInteractive, origStart })
+	isInteractive = func() bool { return true }
+	called := false
+	startConnectionWizard = func(...wizards.WizardOption) (wizards.ConnectionResult, error) {
+		called = true
+		return result, nil
+	}
+	return &called
+}
+
+func TestRunConfig_CancelledIsExit12(t *testing.T) {
+	dir := t.TempDir()
+	called := stubConnectionWizard(t, wizards.ConnectionResult{Cancelled: true})
+
+	err := runConfig(configCmd, []string{dir})
+	if !*called {
+		t.Fatal("the wizard was never reached")
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitApprovalDenied {
+		t.Errorf("Esc: exit code %d, want %d: %v", got, pgmi.ExitApprovalDenied, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pgmi.yaml")); !os.IsNotExist(statErr) {
+		t.Error("a cancelled config wrote pgmi.yaml")
+	}
+
+	existing := []byte("connection:\n  host: keep-me\n  database: keepdb\n")
+	if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), existing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origPrompt := promptContinue
+	t.Cleanup(func() { promptContinue = origPrompt })
+	promptContinue = func(string) bool { return false }
+	*called = false
+
+	err = runConfig(configCmd, []string{dir})
+	if *called {
+		t.Error("a declined overwrite still ran the wizard")
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitApprovalDenied {
+		t.Errorf("declined overwrite: exit code %d, want %d: %v", got, pgmi.ExitApprovalDenied, err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "pgmi.yaml")); !bytes.Equal(after, existing) {
+		t.Errorf("a declined overwrite changed pgmi.yaml:\n%s", after)
+	}
+}
+
+func TestRunConfig_InterruptedIsExit130(t *testing.T) {
+	dir := t.TempDir()
+	stubConnectionWizard(t, wizards.ConnectionResult{Cancelled: true, Interrupted: true})
+
+	err := runConfig(configCmd, []string{dir})
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitInterrupted {
+		t.Errorf("exit code %d, want %d: %v", got, pgmi.ExitInterrupted, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pgmi.yaml")); !os.IsNotExist(statErr) {
+		t.Error("an interrupted config wrote pgmi.yaml")
+	}
+}
+
+func TestRunDeploy_InterruptedWizardIsExit130(t *testing.T) {
+	resetDeployFlags()
+	clearPGEnv(t)
+	called := stubConnectionWizard(t, wizards.ConnectionResult{Cancelled: true, Interrupted: true})
+
+	err := runDeploy(deployCmd, []string{deployProjectDir(t)})
+	if !*called {
+		t.Fatal("the wizard was never reached; runDeployWizard's mapping is not exercised")
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitInterrupted {
+		t.Errorf("exit code %d, want %d: %v", got, pgmi.ExitInterrupted, err)
+	}
+}
+
+func TestRunConfig_PrefillsFormFromExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pgmi.yaml"), []byte("connection:\n  host: 10.1.2.3\n  port: 55602\n  database: trialw1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origInteractive, origStart, origPrompt := isInteractive, startConnectionWizard, promptContinue
+	t.Cleanup(func() { isInteractive, startConnectionWizard, promptContinue = origInteractive, origStart, origPrompt })
+	isInteractive = func() bool { return true }
+	promptContinue = func(string) bool { return true }
+	var view string
+	startConnectionWizard = func(opts ...wizards.WizardOption) (wizards.ConnectionResult, error) {
+		m, _ := wizards.NewConnectionWizard(opts...).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		view = ansi.Strip(m.View().Content)
+		return wizards.ConnectionResult{Cancelled: true}, nil
+	}
+
+	_ = runConfig(configCmd, []string{dir})
+	for _, want := range []string{"10.1.2.3", "55602", "trialw1"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the form does not start from the file's %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestDeployCmd_EnvConnectionLineOnlyOnConnectionErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		conn     string
+		setup    func(project string) string
+		wantLine bool
+	}{
+		"bad --param": {"postgresql://nobody@127.0.0.1:1/postgres", func(p string) string {
+			deployFlags.params = []string{"noequals"}
+			return p
+		}, false},
+		"missing project path": {"postgresql://nobody@127.0.0.1:1/postgres", func(string) string {
+			return filepath.Join(t.TempDir(), "nonexistent")
+		}, false},
+		"malformed connection string": {"postgresql://[bad", func(p string) string { return p }, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resetDeployFlags()
+			clearPGEnv(t)
+			t.Setenv("PGMI_CONNECTION_STRING", tc.conn)
+			deployFlags.database = "app"
+			deployFlags.force = true
+			deployFlags.timeout = 10 * time.Second
+
+			err := runDeploy(deployCmd, []string{tc.setup(deployProjectDir(t))})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := strings.Contains(err.Error(), "(connection from"); got != tc.wantLine {
+				t.Errorf("connection-source line present = %v, want %v:\n%v", got, tc.wantLine, err)
+			}
+			if pgmi.ExitCodeForError(err) != pgmi.ExitConfigError {
+				t.Errorf("exit code %d, want %d: %v", pgmi.ExitCodeForError(err), pgmi.ExitConfigError, err)
+			}
+		})
 	}
 }

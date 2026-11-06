@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 )
 
-// pkg/pgmi/constants.go says twice that SQLExtensions "must stay consistent
-// with pg_temp.pgmi_is_sql_file() in schema.sql", and nothing checked it.
+// pkg/pgmi/constants.go says sqlExtensions "must stay consistent with
+// pg_temp.pgmi_is_sql_file() in schema.sql", and nothing checked it.
 //
 // The two are not redundant, they are load-bearing in different places. Go's
 // list decides whether the scanner parses a file's <pgmi-meta>; the SQL
@@ -63,10 +63,10 @@ func TestSQLExtensionParityWithSchema(t *testing.T) {
 			if i := strings.LastIndex(name, "."); i >= 0 {
 				ext = name[i:]
 			}
-			fromGo := pgmi.IsSQLExtension(ext)
+			fromGo := pathrule.IsSQLExtension(ext)
 
 			if fromGo != fromSQL {
-				t.Errorf("%q: pgmi.IsSQLExtension=%v but pg_temp.pgmi_is_sql_file=%v — "+
+				t.Errorf("%q: pathrule.IsSQLExtension=%v but pg_temp.pgmi_is_sql_file=%v — "+
 					"the scanner and the session disagree about whether this file is SQL",
 					name, fromGo, fromSQL)
 			}

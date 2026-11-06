@@ -4,9 +4,12 @@
     idempotent="true">
   <description>
     Admin analytics REST API: surfaces handler, route, and exchange views
-    as JSON endpoints under the /admin/ namespace. Every endpoint is gated on
-    the system-wide superuser role (api.current_user_is_admin) — these surfaces
-    expose cross-tenant operational data and a destructive purge.
+    as JSON endpoints under the /admin/ namespace, and the invitation-only
+    path for organizations. Every endpoint declares the platform permission
+    platform.operate, which only a platform operator in a session that used a
+    second factor holds; the gateway refuses everyone else before the body
+    runs. These surfaces expose cross-tenant operational data and a
+    destructive purge.
   </description>
   <sortKeys>
     <key>005/002</key>
@@ -14,20 +17,15 @@
 </pgmi-meta>
 */
 
-DO $$ BEGIN RAISE DEBUG '-> Installing admin analytics handlers'; END $$;
-
--- ============================================================================
--- GET /admin/dashboard
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000001',
-        'uri', '^/admin/dashboard$',
+        'path', '/admin/dashboard',
         'httpMethod', '^GET$',
         'name', 'admin_dashboard',
         'description', 'Combined dashboard: handler, route, and exchange summaries',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -44,16 +42,15 @@ DECLARE
     v_routes jsonb;
     v_exchanges jsonb;
 BEGIN
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
     SELECT jsonb_build_object(
         'totalHandlers', total_handlers,
         'restHandlers', rest_handlers,
         'rpcHandlers', rpc_handlers,
         'mcpHandlers', mcp_handlers,
-        'requiresAuthCount', requires_auth_count,
+        'publicCount', public_count,
+        'authenticatedCount', authenticated_count,
+        'organizationCount', organization_count,
+        'permissionCount', permission_count,
         'oldestHandlerAt', oldest_handler_at,
         'newestHandlerAt', newest_handler_at
     ) INTO v_handlers FROM api.vw_handler_summary;
@@ -74,12 +71,10 @@ BEGIN
         'restExchanges', rest_exchanges,
         'rpcExchanges', rpc_exchanges,
         'mcpExchanges', mcp_exchanges,
-        'pendingCount', pending_count,
         'errorCount', error_count,
-        'restAvgDuration', COALESCE(rest_avg_duration::text, null),
-        'rpcAvgDuration', COALESCE(rpc_avg_duration::text, null),
-        'mcpAvgDuration', COALESCE(mcp_avg_duration::text, null),
-        'oldestPendingAt', oldest_pending_at
+        'restAvgDuration', rest_avg_duration::text,
+        'rpcAvgDuration', rpc_avg_duration::text,
+        'mcpAvgDuration', mcp_avg_duration::text
     ) INTO v_exchanges FROM api.vw_exchange_summary;
 
     RETURN api.json_response(200, jsonb_build_object(
@@ -91,18 +86,15 @@ END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/handlers
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000002',
-        'uri', '^/admin/handlers$',
+        'path', '/admin/handlers',
         'httpMethod', '^GET$',
         'name', 'admin_handlers',
         'description', 'List all handlers with health and binding info',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -114,23 +106,9 @@ SELECT api.create_or_replace_rest_handler(
     ),
     $body$
 DECLARE
-    v_q extensions.hstore;
-    v_page record;
     v_items jsonb;
     v_total int;
 BEGIN
-    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
-    -- should get 403, not a 422 that reveals the endpoint validates pagination.
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
-    v_q := api.query_params((request).url);
-    v_page := api.pagination_params(v_q);
-    IF (v_page.o_error).status_code IS NOT NULL THEN
-        RETURN v_page.o_error;
-    END IF;
-
     SELECT COUNT(*) INTO v_total FROM api.vw_handler_info;
 
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -142,10 +120,12 @@ BEGIN
         'age', age::text,
         'functionExists', function_exists,
         'definitionDrifted', definition_drifted,
-        'restPattern', rest_pattern,
+        'restPath', rest_path,
+        'restMethod', rest_method_regexp,
+        'unrouted', is_unrouted,
         'rpcMethod', rpc_method,
         'mcpName', mcp_name,
-        'requiresAuth', requires_auth,
+        'access', access,
         'hasInputSchema', has_input_schema,
         'hasOutputSchema', has_output_schema,
         'schemaComplete', schema_complete
@@ -153,31 +133,25 @@ BEGIN
     FROM (
         SELECT * FROM api.vw_handler_info
         ORDER BY created_at DESC
-        LIMIT v_page.o_limit OFFSET v_page.o_offset
     ) sub;
 
     RETURN api.json_response(200, jsonb_build_object(
         'handlers', v_items,
-        'total', v_total,
-        'limit', v_page.o_limit,
-        'offset', v_page.o_offset
+        'total', v_total
     ));
 END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/handlers/stats
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000003',
-        'uri', '^/admin/handlers/stats$',
+        'path', '/admin/handlers/stats',
         'httpMethod', '^GET$',
         'name', 'admin_handler_stats',
         'description', 'Handler statistics grouped by type, volatility, security, etc.',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -190,17 +164,13 @@ SELECT api.create_or_replace_rest_handler(
 DECLARE
     v_items jsonb;
 BEGIN
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'handlerType', handler_type,
         'volatility', volatility,
         'leakproof', leakproof,
         'security', security,
         'languageName', language_name,
-        'requiresAuth', requires_auth,
+        'access', access,
         'handlerCount', handler_count
     )), '[]'::jsonb) INTO v_items
     FROM api.vw_handler_stats;
@@ -210,18 +180,15 @@ END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/routes
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000004',
-        'uri', '^/admin/routes$',
+        'path', '/admin/routes',
         'httpMethod', '^GET$',
         'name', 'admin_routes',
         'description', 'Unified route listing across REST, RPC, and MCP',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -233,23 +200,9 @@ SELECT api.create_or_replace_rest_handler(
     ),
     $body$
 DECLARE
-    v_q extensions.hstore;
-    v_page record;
     v_items jsonb;
     v_total int;
 BEGIN
-    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
-    -- should get 403, not a 422 that reveals the endpoint validates pagination.
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
-    v_q := api.query_params((request).url);
-    v_page := api.pagination_params(v_q);
-    IF (v_page.o_error).status_code IS NOT NULL THEN
-        RETURN v_page.o_error;
-    END IF;
-
     SELECT COUNT(*) INTO v_total FROM api.vw_route_info;
 
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -259,7 +212,7 @@ BEGIN
         'methodRegexp', method_regexp,
         'mcpType', mcp_type,
         'functionName', handler_function_name,
-        'requiresAuth', requires_auth,
+        'access', access,
         'autoLog', auto_log,
         'sequenceNumber', sequence_number,
         'volatility', volatility,
@@ -269,143 +222,105 @@ BEGIN
     FROM (
         SELECT * FROM api.vw_route_info
         ORDER BY sequence_number
-        LIMIT v_page.o_limit OFFSET v_page.o_offset
     ) sub;
 
     RETURN api.json_response(200, jsonb_build_object(
         'routes', v_items,
-        'total', v_total,
-        'limit', v_page.o_limit,
-        'offset', v_page.o_offset
+        'total', v_total
     ));
 END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/exchanges
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000005',
-        'uri', '^/admin/exchanges$',
+        'path', '/admin/exchanges',
         'httpMethod', '^GET$',
         'name', 'admin_exchanges',
-        'description', 'Paginated exchange list across REST, RPC, MCP with filters',
-        'requiresAuth', true,
-        'outputSchema', jsonb_build_object(
+        'description', 'Paginated exchange list across REST, RPC, MCP, newest first; actualPrincipalId narrows it to the exchanges one principal made',
+        'permissions', jsonb_build_array('platform.operate'),
+        'querySchema', api.page_query_schema(jsonb_build_object(
+            'protocol', jsonb_build_object('type', 'string', 'enum', jsonb_build_array('rest', 'rpc', 'mcp')),
+            'actualPrincipalId', jsonb_build_object('type', 'string', 'format', 'uuid'))),
+        'outputSchema', api.page_output_schema(jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
-                'exchanges', jsonb_build_object('type', 'array', 'items', jsonb_build_object('type', 'object')),
-                'total', jsonb_build_object('type', 'integer')
-            ),
-            'required', jsonb_build_array('exchanges', 'total')
-        )
+                'protocol', jsonb_build_object('type', 'string'),
+                'exchangeId', jsonb_build_object('type', 'string', 'format', 'uuid'),
+                'enqueuedAt', jsonb_build_object('type', 'string', 'format', 'date-time'),
+                'statusCode', jsonb_build_object('type', jsonb_build_array('integer', 'null')),
+                'isError', jsonb_build_object('type', 'boolean'),
+                'summary', jsonb_build_object('type', jsonb_build_array('string', 'null'))),
+            'required', jsonb_build_array('protocol', 'exchangeId', 'enqueuedAt')))
     ),
     $body$
 DECLARE
-    v_q extensions.hstore;
-    v_page record;
-    v_protocol text;
-    v_items jsonb;
-    v_total int;
+    v_q        extensions.hstore := api.query_params((request).url);
+    v_page     record := api.pagination_params(v_q);
+    v_protocol text := v_q -> 'protocol';
+    v_actual   text := common.try_cast(v_q -> 'actualPrincipalId', NULL::uuid)::text;
+    v_keys     jsonb;
+    v_items    jsonb;
+    v_total    bigint;
 BEGIN
-    -- Authorize before doing any work: a non-admin sending a malformed ?limit=
-    -- should get 403, not a 422 that reveals the endpoint validates pagination.
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
+    IF v_actual IS NULL THEN
+        SELECT jsonb_agg(k),
+               (SELECT count(*) FROM api.exchange e
+                WHERE v_protocol IS NULL OR e.tableoid = ('api.' || v_protocol || '_exchange')::regclass)
+        INTO v_keys, v_total
+        FROM (SELECT protocol, exchange_id, enqueued_at
+              FROM api.vw_exchange
+              WHERE v_protocol IS NULL OR protocol = v_protocol
+              ORDER BY enqueued_at DESC
+              LIMIT v_page.o_limit OFFSET v_page.o_offset) k;
+    ELSE
+        SELECT jsonb_agg(k),
+               (SELECT count(*) FROM api.vw_exchange
+                WHERE (v_protocol IS NULL OR protocol = v_protocol) AND context->>'actualPrincipalId' = v_actual)
+        INTO v_keys, v_total
+        FROM (SELECT protocol, exchange_id, enqueued_at
+              FROM api.vw_exchange
+              WHERE (v_protocol IS NULL OR protocol = v_protocol) AND context->>'actualPrincipalId' = v_actual
+              ORDER BY enqueued_at DESC
+              LIMIT v_page.o_limit OFFSET v_page.o_offset) k;
     END IF;
 
-    v_q := api.query_params((request).url);
-    v_page := api.pagination_params(v_q);
-    IF (v_page.o_error).status_code IS NOT NULL THEN
-        RETURN v_page.o_error;
-    END IF;
+    SELECT jsonb_agg(jsonb_build_object(
+               'protocol', p.protocol,
+               'exchangeId', p.exchange_id,
+               'enqueuedAt', p.enqueued_at,
+               'duration', COALESCE(r.duration, c.duration, m.duration)::text,
+               'functionName', COALESCE(r.handler_function_name, c.handler_function_name, m.handler_function_name),
+               'statusCode', COALESCE(r.response_status, c.response_status),
+               'isError', COALESCE(r.is_error, c.is_error, m.is_error),
+               'summary', CASE p.protocol
+                              WHEN 'rest' THEN r.request_method || ' ' || r.request_url
+                              WHEN 'rpc' THEN c.rpc_method
+                              ELSE m.mcp_type || ':' || m.mcp_name
+                          END
+           ) ORDER BY p.enqueued_at DESC)
+    INTO v_items
+    FROM jsonb_to_recordset(v_keys) AS p(protocol text, exchange_id uuid, enqueued_at timestamptz)
+    LEFT JOIN api.vw_rest_exchange_info r ON p.protocol = 'rest' AND r.exchange_id = p.exchange_id
+    LEFT JOIN api.vw_rpc_exchange_info c ON p.protocol = 'rpc' AND c.exchange_id = p.exchange_id
+    LEFT JOIN api.vw_mcp_exchange_info m ON p.protocol = 'mcp' AND m.exchange_id = p.exchange_id;
 
-    v_protocol := v_q -> 'protocol';
-
-    WITH unified AS (
-        SELECT 'rest' AS protocol, exchange_id, enqueued_at, duration,
-               handler_function_name, response_status AS status_code,
-               is_error, is_pending,
-               request_method || ' ' || request_url AS summary
-        FROM api.vw_rest_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'rest'
-        UNION ALL
-        SELECT 'rpc', exchange_id, enqueued_at, duration,
-               handler_function_name, response_status,
-               is_error, is_pending,
-               rpc_method
-        FROM api.vw_rpc_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'rpc'
-        UNION ALL
-        SELECT 'mcp', exchange_id, enqueued_at, duration,
-               handler_function_name, NULL::int,
-               is_error, false,
-               mcp_type || ':' || mcp_name
-        FROM api.vw_mcp_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'mcp'
-    )
-    SELECT COUNT(*) INTO v_total FROM unified;
-
-    WITH unified AS (
-        SELECT 'rest' AS protocol, exchange_id, enqueued_at, duration,
-               handler_function_name, response_status AS status_code,
-               is_error, is_pending,
-               request_method || ' ' || request_url AS summary
-        FROM api.vw_rest_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'rest'
-        UNION ALL
-        SELECT 'rpc', exchange_id, enqueued_at, duration,
-               handler_function_name, response_status,
-               is_error, is_pending,
-               rpc_method
-        FROM api.vw_rpc_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'rpc'
-        UNION ALL
-        SELECT 'mcp', exchange_id, enqueued_at, duration,
-               handler_function_name, NULL::int,
-               is_error, false,
-               mcp_type || ':' || mcp_name
-        FROM api.vw_mcp_exchange_info
-        WHERE v_protocol IS NULL OR v_protocol = 'mcp'
-    )
-    SELECT COALESCE(jsonb_agg(jsonb_build_object(
-        'protocol', protocol,
-        'exchangeId', exchange_id,
-        'enqueuedAt', enqueued_at,
-        'duration', duration::text,
-        'functionName', handler_function_name,
-        'statusCode', status_code,
-        'isError', is_error,
-        'isPending', is_pending,
-        'summary', summary
-    ) ORDER BY enqueued_at DESC), '[]'::jsonb) INTO v_items
-    FROM (SELECT * FROM unified ORDER BY enqueued_at DESC LIMIT v_page.o_limit OFFSET v_page.o_offset) sub;
-
-    RETURN api.json_response(200, jsonb_build_object(
-        'exchanges', v_items,
-        'total', v_total,
-        'limit', v_page.o_limit,
-        'offset', v_page.o_offset
-    ));
+    RETURN api.page_response(v_items, v_total, v_page.o_limit, v_page.o_offset);
 END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/exchanges/stats
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000006',
-        'uri', '^/admin/exchanges/stats$',
+        'path', '/admin/exchanges/stats',
         'httpMethod', '^GET$',
         'name', 'admin_exchange_stats',
-        'description', 'Exchange statistics grouped by protocol, status, error, pending',
-        'requiresAuth', true,
+        'description', 'Exchange statistics grouped by protocol, status and error',
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -418,15 +333,10 @@ SELECT api.create_or_replace_rest_handler(
 DECLARE
     v_items jsonb;
 BEGIN
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'protocol', protocol,
         'statusCode', status_code,
         'isError', is_error,
-        'isPending', is_pending,
         'exchangeCount', exchange_count
     )), '[]'::jsonb) INTO v_items
     FROM api.vw_exchange_stats;
@@ -436,18 +346,15 @@ END;
     $body$
 );
 
--- ============================================================================
--- GET /admin/exchanges/:id/replay
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000007',
-        'path', '/admin/exchanges/{exchangeId}/replay',
+        'path', '/admin/exchanges/{exchangeId:uuid}/replay',
         'httpMethod', '^GET$',
         'name', 'admin_exchange_replay',
         'description', 'Get replay SQL for a specific exchange by ID',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -460,47 +367,22 @@ SELECT api.create_or_replace_rest_handler(
     ),
     $body$
 DECLARE
-    v_path text;
-    v_parts text[];
-    v_exchange_id uuid;
+    v_exchange_id uuid := ((request).path_params->>'exchangeId')::uuid;
     v_result jsonb;
 BEGIN
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
-    v_path := split_part((request).url, '?', 1);
-    v_parts := string_to_array(v_path, '/');
-    v_exchange_id := common.try_cast(v_parts[4], null::uuid);
-
-    IF v_exchange_id IS NULL THEN
-        RETURN api.problem_response(400, 'Bad Request', 'Invalid exchange ID');
-    END IF;
-
-    SELECT jsonb_build_object(
-        'exchangeId', exchange_id, 'protocol', 'rest',
-        'replaySql', replay_sql
-    ) INTO v_result
-    FROM api.vw_rest_exchange_info WHERE exchange_id = v_exchange_id;
+    SELECT jsonb_build_object('exchangeId', exchange_id, 'protocol', protocol, 'replaySql', replay_sql)
+    INTO v_result
+    FROM (SELECT 1, 'rest', exchange_id, replay_sql FROM api.vw_rest_exchange_info WHERE exchange_id = v_exchange_id
+          UNION ALL
+          SELECT 2, 'rpc', exchange_id, replay_sql FROM api.vw_rpc_exchange_info WHERE exchange_id = v_exchange_id
+          UNION ALL
+          SELECT 3, 'mcp', exchange_id, replay_sql FROM api.vw_mcp_exchange_info WHERE exchange_id = v_exchange_id
+         ) e(rank, protocol, exchange_id, replay_sql)
+    ORDER BY rank
+    LIMIT 1;
 
     IF v_result IS NULL THEN
-        SELECT jsonb_build_object(
-            'exchangeId', exchange_id, 'protocol', 'rpc',
-            'replaySql', replay_sql
-        ) INTO v_result
-        FROM api.vw_rpc_exchange_info WHERE exchange_id = v_exchange_id;
-    END IF;
-
-    IF v_result IS NULL THEN
-        SELECT jsonb_build_object(
-            'exchangeId', exchange_id, 'protocol', 'mcp',
-            'replaySql', replay_sql
-        ) INTO v_result
-        FROM api.vw_mcp_exchange_info WHERE exchange_id = v_exchange_id;
-    END IF;
-
-    IF v_result IS NULL THEN
-        RETURN api.problem_response(404, 'Not Found', format('Exchange %s not found', v_exchange_id));
+        RETURN api.problem_response(404, 'Not Found', format('Exchange %s not found', v_exchange_id), code => 'api.exchange.not_found');
     END IF;
 
     RETURN api.json_response(200, v_result);
@@ -508,18 +390,19 @@ END;
     $body$
 );
 
--- ============================================================================
--- POST /admin/maintenance/purge-exchanges
--- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'a7f02000-0005-4000-8000-000000000008',
-        'uri', '^/admin/maintenance/purge-exchanges$',
+        'path', '/admin/maintenance/purge-exchanges',
         'httpMethod', '^POST$',
         'name', 'admin_purge_exchanges',
         'description', 'Single-batch exchange purge (admin only); POST to avoid CSRF/prefetch on a destructive operation',
-        'requiresAuth', true,
+        'permissions', jsonb_build_array('platform.operate'),
+        'querySchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object(
+            'retention_days', jsonb_build_object('type', 'integer', 'minimum', 1,
+                'description', 'Keep this many days; defaults to the deploy parameter exchange_retention_days'),
+            'batch_size', jsonb_build_object('type', 'integer', 'minimum', 1, 'maximum', 50000, 'default', 5000))),
         'outputSchema', jsonb_build_object(
             'type', 'object',
             'properties', jsonb_build_object(
@@ -538,82 +421,137 @@ SELECT api.create_or_replace_rest_handler(
     ),
     $body$
 DECLARE
-    v_q extensions.hstore;
-    v_retention_days int;
-    v_batch_size int;
-    v_cutoff timestamptz;
-    v_rest_deleted int;
-    v_rpc_deleted int;
-    v_mcp_deleted int;
-    v_has_more boolean;
+    v_q      extensions.hstore := api.query_params((request).url);
+    v_cutoff timestamptz := now() - COALESCE(make_interval(days => (v_q->'retention_days')::int), api.exchange_retention());
+    v_batch  record;
 BEGIN
-    IF NOT api.current_user_is_admin() THEN
-        RETURN api.problem_response(403, 'Forbidden', 'Administrator privileges required');
-    END IF;
-
-    v_q := api.query_params((request).url);
-    v_retention_days := COALESCE(common.try_cast(v_q -> 'retention_days', null::int), 30);
-    v_batch_size := COALESCE(common.try_cast(v_q -> 'batch_size', null::int), 5000);
-
-    IF v_retention_days < 1 THEN
-        RETURN api.problem_response(422, 'Unprocessable Entity', 'retention_days must be >= 1');
-    END IF;
-    IF v_batch_size < 1 OR v_batch_size > 50000 THEN
-        RETURN api.problem_response(422, 'Unprocessable Entity', 'batch_size must be 1-50000');
-    END IF;
-
-    v_cutoff := now() - (v_retention_days || ' days')::interval;
-
-    DELETE FROM api.rest_exchange
-    WHERE ctid = ANY (ARRAY(
-        SELECT ctid FROM api.rest_exchange
-        WHERE enqueued_at < v_cutoff
-        LIMIT v_batch_size));
-    GET DIAGNOSTICS v_rest_deleted = ROW_COUNT;
-
-    DELETE FROM api.rpc_exchange
-    WHERE ctid = ANY (ARRAY(
-        SELECT ctid FROM api.rpc_exchange
-        WHERE enqueued_at < v_cutoff
-        LIMIT v_batch_size));
-    GET DIAGNOSTICS v_rpc_deleted = ROW_COUNT;
-
-    DELETE FROM api.mcp_exchange
-    WHERE ctid = ANY (ARRAY(
-        SELECT ctid FROM api.mcp_exchange
-        WHERE enqueued_at < v_cutoff
-        LIMIT v_batch_size));
-    GET DIAGNOSTICS v_mcp_deleted = ROW_COUNT;
-
-    v_has_more := EXISTS (
-        SELECT 1 FROM api.rest_exchange WHERE enqueued_at < v_cutoff
-        UNION ALL
-        SELECT 1 FROM api.rpc_exchange WHERE enqueued_at < v_cutoff
-        UNION ALL
-        SELECT 1 FROM api.mcp_exchange WHERE enqueued_at < v_cutoff
-    );
+    SELECT * INTO v_batch FROM api.purge_exchanges_batch(v_cutoff, COALESCE((v_q->'batch_size')::int, 5000));
 
     RETURN api.json_response(200, jsonb_build_object(
         'deleted', jsonb_build_object(
-            'rest', v_rest_deleted,
-            'rpc', v_rpc_deleted,
-            'mcp', v_mcp_deleted
+            'rest', v_batch.rest_deleted,
+            'rpc', v_batch.rpc_deleted,
+            'mcp', v_batch.mcp_deleted
         ),
-        'totalDeleted', v_rest_deleted + v_rpc_deleted + v_mcp_deleted,
+        'totalDeleted', v_batch.rest_deleted + v_batch.rpc_deleted + v_batch.mcp_deleted,
         'cutoff', v_cutoff,
-        'hasMore', v_has_more
+        'hasMore', EXISTS (SELECT FROM api.exchange WHERE enqueued_at < v_cutoff)
     ));
 END;
     $body$
 );
 
-DO $$ BEGIN
-    RAISE DEBUG '  + GET /admin/dashboard - combined summaries';
-    RAISE DEBUG '  + GET /admin/handlers - handler list with health';
-    RAISE DEBUG '  + GET /admin/handlers/stats - handler statistics';
-    RAISE DEBUG '  + GET /admin/routes - unified route listing';
-    RAISE DEBUG '  + GET /admin/exchanges - paginated exchange list';
-    RAISE DEBUG '  + GET /admin/exchanges/stats - exchange statistics';
-    RAISE DEBUG '  + GET /admin/exchanges/:id/replay - exchange replay SQL';
-    RAISE DEBUG '  + POST /admin/maintenance/purge-exchanges - batch exchange retention';
-END $$;
+-- Runs the logged request again as its caller and rolls it back
+-- (api.replay_exchange): what would it answer now?
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'a7f02000-0005-4000-8000-00000000000a',
+        'path', '/admin/exchanges/{exchangeId:uuid}/replay',
+        'httpMethod', '^POST$',
+        'name', 'admin_replay_exchange',
+        'description', 'Replay a logged REST, RPC or MCP exchange in its logged context, rolled back; answers the replayed response',
+        'permissions', jsonb_build_array('platform.operate'),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'exchangeId', jsonb_build_object('type', 'string', 'format', 'uuid'),
+                'status', jsonb_build_object('type', 'integer'),
+                'headers', jsonb_build_object('type', 'object'),
+                'body', jsonb_build_object('type', 'string')
+            ),
+            'required', jsonb_build_array('exchangeId', 'status', 'headers')
+        )
+    ),
+    $body$
+DECLARE
+    v_exchange_id uuid := ((request).path_params->>'exchangeId')::uuid;
+    v_response api.http_response;
+BEGIN
+    IF NOT EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_exchange_id
+                   UNION ALL
+                   SELECT FROM api.rpc_exchange WHERE object_id = v_exchange_id
+                   UNION ALL
+                   SELECT FROM api.mcp_exchange WHERE object_id = v_exchange_id) THEN
+        RETURN api.problem_response(404, 'Not Found', format('No exchange %s', v_exchange_id), code => 'api.exchange.not_found');
+    END IF;
+
+    v_response := api.replay_exchange(v_exchange_id);
+    RETURN api.json_response(200, jsonb_strip_nulls(jsonb_build_object(
+        'exchangeId', v_exchange_id,
+        'status', (v_response).status_code,
+        'headers', extensions.hstore_to_jsonb((v_response).headers),
+        'body', convert_from((v_response).content, 'UTF8'))));
+END;
+    $body$
+);
+
+-- The default, invitation-only path: an operator creates a pending
+-- organization and invites its owner; it becomes active when that person
+-- signs in with the verified address and accepts.
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'a7f02000-0005-4000-8000-000000000009',
+        'path', '/admin/organizations',
+        'httpMethod', '^POST$',
+        'name', 'admin_create_organization',
+        'description', 'Create a pending organization and invite its owner by email',
+        'permissions', jsonb_build_array('platform.operate'),
+        'successStatus', 201,
+        'noLocation', 'GET /organizations/{id} shows only the caller''s own organizations',
+        'inputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'name', jsonb_build_object('type', 'string'),
+                'slug', jsonb_build_object('type', 'string'),
+                'ownerEmail', jsonb_build_object('type', 'string', 'format', 'email')
+            ),
+            'required', jsonb_build_array('name', 'slug', 'ownerEmail')
+        ),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'id', jsonb_build_object('type', 'string', 'format', 'uuid'),
+                'name', jsonb_build_object('type', 'string'),
+                'slug', jsonb_build_object('type', 'string'),
+                'status', jsonb_build_object('type', 'string', 'const', 'pending')
+            ),
+            'required', jsonb_build_array('id', 'name', 'slug', 'status')
+        )
+    ),
+    $body$
+DECLARE
+    v_b       jsonb := api.content_json((request).content);
+    v_name    text := v_b->>'name';
+    v_slug    text := v_b->>'slug';
+    v_email   text := v_b->>'ownerEmail';
+    v_problem text;
+    v_org     membership.organization;
+BEGIN
+    IF NOT coalesce(membership.fn_is_well_formed_email(membership.fn_normalize_email(v_email)), false) THEN
+        RETURN api.problem_response(422, 'Unprocessable Content', 'ownerEmail is not a valid email address',
+                                    code => 'membership.invitation.email_invalid',
+                                    invalid_params => jsonb_build_array(api.invalid_param('ownerEmail', 'invalid')));
+    END IF;
+    v_problem := membership.fn_organization_problem(v_name, v_slug);
+    IF v_problem IS NULL THEN
+        v_org := membership.fn_create_organization(v_name, v_slug, v_email);
+        IF v_org.object_id IS NULL THEN
+            -- Another request took the slug between the probe and the insert.
+            v_problem := coalesce(membership.fn_organization_problem(v_name, v_slug), 'membership.organization.slug_taken');
+        END IF;
+    END IF;
+    IF v_problem IS NOT NULL THEN
+        RETURN api.problem_response(422, 'Unprocessable Content', 'The name or slug is not valid', code => v_problem,
+            invalid_params => jsonb_build_array(CASE v_problem
+                WHEN 'membership.organization.name_invalid' THEN api.invalid_param('name', 'invalid')
+                WHEN 'membership.organization.slug_taken' THEN api.invalid_param('slug', 'duplicate')
+                WHEN 'membership.organization.slug_reserved' THEN api.invalid_param('slug', 'reserved')
+                ELSE api.invalid_param('slug', 'invalid') END));
+    END IF;
+    RETURN api.json_response(201, jsonb_build_object(
+        'id', v_org.object_id, 'name', v_org.name, 'slug', v_org.slug, 'status', v_org.status));
+END;
+    $body$
+);

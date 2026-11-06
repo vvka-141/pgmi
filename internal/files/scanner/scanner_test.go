@@ -10,6 +10,7 @@ import (
 
 	"github.com/vvka-141/pgmi/internal/checksum"
 	"github.com/vvka-141/pgmi/internal/files/fakefs"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -282,7 +283,7 @@ func TestScanDirectory_TestFiles(t *testing.T) {
 		t.Fatal("Test file not found in results")
 	}
 
-	if !pgmi.IsTestPath(testFile.Path) {
+	if !pathrule.IsTestPath(testFile.Path) {
 		t.Error("IsTestPath should return true for __test__ file")
 	}
 
@@ -309,7 +310,7 @@ func TestScanDirectory_RootLevelTestFiles(t *testing.T) {
 
 	testFileCount := 0
 	for _, f := range result.Files {
-		if pgmi.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) {
 			testFileCount++
 			if !strings.HasPrefix(f.Path, "./__test__/") {
 				t.Errorf("Root-level test file should have path ./__test__/*, got %q", f.Path)
@@ -342,7 +343,7 @@ func TestScanDirectory_SQLExtensions(t *testing.T) {
 
 	sqlCount := 0
 	for _, f := range result.Files {
-		if pgmi.IsSQLExtension(f.Extension) {
+		if pathrule.IsSQLExtension(f.Extension) {
 			sqlCount++
 		}
 	}

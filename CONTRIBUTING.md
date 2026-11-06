@@ -42,10 +42,10 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 
 You need:
 
-- Go 1.26 or the version declared by `go.mod`
+- Go 1.27 or the version declared by `go.mod`
 - Docker, or `PGMI_TEST_CONN` pointing to a PostgreSQL test database, for
   integration tests
-- golangci-lint 1.64.8 for `make lint`
+- golangci-lint 2.15.0 for `make lint`
 
 Start with:
 
@@ -80,7 +80,7 @@ return fmt.Errorf("%w: invalid configuration", ErrInvalidConfig)
 ### Naming Conventions
 
 - **Constants**: Use `PascalCase` for exported constants, `camelCase` for unexported
-- **Interfaces**: Use descriptive names ending in `-er` when appropriate (`Connector`, `Deployer`, `Approver`)
+- **Interfaces**: Use descriptive names ending in `-er` when appropriate (`Connector`, `Approver`, `Logger`)
 - **Test Files**: Use `_test.go` suffix for unit tests, `_integration_test.go` for integration tests
 
 ### Dependency Injection
@@ -89,7 +89,7 @@ All services use constructor injection with explicit dependencies:
 
 ```go
 func NewDeploymentService(
-    connectorFactory func(*pgmi.ConnectionConfig) (pgmi.Connector, error),
+    connectorFactory func(*db.ConnectionConfig) (db.Connector, error),
     approver pgmi.Approver,
     logger pgmi.Logger,
     // ... other dependencies
@@ -152,6 +152,29 @@ func TestParser_ParseConnectionString(t *testing.T) {
 }
 ```
 
+### Agent skills
+
+pgmi ships skills that coding agents copy from: the shared scaffold skills
+(`internal/scaffold/skills/`) and each template's own (`.agents/skills/` under
+`internal/scaffold/templates/<name>/`). An agent writes whatever a skill shows, so a
+change that removes, renames or reshapes an API updates every skill that names
+it **in the same commit**:
+
+1. Grep both skill trees for each name the change removes or renames:
+   functions, views, handler metadata keys, headers, parameters, CLI commands,
+   file paths.
+2. Rewrite each hit to the new shape, or drop it. Do not keep the old name as a
+   "retired" note; say what to do now.
+3. Add each removed name to `retiredAPIs` in
+   `internal/scaffold/skill_snippet_guard_test.go`, with one planted line in
+   `TestRetiredAPIHitsFlagsEachTerm`. `TestSkillsNameNoRetiredAPI` then keeps it
+   out of every shipped skill.
+4. A test or SQL example that changed runs: mark it `sql runnable target=...`
+   so `TestSkillBlocksDeploy` deploys it, or check it against a live database.
+5. Examples that teach template patterns use project, task and document.
+6. Run `make sync-ai` to refresh the local mirror in `.claude/skills/` from the
+   scaffold trees.
+
 ## Git Workflow
 
 This project uses a simplified gitflow:
@@ -211,6 +234,15 @@ go build -o pgmi.exe ./cmd/pgmi
 
 Set `PGMI_REQUIRE_DB=1` for the full integration run when a missing database
 must fail rather than skip.
+
+## Reading release download counts
+
+The download counts on GitHub release assets include our own CI. Every
+`verify-install.yml` run (after each release and weekly) installs through
+Homebrew, `install.sh` (twice) and `install.ps1`, which downloads the macOS
+arm64 archive once, the Linux amd64 archive twice and the Windows amd64 zip
+once, plus `checksums.txt`. Subtract those runs before reading a count as
+adoption.
 
 ## Questions?
 

@@ -1,35 +1,40 @@
 ---
 title: pgmi
-description: "pgmi is a PostgreSQL-native execution fabric: it loads your project files into session-scoped temp tables and hands control to your own deploy.sql. An execution fabric, not a migration framework — you write the deployment logic in SQL."
+description: "Your deploy.sql controls the PostgreSQL deployment and tests the changes before COMMIT. A failing test aborts the deployment transaction."
 ---
 
 # pgmi
 
-**A PostgreSQL-native execution fabric — not a migration framework.**
+**PostgreSQL deployments written in SQL, tested before they commit.**
 
-pgmi loads your project files and parameters into PostgreSQL session-scoped temp
-tables, then hands control to your `deploy.sql`. Execution order, transactions,
-idempotency, locking, rollback — you write them in SQL, not in tool
-configuration. Most tools decide those things for you; pgmi gets out of the way.
+pgmi loads your project files into one PostgreSQL session as queryable data,
+then runs the `deploy.sql` you write. Your deployment selects migrations, loads
+reference data, tests the changed database, and commits only if the tests
+pass. A failing test aborts the deployment transaction.
 
-> **Most tools** — your files → the tool decides order & transactions → database
->
-> **pgmi** — your files → PostgreSQL temp tables → *your* `deploy.sql` decides → database
+Migration frameworks decide ordering, history and the transaction model for
+you. With pgmi those decisions are SQL in your `deploy.sql`
+([Why pgmi?]({{< relref "docs/why-pgmi" >}})).
 
-## Why it exists
+![Test-gated deployment: apply files, test the changed database, commit only if tests pass](docs/diagrams/d00-test-gated-deploy.drawio.svg)
 
-Real deployments need environment-specific behavior — recreate everything in
-dev, run only changed migrations in staging, require approval for destructive
-changes in production. With most tools that means config files, framework
-conditionals, and wrapper scripts. With pgmi, deployment policy stays in
-`deploy.sql`, where the full power of PostgreSQL's procedural languages is
-already there. The CLI handles infrastructure only — connections, parameters,
-observability — and never deployment orchestration.
+## Start a project
 
-## Try in 60 seconds
+`pgmi init` writes one of three starting points:
+
+| | Writes | For |
+|---|---|---|
+| **minimal** (the default) | `deploy.sql`, a loop that runs every SQL file in path order, and `hello_world.sql` | Building your own deployment from nothing |
+| **basic** | `physical/` tables that run once, tracked in a ledger that refuses an edited file; `semantic/` views and functions re-run on every deploy; tests that gate the commit | Deploying a schema with a small project. PostgreSQL 15+ |
+| **advanced** | Your application's backend in PostgreSQL, as code you own: HTTP API, sign-in, tenancy and audit, served by reference gateways | Building the application itself. PostgreSQL 18+; read [the advanced-template guide]({{< relref "docs/advanced" >}}) first |
+
+The basic and advanced templates also write an `AGENTS.md` and skills into the
+project, so a coding agent learns the project's conventions before it edits.
+
+## Try it
 
 ```bash
-# 1. Install (macOS / Linux — no Go toolchain needed)
+# 1. Install (macOS / Linux, no Go toolchain needed)
 curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | bash
 
 # 2. Scaffold a project
@@ -37,26 +42,16 @@ pgmi init myapp --template basic
 cd myapp
 
 # 3. Deploy to your local PostgreSQL
-pgmi deploy . --overwrite --force
+pgmi deploy . --overwrite --force --param env=dev
 ```
 
 Windows PowerShell install: `irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex`.
-Full walkthrough in the [Quickstart]({{< relref "docs/quickstart" >}}).
-
-## Choose your path
-
-| | **basic** | **advanced** |
-|---|---|---|
-| Best for | A small, explicit migration scaffold | A full SQL-native reference app you own and trim |
-| Ordering | Path-based (`001_`, `002_`) | Metadata-driven `<pgmi-meta>` sort keys |
-| Includes | `migrations/`, `__test__/` | Schemas, roles, audit logging, REST/RPC/MCP APIs |
-| MCP | None | Full MCP server for AI assistants |
-
-Either can run in production — advanced is *more complete*, not *more
-production*. See [Choosing a template]({{< relref "docs/quickstart" >}}#choosing-a-template).
+The full walkthrough, including a test that fails and rolls the deploy back, is
+the [Quickstart]({{< relref "docs/quickstart" >}}).
 
 ## Go deeper
 
-- [Why pgmi]({{< relref "docs/why-pgmi" >}}) — the approach, and when it does *not* fit
-- [Documentation]({{< relref "docs" >}}) — full reference
-- [GitHub](https://github.com/vvka-141/pgmi) — source, releases, issues
+- [Articles]({{< relref "articles" >}}): test gates, transaction boundaries and deployments as PostgreSQL programs
+- [Why pgmi]({{< relref "docs/why-pgmi" >}}): the approach, and when it does not fit ([Tradeoffs]({{< relref "docs/tradeoffs" >}}))
+- [Documentation]({{< relref "docs" >}}): the full reference
+- [GitHub](https://github.com/vvka-141/pgmi): source, releases, issues

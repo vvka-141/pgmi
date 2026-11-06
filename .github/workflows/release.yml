@@ -15,13 +15,13 @@ jobs:
     name: Pre-release verification
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       # Releases are cut from main. Without this, a v* tag pushed from any
       # commit — a stale branch, an unmerged fix — publishes as a release.
@@ -35,15 +35,15 @@ jobs:
           fi
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
 
       - name: dead code (production only)
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
           args: -c .golangci-deadcode.yml
 
@@ -69,13 +69,13 @@ jobs:
       # "fix" a red gate by suppressing it — bump the module, or record why the
       # finding is not reachable in RELEASES.md.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
       - name: Validate GoReleaser config
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.18.2
+          version: v2.19.0
           args: check
 
       # The release page leads with this narrative. Fail here, before anything is
@@ -106,19 +106,13 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
-
-      # Pinned: this runs with CLOUDSMITH_API_KEY in the environment, so an
-      # unpinned install hands the publication credential to whatever version
-      # PyPI serves that day.
-      - name: Install Cloudsmith CLI
-        run: pip install cloudsmith-cli==1.19.0
+          go-version: '1.27'
 
       # RELEASE_SUMMARY is rendered at the top of the release body by
       # .goreleaser.yaml. Single-sourced from RELEASES.md so the narrative that
@@ -132,15 +126,14 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.18.2
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
 
       # checksums.txt is published unsigned, so matching a download against it
       # proves nothing if the release assets themselves were replaced. The

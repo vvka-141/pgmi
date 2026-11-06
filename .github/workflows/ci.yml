@@ -11,21 +11,21 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
 
       - name: dead code (production only)
-        uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64.8
+          version: v2.15.0
           install-mode: goinstall
           args: -c .golangci-deadcode.yml
 
@@ -33,10 +33,10 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       # PGMI_REQUIRE_DB: without it an unreachable Docker daemon skips every
       # integration test and the job still passes.
@@ -46,10 +46,10 @@ jobs:
         run: go test -race -tags pgmi_testhooks -timeout 10m ./...
 
   # The compatibility table is a claim, and until this job existed nothing
-  # checked it: every test ran against a single PostgreSQL 17 image. Both floors
-  # are covered — 11 for pgmi core and the basic template, 15 for the advanced
-  # template — so a construct that silently raises either one red-lines here
-  # instead of reaching a user.
+  # checked it: every test ran against a single PostgreSQL image. This job
+  # covers the core and basic-template floor (15); the advanced template's
+  # floor is 18, the image the `test` job already runs it on, so a construct
+  # that silently raises either one red-lines instead of reaching a user.
   #
   # Official postgres:N images via `services`, which is both cheaper than
   # testcontainers for a matrix and published per major, so a version is one
@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ['11', '15', '17']
+        pg: ['15']
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -77,10 +77,10 @@ jobs:
       PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       PGMI_REQUIRE_DB: '1'
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Core and basic template
         run: |
@@ -88,14 +88,7 @@ jobs:
             ./internal/services/... ./internal/params/... ./internal/contract/... \
             ./internal/files/... ./internal/cli/... ./internal/preprocessor/... \
             ./internal/db/... ./internal/metadata/...
-          go test -timeout 10m -run 'TestTemplateDeployment/basic' ./internal/scaffold
-
-      # The advanced template is 15+ and says so: it needs xid8 (13) and
-      # security_invoker views (15). Running it on 11 would conflate the two
-      # floors and make the core result unreadable.
-      - name: Advanced template
-        if: matrix.pg != '11'
-        run: go test -timeout 15m ./internal/scaffold
+          go test -timeout 10m -run 'TestTemplateDeployment/basic|TestSkillBlocksDeploy/basic' ./internal/scaffold
 
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,
@@ -126,10 +119,10 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Run unit tests
         run: go test -short -tags pgmi_testhooks -timeout 10m ./...
@@ -138,10 +131,10 @@ jobs:
     name: Connection & Security Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Run connection tests
         env:
@@ -156,17 +149,25 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   examples:
     name: Examples
     uses: ./.github/workflows/examples.yml
+
+  # Advisory here, like vulncheck: a CVE published overnight must not red-line
+  # an unrelated branch. The weekly schedule fails on a finding.
+  gateway-audit:
+    name: Gateway audit
+    uses: ./.github/workflows/gateway-audit.yml
+    with:
+      advisory: true
 
   build:
     name: Build
@@ -178,10 +179,10 @@ jobs:
         goarch: [amd64, arm64]
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build
         env:
@@ -194,7 +195,7 @@ jobs:
             ./cmd/pgmi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pgmi-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*

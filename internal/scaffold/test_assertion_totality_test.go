@@ -29,9 +29,11 @@ func repoExamplesDir() string {
 }
 
 var nullUnsafeAssertions = []struct {
-	name    string
-	pattern *regexp.Regexp
-	fix     string
+	name     string
+	pattern  *regexp.Regexp
+	fix      string
+	testOnly bool
+	raw      bool // judged on the condition as written, before IS tests are folded away
 }{
 	{
 		name:    "!= or <> in an assertion",
@@ -53,7 +55,48 @@ var nullUnsafeAssertions = []struct {
 		pattern: regexp.MustCompile(`(?:^|[^_a-z(])array_length\(`),
 		fix:     "use coalesce(array_length(x, 1), 0) — an empty array yields NULL, not 0",
 	},
+	{
+		name:     "NOT over a value that can be NULL",
+		pattern:  regexp.MustCompile(`(?:^|\(|\bOR |\bAND )NOT (?:\(|[a-z_])`),
+		fix:      "write (<expr>) IS NOT TRUE — NOT NULL is NULL, so the RAISE is skipped",
+		testOnly: true,
+	},
+	{
+		name:     "= in an assertion",
+		pattern:  regexp.MustCompile(`[^<>!=:]=[^>=]`),
+		fix:      "use IS NOT DISTINCT FROM — NULL = x is NULL, so the RAISE is skipped",
+		testOnly: true,
+	},
+	{
+		name:     "!~ in an assertion",
+		pattern:  regexp.MustCompile(`!~`),
+		fix:      "wrap the left operand in coalesce(<expr>, '') — NULL !~ 'x' is NULL",
+		testOnly: true,
+	},
+	{
+		name:     "function result IS NOT DISTINCT FROM a value",
+		pattern:  regexp.MustCompile(`(?:^|[^a-z0-9_])(?:[a-z_][a-z0-9_]*\.)?(?:[a-bd-z_][a-z0-9_]*|c(?:[a-np-z0-9_][a-z0-9_]*|o(?:[a-bd-z0-9_][a-z0-9_]*)?)?)\([^()]*\)\s+IS NOT DISTINCT FROM\s+(?:-?[0-9]|'|true\b|false\b)`),
+		fix:      "write coalesce(<fn>(...), <neutral>) = <value> — a NULL result is not the value, so the RAISE is skipped",
+		testOnly: true,
+		raw:      true,
+	},
+	{
+		name:     "NOT BETWEEN in an assertion",
+		pattern:  regexp.MustCompile(`(?:^|[^)\s])\s+NOT BETWEEN\b`),
+		fix:      "write (<expr> BETWEEN a AND b) IS NOT TRUE — NULL NOT BETWEEN a AND b is NULL",
+		testOnly: true,
+	},
+	{
+		name:     "bare <, <=, > or >= in an assertion",
+		pattern:  regexp.MustCompile(`(?:^|[^)\s])\s+(?:<|<=|>|>=)\s`),
+		fix:      "write (<a> < <b>) IS NOT FALSE (or IS TRUE) — NULL < x is NULL, so the RAISE is skipped",
+		testOnly: true,
+	},
 }
+
+// nullSafeAllowed exempts one assertion, by file and the start of its
+// condition text, whose operands are proven never NULL. Give the reason.
+var nullSafeAllowed = map[string]string{}
 
 var (
 	ifHeader   = regexp.MustCompile(`^\s*(?:IF|ELSIF)\b`)
@@ -140,12 +183,21 @@ func scanAssertions(path, body string) []string {
 		}
 
 		cond := conditionText(lines[i : end+1])
-		if isTotalByConstruction(cond) {
+		if isTotalByConstruction(cond) || allowedAssertion(path, cond) {
 			i = end
 			continue
 		}
+		shape := withoutSubqueries(cond)
+		inTest := strings.Contains(path, "/__test__/") || strings.Contains(path, "/__tests__/")
 		for _, rule := range nullUnsafeAssertions {
-			if rule.pattern.MatchString(cond) {
+			if rule.testOnly && !inTest {
+				continue
+			}
+			subject := shape
+			if rule.raw {
+				subject = cond
+			}
+			if rule.pattern.MatchString(subject) {
 				offenders = append(offenders, fmt.Sprintf("%s:%d [%s] %s\n      -> %s",
 					path, i+1, rule.name, truncate(cond, 110), rule.fix))
 			}
@@ -162,6 +214,105 @@ func isTotalByConstruction(cond string) bool {
 	return existsOnly.MatchString(cond) ||
 		strings.Contains(cond, "SQLERRM") || strings.Contains(cond, "SQLSTATE") ||
 		strings.Contains(cond, "try_cast(") || strings.Contains(cond, "?>")
+}
+
+func allowedAssertion(path, cond string) bool {
+	for key := range nullSafeAllowed {
+		file, prefix, _ := strings.Cut(key, ": ")
+		if strings.HasSuffix(path, file) && strings.HasPrefix(cond, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	existsNotFound = regexp.MustCompile(`\bNOT (?:EXISTS|FOUND)\b`)
+	nullTests      = regexp.MustCompile(`\bIS (?:NOT )?(?:TRUE|FALSE|NULL|DISTINCT FROM)\b|\bIS NOT DISTINCT FROM\b`)
+)
+
+// withoutSubqueries reduces a condition to the shape the rules judge: a
+// parenthesised SELECT becomes (), so an = in its WHERE is not a comparison of
+// the assertion; NOT EXISTS and NOT FOUND are total; and an expression already
+// closed by IS [NOT] TRUE/FALSE/NULL/DISTINCT FROM keeps none of its inner
+// operators, since the test makes it total.
+func withoutSubqueries(cond string) string {
+	out := foldCalls(cond, "(SELECT ", "()")
+	out = foldCalls(out, "coalesce(", "(TOTAL)")
+	out = existsNotFound.ReplaceAllString(out, "TOTAL")
+	for {
+		loc := nullTests.FindStringIndex(out)
+		if loc == nil {
+			break
+		}
+		left := operandStart(out[:loc[0]])
+		out = out[:left] + "TOTAL " + out[loc[1]:]
+	}
+	return out
+}
+
+// foldCalls replaces every parenthesised group opening with prefix by with: a
+// subquery's WHERE is not the assertion's, and coalesce with a default is
+// never NULL.
+func foldCalls(cond, prefix, with string) string {
+	out := cond
+	for {
+		start := strings.Index(out, prefix)
+		if start < 0 {
+			break
+		}
+		depth, end := 0, -1
+		for i := start + strings.IndexByte(prefix, '('); i < len(out); i++ {
+			switch out[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+			if depth == 0 {
+				end = i
+				break
+			}
+		}
+		if end < 0 {
+			break
+		}
+		out = out[:start] + with + out[end+1:]
+	}
+	return out
+}
+
+// operandStart finds where the operand of a trailing IS ... test begins: the
+// matching ( of a closing ), else the start of the last word.
+func operandStart(s string) int {
+	s = strings.TrimRight(s, " ")
+	if strings.HasSuffix(s, ")") {
+		depth := 0
+		for i := len(s) - 1; i >= 0; i-- {
+			switch s[i] {
+			case ')':
+				depth++
+			case '(':
+				depth--
+			}
+			if depth == 0 {
+				for i > 0 && (s[i-1] == '.' || s[i-1] == '_' || isWordByte(s[i-1])) {
+					i--
+				}
+				return i
+			}
+		}
+		return 0
+	}
+	i := len(s)
+	for i > 0 && s[i-1] != ' ' && s[i-1] != '(' {
+		i--
+	}
+	return i
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
 // conditionText strips the IF/THEN scaffolding, comments and string literals so
@@ -182,4 +333,42 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func TestScanAssertionsFlagsEachNullUnsafeShape(t *testing.T) {
+	bad := map[string]string{
+		"NOT over a value that can be NULL":            "IF NOT v_body ? 'x' THEN",
+		"= in an assertion":                            "IF v_etag_after = v_etag THEN",
+		"!~ in an assertion":                           "IF v_html !~ 'x' THEN",
+		"function result IS NOT DISTINCT FROM a value": "IF strpos(v_message, v_code) IS NOT DISTINCT FROM 0 THEN",
+		"NOT BETWEEN in an assertion":                  "IF (v_body->>'at')::timestamptz NOT BETWEEN now() AND now() + interval '1 hour' THEN",
+		"bare <, <=, > or >= in an assertion":          "IF (v_new->>'expiresAt')::timestamptz <= now() THEN",
+	}
+	for rule, head := range bad {
+		body := "DO $$ BEGIN\n    " + head + "\n        RAISE EXCEPTION 'x';\n    END IF;\nEND $$;\n"
+		got := scanAssertions("templates/advanced/lib/__test__/probe.sql", body)
+		if len(got) != 1 || !strings.Contains(got[0], rule) {
+			t.Errorf("%s: want one %q finding, got %v", head, rule, got)
+		}
+		if got := scanAssertions("templates/advanced/deploy.sql", body); len(got) != 0 {
+			t.Errorf("%s outside a test file: want no finding, got %v", head, got)
+		}
+	}
+	for _, head := range []string{
+		"IF (v_body ? 'x') IS NOT TRUE THEN",
+		"IF (v_etag_after = v_etag) IS NOT FALSE THEN",
+		"IF NOT EXISTS (SELECT FROM t WHERE a = b) THEN",
+		"IF NOT FOUND THEN",
+		"IF (SELECT count(*) FROM t WHERE a = b) IS DISTINCT FROM 1 THEN",
+		"IF coalesce(strpos(v_message, v_code), 0) IS NOT DISTINCT FROM 0 THEN",
+		"IF ((v_body->>'at')::timestamptz BETWEEN now() AND now() + interval '1 hour') IS NOT TRUE THEN",
+		"IF ((v_new->>'expiresAt')::timestamptz > now()) IS NOT TRUE THEN",
+		"IF coalesce(v_count, 0) < 10 THEN",
+		"IF coalesce(v_msg, '') NOT LIKE '%x%' THEN",
+	} {
+		body := "DO $$ BEGIN\n    " + head + "\n        RAISE EXCEPTION 'x';\n    END IF;\nEND $$;\n"
+		if got := scanAssertions("templates/advanced/lib/__test__/probe.sql", body); len(got) != 0 {
+			t.Errorf("%s: want no finding, got %v", head, got)
+		}
+	}
 }

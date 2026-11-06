@@ -10,18 +10,16 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 
 > **How pgmi deploys:** The `deploy.sql` examples below query files from `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and execute them directly with `EXECUTE`. See [Session API](session-api.md) for the full reference.
 
-> **⚠️ Read this first: pgmi re-executes every migration on every deploy.** The
-> basic template keeps no ledger — each file runs again every time you
-> `pgmi deploy`. That is safe *only* when your SQL is idempotent
-> (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`,
-> `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). If you arrive with Flyway's,
-> Liquibase's, or Sqitch's "each migration runs exactly once" mental model, a
-> non-idempotent statement like a bare `ALTER TABLE ... ADD COLUMN` **succeeds on
-> the first deploy and fails on the second.** Two ways out: make every migration
-> idempotent, or turn on apply-once tracking — the basic template's `deploy.sql`
-> ships a commented-out opt-in block for exactly this, and
-> [Tracking migration state](#tracking-migration-state) below lays out the
-> options.
+> **⚠️ Read this first: pgmi itself runs nothing once.** Which files run once
+> and which run on every deploy is decided by your `deploy.sql`. A loop over
+> files with no ledger re-runs every file on every deploy, which is safe *only*
+> when the SQL is idempotent: coming from Flyway's, Liquibase's or Sqitch's
+> "each migration runs exactly once" model, a bare `ALTER TABLE ... ADD COLUMN`
+> in such a loop **succeeds on the first deploy and fails on the second.** The
+> basic template's `deploy.sql` keeps a small ledger: files marked
+> `<pgmi-meta idempotent="false">` run once, and editing one after it ran
+> refuses the deploy. [Tracking migration state](#tracking-migration-state)
+> below lays out the options.
 
 ![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
 
@@ -117,7 +115,7 @@ myapp/
 |----------------|-----------------|
 | `flyway migrate` | `pgmi deploy .` |
 | `flyway info` | Query `pg_temp.pgmi_source_view` in deploy.sql |
-| `flyway validate` | `pgmi metadata validate .` |
+| `flyway validate` | The basic template's run-once ledger: a deploy refuses a `physical/` file edited after it ran. `pgmi metadata validate .` checks the `<pgmi-meta>` blocks offline |
 | `flyway clean` | `pgmi deploy . --overwrite` drops and recreates the *entire database* (not just schema objects). For true "clean" behavior, implement `DROP SCHEMA ... CASCADE` in deploy.sql. |
 | `flyway_schema_history` | Implement your own tracking table, or use [pgmi metadata](METADATA.md) |
 | Callbacks (`beforeMigrate`, etc.) | Code in deploy.sql before/after file loops |
@@ -142,7 +140,7 @@ myapp/
 
 - **Conditional logic**: Skip migrations based on environment, feature flags, or database state:
   ```sql
-  IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+  IF current_setting('pgmi.env') = 'prod' THEN
       FOR v_file IN (
           SELECT p.path, p.content
           FROM pg_temp.pgmi_plan_view p
@@ -159,7 +157,7 @@ myapp/
 
 ### Concrete differences in Flyway terms
 
-- **Checksum mismatch after formatting**: Flyway checksums are raw bytes — reformatting a file triggers a mismatch that requires `flyway repair`. pgmi provides both a raw checksum and a normalized one (comments stripped, whitespace collapsed); tracking against the normalized checksum makes reformatting free.
+- **Checksum mismatch after formatting**: Flyway checksums are raw bytes — reformatting a file triggers a mismatch that requires `flyway repair`. pgmi provides both a raw checksum and a normalized one (comments stripped, whitespace collapsed outside literals); tracking against the normalized checksum makes reformatting free.
 - **Test gate location**: Flyway's [documented testing approach](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions) embeds assertions in migration files and uses transaction rollback to iterate. Tests run interactively before committing through Flyway. With pgmi, `CALL pgmi_test()` runs tests *inside* the deploy transaction, against the target, post-migration — a failing test means the commit never happened.
 - **Plan inspectability**: Flyway validates checksums against `flyway_schema_history`. pgmi's `pgmi_plan_view` is a SQL view you can query and assert on — "no two files may claim the same sort key" or "the plan must match this signed manifest" are queries, not tool features you wait for.
 
@@ -245,7 +243,7 @@ myapp/
 
    **After (pgmi):**
    ```sql
-   IF COALESCE(current_setting('pgmi.env', true), 'dev') = 'production' THEN
+   IF current_setting('pgmi.env') = 'prod' THEN
        FOR v_file IN (SELECT content FROM pg_temp.pgmi_source_view WHERE path = './migrations/production_only.sql') LOOP
            EXECUTE v_file.content;
        END LOOP;
@@ -380,7 +378,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 ### Option 2: Use pgmi metadata
 
-Add UUID-based tracking with the advanced template:
+Mark a file run-once; both templates' `deploy.sql` track it by its UUID, run it once and refuse the deploy when it is edited after it ran:
 ```sql
 /*
 <pgmi-meta

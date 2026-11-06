@@ -2,13 +2,12 @@ package wizards
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/tui/components"
@@ -23,14 +22,16 @@ type TemplateInfo struct {
 // DefaultTemplates returns the available template information.
 func DefaultTemplates() []TemplateInfo {
 	return []TemplateInfo{
-		{Name: "basic", Description: "Linear migrations, minimal structure"},
-		{Name: "advanced", Description: "Metadata-driven deployment, REST/RPC/MCP handler registry"},
+		{Name: "minimal", Description: scaffold.TemplateSummary("minimal")},
+		{Name: "basic", Description: scaffold.TemplateSummary("basic")},
+		{Name: "advanced", Description: scaffold.TemplateSummary("advanced")},
 	}
 }
 
 // InitResult holds the result of the init wizard.
 type InitResult struct {
 	Cancelled   bool
+	Interrupted bool
 	TargetDir   string
 	Template    string
 	SetupConfig bool
@@ -83,7 +84,7 @@ func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 	di := textinput.New()
 	di.Placeholder = "."
 	di.CharLimit = 256
-	di.Width = 50
+	di.SetWidth(50)
 	if targetDir != "" {
 		di.SetValue(targetDir)
 	}
@@ -112,7 +113,17 @@ func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd := w.connWizard.Update(msg)
 		cw := m.(ConnectionWizard)
 		w.connWizard = &cw
-		if cw.result.Cancelled || cw.step == stepDone {
+		switch {
+		case cw.result.Interrupted:
+			w.result.Cancelled = true
+			w.result.Interrupted = true
+			return w, tea.Quit
+		case cw.result.Cancelled:
+			w.connActive = false
+			w.connWizard = nil
+			w.step = initStepSetupChoice
+			return w, nil
+		case cw.step == stepDone:
 			w.result.ConnResult = cw.Result()
 			return w, tea.Quit
 		}
@@ -125,9 +136,10 @@ func (w InitWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.height = msg.Height
 		return w, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			w.result.Cancelled = true
+			w.result.Interrupted = true
 			return w, tea.Quit
 		}
 
@@ -159,7 +171,7 @@ func (w InitWizard) resolveDir() string {
 	return dir
 }
 
-func (w InitWizard) updateDirectory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w InitWizard) updateDirectory(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Select):
 		dir := w.resolveDir()
@@ -200,21 +212,10 @@ func (w InitWizard) updateDirectory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // checkDirBlocking returns the list of non-pgmi files blocking init, or nil if safe.
 func checkDirBlocking(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil // doesn't exist yet — fine
-	}
-
-	var blocking []string
-	for _, entry := range entries {
-		if !scaffold.ManagedFiles[entry.Name()] {
-			blocking = append(blocking, entry.Name())
-		}
-	}
-	return blocking
+	return scaffold.BlockingEntries(dir)
 }
 
-func (w InitWizard) updateTemplate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w InitWizard) updateTemplate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Up):
 		if w.templateIdx > 0 {
@@ -234,7 +235,7 @@ func (w InitWizard) updateTemplate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return w, nil
 }
 
-func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (w InitWizard) updateSetupChoice(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, w.keys.Up), key.Matches(msg, w.keys.Down):
 		w.setupConfig = !w.setupConfig
@@ -242,6 +243,7 @@ func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		w.result.SetupConfig = w.setupConfig
 		if w.setupConfig {
 			cw := NewConnectionWizard()
+			cw.width, cw.height = w.width, w.height
 			w.connWizard = &cw
 			w.connActive = true
 			return w, cw.Init()
@@ -254,10 +256,17 @@ func (w InitWizard) updateSetupChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // View implements tea.Model.
-func (w InitWizard) View() string {
+func (w InitWizard) View() tea.View {
+	v := tea.NewView(w.content())
+	v.AltScreen = true
+	return v
+}
+
+func (w InitWizard) content() string {
 	if w.connActive && w.connWizard != nil {
-		return w.connWizard.View()
+		return w.connWizard.content()
 	}
+	w.styles = w.styles.sized(w.width)
 
 	var b strings.Builder
 
@@ -291,12 +300,12 @@ func (w InitWizard) viewDirectory() string {
 		b.WriteString("\n")
 		b.WriteString(w.styles.Error.Render("Directory is not empty: " + w.dirError))
 		b.WriteString("\n")
-		b.WriteString(w.styles.Description.Render("Pick another path or remove the files (pgmi.yaml and .env are tolerated)."))
+		b.WriteString(w.styles.Description.Render("Pick another path or remove the files (pgmi.yaml, .env and .git are tolerated)."))
 	} else {
-		b.WriteString(w.styles.Description.Render("\nEnter for current directory, or type a path."))
+		b.WriteString("\n" + w.styles.Description.Render("Enter for current directory, or type a path."))
 	}
 
-	b.WriteString(w.styles.Help.Render("\n\nenter confirm • esc cancel"))
+	b.WriteString("\n" + w.styles.Help.Render("\nenter confirm • esc cancel"))
 
 	return b.String()
 }
@@ -383,7 +392,7 @@ func RunInitWizard(targetDir string) (InitResult, error) {
 	}
 
 	wizard := NewInitWizard(targetDir, templates)
-	p := tea.NewProgram(wizard, tea.WithAltScreen())
+	p := tea.NewProgram(wizard)
 
 	model, err := p.Run()
 	if err != nil {

@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"io/fs"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +104,7 @@ func testTemplateStructure(t *testing.T, templateName string) {
 					strings.Contains(upperContent, "INSERT") ||
 					strings.Contains(upperContent, "UPDATE") ||
 					strings.Contains(upperContent, "DELETE") ||
+					strings.Contains(upperContent, "ALTER") ||
 					strings.Contains(upperContent, "DO $$") ||
 					strings.Contains(upperContent, "BEGIN") ||
 					strings.Contains(upperContent, "RAISE NOTICE")
@@ -122,10 +124,11 @@ func testTemplateStructure(t *testing.T, templateName string) {
 	t.Run("template-specific structure", func(t *testing.T) {
 		switch templateName {
 		case "basic":
-			// Basic template should have migrations directory
-			info, err := efs.Stat("migrations")
-			require.NoError(t, err, "Basic template should have migrations directory")
-			require.True(t, info.IsDir(), "migrations should be a directory")
+			for _, dirName := range []string{"physical", "semantic"} {
+				info, err := efs.Stat(dirName)
+				require.NoError(t, err, "Basic template should have %s directory", dirName)
+				require.True(t, info.IsDir(), "%s should be a directory", dirName)
+			}
 
 		case "advanced":
 			// Advanced template should have api/ at root and lib/ with nested structure
@@ -237,35 +240,29 @@ func TestTemplateDeploySQLReading(t *testing.T) {
 	}
 }
 
-// TestBasicTemplateTestFilePaths verifies that root-level __test__/ files
-// are scanned with correct paths that will match the SQL is_test_file regex
+// TestBasicTemplateTestFilePaths verifies that every __test__/ file of the
+// basic template is scanned with the ./ path the SQL is_test_file regex needs.
 func TestBasicTemplateTestFilePaths(t *testing.T) {
-	templateRoot := "templates/basic"
-	efs := fakefs.NewEmbedFileSystem(templatesFS, templateRoot)
-
-	calc := checksum.New()
-	s := scanner.NewScannerWithFS(calc, efs)
+	efs := fakefs.NewEmbedFileSystem(templatesFS, "templates/basic")
+	s := scanner.NewScannerWithFS(checksum.New(), efs)
 
 	result, err := s.ScanDirectory(".")
 	require.NoError(t, err)
 
-	// Find test files and verify their paths
 	var testFiles []string
 	for _, file := range result.Files {
 		if strings.Contains(file.Path, "__test__") {
 			testFiles = append(testFiles, file.Path)
-			// Verify path has ./ prefix
-			require.True(t, strings.HasPrefix(file.Path, "./"),
-				"Test file path should have ./ prefix: %s", file.Path)
-			// Verify path matches the pattern for root-level __test__
-			require.True(t, strings.HasPrefix(file.Path, "./__test__/"),
-				"Root-level test file should have path ./__test__/*: %s", file.Path)
 		}
 	}
 
-	require.Len(t, testFiles, 2, "Expected 2 test files in basic template __test__/")
-	require.Contains(t, testFiles, "./__test__/_setup.sql")
-	require.Contains(t, testFiles, "./__test__/test_user_crud.sql")
+	require.ElementsMatch(t, []string{
+		"./__test__/test_function_privileges.sql",
+		"./physical/__test__/test_constraints.sql",
+		"./semantic/__test__/_setup.sql",
+		"./semantic/__test__/test_project.sql",
+		"./semantic/__test__/test_task.sql",
+	}, testFiles)
 }
 
 // TestEmbedFileSystemPerformance validates that EmbedFileSystem performs well
@@ -300,11 +297,16 @@ func TestEmbedFileSystemPerformance(t *testing.T) {
 // scaffolds them into user projects while a CI build from a fresh clone does
 // not. Same version, different output.
 //
-// Dotfiles stay allowed; only dot-directories are rejected.
+// Dotfiles stay allowed; only dot-directories are rejected, except a
+// template's .agents/, which ships on purpose and which
+// TestScaffoldAIFilesAreTrackedAndEmbedded holds to git.
 func TestNoDotDirectoriesEmbedded(t *testing.T) {
 	err := fs.WalkDir(templatesFS, "templates", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if ok, _ := pathpkg.Match("templates/*/.agents", path); ok && d.IsDir() {
+			return nil
 		}
 		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
 			t.Errorf("dot-directory %q is embedded in the template tree; it is gitignored, "+

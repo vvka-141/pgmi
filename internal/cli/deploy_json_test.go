@@ -57,7 +57,7 @@ func decodeEnvelope(t *testing.T, out string) map[string]any {
 	return env
 }
 
-var sampleResult = &services.DeployResult{
+var sampleResult = &pgmi.DeployResult{
 	FilesLoaded: 3,
 	TestMacros:  1,
 	Duration:    1165 * time.Millisecond,
@@ -70,7 +70,7 @@ var sampleResult = &services.DeployResult{
 func TestDeployJSON_EnvelopeShape(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		env := decodeEnvelope(t, captureStdout(t, func() {
-			printDeployJSON(sampleResult, nil)
+			printDeployJSON(sampleResult, nil, deployProvenance{})
 		}))
 
 		want := map[string]any{
@@ -81,11 +81,15 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 			"durationMs":  float64(1165),
 			"database":    "myapp",
 			"created":     false,
+			"recreated":   false,
 		}
 		for k, v := range want {
 			if env[k] != v {
 				t.Errorf("envelope[%q] = %#v, want %#v", k, env[k], v)
 			}
+		}
+		if _, ok := env["notices"].([]any); !ok {
+			t.Errorf("envelope[\"notices\"] = %#v, want an array", env["notices"])
 		}
 
 		// Diagnostics are omitted, not emitted empty — a parser testing for
@@ -110,7 +114,7 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 		deployErr := fmt.Errorf("execution failed: %w", pgErr)
 
 		env := decodeEnvelope(t, captureStdout(t, func() {
-			printDeployJSON(sampleResult, deployErr)
+			printDeployJSON(sampleResult, deployErr, deployProvenance{})
 		}))
 
 		if env["status"] != "failed" {
@@ -144,7 +148,7 @@ func TestDeployJSON_EnvelopeShape(t *testing.T) {
 		deployErr := errors.New(
 			`failed to connect: host=db port=5432 password=hunter2 sslmode=require`)
 
-		out := captureStdout(t, func() { printDeployJSON(nil, deployErr) })
+		out := captureStdout(t, func() { printDeployJSON(nil, deployErr, deployProvenance{}) })
 
 		if strings.Contains(out, "hunter2") {
 			t.Errorf("envelope leaked a password:\n%s", out)
@@ -197,7 +201,7 @@ func TestDeployJSON_ExitCodeMatchesProcessExit(t *testing.T) {
 			var emitted bool
 
 			out := captureStdout(t, func() {
-				returned, emitted = finishDeploy(sampleResult, tt.deployErr, tt.interrupted, true)
+				returned, emitted = finishDeploy(sampleResult, tt.deployErr, tt.interrupted, true, deployProvenance{})
 			})
 
 			if !emitted {
@@ -225,7 +229,7 @@ func TestDeployJSON_ExitCodeMatchesProcessExit(t *testing.T) {
 }
 
 func TestDeployJSON_TailFailureCarriesUnitContext(t *testing.T) {
-	tailResult := &services.DeployResult{
+	tailResult := &pgmi.DeployResult{
 		FilesLoaded:    5,
 		TestMacros:     0,
 		Duration:       720 * time.Millisecond,
@@ -237,7 +241,7 @@ func TestDeployJSON_TailFailureCarriesUnitContext(t *testing.T) {
 	deployErr := errors.New("execution failed: boom")
 
 	env := decodeEnvelope(t, captureStdout(t, func() {
-		printDeployJSON(tailResult, deployErr)
+		printDeployJSON(tailResult, deployErr, deployProvenance{})
 	}))
 
 	if env["executionUnits"] != float64(4) {
@@ -252,7 +256,7 @@ func TestDeployJSON_TailFailureCarriesUnitContext(t *testing.T) {
 }
 
 func TestDeployJSON_AtomicFailureCarriesUnitContext(t *testing.T) {
-	atomicResult := &services.DeployResult{
+	atomicResult := &pgmi.DeployResult{
 		FilesLoaded:    5,
 		TestMacros:     0,
 		Duration:       720 * time.Millisecond,
@@ -264,7 +268,7 @@ func TestDeployJSON_AtomicFailureCarriesUnitContext(t *testing.T) {
 	deployErr := errors.New("execution failed: syntax error")
 
 	env := decodeEnvelope(t, captureStdout(t, func() {
-		printDeployJSON(atomicResult, deployErr)
+		printDeployJSON(atomicResult, deployErr, deployProvenance{})
 	}))
 
 	if env["executionUnits"] != float64(3) {
@@ -279,12 +283,13 @@ func TestDeployJSON_AtomicFailureCarriesUnitContext(t *testing.T) {
 }
 
 func TestDeploySummary_TailFailureMentionsUnitOrdinal(t *testing.T) {
-	tailResult := &services.DeployResult{
+	tailResult := &pgmi.DeployResult{
 		FilesLoaded:    5,
 		Duration:       720 * time.Millisecond,
 		Database:       "prod",
 		ExecutionUnits: 4,
 		UnitsCommitted: 2,
+		FailedUnit:     3,
 		ExecutionMode:  "psql",
 	}
 	out := captureStderr(t, func() {
@@ -299,7 +304,7 @@ func TestDeploySummary_TailFailureMentionsUnitOrdinal(t *testing.T) {
 }
 
 func TestDeploySummary_AtomicFailureOmitsUnitDetail(t *testing.T) {
-	atomicResult := &services.DeployResult{
+	atomicResult := &pgmi.DeployResult{
 		FilesLoaded:    5,
 		Duration:       720 * time.Millisecond,
 		Database:       "prod",
@@ -312,6 +317,39 @@ func TestDeploySummary_AtomicFailureOmitsUnitDetail(t *testing.T) {
 	})
 	if strings.Contains(out, "unit") {
 		t.Errorf("atomic failure summary should NOT mention units (nothing committed):\n%s", out)
+	}
+	if !strings.Contains(out, "failed after 0.72s — nothing committed\n") {
+		t.Errorf("an atomic failure must say nothing was committed:\n%s", out)
+	}
+}
+
+func TestDeploySummary_NamesADatabaseItCreated(t *testing.T) {
+	for _, tt := range []struct {
+		mode, want string
+	}{
+		{"atomic", `— nothing committed; created database "fresh", left empty` + "\n"},
+		{"", `— created database "fresh", left empty` + "\n"},
+		{"psql", `already committed) — created database "fresh"` + "\n"},
+	} {
+		t.Run(tt.mode, func(t *testing.T) {
+			result := &pgmi.DeployResult{Duration: time.Second, Database: "fresh", Created: true, ExecutionMode: tt.mode,
+				ExecutionUnits: 3, UnitsCommitted: 1, FailedUnit: 2}
+			out := captureStderr(t, func() { printDeploySummary(result, errors.New("boom")) })
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("want %q in:\n%s", tt.want, out)
+			}
+		})
+	}
+	recreated := captureStderr(t, func() {
+		printDeploySummary(&pgmi.DeployResult{Duration: time.Second, Database: "kept", Recreated: true, ExecutionMode: "atomic"},
+			errors.New("boom"))
+	})
+	if !strings.Contains(recreated, `— nothing committed; recreated database "kept", left empty`+"\n") {
+		t.Errorf("a failed --overwrite must say the database was recreated and left empty:\n%s", recreated)
+	}
+	ok := captureStderr(t, func() { printDeploySummary(&pgmi.DeployResult{Database: "fresh", Created: true}, nil) })
+	if strings.Contains(ok, "created") || strings.Contains(ok, "committed") {
+		t.Errorf("the success line is unchanged:\n%s", ok)
 	}
 }
 
@@ -381,5 +419,52 @@ func TestDeploySummary_SuccessWording(t *testing.T) {
 	want := fmt.Sprintf("%s: %d files loaded in ", sampleResult.Database, sampleResult.FilesLoaded)
 	if !strings.Contains(out, want) || strings.Contains(out, "macro") {
 		t.Errorf("summary = %q, want it to contain %q and no macro count", out, want)
+	}
+}
+
+func TestFinishDeploy_JSONKeepsStderrSummary(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		result *pgmi.DeployResult
+		err    error
+		want   string
+	}{
+		{"success", &pgmi.DeployResult{Duration: time.Second, Database: "ok", ExecutionMode: "atomic", ExecutionUnits: 1, UnitsCommitted: 1}, nil, "ok ok"},
+		{"overwrite failure", &pgmi.DeployResult{Duration: time.Second, Database: "kept", Recreated: true, ExecutionMode: "atomic"},
+			errors.New("boom"), `recreated database "kept", left empty`},
+		{"tail failure", &pgmi.DeployResult{Duration: time.Second, Database: "prod", ExecutionUnits: 4, UnitsCommitted: 2, FailedUnit: 3,
+			ExecutionMode: "psql"}, errors.New("boom"), "2 earlier unit(s) already committed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plain := captureStderr(t, func() { _, _ = finishDeploy(tt.result, tt.err, false, false, deployProvenance{}) })
+			var stdout string
+			withJSON := captureStderr(t, func() {
+				stdout = captureStdout(t, func() { _, _ = finishDeploy(tt.result, tt.err, false, true, deployProvenance{}) })
+			})
+			if !strings.Contains(plain, tt.want) || withJSON != plain {
+				t.Errorf("stderr with --json must match without it and contain %q:\nplain: %s\njson:  %s", tt.want, plain, withJSON)
+			}
+			var record map[string]any
+			if err := json.Unmarshal([]byte(stdout), &record); err != nil {
+				t.Errorf("stdout must hold only the JSON record: %v\n%s", err, stdout)
+			}
+		})
+	}
+}
+
+func TestCLIWording_MissingMaintenanceDatabaseNamesTheCLISources(t *testing.T) {
+	lib := services.MissingMaintenanceDBError{Name: "nosuchmaint", Err: errors.New("3D000")}
+	err := cliWording(fmt.Errorf("deploy: %w", lib))
+	msg := err.Error()
+	for _, want := range []string{`maintenance database "nosuchmaint" does not exist`, "connection string", "connection.maintenance_database"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("CLI message lacks %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "DeploymentConfig") {
+		t.Errorf("the CLI message names the library field: %s", msg)
+	}
+	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConnectionError {
+		t.Errorf("exit code %d, want %d", got, pgmi.ExitConnectionError)
 	}
 }

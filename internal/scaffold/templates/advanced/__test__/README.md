@@ -1,30 +1,29 @@
 # Your Application Tests
 
-Place your test files here. Tests are executed after deployment in savepoints
-that roll back their transactional changes. Sequence advances and external
-effects are not rolled back.
+Tests of the project as a whole go here. A test sits next to what it tests:
+an API test goes in `api/__test__/`, where `_setup.sql` signs up Alice as the
+owner of Acme Corp (`test.alice_subject`, `test.acme_org_id`); a kernel test
+next to its `core/` file. Tests run after deployment in savepoints that roll
+back their transactional changes. Sequence advances and external effects are
+not rolled back.
 
 ## Example Test Structure
 
 ```
+api/__test__/
+└── test_my_handlers.sql
+core/__test__/
+└── test_business_logic.sql
 __test__/
-├── api/
-│   └── test_my_handlers.sql
-└── domain/
-    └── test_business_logic.sql
+└── test_whole_project.sql
 ```
 
 ## Writing Tests
 
-Tests use pure PostgreSQL - no framework required:
+Tests use pure PostgreSQL - no framework required. A test file takes no
+`<pgmi-meta>` block:
 
 ```sql
-/*
-<pgmi-meta id="YOUR-UUID-HERE" idempotent="true">
-  <description>My API tests</description>
-</pgmi-meta>
-*/
-
 DO $$
 BEGIN
     -- Test your handler
