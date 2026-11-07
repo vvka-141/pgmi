@@ -21,13 +21,10 @@ before it commits. A failing test aborts the deployment transaction.
   to its directory's fixture state. Call it before `COMMIT`: a failing test
   aborts that transaction; anything an earlier `COMMIT` applied stays.
 - **Coding agents get PostgreSQL engineering skills and tools.** The basic and
-  advanced templates write an `AGENTS.md` and skills that teach an agent how
-  to build the database well: tables, constraints and indexes in run-once
-  files, views and writer functions on top, row-level security, concurrency,
-  and tests that check its work before the commit. `pgmi serve` lets the agent
-  deploy and check the plan over MCP, and `pgmi ai contract` prints the session
-  API of the binary you run. The skills are your project's files; the agent
-  decides what to write, and pgmi plans nothing on its own.
+  advanced templates write skills that teach an agent constraints, indexing,
+  row-level security, concurrency and a view-and-function layer, with tests
+  that check its work before the commit. `pgmi serve` lets it deploy over MCP.
+  The skills are your project's files; pgmi plans nothing on its own.
 
 Migration frameworks decide ordering, history, and the transaction model for you.
 With pgmi those decisions are SQL in your `deploy.sql` ([Why pgmi?](docs/WHY-PGMI.md)).

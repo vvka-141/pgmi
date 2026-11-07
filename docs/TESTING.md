@@ -507,7 +507,7 @@ DECLARE
 BEGIN
     -- Fixture already inserted orders. Just query and verify.
     SELECT SUM(total) INTO v_total FROM orders;
-    IF v_total != 249.49 THEN
+    IF v_total IS DISTINCT FROM 249.49 THEN
         RAISE EXCEPTION 'TEST FAILED: Expected total 249.49, got %', v_total;
     END IF;
 
@@ -816,7 +816,7 @@ This means:
 
 | Approach | Isolation | Speed | Requires Docker | Real PostgreSQL | Gate location |
 |----------|-----------|-------|-----------------|-----------------|---------------|
-| **pgmi (savepoints)** | Per-test rollback | Fast (no I/O) | No | Yes | Inside the deploy transaction, against the target |
+| **pgmi (savepoints)** | Per-test rollback | Fast (no database restore or rebuild) | No | Yes | Inside the deploy transaction, against the target |
 | **Atlas ([`migrate test`](https://atlasgo.io/testing/migrate))** | Dev-database container | Fast | Yes (`docker://`) | Yes (dev copy) | Before the apply, against a dev database |
 | **Testcontainers** | Fresh database per test | Slow (container startup) | Yes | Yes | Separate CI step |
 | **pgTAP** | None (manual cleanup) | Fast | No | Yes | Separate `pg_prove` run |
