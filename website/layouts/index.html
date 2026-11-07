@@ -75,11 +75,32 @@ Executing deploy.sql
           <img class="hero-pg" src="{{ "postgresql-elephant.svg" | relURL }}" alt="PostgreSQL" width="46" height="48">
           <p class="eyebrow">Programmable PostgreSQL deployments</p>
           <h1>pgmi</h1>
-          <p class="lede">Your deploy.sql applies changes, runs database tests before COMMIT, and aborts the deployment if a test fails. pgmi loads your project into one PostgreSQL session; your SQL decides what runs and when it commits.</p>
+          <p class="lede">Your deploy.sql applies changes, can run database tests before COMMIT, and aborts the deployment if a test fails. pgmi loads your project into one PostgreSQL session; your SQL decides what runs and when it commits.</p>
           <div class="hero-actions">
             <a class="button primary" data-goatcounter-click="cta-quickstart" href="{{ "docs/quickstart/" | relURL }}">See a complete deployment</a>
             <a class="button secondary" data-goatcounter-click="cta-coming-from" href="{{ "docs/coming-from/" | relURL }}">Coming from Flyway or Sqitch?</a>
           </div>
+        </div>
+      </section>
+
+      <section class="shell model-section" aria-labelledby="model-title">
+        <div>
+          <p class="eyebrow">Execution model</p>
+          <h2 id="model-title">pgmi prepares the session. Your SQL decides the deployment.</h2>
+        </div>
+        <div class="model-grid">
+          <article>
+            <strong>Load</strong>
+            <p>Project files, metadata, tests, and parameters become session-scoped temporary tables and stable views.</p>
+          </article>
+          <article>
+            <strong>Decide</strong>
+            <p><code>deploy.sql</code> queries those views and executes what it selects, choosing ordering, filtering, transactions and idempotency. PostgreSQL reports notices and errors directly.</p>
+          </article>
+          <article>
+            <strong>Test</strong>
+            <p><code>CALL pgmi_test()</code> runs your <code>__test__/</code> tree against the uncommitted changes. A directory's fixture applies to every test below it, and each test rolls back to its directory's fixture state. A failing test aborts the transaction it runs in.</p>
+          </article>
         </div>
       </section>
 
@@ -107,26 +128,6 @@ Executing deploy.sql
         </div>
         <p class="paths-note">The basic and advanced templates also write an <code>AGENTS.md</code> and skills, so a coding agent learns the project's conventions before it edits. pgmi takes no position on architecture: each template is a starting point you own (<a href="{{ "docs/core-vs-template/" | relURL }}">what pgmi gives you, and what you own</a>).</p>
       </section>
-      <section class="shell model-section" aria-labelledby="model-title">
-        <div>
-          <p class="eyebrow">Execution model</p>
-          <h2 id="model-title">pgmi prepares the session. Your SQL decides the deployment.</h2>
-        </div>
-        <div class="model-grid">
-          <article>
-            <strong>Load</strong>
-            <p>Project files, metadata, tests, and parameters become session-scoped temporary tables and stable views.</p>
-          </article>
-          <article>
-            <strong>Decide</strong>
-            <p><code>deploy.sql</code> queries those views and executes what it selects, choosing ordering, filtering, transactions and idempotency. PostgreSQL reports notices and errors directly.</p>
-          </article>
-          <article>
-            <strong>Test</strong>
-            <p><code>CALL pgmi_test()</code> runs your <code>__test__/</code> tree against the uncommitted changes. A directory's fixture applies to every test below it, and each test rolls back to its directory's fixture state. A failing test aborts the transaction it runs in.</p>
-          </article>
-        </div>
-      </section>
 
       <section class="contrast-section">
         <div class="shell split-section">
@@ -138,7 +139,7 @@ Executing deploy.sql
           <ul class="check-list">
             <li>CLI flags stay focused on infrastructure: connections, parameters, compatibility, observability.</li>
             <li>Deployment behavior stays in <code>deploy.sql</code>, where it can be reviewed and tested with the rest of the database code.</li>
-            <li>Coding agents get the binary's session API from <code>pgmi ai contract</code> and can drive pgmi over MCP with <code>pgmi serve</code>.</li>
+            <li>Coding agents get the binary's session API from <code>pgmi ai contract</code> and drive pgmi over MCP with <code>pgmi serve</code>. MCP endpoints your own application serves at runtime are a separate thing, written in the advanced template.</li>
           </ul>
         </div>
       </section>
