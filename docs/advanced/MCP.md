@@ -59,8 +59,10 @@ thin HTTP gateway for transport.
 
 ## Agents as callers
 
-An agent calls your application's operations, not its tables. What the
-template enforces for every tool call:
+An agent calls your application's operations, not its tables. Once one call
+commits, a later call sees that state, and its kernel can refuse it: an agent
+that asks for the last seat after another agent booked it gets a refusal it
+can read. What the template enforces for every tool call:
 
 - The call is one transaction, at the isolation the tool declared. It
   commits whole or rolls back.
@@ -71,13 +73,13 @@ template enforces for every tool call:
   may call.
 - The exchange log names both the agent and the person it acts for.
 
-Your kernels supply the business rules. A call that starts after another
-agent's call committed sees that state, so its kernel can refuse. For calls
-that overlap, the declared isolation decides. At the default `READ COMMITTED`,
-a precondition holds across overlapping calls only through a row lock or a
-constraint. Under `SERIALIZABLE` one of them fails with a serialization error,
-the gateway retries it as a whole, and the retry sees the other's result. How a tool answers a refusal is your design. The scaffolded
-`pgmi-mcp` skill teaches a refusal shape (`code`, `rule`, `remedy`) that an
+Your kernels supply the business rules. For calls that overlap, the declared
+isolation decides. At the default `READ COMMITTED`, a precondition holds
+across overlapping calls only through a row lock or a constraint. Under
+`SERIALIZABLE` one of them fails with a serialization error, the gateway
+retries it as a whole, and the retry sees the other's result.
+
+How a tool answers a refusal is your design. The scaffolded `pgmi-mcp` skill teaches a refusal shape (`code`, `rule`, `remedy`) that an
 agent can act on, with a runnable example; the template itself ships only
 `echo_note`.
 
