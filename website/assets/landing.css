@@ -177,7 +177,7 @@ code {
   position: relative;
   z-index: 2;
   padding-top: 86px;
-  padding-bottom: 124px;
+  padding-bottom: 168px;
 }
 
 .hero-pg {
@@ -387,8 +387,41 @@ h3 {
 }
 
 @media (max-width: 1160px) {
+  .hero {
+    min-height: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-copy {
+    padding-top: 110px;
+    padding-bottom: 28px;
+  }
+
+  .hero-visual {
+    position: relative;
+    inset: auto;
+    z-index: 0;
+    order: 2;
+    width: min(1120px, calc(100% - 40px));
+    margin: 0 auto;
+    padding-bottom: 110px;
+  }
+
   .terminal-window {
-    width: min(520px, calc(55vw - 300px));
+    position: static;
+    width: auto;
+    transform: none;
+  }
+
+  .terminal-window pre {
+    padding: 18px;
+    font-size: 0.82rem;
+  }
+
+  .flow-row {
+    position: static;
+    margin-top: 24px;
   }
 }
 
@@ -403,25 +436,8 @@ h3 {
     flex-wrap: wrap;
   }
 
-  .hero {
-    min-height: 720px;
-    align-items: end;
-  }
-
-  .hero-copy {
-    padding-top: 150px;
-    padding-bottom: 132px;
-  }
-
-  .terminal-window {
-    top: 112px;
-    right: -220px;
-    width: 620px;
-  }
-
   .flow-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    bottom: 36px;
   }
 
   .model-grid,
@@ -449,9 +465,8 @@ h3 {
     font-size: 0.86rem;
   }
 
-  .terminal-window {
-    right: -300px;
-    opacity: 0.64;
+  .hero-visual {
+    width: calc(100% - 28px);
   }
 
   .button {
