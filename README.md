@@ -20,12 +20,14 @@ before it commits. A failing test aborts the deployment transaction.
   directory's fixture applies to every test below it, and each test rolls back
   to its directory's fixture state. Call it before `COMMIT`: a failing test
   aborts that transaction; anything an earlier `COMMIT` applied stays.
-- **Coding agents get tools and project skills.** `pgmi serve` lets a coding
-  agent deploy a project and check its metadata and plan over MCP, and
-  `pgmi ai contract` prints the session API of the binary you run. The basic and
-  advanced templates also write an `AGENTS.md` and PostgreSQL skills into the
-  project. The agent stays in control: pgmi runs the commands it is given and
-  plans nothing on its own.
+- **Coding agents get PostgreSQL engineering skills and tools.** The basic and
+  advanced templates write an `AGENTS.md` and skills that teach an agent how
+  to build the database well: tables, constraints and indexes in run-once
+  files, views and writer functions on top, row-level security, concurrency,
+  and tests that check its work before the commit. `pgmi serve` lets the agent
+  deploy and check the plan over MCP, and `pgmi ai contract` prints the session
+  API of the binary you run. The skills are your project's files; the agent
+  decides what to write, and pgmi plans nothing on its own.
 
 Migration frameworks decide ordering, history, and the transaction model for you.
 With pgmi those decisions are SQL in your `deploy.sql` ([Why pgmi?](docs/WHY-PGMI.md)).
@@ -41,7 +43,8 @@ templates. From then on the code is yours to change:
   application calls the functions by name; there is no API layer in the database.
 - **advanced** — your application's backend in PostgreSQL, as code you own:
   REST, RPC and MCP endpoints your application serves at runtime (separate from
-  `pgmi serve`, which is pgmi's own tool for coding agents). Read
+  `pgmi serve`, which is pgmi's own tool for coding agents), and five more
+  skills for designing that API layer. Read
   [the advanced-template guide](docs/advanced/README.md) before choosing it.
 
 [What pgmi gives you, and what you own](docs/core-vs-template.md) draws the line
@@ -295,15 +298,6 @@ go install github.com/vvka-141/pgmi/cmd/pgmi@latest
 
 Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 
-## Choose your path
-
-- **Starting from nothing?** → `pgmi init myapp` writes a `deploy.sql` loop, `hello_world.sql` and a `.pgmiignore`. Build the rest your own way.
-- **Just deploying SQL?** → the **basic** template: conventional two-layer development, run-once tables and re-run views and functions. `pgmi init myapp --template basic`
-- **Building your backend in PostgreSQL?** → read [the advanced-template guide](docs/advanced/README.md) to decide whether its runtime and maintenance model fit your application. Requires PostgreSQL 18.
-- **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) for the approach, [Highlights](docs/HIGHLIGHTS.md) for capabilities, and [Tradeoffs](docs/TRADEOFFS.md) for limits.
-
-Either template can be adapted for production. Choose advanced when the application needs its API, sign-in and tenancy infrastructure. [Choose a template](docs/templates.md) compares the three side by side; `pgmi templates list` shows what's available.
-
 ## When pgmi makes sense — and when it doesn't
 
 A good fit when you need:
@@ -320,7 +314,7 @@ A poor fit when:
 - **You want tool-managed migration history** — the binary keeps no version table; each template's `deploy.sql` tracks what ran, as code you own and can change, not as a built-in
 - **Your only deploy path is a transaction-mode pooler** — the deploy's session temp tables can't survive it
 
-[Tradeoffs](docs/TRADEOFFS.md) lists the limits; [Highlights](docs/HIGHLIGHTS.md) the strengths.
+[Why pgmi?](docs/WHY-PGMI.md) explains the approach, [Highlights](docs/HIGHLIGHTS.md) the strengths, and [Tradeoffs](docs/TRADEOFFS.md) the limits.
 
 ## Documentation
 

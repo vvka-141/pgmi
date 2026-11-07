@@ -9,7 +9,7 @@ bookFlatSection: true
 
 Technical writing on PostgreSQL deployment patterns: transactional DDL,
 test gates inside the deployment transaction, and programming deployments
-in SQL. Every article is backed by runnable SQL verified against a live
+in SQL; and on application design in PostgreSQL, by people and coding agents. Every article is backed by runnable SQL verified against a live
 PostgreSQL — many by CI-verified examples in the
 [pgmi repository](https://github.com/vvka-141/pgmi).
 
