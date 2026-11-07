@@ -352,7 +352,7 @@ pgmi loads your project files into session-scoped views, then runs `deploy.sql`:
 - **`pg_temp.pgmi_source_view`** — raw access to all files (for introspection)
 - **`pg_temp.pgmi_plan_view`** — files sorted by execution order (for deployment)
 
-Both templates run the files from `pg_temp.pgmi_plan_view`. The basic template's `deploy.sql` also keeps a small ledger, `deployment.run_once`, of the files marked run-once, and refuses a deploy when one of them changed after it ran.
+The basic and advanced templates run the files from `pg_temp.pgmi_plan_view`. The basic template's `deploy.sql` also keeps a small ledger, `deployment.run_once`, of the files marked run-once, and refuses a deploy when one of them changed after it ran.
 
 ### physical/ and semantic/ — two layers
 
@@ -373,7 +373,7 @@ What this does:
 - `--overwrite` allows dropping and recreating the database if it already exists
 - `--force` replaces interactive confirmation with a 5-second countdown (you can still press Ctrl+C to cancel)
 
-**Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag. pgmi drops and recreates the database *before* `deploy.sql` runs, so a deploy that then fails (for example on a missing parameter) leaves an empty database behind. Both templates require `env`: pass `--param env=dev` on a local `--overwrite`.
+**Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag. pgmi drops and recreates the database *before* `deploy.sql` runs, so a deploy that then fails (for example on a missing parameter) leaves an empty database behind. The basic and advanced templates require `env`: pass `--param env=dev` on a local `--overwrite`.
 
 > **CI/CD:** pin the pgmi binary version (before 1.0 the session API may change in a minor release, listed under Upgrading in the release notes), add `--compat 1`, and drop `--overwrite` for incremental deploys:
 > ```bash
@@ -499,7 +499,7 @@ This is what makes pgmi different from migration tools: PostgreSQL itself is the
 
 ## Choosing a template
 
-Without `--template`, `pgmi init` writes the **minimal** project: a `deploy.sql` loop, `hello_world.sql` and a `.pgmiignore`. The **basic** template adds a run-once ledger and a test gate to a small two-layer project; the **advanced** template is an opinionated application backend with REST, RPC and MCP routing in the database. [Choose a template](templates.md) compares the three side by side.
+Without `--template`, `pgmi init` writes the **minimal** project: a `deploy.sql` loop, `hello_world.sql` and a `.pgmiignore`. The **basic** template adds a run-once ledger and a test gate to a two-layer project, with the application outside PostgreSQL; the **advanced** template is an opinionated application backend with REST, RPC and MCP routing in the database. [Choose a template](templates.md) compares the three side by side.
 
 ---
 

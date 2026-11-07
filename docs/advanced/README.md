@@ -27,7 +27,8 @@ database and calls functions over SQL.
 
 Every database project first meets the same problem: remember which scripts
 already ran, and do not run them again. That infrastructure takes work to
-build, so the template ships it, with a test gate and request logging on top.
+build, so the template ships it, calls pgmi's built-in test gate before its
+`COMMIT`, and adds request logging on top.
 It is scaffolding: after `pgmi init` the code belongs to you, to keep, change
 or replace. pgmi itself only runs your `deploy.sql`; the minimal template
 shows it bare.

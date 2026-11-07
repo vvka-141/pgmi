@@ -144,5 +144,5 @@ pgmi ai                    # Overview for AI assistants
 pgmi ai contract           # Session API contract (views/functions)
 ```
 
-A scaffolded project carries its own skills in `.agents/skills/`.
+`pgmi serve` offers pgmi's commands as MCP tools for coding agents (not the advanced template's runtime MCP). Projects from `--template basic` or `--template advanced` carry their own `AGENTS.md` and skills in `.agents/skills/`; minimal writes none.
 See [CLI.md#pgmi-ai](CLI.md#pgmi-ai) for details.

@@ -306,6 +306,10 @@ After the first `COMMIT`, statements are not implicitly grouped: any later phase
 
 ## Rollback strategies
 
+pgmi has no rollback command and cannot undo a deployment after `COMMIT`.
+PostgreSQL aborts an uncommitted transaction when a statement or test fails;
+reverting a committed change takes a new forward deploy.
+
 ### Automatic rollback (transaction-based)
 
 If you use single-transaction deployment, PostgreSQL rolls back automatically on any error:
@@ -315,7 +319,7 @@ If you use single-transaction deployment, PostgreSQL rolls back automatically on
 BEGIN;
 -- ... all migrations via EXECUTE v_file.content ...
 COMMIT;
--- If any migration fails, nothing is committed
+-- If any migration fails before COMMIT, its transactional changes roll back
 ```
 
 ### Compensating transactions

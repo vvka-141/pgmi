@@ -1,6 +1,6 @@
 ---
 title: "Why pgmi"
-description: "Understand when pgmi's SQL-driven execution fabric fits a PostgreSQL project and when another migration tool is a better choice."
+description: "Understand when pgmi's SQL-driven deployment and pre-commit testing fit a PostgreSQL project, and when a conventional migration tool is a better choice."
 weight: 20
 ---
 
@@ -15,7 +15,7 @@ Most deployment tools take your files, decide the order and the transaction boun
 Two ideas follow:
 
 - **Your SQL runs the deploy.** You write the deployment logic in SQL, not configuration.
-- **A test tree can gate its commit.** `CALL pgmi_test()` runs your `__test__/` directories against the changed, uncommitted database, so a failing test aborts the deployment before anything commits.
+- **A test tree can gate its commit.** `CALL pgmi_test()` runs your `__test__/` directories against the changed, uncommitted database, so a failing test aborts the transaction the call runs in; changes an earlier `COMMIT` applied stay.
 
 ![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
 
@@ -119,7 +119,7 @@ pgmi is a good fit when:
 
 ## When pgmi is overkill
 
-pgmi handles linear migrations out of the box (the basic template runs its tables once each, in path order). pgmi ships with three templates — **minimal**, a bare `deploy.sql` to build on, **basic**, a small two-layer project, and **advanced**, a large, editable reference system (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — any of them can be production depending on your project. See [Templates](templates.md) for the canonical comparison.
+pgmi handles linear migrations out of the box (the basic template runs its tables once each, in path order). pgmi ships with three templates — **minimal**, a bare `deploy.sql` to build on, **basic**, conventional two-layer database development with the application outside PostgreSQL, and **advanced**, an application backend in PostgreSQL (metadata tracking, roles, RLS, API/MCP). Advanced is _more complete_, not _more production_ — any of them can be production depending on your project. See [Templates](templates.md) for the canonical comparison.
 
 But consider simpler tools if:
 
@@ -148,7 +148,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Cloud auth | Native (Azure, AWS, GCP IAM); Azure tested by hand against a real cloud, AWS and GCP not ([connections](CONNECTIONS.md)) | Varies by tool |
 | File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
-| Test gate location | Inside the deploy transaction, against the target, post-migration — a failing test aborts the commit | A separate command against a dev database, before the apply (Atlas [`migrate test`](https://atlasgo.io/testing/migrate)); or assertions embedded in migration files (Flyway [transaction testing](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions)) |
+| Test gate location | Where `deploy.sql` calls it: inside the deploy transaction, against the target, post-migration — a failing test aborts the commit | A separate command against a dev database, before the apply (Atlas [`migrate test`](https://atlasgo.io/testing/migrate)); or assertions embedded in migration files (Flyway [transaction testing](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions)) |
 | Checksum semantics | Raw SHA-256 **and** comment/whitespace-normalized; reformatting a file is free | Raw bytes only; reformatting triggers a checksum mismatch that requires `repair` (Flyway) or plan recalculation (Atlas) |
 | Plan inspectability | `pgmi_plan_view` is a SQL view — assertable by project-authored queries | Atlas [`migrate lint`](https://atlasgo.io/versioned/lint) ships 50+ vendor-supplied analyzers (requires a dev database); Flyway validates checksums against history |
 | Same file at multiple positions | Yes — `UNNEST(sort_keys)` places one idempotent file at several stages | One file, one ordinal |
@@ -189,7 +189,7 @@ pgmi does NOT decide:
 
 ### Your SQL remains portable
 
-Your migration files are valid PostgreSQL SQL—you can run them directly with `psql`. The optional `<pgmi-meta>` blocks live inside standard SQL comments (`/* ... */`), so they don't break compatibility. pgmi parses them before SQL reaches PostgreSQL to configure file ordering and idempotency tracking — they're metadata about your files, not executable syntax.
+Your migration files are valid PostgreSQL SQL—you can run them directly with `psql`. The optional `<pgmi-meta>` blocks live inside standard SQL comments (`/* ... */`), so they don't break compatibility. pgmi parses them before SQL reaches PostgreSQL and exposes them in `pgmi_plan_view` and `pgmi_source_metadata_view`, so your `deploy.sql` can order files and decide what runs once — they're metadata about your files, not executable syntax. pgmi itself keeps no history.
 
 The pgmi-specific parts are `deploy.sql` (which queries session temp tables) and any `<pgmi-meta>` blocks you choose to add. If you later switch tools, your migration files work unchanged — strip the comment blocks and they're plain SQL.
 

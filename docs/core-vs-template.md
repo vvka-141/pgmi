@@ -62,7 +62,7 @@ not a framework: pgmi never checks that your project still follows it.
 
 - **minimal** (the default): a `deploy.sql` loop that runs every SQL file in
   path order, `hello_world.sql` and a `.pgmiignore`. The core mechanism, bare.
-- **basic**: a small two-layer project. Run-once tables in `physical/`, tracked
+- **basic**: conventional two-layer development, with the application outside PostgreSQL. Run-once tables in `physical/`, tracked
   in a ledger that refuses an edited file. Views and functions in `semantic/`,
   re-run on every deploy. Tests that gate the commit. Your application, in any
   language, calls the functions over SQL.

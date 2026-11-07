@@ -597,8 +597,8 @@ steps 2–3 are rolled back.
 
 If all tests pass, the savepoints roll back the test data (so it doesn't persist), but the migrations remain, and `COMMIT` makes them permanent.
 
-**Successful deployment implies all tests passed.** Failed tests prevent the
-transactional deployment changes from committing. Sequence counters and external
+**When `deploy.sql` calls `CALL pgmi_test()` before `COMMIT`, a successful deployment means every test passed.** A failing test prevents
+that transaction's changes from committing; an earlier `COMMIT` stays. Sequence counters and external
 or explicitly non-transactional effects may still advance or occur.
 
 ---
@@ -634,7 +634,7 @@ The `CALL pgmi_test()` macro:
 - Runs **only** files from `__test__/` or `__tests__/` directories
 - Uses **savepoints** to isolate each test's transactional state
 - Stops at the **first failure** — no partial results to interpret
-- Gates the `COMMIT` — failed tests roll back transactional deployment changes
+- Gates the `COMMIT` when called before it — failed tests roll back transactional deployment changes
 
 ---
 

@@ -198,7 +198,7 @@ On connect, pgmi creates session-scoped temporary tables and views holding your
 files and parameters, sets `pgmi.<name>` for each parameter, and takes an
 advisory lock, so a second deploy of the same database is refused.
 
-This is the minimal template's `deploy.sql` plus `CALL pgmi_test()`; it runs every file on every deploy. pgmi keeps no history of its
+This is the minimal template's `deploy.sql` plus `CALL pgmi_test()`, which needs at least one test file under a `__test__/` directory; it runs every file on every deploy. pgmi keeps no history of its
 own: what has run, and what may run again, is your SQL's decision too. The basic
 template's `deploy.sql` records applied run-once files in a ledger table and skips
 them on later deploys. If an applied file has changed, it refuses the deploy and
@@ -298,7 +298,7 @@ Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkt
 ## Choose your path
 
 - **Starting from nothing?** → `pgmi init myapp` writes a `deploy.sql` loop, `hello_world.sql` and a `.pgmiignore`. Build the rest your own way.
-- **Just deploying SQL?** → the **basic** template: a small two-layer project, run-once tables and re-run views and functions. `pgmi init myapp --template basic`
+- **Just deploying SQL?** → the **basic** template: conventional two-layer development, run-once tables and re-run views and functions. `pgmi init myapp --template basic`
 - **Building your backend in PostgreSQL?** → read [the advanced-template guide](docs/advanced/README.md) to decide whether its runtime and maintenance model fit your application. Requires PostgreSQL 18.
 - **Evaluating the approach first?** → read [Why pgmi?](docs/WHY-PGMI.md) for the approach, [Highlights](docs/HIGHLIGHTS.md) for capabilities, and [Tradeoffs](docs/TRADEOFFS.md) for limits.
 

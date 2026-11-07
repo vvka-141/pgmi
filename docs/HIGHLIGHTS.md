@@ -178,9 +178,10 @@ pgmi's conventions from the tool it is already invoking:
 ```bash
 pgmi ai                 # llms.txt-style overview
 pgmi ai contract        # the session API contract, machine-readable
+pgmi serve              # pgmi's commands as MCP tools over stdio, for coding agents
 ```
 
-`pgmi init` is the part that matters: every basic or advanced project carries an `AGENTS.md`
+In the basic and advanced templates, `pgmi init` adds project-owned guidance: every basic or advanced project carries an `AGENTS.md`
 routing table and skills under `.agents/skills/`, committed with the code, so the next
 agent to open the project learns how it deploys *before* it edits SQL — rather than
 inventing a migration framework that isn't there. The skills include PostgreSQL recipes

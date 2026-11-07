@@ -6,7 +6,7 @@ weight: 32
 
 # Choose a template
 
-`pgmi init` writes a starting project from a template. A template is scaffolding, not part of pgmi. Projects that mix run-once and re-runnable files often need the same infrastructure: remember which scripts already ran, do not run them again, and test before the commit. The basic and advanced templates supply it as plain SQL you can read and change; minimal leaves it to you. pgmi itself only runs your `deploy.sql`, and the minimal template shows it bare.
+`pgmi init` writes a starting project from a template. A template is scaffolding, not part of pgmi. Projects that mix run-once and re-runnable files often need the same infrastructure: remember which scripts already ran, and do not run them again. The basic and advanced templates supply that ledger as plain SQL you can read and change, and call pgmi's built-in `CALL pgmi_test()` before their `COMMIT`; minimal leaves both to you. pgmi itself only runs your `deploy.sql`, and the minimal template shows it bare.
 
 ## Side by side
 
