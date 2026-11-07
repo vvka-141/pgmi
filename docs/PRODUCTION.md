@@ -320,7 +320,9 @@ COMMIT;
 
 ### Compensating transactions
 
-For deployments where you need to undo specific migrations, create matching rollback scripts:
+pgmi has no rollback command. `pgmi.rollback` below is a parameter your
+`deploy.sql` reads, and running undo scripts is a new forward deploy: it
+commits like any other. For each migration, write a matching undo script:
 
 ```sql
 -- migrations/002_add_email_column.sql
@@ -330,43 +332,59 @@ ALTER TABLE users ADD COLUMN email TEXT;
 ALTER TABLE users DROP COLUMN IF EXISTS email;
 ```
 
-Then in deploy.sql, implement rollback capability:
+Then let `deploy.sql` keep a ledger of applied migrations, so the normal run
+applies each one once and the undo run reverts only what the ledger shows
+applied:
 
 ```sql
--- deploy.sql with rollback support
+-- deploy.sql with an undo mode
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.applied_migration (
+    path text PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+
 DO $$
 DECLARE
     v_rollback BOOLEAN := COALESCE(current_setting('pgmi.rollback', true), 'false')::boolean;
     v_file RECORD;
 BEGIN
     IF v_rollback THEN
-        -- Execute rollback scripts in reverse order
         FOR v_file IN (
-            SELECT path, content FROM pg_temp.pgmi_source_view
-            WHERE path LIKE './rollback/%' AND is_sql_file
-            ORDER BY path DESC
+            SELECT m.path, u.content
+            FROM public.applied_migration m
+            JOIN pg_temp.pgmi_source_view u
+              ON u.path = './rollback/' || substr(m.path, length('./migrations/') + 1)
+            ORDER BY m.path DESC
         )
         LOOP
-            RAISE NOTICE 'Rolling back: %', v_file.path;
+            RAISE NOTICE 'Undoing: %', v_file.path;
             EXECUTE v_file.content;
+            DELETE FROM public.applied_migration WHERE path = v_file.path;
         END LOOP;
     ELSE
-        -- Normal deployment
         FOR v_file IN (
             SELECT p.path, p.content
             FROM pg_temp.pgmi_plan_view p
             JOIN pg_temp.pgmi_source_view s ON s.path = p.path
             WHERE s.is_sql_file AND p.path LIKE './migrations/%'
+              AND NOT EXISTS (SELECT 1 FROM public.applied_migration m WHERE m.path = p.path)
             ORDER BY p.execution_order
         )
         LOOP
             RAISE NOTICE 'Executing: %', v_file.path;
             EXECUTE v_file.content;
+            INSERT INTO public.applied_migration (path) VALUES (v_file.path);
         END LOOP;
     END IF;
 END $$;
+
+CALL pgmi_test();
+COMMIT;
 ```
 
+`CALL pgmi_test()` needs at least one test file under a `__test__/` directory.
 Usage:
 ```bash
 pgmi deploy . -d mydb --param rollback=true
