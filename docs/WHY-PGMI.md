@@ -93,9 +93,11 @@ pgmi is a good fit when:
 - Some need a single transaction (all-or-nothing)
 - Migration tools expose transaction settings per script, such as Flyway's `executeInTransaction=false`. In pgmi, `deploy.sql` also defines which scripts share a transaction and where deployment phases commit
 
-**Your team is fluent in SQL/PL/pgSQL.**
+**Your team writes PostgreSQL, or has coding agents write it.**
 - pgmi's power comes from writing deployment logic in PostgreSQL's native language
-- If your team avoids SQL, pgmi's advantage disappears
+- PostgreSQL experts program it directly
+- With the basic or advanced template, coding agents get skills that carry the PostgreSQL patterns (schema layers, constraints, indexing, row-level security, tests), so not every developer has to master PL/pgSQL
+- Someone on the team still decides the design and reviews the SQL; tests check only what they assert
 
 **You're building automation that needs predictability.**
 - pgmi itself adds no hidden state: the session is built only from your files and parameters (what your SQL then reads — clocks, catalogs, live data — is your choice)

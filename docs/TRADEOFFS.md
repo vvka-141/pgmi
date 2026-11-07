@@ -1,6 +1,6 @@
 ---
 title: "Trade-offs"
-description: "Review pgmi's limits, required PL/pgSQL fluency, PostgreSQL-only scope, and when another tool fits better."
+description: "Review pgmi's limits, the PL/pgSQL your team must review, PostgreSQL-only scope, and when another tool fits better."
 weight: 170
 ---
 
@@ -10,18 +10,18 @@ pgmi trades framework-managed complexity for SQL-level control. That trade has r
 
 ---
 
-## PL/pgSQL expertise required
+## PL/pgSQL is the deployment language
 
-pgmi's `deploy.sql` is a PL/pgSQL program, not configuration. Your team needs to be comfortable with:
+pgmi's `deploy.sql` is a PL/pgSQL program, not configuration. Whoever writes or changes it needs to be comfortable with:
 
 - `FOR v_file IN (SELECT ...) LOOP ... END LOOP`
 - `EXECUTE v_file.content`
 - `current_setting('pgmi.key', true)`
 - `RAISE EXCEPTION` with a condition, to refuse a deploy
 
-**Honest test:** If your team would struggle to write a PL/pgSQL block that loops over a query result and calls `EXECUTE` on each row, changing the deployment logic will be slow. The templates work out of the box, but customizing them is PL/pgSQL work.
+**Honest test:** Without a coding agent, if your team would struggle to write a PL/pgSQL block that loops over a query result and calls `EXECUTE` on each row, changing the deployment logic will be slow. The templates work out of the box, but customizing them is PL/pgSQL work.
 
-The scaffold includes skills with the deploy.sql patterns, and `pgmi ai contract` prints the installed binary's session API. Your team still needs enough PL/pgSQL to review and maintain the deployment code, whoever writes it.
+With a coding agent, the basic and advanced templates' skills carry the deploy.sql and schema patterns, and `pgmi ai contract` prints the installed binary's session API, so the agent can write much of this code. Your team still needs enough PL/pgSQL to review and maintain it, whoever writes it.
 
 ---
 
@@ -161,7 +161,7 @@ For teams comfortable with PL/pgSQL, this is a feature. For teams that want a to
 ## Who should use pgmi
 
 **Good fit:**
-- Teams fluent in SQL/PL/pgSQL who want deployment logic in the database's native language
+- Teams that want deployment logic in the database's native language, written by their PostgreSQL experts or by coding agents using the scaffolded skills, and reviewed by the team
 - Projects that need conditional deployment, data ingestion, or custom transaction strategies
 - Multi-cloud PostgreSQL deployments (same `deploy.sql` works everywhere)
 - Teams that value transparency — every piece of deployment state is queryable SQL

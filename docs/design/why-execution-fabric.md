@@ -56,7 +56,7 @@ vocabulary: anything it didn't anticipate (test-gated commits, data-dependent
 branching, [multi-phase ordering](../METADATA.md), interleaved
 concurrent-index builds) becomes a feature request. Making the deployment a
 PostgreSQL program makes those the user's ordinary SQL instead. The cost is
-recorded, not hidden: [PL/pgSQL expertise is required](../TRADEOFFS.md#plpgsql-expertise-required),
+recorded, not hidden: [someone on the team must review PL/pgSQL](../TRADEOFFS.md#plpgsql-is-the-deployment-language),
 and pgmi is [overkill for some projects](../WHY-PGMI.md#when-pgmi-is-overkill).
 
 ## The contract that makes it safe

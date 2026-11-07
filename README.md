@@ -303,6 +303,7 @@ A good fit when you need:
 - **Test-gated deployments** — database tests inside the deployment transaction, rollback on failure ([Testing Guide](docs/TESTING.md))
 - **Explicit transaction control** — you decide where `BEGIN` and `COMMIT` go
 - **Data files alongside schema** — JSON config, XML reference data, CSV seeds in the same transaction as migrations
+- **Coding agents doing the PostgreSQL work** — the basic and advanced templates' skills carry the patterns, so not every developer has to master PL/pgSQL; your team decides and reviews
 - **Multi-cloud PostgreSQL targets** — the same `deploy.sql` works on Azure, AWS, GCP with native auth (Azure tested by hand against a real cloud, AWS and GCP not; see [connections](docs/CONNECTIONS.md))
 
 A poor fit when:
