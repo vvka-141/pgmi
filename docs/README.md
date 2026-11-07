@@ -6,29 +6,15 @@ weight: 10
 
 # pgmi Documentation
 
-pgmi is a PostgreSQL-native deployment tool that loads your project files into session temp tables and lets your `deploy.sql` drive everything — transactions, execution order, and logic. These docs cover the session API, CLI, deployment patterns, testing, security, and operational guides.
+pgmi loads your project files into one PostgreSQL session and runs the `deploy.sql` you write. Three ideas carry it:
+
+- **Your SQL runs the deploy**: transactions, execution order and logic.
+- **A test tree can gate the commit**: `CALL pgmi_test()` tests the changed database before `COMMIT`.
+- **Coding agents get tools and project skills**: `pgmi serve`, `pgmi ai contract`, and the `AGENTS.md` and skills the basic and advanced templates write.
+
+The templates are optional starting points that become your project's code; a hand-written `deploy.sql` works without one.
 
 ![The pgmi model: pgmi prepares one PostgreSQL session and hands control to your deploy.sql](diagrams/d01-the-pgmi-model.drawio.svg)
-
-## Articles
-
-**Deployment**
-
-- [Test PostgreSQL migrations before COMMIT](https://vvka-141.github.io/pgmi/articles/test-postgresql-migrations-before-commit/): where the test gate sits, after lint and rehearsal
-- [Your ALTER TABLE Is Fast. The Queue Behind It Is Not.](https://vvka-141.github.io/pgmi/articles/lock-queue-fast-is-not-safe/): bounded lock waits and phased deploys; runnable in [`examples/lock-safe-deploy/`](https://github.com/vvka-141/pgmi/tree/main/examples/lock-safe-deploy)
-- [Your Transaction Boundary Belongs in the Program, Not the Filename](https://vvka-141.github.io/pgmi/articles/transaction-boundary-in-the-program/): transactions decided in deploy.sql
-- [Your Migration Numbers Are a Distributed Counter Without Coordination](https://vvka-141.github.io/pgmi/articles/migration-numbers-distributed-counter/): a pull-request check on `pgmi_plan_view` rejects duplicate numbers before merge
-- [Your Deployment Is a PostgreSQL Program](https://vvka-141.github.io/pgmi/articles/deployment-is-a-postgresql-program/): the deployment as code you can read and test
-
-**Testing and data**
-
-- [Scenario-Tree Testing in PostgreSQL](https://vvka-141.github.io/pgmi/articles/test-every-branch-before-commit/): several outcomes from one setup, each branch isolated by savepoints
-- [From Seed Scripts to Desired-State Reference Data](https://vvka-141.github.io/pgmi/articles/desired-state-reference-data-postgresql/): reference data validated, diffed and reconciled from a file; runnable in [`examples/seed-demo/`](https://github.com/vvka-141/pgmi/tree/main/examples/seed-demo)
-
-**Application design**
-
-- [The Request Becomes a Transaction](https://vvka-141.github.io/pgmi/articles/request-becomes-a-transaction/): API tests inside the deploy transaction
-- [AI agents write PostgreSQL like Python](https://vvka-141.github.io/pgmi/articles/ai-agents-write-postgresql-like-python/): the handler discipline that keeps agent-written PL/pgSQL correct
 
 ## Recommended Reading Order
 
@@ -65,8 +51,31 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 
 **Using the advanced template?**
 1. [Advanced template overview](advanced/README.md) — What the application stack ships and what you can remove
-2. [Script metadata](METADATA.md) — Script tracking with `<pgmi-meta>`
-3. [MCP overview](advanced/MCP.md) — Expose your deployed application to AI assistants
+2. [MCP overview](advanced/MCP.md) — Expose your deployed application to AI assistants
+3. [Upgrading](advanced/UPGRADING.md) — Take template fixes into a project you have changed
+
+**Working with a coding agent?**
+1. [AI assistant support](../README.md#ai-assistant-support) — `pgmi serve`, `pgmi ai contract`, and the project's `AGENTS.md` and skills
+
+## Articles
+
+**Deployment**
+
+- [Test PostgreSQL migrations before COMMIT](https://vvka-141.github.io/pgmi/articles/test-postgresql-migrations-before-commit/): where the test gate sits, after lint and rehearsal
+- [Your ALTER TABLE Is Fast. The Queue Behind It Is Not.](https://vvka-141.github.io/pgmi/articles/lock-queue-fast-is-not-safe/): bounded lock waits and phased deploys; runnable in [`examples/lock-safe-deploy/`](https://github.com/vvka-141/pgmi/tree/main/examples/lock-safe-deploy)
+- [Your Transaction Boundary Belongs in the Program, Not the Filename](https://vvka-141.github.io/pgmi/articles/transaction-boundary-in-the-program/): transactions decided in deploy.sql
+- [Your Migration Numbers Are a Distributed Counter Without Coordination](https://vvka-141.github.io/pgmi/articles/migration-numbers-distributed-counter/): a pull-request check on `pgmi_plan_view` rejects duplicate numbers before merge
+- [Your Deployment Is a PostgreSQL Program](https://vvka-141.github.io/pgmi/articles/deployment-is-a-postgresql-program/): the deployment as code you can read and test
+
+**Testing and data**
+
+- [Scenario-Tree Testing in PostgreSQL](https://vvka-141.github.io/pgmi/articles/test-every-branch-before-commit/): several outcomes from one setup, each branch isolated by savepoints
+- [From Seed Scripts to Desired-State Reference Data](https://vvka-141.github.io/pgmi/articles/desired-state-reference-data-postgresql/): reference data validated, diffed and reconciled from a file; runnable in [`examples/seed-demo/`](https://github.com/vvka-141/pgmi/tree/main/examples/seed-demo)
+
+**Application design**
+
+- [The Request Becomes a Transaction](https://vvka-141.github.io/pgmi/articles/request-becomes-a-transaction/): API tests inside the deploy transaction
+- [AI agents write PostgreSQL like Python](https://vvka-141.github.io/pgmi/articles/ai-agents-write-postgresql-like-python/): the handler discipline that keeps agent-written PL/pgSQL correct
 
 ---
 
@@ -77,7 +86,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 | Which view should I use? | `pgmi_plan_view` for deployment, `pgmi_source_view` for introspection — see [Session API](session-api.md#which-view-should-i-use) |
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [Session API](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [Testing](TESTING.md) |
-| What's the difference between templates? | Basic = two layers: run-once tables, and views and functions re-run on every deploy, behind a test gate. Advanced = a full, tested PostgreSQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Choose a template](templates.md) |
+| What's the difference between templates? | Minimal = a `deploy.sql` loop and one file: the mechanism, bare. Basic = two layers: run-once tables, and views and functions re-run on every deploy, behind a test gate. Advanced = a full, tested PostgreSQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Choose a template](templates.md) |
 | How do I filter which files run? | Join `pgmi_plan_view` to `pgmi_source_view`, require `is_sql_file`, then add your path filter — see [Session API](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI reference](CLI.md#exit-codes) |
 
@@ -115,7 +124,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 - **[Production](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 
 ### Advanced template (code you own)
-These pages document application code scaffolded by `pgmi init --template advanced` — a complete PostgreSQL application stack, not a pgmi core feature. The generated SQL and gateways become code you own, modify, or delete. Start at the [capability tour](advanced/README.md).
+These pages document application code scaffolded by `pgmi init --template advanced` — a complete PostgreSQL application stack, not a pgmi core feature. The generated SQL and gateways become code you own, to keep, change or replace. Start at the [capability tour](advanced/README.md).
 
 - **[MCP overview](advanced/MCP.md)** — What the MCP support scaffolds, what you operate, and where to start
 - **[Client guides](advanced/clients/README.md)** — Generate typed clients from your deployment's OpenAPI contract
