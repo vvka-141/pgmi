@@ -12,7 +12,10 @@ pgmi takes a different approach to database deployments. This document explains 
 
 Most deployment tools take your files, decide the order and the transaction boundaries themselves, and apply the result. pgmi loads your files into PostgreSQL temp tables and lets **your deploy.sql** decide everything on the way to the database.
 
-The difference: **you write the deployment logic in SQL, not configuration.**
+Two ideas follow:
+
+- **Your SQL runs the deploy.** You write the deployment logic in SQL, not configuration.
+- **A test tree can gate its commit.** `CALL pgmi_test()` runs your `__test__/` directories against the changed, uncommitted database, so a failing test aborts the deployment before anything commits.
 
 ![Migration framework vs pgmi execution fabric: the tool decides vs your deploy.sql decides](diagrams/d02-fabric-vs-framework.drawio.svg)
 
@@ -22,6 +25,7 @@ Suppose you need environment-specific deployment behavior:
 - In development (`dev`): drop and recreate the application schema
 - In every environment (`dev`, `test`, `prod`): run the files under `./physical/` in plan order
 - In production (`prod`): record the deployment in an audit table
+- Before committing: run the project's tests
 
 **With traditional tools**, you'd need:
 - Multiple configuration files
@@ -32,6 +36,8 @@ Suppose you need environment-specific deployment behavior:
 
 ```sql
 -- deploy.sql
+BEGIN;
+
 DO $$
 DECLARE
     v_env TEXT := current_setting('pgmi.env', true);
@@ -64,11 +70,14 @@ BEGIN
         INSERT INTO audit.deployments (deployed_at, env) VALUES (now(), v_env);
     END IF;
 END $$;
+
+CALL pgmi_test();
+COMMIT;
 ```
 
 No framework DSL. No YAML conditionals. Just PostgreSQL.
 
-> Your `deploy.sql` queries `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and uses `EXECUTE` to run files directly. The `IF v_env` conditional controls what SQL runs based on runtime conditions. See [Session API](session-api.md).
+> Your `deploy.sql` queries `pg_temp.pgmi_plan_view` (or `pg_temp.pgmi_source_view`) and uses `EXECUTE` to run files directly. The `IF v_env` conditional controls what SQL runs based on runtime conditions. `CALL pgmi_test()` needs the explicit `BEGIN` and at least one test file under a `__test__/` directory; with none, it raises and the deploy aborts. See [Session API](session-api.md) and [Testing](TESTING.md).
 
 ## When pgmi makes sense
 
