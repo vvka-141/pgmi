@@ -239,7 +239,7 @@ PASS: fixture provides exactly 2 users
 
 Both tests pass. `test_user_count.sql` sees exactly 2 users even though `test_insert.sql` added a third. The savepoint rollback erased Charlie before running `test_user_count.sql`.
 
-**This is the core guarantee: every test starts from the exact fixture state, no matter what.**
+**This is the core guarantee: every test starts from the fixture's state, whatever the tests before it changed.** Sequence advances and effects outside the transaction are the exceptions: PostgreSQL does not roll those back.
 
 ---
 

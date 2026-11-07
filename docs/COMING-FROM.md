@@ -31,7 +31,7 @@ This guide helps you migrate to pgmi from other database deployment tools. Each 
 | Execution order | Filename prefix (V1, V2...) | Changelog order | Your `deploy.sql` decides |
 | Transaction control | `flyway.group=true` (batch) | Per-changeset or global | `BEGIN`/`COMMIT` in deploy.sql |
 | Tracking state | `flyway_schema_history` table | `databasechangelog` table | Your choice (or none) |
-| Rollback | Undo scripts (`U1__name.sql`) | Rollback commands in changeset | PostgreSQL transactions |
+| Rollback | Undo scripts (`U1__name.sql`) | Rollback commands in changeset | A failed deploy rolls back its open transaction; undoing a committed change is a new forward change |
 | Conditionals | Callbacks, limited | Preconditions, contexts | Full PL/pgSQL in deploy.sql |
 | Configuration | `flyway.conf` / `flyway.toml` | `liquibase.properties` | `pgmi.yaml` |
 
@@ -256,7 +256,7 @@ myapp/
 |-------------------|-----------------|
 | `liquibase update` | `pgmi deploy .` |
 | `liquibase status` | `pgmi metadata plan .` or query `pg_temp.pgmi_source_view` |
-| `liquibase rollback` | PostgreSQL transaction rollback |
+| `liquibase rollback` | None for committed changes: write a forward change. A failing deploy rolls back its open transaction |
 | `databasechangelog` | Implement tracking table, or use [pgmi metadata](METADATA.md) |
 | Contexts | Parameters + conditionals in deploy.sql |
 | Preconditions | PL/pgSQL conditionals in deploy.sql |

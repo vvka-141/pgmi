@@ -26,8 +26,7 @@ With pgmi those decisions are SQL in your `deploy.sql` ([Why pgmi?](docs/WHY-PGM
   of the binary you run, and `pgmi serve` lets a coding agent drive pgmi over MCP.
 
 pgmi takes no position on your architecture. `pgmi init` writes a starting
-project from one of three templates. From then on the code is yours to change
-or delete:
+project from one of three templates. From then on the code is yours to change:
 
 - **minimal** (the default) — a `deploy.sql` loop and one SQL file: the mechanism, bare.
 - **basic** — deploy a schema with a small project: table files that run once
