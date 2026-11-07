@@ -39,7 +39,7 @@ Transactional test data does not persist. Your migrations commit, but each test'
 transactional state is isolated. PostgreSQL sequence advances and effects outside
 the transaction are not rolled back.
 
-PostgreSQL **savepoints** isolate each test from every other test. Each test gets a clean copy of the fixture state, regardless of what previous tests did.
+PostgreSQL **savepoints** isolate each test from every other test. Each test starts from the fixture state: whatever earlier tests changed in the transaction is rolled back. Sequence advances and effects outside the database are not.
 
 You don't manage any of this. You write SQL in `__test__/` directories and call `CALL pgmi_test()` in your deploy.sql.
 
@@ -312,16 +312,19 @@ INSERT INTO users (name, email) VALUES
 ```sql
 -- This runs AFTER root _setup.sql.
 -- Alice and Bob already exist.
-INSERT INTO orders (user_id, total, status) VALUES
-    (1, 99.99, 'pending'),
-    (2, 149.50, 'shipped');
+INSERT INTO orders (user_id, total, status)
+SELECT u.id, o.total, o.status
+FROM (VALUES ('alice@example.com', 99.99, 'pending'),
+             ('bob@example.com', 149.50, 'shipped')) AS o(email, total, status)
+JOIN users u ON u.email = o.email;
 ```
 
 **`admin/_setup.sql`**:
 ```sql
 -- This also runs after root _setup.sql.
 -- Alice and Bob exist, but NO orders (orders fixture is separate).
-INSERT INTO user_roles (user_id, role) VALUES (1, 'admin');
+INSERT INTO user_roles (user_id, role)
+SELECT id, 'admin' FROM users WHERE email = 'alice@example.com';
 ```
 
 pgmi executes this structure as nested savepoints:
@@ -521,7 +524,7 @@ Because pgmi manages the transaction lifecycle, you skip the entire category of 
 | Traditional approach | With pgmi |
 |---------------------|-----------|
 | Write `teardown.sql` to clean up after tests | Not needed — savepoint rollback handles it |
-| Worry about test execution order | Not needed — each test starts from fixture state |
+| Worry about test execution order | Not needed — each test starts from fixture state (sequence advances and external effects excepted) |
 | Manage test database separately | Not needed — tests run against the target deployment and transactional test state is rolled back |
 | Build a test runner or assertion framework | Not needed — `RAISE EXCEPTION` is the assertion |
 | Truncate tables, drop temp objects, clean up transactional test state | Not needed — outer `ROLLBACK` reverts transactional changes (sequence advances from `nextval()` are not rolled back) |
@@ -568,7 +571,7 @@ CALL pgmi_test();
 COMMIT;
 ```
 
-The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreSQL. It generates the entire savepoint structure — every fixture setup, every test wrapped in its own savepoint, every rollback.
+The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreSQL. It generates the entire savepoint structure — every fixture setup, one savepoint per directory after its fixtures, every rollback to it.
 
 ### What happens at runtime
 
@@ -837,14 +840,16 @@ without a second execution mode. → [Working TAP 14 reporter](../examples/tap-r
 
 ## Compliance and gated deployment
 
-The [gated deployment pattern](#the-gated-deployment-pattern) provides auditable evidence that tests passed before changes were committed:
+When `deploy.sql` calls `CALL pgmi_test()` before its `COMMIT`, the [gated deployment pattern](#the-gated-deployment-pattern) provides auditable evidence that tests passed before those changes were committed:
 
 1. Migrations run inside `BEGIN`
 2. `CALL pgmi_test()` executes all tests
 3. If any test fails → `RAISE EXCEPTION` → transaction aborts → transactional changes roll back
 4. If all tests pass → `COMMIT` → changes persist
 
-**For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Tests passing is a precondition for the commit — there is no way to commit with failing tests, and no way to commit with an empty test plan (the macro refuses to pass when it discovers nothing to run).
+**For regulated environments:** The combination of test-gated commits and the advanced template's `internal.deployment_script_execution_log` provides a deployment audit trail: which scripts ran, when, by whom, with what checksums. Where `deploy.sql` calls the macro before `COMMIT`, a failing test aborts that transaction, and an empty test plan aborts it too (the macro refuses to pass when it discovers nothing to run). Passing tests prove only what their assertions check.
+
+Locks taken by the deploy's DDL are held until `COMMIT`, so a long test tree holds them longer.
 
 ```sql
 -- After deployment, query the audit trail
