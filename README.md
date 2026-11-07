@@ -148,7 +148,8 @@ pgmi exits with code `13`, the transaction aborts, and the `audit_log` table fro
 the new file **does not exist**. Tests run inside the deployment transaction
 (each rolled back to its directory's fixture state), and only a deployment whose tests pass
 commits. PostgreSQL does not roll back sequence advances or effects outside the
-transaction.
+transaction. Passing tests check what they assert, not every requirement or
+safety under concurrent load.
 
 A complete, CI-verified version of this pattern lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) — both paths run on every push.
 
@@ -197,7 +198,7 @@ On connect, pgmi creates session-scoped temporary tables and views holding your
 files and parameters, sets `pgmi.<name>` for each parameter, and takes an
 advisory lock, so a second deploy of the same database is refused.
 
-This minimal version runs every file on every deploy. pgmi keeps no history of its
+This is the minimal template's `deploy.sql` plus `CALL pgmi_test()`; it runs every file on every deploy. pgmi keeps no history of its
 own: what has run, and what may run again, is your SQL's decision too. The basic
 template's `deploy.sql` records applied run-once files in a ledger table and skips
 them on later deploys. If an applied file has changed, it refuses the deploy and
@@ -210,6 +211,49 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 - **Your SQL owns the deploy** — transactions, execution order and idempotency live in `deploy.sql`, not in the tool. pgmi retries connection attempts; your pipeline decides whether to retry a failed deploy.
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
 - **One transaction, then psql** — everything through the first top-level `COMMIT` runs in one transaction; without one, the whole file is atomic. The templates commit after the test gate and before the final banner, so a statement appended after that `COMMIT` autocommits on its own (as `CREATE INDEX CONCURRENTLY` needs) unless you group it in a `BEGIN ... COMMIT` of its own ([the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
+
+## AI assistant support
+
+Agents meet pgmi in two different roles.
+
+**An agent that develops your database** (Claude Code, Codex, or a smaller
+model) gets tools from pgmi and stays in control of what to change:
+
+- `pgmi serve` offers pgmi's commands as MCP tools over stdio: `deploy`,
+  `init`, `metadata_plan`, `metadata_validate`, `templates_list`,
+  `ai_overview` and `ai_contract`. Tests run inside `deploy`; there is no
+  separate test tool. A deploy that would drop the database must repeat its
+  name ([CLI reference](docs/CLI.md#pgmi-serve)).
+- The binary carries the facts that must match its version, so agents read them on demand instead of guessing:
+
+  ```bash
+  pgmi ai                    # Overview for AI assistants (llms.txt style)
+  pgmi ai contract           # Print the session API contract (views/functions)
+  ```
+
+- `pgmi init --template basic` or `--template advanced` writes an `AGENTS.md`
+  that routes agents to 14 project skills under `.agents/skills/`, and a
+  `CLAUDE.md` that imports it. The skills cover the pgmi workflow (deploy,
+  test, debug a failed deploy, metadata), two-layer schema design, and a
+  PostgreSQL recipe library (indexing, integrity, concurrency, security, time,
+  analytics, change capture) whose SQL deploys in pgmi's CI. The advanced
+  template adds five more for its API layer, endpoints, handlers and MCP tools.
+  They are the project's files: commit them and edit them. The minimal template
+  writes none.
+
+How the guidance is evaluated: [AI guidance in the scaffold](docs/design/ai-guidance-in-the-scaffold.md#how-success-is-measured).
+
+**An agent that uses your application** at runtime is a separate case, and only
+the advanced template serves it. Its [MCP gateway](docs/advanced/MCP.md)
+exposes your deployed application's tools to AI assistants. Each agent signs
+in as its own principal with a role its person chose. Each tool call is one
+transaction under row-level security, and your SQL decides whether the change
+commits. A call that starts after another committed sees that state, so its
+kernel can refuse it; overlapping calls are ordered only by a row lock or
+constraint in your kernel, or under a route that declares `SERIALIZABLE`,
+where the gateway retries the loser. The `pgmi-mcp` skill teaches the refusal
+shape; the template itself ships only the `echo_note` tool. `pgmi serve`
+plays no part in this.
 
 ## Why it works this way
 
@@ -315,41 +359,6 @@ A poor fit when:
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
 | [Advanced template](docs/advanced/README.md) | An application layer you own: one handler registry → REST+RPC+MCP+OpenAPI, per-route transaction policy, sessions and RLS, audit trails, reference gateways in five languages |
 | [Advanced-template MCP gateway](docs/advanced/MCP.md) | Expose your deployed application to AI assistants |
-
-## AI assistant support
-
-Agents meet pgmi in two different roles.
-
-**An agent that develops your database** (Claude Code, Codex, or a smaller model):
-
-- `pgmi init --template basic` or `--template advanced` writes an `AGENTS.md`
-  that routes agents to project skills under `.agents/skills/`, and a
-  `CLAUDE.md` that imports it. The skills cover the pgmi workflow (deploy,
-  test, debug a failed deploy, metadata), two-layer schema design, and a
-  PostgreSQL recipe library (indexing, integrity, concurrency, security, time,
-  analytics, change capture) whose SQL deploys in pgmi's CI. The advanced
-  template adds skills for its API layer, endpoints, handlers and MCP tools.
-  They are the project's files: commit them and edit them. The minimal template
-  writes none.
-- The binary carries the facts that must match its version, so agents read them on demand instead of guessing:
-
-  ```bash
-  pgmi ai                    # Overview for AI assistants (llms.txt style)
-  pgmi ai contract           # Print the session API contract (views/functions)
-  ```
-
-- `pgmi serve` exposes pgmi's commands, deploy included, as MCP tools over
-  stdio; a deploy that would drop the database must repeat its name
-  ([CLI reference](docs/CLI.md#pgmi-serve)).
-
-How the guidance is evaluated: [AI guidance in the scaffold](docs/design/ai-guidance-in-the-scaffold.md#how-success-is-measured).
-
-**An agent that uses your application** at runtime is a separate case, and only
-the advanced template serves it. Its [MCP gateway](docs/advanced/MCP.md)
-exposes your deployed application's tools to AI assistants. Each agent signs
-in as its own principal with a role its person chose. Each tool call is one
-transaction under row-level security, and your SQL decides whether the change
-commits. `pgmi serve` plays no part in this.
 
 ## Running unattended
 
