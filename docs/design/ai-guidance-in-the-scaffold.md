@@ -67,7 +67,7 @@ gateways/                 advanced template only: reference gateways
 ```
 
 In the pgmi repository the skills come from two trees. `internal/scaffold/skills/`
-reaches every template: the pgmi skills (workflow, SQL, testing, metadata,
+reaches the basic and advanced templates (minimal writes no skills): the pgmi skills (workflow, SQL, testing, metadata,
 debugging a deploy, design, the physical and semantic layers) and the
 `postgres-<area>` recipes.
 `internal/scaffold/templates/<name>/.agents/skills/` reaches one template:

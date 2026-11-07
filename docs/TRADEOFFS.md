@@ -40,7 +40,9 @@ The honest tradeoff is not "pgmi has no tracking". It is that **you pick the mod
 ## A runtime error names the file, not the line
 
 A runtime error (a constraint violation, division by zero) names the project
-file but carries no line or column. An exception handler in deploy.sql that
+file but carries no line or column. One exception: when the whole file is a
+single `DO` block that starts on its first line, as test files usually are,
+PL/pgSQL's line inside the block is the file's line, and pgmi prints it. An exception handler in deploy.sql that
 replaces the error with `RAISE EXCEPTION` loses the file too: it builds a new
 error and discards the text pgmi matches on. Let the error propagate, or
 re-raise with a bare `RAISE;` ([deploy.sql guide](DEPLOY-GUIDE.md#which-file-failed)).
