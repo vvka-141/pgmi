@@ -7,7 +7,7 @@ bookFlatSection: false
 
 # pgmi documentation
 
-Reference documentation for pgmi — the PostgreSQL-native execution fabric.
+Reference documentation for pgmi: PostgreSQL deployments written in SQL, tested before they commit.
 Browse the sidebar, or start with [Why pgmi]({{< relref "why-pgmi" >}}) and the
 [Quickstart]({{< relref "quickstart" >}}).
 

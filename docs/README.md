@@ -37,7 +37,7 @@ pgmi is a PostgreSQL-native deployment tool that loads your project files into s
 2. [Choose a template](templates.md) — Minimal, basic and advanced side by side
 3. [Why pgmi](WHY-PGMI.md) — Understand the philosophy
 4. [Core vs. template](core-vs-template.md) — What pgmi gives you, and what you own
-5. [Highlights](HIGHLIGHTS.md) — What pgmi does that other tools can't
+5. [Highlights](HIGHLIGHTS.md) — Ten distinctive capabilities, grounded in code
 6. [Session API](session-api.md) — Learn the session API
 7. [Trade-offs](TRADEOFFS.md) — Understand the honest costs
 

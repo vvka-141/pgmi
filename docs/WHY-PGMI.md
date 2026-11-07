@@ -95,11 +95,11 @@ pgmi is a good fit when:
 
 **You deploy data files alongside schema.**
 - JSON configuration, XML reference data, CSV seed data — loaded and processed in the same transaction as your migrations
-- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the [advanced template](advanced/README.md) does this automatically)
+- Checksum columns in `pgmi_source_view` enable change detection — your deploy.sql can compare checksums against a tracking table to skip unchanged files (the basic and [advanced](advanced/README.md) templates do this for run-once files)
 - See [deploy.sql guide](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
-- Same `deploy.sql` works on Azure Database for PostgreSQL, Amazon RDS, Google Cloud SQL, Citus, TimescaleDB, Neon, Supabase
+- The same `deploy.sql` targets self-hosted PostgreSQL and the managed services. CI tests self-hosted PostgreSQL; Azure was tested by hand, the other services are expected to work ([compatibility matrix](PRODUCTION.md#postgresql-compatibility))
 - Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM) — no credential translation layer
 - See [Connections](CONNECTIONS.md) for the full connection architecture
 
@@ -144,7 +144,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Plan inspectability | `pgmi_plan_view` is a SQL view — assertable by project-authored queries | Atlas [`migrate lint`](https://atlasgo.io/versioned/lint) ships 50+ vendor-supplied analyzers (requires a dev database); Flyway validates checksums against history |
 | Same file at multiple positions | Yes — `UNNEST(sort_keys)` places one idempotent file at several stages | One file, one ordinal |
 | Database-free CI validation | Structure, metadata, UUID uniqueness, and full execution order computable offline (`--json`) | Atlas lint and Flyway validate both require a database connection |
-| Coding-agent support | Every scaffolded project carries an `AGENTS.md` and skills, including PostgreSQL recipes whose SQL runs in pgmi's CI; facts that change with the binary come from the binary (`pgmi ai contract`) | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
+| Coding-agent support | Every basic or advanced project carries an `AGENTS.md` and skills, including PostgreSQL recipes whose SQL runs in pgmi's CI; facts that change with the binary come from the binary (`pgmi ai contract`) | Documentation sites; some tools also publish agent skills, versioned apart from the binary you run |
 
 For a deeper exploration of pgmi's costs, see [Trade-offs](TRADEOFFS.md). For the
 other side — the capabilities that are hard to reproduce with another tool at all —

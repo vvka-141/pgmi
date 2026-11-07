@@ -86,9 +86,8 @@ schema, analyze a plan. The advanced template implements the MCP JSON-RPC protoc
   routes and JSON-RPC methods, one registration per protocol, and can share one
   kernel with them.
 - One tool call is one transaction, at the isolation the tool declared (item 2).
-- **Tool discovery is auth-aware**: `api.mcp_list_tools` hides tools the caller may not call
-  from an unauthenticated session, so an agent's visible capability set is scoped to
-  its identity.
+- **Tool discovery is auth-aware**: `api.mcp_list_tools` lists only the tools the session's
+  caller may call, so an agent's visible capability set is scoped to its identity.
 - Row-level security applies to the agent exactly as it applies to a human caller.
 - The agent has its own principal and an agent role its person chose; it holds the
   role's permissions intersected with the person's, and every log records both, so an
@@ -136,9 +135,9 @@ Every file arrives with two checksums:
 `pgmi_plan_view.pgmi_checksum` is the same normalized value.
 
 A raw-byte checksum treats "I added a comment explaining this migration" as a
-different migration. That is the single most common Flyway support thread —
-`checksum mismatch` after a formatting change — and the documented remedy is
-`flyway repair`, which rewrites history to match the file.
+different migration. Flyway reports such a change as a `checksum mismatch`,
+and its documented remedy is `flyway repair`, which rewrites history to match
+the file.
 
 pgmi's normalized checksum doesn't move when you reformat, re-indent, add
 documentation, or edit a `<pgmi-meta>` block (it lives in a comment). Track against
@@ -213,11 +212,11 @@ pgmi ai                 # llms.txt-style overview
 pgmi ai contract        # the session API contract, machine-readable
 ```
 
-`pgmi init` is the part that matters: every scaffolded project carries an `AGENTS.md`
+`pgmi init` is the part that matters: every basic or advanced project carries an `AGENTS.md`
 routing table and skills under `.agents/skills/`, committed with the code, so the next
 agent to open the project learns how it deploys *before* it edits SQL — rather than
 inventing a migration framework that isn't there. The skills include PostgreSQL recipes
-whose SQL pgmi's CI deploys on every supported release.
+whose SQL pgmi's CI deploys (PostgreSQL 15 for the basic template, 18 for both).
 
 → [AI assistant support](../README.md#ai-assistant-support) · [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt)
 

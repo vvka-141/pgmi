@@ -58,6 +58,7 @@
 Loaded 14 files
 Executing deploy.sql
 [pgmi] Test suite started
+[pgmi] Fixture: ./semantic/__test__/_setup.sql
 [pgmi] Test: ./semantic/__test__/test_task.sql
 [pgmi] Test suite passed
 ✓ demo: 14 files loaded in 0.09s</code></pre>
@@ -104,7 +105,7 @@ Executing deploy.sql
             <a href="{{ "docs/advanced/" | relURL }}">Read the guide before choosing it</a>
           </article>
         </div>
-        <p class="paths-note">The basic and advanced templates also write an <code>AGENTS.md</code> and skills, so a coding agent learns the project's conventions before it edits.</p>
+        <p class="paths-note">The basic and advanced templates also write an <code>AGENTS.md</code> and skills, so a coding agent learns the project's conventions before it edits. pgmi takes no position on architecture: each template is a starting point you own (<a href="{{ "docs/core-vs-template/" | relURL }}">what pgmi gives you, and what you own</a>).</p>
       </section>
       <section class="shell model-section" aria-labelledby="model-title">
         <div>
@@ -117,12 +118,12 @@ Executing deploy.sql
             <p>Project files, metadata, tests, and parameters become session-scoped temporary tables and stable views.</p>
           </article>
           <article>
-            <strong>Hand off</strong>
-            <p><code>deploy.sql</code> queries those views and chooses ordering, filtering, transactions, idempotency, and rollback.</p>
+            <strong>Decide</strong>
+            <p><code>deploy.sql</code> queries those views and executes what it selects, choosing ordering, filtering, transactions and idempotency. PostgreSQL reports notices and errors directly.</p>
           </article>
           <article>
-            <strong>Execute</strong>
-            <p>pgmi runs what your deploy.sql selects in the same PostgreSQL session. PostgreSQL reports notices and errors directly.</p>
+            <strong>Test</strong>
+            <p><code>CALL pgmi_test()</code> runs your <code>__test__/</code> tree against the uncommitted changes. A directory's fixture applies to every test below it, and each test rolls back to a savepoint. A failing test aborts the deployment.</p>
           </article>
         </div>
       </section>
@@ -137,6 +138,7 @@ Executing deploy.sql
           <ul class="check-list">
             <li>CLI flags stay focused on infrastructure: connections, parameters, compatibility, observability.</li>
             <li>Deployment behavior stays in <code>deploy.sql</code>, where it can be reviewed and tested with the rest of the database code.</li>
+            <li>Coding agents get the binary's session API from <code>pgmi ai contract</code> and can drive pgmi over MCP with <code>pgmi serve</code>.</li>
           </ul>
         </div>
       </section>

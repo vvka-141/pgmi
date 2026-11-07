@@ -14,7 +14,7 @@ url: /docs/mcp/
 
 pgmi has **two unrelated MCP surfaces** — be sure you're reading about the right one:
 
-- **`pgmi serve`** (part of the CLI, every install): exposes pgmi's project-inspection commands as an MCP server over stdio, so a coding agent can drive pgmi itself. See the [CLI reference](../CLI.md).
+- **`pgmi serve`** (part of the CLI, every install): exposes pgmi's own commands (init, metadata, deploy) as an MCP server over stdio, so a coding agent that develops the project can drive pgmi itself. See the [CLI reference](../CLI.md#pgmi-serve).
 - **The advanced-template MCP gateway** (this section): exposes *your deployed PostgreSQL application* — its tools, resources, and prompts — to AI assistants over HTTP.
 
 The Model Context Protocol (MCP) is an open standard that allows AI
@@ -54,8 +54,31 @@ thin HTTP gateway for transport.
   See [MCP identity](MCP-GATEWAY.md#mcp-identity).
 - **Handler recipes** — complete, copy-ready examples for tools, resources,
   and prompts in [Writing MCP Handlers](MCP-HANDLERS.md). The template ships
-  with REST examples in `api/examples.sql`; add your own MCP handlers the
-  same way.
+  REST examples and one MCP tool, `echo_note`, in `api/examples.sql`; add
+  your own MCP handlers the same way.
+
+## Agents as callers
+
+An agent calls your application's operations, not its tables. What the
+template enforces for every tool call:
+
+- The call is one transaction, at the isolation the tool declared. It
+  commits whole or rolls back.
+- The agent's access is checked in the database before the handler runs:
+  its own principal, its `agent.*` role intersected with its person's
+  permissions, and row-level security on every row it touches.
+- Discovery is scoped: `api.mcp_list_tools` lists only the tools that session
+  may call.
+- The exchange log names both the agent and the person it acts for.
+
+Your kernels supply the business rules. A call that starts after another
+agent's call committed sees that state, so its kernel can refuse. For calls
+that overlap, the declared isolation decides: under `SERIALIZABLE` one of
+them fails with a serialization error, the gateway retries it as a whole, and
+the retry sees the other's result. How a tool answers a refusal is your design. The scaffolded
+`pgmi-mcp` skill teaches a refusal shape (`code`, `rule`, `remedy`) that an
+agent can act on, with a runnable example; the template itself ships only
+`echo_note`.
 
 ## What you operate
 

@@ -91,7 +91,7 @@ pgmi is a CLI tool. There is no:
 - Commercial support or training programs
 - Web dashboard
 
-Documentation is `README.md`, these docs, `pgmi ai`, and the agent skills `pgmi init` writes into each project.
+Documentation is `README.md`, these docs, `pgmi ai`, and the agent skills the basic and advanced templates write into each project.
 
 ---
 
