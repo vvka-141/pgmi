@@ -28,8 +28,8 @@ database and calls functions over SQL.
 Every database project first meets the same problem: remember which scripts
 already ran, and do not run them again. That infrastructure takes work to
 build, so the template ships it, with a test gate and request logging on top.
-It is scaffolding: after `pgmi init` the code belongs to you, to change,
-replace or delete. pgmi itself stays an execution fabric; the minimal template
+It is scaffolding: after `pgmi init` the code belongs to you, to keep, change
+or replace. pgmi itself only runs your `deploy.sql`; the minimal template
 shows it bare.
 
 The advanced template is pre-1.0: a later release may again need a new
@@ -88,9 +88,10 @@ Routing, the handler registry and the gateway contract live in PostgreSQL.
 The gateway keeps TLS, sign-in, token checks, CSRF and timeouts. That split
 buys four things:
 
-- **Performance.** Route lookup is an indexed query, and a handler reads and
-  writes next to its data: no round trips between application code and the
-  database inside a request.
+- **Fewer round trips.** Route lookup is an indexed query, one policy lookup
+  (an extra round trip) runs before `BEGIN`, and the handler reads and writes next to its data: no
+  round trips between application code and the database inside the
+  transaction ([Limits](TRANSACTION-POLICY.md#limits)).
 - **Security.** Every application table is forced to row-level security or
   exempted with a reason, and constraints keep membership consistent: an
   exclusion constraint allows one owner per organization at a time.
@@ -107,8 +108,9 @@ PostgreSQL. [Trade-offs](../TRADEOFFS.md) lists them.
 ## How a request flows
 
 The gateway asks the route's policy, opens one transaction at that isolation
-level, and calls the database. Access is checked before the handler runs; the
-handler answers from one snapshot; the gateway commits, or retries the whole
+level, and calls the database. Access is checked before the handler runs. A
+route that declares repeatable read or serializable answers from one snapshot;
+the default is read committed. The gateway commits, or retries the whole
 transaction on a serialization failure or deadlock.
 
 ![A REST call from the browser through the gateway into one database transaction and back.](../diagrams/d12-request-lifecycle.drawio.svg)
@@ -139,7 +141,8 @@ answers a first request.
   SQL handlers; the database checks access.
 - **Per request.** The gateway resolves the route's isolation level and
   read-only mode, then opens one transaction. The database checks access
-  before the handler runs, and the handler answers from one snapshot. The
+  before the handler runs. A route that declares repeatable read or
+  serializable answers from one snapshot; the default is read committed. The
   gateway retries serialization failures and deadlocks.
 - **Pooling.** PgBouncer transaction pooling works at runtime, because the
   request context is set per transaction. Only the deploy needs a session of
@@ -149,11 +152,17 @@ answers a first request.
 - **Updates.** A newer template does not update your project: you port the
   changes you want by hand. A v0.13 database cannot be upgraded in place; see
   [Upgrading](UPGRADING.md).
-- **Removal.** You can remove the gateways, `api/dev/`, change tracking, the
+- **Removal.** You can delete the gateways, `api/dev/`, change tracking, the
   entity registry and per-organization numbering; CI deploys the template
-  after removing each one separately. Membership and MCP support are woven
-  through the framework and cannot be removed. Without registered MCP
-  handlers, the MCP code stays dormant.
+  after removing each one separately. Membership is a ready-made starting
+  point for the most common multi-tenant SaaS access model: organizations,
+  roles and enterprise-style permissions on each endpoint. It is working code
+  you own: keep it, reshape it, or replace it with a different access model in
+  PostgreSQL, or open endpoints that need no sign-in. `lib/` calls its identity
+  readers, so deleting the `membership/` folder alone fails the deploy.
+  Removing or replacing it is a routine refactor, and the test suite tells you
+  when you're done. MCP support runs through the shared API files; without
+  registered MCP handlers it stays dormant.
 
 ## What else to know on day one
 
