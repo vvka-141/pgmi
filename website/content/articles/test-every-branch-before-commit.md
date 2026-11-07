@@ -379,9 +379,9 @@ abridged in the middle:
 [pgmi] Fixture: ./__test__/order_placed/paid/_setup.sql
 [pgmi] Test: ./__test__/order_placed/paid/test_paid.sql
 ...
-[pgmi] Test suite completed (24 steps)
+[pgmi] Test suite passed
 committed state: 0 product rows, 0 order rows
-✓ demo2: 19 files loaded, 1 test macro(s) expanded in 0.34s
+✓ demo2: 19 files loaded in 0.34s
 ```
 
 Seven states across five levels of nesting, twenty-four steps, 0.34 seconds — and after
@@ -401,8 +401,9 @@ deploy to a fresh database:
 ```text
 [pgmi] Fixture: ./__test__/order_placed/cancelled/_setup.sql
 [pgmi] Test: ./__test__/order_placed/cancelled/test_cancelled.sql
-✗ broken2: failed after 0.53s
-pgmi: error: execution failed: ERROR: Failed in ./__test__/order_placed/cancelled/test_cancelled.sql: cancel must restore stock to 5, got 3 (SQLSTATE P0001)
+✗ broken2: failed after 0.53s — nothing committed; created database "broken2", left empty
+pgmi: error: ERROR: cancel must restore stock to 5, got 3 (SQLSTATE P0001)
+SQL statement in ./__test__/order_placed/cancelled/test_cancelled.sql
 ```
 
 Exit code 13. The database afterward contains no tables at all. The migration had executed; the walk reached
@@ -604,7 +605,7 @@ argues the general case.
 Start small. Pick one lifecycle your database already implements — an order, a device, a
 job, an approval, a subscription, a claim — with three or four meaningful states. Do not redesign your testing stack. Represent just that lifecycle as
 directories, put each transition in a `_setup.sql`, and see how much repeated
-shared-prefix setup disappears. (If you start from `pgmi init`, the harness is already
+shared-prefix setup disappears. (If you start from `pgmi init -t basic` or `-t advanced`, the harness is already
 wired: the scaffolded deploy.sql gates its commit on `CALL pgmi_test()`, and the
 `__test__/` directory follows this convention — the nesting is yours to add.) After that,
 adding a branch means describing only what changed: one directory

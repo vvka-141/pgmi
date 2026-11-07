@@ -186,13 +186,13 @@ $ pgmi deploy . -d lock_safe_demo --force
 Database "lock_safe_demo" does not exist; creating
 Preparing session: scanning files, loading parameters
 Loaded 4 files
-Loaded 1 parameters
+Loaded 1 parameter(s)
 Executing deploy.sql
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_schema.sql
-[pgmi] Test suite completed (2 steps)
+[pgmi] Test suite passed
 [phase 2] plan survived COMMIT: 3 source file(s), 3 planned step(s)
-✓ lock_safe_demo: 4 files loaded, 1 test macro(s) expanded in 1.38s
+✓ lock_safe_demo: 4 files loaded in 1.38s
 ```
 
 Both indexes end up `VALID` and the constraint ends up validated.
@@ -238,8 +238,8 @@ make the sequence all-or-nothing. The question is what you are left holding.
 Breaking the last statement of the deployment above:
 
 ```
-✗ lock_safe_broken: failed after 1.10s (unit 11 of 11 failed; 10 earlier unit(s) already committed)
-pgmi: error: execution failed: ERROR: column "nonexistent_column" does not exist (SQLSTATE 42703)
+✗ lock_safe_broken: failed after 1.10s (unit 11 of 11 failed; 10 earlier unit(s) already committed) — created database "lock_safe_broken"
+pgmi: error: ERROR: column "nonexistent_column" does not exist (SQLSTATE 42703)
 ```
 
 Ten units committed; the eleventh did not. The first index exists and is valid,
@@ -254,16 +254,16 @@ re-run converges rather than colliding:
 $ pgmi deploy . -d lock_safe_broken --force
 Preparing session: scanning files, loading parameters
 Loaded 4 files
-Loaded 1 parameters
+Loaded 1 parameter(s)
 Executing deploy.sql
 relation "orders" already exists, skipping
 column "status" of relation "orders" already exists, skipping
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_schema.sql
-[pgmi] Test suite completed (2 steps)
+[pgmi] Test suite passed
 [phase 2] plan survived COMMIT: 3 source file(s), 3 planned step(s)
 relation "idx_orders_customer" already exists, skipping
-✓ lock_safe_broken: 4 files loaded, 1 test macro(s) expanded in 0.39s
+✓ lock_safe_broken: 4 files loaded in 0.39s
 ```
 
 That convergence is not free either. For a corrected whole-file re-run to

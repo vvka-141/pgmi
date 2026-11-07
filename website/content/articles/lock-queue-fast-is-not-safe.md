@@ -301,8 +301,8 @@ write; they are about where your `COMMIT` goes — and that is a property of the
 deployment program, not of any single migration. Most migration frameworks
 represent the answer as metadata attached to a migration unit. What changes
 when the boundary becomes an ordinary SQL statement in the program instead is
-the subject of the companion to this article: *Your Transaction Boundary Belongs in the
-Program, Not the Filename*.
+the subject of the companion to this article: [*Your Transaction Boundary Belongs in the
+Program, Not the Filename*](https://vvka-141.github.io/pgmi/articles/transaction-boundary-in-the-program/).
 
 ## Sources
 

@@ -288,20 +288,25 @@ those files and orchestrates everything — including the test gate:
 Tests live in `__test__/` directories next to migrations. A
 `CALL pgmi_test()` macro in deploy.sql expands — before the SQL reaches
 PostgreSQL — into exactly the top-level savepoint stream described above:
-fixture, `SAVEPOINT` per test, execute, `ROLLBACK TO SAVEPOINT`. A failing
+a savepoint per directory, its fixture, then one savepoint that every test in
+the directory runs from and rolls back to with `ROLLBACK TO SAVEPOINT`. A failing
 test raises, the transaction aborts, exit code 13.
 
 The [runnable example](https://github.com/vvka-141/pgmi/tree/main/examples/test-gated-deploy)
 deploys migrations and a test suite in one transaction (output abridged):
 
 ```text
-Loaded 9 files
+Loaded 13 files
+Loaded 1 parameter(s)
 Executing deploy.sql
 [pgmi] Test suite started
-[pgmi] Fixture: ./__test__/_setup.sql
-[pgmi] Test: ./__test__/test_user_crud.sql
-[pgmi] Test suite completed (3 steps)
-✓ 9 files loaded, 1 test macro(s) expanded in 5.21s
+[pgmi] Test: ./__test__/test_function_privileges.sql
+[pgmi] Test: ./physical/__test__/test_constraints.sql
+[pgmi] Fixture: ./semantic/__test__/_setup.sql
+[pgmi] Test: ./semantic/__test__/test_project.sql
+[pgmi] Test: ./semantic/__test__/test_task.sql
+[pgmi] Test suite passed
+✓ pgmi_example: 13 files loaded, 2 paths ignored in 0.15s
 ```
 
 Copy in the deliberately failing test — it expects an `audit_log` entry that
@@ -309,8 +314,8 @@ nothing creates — and deploy to a fresh database:
 
 ```text
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ Failed after 1.99s
-pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
+✗ pgmi_example_broken: failed after 0.12s — nothing committed; created database "pgmi_example_broken", left empty
+pgmi: error: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
 ```
 
 Exit code 13, and the proof that matters:
@@ -330,7 +335,7 @@ To be clear about what pgmi does *not* do: it doesn't impose the gate. The
 transaction boundaries live in your deploy.sql; `CALL pgmi_test()` gates the
 commit because you placed it before `COMMIT`. And everything in the
 limitations section applies unchanged — concurrent index builds still need
-their own phase, and the deployment session needs a direct connection
+their own phase, and the deployment session needs a direct or session-pooled connection
 (transaction-mode poolers recycle backends between statements, which breaks
 session-scoped state).
 

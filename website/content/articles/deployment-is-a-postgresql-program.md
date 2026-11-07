@@ -174,8 +174,8 @@ input.
 
 *All* files are loaded, not only SQL. A project that carries a `project.json`, a CSV of
 reference rows, or a YAML policy document gets those as rows too, and the deployment can
-read them with `content::jsonb` in the same query it uses for migrations. The scaffolded
-starter project does exactly that to read its own version number.
+read them with `content::jsonb` in the same query it uses for migrations. The basic
+template's `deploy.sql` does exactly that to read its own version number.
 
 And each file carries two checksums, not one: a hash of the raw bytes, and a hash of
 normalized content with comments stripped, case folded, and whitespace collapsed. One
@@ -270,7 +270,7 @@ strategy; the invalid index has to be dealt with explicitly before the deploymen
 
 ### The public surface stays small
 
-Six views, a handful of deploy-facing functions, and one composite type for test events form
+Seven views, a handful of deploy-facing functions, and one composite type for test events form
 the session API. The two pieces of preprocessing sit around it: the test macro and the
 head/tail split. Together they are the public contract — and the tables and other machinery
 behind it are free to change, while a deployment can pin the contract version it was written
@@ -336,8 +336,8 @@ data-dependent branching — and not before.
 **A durable ledger is a real property, and the project now owns it.** An external tool's history
 table survives the session, the operator, and the tool itself. A model where the deployment
 program decides what has run means an environment's history is exactly as good as the
-program that maintains it, and a team that deletes the tracking gets none. The scaffolded
-starter ships a small ledger: each run-once file runs once, and a deploy that finds one
+program that maintains it, and a team that deletes the tracking gets none. The basic
+template ships a small ledger: each run-once file runs once, and a deploy that finds one
 edited after it ran is refused, with the file named. The advanced template ships a full
 tracking system. But both are project code: the choice is now something a team keeps,
 changes or removes, badly or well, rather than something they inherit.
@@ -414,4 +414,4 @@ it.
 
 ---
 
-*Updated November 2026 for pgmi v0.14: the scaffolded starter now ships a run-once ledger that refuses to redeploy a file edited after it ran, and the paragraph on durable ledgers reflects it.*
+*Updated November 2026 for pgmi v0.14: the basic template now ships a run-once ledger that refuses to redeploy a file edited after it ran, and the paragraph on durable ledgers reflects it.*

@@ -476,16 +476,16 @@ applying ./migrations/001_catalog.sql
 plan: grant + auditor -> invoice.read
 plan: grant + auditor -> report.run
 ... (6 grants added on first load)
-[pgmi] Test suite completed (2 steps)
-✓ 6 files loaded, 1 test macro(s) expanded in 1.95s          (exit 0)
+[pgmi] Test suite passed
+✓ seed_demo: 7 files loaded in 0.08s                          (exit 0)
 
 $ pgmi deploy ./seed-demo --connection $DB --force    # again, nothing changed
-✓ 6 files loaded, 1 test macro(s) expanded in 1.93s          (exit 0)
+✓ seed_demo: 7 files loaded in 0.06s                          (exit 0)
 
 # drop report.run from auditor's grants in roles.json, redeploy:
 $ pgmi deploy ./seed-demo --connection $DB --force
 plan: grant - auditor -> report.run
-✓ 6 files loaded, 1 test macro(s) expanded in 1.62s          (exit 0)
+✓ seed_demo: 7 files loaded in 0.07s                          (exit 0)
 
 $ psql $DB -c "SELECT r.key AS role, count(rp.*) AS grants
                FROM role r LEFT JOIN role_permission rp USING (role_id)
@@ -506,8 +506,8 @@ $ pgmi deploy ./seed-demo --connection $DB --force
 seed file validated: ./seeds/roles.json
 applying ./migrations/001_catalog.sql
 [pgmi] Test: ./__test__/test_catalog_invariants.sql
-✗ Failed after 1.54s
-pgmi: error: execution failed: ERROR: catalog invariant violated:
+✗ seed_demo: failed after 0.07s — nothing committed
+pgmi: error: ERROR: catalog invariant violated:
   1 active role(s) with no permissions (SQLSTATE P0001)      (exit 13)
 
 $ psql $DB -c "\dt"

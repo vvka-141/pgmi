@@ -358,7 +358,8 @@ What this model does not give you:
   Django's DAGs — or Sqitch's `--requires` — model that directly.
 - **No built-in applied-migrations ledger.** Every deployment computes a fresh
   plan; nothing records what ran last time unless `deploy.sql` writes a tracking
-  table. The metadata UUID can key that history, while `idempotent` tells
+  table (the basic template's `deploy.sql` ships one, as project SQL you own;
+  see [Choose a template](https://vvka-141.github.io/pgmi/docs/templates/)). The metadata UUID can key that history, while `idempotent` tells
   project SQL whether a source should run again or be skipped. Tools with a
   ledger give you skip-already-applied for free.
 - **Policy you don't write doesn't exist.** Out of the box, pgmi's only
