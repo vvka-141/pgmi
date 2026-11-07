@@ -130,17 +130,18 @@ END $$;
 ```text
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_audit_log.sql
-✗ demo_db: failed after 0.09s
-pgmi: error: execution failed: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
+✗ demo_db: failed after 0.07s — nothing committed
+pgmi: error: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
 WHERE: PL/pgSQL function inline_code_block line 4 at RAISE
 SQL statement in ./__test__/test_audit_log.sql
 PL/pgSQL function inline_code_block line 1 at EXECUTE
-LOCATION: ./__test__/test_audit_log.sql
+LOCATION: ./__test__/test_audit_log.sql line 4
+LINE 4:         RAISE EXCEPTION 'audit_log must contain a deploy event';
 ```
 
 pgmi exits with code `13`, the transaction aborts, and the `audit_log` table from
 the new file **does not exist**. Tests run inside the deployment transaction
-(each isolated in its own savepoint), and only a deployment whose tests pass
+(each rolled back to its directory's fixture state), and only a deployment whose tests pass
 commits. PostgreSQL does not roll back sequence advances or effects outside the
 transaction.
 
@@ -163,7 +164,7 @@ before the deployment commits
 
 ## The entire model in one file
 
-`deploy.sql` is plain PostgreSQL. Your files are rows in a session view; you query them and decide what to execute. pgmi rewrites one thing before sending it: `CALL pgmi_test()` becomes the test calls, each in its own savepoint ([Testing](docs/TESTING.md)):
+`deploy.sql` is plain PostgreSQL. Your files are rows in a session view; you query them and decide what to execute. pgmi rewrites one thing before sending it: `CALL pgmi_test()` becomes the test calls, each rolled back to its directory's fixture state ([Testing](docs/TESTING.md)):
 
 ```sql
 -- deploy.sql

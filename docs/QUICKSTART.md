@@ -55,16 +55,58 @@ pgmi creates the `demo_db` database, loads the project into a session, and your 
 ✓ demo_db: 14 files loaded, 3 paths ignored in 0.09s
 ```
 
-Now see what makes this different from `psql -f`: make a test fail and watch the whole deployment refuse to commit. Edit `demo/semantic/__test__/test_task.sql`, add `RAISE EXCEPTION 'forced failure';` anywhere in the DO block, and redeploy:
+Now see what makes this different from `psql -f`: add a table and a test it fails, and watch the whole deployment refuse to commit. Create `demo/physical/003_audit_log.sql`:
+
+```sql
+/*
+<pgmi-meta id="5b0e7c1a-9f3d-4e2b-8a61-0c4d2e7f9b13" idempotent="false">
+</pgmi-meta>
+*/
+CREATE TABLE audit_log (
+    event text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+and `demo/__test__/test_audit_log.sql`, which expects a `deploy` event nothing inserts:
+
+```sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM audit_log WHERE event = 'deploy') THEN
+        RAISE EXCEPTION 'audit_log must contain a deploy event';
+    END IF;
+END $$;
+```
+
+Redeploy:
 
 ```bash
 pgmi deploy demo -d demo_db --param env=dev
 ```
 
-pgmi exits with code `13`, and PostgreSQL rolls back the transactional schema and
+```text
+[pgmi] Executing: ./physical/003_audit_log.sql
+[pgmi] Executing: ./semantic/project.sql
+[pgmi] Executing: ./semantic/task.sql
+[pgmi] Test suite started
+[pgmi] Test: ./__test__/test_audit_log.sql
+✗ demo_db: failed after 0.07s — nothing committed
+pgmi: error: ERROR: audit_log must contain a deploy event (SQLSTATE P0001)
+WHERE: PL/pgSQL function inline_code_block line 4 at RAISE
+SQL statement in ./__test__/test_audit_log.sql
+PL/pgSQL function inline_code_block line 1 at EXECUTE
+LOCATION: ./__test__/test_audit_log.sql line 4
+LINE 4:         RAISE EXCEPTION 'audit_log must contain a deploy event';
+```
+
+pgmi exits with code `13`. The file ran, but its table is gone:
+`docker exec pgmi-demo psql -U postgres -d demo_db -Atc "select to_regclass('audit_log')"`
+prints an empty line. PostgreSQL rolled back the transactional schema and
 data changes made before the failing test. Sequence counters and external or
 explicitly non-transactional effects are not rolled back. That test gate, inside
-your own deployment transaction, is the core of the pgmi model.
+your own deployment transaction, is the core of the pgmi model. (For a quicker
+check, add `RAISE EXCEPTION 'forced failure';` to any test instead.)
 
 Clean up with `docker rm -f pgmi-demo`, and clear the connection string before continuing — it outranks the `pgmi.yaml` you are about to edit: `unset PGMI_CONNECTION_STRING` (PowerShell: `Remove-Item Env:PGMI_CONNECTION_STRING`). For a real setup against your own PostgreSQL server, continue below.
 
@@ -440,12 +482,13 @@ Now watch a test gate the deploy. Add `RAISE EXCEPTION 'forced failure';` inside
 
 ## What just happened?
 
-Here's the entire model in four points:
+Here's the entire model in five points:
 
 1. **pgmi loaded your files** (everything in the project folder) into PostgreSQL temporary tables and views (`pg_temp.pgmi_source_view`, `pg_temp.pgmi_plan_view`)
 2. **pgmi ran `deploy.sql`**, which queries those views and directly executes files using `EXECUTE v_file.content`
 3. **Your SQL files are regular SQL** — no framework conventions, no special syntax
 4. **`deploy.sql` is the only thing that decides** what runs, in what order, with what transaction boundaries. Not a config file. Not pgmi. Your SQL.
+5. **`CALL pgmi_test()` ran your `__test__/` tree** against the changed, uncommitted database, before `COMMIT`. A failing test aborted the transaction.
 
 This is what makes pgmi different from migration tools: PostgreSQL itself is the deployment engine. You write the logic in SQL, and pgmi just provides the infrastructure to get your files into the database session.
 
