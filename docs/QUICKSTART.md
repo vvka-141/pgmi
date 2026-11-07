@@ -28,7 +28,7 @@ No Go toolchain required — the quickstart installs a prebuilt binary. (Install
 Have Docker but no PostgreSQL at hand? This detour needs nothing else — no passwords to remember, no server setup, disposable afterwards. Install pgmi (Step 1 below), then:
 
 ```bash
-docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:18-alpine
 docker exec pgmi-demo timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
 ```
 

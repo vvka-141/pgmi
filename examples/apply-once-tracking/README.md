@@ -36,7 +36,7 @@ hide a real change to the data.
 Needs a PostgreSQL server (any recent version; a throwaway container works):
 
 ```bash
-docker run -d --name pgmi-example -e POSTGRES_PASSWORD=postgres -p 5440:5432 postgres:17
+docker run -d --name pgmi-example -e POSTGRES_PASSWORD=postgres -p 5440:5432 postgres:18
 docker exec pgmi-example timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
 ```
 

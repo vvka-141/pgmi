@@ -56,7 +56,7 @@ nothing is running, start a disposable PostgreSQL in Docker (already have one?
 skip this block and point `PGMI_CONNECTION_STRING` at it):
 
 ```bash
-docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:17-alpine
+docker run -d --name pgmi-demo -e POSTGRES_PASSWORD=postgres -p 5434:5432 postgres:18-alpine
 docker exec pgmi-demo timeout 60 sh -c 'until pg_isready -h 127.0.0.1 -q; do sleep 1; done'
 ```
 
@@ -73,12 +73,17 @@ pgmi deploy demo -d demo_db --param env=dev
 ```
 
 ```text
+connection: from PGMI_CONNECTION_STRING (127.0.0.1:5434/demo_db)
 Database "demo_db" does not exist; creating
 Preparing session: scanning files, loading parameters
 Loaded 14 files
 Loaded 1 parameter(s)
 Executing deploy.sql
 [dev] Deploying demo v1.0.0
+[pgmi] Executing: ./physical/001_project.sql
+[pgmi] Executing: ./physical/002_task.sql
+[pgmi] Executing: ./semantic/project.sql
+[pgmi] Executing: ./semantic/task.sql
 [pgmi] Test suite started
 [pgmi] Test: ./__test__/test_function_privileges.sql
 [pgmi] Test: ./physical/__test__/test_constraints.sql
