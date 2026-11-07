@@ -18,8 +18,8 @@ SaaS backends, internal business systems, and applications that AI agents
 operate. Callers get coarse operations, never tables. A handler checks
 access and calls one kernel function. The kernel enforces the business rules
 and writes, and the request commits or is refused as one transaction. For an
-agent, that means it asks for an outcome and your SQL decides whether the
-outcome commits ([agents as callers](MCP.md#agents-as-callers)).
+agent, that means it calls an operation, and its kernel commits it or refuses
+it ([agents as callers](MCP.md#agents-as-callers)).
 
 This is one way to build on pgmi, not the way. pgmi itself takes no position
 on architecture: the basic template keeps the application outside the

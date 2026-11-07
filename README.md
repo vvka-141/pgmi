@@ -9,32 +9,40 @@
 
 pgmi loads your project files into one PostgreSQL session as queryable data, then
 runs the `deploy.sql` **you** write. Your deployment selects migrations, loads
-reference data, tests the changed database — and commits only if everything
-passes. A failing test aborts the deployment transaction.
+reference data, and can test the changed database with `CALL pgmi_test()`
+before it commits. A failing test aborts the deployment transaction.
+
+- **Your SQL runs the deploy.** Your files are rows in session views.
+  `deploy.sql` queries them and decides what runs, in what order, and inside
+  which transaction.
+- **A test tree can gate the commit.** `CALL pgmi_test()` runs the tests in your
+  `__test__/` directories against the changed, uncommitted database. A
+  directory's fixture applies to every test below it, and each test rolls back
+  to its directory's fixture state. Call it before `COMMIT`: a failing test
+  aborts that transaction; anything an earlier `COMMIT` applied stays.
+- **Coding agents get tools and project skills.** `pgmi serve` lets a coding
+  agent deploy a project and check its metadata and plan over MCP, and
+  `pgmi ai contract` prints the session API of the binary you run. The basic and
+  advanced templates also write an `AGENTS.md` and PostgreSQL skills into the
+  project. The agent stays in control: pgmi runs the commands it is given and
+  plans nothing on its own.
 
 Migration frameworks decide ordering, history, and the transaction model for you.
 With pgmi those decisions are SQL in your `deploy.sql` ([Why pgmi?](docs/WHY-PGMI.md)).
 
-- **Control.** Your files are rows in session views. `deploy.sql` queries them
-  and decides what runs, in what order, and inside which transaction.
-- **Confidence.** `CALL pgmi_test()` runs the tests in your `__test__/`
-  directories against the changed, uncommitted database. A directory's fixture
-  applies to every test below it, and each test's changes roll back to a
-  savepoint. Call it before `COMMIT`, and a failing test commits nothing.
-- **Agent-ready.** The basic and advanced templates write an `AGENTS.md` and
-  PostgreSQL skills into the project. `pgmi ai contract` prints the session API
-  of the binary you run, and `pgmi serve` lets a coding agent drive pgmi over MCP.
-
-pgmi takes no position on your architecture. `pgmi init` writes a starting
-project from one of three templates. From then on the code is yours to change:
+pgmi takes no position on your architecture. Write your own `deploy.sql` (no
+`init` needed), or let `pgmi init` write a starting project from one of three
+templates. From then on the code is yours to change:
 
 - **minimal** (the default) — a `deploy.sql` loop and one SQL file: the mechanism, bare.
-- **basic** — deploy a schema with a small project: table files that run once
-  (tracked in a ledger), views and functions that re-run on every deploy, and
-  tests that gate the commit. Your application calls the functions by name;
-  there is no API layer in the database.
-- **advanced** — build your application's backend in PostgreSQL, as code you
-  own, with REST, RPC and MCP routing in the database; read [the advanced-template guide](docs/advanced/README.md) before choosing it.
+- **basic** — conventional database development, with the application outside
+  PostgreSQL: table files that run once (tracked in a ledger), views and
+  functions that re-run on every deploy, and tests that gate the commit. Your
+  application calls the functions by name; there is no API layer in the database.
+- **advanced** — your application's backend in PostgreSQL, as code you own:
+  REST, RPC and MCP endpoints your application serves at runtime (separate from
+  `pgmi serve`, which is pgmi's own tool for coding agents). Read
+  [the advanced-template guide](docs/advanced/README.md) before choosing it.
 
 [What pgmi gives you, and what you own](docs/core-vs-template.md) draws the line
 between pgmi and the templates; [Choose a template](docs/templates.md) compares all three.
@@ -142,7 +150,9 @@ The tests form a tree. In the first run, `./semantic/__test__/_setup.sql` is a
 fixture. It runs once before `test_project.sql` and `test_task.sql`, and each
 test rolls back to the fixture's state, so neither sees the other's changes.
 Subdirectories of `__test__/` add their own fixtures on top of their parent's,
-so one setup can branch into several scenarios. The whole tree rolls back
+so one setup can branch into several scenarios: `__test__/billing/_setup.sql`
+runs after `__test__/_setup.sql`, and both `__test__/billing/test_invoice.sql`
+and `__test__/billing/test_refund.sql` start from that state. The whole tree rolls back
 before the deployment commits
 ([hierarchical fixtures](docs/TESTING.md#hierarchical-fixtures);
 [Scenario-Tree Testing in PostgreSQL](https://vvka-141.github.io/pgmi/articles/test-every-branch-before-commit/)).

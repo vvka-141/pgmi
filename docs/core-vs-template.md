@@ -8,7 +8,7 @@ weight: 25
 
 pgmi has one job: prepare a PostgreSQL session and execute your `deploy.sql`.
 Everything on the pgmi side of that line upgrades when you upgrade pgmi.
-Everything on the project side is yours to keep, change or delete.
+Everything on the project side is yours to keep, change or replace.
 
 A pgmi project has four parts. Only the first one is pgmi.
 
@@ -48,8 +48,7 @@ The rest of core:
   and `serve` ([CLI reference](CLI.md)).
 - **Tooling for coding agents.** `pgmi ai` and `pgmi ai contract` print what an
   agent needs to know about this binary's session API. `pgmi serve` offers the
-  CLI commands as MCP tools over stdio, so an agent can deploy and inspect a
-  project.
+  CLI commands as MCP tools over stdio, so an agent can deploy a project and check its metadata and plan.
 - **The Go library.** `pkg/pgmi/deploy` runs the same deploy from your own Go
   program ([Go library](GO-LIBRARY.md)).
 
@@ -101,9 +100,11 @@ them at runtime. Two MCP surfaces exist, and they are unrelated:
 Everything reachable from `deploy.sql` is yours.**
 
 A pgmi upgrade never upgrades, migrates or overwrites template code. Trimming
-the advanced template is expected, but not every part comes out: the gateways,
-`api/dev/` and several framework parts do, while membership and MCP support are
-woven through it ([Before you choose it](advanced/README.md#before-you-choose-it)).
+the advanced template is expected. The gateways, `api/dev/` and several
+framework parts delete cleanly. Membership is a ready-made access model you can
+keep, reshape or replace; `lib/` calls its identity readers, so replacing it is
+a refactor rather than a folder delete
+([Before you choose it](advanced/README.md#before-you-choose-it)).
 
 ## What happens on upgrade
 

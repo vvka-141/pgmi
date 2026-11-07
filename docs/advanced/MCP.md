@@ -73,9 +73,10 @@ template enforces for every tool call:
 
 Your kernels supply the business rules. A call that starts after another
 agent's call committed sees that state, so its kernel can refuse. For calls
-that overlap, the declared isolation decides: under `SERIALIZABLE` one of
-them fails with a serialization error, the gateway retries it as a whole, and
-the retry sees the other's result. How a tool answers a refusal is your design. The scaffolded
+that overlap, the declared isolation decides. At the default `READ COMMITTED`,
+a precondition holds across overlapping calls only through a row lock or a
+constraint. Under `SERIALIZABLE` one of them fails with a serialization error,
+the gateway retries it as a whole, and the retry sees the other's result. How a tool answers a refusal is your design. The scaffolded
 `pgmi-mcp` skill teaches a refusal shape (`code`, `rule`, `remedy`) that an
 agent can act on, with a runnable example; the template itself ships only
 `echo_note`.

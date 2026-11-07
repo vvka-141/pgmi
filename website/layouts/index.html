@@ -123,7 +123,7 @@ Executing deploy.sql
           </article>
           <article>
             <strong>Test</strong>
-            <p><code>CALL pgmi_test()</code> runs your <code>__test__/</code> tree against the uncommitted changes. A directory's fixture applies to every test below it, and each test rolls back to a savepoint. A failing test aborts the deployment.</p>
+            <p><code>CALL pgmi_test()</code> runs your <code>__test__/</code> tree against the uncommitted changes. A directory's fixture applies to every test below it, and each test rolls back to its directory's fixture state. A failing test aborts the transaction it runs in.</p>
           </article>
         </div>
       </section>
