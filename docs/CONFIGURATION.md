@@ -18,7 +18,7 @@ pgmi deploy . --database myapp --param env=dev
 pgmi deploy .
 ```
 
-`pgmi init` generates a `pgmi.yaml` automatically for both templates.
+The basic and advanced templates ship a `pgmi.yaml`. The minimal template writes none, unless you set up the connection in the `pgmi init` wizard, which writes one for any template.
 
 ## Coming from Other Tools
 

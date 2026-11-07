@@ -378,7 +378,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 ### Option 2: Use pgmi metadata
 
-Mark a file run-once; both templates' `deploy.sql` track it by its UUID, run it once and refuse the deploy when it is edited after it ran:
+Mark a file run-once; the basic and advanced templates' `deploy.sql` track it by its UUID, run it once and refuse the deploy when it is edited after it ran:
 ```sql
 /*
 <pgmi-meta

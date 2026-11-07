@@ -126,7 +126,7 @@ context, so wrap such statements (see [SECURITY.md](SECURITY.md#your-sql-control
 pgmi deploy . -d "$DB_NAME" --compat 1 --force --param env=prod --json > deploy-result.json
 ```
 
-**A parameter that was not wired.** Both templates refuse a missing or
+**A parameter that was not wired.** The basic and advanced templates refuse a missing or
 malformed parameter with exit 13 and `sqlstate` `22023`
 (`invalid_parameter_value`), before any change, so CI can tell "the secret was
 not passed" from a failed migration. A first deploy refused this way leaves an
