@@ -6,16 +6,16 @@ weight: 32
 
 # Choose a template
 
-`pgmi init` writes a starting project from a template. A template is scaffolding, not part of pgmi. Every project soon needs the same infrastructure: remember which scripts already ran, do not run them again, and test before the commit. That code is tedious to write, so the basic and advanced templates ship it as plain SQL you can read and change. pgmi itself stays an execution fabric, and the minimal template shows it bare.
+`pgmi init` writes a starting project from a template. A template is scaffolding, not part of pgmi. Projects that mix run-once and re-runnable files often need the same infrastructure: remember which scripts already ran, do not run them again, and test before the commit. The basic and advanced templates supply it as plain SQL you can read and change; minimal leaves it to you. pgmi itself only runs your `deploy.sql`, and the minimal template shows it bare.
 
 ## Side by side
 
 | | minimal | basic | advanced |
 |---|---|---|---|
-| **For** | Building your own deployment from nothing | Deploying a schema with classical PostgreSQL design: tables, views, and functions called by name | Building an application backend in PostgreSQL, with security, performance and REST/RPC/MCP routing in the database |
+| **For** | Building your own deployment from nothing | Conventional database development, with the application outside PostgreSQL: tables, views, and functions called by name | Building an application backend in PostgreSQL, with security, performance and REST/RPC/MCP routing in the database |
 | **You write** | Any SQL files; `deploy.sql` runs them | Run-once tables in `physical/`, re-run views and functions in `semantic/`, tests in `__test__/` | Tables, kernel functions and handlers in a file contract with `<pgmi-meta>` sort keys; gateways keep only cross-cutting concerns |
 | **Ships** | `deploy.sql` (runs every SQL file in path order, one transaction), `hello_world.sql`, and a `.pgmiignore` that keeps parameter files and backup copies out of the session | `deployment.run_once` ledger, refusal of changed run-once files, `CALL pgmi_test()` before `COMMIT`, required `env` parameter (`dev`, `test`, `prod`), `EXECUTE` revoked from `PUBLIC` by default, dev-only seed data | `internal.deployment`, `internal.deployment_script`, `internal.deployment_script_content`, `internal.deployment_script_execution_log`; refusal of changed run-once files; `internal.environment`; exchange log `api.exchange` (with `api.rest_exchange`, `api.rpc_exchange`, `api.mcp_exchange`); `internal.job_run_log`; advisory lock, lost-grant check, test gate before `COMMIT`; parameters declared in `session.xml` and read as `current_setting('deployment.<key>')` |
-| **Is not** | No tracking, no tests, no parameters: a file that ran runs again | No API, gateway or MCP inside the database | A "more production" basic. It is a different, opinionated starting point you trim |
+| **Is not** | No ledger, sample tests, test-gate call or parameter use supplied: a file that ran runs again. Core tests and parameters work when you add them | No API, gateway or MCP inside the database | A "more production" basic. It is a different, opinionated starting point you trim |
 | **PostgreSQL** | 15+ | 15+ | 18+, a role with `CREATEROLE` and `CREATEDB`, no superuser ([requirements](#advanced-template-requirements)) |
 | **Start** | `pgmi init myapp` | `pgmi init myapp --template basic` | `pgmi init myapp --template advanced` |
 

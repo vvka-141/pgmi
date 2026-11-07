@@ -443,7 +443,7 @@ Use `pgmi templates list` to see all available templates with descriptions.
 | Template | Purpose |
 |----------|---------|
 | `minimal` | Three files and no opinions: `deploy.sql` runs every SQL file in path order with an `Executing:` notice per file, `hello_world.sql` raises a notice, and `.pgmiignore` keeps parameter files and backup copies out of the session. No tables, ledger, tests, parameters, `pgmi.yaml` or agent skills. For building your own deployment from nothing. |
-| `basic` | Low-ceremony, production-capable for small systems. Two layers: run-once `physical/` tables and re-run `semantic/` views and functions. PostgreSQL 15+, runs on any provider. |
+| `basic` | Conventional database development, with the application outside PostgreSQL. Two layers: run-once `physical/` tables and re-run `semantic/` views and functions. PostgreSQL 15+, runs on any provider. |
 | `advanced` | Full reference app. Five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects, role hierarchy, metadata-driven deployment. PostgreSQL 18+; needs a role with `CREATEROLE` + `CREATEDB` (no superuser). Runs on managed cloud — see the [Production Guide](PRODUCTION.md#managed-cloud-postgresql). |
 
 [Choose a template](templates.md) compares the three side by side.

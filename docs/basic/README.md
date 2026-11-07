@@ -6,8 +6,9 @@ weight: 130
 
 # The basic template
 
-The basic template is classical PostgreSQL design. Tables hold the data,
-views are the read surface, and functions are the only writers. Your
+The basic template is conventional database development, with the
+application outside PostgreSQL. Tables hold the data, views are the read
+surface, and by convention functions are the writers. Your
 application connects as usual and calls those functions by name. There is no
 API layer, gateway or MCP inside the database. Choose it when you want a
 well-structured database and keep HTTP, if any, in your application.
