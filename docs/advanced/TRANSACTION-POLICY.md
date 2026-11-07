@@ -201,5 +201,5 @@ default_transaction_isolation`) — static server-side configuration.
 
 - [Advanced template overview](README.md#declarative-per-route-transaction-policy)
 - [MCP gateway — transaction policy](MCP-GATEWAY.md#transaction-policy)
-- [Highlights §2](../HIGHLIGHTS.md#2-routes-declare-their-transaction-policy-and-the-policy-is-resolved-before-begin)
+- [Highlights §9](../HIGHLIGHTS.md#9-routes-declare-their-transaction-policy-and-the-policy-is-resolved-before-begin)
 - [`lib/api/00-transaction-isolation.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/lib/api/00-transaction-isolation.sql)

@@ -56,7 +56,7 @@ prints the file, line and column, with PostgreSQL's `DETAIL`, `HINT` and
 A concurrent index cannot run through `EXECUTE` in a plan loop or a DO block:
 PostgreSQL refuses it from any function execution context ("cannot be executed
 from a function"). Write each one explicitly at the top level of deploy.sql,
-after its first top-level `COMMIT` ([how](HIGHLIGHTS.md#10-create-index-concurrently-works-inside-a-deploy)).
+after its first top-level `COMMIT` ([how](HIGHLIGHTS.md#7-create-index-concurrently-works-inside-a-deploy)).
 
 Statements there autocommit, so earlier ones stay applied if a later one
 fails. A rerun must also reap an `INVALID` index a failed build left behind;

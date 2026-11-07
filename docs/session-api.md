@@ -197,7 +197,7 @@ END $$;
 
 **Honest cost:** a change that touches *only* comments is invisible to `pgmi_checksum`. If your comments carry operational meaning (e.g., planner hints via `pg_hint_plan`, or `<pgmi-meta>` blocks that don't affect the normalized body), the normalized checksum won't catch the edit.
 
-See [Highlights §5](HIGHLIGHTS.md#5-checksums-that-survive-a-reformat) and [Checksum-based change detection](DEPLOY-GUIDE.md#checksum-based-change-detection) for usage examples.
+See [Highlights §4](HIGHLIGHTS.md#4-checksums-that-survive-a-reformat) and [Checksum-based change detection](DEPLOY-GUIDE.md#checksum-based-change-detection) for usage examples.
 
 ### Parameters
 
