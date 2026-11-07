@@ -186,7 +186,7 @@ agent to open the project learns how it deploys *before* it edits SQL — rather
 inventing a migration framework that isn't there. The skills include PostgreSQL recipes
 whose SQL pgmi's CI deploys (PostgreSQL 15 for the basic template, 18 for both).
 
-→ [AI assistant support](../README.md#ai-assistant-support) · [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt)
+→ [AI assistant support](https://github.com/vvka-141/pgmi#ai-assistant-support) · [`llms.txt`](https://vvka-141.github.io/pgmi/llms.txt)
 
 ---
 

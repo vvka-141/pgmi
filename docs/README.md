@@ -55,7 +55,7 @@ The templates are optional starting points that become your project's code; a ha
 3. [Upgrading](advanced/UPGRADING.md) — Take template fixes into a project you have changed
 
 **Working with a coding agent?**
-1. [AI assistant support](../README.md#ai-assistant-support) — `pgmi serve`, `pgmi ai contract`, and the project's `AGENTS.md` and skills
+1. [AI assistant support](https://github.com/vvka-141/pgmi#ai-assistant-support) — `pgmi serve`, `pgmi ai contract`, and the project's `AGENTS.md` and skills
 
 ## Articles
 
@@ -86,7 +86,7 @@ The templates are optional starting points that become your project's code; a ha
 | Which view should I use? | `pgmi_plan_view` for deployment, `pgmi_source_view` for introspection — see [Session API](session-api.md#which-view-should-i-use) |
 | How do I access CLI parameters? | `current_setting('pgmi.key', true)` — see [Session API](session-api.md#parameters) |
 | How do I run tests? | `CALL pgmi_test()` in deploy.sql — see [Testing](TESTING.md) |
-| What's the difference between templates? | Minimal = a `deploy.sql` loop and one file: the mechanism, bare. Basic = two layers: run-once tables, and views and functions re-run on every deploy, behind a test gate. Advanced = a full, tested PostgreSQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Either is production-capable; see [Choose a template](templates.md) |
+| What's the difference between templates? | Minimal = a `deploy.sql` loop and one file: the mechanism, bare. Basic = two layers: run-once tables, and views and functions re-run on every deploy, behind a test gate. Advanced = a full, tested PostgreSQL application stack (one handler registry → REST+RPC+MCP+OpenAPI, RLS auth, transaction policy, audit trails) — more infrastructure, not a higher safety tier. Basic and advanced are both production-capable; see [Choose a template](templates.md) |
 | How do I filter which files run? | Join `pgmi_plan_view` to `pgmi_source_view`, require `is_sql_file`, then add your path filter — see [Session API](session-api.md) |
 | What exit codes does pgmi use? | 0=success, 13=SQL error, etc. — see [CLI reference](CLI.md#exit-codes) |
 

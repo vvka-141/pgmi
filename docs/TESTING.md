@@ -571,7 +571,7 @@ CALL pgmi_test();
 COMMIT;
 ```
 
-The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreSQL. It generates the entire savepoint structure — every fixture setup, one savepoint per directory after its fixtures, every rollback to it.
+The `CALL pgmi_test()` macro is expanded by pgmi before the SQL reaches PostgreSQL. It generates the entire savepoint structure — every fixture setup, a savepoint before each directory's fixtures (rolled back at teardown) and one after them (each test rolls back to it).
 
 ### What happens at runtime
 

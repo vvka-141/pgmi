@@ -384,7 +384,10 @@ CALL pgmi_test();
 COMMIT;
 ```
 
-`CALL pgmi_test()` needs at least one test file under a `__test__/` directory.
+The undo run reverses path order, so the sample assumes migrations run in path
+order (no sort keys). `CALL pgmi_test()` runs in both modes, so the tests must
+hold after an undo too, and it needs at least one test file under a
+`__test__/` directory.
 Usage:
 ```bash
 pgmi deploy . -d mydb --param rollback=true

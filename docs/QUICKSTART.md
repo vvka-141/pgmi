@@ -42,7 +42,7 @@ pgmi init demo --template basic
 pgmi deploy demo -d demo_db --param env=dev
 ```
 
-pgmi creates the `demo_db` database, loads the project into a session, and your generated `deploy.sql` runs the project's SQL files and the test suite in the [atomic head](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) of the script — everything up to the first top-level `COMMIT` is one transaction:
+pgmi creates the `demo_db` database, loads the project into a session, and your generated `deploy.sql` runs the project's SQL files and the test suite in the [atomic head](DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract) of the script — everything up to the first top-level `COMMIT` is one transaction. The output ends with:
 
 ```text
 [pgmi] Test suite started
@@ -85,7 +85,10 @@ Redeploy:
 pgmi deploy demo -d demo_db --param env=dev
 ```
 
+The output ends with:
+
 ```text
+[dev] Deploying demo v1.0.0
 [pgmi] Executing: ./physical/003_audit_log.sql
 [pgmi] Executing: ./semantic/project.sql
 [pgmi] Executing: ./semantic/task.sql
@@ -126,7 +129,7 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
-Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive or `.deb` package all work — see the [full install options](../README.md#install).
+Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive or `.deb` package all work — see the [full install options](https://github.com/vvka-141/pgmi#install).
 
 Verify the installation:
 
