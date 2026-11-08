@@ -39,6 +39,7 @@ sign-in without an identity provider that only an `env=dev` deploy accepts:
 ```bash
 psql -d mydb -c "CREATE ROLE mydb_gateway LOGIN PASSWORD 'secret' IN ROLE mydb_api"
 cd gateways/python
+python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 export DATABASE_URL="postgresql://mydb_gateway:secret@localhost:5432/mydb"
 DEV_LOGIN=1 python gateway.py

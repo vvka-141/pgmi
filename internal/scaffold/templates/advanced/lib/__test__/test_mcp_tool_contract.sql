@@ -29,9 +29,20 @@ DECLARE
 BEGIN
     RAISE NOTICE '-> Testing tool effects, annotations and schema references';
 
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object('id', 'f4500000-0000-4000-8000-0000000000ac', 'type', 'tool', 'name', 'tc_target',
+                           'effect', 'write', 'reversible', true, 'description', 'target', 'access', 'public'),
+        $b$BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END;$b$);
+
     FOR v_case IN SELECT * FROM (VALUES
             ('{"type": "tool"}'::jsonb,                                              'must declare "effect"'),
-            ('{"type": "tool", "effect": "proposal", "reversible": true}',           'must declare "effect"'),
+            ('{"type": "tool", "effect": "proposal", "proposes": "tc_target", "reversible": true}', 'takes no "reversible"'),
+            ('{"type": "tool", "effect": "proposal"}',                               'must declare "proposes"'),
+            ('{"type": "tool", "effect": "proposal", "proposes": "tc_missing"}',     'not a registered write tool'),
+            ('{"type": "tool", "effect": "proposal", "proposes": "echo_note"}',      'not a registered write tool'),
+            ('{"type": "tool", "effect": "proposal", "proposes": "tc_probe"}',       'not a registered write tool'),
+            ('{"type": "tool", "effect": "write", "reversible": true, "proposes": "tc_target"}', 'takes no "proposes"'),
+            ('{"type": "prompt", "proposes": "tc_target"}',                          'only a tool declares'),
             ('{"type": "tool", "effect": "delete"}',                                 'must declare "effect"'),
             ('{"type": "tool", "effect": "write"}',                                  '"reversible"'),
             ('{"type": "tool", "effect": "write", "reversible": "yes"}',             '"reversible"'),
@@ -62,7 +73,10 @@ BEGIN
              '{"effect": "write", "reversible": true}'),
             ('{"effect": "write", "reversible": false, "openWorldHint": true}',
              '{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}',
-             '{"effect": "write", "reversible": false}')
+             '{"effect": "write", "reversible": false}'),
+            ('{"effect": "proposal", "proposes": "tc_target"}',
+             '{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}',
+             '{"effect": "proposal", "proposes": "tc_target"}')
         ) c(metadata, annotations, effect) LOOP
         v_error := pg_temp.tc_register(v_case.metadata || '{"type": "tool", "inputSchema": {"type": "object", "$defs": {"n": {"type": "integer"}}, "properties": {"n": {"$ref": "#/$defs/n"}}}}');
         IF v_error IS NOT NULL THEN

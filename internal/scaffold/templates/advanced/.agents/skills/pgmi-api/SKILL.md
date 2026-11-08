@@ -52,7 +52,7 @@ transaction. They differ in routing and envelope:
 | May they call this handler | PostgreSQL, from `access` / `permissions`, before the body |
 | Which rows they see | row-level security on every table |
 | Is the input well-formed | the dispatcher's declared checks (400), then the body (422) |
-| Business rules, state, references | the body and the kernels |
+| Business rules, state, references | the entity's `fn_<entity>_problem(s)`, which the kernel enforces; the body only translates the refusal |
 | Error sanitizing | PostgreSQL: the client never sees `SQLERRM` |
 
 ## Identity and access

@@ -285,3 +285,5 @@ AI agents don't write bad SQL at random. They port the idioms of exception-drive
 ---
 
 *Updated November 2026 for pgmi v0.14: the handler rules now ship as a project skill that `pgmi init` writes, instead of being printed by the pgmi binary.*
+
+*The gateway described under "Where pgmi comes in" has changed too. Each reference gateway now retries the whole transaction on `40001` or `40P01`, starting every attempt with a fresh `BEGIN`. When the attempts run out, it answers HTTP 409 or MCP error `-31000`, with code `pgmi.transaction_retryable`. Handlers still let these errors propagate.*

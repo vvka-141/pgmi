@@ -59,13 +59,17 @@ Common to all: small uppercase muted section labels (`fontSize=11`,
 - Dashed borders mean "external, not owned by pgmi"
 - Edges: solid, `endArrow=classic`; color follows the semantic of the flow
   (forest for pgmi actions, amber for the handover, muted for external)
+- Connectors are orthogonal: `edgeStyle=orthogonalEdgeStyle;rounded=1`,
+  horizontal and vertical segments only, never a diagonal or a curve. Attach
+  at side midpoints, align connected boxes so a single-segment edge is
+  straight, and give the later edge `jumpStyle=arc` where two must cross
 - Pin the page background: `background="#fbfaf7"` on `mxGraphModel` so exports
   are identical on GitHub, Hugo light, and Hugo dark
 
 ## Icons
 
-Two tiers, one rule: icons mark **external actors only** — never inside
-pgmi-owned boxes. Boxes, arrows, and typography carry the diagram.
+Icons mark external actors and the kind of a database object. Boxes, arrows,
+and typography still carry the diagram; the label always stays.
 
 - **Official brand marks** (`icons/logos/`, see ATTRIBUTION.md): use when the
   external product's identity is the point — PostgreSQL, Azure/AWS/GCP in
@@ -73,6 +77,14 @@ pgmi-owned boxes. Boxes, arrows, and typography carry the diagram.
   diagram; a diagram that needs many logos is a slide, not documentation.
 - **House stroke icons** (`icons/`): palette-colored generic actors
   (database, terminal, CI, HTTP client, AI agent) for everything else.
+- **Object-kind icons** (`icons/tabler/`, Tabler outline, MIT): 16×16 inside a
+  box that *is* one object — `table`, `eye` (view), `math-function`
+  (function or kernel), `flask` (test or fixture), `file-code` (deploy.sql).
+  Stroke in the box's own stroke color, never amber; 10 units in from the left,
+  vertically centered on a one-line box, top-left on a taller one. A box whose
+  text is left-aligned gets `spacingLeft` +22 so the text clears the icon.
+  Containers, steps, plan rows and comparison columns get none, and neither does
+  a diagram where every box is the same kind (d19 is all tables).
 
 Reusable library: `pgmi-icon-library.xml` — in draw.io use *File → Open
 Library*; when authoring XML directly, copy the `data:image/svg+xml;base64,…`

@@ -11,6 +11,7 @@ target/
 bin/
 obj/
 __pycache__/
+.venv/
 
 # Editor and OS noise
 .DS_Store

@@ -523,6 +523,23 @@ func TestFormatError_RedactsAwkwardPasswordForms(t *testing.T) {
 			text:    `parse "postgresql://app:db.abc.us-east-1.rds.amazonaws.com%3A5432%2F%3FAction%3Dconnect%26X-Amz-Signature%3Dsigsecret123@h/db": bad`,
 			secrets: []string{"sigsecret123", "X-Amz-Signature"},
 		},
+		{
+			// format('password=%L', v) writes an E'' string when the value
+			// holds a backslash; a quoted value is redacted whole, spaces and all.
+			name:    "keyword form, E'' quoted value with spaces",
+			text:    `NOTICE: password=E's3\\cret # not a comment'`,
+			secrets: []string{"s3", "not a comment"},
+		},
+		{
+			name:    "named argument, quoted value with spaces",
+			text:    `CONTEXT: SELECT connect(password => 's3cret # not a comment')`,
+			secrets: []string{"s3cret", "not a comment"},
+		},
+		{
+			name:    "JSON member, quoted value with spaces",
+			text:    `NOTICE: {"user": "app", "password": "s3cret # not a comment"}`,
+			secrets: []string{"s3cret", "not a comment"},
+		},
 	}
 
 	for _, tt := range tests {

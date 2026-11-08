@@ -78,8 +78,9 @@ const (
 	initStepSetupChoice
 )
 
-// NewInitWizard creates a new init wizard.
-// If targetDir is non-empty, the directory step is pre-filled but still shown for confirmation.
+// NewInitWizard creates a new init wizard. A targetDir the user already named
+// skips the directory step unless something in it blocks init; then the step
+// shows why.
 func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 	di := textinput.New()
 	di.Placeholder = "."
@@ -90,7 +91,7 @@ func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 	}
 	di.Focus() // Must focus here — Init() has value receiver, state changes there are lost
 
-	return InitWizard{
+	w := InitWizard{
 		step:        initStepDirectory,
 		dirInput:    di,
 		dirComplete: components.NewPathCompleter(true),
@@ -100,6 +101,16 @@ func NewInitWizard(targetDir string, templates []TemplateInfo) InitWizard {
 		styles:      defaultWizardStyles(),
 		keys:        defaultWizardKeys(),
 	}
+	if targetDir != "" {
+		if blocking := checkDirBlocking(targetDir); len(blocking) > 0 {
+			absPath, _ := filepath.Abs(targetDir)
+			w.dirError = fmt.Sprintf("'%s' contains: %s", absPath, strings.Join(blocking, ", "))
+		} else {
+			w.result.TargetDir = targetDir
+			w.step = initStepTemplate
+		}
+	}
+	return w
 }
 
 // Init implements tea.Model.
@@ -318,17 +329,15 @@ func (w InitWizard) viewTemplate() string {
 	b.WriteString("\n\n")
 
 	for i, t := range w.templates {
-		cursor := "  "
 		style := w.styles.Unselected
 		symbol := "○"
 
 		if i == w.templateIdx {
-			cursor = ""
 			style = w.styles.Selected
 			symbol = "●"
 		}
 
-		b.WriteString(cursor)
+		b.WriteString("  ")
 		b.WriteString(style.Render(symbol + " " + t.Name))
 		b.WriteString("\n")
 		b.WriteString(w.styles.Description.Render(t.Description))
@@ -338,6 +347,14 @@ func (w InitWizard) viewTemplate() string {
 	b.WriteString(w.styles.Help.Render("\n↑/↓ navigate • enter select • esc back"))
 
 	return b.String()
+}
+
+// noSetupNote says what declining leaves behind: minimal writes no pgmi.yaml.
+func (w InitWizard) noSetupNote() string {
+	if w.result.Template == "minimal" {
+		return "no pgmi.yaml; pass the connection on the command line"
+	}
+	return "pgmi.yaml gets a placeholder"
 }
 
 func (w InitWizard) viewSetupChoice() string {
@@ -351,22 +368,20 @@ func (w InitWizard) viewSetupChoice() string {
 		name     string
 		desc     string
 	}{
-		{!w.setupConfig, "No — configure later", "pgmi.yaml gets a placeholder"},
+		{!w.setupConfig, "No — configure later", w.noSetupNote()},
 		{w.setupConfig, "Yes — run the connection wizard", "writes connection settings to pgmi.yaml"},
 	}
 
 	for _, opt := range options {
-		cursor := "  "
 		style := w.styles.Unselected
 		symbol := "○"
 
 		if opt.selected {
-			cursor = ""
 			style = w.styles.Selected
 			symbol = "●"
 		}
 
-		b.WriteString(cursor)
+		b.WriteString("  ")
 		b.WriteString(style.Render(symbol + " " + opt.name))
 		b.WriteString("\n")
 		b.WriteString(w.styles.Description.Render(opt.desc))

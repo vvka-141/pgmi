@@ -11,10 +11,10 @@ contract and refuses a deploy that breaks it.
 | Before you… | Read |
 |---|---|
 | deploy or test for the first time in a session | `.agents/skills/pgmi-workflow/SKILL.md` |
-| add a table, index, type or policy | `README.md` (file contract: run-once and re-run files), `.agents/skills/pgmi-endpoint/SKILL.md` and `.agents/skills/pgmi-api-layer/SKILL.md` |
+| add a table or type | `README.md` (file contract: run-once and re-run files), `.agents/skills/pgmi-layers/SKILL.md`, then `.agents/skills/pgmi-api-layer/SKILL.md` |
 | add a kernel or view, or decide where a business rule lives | `.agents/skills/pgmi-layers/SKILL.md`, then `.agents/skills/pgmi-api-layer/SKILL.md` |
 | decide whether a check belongs in a handler or a kernel, or link two organizations' tables | `.agents/skills/pgmi-api-layer/SKILL.md` |
-| add a table with an API, a route or a resource | `.agents/skills/pgmi-endpoint/SKILL.md` and `.agents/skills/pgmi-api-layer/SKILL.md` |
+| add an endpoint: a route or resource, with the table behind it | `.agents/skills/pgmi-endpoint/SKILL.md` and `.agents/skills/pgmi-api-layer/SKILL.md` |
 | write or review a REST handler body, or fix a wrong status | `.agents/skills/pgmi-handlers/SKILL.md` |
 | add an MCP tool, resource or prompt, or design what agents call | `.agents/skills/pgmi-mcp/SKILL.md` |
 | choose a protocol, design identity or access, review the API's layering or security | `.agents/skills/pgmi-api/SKILL.md` and `ARCHITECTURE.md` |

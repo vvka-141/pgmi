@@ -44,8 +44,10 @@ CREATE TABLE shipment (
 CREATE INDEX shipment_customer_id_idx ON shipment (customer_id);
 ```
 
-Audit: foreign keys whose columns are not the leading columns of a valid,
-non-partial index on the referencing table.
+Audit: foreign keys whose columns are not the leading key columns of a valid,
+non-partial index on the referencing table. `indkey` lists key columns first,
+then `INCLUDE` columns; `indnkeyatts` counts only the key columns, so an
+`INCLUDE` column never counts as indexing a foreign key.
 
 ```sql
 SELECT c.conrelid::regclass AS referencing_table, c.conname
@@ -56,6 +58,7 @@ WHERE c.contype = 'f'
       WHERE i.indrelid = c.conrelid
         AND i.indisvalid
         AND i.indpred IS NULL
+        AND i.indnkeyatts >= cardinality(c.conkey)
         AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(c.conkey)]
             @> c.conkey
         AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(c.conkey)]
@@ -74,6 +77,18 @@ CREATE TEMP TABLE support_ticket (
     ticket_id bigint PRIMARY KEY,
     customer_id bigint REFERENCES customer
 );
+CREATE TEMP TABLE account (
+    tenant_id  int,
+    account_id int,
+    PRIMARY KEY (tenant_id, account_id)
+);
+CREATE TEMP TABLE ledger_entry (
+    entry_id   bigint PRIMARY KEY,
+    tenant_id  int NOT NULL,
+    account_id int NOT NULL,
+    FOREIGN KEY (tenant_id, account_id) REFERENCES account
+);
+CREATE INDEX ledger_entry_tenant_id_idx ON ledger_entry (tenant_id) INCLUDE (account_id);
 
 DO $$
 DECLARE
@@ -83,19 +98,20 @@ BEGIN
     INTO v_unindexed
     FROM pg_constraint c
     WHERE c.contype = 'f'
-      AND c.conrelid IN ('shipment'::regclass, 'support_ticket'::regclass)
+      AND c.conrelid IN ('shipment'::regclass, 'support_ticket'::regclass, 'ledger_entry'::regclass)
       AND NOT EXISTS (
           SELECT FROM pg_index i
           WHERE i.indrelid = c.conrelid
             AND i.indisvalid
             AND i.indpred IS NULL
+            AND i.indnkeyatts >= cardinality(c.conkey)
             AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(c.conkey)]
                 @> c.conkey
             AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(c.conkey)]
                 <@ c.conkey);
 
-    IF v_unindexed IS DISTINCT FROM 'support_ticket' THEN
-        RAISE EXCEPTION 'unindexed foreign keys: %, expected only support_ticket',
+    IF v_unindexed IS DISTINCT FROM 'ledger_entry, support_ticket' THEN
+        RAISE EXCEPTION 'unindexed foreign keys: %, expected ledger_entry and support_ticket',
             coalesce(v_unindexed, 'none');
     END IF;
 END $$;

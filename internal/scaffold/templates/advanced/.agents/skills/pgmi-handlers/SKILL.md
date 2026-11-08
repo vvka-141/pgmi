@@ -1,6 +1,6 @@
 ---
 name: pgmi-handlers
-description: Writes and reviews REST handler bodies in this advanced-template project — the four phases (materialize, validate, probe, execute), safe casts with ?> and common.try_cast, api.malformed_params, status codes and problem codes (400, 404, 409, 422), the handler-to-kernel contract, PATCH and PUT semantics, optimistic concurrency, retry-safe routes, and the outbox for a background job over an organization's rows. Use when writing or changing the body of api.create_or_replace_rest_handler (an RPC body follows the same phases and refuses with -32010 or -32011), when an endpoint answers the wrong status or a 500, when adding a background job or outbox, or when reviewing api/*.sql.
+description: Writes and reviews REST handler bodies in this advanced-template project — the four phases (materialize, validate, probe, execute), safe casts with ?> and common.try_cast, api.malformed_params, status codes and problem codes (400, 404, 409, 422), the handler-to-kernel contract, PATCH and PUT semantics, optimistic concurrency, retry-safe routes, and the outbox for a background job over an organization's rows. Use when writing or changing the body of api.create_or_replace_rest_handler (an RPC body follows the same phases and refuses with -32010 or -32011), when an endpoint answers the wrong status or a 500, when adding a background job or outbox, or when reviewing the REST handler files in api/.
 ---
 
 # Handler bodies

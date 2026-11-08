@@ -28,7 +28,9 @@ func TestWrapConnectionErrorPrefersSQLSTATE(t *testing.T) {
 		name         string
 		code         string
 		message      string
+		auth         pgmi.AuthMethod
 		wantContains string
+		wantAbsent   string
 	}{
 		{
 			name:         "insufficient privilege is not an SSL problem",
@@ -46,7 +48,31 @@ func TestWrapConnectionErrorPrefersSQLSTATE(t *testing.T) {
 			name:         "invalid password",
 			code:         "28P01",
 			message:      `password authentication failed for user "u"`,
-			wantContains: `password authentication failed for user "u" on database "mydb"`,
+			wantContains: "password authentication failed for user \"u\" on database \"mydb\"\ncheck $PGPASSWORD, ~/.pgpass, or the connection string",
+		},
+		{
+			name:         "refused Azure token",
+			code:         "28P01",
+			message:      `password authentication failed for user "u"`,
+			auth:         pgmi.AuthMethodAzureEntraID,
+			wantContains: "the Azure Entra ID token was refused for user \"u\" on database \"mydb\"\ncheck that the signed-in identity has a database role and that --username matches it",
+			wantAbsent:   "PGPASSWORD",
+		},
+		{
+			name:         "refused AWS token",
+			code:         "28P01",
+			message:      `password authentication failed for user "u"`,
+			auth:         pgmi.AuthMethodAWSIAM,
+			wantContains: `the AWS IAM token was refused for user "u" on database "mydb"`,
+			wantAbsent:   "pgpass",
+		},
+		{
+			name:         "refused Google token",
+			code:         "28P01",
+			message:      `password authentication failed for user "u"`,
+			auth:         pgmi.AuthMethodGoogleIAM,
+			wantContains: `the Google IAM token was refused for user "u" on database "mydb"`,
+			wantAbsent:   "pgpass",
 		},
 		{
 			name:         "no pg_hba entry",
@@ -79,10 +105,13 @@ func TestWrapConnectionErrorPrefersSQLSTATE(t *testing.T) {
 			pgErr := &pgconn.PgError{Severity: "FATAL", Code: tt.code, Message: tt.message}
 			original := pgxMultiAttemptError(pgErr)
 
-			wrapped := WrapConnectionError(original, "127.0.0.1", 5442, "mydb", "u")
+			wrapped := WrapConnectionError(original, tt.auth, "127.0.0.1", 5442, "mydb", "u")
 
 			if !strings.Contains(wrapped.Error(), tt.wantContains) {
 				t.Errorf("WrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
+			}
+			if tt.wantAbsent != "" && strings.Contains(wrapped.Error(), tt.wantAbsent) {
+				t.Errorf("WrapConnectionError() = %q, want it not to mention %q", wrapped.Error(), tt.wantAbsent)
 			}
 			if strings.Contains(wrapped.Error(), "SSL/TLS connection error") {
 				t.Errorf("SQLSTATE %s misreported as an SSL/TLS error: %q", tt.code, wrapped.Error())
@@ -105,7 +134,9 @@ func TestWrapConnectionError(t *testing.T) {
 		port         int
 		database     string
 		username     string
+		auth         pgmi.AuthMethod
 		wantContains string
+		wantAbsent   string
 	}{
 		{
 			name:         "connection refused",
@@ -154,7 +185,40 @@ func TestWrapConnectionError(t *testing.T) {
 			port:         5432,
 			database:     "testdb",
 			username:     "postgres",
-			wantContains: `password authentication failed for user "postgres" on database "testdb"`,
+			wantContains: "password authentication failed for user \"postgres\" on database \"testdb\"\ncheck $PGPASSWORD, ~/.pgpass, or the connection string",
+		},
+		{
+			name:         "refused Azure token, no SQLSTATE",
+			errMsg:       `password authentication failed for user "app"`,
+			host:         "srv.postgres.database.azure.com",
+			port:         5432,
+			database:     "testdb",
+			username:     "app",
+			auth:         pgmi.AuthMethodAzureEntraID,
+			wantContains: "the Azure Entra ID token was refused for user \"app\" on database \"testdb\"\ncheck that the signed-in identity has a database role and that --username matches it",
+			wantAbsent:   "PGPASSWORD",
+		},
+		{
+			name:         "refused AWS token, no SQLSTATE",
+			errMsg:       `password authentication failed for user "app"`,
+			host:         "db.rds.amazonaws.com",
+			port:         5432,
+			database:     "testdb",
+			username:     "app",
+			auth:         pgmi.AuthMethodAWSIAM,
+			wantContains: `the AWS IAM token was refused for user "app" on database "testdb"`,
+			wantAbsent:   "pgpass",
+		},
+		{
+			name:         "refused Google token, no SQLSTATE",
+			errMsg:       `password authentication failed for user "app@proj.iam"`,
+			host:         "proj:region:inst",
+			port:         5432,
+			database:     "testdb",
+			username:     "app@proj.iam",
+			auth:         pgmi.AuthMethodGoogleIAM,
+			wantContains: `the Google IAM token was refused for user "app@proj.iam" on database "testdb"`,
+			wantAbsent:   "pgpass",
 		},
 		{
 			name:         "database does not exist",
@@ -251,10 +315,13 @@ func TestWrapConnectionError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			originalErr := errors.New(tt.errMsg)
-			wrapped := WrapConnectionError(originalErr, tt.host, tt.port, tt.database, tt.username)
+			wrapped := WrapConnectionError(originalErr, tt.auth, tt.host, tt.port, tt.database, tt.username)
 
 			if !strings.Contains(wrapped.Error(), tt.wantContains) {
 				t.Errorf("WrapConnectionError() = %q, want it to contain %q", wrapped.Error(), tt.wantContains)
+			}
+			if tt.wantAbsent != "" && strings.Contains(wrapped.Error(), tt.wantAbsent) {
+				t.Errorf("WrapConnectionError() = %q, want it not to mention %q", wrapped.Error(), tt.wantAbsent)
 			}
 
 			// Verify original error is wrapped (unwrappable)
@@ -281,7 +348,7 @@ func TestWrapConnectionErrorKeepsClosedConnectionRetryable(t *testing.T) {
 		"wrapped io.ErrUnexpectedEOF": fmt.Errorf("failed to receive message: %w", io.ErrUnexpectedEOF),
 	} {
 		t.Run(name, func(t *testing.T) {
-			wrapped := WrapConnectionError(original, "127.0.0.1", 5441, "demo_db", "postgres")
+			wrapped := WrapConnectionError(original, pgmi.AuthMethodStandard, "127.0.0.1", 5441, "demo_db", "postgres")
 			if !strings.Contains(wrapped.Error(), "server closed the connection") {
 				t.Errorf("WrapConnectionError() = %q, want the closed-connection hint", wrapped.Error())
 			}
@@ -299,7 +366,7 @@ func TestWrapConnectionErrorPrefersCertificateFailureOverEOF(t *testing.T) {
 		errors.New("[::1]:5432 (localhost): tls error: x509: certificate signed by unknown authority"),
 		fmt.Errorf("127.0.0.1:5432 (localhost): failed to receive message: %w", io.ErrUnexpectedEOF),
 	)
-	wrapped := WrapConnectionError(joined, "localhost", 5432, "mydb", "postgres")
+	wrapped := WrapConnectionError(joined, pgmi.AuthMethodStandard, "localhost", 5432, "mydb", "postgres")
 	if !strings.Contains(wrapped.Error(), "SSL/TLS connection error") {
 		t.Errorf("WrapConnectionError() = %q, want the SSL/TLS hint", wrapped.Error())
 	}

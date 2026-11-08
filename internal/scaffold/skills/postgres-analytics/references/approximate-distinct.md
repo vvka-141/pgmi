@@ -23,9 +23,8 @@ about 1.3 kB, unions with other sketches, and estimates within a few percent.
 ## Requires
 - PostgreSQL 15+.
 - Extension `hll` (postgresql-hll, third-party, from Citus): not part of core
-  PostgreSQL and not in the stock `postgres` Docker image. Amazon RDS for
-  PostgreSQL, Azure Database for PostgreSQL flexible server and Cloud SQL for
-  PostgreSQL list it as supported; check your provider and major version.
+  PostgreSQL and not in the stock `postgres` Docker image. Check that your
+  provider and major version offer it.
 - Server settings: none.
 
 ## Pattern

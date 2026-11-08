@@ -419,3 +419,7 @@ covers `<pgmi-meta>` and sort keys.
 - Atlas: [migration directory integrity](https://atlasgo.io/concepts/migration-directory-integrity)
 - PostgreSQL: [Populating a Database](https://www.postgresql.org/docs/current/populate.html) · [Collation Support](https://www.postgresql.org/docs/current/collation.html)
 - pgmi internals: [`internal/contract/api-v1.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/contract/api-v1.sql) (pgmi_plan_view) · [`internal/params/schema.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/params/schema.sql) (sort_keys) · [`contract_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/contract/contract_test.go), [`deployer_plan_order_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/services/deployer_plan_order_test.go) (COLLATE "C" enforcement)
+
+---
+
+*Updated November 2026 for pgmi v0.14: the "No built-in applied-migrations ledger" limit still holds for pgmi, which keeps none, but the basic template's `deploy.sql` now ships one. `deployment.run_once` records each run-once file by metadata id, path and checksum, skips files that already ran, and refuses the deploy when one of them was edited after it ran.*

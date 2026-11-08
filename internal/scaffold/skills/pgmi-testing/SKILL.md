@@ -68,7 +68,9 @@ depend on rows that only a development seed inserts.
   stays readable.
 - Make every failing condition total: `IS DISTINCT FROM`, not `<>` or `=`,
   and `SELECT ... INTO STRICT` or a `FOUND` check, not a bare `INTO`. An `IF`
-  whose condition is NULL takes no branch and the test passes.
+  whose condition is NULL takes no branch and the test passes. A writer that
+  refuses returns a row of NULLs, which `STRICT` and `FOUND` both accept:
+  test `(f(...)).id IS NULL` instead (pgmi-layers).
 - Assert on the database state, re-queried, not on what the code under test
   returns about itself.
 - Compare result sets in both directions (`EXCEPT` each way), so a missing

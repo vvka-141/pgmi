@@ -128,13 +128,18 @@ install_pgmi() {
 }
 
 verify_install() {
-    if command -v pgmi &> /dev/null; then
+    echo ""
+    "${INSTALL_DIR}/pgmi" --version
+    local found
+    found=$(command -v pgmi 2>/dev/null || true)
+    if [ -z "$found" ]; then
         echo ""
-        pgmi --version
-    else
+        echo "${INSTALL_DIR} is not on PATH. Put it first:"
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+    elif [ "$found" != "${INSTALL_DIR}/pgmi" ]; then
         echo ""
-        echo "Installed to ${INSTALL_DIR}. Add it to PATH if not already there:"
-        echo "  export PATH=\"\$PATH:${INSTALL_DIR}\""
+        echo "WARNING: 'pgmi' runs ${found}, not the one just installed. Put ${INSTALL_DIR} first:"
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     fi
 }
 

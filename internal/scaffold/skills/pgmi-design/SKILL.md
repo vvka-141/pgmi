@@ -1,6 +1,6 @@
 ---
 name: pgmi-design
-description: How to design a pgmi project and its deploy.sql. Covers which decisions belong in deploy.sql rather than in a CLI flag, choosing transaction boundaries and phases, making every redeploy converge onto a database that already holds data, building a preview or dry run in SQL through a parameter, and modelling the application as data, constraints and operations inside PostgreSQL. Use when planning a feature, a schema change or a data migration, when choosing deploy.sql's transactions or phases, when a change must be safe to redeploy, or when looking for a --dry-run, --skip, --only or --rollback flag that pgmi does not have.
+description: Designs a pgmi project and its deploy.sql. Covers which decisions belong in deploy.sql rather than in a CLI flag, choosing transaction boundaries and phases, making every redeploy converge onto a database that already holds data, building a preview or dry run in SQL through a parameter, and modelling the application as data, constraints and operations inside PostgreSQL. Use when planning a feature, a schema change or a data migration, when choosing deploy.sql's transactions or phases, when a change must be safe to redeploy, or when looking for a --dry-run, --skip, --only or --rollback flag that pgmi does not have.
 ---
 
 # Designing a pgmi project

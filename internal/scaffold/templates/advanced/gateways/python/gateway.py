@@ -611,13 +611,14 @@ class MCPHandler(BaseHTTPRequestHandler):
         if self._rest_url() is not None:
             self._rest()
             return
-        if self.path == "/auth/logout":
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/auth/logout":
             self._logout()
             return
-        if self.path == "/auth/dev-login":
+        if path == "/auth/dev-login":
             self._dev_login()
             return
-        if urllib.parse.urlsplit(self.path).path != "/mcp":
+        if path != "/mcp":
             self.send_not_found()
             return
 
@@ -804,13 +805,13 @@ class MCPHandler(BaseHTTPRequestHandler):
         if path == "/auth/callback":
             self._callback()
             return
-        if self.path == "/health":
+        if path == "/health":
             self.send_json_response(200, {"status": "healthy"})
             return
         if RESOURCE is not None and path in RESOURCE.metadata_paths:
             self.send_json_response(200, RESOURCE.metadata())
             return
-        if urllib.parse.urlsplit(self.path).path == "/mcp":
+        if path == "/mcp":
             self._mcp_method_not_allowed()
             return
         self.send_not_found()

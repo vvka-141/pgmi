@@ -840,7 +840,7 @@ func TestValidateAndParseConfig_CarriesCloudAuthSettings(t *testing.T) {
 func TestDeploy_MissingMaintenanceDatabase(t *testing.T) {
 	noDatabases := func(_ context.Context, _ *db.ConnectionConfig, dbName string) (db.DBConnection, func(), error) {
 		pgErr := &pgconn.PgError{Code: "3D000", Message: `database "` + dbName + `" does not exist`}
-		return nil, nil, db.WrapConnectionError(pgErr, "127.0.0.1", 55601, dbName, "postgres")
+		return nil, nil, db.WrapConnectionError(pgErr, pgmi.AuthMethodStandard, "127.0.0.1", 55601, dbName, "postgres")
 	}
 	for _, overwrite := range []bool{false, true} {
 		t.Run(fmt.Sprintf("overwrite=%v", overwrite), func(t *testing.T) {

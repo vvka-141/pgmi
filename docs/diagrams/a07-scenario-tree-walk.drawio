@@ -48,40 +48,36 @@
           <mxGeometry x="243" y="124" width="180" height="18" as="geometry" />
         </mxCell>
 
-        <mxCell id="emig" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="mig" target="root">
+        <mxCell id="emig" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="mig" target="root">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e1" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="root" target="placed">
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="root" target="placed">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e2" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="placed" target="cancelled">
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="placed" target="cancelled">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e3" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="placed" target="paid">
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="placed" target="paid">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e4" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="paid" target="refunded">
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="paid" target="refunded">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e5" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="paid" target="shipped">
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="paid" target="shipped">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e6" style="edgeStyle=none;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="shipped" target="delivered">
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#143d2b;endArrow=classic;" edge="1" parent="1" source="shipped" target="delivered">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="r1" style="edgeStyle=none;curved=1;html=1;strokeColor=#b45309;dashed=1;endArrow=classic;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cancelled" target="placed">
+        <mxCell id="r1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#b45309;dashed=1;endArrow=classic;exitX=0.5;exitY=0;entryX=0.75;entryY=0;" edge="1" parent="1" source="cancelled" target="placed">
           <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="460" y="54" />
-            </Array>
+            <Array as="points"><mxPoint x="565" y="66" /><mxPoint x="446" y="66" /></Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="r2" style="edgeStyle=none;curved=1;html=1;strokeColor=#b45309;dashed=1;endArrow=classic;exitX=0;exitY=0.15;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="refunded" target="paid">
+        <mxCell id="r2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#b45309;dashed=1;endArrow=classic;exitX=0.5;exitY=0;entryX=0.5;entryY=0;" edge="1" parent="1" source="refunded" target="paid">
           <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="592" y="196" />
-            </Array>
+            <Array as="points"><mxPoint x="683" y="160" /><mxPoint x="548" y="160" /></Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="r1lbl" value="ROLLBACK TO &#8212; branch point restored;&#10;the sibling inherits the same history" style="text;html=1;align=left;verticalAlign=middle;fontColor=#b45309;fontSize=12;" vertex="1" parent="1">

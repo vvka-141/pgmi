@@ -146,14 +146,14 @@ func (c *StandardConnector) Connect(ctx context.Context) (*pgxpool.Pool, error) 
 		newPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
 			pool = nil
-			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.AuthMethod, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		// Test the connection
 		if err := newPool.Ping(ctx); err != nil {
 			newPool.Close()
 			pool = nil
-			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.AuthMethod, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		pool = newPool
@@ -226,7 +226,7 @@ const (
 // WrapConnectionError wraps raw pgx connection errors with actionable guidance.
 // All returned errors satisfy errors.Is(err, pgmi.ErrConnectionFailed) and
 // errors.Is(err, originalErr).
-func WrapConnectionError(err error, host string, port int, database, username string) error {
+func WrapConnectionError(err error, auth pgmi.AuthMethod, host string, port int, database, username string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// The server's own SQLSTATE decides, never the prose: pgx reports every
@@ -237,7 +237,7 @@ func WrapConnectionError(err error, host string, port int, database, username st
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case sqlStateInvalidPassword:
-			return newConnError(err, "password authentication failed for user %q on database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", username, database)
+			return passwordRefused(err, auth, database, username)
 
 		case sqlStateInvalidAuthSpec:
 			return newConnError(err, "authentication rejected for user %q on database %q: %s\nno pg_hba.conf entry matches this host, user, and method", username, database, pgErr.Message)
@@ -271,7 +271,7 @@ func WrapConnectionError(err error, host string, port int, database, username st
 		return newConnError(err, "cannot resolve host %q\ncheck hostname spelling, DNS, and $PGHOST", host)
 
 	case strings.Contains(errStr, "password authentication failed"):
-		return newConnError(err, "password authentication failed for user %q on database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", username, database)
+		return passwordRefused(err, auth, database, username)
 
 	case strings.Contains(errStr, "does not exist"):
 		return newConnError(err, "database %q does not exist\ncreate it with `createdb %s` or pass --overwrite to let pgmi create it", database, database)
@@ -300,6 +300,13 @@ func WrapConnectionError(err error, host string, port int, database, username st
 	default:
 		return newConnError(err, "failed to connect to database: %v", err)
 	}
+}
+
+func passwordRefused(err error, auth pgmi.AuthMethod, database, username string) error {
+	if auth == pgmi.AuthMethodStandard {
+		return newConnError(err, "password authentication failed for user %q on database %q\ncheck $PGPASSWORD, ~/.pgpass, or the connection string", username, database)
+	}
+	return newConnError(err, "the %s token was refused for user %q on database %q\ncheck that the signed-in identity has a database role and that --username matches it", auth, username, database)
 }
 
 // newAWSConnector creates a token-based connector with the AWS IAM token provider.

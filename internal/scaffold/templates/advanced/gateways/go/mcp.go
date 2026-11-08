@@ -71,7 +71,7 @@ func (g *Gateway) mcpError(r *http.Request, err error) rpcError {
 			data:    map[string]any{"code": "pgmi.transaction_retryable", "sqlstate": exhausted.SQLState, "attempts": exhausted.Attempts},
 			headers: map[string]string{"Retry-After": retryAfter}}
 	case errors.Is(err, ErrUnavailable):
-		g.Log.WarnContext(r.Context(), "no pooled connection", "path", r.URL.Path)
+		g.Log.WarnContext(r.Context(), "no pooled connection", "path", r.URL.Path, "error", err)
 		return rpcError{status: http.StatusServiceUnavailable, code: -31000,
 			message: "The database is unavailable; repeat the call later",
 			data:    map[string]any{"code": "pgmi.unavailable"}, headers: map[string]string{"Retry-After": retryAfter}}

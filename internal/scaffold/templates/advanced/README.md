@@ -10,7 +10,7 @@ Choose it when the database should hold the business logic and serve REST, RPC a
 
 **Requires PostgreSQL 18 or newer.** `deploy.sql` refuses an older server before it creates any objects; the empty database pgmi created for the deploy stays.
 
-**No superuser required.** A login with `CREATEROLE` and `CREATEDB` deploys it: `deploy.sql` grants itself the roles it creates. `TestAdvancedTemplate_DeploysWithoutSuperuser` deploys it twice that way. Entity lifecycle standards (`created_at`/`deleted_at`) are enforced by a deploy-end sweep over `pg_temp` functions — no DDL event trigger, no superuser privilege. Runs on managed providers that offer PostgreSQL 18, such as AWS RDS, Cloud SQL and Neon.
+**No superuser required.** A login with `CREATEROLE` and `CREATEDB` deploys it: `deploy.sql` grants itself the roles it creates. [Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql) shows the statement that creates that login. `TestAdvancedTemplate_DeploysWithoutSuperuser` deploys it twice that way. Entity lifecycle standards (`created_at`/`deleted_at`) are enforced by a deploy-end sweep over `pg_temp` functions — no DDL event trigger, no superuser privilege. Runs on managed providers that offer PostgreSQL 18, such as AWS RDS, Cloud SQL and Neon.
 
 ## Deployment Architecture
 
@@ -430,6 +430,24 @@ organization's agents are on; ending a membership revokes the person's
 connections into it. Each change is in the audit log with the agent as its
 subject, and a logged agent call replays only while its connection is live. A
 connection carries no second factor, so it never holds a platform permission.
+
+**Proposals: an agent proposes, a person confirms.** A tool with
+`"effect": "proposal"` names, in `"proposes"`, a registered tool with
+`"effect": "write"` (registration refuses a missing, unknown or non-write
+target, and `"reversible"`: nothing changes until someone confirms). Its body
+calls only `membership.fn_propose(<target>, (request).arguments)` and answers
+`{"proposalId": ...}` at once; the call never waits for a person. It is called
+under the permission it declares, like any tool, so a role's grant list stays
+the only ceiling: `agent.reader` may hold `task.propose` without `task.write`.
+A person signed in on the web, acting as themselves and holding
+`proposals.decide`, lists the organization's pending proposals
+(`GET /proposals`) and confirms (`POST /proposals/{id}/confirm`) or rejects
+(`POST /proposals/{id}/reject`) each. Confirming runs the target tool through
+the MCP dispatcher as that person, so the target's own permission applies to
+them, and answers the proposal with the tool's `answer`; a target that refuses
+answers 409 `membership.proposal.tool_refused` and leaves it pending. An agent
+never decides (403 `membership.proposal.human_required`), and a decided
+proposal is decided for good (409 `membership.proposal.decided`).
 
 Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a REST or RPC route may declare a read-only policy (`readOnly`), which leaves it unlogged. The HTTP gateway (`gateways/`) resolves the policy before `BEGIN`; the database enforces it fail-closed. See [Transaction policy](https://vvka-141.github.io/pgmi/docs/advanced/transaction-policy/).
 

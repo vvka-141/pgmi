@@ -1079,6 +1079,12 @@ BEGIN
             'Invalid Request: expected a JSON-RPC 2.0 request object', NULL, v_json_id), v_start_time);
     END IF;
 
+    IF NOT (v_body ? 'id') THEN
+        v_response := internal.finalize_error(ROW(202, ''::extensions.hstore, ''::bytea)::api.http_response, v_start_time);
+        v_response.headers := v_response.headers - 'content-type'::text;
+        RETURN v_response;
+    END IF;
+
     SELECT h.handler_exec_sql, h.object_id, h.access,
            h.response_headers, h.output_json_schema, h.min_transaction_isolation, h.read_only,
            h.input_json_schema, h.accepts, h.produces,

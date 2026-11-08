@@ -91,7 +91,7 @@ created it.
 | `overrides` | Each `pgmi.yaml` connection value another source replaced, as `{field, from, value, notFrom, notValue}`, e.g. `{"field": "sslmode", "from": "PGSSLMODE", "value": "disable", "notFrom": "pgmi.yaml", "notValue": "verify-full"}`. An empty `value` means the yaml value was dropped: a connection string never takes `sslmode` from `pgmi.yaml`. Never a password. `[]` when nothing was replaced |
 | `dotenvKeys` | The keys the project `.env` set, sorted, names only: those not already in the real environment. `[]` when it set none |
 | `startedAt`, `finishedAt` | RFC 3339 UTC timestamps |
-| `filesLoaded`, `testMacros`, `durationMs`, `database` | Run summary |
+| `filesLoaded`, `testMacros`, `durationMs`, `database` | Run summary. These and the keys down to `recreated` are always present: `null` (`ignoredPaths`: `[]`) when the run stopped before loading the project, e.g. a mistyped path (exit 10) |
 | `pathsIgnored` | Paths left out by the built-in exclusions and `.pgmiignore`; an ignored directory counts once ([what gets loaded](DEPLOY-GUIDE.md#what-gets-loaded)) |
 | `ignoredPaths` | Each of those paths as `{path, rule}`, `rule` being `built-in` or `.pgmiignore` |
 | `created` | `true` when this deploy created the target database. On a routine deploy that usually means a mistyped `-d` |
@@ -536,6 +536,11 @@ pgmi metadata scaffold ./myproject --write
 
 A file with no `--sort-key` and no sibling prefix to copy, or whose siblings
 use more than one prefix, stops the command before anything is written (exit 2).
+
+A directory inside a project is scanned from the project root (the nearest
+directory above it holding `deploy.sql`), so paths, suggested keys and
+`.pgmiignore` are the same as for `pgmi metadata scaffold <project>`. Only the
+files under the directory you name are changed, and `--write` names each one.
 
 ### pgmi metadata validate
 

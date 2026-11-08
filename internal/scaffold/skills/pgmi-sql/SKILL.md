@@ -1,6 +1,6 @@
 ---
 name: pgmi-sql
-description: Writes and reviews SQL and PL/pgSQL for a pgmi project — deploy.sql logic that selects and EXECUTEs project files from the session views, functions and procedures, schema changes (run-once by default, re-runnable when deploy.sql re-runs structure), dynamic SQL with format(), error handling that keeps pgmi's failure attribution, deployment parameters read with current_setting('pgmi.key', true), and function privileges. Use when writing or reviewing the SQL in deploy.sql, a migration, schema or function file, or a DO block, or when a statement fails with a PostgreSQL error such as a syntax error, cannot change return type, function does not exist, or cannot be executed from a function.
+description: Writes and reviews SQL and PL/pgSQL for a pgmi project — deploy.sql logic that selects and EXECUTEs project files from the session views, functions and procedures, schema changes (run-once by default, re-runnable when deploy.sql re-runs structure), dynamic SQL with format(), error handling that keeps pgmi's failure attribution, deployment parameters read with current_setting('pgmi.key', true), and function privileges. Use when writing or reviewing the SQL in deploy.sql, a migration, schema or function file, or a DO block, or when writing SQL that PostgreSQL rejects as written, such as a syntax error, cannot change return type, or cannot be executed from a function.
 ---
 
 # Writing SQL for a pgmi project

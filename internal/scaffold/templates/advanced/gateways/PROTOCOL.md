@@ -297,6 +297,13 @@ permission). A handler body refuses with `-32010` (the state refuses, sent as
 409, `data.code`) or `-32011` (invalid input, sent as 422,
 `data.invalid-params`); a gateway passes the status and body through.
 
+A body with no `id` member is a JSON-RPC notification. `/rpc` does not run
+it: the database answers `202` with no body, and no session resolves and no
+handler runs. JSON-RPC intends a notification to run unanswered; pgmi
+deliberately departs from that, because an RPC method is a business action
+and nobody would see whether it succeeded. MCP notifications are answered
+the same way. `"id": null` is a request, not a notification, and runs.
+
 ### MCP status codes
 
 A refusal is answered with 400 and never dispatched. A dispatched answer

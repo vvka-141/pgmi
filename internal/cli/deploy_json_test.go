@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -466,5 +467,37 @@ func TestCLIWording_MissingMaintenanceDatabaseNamesTheCLISources(t *testing.T) {
 	}
 	if got := pgmi.ExitCodeForError(err); got != pgmi.ExitConnectionError {
 		t.Errorf("exit code %d, want %d", got, pgmi.ExitConnectionError)
+	}
+}
+
+// A parser reads the same fact keys whatever the exit code; a fact the run
+// never reached is null. Only diagnostics depend on what failed.
+func TestDeployJSON_FactKeysDoNotDependOnTheExitCode(t *testing.T) {
+	diagnostic := map[string]bool{"error": true, "sqlstate": true, "detail": true, "hint": true, "where": true,
+		"failedFile": true, "phase": true, "script": true, "sourceLine": true, "failedFileCandidates": true,
+		"line": true, "column": true, "scriptExpanded": true, "executionUnits": true, "unitsCommitted": true, "executionMode": true}
+	keys := func(result *pgmi.DeployResult, err error) []string {
+		var ks []string
+		for k := range deployResultFields(result, err, deployProvenance{}) {
+			if !diagnostic[k] {
+				ks = append(ks, k)
+			}
+		}
+		slices.Sort(ks)
+		return ks
+	}
+	want := keys(sampleResult, nil)
+	for name, run := range map[string]struct {
+		result *pgmi.DeployResult
+		err    error
+	}{
+		"exit 10": {nil, fmt.Errorf("%w: no such path", pgmi.ErrInvalidConfig)},
+		"exit 11": {nil, fmt.Errorf("%w: refused", pgmi.ErrConnectionFailed)},
+		"exit 13": {sampleResult, fmt.Errorf("%w: %w", pgmi.ErrExecutionFailed, &pgconn.PgError{Code: "42P01", Message: "no"})},
+		"exit 14": {nil, pgmi.ErrDeploySQLNotFound},
+	} {
+		if got := keys(run.result, run.err); !slices.Equal(got, want) {
+			t.Errorf("%s: keys %v, want %v", name, got, want)
+		}
 	}
 }

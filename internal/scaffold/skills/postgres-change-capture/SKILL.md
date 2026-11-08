@@ -1,6 +1,6 @@
 ---
 name: postgres-change-capture
-description: Index of PostgreSQL recipes for recording and reacting to data changes - an audit table filled by triggers (old and new rows as jsonb, actor, transition tables), publications and logical replication slots for an external change feed or CDC, and LISTEN/NOTIFY with pg_notify for in-app signals. Use when asked to audit or log who changed a row, keep a change history, stream changes to another system, or wake a worker when a row arrives.
+description: PostgreSQL recipes for recording and reacting to data changes - an audit table filled by triggers (old and new rows as jsonb, actor, transition tables), publications and logical replication slots for an external change feed or CDC, and LISTEN/NOTIFY with pg_notify for in-app signals. Use when asked to audit or log who changed a row, keep a change history, stream changes to another system, or wake a worker when a row arrives.
 ---
 
 # PostgreSQL change-capture recipes

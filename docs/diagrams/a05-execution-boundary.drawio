@@ -21,7 +21,7 @@
           <mxGeometry x="52" y="176" width="300" height="34" as="geometry" />
         </mxCell>
 
-        <mxCell id="bnd" style="edgeStyle=none;html=1;strokeColor=#b45309;strokeWidth=2;endArrow=none;" edge="1" parent="1">
+        <mxCell id="bnd" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#b45309;strokeWidth=2;endArrow=none;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="382" y="72" as="sourcePoint" />
             <mxPoint x="382" y="238" as="targetPoint" />

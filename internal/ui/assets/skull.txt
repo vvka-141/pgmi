@@ -1,16 +1,12 @@
-╔═══════════════════════════════════════════════════════════════════════╗
-║                                                                       ║
       ______
    .-'      '-.
   /            \
  |              |
- |,  .-.  .-.  ,|       ⚠️  DANGER: DESTRUCTIVE OPERATION ⚠️ 
- | )(_o/  \o_)( |  Database '${dbname}' will be PERMANENTLY DELETED  
- |/     /\     \|               ALL DATA WILL BE LOST 
+ |,  .-.  .-.  ,|       ⚠  DANGER: DESTRUCTIVE OPERATION ⚠
+ | )(_o/  \o_)( |  Database '${dbname}' will be PERMANENTLY DELETED
+ |/     /\     \|               ALL DATA WILL BE LOST
  (_     ^^     _)
   \__|IIIIII|__/
    | \IIIIII/ |
    \          /
     `--------`
-║                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════╝

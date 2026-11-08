@@ -232,7 +232,7 @@ func (g *Gateway) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		p = &problem{status: http.StatusConflict, title: "Conflict", code: "pgmi.transaction_retryable",
 			detail: "the request conflicted with a concurrent change; repeat it", headers: map[string]string{"Retry-After": retryAfter}}
 	case errors.Is(err, ErrUnavailable):
-		g.Log.WarnContext(r.Context(), "no pooled connection", "path", r.URL.Path)
+		g.Log.WarnContext(r.Context(), "no pooled connection", "path", r.URL.Path, "error", err)
 		p = &problem{status: http.StatusServiceUnavailable, title: "Service Unavailable", code: "pgmi.unavailable",
 			detail: "no database connection is free; repeat the request", headers: map[string]string{"Retry-After": retryAfter}}
 	case errors.As(err, &failed):

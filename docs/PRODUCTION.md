@@ -59,6 +59,14 @@ The **basic** template works on PostgreSQL 15+; the **advanced** template requir
 2. **`CREATE EXTENSION`** for `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`, `btree_gist`. Extension availability and the role allowed to install each one vary by provider and service tier.
 3. **`CREATE SCHEMA`** — the template creates five application schemas (`internal`, `core`, `api`, `common`, `membership`) plus `extensions` for extension objects.
 
+A superuser or the provider's admin creates that login once:
+
+```sql
+CREATE ROLE myapp_deploy LOGIN CREATEROLE CREATEDB NOSUPERUSER NOBYPASSRLS PASSWORD '...';
+```
+
+The deploy grants itself the roles it creates, so no further grant is needed. Keep the login's password off the command line: put it in the connection string from a secret or in an environment variable ([Connect with a password](CONNECTIONS.md#connect-with-a-password)).
+
 Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
 | Provider | Basic template | Advanced template | Verification |
@@ -78,7 +86,7 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 the core requirements are standard PostgreSQL features, but the provider is not
 part of continuous integration. `Capability-dependent` means the advanced
 template works only when the service offers PostgreSQL 18 and the actual deploy
-role can create roles and schemas and install all four required extensions. Verify those capabilities on the selected
+role can create roles and schemas and install all five required extensions. Verify those capabilities on the selected
 service and tier before production use.
 
 ---

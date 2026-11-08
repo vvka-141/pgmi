@@ -1,6 +1,6 @@
 ---
 name: pgmi-api-layer
-description: Add-on to pgmi-layers for this advanced-template project — what the physical and semantic layers look like here (entity tables, composite tenant foreign keys, forced row-level security, catalogs, kernels as the writers, per-entity problem functions, views through core.ensure_view) and the third layer on top, handlers that only shape input and output. Use after pgmi-layers when adding a table, kernel, view or business rule in this project, or when deciding whether a check belongs to a handler or a kernel.
+description: Tables, kernels and business rules in this advanced-template project, as an add-on to pgmi-layers — entity tables, composite tenant foreign keys, forced row-level security, catalogs, kernels as the only writers, per-entity *_problem refusal functions, views through core.ensure_view, and the handlers on top that only shape input and output. Use after pgmi-layers when adding a table, kernel, view or business rule in this project, or when deciding whether a rule belongs in a kernel or in a handler.
 ---
 
 # The layers in this template, and the API on top

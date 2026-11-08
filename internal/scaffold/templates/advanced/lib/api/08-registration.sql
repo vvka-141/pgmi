@@ -995,23 +995,25 @@ COMMENT ON FUNCTION api.create_or_replace_rpc_handler(jsonb, text) IS
 -- ============================================================================
 
 -- What calling a tool does, declared once so an agent knows it before the
--- call: "effect" is read (changes nothing) or write (makes a change); a write
--- also declares "reversible", whether the change can be undone afterwards.
+-- call: "effect" is read (changes nothing), write (makes a change) or proposal
+-- (records a change for a person to confirm); a write also declares
+-- "reversible", whether the change can be undone afterwards, and a proposal
+-- "proposes", the registered write tool a confirm runs.
 -- "openWorldHint" (default false) says the tool reaches outside this
 -- database. A resource or a prompt declares none of them. Returns the effect
 -- block tools/list publishes under _meta["pgmi/effect"]; NULL for a resource
 -- or prompt.
 CREATE OR REPLACE FUNCTION internal.mcp_tool_effect(p_metadata jsonb, p_type text, p_label text)
 RETURNS jsonb
-LANGUAGE plpgsql IMMUTABLE AS $$
+LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_effect text := p_metadata->>'effect';
 BEGIN
     IF p_type <> 'tool' THEN
-        IF p_metadata ?| ARRAY['effect', 'reversible', 'openWorldHint', 'annotations'] THEN
+        IF p_metadata ?| ARRAY['effect', 'reversible', 'proposes', 'openWorldHint', 'annotations'] THEN
             RAISE EXCEPTION 'MCP % "%" declares an effect or annotations, which only a tool declares', p_type, p_label
                 USING ERRCODE = 'invalid_parameter_value',
-                      HINT = 'Reading a resource or getting a prompt changes nothing: drop "effect", "reversible", "openWorldHint" and "annotations".';
+                      HINT = 'Reading a resource or getting a prompt changes nothing: drop "effect", "reversible", "proposes", "openWorldHint" and "annotations".';
         END IF;
         RETURN NULL;
     END IF;
@@ -1019,16 +1021,36 @@ BEGIN
     IF p_metadata ? 'annotations' THEN
         RAISE EXCEPTION 'MCP tool "%" declares "annotations", which are derived from "effect"', p_label
             USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'Drop "annotations"; declare "effect" (and "reversible", "openWorldHint").';
+                  HINT = 'Drop "annotations"; declare "effect" (and "reversible" or "proposes", "openWorldHint").';
     END IF;
-    IF jsonb_typeof(p_metadata->'effect') IS DISTINCT FROM 'string' OR v_effect NOT IN ('read', 'write') THEN
-        RAISE EXCEPTION 'MCP tool "%" must declare "effect": "read" or "write", got %', p_label, COALESCE((p_metadata->'effect')::text, 'nothing')
+    IF jsonb_typeof(p_metadata->'effect') IS DISTINCT FROM 'string' OR v_effect NOT IN ('read', 'write', 'proposal') THEN
+        RAISE EXCEPTION 'MCP tool "%" must declare "effect": "read", "write" or "proposal", got %', p_label, COALESCE((p_metadata->'effect')::text, 'nothing')
             USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'read: the tool changes nothing; write: it makes the change, and declares "reversible". An agent reads it in tools/list before it calls the tool.';
+                  HINT = 'read: the tool changes nothing; write: it makes the change, and declares "reversible"; proposal: it records the change for a person to confirm, and declares "proposes". An agent reads it in tools/list before it calls the tool.';
     END IF;
-    IF v_effect = 'read' AND p_metadata ? 'reversible' THEN
-        RAISE EXCEPTION 'MCP tool "%" declares effect read, which takes no "reversible"', p_label
-            USING ERRCODE = 'invalid_parameter_value';
+    IF v_effect IN ('read', 'proposal') AND p_metadata ? 'reversible' THEN
+        RAISE EXCEPTION 'MCP tool "%" declares effect %, which takes no "reversible"', p_label, v_effect
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = CASE WHEN v_effect = 'proposal' THEN 'Nothing changes until a person confirms; the target tool declares whether its change can be undone.'
+                              ELSE 'A read changes nothing, so there is nothing to undo.' END;
+    END IF;
+    IF v_effect IS DISTINCT FROM 'proposal' AND p_metadata ? 'proposes' THEN
+        RAISE EXCEPTION 'MCP tool "%" declares effect %, which takes no "proposes"', p_label, v_effect
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Only a tool with "effect": "proposal" names the write tool it proposes.';
+    END IF;
+    IF v_effect = 'proposal' AND jsonb_typeof(p_metadata->'proposes') IS DISTINCT FROM 'string' THEN
+        RAISE EXCEPTION 'MCP tool "%" declares effect proposal and must declare "proposes": the name of a write tool, got %',
+            p_label, COALESCE((p_metadata->'proposes')::text, 'nothing')
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Name the registered MCP tool with "effect": "write" that a person''s confirm runs.';
+    END IF;
+    IF v_effect = 'proposal' AND NOT EXISTS (
+        SELECT FROM api.mcp_route r JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
+        WHERE r.mcp_type = 'tool' AND r.mcp_name = p_metadata->>'proposes' AND r.effect->>'effect' = 'write') THEN
+        RAISE EXCEPTION 'MCP tool "%" proposes "%", which is not a registered write tool', p_label, p_metadata->>'proposes'
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Register the target tool, with "effect": "write", before the proposal tool, and spell its name as registered.';
     END IF;
     IF v_effect = 'write' AND jsonb_typeof(p_metadata->'reversible') IS DISTINCT FROM 'boolean' THEN
         RAISE EXCEPTION 'MCP tool "%" declares effect write and must declare "reversible": true or false, got %',
@@ -1042,16 +1064,18 @@ BEGIN
     END IF;
 
     RETURN jsonb_build_object('effect', v_effect)
-        || CASE WHEN v_effect = 'write' THEN jsonb_build_object('reversible', p_metadata->'reversible') ELSE '{}' END;
+        || CASE v_effect WHEN 'write' THEN jsonb_build_object('reversible', p_metadata->'reversible')
+                         WHEN 'proposal' THEN jsonb_build_object('proposes', p_metadata->'proposes')
+                         ELSE '{}' END;
 END;
 $$;
 
 COMMENT ON FUNCTION internal.mcp_tool_effect(jsonb, text, text) IS
-    'A tool''s effect block from its metadata ({effect read} or {effect write, reversible}); raises invalid_parameter_value, failing the deploy, for a tool without a valid effect, hand-written annotations, or a resource or prompt that declares any of them. NULL for a resource or prompt.';
+    'A tool''s effect block from its metadata ({effect read}, {effect write, reversible} or {effect proposal, proposes}, proposes naming a registered write tool); raises invalid_parameter_value, failing the deploy, for a tool without a valid effect, hand-written annotations, or a resource or prompt that declares any of them. NULL for a resource or prompt.';
 
 -- The MCP tool annotations, derived from the effect, never written by hand:
 -- read-only and idempotent for a read, destructive for a write that cannot be
--- undone, open-world only when declared.
+-- undone, none of them for a proposal, open-world only when declared.
 CREATE OR REPLACE FUNCTION internal.mcp_tool_annotations(p_effect jsonb, p_open_world boolean)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -1064,7 +1088,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION internal.mcp_tool_annotations(jsonb, boolean) IS
-    'A tool''s MCP annotations from its effect block: readOnlyHint and idempotentHint for a read, destructiveHint for a write that cannot be undone, openWorldHint as declared (default false). NULL for a resource or prompt.';
+    'A tool''s MCP annotations from its effect block: readOnlyHint and idempotentHint for a read, destructiveHint for a write that cannot be undone, none for a proposal, openWorldHint as declared (default false). NULL for a resource or prompt.';
 
 -- An MCP client resolves a tool's schema on its own: a $ref must point inside
 -- the schema ("#" or "#/$defs/..."), never at #/components/... or another
@@ -1190,7 +1214,7 @@ BEGIN
     FROM internal.declared_access(p_metadata, v_name) d;
     PERFORM internal.refuse_unknown_handler_keys(p_metadata,
         ARRAY['access', 'annotations', 'arguments', 'description', 'effect', 'id', 'inputSchema', 'mimeType',
-              'minTransactionIsolation', 'name', 'openWorldHint', 'outputSchema', 'permissions', 'readOnly',
+              'minTransactionIsolation', 'name', 'openWorldHint', 'outputSchema', 'permissions', 'proposes', 'readOnly',
               'reversible', 'tags', 'title', 'type', 'uriTemplate'],
         format('MCP handler %s', v_name));
     v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
@@ -1239,7 +1263,7 @@ END;
 $func$;
 
 COMMENT ON FUNCTION api.create_or_replace_mcp_handler(jsonb, text) IS
-    'Registers an MCP handler (tool/resource/prompt): creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.mcp_route. A tool declares its "effect" (read, or write with "reversible"), from which its annotations are derived; a $ref in its schemas must be local to the schema. SECURITY DEFINER.';
+    'Registers an MCP handler (tool/resource/prompt): creates the handler function, snapshots pg_proc metadata, upserts into api.handler + api.mcp_route. A tool declares its "effect" (read, write with "reversible", or proposal with "proposes"), from which its annotations are derived; a $ref in its schemas must be local to the schema. SECURITY DEFINER.';
 
 -- ============================================================================
 -- Catalog Version — the cache-invalidation signal

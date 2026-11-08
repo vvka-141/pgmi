@@ -628,10 +628,17 @@ func NewErrorDetail(err error) *ErrorDetail {
 
 // passwordKVPattern matches the keyword form: `password=secret`, `sslpassword=x`,
 // ADO.NET's `Pwd=`, and quoted values in both escape styles: ADO.NET doubles
-// the quote, libpq escapes it with a backslash. The unquoted
-// value ends at whitespace, `&` or `;` — the separators of the URI query and
-// ADO.NET forms respectively.
-var passwordKVPattern = regexp.MustCompile(`(?i)(?:password|\bpwd)\s*=\s*('(?:[^'\\]|''|\\.)*'|"(?:[^"\\]|""|\\.)*"|[^\s&;'"]*)`)
+// the quote, libpq escapes it with a backslash; format('%L') writes E'...'
+// when the value holds a backslash. A quoted value is redacted whole. The
+// unquoted value ends at whitespace, `&` or `;` — the separators of the URI
+// query and ADO.NET forms respectively.
+var passwordKVPattern = regexp.MustCompile(`(?i)(?:password|\bpwd)\s*(=)\s*(E?'(?:[^'\\]|''|\\.)*'|"(?:[^"\\]|""|\\.)*"|[^\s&;'"]*)`)
+
+// passwordQuotedPattern matches a quoted value after `:` or `=>`: a JSON
+// member (`"password": "..."`) or a named argument (`password => '...'`) that
+// user SQL printed. Only quoted values: after a colon, an unquoted word is as
+// likely prose as a secret.
+var passwordQuotedPattern = regexp.MustCompile(`(?i)((?:password|\bpwd)"?\s*(?::|=>)\s*)(?:E?'(?:[^'\\]|''|\\.)*'|"(?:[^"\\]|""|\\.)*")`)
 
 // passwordURIPattern matches `scheme://user:password@host`. The password runs to
 // the LAST `@` in the token, not the first: an unescaped `@` inside a password
@@ -653,8 +660,26 @@ var passwordURIPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://[^:/@\s]+
 // The keyword pass runs first so a `sslpassword=` inside a URI query string is
 // consumed before the greedy URI pass could anchor on an `@` within it.
 func redactPasswords(s string) string {
-	s = passwordKVPattern.ReplaceAllString(s, "password=[redacted]")
+	s = passwordQuotedPattern.ReplaceAllString(s, "${1}[redacted]")
+	s = redactKeywordForm(s)
 	s = passwordSQLPattern.ReplaceAllString(s, "PASSWORD [redacted]")
 	s = passwordURIPattern.ReplaceAllString(s, "$1:[redacted]@")
 	return s
+}
+
+// redactKeywordForm applies passwordKVPattern, except where the `=` begins a
+// `=>`: that named-argument form is passwordQuotedPattern's.
+func redactKeywordForm(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range passwordKVPattern.FindAllStringSubmatchIndex(s, -1) {
+		if eq := m[3]; eq < len(s) && s[eq] == '>' {
+			continue
+		}
+		b.WriteString(s[last:m[0]])
+		b.WriteString("password=[redacted]")
+		last = m[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }

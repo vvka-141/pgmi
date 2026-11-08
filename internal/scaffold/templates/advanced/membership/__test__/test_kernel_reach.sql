@@ -66,6 +66,8 @@ BEGIN
     PERFORM pg_temp.test_as_kernel();
     INSERT INTO membership.pending_connection (principal_object_id, issuer_id, client_id, pairing_code, expires_at)
     VALUES (v_b_member, 'test', 'reach-client', membership.fn_new_pairing_code(), clock_timestamp() + interval '1 hour');
+    INSERT INTO membership.proposal (organization_object_id, tool_name, arguments, proposed_by_object_id, proposer_kind)
+    VALUES (v_b, 'reach_probe', '{}', v_b_member, 'human');
     SELECT jsonb_build_object(
         'p_organization_object_id', v_b,
         'p_membership_object_id', (SELECT object_id FROM membership.organization_membership
@@ -87,6 +89,7 @@ BEGIN
         'p_previous_owner_becomes_admin', true, 'p_action', 'membership.reach.probe', 'p_detail', '{}',
         'p_method', 'GET', 'p_url', '/members', 'p_client_name', 'Reach probe', 'p_valid_days', 1,
         'p_operation', 'revoke', 'p_enabled', false,
+        'p_proposal_object_id', (SELECT object_id FROM membership.proposal WHERE organization_object_id = v_b),
         'p_pairing_code', (SELECT pairing_code FROM membership.pending_connection WHERE principal_object_id = v_b_member))
     INTO v_id;
     PERFORM pg_temp.test_as_owner();

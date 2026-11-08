@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -419,11 +420,34 @@ func setConnection(root *yaml.Node, conn config.ConnectionConfig) error {
 	}
 	for _, k := range order {
 		if !seen[k] {
+			dropPlaceholder(section, k)
 			kept = append(kept, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, set[k])
 		}
 	}
 	section.Content = kept
 	return nil
+}
+
+// dropPlaceholder removes the commented-out "# key: ..." line a scaffolded
+// pgmi.yaml carries for a key that is now being set, so the file does not
+// show the key twice.
+func dropPlaceholder(section *yaml.Node, key string) {
+	placeholder := regexp.MustCompile(`^\s*#\s*` + regexp.QuoteMeta(key) + `:`)
+	scrub := func(c *string) {
+		lines := strings.Split(*c, "\n")
+		out := lines[:0]
+		for _, l := range lines {
+			if !placeholder.MatchString(l) {
+				out = append(out, l)
+			}
+		}
+		*c = strings.TrimRight(strings.Join(out, "\n"), "\n")
+	}
+	for _, n := range append([]*yaml.Node{section}, section.Content...) {
+		scrub(&n.HeadComment)
+		scrub(&n.LineComment)
+		scrub(&n.FootComment)
+	}
 }
 
 func authMethodToString(m pgmi.AuthMethod) string {

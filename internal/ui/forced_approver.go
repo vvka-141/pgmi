@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
@@ -54,9 +55,8 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 	}
 
 	if a.showSkull {
-		warningText := strings.ReplaceAll(dangerSkull, "${dbname}", dbName)
 		fmt.Fprintln(a.output)
-		fmt.Fprint(a.output, warningText)
+		fmt.Fprint(a.output, dangerBanner(dbName))
 		fmt.Fprintln(a.output)
 	}
 
@@ -94,3 +94,21 @@ func (a *ForcedApprover) RequestApproval(ctx context.Context, dbName string) (bo
 var _ pgmi.Approver = (*ForcedApprover)(nil)
 
 const defaultForceApprovalCountdown = 5 * time.Second
+
+// dangerBanner frames the skull and its warning for dbName. The frame is
+// drawn here, not in the asset, so it fits any database name.
+func dangerBanner(dbName string) string {
+	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(dangerSkull, "${dbname}", dbName), "\n"), "\n")
+	width := 0
+	for _, l := range lines {
+		width = max(width, ansi.StringWidth(l))
+	}
+	rule := strings.Repeat("═", width+4)
+	var b strings.Builder
+	b.WriteString("╔" + rule + "╗\n")
+	for _, l := range append(append([]string{""}, lines...), "") {
+		b.WriteString("║  " + l + strings.Repeat(" ", width-ansi.StringWidth(l)) + "  ║\n")
+	}
+	b.WriteString("╚" + rule + "╝\n")
+	return b.String()
+}

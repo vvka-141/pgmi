@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
 )
 
@@ -431,6 +432,24 @@ func TestNonInteractiveApprover_RefusesImmediately(t *testing.T) {
 	for _, want := range []string{"--force", "clirev"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestDangerBannerFramesEveryLine(t *testing.T) {
+	for _, db := range []string{"x", "a_much_longer_database_name_than_the_frame_was_drawn_for"} {
+		banner := dangerBanner(db)
+		if !strings.Contains(banner, "'"+db+"'") {
+			t.Fatalf("banner does not name %s:\n%s", db, banner)
+		}
+		lines := strings.Split(strings.TrimRight(banner, "\n"), "\n")
+		width := ansi.StringWidth(lines[0])
+		for i, l := range lines {
+			first, last := []rune(l)[0], []rune(l)[len([]rune(l))-1]
+			inside := (first == '║' && last == '║') || (i == 0 && first == '╔' && last == '╗') || (i == len(lines)-1 && first == '╚' && last == '╝')
+			if !inside || ansi.StringWidth(l) != width {
+				t.Errorf("%s: line %d is outside the frame:\n%s", db, i, banner)
+			}
 		}
 	}
 }

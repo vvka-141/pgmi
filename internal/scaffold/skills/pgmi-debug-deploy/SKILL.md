@@ -1,6 +1,6 @@
 ---
 name: pgmi-debug-deploy
-description: Diagnoses a failed pgmi deploy in a pgmi project. Maps the exit code (10 invalid configuration, 11 connection, 12 overwrite refused, 13 SQL failed, 14 no deploy.sql, 15 concurrent deploy, 16 timeout, 130 interrupted) and the SQLSTATE to what to inspect and how to fix it, reads the --json failure record, and tells whether anything was committed. Use when pgmi deploy exits non-zero, when a test fails the deploy, when an error names no file, or when a deploy succeeds but changes nothing.
+description: Diagnoses a failed pgmi deploy in a pgmi project. Maps the exit code and the SQLSTATE to what to inspect and how to fix it, reads the --json failure record, and tells whether anything was committed. Use when pgmi deploy exits non-zero, when a test fails the deploy, when an error names no file, or when a deploy succeeds but changes nothing.
 ---
 
 # Debugging a failed deploy

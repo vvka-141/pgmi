@@ -5,32 +5,28 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vvka-141/pgmi/internal/scaffold"
 )
 
-func TestDetectTemplate_Advanced(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "lib", "api"), 0755); err != nil {
+func TestDetectTemplate_ReadsTheScaffoldMarker(t *testing.T) {
+	for _, tmpl := range []string{"minimal", "basic", "advanced"} {
+		dir := filepath.Join(t.TempDir(), "p")
+		if err := scaffold.NewScaffolder(false).CreateProject("p", tmpl, dir); err != nil {
+			t.Fatal(err)
+		}
+		if got := detectTemplate(dir); got != tmpl {
+			t.Errorf("%s project: detectTemplate() = %q", tmpl, got)
+		}
+	}
+	bare := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bare, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := detectTemplate(dir); got != "advanced" {
-		t.Errorf("detectTemplate() = %q, want %q", got, "advanced")
-	}
-}
-
-func TestDetectTemplate_Basic(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), []byte("SELECT 1;"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if got := detectTemplate(dir); got != "basic" {
-		t.Errorf("detectTemplate() = %q, want %q", got, "basic")
-	}
-}
-
-func TestDetectTemplate_Unknown(t *testing.T) {
-	dir := t.TempDir()
-	if got := detectTemplate(dir); got != "unknown" {
-		t.Errorf("detectTemplate() = %q, want %q", got, "unknown")
+	for name, dir := range map[string]string{"bare deploy.sql": bare, "empty": t.TempDir()} {
+		if got := detectTemplate(dir); got != "unknown" {
+			t.Errorf("%s: detectTemplate() = %q, want unknown", name, got)
+		}
 	}
 }
 
@@ -70,8 +66,8 @@ func TestRunInfo_BasicProject(t *testing.T) {
 		t.Fatalf("json.Unmarshal: %v\nraw: %s", err, buf[:n])
 	}
 
-	if info.Template != "basic" {
-		t.Errorf("template = %q, want %q", info.Template, "basic")
+	if info.Template != "unknown" {
+		t.Errorf("template = %q, want %q", info.Template, "unknown")
 	}
 	if !info.DeploySQL {
 		t.Error("deploySql should be true")

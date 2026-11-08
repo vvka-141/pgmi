@@ -639,7 +639,8 @@ func targetOf(cfg pgmi.DeploymentConfig) *deployTarget {
 
 // deployResultFields is the machine-readable deploy result, shared by
 // `deploy --json` and the MCP deploy tool so the two cannot drift.
-// Provenance keys are always present; a fact the run never reached is null.
+// Provenance and result keys are always present, whatever the exit code; a
+// fact the run never reached is null. Diagnostics appear only when known.
 func deployResultFields(result *pgmi.DeployResult, deployErr error, prov deployProvenance) map[string]any {
 	pgmiVersion, _, _ := resolveVersionInfo()
 	out := map[string]any{
@@ -657,6 +658,10 @@ func deployResultFields(result *pgmi.DeployResult, deployErr error, prov deployP
 		"startedAt":        prov.startedAt.UTC().Format(time.RFC3339Nano),
 		"finishedAt":       time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	for _, k := range []string{"filesLoaded", "pathsIgnored", "testMacros", "durationMs", "database", "created", "recreated"} {
+		out[k] = nil
+	}
+	out["ignoredPaths"] = []map[string]string{}
 	if _, v, err := contract.Load(prov.compat); err == nil {
 		out["contractVersion"] = string(v)
 	}

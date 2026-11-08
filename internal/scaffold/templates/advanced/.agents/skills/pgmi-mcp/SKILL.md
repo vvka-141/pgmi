@@ -24,7 +24,7 @@ SELECT api.create_or_replace_mcp_handler(
     jsonb_build_object(
         'id', '<uuid>',
         'type', 'tool',                  -- tool | resource | prompt
-        'effect', 'read',                -- tools only: read, or write with 'reversible', true|false
+        'effect', 'read',                -- tools only: read; write with 'reversible'; proposal with 'proposes'
         'name', 'review_project_tasks',  -- a task, verb first
         'title', 'Review a project''s tasks',
         'description', 'What, when to use it, Read-only or Writes, detail levels, free-text fields',
@@ -38,6 +38,16 @@ SELECT api.create_or_replace_mcp_handler(
 - **`effect` is required on a tool**, refused on a resource or prompt.
   Annotations are derived from it (`readOnlyHint`, `idempotentHint`,
   `destructiveHint`); hand-written `annotations` are refused.
+- **A write a person must confirm is a proposal tool**: `'effect',
+  'proposal', 'proposes', '<write tool>'`, no `reversible`. The target is a
+  registered tool with effect `write`, registered first. The body only calls
+  `membership.fn_propose('<write tool>', (request).arguments)` and answers
+  `{"proposalId": ...}`; nothing waits. Declare its own permission
+  (`task.propose`): any role granting it may propose, without the target's.
+  A person acting as themselves with `proposals.decide` confirms at
+  `POST /proposals/{id}/confirm`, which runs the target as that person under
+  the target's permission, or rejects at `.../reject`. An agent never
+  decides, and a proposal is decided once.
 - `$ref` in a tool schema is local (`#/$defs/<name>`). `readOnly` is refused
   on MCP handlers: every exchange is logged in `api.mcp_exchange`.
 - A resource declares `uriTemplate` and `mimeType`; a prompt `arguments`.

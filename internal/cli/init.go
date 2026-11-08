@@ -128,7 +128,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// A kept pgmi.yaml that names a database is the target: -d would override it.
-	dbName := "mydb"
+	dbName := defaultDatabase(selectedTemplate)
 	switch {
 	case setupConnection && connResult.Config.Database != "":
 		dbName = connResult.Config.Database
@@ -190,9 +190,18 @@ func managedCloudCaveat(template string) string {
 		return ""
 	}
 	return "Managed-cloud note: the advanced template needs PostgreSQL 18 or newer and the\n" +
-		"uuid-ossp, pgcrypto, pg_trgm and hstore extensions. No superuser required: deploy\n" +
-		"as a role with CREATEROLE and CREATEDB. Details:\n" +
+		"uuid-ossp, pgcrypto, pg_trgm, hstore and btree_gist extensions. No superuser\n" +
+		"required: deploy as a role with CREATEROLE and CREATEDB. Details:\n" +
 		"https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql"
+}
+
+// defaultDatabase is the database init's "Next:" deploys to: the advanced
+// README's, so its later steps (the gateway role, DATABASE_URL) still apply.
+func defaultDatabase(template string) string {
+	if template == "advanced" {
+		return "myapp_dev"
+	}
+	return "mydb"
 }
 
 // isInitBlocked checks if the target directory has non-pgmi files that would block init.

@@ -243,6 +243,7 @@ With `--azure` or `--aws` the password is a bearer token, so pgmi never lets the
 - `disable`, `allow` and `prefer` are refused before connecting (exit 10), whichever source set them: `--sslmode`, `PGSSLMODE`, the connection string, or `connection.sslmode` in pgmi.yaml. The error names the source.
 - `require`, `verify-ca` and `verify-full` are accepted.
 - When nothing sets sslmode, the default is `verify-full` for Azure, and for AWS when a root certificate is configured (`--sslrootcert`, `PGSSLROOTCERT`, pgmi.yaml, or `sslrootcert` in the connection string). AWS without one defaults to `require`.
+- The pgmi.yaml that `pgmi init` writes for the basic and advanced templates sets `sslmode: prefer` for local development, so these commands are refused from a fresh project until you pass `--sslmode verify-full` (`require` for AWS without a root certificate) or change that line.
 
 Google Cloud SQL is not affected: its connector supplies TLS itself.
 

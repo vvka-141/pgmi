@@ -410,6 +410,7 @@ type reply struct {
 	status  int
 	headers http.Header
 	body    map[string]any
+	raw     []byte
 }
 
 func (c *client) call(method, path string, body any, headers map[string]string, signedIn bool) reply {
@@ -438,9 +439,13 @@ func (c *client) call(method, path string, body any, headers map[string]string, 
 		c.t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
 	var decoded map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&decoded)
-	return reply{resp.StatusCode, resp.Header, decoded}
+	_ = json.Unmarshal(raw, &decoded)
+	return reply{resp.StatusCode, resp.Header, decoded, raw}
 }
 
 func (c *client) post(path string, body any, headers map[string]string) reply {
@@ -573,6 +578,11 @@ func TestAgainstTheDeployedTemplate(t *testing.T) {
 		if r.status != http.StatusUnprocessableEntity || rpcErr["code"] != float64(-32011) || r.body["id"] != float64(9) ||
 			fmt.Sprint(data["invalid-params"]) != "[map[name:newOwnerId reason:not_found]]" {
 			t.Errorf("a target outside the organization: %d %v", r.status, r.body)
+		}
+		notification := map[string]any{"jsonrpc": "2.0", "method": "organization.transfer_ownership",
+			"params": map[string]any{"newOwnerId": "00000000-0000-4000-8000-000000000000"}}
+		if r := c.post("/rpc", notification, org); r.status != http.StatusAccepted || len(r.raw) != 0 {
+			t.Errorf("a notification: %d %q", r.status, r.raw)
 		}
 		if r := c.post("/rpc", call("no.such.method", nil), org); r.status != http.StatusNotFound {
 			t.Errorf("an unknown method: %d %v", r.status, r.body)

@@ -15,6 +15,7 @@ import (
 	"github.com/vvka-141/pgmi/internal/contract"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/internal/files/loader"
+	"github.com/vvka-141/pgmi/internal/files/pathrule"
 	"github.com/vvka-141/pgmi/internal/files/scanner"
 	"github.com/vvka-141/pgmi/internal/preprocessor"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
@@ -255,6 +256,9 @@ func (s *DeploymentService) executeDeploySQL(
 
 	if result.MacroCount > 0 {
 		s.logger.Verbose("Expanded %d test macro(s) in deploy.sql", result.MacroCount)
+	}
+	if notice := unusedTestsNotice(scan, result.MacroCount); notice != "" {
+		s.logger.Info("%s", notice)
 	}
 
 	// Execute deploy.sql as a sequence of simple-query messages on ONE
@@ -584,4 +588,23 @@ func classifyCreateFailure(err error) error {
 func isTemplateDatabase(name string) bool {
 	lower := strings.ToLower(name)
 	return lower == "template0" || lower == "template1"
+}
+
+// unusedTestsNotice tells a user whose __test__/ files never run why: deploy.sql
+// neither calls the pgmi_test() macro nor the test functions behind it. It only
+// informs; deploy.sql still decides what runs.
+func unusedTestsNotice(scan scanner.Result, macroCount int) string {
+	if macroCount > 0 || strings.Contains(strings.ToLower(scan.DeploySQL), "pgmi_test") {
+		return ""
+	}
+	n := 0
+	for _, f := range scan.Files {
+		if pathrule.IsTestPath(f.Path) {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d test file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run", n)
 }

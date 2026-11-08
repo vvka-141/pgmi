@@ -133,27 +133,34 @@ var scaffoldedPattern = regexp.MustCompile(`^-- Scaffolded by pgmi (\S+) from th
 // scaffoldedFrom reads the line pgmi init writes at the top of deploy.sql, so
 // a user can tell which pgmi version and template a project started from.
 func scaffoldedFrom(sourcePath string) string {
+	version, template := scaffoldMarker(sourcePath)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf("pgmi %s, %s template", version, template)
+}
+
+// detectTemplate is the template the marker line names; a project without
+// one was not scaffolded by pgmi init, or its owner removed the line.
+func detectTemplate(sourcePath string) string {
+	if _, template := scaffoldMarker(sourcePath); template != "" {
+		return template
+	}
+	return "unknown"
+}
+
+func scaffoldMarker(sourcePath string) (version, template string) {
 	f, err := os.Open(filepath.Join(sourcePath, "deploy.sql"))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer f.Close()
 	line, _ := bufio.NewReader(f).ReadString('\n')
 	m := scaffoldedPattern.FindStringSubmatch(strings.TrimRight(line, "\r\n"))
 	if m == nil {
-		return ""
+		return "", ""
 	}
-	return fmt.Sprintf("pgmi %s, %s template", m[1], m[2])
-}
-
-func detectTemplate(sourcePath string) string {
-	if _, err := os.Stat(filepath.Join(sourcePath, "lib", "api")); err == nil {
-		return "advanced"
-	}
-	if _, err := os.Stat(filepath.Join(sourcePath, "deploy.sql")); err == nil {
-		return "basic"
-	}
-	return "unknown"
+	return m[1], m[2]
 }
 
 func printProjectInfo(info projectInfo) {

@@ -88,13 +88,13 @@ func (c *TokenBasedConnector) Connect(ctx context.Context) (*pgxpool.Pool, error
 
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
-			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.AuthMethod, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		if err := pool.Ping(ctx); err != nil {
 			pool.Close()
 			pool = nil
-			return WrapConnectionError(err, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
+			return WrapConnectionError(err, c.config.AuthMethod, c.config.Host, c.config.Port, c.config.Database, c.config.Username)
 		}
 
 		return nil

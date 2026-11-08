@@ -12,12 +12,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // fakeChannel answers each call with the next error of its list (nil: success)
@@ -77,6 +80,27 @@ func TestALostConnectionRetriesThePolicyLookups(t *testing.T) {
 	c.Channel = f
 	if _, err := c.MCPPolicy(t.Context(), rc, nil, "", MCPHeaders{}); err != nil || f.calls != 2 {
 		t.Errorf("mcp policy: %v after %d calls", err, f.calls)
+	}
+}
+
+func TestAFailedConnectIsLoggedWithItsCause(t *testing.T) {
+	pool, err := pgxpool.New(t.Context(), "postgres://gateway:s3cret-pw@127.0.0.1:1/app?connect_timeout=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var out bytes.Buffer
+	g := &Gateway{Channel: &Postgres{Pool: pool, AcquireTimeout: 5 * time.Second}, Log: slog.New(slog.NewTextHandler(&out, nil))}
+	resp := serve(g, httptest.NewRequest(http.MethodGet, "/api/hello", nil))
+	var body struct{ Code, Detail string }
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || body.Code != "pgmi.unavailable" || body.Detail != "no database connection is free; repeat the request" {
+		t.Errorf("answer changed: %d %+v", resp.StatusCode, body)
+	}
+	if log := out.String(); !strings.Contains(log, "failed to connect") || !strings.Contains(log, "127.0.0.1:1") || strings.Contains(log, "s3cret-pw") {
+		t.Errorf("log must name the connect error and never the password:\n%s", log)
 	}
 }
 

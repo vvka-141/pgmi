@@ -1,12 +1,16 @@
 # pgmi - AI Assistant Guide
 
-> PostgreSQL-native deployment driver. You write the deployment in SQL and PL/pgSQL; pgmi handles connection, parameters, and exit codes.
+> PostgreSQL deployments written in SQL, tested before they commit. pgmi loads the project into one PostgreSQL session and runs the `deploy.sql` the project wrote; pgmi handles connection, parameters and exit codes.
 
 ## What is pgmi?
 
-pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tables, then executes a user-provided `deploy.sql` that orchestrates deployment using PostgreSQL's procedural languages.
+pgmi loads the project's files and parameters into session-scoped temporary tables and views, then runs the project's `deploy.sql`. Three things follow:
 
-**Key insight:** pgmi is an execution fabric, NOT a migration framework. Transaction control, execution order, retry logic, idempotency - all belong in your SQL, not CLI flags.
+1. **The project's SQL runs the deploy.** `deploy.sql` queries the session views and decides what runs, in what order, and inside which transaction. Execution order, retries and idempotency belong in that SQL, never in a CLI flag. pgmi is not a migration framework.
+2. **A test tree can gate the commit.** `CALL pgmi_test()` runs the `__test__/` directories against the changed, uncommitted database; each test rolls back to its directory's fixture state. Called before `COMMIT`, a failing test aborts that transaction; anything an earlier `COMMIT` applied stays.
+3. **You get tools and project skills.** `pgmi ai contract` prints this binary's session API and `pgmi serve` offers pgmi's commands over MCP. The basic and advanced templates write an `AGENTS.md` and skills into the project. pgmi runs what you ask; it plans nothing on its own.
+
+Keep three things apart: **pgmi core** (the binary, the session views, `CALL pgmi_test()`), the **templates** (minimal, basic, advanced: starting points that become the project's own code, optional, since a hand-written `deploy.sql` needs none), and **agent tooling** (`pgmi ai`, `pgmi serve`, the scaffolded skills). The advanced template's REST/RPC/MCP endpoints are application code that serves the project's own callers at runtime; they are not `pgmi serve`.
 
 ## Quick Start for AI Assistants
 
@@ -14,9 +18,9 @@ pgmi loads SQL files and parameters into PostgreSQL session-scoped temporary tab
 # Initialize a project
 pgmi init myproject --template basic
 
-# Deploy to database. Tests are not a separate command: deploy.sql calls
-# CALL pgmi_test(), so they run inside the same transaction and a failing
-# test rolls the whole deployment back. pgmi reads the connection string from
+# Deploy to database. Tests are not a separate command: the basic template's
+# deploy.sql calls CALL pgmi_test() before its COMMIT, so they run inside the
+# same transaction and a failing test aborts it. pgmi reads the connection string from
 # PGMI_CONNECTION_STRING or DATABASE_URL, which keeps the password out of argv.
 # Name the target with -d: a database in the string otherwise replaces
 # pgmi.yaml's (pgmi names the override), and the templates require env.
@@ -157,8 +161,8 @@ END IF;
 Ten distinctive capabilities are grounded in the implementation and guides.
 The three most relevant to agents:
 
-1. **Tests gate the deploy transaction** — `CALL pgmi_test()` runs inside the
-   deployment transaction; a failing test aborts the commit and rolls back its
+1. **Tests can gate the deploy transaction** — `CALL pgmi_test()` runs inside the
+   deployment transaction; called before `COMMIT`, a failing test aborts the commit and rolls back its
    transactional schema and data changes. Sequence advances and effects outside
    the transaction are not rolled back.
 2. **Reformat-proof checksums** — `pgmi_checksum` strips comments, and folds case

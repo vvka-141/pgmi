@@ -342,6 +342,56 @@ END $$;
 
 DO $$
 DECLARE
+    v_response api.http_response;
+    v_before bigint;
+    v_after bigint;
+BEGIN
+    CREATE TEMP TABLE rpc_notification_probe (ran int);
+
+    PERFORM api.create_or_replace_rpc_handler(
+        jsonb_build_object('id', 'ffffffff-2003-4000-8000-000000000001', 'methodName', 'test.notify',
+            'access', 'public'),
+        $body$
+BEGIN
+    INSERT INTO pg_temp.rpc_notification_probe VALUES (1);
+    RETURN api.jsonrpc_success(jsonb_build_object('ran', true), api.content_json((request).content)->'id');
+END;
+        $body$
+    );
+
+    SELECT count(*) INTO v_before FROM pg_temp.rpc_notification_probe;
+    v_response := api.rpc_invoke(api.rpc_resolve('test.notify'), ''::extensions.hstore,
+        convert_to('{"jsonrpc": "2.0", "method": "test.notify", "params": {}}', 'UTF8'));
+    SELECT count(*) INTO v_after FROM pg_temp.rpc_notification_probe;
+
+    IF (v_response).status_code IS DISTINCT FROM 202 OR (v_response).content IS DISTINCT FROM ''::bytea
+       OR coalesce((v_response).headers ? 'content-type', true) THEN
+        RAISE EXCEPTION 'TEST FAILED: a notification must answer 202 with no body, got % %',
+            (v_response).status_code, convert_from(coalesce((v_response).content, ''::bytea), 'UTF8');
+    END IF;
+    IF v_after IS DISTINCT FROM v_before THEN
+        RAISE EXCEPTION 'TEST FAILED: a notification ran its method (% rows before, % after)', v_before, v_after;
+    END IF;
+
+    v_response := api.rpc_invoke(api.rpc_resolve('test.notify'), ''::extensions.hstore,
+        convert_to('{"jsonrpc": "2.0", "method": "test.notify", "id": null}', 'UTF8'));
+    SELECT count(*) INTO v_after FROM pg_temp.rpc_notification_probe;
+
+    IF (v_response).status_code IS DISTINCT FROM 200
+       OR api.content_json((v_response).content)->'result' IS DISTINCT FROM '{"ran": true}'::jsonb THEN
+        RAISE EXCEPTION 'TEST FAILED: a request with "id": null must be dispatched, got % %',
+            (v_response).status_code, api.content_json((v_response).content);
+    END IF;
+    IF v_after IS DISTINCT FROM v_before + 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: a request with "id": null did not run its method';
+    END IF;
+
+    DROP TABLE pg_temp.rpc_notification_probe;
+    RAISE NOTICE '  ✓ RPC: a notification runs nothing and answers 202; "id": null is a request';
+END $$;
+
+DO $$
+DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
     v_list jsonb;

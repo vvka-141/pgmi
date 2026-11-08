@@ -534,3 +534,24 @@ func loadProjectConfig(sourcePath string) (*config.ProjectConfig, error) {
 	loadDotenv(sourcePath)
 	return loadProjectYAML(sourcePath)
 }
+
+func TestSaveConnectionToConfig_ReplacesTheCommentedPlaceholder(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "p")
+	if err := scaffold.NewScaffolder(false).CreateProject("p", "basic", dir); err != nil {
+		t.Fatal(err)
+	}
+	conn := &db.ConnectionConfig{Host: "localhost", Port: 5432, Username: "postgres", Database: "app", SSLMode: "prefer"}
+	if err := saveConnectionToConfig(dir, conn, "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "pgmi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "username:"); n != 1 {
+		t.Errorf("pgmi.yaml has %d username: lines, want 1:\n%s", n, data)
+	}
+	if !strings.Contains(string(data), "timeout: 3m") || !strings.Contains(string(data), "# Parameters passed to deploy.sql") {
+		t.Errorf("comments and keys outside the placeholder must survive:\n%s", data)
+	}
+}

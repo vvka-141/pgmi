@@ -102,3 +102,8 @@ RETURN api.jsonrpc_error(-32011, 'Invalid params', v_id,
                          jsonb_build_object('invalid-params', jsonb_build_array(
                              jsonb_build_object('name', 'assignee', 'reason', 'not_found'))));
 ```
+
+A body runs only for a request with an `id` member, `null` included. A
+notification, a body with no `id`, is answered `202` with no body and never
+reaches the handler: an RPC method is a business action, and a
+notification's outcome would be invisible.

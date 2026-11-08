@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/vvka-141/pgmi/internal/config"
@@ -700,17 +701,14 @@ func TestInitWizard_ConnectionEmbedded_SingleProgram(t *testing.T) {
 	templates := DefaultTemplates()
 	dir := filepath.Join(t.TempDir(), "newproject")
 	w := NewInitWizard(dir, templates)
-
-	// Step 1: confirm directory
-	m, _ := update(t, w, keyMsg("enter"))
-	iw := asInitWizard(t, m)
-	if iw.step != initStepTemplate {
-		t.Fatalf("expected initStepTemplate, got %d", iw.step)
+	if w.step != initStepTemplate {
+		t.Fatalf("a given directory must skip to initStepTemplate, got %d", w.step)
 	}
+	var m tea.Model = w
 
-	// Step 2: select minimal template (first, already selected)
+	// Select minimal template (first, already selected)
 	m, _ = update(t, m, keyMsg("enter"))
-	iw = asInitWizard(t, m)
+	iw := asInitWizard(t, m)
 	if iw.step != initStepSetupChoice {
 		t.Fatalf("expected initStepSetupChoice, got %d", iw.step)
 	}
@@ -1376,9 +1374,7 @@ func TestConnectionWizard_AzureValidation_MissingDatabase(t *testing.T) {
 // --- InitWizard View tests ---
 
 func TestInitWizard_View_DirectoryStep(t *testing.T) {
-	templates := DefaultTemplates()
-	dir := filepath.Join(t.TempDir(), "newproject")
-	w := NewInitWizard(dir, templates)
+	w := NewInitWizard("", DefaultTemplates())
 
 	view := w.View().Content
 	if !strings.Contains(view, "pgmi init") {
@@ -1392,16 +1388,38 @@ func TestInitWizard_View_DirectoryStep(t *testing.T) {
 func TestInitWizard_View_TemplateStep(t *testing.T) {
 	templates := DefaultTemplates()
 	dir := filepath.Join(t.TempDir(), "newproject")
-	w := NewInitWizard(dir, templates)
-
-	// Confirm directory → template step
-	m, _ := update(t, w, keyMsg("enter"))
-	view := m.View().Content
+	view := NewInitWizard(dir, templates).View().Content
 	if !strings.Contains(view, "basic") {
 		t.Error("View at template step should contain 'basic'")
 	}
 	if !strings.Contains(view, "advanced") {
 		t.Error("View at template step should contain 'advanced'")
+	}
+}
+
+func TestInitWizard_BlockedDirectoryStaysOnTheDirectoryStep(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deploy.sql"), []byte("SELECT 1;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := NewInitWizard(dir, DefaultTemplates())
+	if w.step != initStepDirectory || !strings.Contains(w.View().Content, "deploy.sql") {
+		t.Errorf("a blocked directory must stay on the directory step and say why; step %d:\n%s", w.step, w.View().Content)
+	}
+}
+
+func TestInitWizard_RadioRowsAlign(t *testing.T) {
+	w := NewInitWizard(filepath.Join(t.TempDir(), "p"), DefaultTemplates())
+	for name, view := range map[string]string{"template": w.View().Content, "setup": w.viewSetupChoice()} {
+		cols := map[int]bool{}
+		for _, line := range strings.Split(ansi.Strip(view), "\n") {
+			if i := strings.IndexAny(line, "●○"); i >= 0 {
+				cols[len([]rune(line[:i]))] = true
+			}
+		}
+		if len(cols) != 1 {
+			t.Errorf("%s step: radio symbols sit in columns %v, want one column:\n%s", name, cols, ansi.Strip(view))
+		}
 	}
 }
 

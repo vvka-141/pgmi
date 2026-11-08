@@ -130,15 +130,21 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Default idempotent: %v\n", scaffoldIdempotent)
 	}
 
+	root, under, err := scaffoldScope(projectPath)
+	if err != nil {
+		return err
+	}
+
 	fmt.Fprintln(os.Stderr, "Scanning SQL files...")
-	scanResult, err := scanner.NewScanner(checksum.New()).ScanDirectory(projectPath)
+	scanResult, err := scanner.NewScanner(checksum.New()).ScanDirectory(root)
 	if err != nil {
 		return fmt.Errorf("failed to scan directory: %w", err)
 	}
 
 	var pending []string
 	for _, file := range scanResult.Files {
-		if file.Metadata == nil && pathrule.IsSQLExtension(file.Extension) && !pathrule.IsTestPath(file.Path) {
+		if file.Metadata == nil && pathrule.IsSQLExtension(file.Extension) && !pathrule.IsTestPath(file.Path) &&
+			strings.HasPrefix(file.Path, under) {
 			pending = append(pending, file.Path)
 		}
 	}
@@ -179,10 +185,11 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "    Idempotent: %v\n", scaffoldIdempotent)
 
 		if !previewOnly {
-			if err := prependToFile(filepath.Join(projectPath, filepath.FromSlash(filePath)), metaBlock); err != nil {
+			target := filepath.Join(root, filepath.FromSlash(filePath))
+			if err := prependToFile(target, metaBlock); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
-			fmt.Fprintf(os.Stderr, "    Written to file\n")
+			fmt.Fprintf(os.Stderr, "    Written to %s\n", target)
 		}
 		fmt.Fprintln(out)
 	}
@@ -193,6 +200,33 @@ func runMetadataScaffold(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Generated metadata for %d file(s).\n", len(pending))
 	}
 	return nil
+}
+
+// scaffoldScope finds the project a directory belongs to: the nearest
+// directory at or above it holding deploy.sql. Scanning from there gives the
+// paths, sort keys and .pgmiignore that pgmi metadata scaffold . would; under
+// is the scanned-path prefix of the files to scaffold. Without a deploy.sql
+// above it, the directory is its own root.
+func scaffoldScope(dir string) (root, under string, err error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", err
+	}
+	for d := abs; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, "deploy.sql")); err == nil {
+			rel, err := filepath.Rel(d, abs)
+			if err != nil {
+				return "", "", err
+			}
+			if rel == "." {
+				return d, "./", nil
+			}
+			return d, "./" + filepath.ToSlash(rel) + "/", nil
+		}
+		if filepath.Dir(d) == d {
+			return abs, "./", nil
+		}
+	}
 }
 
 // scaffoldSortKeys gives each pending file the key <prefix>/<file name>. The

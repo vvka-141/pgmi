@@ -49,14 +49,26 @@ Registration refuses a tool without one, naming it:
 | `"effect": "read"` | changes nothing |
 | `"effect": "write", "reversible": true` | makes a change that can be undone afterwards |
 | `"effect": "write", "reversible": false` | makes a change that cannot (a delete, a cancellation) |
+| `"effect": "proposal", "proposes": "<write tool>"` | records the change for a person to confirm; nothing else changes until then |
 | `"openWorldHint": true` | optional, default false: the tool reaches outside this database |
 
 The MCP annotations are derived from it and never written by hand
 (`"annotations"` in the metadata is refused): a read is `readOnlyHint` and
-`idempotentHint`, a write that cannot be undone is `destructiveHint`.
+`idempotentHint`, a write that cannot be undone is `destructiveHint`, a
+proposal is none of them.
 `tools/list` publishes them as `annotations`, and the effect itself under
 `_meta["pgmi/effect"]`. A resource or a prompt declares none of these: reading
 one changes nothing.
+
+A proposal's `"proposes"` names a tool already registered with
+`"effect": "write"`; registration refuses a missing, unknown or non-write
+target and a `"reversible"`. The body calls
+`membership.fn_propose('<write tool>', (request).arguments)` and answers the
+proposal id at once. A person signed in on the web, acting as themselves and
+holding `proposals.decide`, confirms it with `POST /proposals/{id}/confirm`,
+which runs the target as that person under the target's own permission, or
+rejects it with `POST /proposals/{id}/reject`; `GET /proposals` lists the
+pending ones. The advanced template's README ("Proposals") has the details.
 
 ## Schema Contracts and Tags
 

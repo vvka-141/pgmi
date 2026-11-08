@@ -28,7 +28,8 @@ pgmi-metadata (`<pgmi-meta>` blocks), pgmi-testing (test files and fixtures).
 ## Order and sort keys
 
 - Application files sort at `005/100/...` or later; `001` to `004` and
-  `005/000/...` are the framework. Keep one prefix per entity, structure before kernel before
+  `005/000/...` are the framework, and `005/001` to `005/007` are the
+  template's own handlers in `api/` (the example domain, sessions, access). Keep one prefix per entity, structure before kernel before
   handlers: `005/100/project/1`, `/2`, `/3`. Check with `pgmi metadata plan .`.
 - The `<pgmi-meta>` block is a `/* */` comment. A file without a place in the
   plan stops the deploy before anything runs.
@@ -43,7 +44,8 @@ pgmi-metadata (`<pgmi-meta>` blocks), pgmi-testing (test files and fixtures).
   change in a new run-once file sorted after it.
 - **Every table is forced to row-level security or exempt with a reason.**
   An organization's rows: `organization_id` plus
-  `SELECT core.apply_org_rls('core.<table>')`. Shared rows:
+  `SELECT core.apply_org_rls('core.<table>')`; a table without a
+  `created_by_user_id` column passes `p_has_created_by => false`. Shared rows:
   `SELECT pg_temp.exempt_from_rls('core.<table>', '<reason>')`.
 - **Every foreign key has an index leading with its columns**, or a
   `pg_temp.exempt_from_fk_index(...)` with the reason.
@@ -74,8 +76,8 @@ pgmi-metadata (`<pgmi-meta>` blocks), pgmi-testing (test files and fixtures).
 
 | Declaration | Who gets in | When |
 |---|---|---|
-| `'permissions', jsonb_build_array('project.write')` | a member whose roles grant one of them, in an organization session | the default for application data |
-| `'access', 'organization'` | any signed-in member, in an organization session | the organization's data where every member may act; no matrix row |
+| `'permissions', jsonb_build_array('project.write')` | a member whose roles grant one of them, in an organization session | roles decide who may call it (pgmi-api-layer) |
+| `'access', 'organization'` | any signed-in member, in an organization session | every member may call it (pgmi-api-layer); no matrix row |
 | `'access', 'authenticated'` | any signed-in person | the caller's own data, outside any organization |
 | `'access', 'public'` | anyone | health checks, public catalogues; never a kernel that writes |
 

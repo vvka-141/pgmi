@@ -791,7 +791,7 @@ func (w *ConnectionWizard) testConnection() tea.Cmd {
 		defer cancel()
 		info, err := tester.TestConnection(ctx, testCfg)
 		if err != nil {
-			return testResultMsg{success: false, err: db.WrapConnectionError(err, testCfg.Host, testCfg.Port, testCfg.Database, testCfg.Username)}
+			return testResultMsg{success: false, err: db.WrapConnectionError(err, testCfg.AuthMethod, testCfg.Host, testCfg.Port, testCfg.Database, testCfg.Username)}
 		}
 		return testResultMsg{success: true, info: info}
 	}

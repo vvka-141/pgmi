@@ -221,3 +221,49 @@ func TestMetadataScaffold_HintNamesTheFilesDirectory(t *testing.T) {
 		t.Fatalf("the hint must name the file's own directory, got %v", err)
 	}
 }
+
+func TestMetadataScaffold_SubdirectoryScansFromTheProjectRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sc")
+	if err := scaffold.NewScaffolder(false).CreateProject("sc", "basic", dir); err != nil {
+		t.Fatal(err)
+	}
+	view := filepath.Join(dir, "semantic", "active_task.sql")
+	backup := filepath.Join(dir, "semantic", "task copy.sql")
+	for p, c := range map[string]string{
+		view:                              "CREATE OR REPLACE VIEW active_task_view AS SELECT * FROM task WHERE status = 'open';\n",
+		backup:                            "SELECT 1;\n",
+		filepath.Join(dir, ".pgmiignore"): "semantic/task copy.sql\n",
+	} {
+		if err := os.WriteFile(p, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := scaffoldMeta(t, filepath.Join(dir, "semantic"), "")
+	if err == nil || !strings.Contains(err.Error(), "--sort-key ./semantic/") {
+		t.Fatalf("the hint must name the directory from the project root, got %v", err)
+	}
+	if err := scaffoldMeta(t, filepath.Join(dir, "semantic"), "./semantic/"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := os.ReadFile(backup); string(c) != "SELECT 1;\n" {
+		t.Errorf(".pgmiignore at the project root was not honoured:\n%s", c)
+	}
+
+	result, err := planProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, lastPhysical := -1, -1
+	for i, e := range result.Plan {
+		switch {
+		case e.Path == "./semantic/active_task.sql":
+			active = i
+		case strings.HasPrefix(e.Path, "./physical/"):
+			lastPhysical = i
+		}
+	}
+	if active < 0 || active < lastPhysical {
+		t.Errorf("./semantic/active_task.sql at %d, last ./physical/ file at %d: path order must hold", active, lastPhysical)
+	}
+}

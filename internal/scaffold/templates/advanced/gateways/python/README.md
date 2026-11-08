@@ -24,6 +24,7 @@ The database login and `DATABASE_URL` come first: the project README's
 Quick Start, "Run a gateway", creates them.
 
 ```bash
+python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 DATABASE_URL="postgresql://mydb_gateway:$GATEWAY_PASSWORD@localhost:5432/mydb" python gateway.py
 python -m unittest test_gateway    # the database tests run when DATABASE_URL is set

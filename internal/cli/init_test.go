@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -261,5 +263,35 @@ func TestInit_DefaultsToTheMinimalTemplate(t *testing.T) {
 	}
 	if first := wizards.DefaultTemplates()[0].Name; first != "minimal" {
 		t.Errorf("the init wizard preselects %q, want minimal like the flag default", first)
+	}
+}
+
+func TestManagedCloudCaveat_NamesEveryExtensionTheAdvancedDeployCreates(t *testing.T) {
+	deploy, err := fs.ReadFile(scaffold.GetTemplatesFS(), "templates/advanced/deploy.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := regexp.MustCompile(`\(VALUES (.*?)\) AS r\(name\)`).FindSubmatch(deploy)
+	if list == nil {
+		t.Fatal("the extension list moved in the advanced deploy.sql")
+	}
+	caveat := strings.Join(strings.Fields(managedCloudCaveat("advanced")), " ")
+	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(list[1], -1) {
+		if !strings.Contains(caveat, string(m[1])) {
+			t.Errorf("the managed-cloud note leaves out %s", m[1])
+		}
+	}
+}
+
+func TestDefaultDatabase_MatchesTheAdvancedReadme(t *testing.T) {
+	readme, err := fs.ReadFile(scaffold.GetTemplatesFS(), "templates/advanced/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if db := defaultDatabase("advanced"); !strings.Contains(string(readme), "--database "+db+" ") {
+		t.Errorf("init's Next: deploys -d %s, which the advanced README never uses", db)
+	}
+	if db := defaultDatabase("basic"); db != "mydb" {
+		t.Errorf("basic: %s", db)
 	}
 }

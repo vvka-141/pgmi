@@ -1,6 +1,6 @@
 ---
 name: pgmi-workflow
-description: How to change, deploy and test a pgmi project — the edit, deploy, read-the-failure loop, where tests and fixtures go, and where to look up the session API instead of guessing. Use before the first deploy in a session, or when unsure where a new file belongs.
+description: Runs the change loop of a pgmi project — edit a file, deploy, read the failure, fix and deploy again — and says where a new file goes and where to look up the session API instead of guessing. Use before the first deploy in a session, when unsure where a new file belongs, or when asked to make a change and see it deployed.
 ---
 
 # Working in a pgmi project

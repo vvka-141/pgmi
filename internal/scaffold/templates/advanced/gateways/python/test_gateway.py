@@ -122,10 +122,10 @@ class GatewayTest(unittest.TestCase):
         return response
 
     @classmethod
-    def sign_in(cls, subject):
+    def sign_in(cls, subject, path="/auth/dev-login"):
         """Development sign-in. In production the transport runs OIDC and
         calls api.open_login_session instead (login_transport.py)."""
-        response = cls.call("POST", "/auth/dev-login",
+        response = cls.call("POST", path,
                             {"subject": subject, "email": f"{subject}@example.com", "displayName": subject})
         if response.status != 204:
             raise RuntimeError(f"dev sign-in: {response.status} {response.body!r}")
@@ -209,6 +209,20 @@ class GatewayTest(unittest.TestCase):
             refused = self.mcp("tools/call", {"name": "echo_note", "arguments": {}}, "cn_unknown", bearer)
             self.assertEqual(refused.status, 401, refused.body)
             self.assertEqual(refused.header("WWW-Authenticate"), 'Bearer error="invalid_token"')
+
+    def test_a_query_string_leaves_dev_login_and_logout_as_they_are(self):
+        session, csrf = self.sign_in("client-python-logout", "/auth/dev-login?x=1")
+        self.assertEqual(self.call("GET", "/api/me", session=session).status, 200)
+
+        response = self.call("POST", "/auth/logout?x=1", headers={"X-CSRF-Token": csrf}, session=session)
+        self.assertEqual(response.status, 204, response.body)
+        jar = SimpleCookie()
+        for name, value in response.headers:
+            if name.lower() == "set-cookie":
+                jar.load(value)
+        for name in (login_transport.SESSION_COOKIE, login_transport.CSRF_COOKIE):
+            self.assertEqual((jar[name].value, jar[name]["max-age"]), ("", "0"), name)
+        self.assertEqual(self.call("GET", "/api/me", session=session).status, 401)
 
     def test_application_name_and_a_bounded_pool(self):
         self.call("GET", "/api/hello")
@@ -797,6 +811,16 @@ class InProcessGateway(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return server.server_address[1]
+
+
+class HealthTest(InProcessGateway):
+    def test_a_query_string_is_still_health(self):
+        port = self.serve(FakeChannel())
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/health?x=1")
+        raw = conn.getresponse()
+        self.assertEqual((raw.status, json.loads(raw.read())), (200, {"status": "healthy"}))
+        conn.close()
 
 
 class AnsweringChannel(FakeChannel):

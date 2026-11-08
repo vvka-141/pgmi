@@ -17,6 +17,29 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
+<!-- DRAFT -->
+## v0.14.1 — TBD
+
+### New
+
+- **An MCP tool in the advanced template can propose a write for a person to confirm.** A tool declared with `"effect": "proposal"` names its target write tool in `"proposes"`; calling it records the proposal and changes nothing else. A person signed in as themselves with `proposals.decide` lists pending proposals with `GET /proposals` and confirms or rejects one; confirming runs the target tool as that person, under that person's permission ([MCP handlers](docs/advanced/MCP-HANDLERS.md)).
+
+### Fixes
+
+- **A refused Azure, AWS or Google token names the provider.** The error now points at the database role and `--username` instead of suggesting `$PGPASSWORD` and `~/.pgpass`, which play no part in token authentication ([connections](docs/CONNECTIONS.md#azure-entra-id)).
+- **`/rpc` answers a JSON-RPC notification with 202 and no body, and runs nothing.** A body with no `id` member is a notification; `"id": null` is still a request and gets an answer ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
+
+- **The Go reference gateway logs why it could not connect.** A refused password, a TLS mismatch, a bad certificate or an unknown host used to look like pool exhaustion: the log said only "no database connection is free". The 503 the client gets is unchanged; the log line now carries the connect error, without the password ([Go gateway](internal/scaffold/templates/advanced/gateways/go/README.md)).
+- **`pgmi metadata scaffold` on a directory inside a project scans from the project root.** Its `--sort-key ./` hint used to reorder a basic project's `semantic/` files ahead of `physical/` and break the deploy, and it ignored the root `.pgmiignore`. Paths, the suggested key and `.pgmiignore` now match scaffolding the whole project, and `--write` names each file it changes ([CLI reference](docs/CLI.md#pgmi-metadata-scaffold)).
+- **The scaffolded skills' unindexed-foreign-key audit no longer counts an `INCLUDE` column as indexing a key.** A composite foreign key whose second column sat only in `INCLUDE` was reported as indexed. The advanced template's `AGENTS.md` sends "add a table" to one place, and several skill descriptions trigger more precisely ([agent guidance](docs/core-vs-template.md)).
+- **`pgmi init` and `pgmi info` tell the truth about the template.** `pgmi info` names the template from the line `pgmi init` writes at the top of `deploy.sql`, and says `unknown` for a project without one, instead of calling every project with a `deploy.sql` "basic". `pgmi init <path>` no longer asks for the directory again, the wizard no longer promises a pgmi.yaml the minimal template does not write, and a wizard-written pgmi.yaml holds one `username:` line. For advanced, the "Next:" command deploys to `myapp_dev` as the advanced README does, and the managed-cloud note lists `btree_gist` ([CLI reference](docs/CLI.md)).
+- **The Azure and AWS examples say what a fresh project needs.** The pgmi.yaml `pgmi init` writes sets `sslmode: prefer`, which token authentication refuses; [connections](docs/CONNECTIONS.md#tls-with-token-authentication) now says to pass `--sslmode verify-full`. The Python gateway's quick start creates a virtual environment first, since stock Ubuntu refuses a system-wide `pip install`.
+- **A failing test in a project whose `deploy.sql` never runs tests is no longer silent.** When `__test__/` files are loaded but `deploy.sql` never mentions `pgmi_test`, the deploy says how many test files it loaded and that none run. pgmi still runs only what `deploy.sql` says ([testing](docs/TESTING.md)).
+- **`deploy --json` carries the same result keys on every exit code.** A run that stopped before loading the project (exit 10, 11, 14) now reports `filesLoaded`, `database`, `created` and the rest as `null` instead of leaving them out; diagnostics still appear only when known ([CLI reference](docs/CLI.md#--json-envelope)).
+- **A quoted password is redacted whole** in errors, `--json` and the MCP tools: also an `E'...'` value, a `password => '...'` argument and a JSON `"password": "..."` member. **`install.sh` reports the binary it installed** and warns when another `pgmi` earlier on PATH would still run. **The `--overwrite --force` banner** fits its frame for any database name.
+- **The Python reference gateway ignores a query string on `/auth/logout`, `/auth/dev-login` and `/health`.** `POST /auth/logout?x=1` answered 404 and left the session open; it now clears both cookies and closes the session, as the other gateways do ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
+- **`pgmi ai` opens with what pgmi gives a coding agent.** The overview names the three ideas in order (your SQL runs the deploy, a test tree can gate the commit, agents get tools and project skills), says the test gate holds only where `deploy.sql` calls it before `COMMIT`, and keeps pgmi core, the templates and agent tooling apart, with the advanced template's runtime MCP named as separate from `pgmi serve` ([core vs. template](docs/core-vs-template.md)).
+
 ## v0.14.0 — 2026-11-06
 
 **A project you scaffold with `pgmi init` now teaches the AI assistant working in it how to build a PostgreSQL application: `AGENTS.md` and a set of skills ship inside the project, next to the code they describe.** Every user also gets secrets passed through the environment instead of the command line, a deploy failure that names its file and line, and pgmi as a Go library. The basic template is redesigned around two layers. The advanced template is rebuilt as a complete application stack, in which an AI agent calling the API over MCP has its own identity.

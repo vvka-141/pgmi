@@ -135,15 +135,22 @@ type Postgres struct {
 	AcquireTimeout time.Duration
 }
 
-// acquire waits at most AcquireTimeout; an exhausted pool is ErrUnavailable,
-// never a request that hangs.
+// acquire waits at most AcquireTimeout; an exhausted pool or a failed connect
+// is ErrUnavailable, never a request that hangs. A failed connect keeps its
+// cause (a refused password, TLS or host) for the log; pgx leaves the
+// password out of it.
 func (p *Postgres) acquire(ctx context.Context) (*pgxpool.Conn, error) {
 	waiting, cancel := context.WithTimeout(ctx, p.AcquireTimeout)
 	defer cancel()
 	conn, err := p.Pool.Acquire(waiting)
 	var connect *pgconn.ConnectError
-	if err != nil && ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &connect)) {
-		return nil, ErrUnavailable
+	if err != nil && ctx.Err() == nil {
+		if errors.As(err, &connect) {
+			return nil, fmt.Errorf("%w: %w", ErrUnavailable, connect)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrUnavailable
+		}
 	}
 	return conn, err
 }
