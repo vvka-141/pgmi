@@ -260,7 +260,7 @@ DECLARE
     v_q        extensions.hstore := api.query_params((request).url);
     v_page     record := api.pagination_params(v_q);
     v_protocol text := v_q -> 'protocol';
-    v_actual   text := common.try_cast(v_q -> 'actualPrincipalId', NULL::uuid)::text;
+    v_actual   uuid := common.try_cast(v_q -> 'actualPrincipalId', NULL::uuid);
     v_keys     jsonb;
     v_items    jsonb;
     v_total    bigint;
@@ -278,11 +278,11 @@ BEGIN
     ELSE
         SELECT jsonb_agg(k),
                (SELECT count(*) FROM api.vw_exchange
-                WHERE (v_protocol IS NULL OR protocol = v_protocol) AND context->>'actualPrincipalId' = v_actual)
+                WHERE (v_protocol IS NULL OR protocol = v_protocol) AND actual_principal_id = v_actual)
         INTO v_keys, v_total
         FROM (SELECT protocol, exchange_id, enqueued_at
               FROM api.vw_exchange
-              WHERE (v_protocol IS NULL OR protocol = v_protocol) AND context->>'actualPrincipalId' = v_actual
+              WHERE (v_protocol IS NULL OR protocol = v_protocol) AND actual_principal_id = v_actual
               ORDER BY enqueued_at DESC
               LIMIT v_page.o_limit OFFSET v_page.o_offset) k;
     END IF;

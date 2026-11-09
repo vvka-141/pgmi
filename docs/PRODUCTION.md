@@ -67,6 +67,17 @@ CREATE ROLE myapp_deploy LOGIN CREATEROLE CREATEDB NOSUPERUSER NOBYPASSRLS PASSW
 
 The deploy grants itself the roles it creates, so no further grant is needed. Keep the login's password off the command line: put it in the connection string from a secret or in an environment variable ([Connect with a password](CONNECTIONS.md#connect-with-a-password)).
 
+### Grants a provider makes on its own
+
+Some providers grant their own roles on every new schema and table, through event triggers they own, and keep a schema of their own in every database. Databricks Lakebase does both: `databricks_reader_<id>`, `databricks_writer_<id>`, `databricks_superuser` and `databricks_gateway` get grants on each new schema and table, three functions in `public` stay executable by `PUBLIC`, and every database holds a schema `__db_system`. The advanced template's guards hold grants to an exact list, so on such a provider they fail the deploy until it names the provider's roles and schemas:
+
+```text
+provider_role_pattern=databricks\_%
+provider_schemas=["__db_system"]
+```
+
+With these set, every deploy revokes `CREATE` from the provider's roles on the template's schemas and `extensions`: a role that can create objects in a schema on a `search_path` can shadow a function called there and run its code as a `SECURITY DEFINER` caller. It also revokes their `TRUNCATE`, `REFERENCES`, `TRIGGER` and `MAINTAIN` on the template's tables, which act on a whole table past row-level security (Lakebase grants all four to `databricks_superuser`). The guards then ignore the provider's `USAGE` on schemas (and anything it holds on `public`, which no template `search_path` names), its `SELECT`, `INSERT`, `UPDATE` and `DELETE` on membership tables, event-trigger functions another role keeps in `public` (they cannot be called directly), and the listed schemas. Its `CREATE` that survives the revoke, its `TRUNCATE`, `TRIGGER`, `REFERENCES` or `MAINTAIN` on a membership table, any other routine, and grants to `PUBLIC` or to the template's roles still fail the deploy; a pattern that matches one of the template's roles is refused. Row-level security binds a provider role unless it has `BYPASSRLS`: Lakebase's reader sees only what a table's policies give it, which for the template's own tables is nothing, while `databricks_superuser`, its admin group, bypasses row-level security by design and reads every row. The refusal log (`api.access_denial`) and the exchange log (`api.exchange` and its `rest_`, `rpc_` and `mcp_exchange` children) hold every organization's rows, so they are forced to row-level security with one policy for the owner: the provider's reader sees none of their rows.
+
 Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object_id core.entity_id`) are enforced by a **deploy-end sweep over `pg_temp` functions** — no DDL event trigger, no superuser. The reconcile machinery lives in `pg_temp` and disappears at session end.
 
 | Provider | Basic template | Advanced template | Verification |
@@ -77,6 +88,7 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 | Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
 | Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Databricks Lakebase | Tested by hand | Tested by hand, with `provider_role_pattern` and `provider_schemas` | Manual runs in 2026-11, not in CI. See [Databricks Lakebase](LAKEBASE.md). |
 | Google AlloyDB | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Supabase | Expected | Not supported | No PostgreSQL 18 offering found, and the advanced template refuses older servers. |
 | Neon | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |

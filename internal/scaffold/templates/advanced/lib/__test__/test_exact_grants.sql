@@ -12,7 +12,9 @@
 -- readers, and its own routines are granted to no role but the owner. The
 -- optional jobs login, when it exists and is a registered service principal,
 -- executes every api.job_* routine and nothing else; unregistered, it executes
--- nothing. The gateway executes no job.
+-- nothing. The gateway executes no job. With provider_role_pattern set, the
+-- routines a managed provider keeps in schema public (owned by a role other
+-- than the owner) are not the application's and are left out.
 -- ============================================================================
 
 CREATE FUNCTION pg_temp.grant_drift()
@@ -34,6 +36,10 @@ AS $$
         JOIN pg_temp.application_schema() s ON s.oid = p.pronamespace
         WHERE NOT EXISTS (SELECT FROM pg_depend d
                           WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+          AND NOT (p.pronamespace = 'public'::regnamespace
+                   AND p.prorettype = 'pg_catalog.event_trigger'::regtype
+                   AND p.proowner IS DISTINCT FROM pg_temp.deployment_setting('database_owner_role')::regrole
+                   AND pg_temp.deployment_setting('provider_role_pattern', false) IS DISTINCT FROM '')
     ),
     gateway(name) AS (
         VALUES ('api.rest_invoke(text,text,extensions.hstore,bytea)'),
@@ -106,6 +112,7 @@ AS $$
     FROM routine r, role
     CROSS JOIN LATERAL aclexplode(r.proacl) a
     WHERE r.proowner = role.kernel AND a.grantee NOT IN (role.kernel, role.owner)
+      AND NOT pg_temp.provider_role(a.grantee)
     UNION ALL
     SELECT 'jobs', r.name, CASE WHEN has_function_privilege(role.jobs, r.oid, 'EXECUTE')
                                 THEN 'executable, not an api.job_* routine of a registered jobs login'
@@ -291,5 +298,39 @@ BEGIN
       AND NOT EXISTS (SELECT FROM unnest(coalesce(p.proconfig, '{}')) cfg WHERE cfg LIKE 'search_path=%');
     IF v_unpinned IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: SECURITY DEFINER without SET search_path: %', v_unpinned;
+    END IF;
+END $$;
+
+-- With provider_role_pattern set, an event-trigger function another role
+-- keeps in schema public drops out (it cannot be called directly); a plain
+-- routine there, and one of the owner's, PUBLIC-executable, still fail.
+DO $$
+DECLARE
+    v_owner text := current_user;
+    v_drift text;
+BEGIN
+    RESET ROLE;
+    CREATE FUNCTION public.provider_probe() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
+    CREATE FUNCTION public.provider_probe_plain() RETURNS int LANGUAGE sql AS 'SELECT 1';
+    EXECUTE format('SET ROLE %I', v_owner);
+    CREATE FUNCTION internal.provider_probe_owned() RETURNS int LANGUAGE sql AS 'SELECT 1';
+    GRANT EXECUTE ON FUNCTION internal.provider_probe_owned() TO PUBLIC;
+    PERFORM set_config('deployment.provider_role_pattern', '', true);
+
+    SELECT string_agg(format('%s %s', role_name, routine), ', ' ORDER BY role_name, routine) INTO v_drift
+    FROM pg_temp.grant_drift() WHERE routine LIKE '%provider_probe%';
+    IF coalesce(v_drift, '') NOT LIKE '%PUBLIC public.provider_probe()%'
+       OR coalesce(v_drift, '') NOT LIKE '%PUBLIC public.provider_probe_plain()%'
+       OR coalesce(v_drift, '') NOT LIKE '%PUBLIC internal.provider_probe_owned()%' THEN
+        RAISE EXCEPTION 'TEST FAILED: without provider_role_pattern all three PUBLIC routines must fail, named: %', v_drift;
+    END IF;
+
+    PERFORM set_config('deployment.provider_role_pattern', 'pgmi\_provider\_%', true);
+    SELECT string_agg(format('%s %s', role_name, routine), ', ' ORDER BY role_name, routine) INTO v_drift
+    FROM pg_temp.grant_drift() WHERE routine LIKE '%provider_probe%';
+    IF coalesce(v_drift, '') LIKE '%public.provider_probe()%'
+       OR coalesce(v_drift, '') NOT LIKE '%PUBLIC public.provider_probe_plain()%'
+       OR coalesce(v_drift, '') NOT LIKE '%PUBLIC internal.provider_probe_owned()%' THEN
+        RAISE EXCEPTION 'TEST FAILED: with provider_role_pattern only the event-trigger function may drop out, named: %', v_drift;
     END IF;
 END $$;

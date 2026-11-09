@@ -5,7 +5,7 @@
 -- scan on every exchange table it reads: by exchange id, by x-request-id
 -- through api.vw_exchange, the newest-first page of GET /admin/exchanges
 -- (a Merge Append of backward index scans, no Sort) and that page filtered by
--- actualPrincipalId (the expression index on each table). The exact index set on
+-- actualPrincipalId (the actual_principal_id index on each table). The exact index set on
 -- the three tables is pinned so an index without a reader cannot creep back.
 -- Each seeded row has its own principal, so the generic plan's estimate of
 -- one principal's share holds on a database whose log already has few.
@@ -103,7 +103,7 @@ BEGIN
 
     EXECUTE $q$PREPARE pg_temp_exchanges_by_actual_principal(text, text) AS
         SELECT protocol, exchange_id, enqueued_at FROM api.vw_exchange
-        WHERE ($1 IS NULL OR protocol = $1) AND context->>'actualPrincipalId' = $2
+        WHERE ($1 IS NULL OR protocol = $1) AND actual_principal_id = $2::uuid
         ORDER BY enqueued_at DESC LIMIT 20 OFFSET 20$q$;
     SET LOCAL plan_cache_mode = force_generic_plan;
     v_filtered := format('EXECUTE pg_temp_exchanges_by_actual_principal(NULL, %L)', v_principal);
@@ -121,7 +121,7 @@ BEGIN
     END IF;
     EXECUTE $q$PREPARE pg_temp_exchange_count_by_actual_principal(text, text) AS
         SELECT count(*) FROM api.vw_exchange
-        WHERE ($1 IS NULL OR protocol = $1) AND context->>'actualPrincipalId' = $2$q$;
+        WHERE ($1 IS NULL OR protocol = $1) AND actual_principal_id = $2::uuid$q$;
     PERFORM pg_temp.assert_exchange_index_scans('the GET /admin/exchanges total by actualPrincipalId',
         format('EXECUTE pg_temp_exchange_count_by_actual_principal(NULL, %L)', v_principal),
         '{rest_exchange,rpc_exchange,mcp_exchange}');

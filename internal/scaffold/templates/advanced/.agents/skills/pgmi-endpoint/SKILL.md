@@ -28,7 +28,7 @@ pgmi-metadata (`<pgmi-meta>` blocks), pgmi-testing (test files and fixtures).
 ## Order and sort keys
 
 - Application files sort at `005/100/...` or later; `001` to `004` and
-  `005/000/...` are the framework, and `005/001` to `005/007` are the
+  `005/000/...` are the framework, and `005/001` to `005/008` are the
   template's own handlers in `api/` (the example domain, sessions, access). Keep one prefix per entity, structure before kernel before
   handlers: `005/100/project/1`, `/2`, `/3`. Check with `pgmi metadata plan .`.
 - The `<pgmi-meta>` block is a `/* */` comment. A file without a place in the

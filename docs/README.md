@@ -40,7 +40,8 @@ The templates are optional starting points that become your project's code; a ha
 2. [Security](SECURITY.md) — Secrets and CI/CD patterns
 3. [CI/CD](CICD.md) — Deploy from GitHub Actions and other pipelines
 4. [Production](PRODUCTION.md) — Performance and rollback strategies
-5. [CLI reference](CLI.md) — All flags and exit codes
+5. [Databricks Lakebase](LAKEBASE.md) — Connect, deploy from a bundle job, test on a branch
+6. [CLI reference](CLI.md) — All flags and exit codes
 
 **Adding tests?**
 1. [Testing](TESTING.md) — `CALL pgmi_test()` and fixtures
@@ -122,6 +123,7 @@ The templates are optional starting points that become your project's code; a ha
 - **[CI/CD](CICD.md)** — Deploy from GitHub Actions and other pipelines
 - **[Go library](GO-LIBRARY.md)** — Run a deploy from your own Go program
 - **[Production](PRODUCTION.md)** — Performance, rollback strategies, monitoring
+- **[Databricks Lakebase](LAKEBASE.md)** — Credentials, bundle jobs, the advanced template, a test gate on a branch
 
 ### Advanced template (code you own)
 These pages document application code scaffolded by `pgmi init --template advanced` — a complete PostgreSQL application stack, not a pgmi core feature. The generated SQL and gateways become code you own, to keep, change or replace. Start at the [capability tour](advanced/README.md).

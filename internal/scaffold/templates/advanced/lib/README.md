@@ -28,12 +28,14 @@ Multi-protocol HTTP handling for REST, JSON-RPC, and MCP.
 | `02-handler-registry.sql` | `api.handler` table for handler metadata (central registry, run once) |
 | `02a-access-control.sql` | `api.handler_permission`, `api.access_denial` (declared access, run once) |
 | `02a-access-control-actor.sql` | `api.access_denial.actor_kind` (run once) |
+| `02a-access-control-rls.sql` | `api.access_denial` forced to row-level security, one policy for the owner (run once) |
 | `02a-access-control-functions.sql` | Permission hook, `internal.access_denial_reason`, refusal log and purge |
 | `03-rest-routes.sql` | REST route table (run once) |
 | `03-rest-routes-functions.sql` | Route ranking: `internal.route_specificity`, `internal.route_shape` (re-run; before the table that uses them) |
 | `04-rpc-routes.sql` | JSON-RPC route table (run once) |
 | `05-mcp-routes.sql` | MCP tool/resource/prompt route table, with `tags text[]` and a tool's derived `annotations` and `effect` (run once) |
 | `06-queue-infrastructure.sql` | The exchange log: abstract `api.exchange` (with the replay `context`) and its `rest_exchange`, `rpc_exchange`, `mcp_exchange` children, each with its indexes: `object_id`, `enqueued_at`, `x-request-id` and the actual principal (run once) |
+| `06a-exchange-rls.sql` | The exchange log forced to row-level security, one policy for the owner; `organization_id` and `actual_principal_id` stored from `context`, the latter indexed for the page by actual principal (run once) |
 | `07-helpers.sql` | Response builders, error handling, tracing; the optional page helper (`api.page_response`, `api.page_output_schema`, `api.page_query_schema`) |
 | `08-registration.sql` | Handler registration + name validation + random dollar-quote |
 | `09-gateways.sql` | Gateway functions (`rest_invoke`, `rpc_invoke`, `mcp_call_tool`, `mcp_list_tools`, …) |

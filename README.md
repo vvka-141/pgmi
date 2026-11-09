@@ -151,6 +151,8 @@ commits. PostgreSQL does not roll back sequence advances or effects outside the
 transaction. Passing tests check what they assert, not every requirement or
 safety under concurrent load.
 
+One transaction is the recommended pattern, not a rule: pgmi needs one session, and how many transactions you run in it is up to you.
+
 A complete, CI-verified version of this pattern lives in [`examples/test-gated-deploy/`](examples/test-gated-deploy/) — both paths run on every push.
 
 The tests form a tree. In the first run, `./semantic/__test__/_setup.sql` is a
@@ -210,7 +212,7 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 
 - **Your SQL owns the deploy** — transactions, execution order and idempotency live in `deploy.sql`, not in the tool. pgmi retries connection attempts; your pipeline decides whether to retry a failed deploy.
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
-- **One transaction, then psql** — everything through the first top-level `COMMIT` runs in one transaction; without one, the whole file is atomic. The templates commit after the test gate and before the final banner, so a statement appended after that `COMMIT` autocommits on its own (as `CREATE INDEX CONCURRENTLY` needs) unless you group it in a `BEGIN ... COMMIT` of its own ([the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
+- **You place the commits** — everything through the first top-level `COMMIT` runs in one transaction; without one, the whole file is atomic. The basic and advanced templates commit after the test gate and before the final banner, so a statement appended after that `COMMIT` autocommits on its own (as `CREATE INDEX CONCURRENTLY` needs) unless you group it in a `BEGIN ... COMMIT` of its own ([the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
 
 ## AI assistant support
 
@@ -309,7 +311,7 @@ A good fit when you need:
 A poor fit when:
 
 - **Nobody on your team can review SQL/PL/pgSQL** — the deployment logic is PostgreSQL code; a coding agent can write it, but someone has to review and maintain it
-- **You want tool-managed migration history** — the binary keeps no version table; each template's `deploy.sql` tracks what ran, as code you own and can change, not as a built-in
+- **You want tool-managed migration history** — the binary keeps no version table; the basic and advanced templates' `deploy.sql` track what ran, as code you own and can change, not as a built-in
 - **Your only deploy path is a transaction-mode pooler** — the deploy's session temp tables can't survive it
 
 [Why pgmi?](docs/WHY-PGMI.md) explains the approach, [Highlights](docs/HIGHLIGHTS.md) the strengths, and [Tradeoffs](docs/TRADEOFFS.md) the limits.

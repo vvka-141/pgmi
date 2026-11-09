@@ -60,7 +60,7 @@ func parseKeywordValue(connStr string) (*ConnectionConfig, error) {
 			}
 			config.ConnectTimeout = time.Duration(seconds) * time.Second
 		default:
-			if !libpqKeywords[kv.key] {
+			if !libpqKeywords[kv.key] && !pgxKeywords[kv.key] {
 				return nil, fmt.Errorf("invalid connection option %q", kv.key)
 			}
 			config.AdditionalParams[kv.key] = kv.value
@@ -141,6 +141,14 @@ var libpqKeywords = map[string]bool{
 	"target_session_attrs": true, "load_balance_hosts": true,
 	"oauth_issuer": true, "oauth_client_id": true, "oauth_client_secret": true,
 	"oauth_scope": true,
+}
+
+// pgxKeywords are the pgx options pgmi passes through, as the URI form does:
+// a single-session server (the PGlite socket) needs default_query_exec_mode=exec
+// so a second connection does not collide with the first's prepared statements.
+var pgxKeywords = map[string]bool{
+	"default_query_exec_mode": true, "statement_cache_capacity": true,
+	"description_cache_capacity": true,
 }
 
 type keywordPair struct {

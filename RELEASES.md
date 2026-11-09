@@ -17,18 +17,23 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
-<!-- DRAFT -->
-## v0.14.1 — TBD
+## v0.14.1 — 2026-11-09
+
+**You can now deploy the advanced template to Databricks Lakebase, from your machine or from a serverless job in a Databricks bundle.** Lakebase grants its own roles on every schema and table it sees created; two deploy parameters name those roles, the deploy takes back what row-level security cannot hold, and the template's grant checks pass. This was verified on a real Lakebase project. The refusal log and the request log now sit behind row-level security too, so a provider's reader sees no organization's data in them. A new page, [Databricks Lakebase](docs/LAKEBASE.md), walks through the credential, the bundle job and a test-gated deploy on a Lakebase branch.
+
+The rest is fixes: clearer errors for refused cloud tokens, keyword connection strings that work against single-session servers such as PGlite, and docs that no longer read as if a deploy must be one transaction. Advanced-template projects: read Upgrading first.
 
 ### New
 
 - **An MCP tool in the advanced template can propose a write for a person to confirm.** A tool declared with `"effect": "proposal"` names its target write tool in `"proposes"`; calling it records the proposal and changes nothing else. A person signed in as themselves with `proposals.decide` lists pending proposals with `GET /proposals` and confirms or rejects one; confirming runs the target tool as that person, under that person's permission ([MCP handlers](docs/advanced/MCP-HANDLERS.md)).
+- **The advanced template deploys on Databricks Lakebase and other providers that grant their own roles on every new schema and table.** Two deploy parameters name what the provider adds: `provider_role_pattern` (Lakebase: `databricks\_%`) and `provider_schemas` (Lakebase: `["__db_system"]`). Every deploy then revokes the provider roles' `CREATE` on the template's schemas and their whole-table privileges on its tables, and the grant guards leave out only what row-level security still binds; grants to `PUBLIC` and to the template's roles still fail the deploy. The refusal log `api.access_denial` and the exchange log `api.exchange` are now forced to row-level security, so a provider's reader granted `SELECT` on them sees no organization's refusals or logged requests ([production guide](docs/PRODUCTION.md#grants-a-provider-makes-on-its-own)). A new page, [Databricks Lakebase](docs/LAKEBASE.md), covers the credential, deploying from a serverless bundle job and a test gate on a Lakebase branch.
 
 ### Fixes
 
 - **A refused Azure, AWS or Google token names the provider.** The error now points at the database role and `--username` instead of suggesting `$PGPASSWORD` and `~/.pgpass`, which play no part in token authentication ([connections](docs/CONNECTIONS.md#azure-entra-id)).
 - **`/rpc` answers a JSON-RPC notification with 202 and no body, and runs nothing.** A body with no `id` member is a notification; `"id": null` is still a request and gets an answer ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
 
+- **A keyword/value connection string accepts pgx's `default_query_exec_mode`, `statement_cache_capacity` and `description_cache_capacity`,** as a URI already did. With `default_query_exec_mode=exec`, a second deploy to a server that keeps one session for every connection, such as the PGlite socket server, no longer fails with `prepared statement "stmtcache_..." already exists` ([connections](docs/CONNECTIONS.md#connection-string-formats)).
 - **The Go reference gateway logs why it could not connect.** A refused password, a TLS mismatch, a bad certificate or an unknown host used to look like pool exhaustion: the log said only "no database connection is free". The 503 the client gets is unchanged; the log line now carries the connect error, without the password ([Go gateway](internal/scaffold/templates/advanced/gateways/go/README.md)).
 - **`pgmi metadata scaffold` on a directory inside a project scans from the project root.** Its `--sort-key ./` hint used to reorder a basic project's `semantic/` files ahead of `physical/` and break the deploy, and it ignored the root `.pgmiignore`. Paths, the suggested key and `.pgmiignore` now match scaffolding the whole project, and `--write` names each file it changes ([CLI reference](docs/CLI.md#pgmi-metadata-scaffold)).
 - **The scaffolded skills' unindexed-foreign-key audit no longer counts an `INCLUDE` column as indexing a key.** A composite foreign key whose second column sat only in `INCLUDE` was reported as indexed. The advanced template's `AGENTS.md` sends "add a table" to one place, and several skill descriptions trigger more precisely ([agent guidance](docs/core-vs-template.md)).
@@ -39,6 +44,11 @@
 - **A quoted password is redacted whole** in errors, `--json` and the MCP tools: also an `E'...'` value, a `password => '...'` argument and a JSON `"password": "..."` member. **`install.sh` reports the binary it installed** and warns when another `pgmi` earlier on PATH would still run. **The `--overwrite --force` banner** fits its frame for any database name.
 - **The Python reference gateway ignores a query string on `/auth/logout`, `/auth/dev-login` and `/health`.** `POST /auth/logout?x=1` answered 404 and left the session open; it now clears both cookies and closes the session, as the other gateways do ([gateway protocol](internal/scaffold/templates/advanced/gateways/PROTOCOL.md)).
 - **`pgmi ai` opens with what pgmi gives a coding agent.** The overview names the three ideas in order (your SQL runs the deploy, a test tree can gate the commit, agents get tools and project skills), says the test gate holds only where `deploy.sql` calls it before `COMMIT`, and keeps pgmi core, the templates and agent tooling apart, with the advanced template's runtime MCP named as separate from `pgmi serve` ([core vs. template](docs/core-vs-template.md)).
+
+### Upgrading
+
+- **pgmi itself and the basic template:** no action needed.
+- **Advanced-template projects** merge the template changes as usual ([Upgrading an advanced-template project](docs/advanced/UPGRADING.md)). Two new run-once files come with them, `lib/api/02a-access-control-rls.sql` and `lib/api/06a-exchange-rls.sql`; `api/admin.sql` and `api/views.sql` depend on the second, so take them together. On a kept database, `06a-exchange-rls.sql` adds two stored columns to the exchange log, which rewrites `api.exchange` and its three child tables under an exclusive lock inside the deploy: requests wait until it finishes. Purge old exchanges first (`POST /admin/maintenance/purge-exchanges`) when the log is large. The new columns cast `organizationId` and `actualPrincipalId` from the logged context to `uuid`, so a replaced `internal.request_log_context()` must store uuids there.
 
 ## v0.14.0 — 2026-11-06
 

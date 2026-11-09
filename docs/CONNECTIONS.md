@@ -38,8 +38,9 @@ Never put a password on the command line: a password inside `--connection` is vi
 
 Passwordless authentication to Azure Database for PostgreSQL Flexible Server.
 Tested by hand against a real Flexible Server, not in CI. Last checked
-2026-11-06 for v0.14.0: PostgreSQL 18, signed in through the Azure CLI, a
-basic-template deploy with its tests and a converging redeploy. Service
+2026-11-09 for v0.14.1: PostgreSQL 18, signed in through the Azure CLI,
+`--sslmode verify-full`, a basic-template deploy with its tests and a
+converging redeploy. Service
 principal and managed identity were not part of that check.
 
 ```bash
@@ -167,7 +168,13 @@ Quote a value containing spaces with single quotes, and escape a quote or
 backslash inside it with `\`: `password='a b\'c'`. `host` and `port` may be
 lists (`host=db1,db2 port=5432,5433`). `hostaddr` is rejected: pgx, which
 pgmi connects through, does not support it, so put the address in `host`.
-Keys are lowercase libpq keywords, as in libpq. Any other key, such as a
+Keys are lowercase libpq keywords, as in libpq, plus three pgx options a URI
+also accepts: `default_query_exec_mode`, `statement_cache_capacity` and
+`description_cache_capacity`. A server that keeps one session for every
+connection, such as the PGlite socket server, needs
+`default_query_exec_mode=exec` (or `simple_protocol`) for a second deploy:
+pgx's default caches prepared statements by name, and the names collide
+with the previous connection's. Any other key, such as a
 typo or an ADO.NET-style `Password=`, is refused with
 `invalid connection option "..."` (exit 10) rather than sent to the server.
 A single quote opens a quoted value only right after `=`; elsewhere it is a

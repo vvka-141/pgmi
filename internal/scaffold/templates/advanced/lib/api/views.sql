@@ -288,17 +288,17 @@ SELECT core.ensure_view('api.vw_exchange', $view$
 CREATE OR REPLACE VIEW api.vw_exchange WITH (security_invoker = true) AS
 SELECT 'rest' AS protocol, e.sequence_number, e.object_id AS exchange_id, e.enqueued_at, e.completed_at,
        e.handler_object_id, e.context, (e.request).headers OPERATOR(extensions.->) 'x-request-id' AS request_id,
-       (e.response).status_code AS response_status
+       (e.response).status_code AS response_status, e.actual_principal_id
 FROM api.rest_exchange e
 UNION ALL
 SELECT 'rpc', e.sequence_number, e.object_id, e.enqueued_at, e.completed_at,
        e.handler_object_id, e.context, (e.request).headers OPERATOR(extensions.->) 'x-request-id',
-       (e.response).status_code
+       (e.response).status_code, e.actual_principal_id
 FROM api.rpc_exchange e
 UNION ALL
 SELECT 'mcp', e.sequence_number, e.object_id, e.enqueued_at, e.completed_at,
        e.handler_object_id, e.context, NULL,
-       NULL
+       NULL, e.actual_principal_id
 FROM api.mcp_exchange e
 $view$);
 

@@ -84,15 +84,15 @@ BEGIN
     END IF;
 
     CREATE TABLE core.rls_gap_probe (organization_id uuid, created_by_user_id uuid);
-    IF (SELECT problem FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe') IS DISTINCT FROM 'row-level security not enabled' THEN
+    IF NOT EXISTS (SELECT FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe' AND problem = 'row-level security not enabled') THEN
         RAISE EXCEPTION 'TEST FAILED: the guard must name a table without row-level security';
     END IF;
     ALTER TABLE core.rls_gap_probe ENABLE ROW LEVEL SECURITY;
-    IF (SELECT problem FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe') IS DISTINCT FROM 'row-level security not forced' THEN
+    IF NOT EXISTS (SELECT FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe' AND problem = 'row-level security not forced') THEN
         RAISE EXCEPTION 'TEST FAILED: the guard must name a table that is enabled, not forced';
     END IF;
     ALTER TABLE core.rls_gap_probe FORCE ROW LEVEL SECURITY;
-    IF (SELECT problem FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe') IS DISTINCT FROM 'no policy' THEN
+    IF NOT EXISTS (SELECT FROM pg_temp.rls_gap() WHERE relation = 'core.rls_gap_probe' AND problem = 'no policy') THEN
         RAISE EXCEPTION 'TEST FAILED: the guard must name a forced table without a policy';
     END IF;
     PERFORM core.apply_org_rls('core.rls_gap_probe');

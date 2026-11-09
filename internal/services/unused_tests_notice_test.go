@@ -12,7 +12,7 @@ import (
 )
 
 func TestUnusedTestsNotice(t *testing.T) {
-	scan := func(tmpl string) scanner.Result {
+	scan := func(tmpl string, testFile string) scanner.Result {
 		t.Helper()
 		dir := filepath.Join(t.TempDir(), "p")
 		if err := scaffold.NewScaffolder(false).CreateProject("p", tmpl, dir); err != nil {
@@ -21,19 +21,32 @@ func TestUnusedTestsNotice(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "__test__"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "__test__", "test_fails.sql"), []byte("DO $$ BEGIN RAISE EXCEPTION 'no'; END $$;\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "__test__", testFile), []byte("DO $$ BEGIN RAISE EXCEPTION 'no'; END $$;\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		r, err := scanner.NewScanner(checksum.New()).ScanDirectory(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
+		deploySQL, err := os.ReadFile(filepath.Join(dir, "deploy.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.DeploySQL = string(deploySQL)
 		return r
 	}
-	if got := unusedTestsNotice(scan("minimal"), 0); !strings.Contains(got, "1 test file(s) loaded; deploy.sql never calls pgmi_test()") {
+	minimal := scan("minimal", "test_fails.sql")
+	if got := unusedTestsNotice(minimal, 0); !strings.Contains(got, "1 test file(s) loaded; deploy.sql never calls pgmi_test()") {
 		t.Errorf("minimal with a __test__ file: %q", got)
 	}
-	if got := unusedTestsNotice(scan("basic"), 1); got != "" {
+	if got := unusedTestsNotice(scan("basic", "test_fails.sql"), 1); got != "" {
 		t.Errorf("basic calls pgmi_test(): %q", got)
+	}
+	minimal.DeploySQL += "\nSELECT count(*) FROM pg_temp.pgmi_test_source_view;\n"
+	if got := unusedTestsNotice(minimal, 0); got != "" {
+		t.Errorf("deploy.sql reads the test views without the macro: %q", got)
+	}
+	if got := unusedTestsNotice(scan("minimal", "README.md"), 0); got != "" {
+		t.Errorf("a README under __test__/ is not a test file: %q", got)
 	}
 }

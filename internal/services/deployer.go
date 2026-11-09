@@ -599,7 +599,7 @@ func unusedTestsNotice(scan scanner.Result, macroCount int) string {
 	}
 	n := 0
 	for _, f := range scan.Files {
-		if pathrule.IsTestPath(f.Path) {
+		if pathrule.IsTestPath(f.Path) && pathrule.IsSQLExtension(f.Extension) {
 			n++
 		}
 	}

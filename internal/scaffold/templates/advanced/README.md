@@ -71,6 +71,8 @@ myproject/
 │   ├── access-handlers.sql   # Members, roles, invitations (members.read / members.manage)
 │   ├── access-explorer.sql   # Who may call what, and why; the simulated decision (access.explore)
 │   ├── admin.sql             # Operator endpoints (platform.operate)
+│   ├── ownership.sql         # Transfer of an organization's ownership
+│   ├── proposals.sql         # Agent proposals a person confirms or rejects
 │   └── dev/                  # env=dev only: impersonation, self-serve organizations
 ├── __test__/                 # YOUR TESTS
 ├── data/authorization.json   # Permission vocabulary and roles, synced every deploy
@@ -281,7 +283,7 @@ Every script requires a `<pgmi-meta>` block:
 | `003/...` | `lib/core`: managed-object infrastructure, catalogs; `lib/internal/views.sql` |
 | `004/...` | `lib/api`: handler registry, routes, gateways, MCP, OpenAPI |
 | `005/000/...` | `membership/`, then the opt-in `lib/core` modules (change tracking, entity registry, numbering) |
-| `005/001` to `005/007` | the shipped handlers in `api/` and `api/dev/` |
+| `005/001` to `005/008` | the shipped handlers in `api/` and `api/dev/` |
 | `005/100/...` | your files: one prefix per entity, structure before kernel before handlers (`005/100/project/1`, `/2`, `/3`) |
 
 ## Three Protocols
@@ -465,6 +467,8 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 | `exchange_retention_days` | `30` | No | Days the exchange log keeps a row: the retention of the `purge_exchanges` job and the default of `POST /admin/maintenance/purge-exchanges` |
 | `api_base_path` | `/api` | No | The path the gateway serves REST under; the OpenAPI `servers` url, so generated clients and `/docs` call the right paths |
 | `www_authenticate` | `Session` | No | The `WWW-Authenticate` challenge on a 401 (RFC 9110 §15.5.2), e.g. `Bearer realm="app"` |
+| `provider_role_pattern` | empty | No | A managed provider's own roles, as a `LIKE` pattern (Lakebase: `databricks\_%`); every deploy revokes their `CREATE` on the template's schemas and `extensions` and their whole-table privileges (`TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN`) on its tables; the guards ignore their `USAGE` on schemas, their row-level DML on membership tables and event-trigger functions another role keeps in `public`. Refused when it matches a template role. Row-level security still binds them ([Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#grants-a-provider-makes-on-its-own)) |
+| `provider_schemas` | `[]` | No | A managed provider's own schemas, as a JSON array (Lakebase: `["__db_system"]`); the schema guard leaves them out. Refused when it names a template schema |
 | `database_owner_role` | `<dbname>_owner` | No | Owner role (NOLOGIN). An existing owner, kernel or api role on which another login holds ADMIN, or an owner, admin or kernel role with a member the deploy did not grant, is refused (22023), never adopted |
 | `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN, full access). The deploy creates it; an existing role that is not a member of this database's owner role is refused (22023), never adopted |
 | `database_api_role` | `<dbname>_api` | No | API group role (NOLOGIN, permission bundle) |

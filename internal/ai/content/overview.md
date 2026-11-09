@@ -104,7 +104,7 @@ END $$;
 
 ### Execution Contract: atomic head, then psql tail
 
-**Before your first top-level `COMMIT`, atomic mode; after it, psql mode.**
+**Before your first top-level `COMMIT`, atomic mode; after it, psql mode.** One transaction is the recommended pattern, not a rule: pgmi needs one session, and how many transactions you run in it is up to you.
 
 - **Head** — everything through the first top-level transaction terminator
   (`COMMIT`, `END`, `ROLLBACK`, and their `WORK`/`TRANSACTION`/`AND CHAIN`

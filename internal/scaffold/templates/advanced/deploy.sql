@@ -107,6 +107,8 @@ SET default_value = CASE key
     WHEN 'exchange_retention_days' THEN '30'
     WHEN 'www_authenticate' THEN 'Session'
     WHEN 'api_base_path' THEN '/api'
+    WHEN 'provider_role_pattern' THEN ''
+    WHEN 'provider_schemas' THEN '[]'
 END;
 
 UPDATE pg_temp.deployment_parameter
@@ -128,6 +130,7 @@ DECLARE
     v_missing_env text;
     v_redundant text;
     v_defaulted int;
+    v_provider  text;
 BEGIN
     SELECT string_agg(original_key, ', ' ORDER BY original_key) FILTER (WHERE is_redundant)
     INTO v_redundant
@@ -181,6 +184,23 @@ BEGIN
         RAISE EXCEPTION 'Role name(s) longer than % bytes: %', current_setting('max_identifier_length'), v_missing
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'Use a shorter database name, or pass shorter role names as those parameters.';
+    END IF;
+    SELECT value INTO v_provider FROM pg_temp.deployment_parameter WHERE key = 'provider_schemas';
+    IF (CASE WHEN pg_input_is_valid(v_provider, 'jsonb')
+             THEN jsonb_typeof(v_provider::jsonb) IS DISTINCT FROM 'array'
+                  OR jsonb_path_exists(v_provider::jsonb, '$[*] ? (@.type() != "string" || @ == "")')
+             ELSE true END) THEN
+        RAISE EXCEPTION 'Parameter provider_schemas must be a JSON array of schema names, e.g. ["__db_system"]'
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    SELECT string_agg(format('%s (%s)', r.key, r.value), ', ' ORDER BY r.key) INTO v_missing
+    FROM pg_temp.deployment_parameter r, pg_temp.deployment_parameter p
+    WHERE p.key = 'provider_role_pattern' AND p.value <> ''
+      AND r.key ~ '^database_[a-z]+_role$' AND r.value LIKE p.value;
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Parameter provider_role_pattern matches the template''s own role(s): %', v_missing
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'The guards ignore grants to roles that match it; it must name only the provider''s roles, such as databricks\_%.';
     END IF;
     IF v_upgrade NOT IN ('true', 'false') THEN
         RAISE EXCEPTION 'Parameter upgrade must be true or false, got %', quote_literal(v_upgrade)
@@ -402,7 +422,8 @@ END $$;
 -- nothing the option would flag fails as stale.
 CREATE FUNCTION pg_temp.guard_exemption()
 RETURNS TABLE (guard text, object text, reason text) LANGUAGE sql IMMUTABLE AS $$
-    SELECT NULL::text, NULL::text, NULL::text WHERE false
+    VALUES ('rls_index_method', 'api.ix_access_denial_bucket (brin on api.access_denial)',
+            'BRIN minmax on timestamptz compares with the leakproof btree operators, so the purge by bucket still uses it under row-level security')
 $$;
 
 -- Fails the deploy when an enabled option found an object it does not exempt,
@@ -623,6 +644,54 @@ SELECT pg_temp.unquiet_bootstrap();
 COMMENT ON SCHEMA extensions IS 'PostgreSQL extensions isolated from application schemas. Keeps extension objects out of search_path conflicts.';
 GRANT USAGE ON SCHEMA extensions TO PUBLIC;
 
+-- A provider's event trigger grants its own roles CREATE on every new schema
+-- (Lakebase: databricks_writer_<id>, databricks_superuser). A role that can
+-- create in a schema on a search_path can shadow a function called there and
+-- run as a SECURITY DEFINER caller, so the provider keeps USAGE only.
+CREATE FUNCTION pg_temp.revoke_provider_create(p_schemas text[])
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_grant record;
+BEGIN
+    FOR v_grant IN
+        SELECT DISTINCT n.nspname, r.rolname
+        FROM pg_namespace n
+        CROSS JOIN LATERAL aclexplode(n.nspacl) g
+        JOIN pg_roles r ON r.oid = g.grantee
+        CROSS JOIN pg_temp.deployment_setting('provider_role_pattern', false) pattern
+        WHERE n.nspname = ANY (p_schemas) AND g.privilege_type = 'CREATE'
+          AND pattern <> '' AND r.rolname LIKE pattern
+    LOOP
+        EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', v_grant.nspname, v_grant.rolname);
+    END LOOP;
+END $$;
+
+SELECT pg_temp.revoke_provider_create('{extensions}');
+
+-- The same trigger grants TRUNCATE, REFERENCES, TRIGGER and MAINTAIN on every
+-- new table (Lakebase: databricks_superuser). They act on the whole table,
+-- past row-level security, so they are revoked before the test gate.
+CREATE FUNCTION pg_temp.revoke_provider_table_privileges()
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_grant record;
+BEGIN
+    FOR v_grant IN
+        SELECT c.oid::regclass AS rel, r.rolname, string_agg(DISTINCT g.privilege_type, ', ') AS privileges
+        FROM pg_class c
+        JOIN pg_temp.application_schema() s ON s.oid = c.relnamespace
+        CROSS JOIN LATERAL aclexplode(c.relacl) g
+        JOIN pg_roles r ON r.oid = g.grantee
+        CROSS JOIN pg_temp.deployment_setting('provider_role_pattern', false) pattern
+        WHERE c.relkind IN ('r', 'p')
+          AND g.privilege_type IN ('TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
+          AND pattern <> '' AND r.rolname LIKE pattern
+        GROUP BY 1, 2
+    LOOP
+        EXECUTE format('REVOKE %s ON %s FROM %I', v_grant.privileges, v_grant.rel, v_grant.rolname);
+    END LOOP;
+END $$;
+
 DO $extensions$
 DECLARE
     v_ext record;
@@ -710,6 +779,7 @@ BEGIN
     -- The kernel calls the helpers of membership and common from the moment
     -- they exist; the request-context readers it calls are granted with them.
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA common, membership GRANT EXECUTE ON ROUTINES TO %I', v_kernel_role);
+    PERFORM pg_temp.revoke_provider_create('{internal,core,api,common,membership}');
 
     RAISE NOTICE '[pgmi] Schemas configured';
 END $schemas$;
@@ -850,6 +920,22 @@ $$;
 CREATE FUNCTION pg_temp.tenant_column()
 RETURNS SETOF name LANGUAGE sql IMMUTABLE AS $$
     VALUES ('organization_id'::name), ('organization_object_id')
+$$;
+
+-- A managed provider's own roles and schemas (provider_role_pattern,
+-- provider_schemas): the schema, routine and membership grant guards in
+-- lib/__test__/ and membership/__test__/ leave them out. Row-level security
+-- never does.
+CREATE FUNCTION pg_temp.provider_role(p_role oid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT coalesce(pattern <> '' AND r.rolname LIKE pattern, false)
+    FROM pg_temp.deployment_setting('provider_role_pattern', false) pattern
+    LEFT JOIN pg_roles r ON r.oid = p_role
+$$;
+
+CREATE FUNCTION pg_temp.provider_schema()
+RETURNS SETOF text LANGUAGE sql STABLE AS $$
+    SELECT jsonb_array_elements_text(pg_temp.deployment_setting('provider_schemas', false)::jsonb)
 $$;
 
 -- Each row policy as the deploy's files left it. Policies live in run-once
@@ -1369,6 +1455,7 @@ BEGIN;
                 USING HINT = 'Restore them (a DROP ... CASCADE takes the grants, policies and triggers of what depends on it). To remove one on purpose, the file that removes it declares it: INSERT INTO pg_temp.access_removal (object, entry) VALUES (''<object>'', ''<entry>'');';
         END IF;
     END $access$;
+    SELECT pg_temp.revoke_provider_table_privileges();
     SAVEPOINT _tests;
     CALL pgmi_test(NULL, 'pg_temp.test_observer');
     ROLLBACK TO SAVEPOINT _tests;

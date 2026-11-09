@@ -483,7 +483,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION internal.request_log_context() IS
-    'Hook the application replaces: the request context the exchange log stores for replay. The default is the principal id.';
+    'Hook the application replaces: the request context the exchange log stores for replay. The default is the principal id. organizationId and actualPrincipalId, when present, must be uuids: the log stores them as uuid columns.';
 
 CREATE OR REPLACE FUNCTION internal.apply_request_log_context(p_context jsonb)
 RETURNS void

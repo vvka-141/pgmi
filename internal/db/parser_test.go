@@ -624,6 +624,41 @@ func TestParseConnectionString_KeywordValuePassesLibpqKeywords(t *testing.T) {
 	}
 }
 
+func TestParseConnectionString_KeywordValueAcceptsPgxExecOptions(t *testing.T) {
+	got, err := ParseConnectionString("host=db default_query_exec_mode=exec statement_cache_capacity=0 description_cache_capacity=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	built := BuildConnectionString(got)
+	for k, v := range map[string]string{
+		"default_query_exec_mode":    "exec",
+		"statement_cache_capacity":   "0",
+		"description_cache_capacity": "0",
+	} {
+		if got.AdditionalParams[k] != v {
+			t.Errorf("%s = %q, want %q", k, got.AdditionalParams[k], v)
+		}
+		if want := k + "=" + v; !strings.Contains(built, want) {
+			t.Errorf("built string %q lacks %s", built, want)
+		}
+	}
+	cfg, err := pgx.ParseConfig(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultQueryExecMode != pgx.QueryExecModeExec {
+		t.Errorf("DefaultQueryExecMode = %v, want exec", cfg.DefaultQueryExecMode)
+	}
+
+	bad, err := ParseConnectionString("host=db default_query_exec_mode=bogus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgx.ParseConfig(BuildConnectionString(bad)); err == nil || !strings.Contains(err.Error(), "invalid default_query_exec_mode") {
+		t.Errorf("bogus exec mode: want pgx's refusal, got %v", err)
+	}
+}
+
 // url.Parse errors quote the raw string, and some quote a slice of the
 // password ("invalid port \":p\"" for p#ss), so a URI with userinfo that fails
 // to parse is reported without either.

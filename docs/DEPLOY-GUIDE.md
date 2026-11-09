@@ -479,7 +479,7 @@ END $$;
 ## Atomic mode, then psql mode: the execution contract
 
 The whole contract in one sentence: **before your first top-level `COMMIT`,
-pgmi's atomic mode; after it, psql mode.**
+pgmi's atomic mode; after it, psql mode.** One transaction is the recommended pattern, not a rule: pgmi needs one session, and how many transactions you run in it is up to you.
 
 pgmi executes deploy.sql on one connection as follows:
 

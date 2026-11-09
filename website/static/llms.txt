@@ -7,7 +7,7 @@ Key facts:
 - The session API is a set of temp views the deploy.sql queries: pgmi_source_view (files), pgmi_parameter_view (CLI params), pgmi_plan_view (metadata-driven ordering), plus pgmi_test_plan()/pgmi_test_generate() for tests
 - `CALL pgmi_test()` runs `__test__/` tests inside the deployment transaction; each test rolls back to its directory's fixture state. Called before COMMIT, a failing test aborts that transaction (exit code 13); anything an earlier COMMIT applied stays
 - Templates are optional, project-owned starting points: minimal (the default: a deploy.sql loop), basic (run-once ledger, re-run views and functions, test gate; the application stays outside PostgreSQL), advanced (an application backend in PostgreSQL with runtime REST/RPC/MCP endpoints, separate from `pgmi serve`). A hand-written deploy.sql needs no template
-- Requires a direct connection or session-mode pooler; transaction-mode poolers (PgBouncer txn mode, RDS Proxy) are incompatible
+- One transaction is the recommended pattern, not a rule: pgmi needs one session, and how many transactions you run in it is up to you. It requires a direct connection or session-mode pooler; transaction-mode poolers (PgBouncer txn mode, RDS Proxy) are incompatible
 - The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai` and `pgmi ai contract`; `pgmi init` writes AGENTS.md and project skills in `.agents/skills/`; `pgmi serve` exposes pgmi commands over MCP (stdio)
 
 ## Docs
@@ -41,6 +41,7 @@ Key facts:
 - [Tradeoffs](https://vvka-141.github.io/pgmi/docs/tradeoffs/): honest limitations and who should not use pgmi
 - [Metadata](https://vvka-141.github.io/pgmi/docs/metadata/): optional pgmi-meta blocks for ordering and idempotency tracking
 - [CI/CD](https://vvka-141.github.io/pgmi/docs/cicd/): pipeline deployment examples
+- [Databricks Lakebase](https://vvka-141.github.io/pgmi/docs/lakebase/): connect with a database credential, deploy from a serverless bundle job, the advanced template's provider settings, a test gate on a branch
 - [API clients](https://vvka-141.github.io/pgmi/docs/advanced/clients/): generate typed clients from an advanced-template OpenAPI contract — TypeScript, Go, Python, C#, generic, and an HTTP request collection
 - [Semantic MCP curation](https://vvka-141.github.io/pgmi/docs/advanced/semantic-mcp-tool-curation/): recipe for surfacing relevant MCP tools with embedding-based curation
 - [Design: why session-centric](https://vvka-141.github.io/pgmi/docs/design/why-session-centric/): why all deployment work happens in one PostgreSQL session, and what was rejected to get there

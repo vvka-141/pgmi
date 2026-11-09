@@ -116,7 +116,7 @@ Executing deploy.sql
         <div class="path-grid">
           <article>
             <h3>Minimal <span class="path-note">— the default</span></h3>
-            <p>Two files: a <code>deploy.sql</code> loop that runs every SQL file in path order, and <code>hello_world.sql</code>. No test gate supplied: add <code>CALL pgmi_test()</code> to your deploy.sql when you want one.</p>
+            <p>Three files: a <code>deploy.sql</code> loop that runs every SQL file in path order, <code>hello_world.sql</code> and a <code>.pgmiignore</code>. No test gate supplied: add <code>CALL pgmi_test()</code> to your deploy.sql when you want one.</p>
             <a href="{{ "docs/cli/#templates" | relURL }}">What each template writes</a>
           </article>
           <article>
