@@ -2,6 +2,9 @@
 title: "Login transport contract"
 description: "What the web server in front of an advanced-template database must do: OIDC sign-in, the session cookie, the session and connection headers, logout, and the roles it connects as."
 weight: 35
+aliases:
+  - /docs/api-keys/
+  - /docs/advanced/api-keys/
 ---
 
 # Login transport contract

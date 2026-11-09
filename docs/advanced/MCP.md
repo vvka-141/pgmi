@@ -3,6 +3,8 @@ title: "MCP gateway overview"
 description: "Understand the advanced template's Model Context Protocol support: what is scaffolded, what you operate, and where to start."
 weight: 30
 url: /docs/mcp/
+aliases:
+  - /docs/advanced/mcp/
 ---
 
 # Advanced Template: MCP Gateway
