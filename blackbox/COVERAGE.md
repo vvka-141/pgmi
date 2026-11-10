@@ -189,3 +189,7 @@ decided in the behaviour contract (PGMI-828), not fixed.
   (`connection/target-session-attrs`). libpq accepts a list matching `PGHOST`.
 - A wrong `sslpassword` is exit 10 (configuration), not 11
   (`tls/encrypted-client-key`).
+- When a host name resolves to several addresses, only the last address's error
+  is reported: a certificate failure on 127.0.0.1 shows as "connection refused"
+  from `::1` (`tls/system-roots`, seen on GitHub runners). The Rust version should
+  report every address's error.
