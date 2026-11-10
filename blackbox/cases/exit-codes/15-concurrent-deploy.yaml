@@ -1,0 +1,13 @@
+description: a second deploy into a database another deploy is still running against is exit 15; the first finishes
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(6);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    expect:
+      exit: 0
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    delay: 3
+    expect:
+      exit: 15

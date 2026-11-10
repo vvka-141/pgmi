@@ -1,0 +1,9 @@
+description: a project without deploy.sql is exit 14
+project:
+  files:
+    schema.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 14
+      stderr: ["deploy.sql"]

@@ -94,6 +94,45 @@ jobs:
             ./internal/db/... ./internal/metadata/...
           go test -timeout 10m -run 'TestTemplateDeployment/basic|TestSkillBlocksDeploy/basic' ./internal/scaffold
 
+  # The black-box suite runs the built binary from outside, as a user does. It
+  # is the executable contract the Rust re-implementation must pass unchanged
+  # (PGMI_BIN points it at any binary).
+  blackbox:
+    name: Black-box suite
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build pgmi
+        run: go build -o "$RUNNER_TEMP/pgmi" ./cmd/pgmi
+
+      - name: Run the black-box suite
+        env:
+          PGMI_BIN: ${{ runner.temp }}/pgmi
+        run: |
+          python -m pip install uv==0.13.6
+          cd blackbox && uv run --locked pytest
+
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,
   # .pgpass location, CRLF through the head/tail splitter, signal handling.

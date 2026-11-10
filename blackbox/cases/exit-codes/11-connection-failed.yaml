@@ -1,0 +1,10 @@
+description: a server that refuses the connection is exit 11
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}"]
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ["refused"]

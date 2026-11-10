@@ -1,0 +1,11 @@
+description: an empty PGMI_PARAM_* value is invalid configuration, exit 10, rejected before connecting
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}"]
+    env:
+      PGMI_PARAM_TOKEN: ""
+    expect:
+      exit: 10
+      stderr: ["PGMI_PARAM_TOKEN"]

@@ -1,4 +1,4 @@
-.PHONY: test test-short test-integration test-connection test-azure test-all lint build release-ready vulncheck doctor build-clean sync-ai diagrams
+.PHONY: test test-short test-integration blackbox test-connection test-azure test-all lint build release-ready vulncheck doctor build-clean sync-ai diagrams
 
 # The version CI lints with. Kept identical in .github/workflows/{ci,release}.yml —
 # TestLintVersionPinsAgree fails if the three drift apart. Lint findings are
@@ -13,6 +13,9 @@ test-short:            ## Alias for `test` — kept for backward compat in CI sc
 
 test-integration:      ## Run the full suite including DB integration (uses testcontainers if PGMI_TEST_CONN not set; conntest/azure tags need their own targets)
 	PGMI_REQUIRE_DB=1 go test -tags pgmi_testhooks ./...
+
+blackbox:              ## Run the black-box suite against PGMI_BIN (default: build ./cmd/pgmi); PostgreSQL from PGMI_TEST_CONN or Docker
+	cd blackbox && uv run --locked pytest
 
 test-connection:       ## Run connection/security scenario tests (requires Docker)
 	go test -tags conntest -timeout 5m ./internal/db/conntest/...

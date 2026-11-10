@@ -1,0 +1,9 @@
+description: a deploy that outlives --timeout is exit 16
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(60);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 3s]
+    timeout: 45
+    expect:
+      exit: 16

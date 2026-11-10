@@ -72,3 +72,5 @@ test_*/
 # published assets — those live under docs/.
 /*.png
 /*.jpg
+/blackbox/.venv/
+/blackbox/.pytest_cache/

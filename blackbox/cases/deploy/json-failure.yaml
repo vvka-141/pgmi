@@ -1,0 +1,13 @@
+description: --json still prints the record when the deploy fails, with the exit code and the error
+project:
+  files:
+    deploy.sql: SELECT 1/0;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stdout: ["division by zero"]
+      json:
+        status: failed
+        exitCode: 13
+        schemaVersion: 1

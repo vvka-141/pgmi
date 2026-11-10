@@ -1,0 +1,19 @@
+description: --json prints one record on stdout describing a successful deploy
+project:
+  files:
+    deploy.sql: SELECT 1;
+    schema.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      json:
+        status: success
+        exitCode: 0
+        schemaVersion: 1
+        database: "{db}"
+        created: true
+        filesLoaded: 1
+        target:
+          host: "{host}"
+          database: "{db}"

@@ -1,0 +1,15 @@
+description: a PGMI_PARAM_* environment variable reaches deploy.sql as current_setting('pgmi.<key>'), key lower-cased
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE seen (value text);
+      INSERT INTO seen VALUES (current_setting('pgmi.greeting', true));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env:
+      PGMI_PARAM_GREETING: hello
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT value FROM seen
+          rows: [[hello]]

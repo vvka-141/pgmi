@@ -58,6 +58,10 @@ make build
 `make test` runs the short unit suite and does not require PostgreSQL.
 `make test-integration` runs the full suite and starts a PostgreSQL
 Testcontainer when `PGMI_TEST_CONN` is not set.
+`make blackbox` runs the built binary from outside against PostgreSQL and
+checks exit codes, output and database state; it needs `uv`. A change in what
+pgmi does from a user's point of view gets a case there
+([blackbox/README.md](blackbox/README.md)).
 
 ## Code Style
 

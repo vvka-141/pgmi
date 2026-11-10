@@ -1,0 +1,14 @@
+description: a failing statement in deploy.sql is exit 13 with the server's error, and the atomic head commits nothing
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE marker (id int);
+      SELECT 1/0;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["division by zero"]
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'marker'
+          rows: [[0]]

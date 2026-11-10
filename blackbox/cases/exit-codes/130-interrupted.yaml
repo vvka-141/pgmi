@@ -1,0 +1,12 @@
+description: SIGINT during a running deploy is exit 130
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(60);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    signal:
+      name: SIGINT
+      after: 3
+    timeout: 45
+    expect:
+      exit: 130

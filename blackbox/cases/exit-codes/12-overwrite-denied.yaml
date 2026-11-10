@@ -1,0 +1,16 @@
+description: --overwrite without --force and without a terminal is refused with exit 12 and drops nothing
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (id int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
+    expect:
+      exit: 12
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

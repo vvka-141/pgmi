@@ -1,0 +1,13 @@
+description: a deploy that runs its SQL exits 0 and leaves the SQL's effects in the target database
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE marker (id int);
+      INSERT INTO marker VALUES (42);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT id FROM marker
+          rows: [[42]]

@@ -1,0 +1,9 @@
+description: an unknown flag is a usage error, exit 2, before anything connects
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --no-such-flag]
+    expect:
+      exit: 2
+      stderr: ["no-such-flag"]
