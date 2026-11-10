@@ -1,0 +1,16 @@
+description: -h, -p and -U with PGPASSWORD connect without a connection string; combining -h with --connection is refused
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (who text); INSERT INTO marker VALUES (current_user);
+steps:
+  - pgmi: [deploy, "{project}", -h, "{host}", -p, "{port}", -U, "{user}", -d, "{db}"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT who FROM marker
+          rows: [["{user}"]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -h, "{host}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["cannot combine --connection with -h"]

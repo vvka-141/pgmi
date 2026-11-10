@@ -13,6 +13,13 @@ def test_minimal_case_parses():
     assert case.description == "deploy succeeds"
     assert case.steps[0].args == ("deploy", "{project}")
     assert case.steps[0].expect.exit == 0
+    assert case.steps[0].cwd == "{workdir}"
+    assert case.steps[0].expect.files == {}
+
+
+def test_stdin_list_keeps_lines_and_waits():
+    doc = {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": ["a", {"wait": 2}, "b\n"], "expect": {"exit": 0}}]}
+    assert parse_case("cases/x.yaml", doc).steps[0].stdin == ("a\n", 2.0, "b\n")
 
 
 @pytest.mark.parametrize(
@@ -30,6 +37,16 @@ def test_minimal_case_parses():
         (
             {**MINIMAL, "steps": [{"pgmi": ["x"], "signal": {"name": "SIGFOO", "after": 1}, "expect": {"exit": 0}}]},
             "steps[0].signal.name",
+        ),
+        ({**MINIMAL, "steps": [{"pgmi": ["x"], "cwd": 3, "expect": {"exit": 0}}]}, "steps[0].cwd"),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "stdin": [{"pause": 1}], "expect": {"exit": 0}}]},
+            "steps[0].stdin[0].pause",
+        ),
+        ({**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "files": ["a"]}}]}, "steps[0].expect.files"),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "files": {"a": ["("]}}}]},
+            "steps[0].expect.files.a[0]",
         ),
     ],
 )

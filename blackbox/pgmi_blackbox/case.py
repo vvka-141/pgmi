@@ -28,6 +28,8 @@ class Expect:
     stderr_not: tuple[str, ...]
     json: dict[str, Any] | None
     sql: tuple[SqlCheck, ...]
+    files: dict[str, tuple[str, ...]]
+    absent: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,11 +43,12 @@ class Step:
     args: tuple[str, ...] | None
     sql: str | None
     env: dict[str, str]
-    stdin: str | None
+    stdin: tuple[str | float, ...] | None
     delay: float
     background: bool
     signal: Signal | None
     timeout: float
+    cwd: str
     expect: Expect
 
 
@@ -146,7 +149,7 @@ def _project(r: _Reader, value: Any) -> Project:
 
 def _step(r: _Reader, value: Any, field: str) -> Step:
     value = r.mapping(
-        value, field, {"pgmi", "sql", "env", "stdin", "delay", "background", "signal", "timeout", "expect"}
+        value, field, {"pgmi", "sql", "env", "stdin", "delay", "background", "signal", "timeout", "cwd", "expect"}
     )
     if ("pgmi" in value) == ("sql" in value):
         raise r.fail(field, "needs exactly one of pgmi or sql")
@@ -161,13 +164,29 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         args=args,
         sql=sql,
         env=r.string_map(value.get("env", {}), f"{field}.env"),
-        stdin=r.string(value["stdin"], f"{field}.stdin") if "stdin" in value else None,
+        stdin=_stdin(r, value["stdin"], f"{field}.stdin") if "stdin" in value else None,
         delay=r.number(value.get("delay", 0), f"{field}.delay"),
         background=background,
         signal=_signal(r, value["signal"], f"{field}.signal") if "signal" in value else None,
         timeout=r.number(value.get("timeout", 120), f"{field}.timeout"),
+        cwd=r.string(value.get("cwd", "{workdir}"), f"{field}.cwd"),
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
     )
+
+
+def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, list):
+        raise r.fail(field, "must be a string or a list of lines and {wait: seconds}")
+    chunks: list[str | float] = []
+    for i, item in enumerate(value):
+        if isinstance(item, str):
+            chunks.append(item if item.endswith("\n") else item + "\n")
+        else:
+            item = r.mapping(item, f"{field}[{i}]", {"wait"}, {"wait"})
+            chunks.append(r.number(item["wait"], f"{field}[{i}].wait"))
+    return tuple(chunks)
 
 
 def _signal(r: _Reader, value: Any, field: str) -> Signal:
@@ -179,7 +198,9 @@ def _signal(r: _Reader, value: Any, field: str) -> Signal:
 
 
 def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
-    allowed = {"exit", "stdout", "stdout_not", "stderr", "stderr_not", "json", "sql"} if pgmi else {"sql"}
+    allowed = {"exit", "stdout", "stdout_not", "stderr", "stderr_not", "json", "sql", "files", "absent"}
+    if not pgmi:
+        allowed = {"sql", "files", "absent"}
     value = r.mapping(value, field, allowed, {"exit"} if pgmi else set())
     exit_code = value.get("exit")
     if pgmi and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
@@ -195,7 +216,15 @@ def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
         stderr_not=r.patterns(value.get("stderr_not", []), f"{field}.stderr_not"),
         json=json_expect,
         sql=tuple(_sql_check(r, c, f"{field}.sql[{i}]") for i, c in enumerate(value.get("sql", []))),
+        files=_files(r, value.get("files", {}), f"{field}.files"),
+        absent=r.strings(value.get("absent", []), f"{field}.absent"),
     )
+
+
+def _files(r: _Reader, value: Any, field: str) -> dict[str, tuple[str, ...]]:
+    if not isinstance(value, dict):
+        raise r.fail(field, "must map paths to lists of regexes")
+    return {path: r.patterns(patterns, f"{field}.{path}") for path, patterns in value.items()}
 
 
 def _sql_check(r: _Reader, value: Any, field: str) -> SqlCheck:

@@ -1,0 +1,14 @@
+description: RAISE DEBUG from deploy.sql reaches stderr only with -v
+project:
+  files:
+    deploy.sql: DO $$ BEGIN RAISE DEBUG 'debug-marker-7f3a'; RAISE NOTICE 'notice-marker-7f3a'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["notice-marker-7f3a"]
+      stderr_not: ["debug-marker-7f3a"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v]
+    expect:
+      exit: 0
+      stderr: ["debug-marker-7f3a", "notice-marker-7f3a"]

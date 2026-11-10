@@ -1,0 +1,22 @@
+description: --overwrite --force without a terminal drops and recreates the database; --force alone changes nothing
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --force]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --force]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    timeout: 60
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

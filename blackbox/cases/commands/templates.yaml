@@ -1,0 +1,18 @@
+description: templates list names every template; describe shows one and refuses an unknown name
+steps:
+  - pgmi: [templates, list]
+    expect:
+      exit: 0
+      stdout: ["(?m)^minimal ", "(?m)^basic ", "(?m)^advanced "]
+  - pgmi: [templates, describe, basic]
+    expect:
+      exit: 0
+      stdout: ["."]
+      stderr: ["pgmi init <path> -t basic"]
+  - pgmi: [templates, describe, nosuch]
+    expect:
+      exit: 2
+      stderr: ["nosuch", "minimal"]
+  - pgmi: [templates, nosuch]
+    expect:
+      exit: 2

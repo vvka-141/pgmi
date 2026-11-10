@@ -1,0 +1,13 @@
+description: ai prints the overview for assistants; ai contract prints the session API as JSON
+steps:
+  - pgmi: [ai]
+    expect:
+      exit: 0
+      stdout: ["pgmi_plan_view", "deploy\\.sql"]
+  - pgmi: [ai, contract]
+    expect:
+      exit: 0
+      stdout: ["pgmi_source_view", "pgmi_test_plan"]
+  - pgmi: [ai, chek]
+    expect:
+      exit: 2

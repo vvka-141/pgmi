@@ -1,0 +1,30 @@
+description: pgmi.yaml supplies connection, params and timeout for a zero-flag deploy, and deploy says the connection came from it
+project:
+  files:
+    pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+      params:
+        greeting: from-yaml
+      timeout: 2s
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (value text);
+      INSERT INTO seen VALUES (current_setting('pgmi.greeting', true));
+      SELECT pg_sleep(coalesce(current_setting('pgmi.sleep', true), '0')::float);
+steps:
+  - pgmi: [deploy, "{project}"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      stderr: ["connection: from pgmi\\.yaml"]
+      sql:
+        - query: SELECT value FROM seen
+          rows: [[from-yaml]]
+  - pgmi: [deploy, "{project}", --param, sleep=30]
+    env: {PGPASSWORD: "{password}"}
+    timeout: 30
+    expect:
+      exit: 16

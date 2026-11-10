@@ -1,0 +1,11 @@
+description: --compat 1 is the current session API; an unknown level is invalid configuration
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --compat, "1"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --compat, "99"]
+    expect:
+      exit: 10
+      stderr: ["unsupported API version \"99\""]

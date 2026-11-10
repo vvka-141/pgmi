@@ -1,0 +1,23 @@
+description: the deploy tool deploys like pgmi deploy, and a ping sent during the deploy is answered before it ends
+project:
+  files:
+    deploy.sql: |
+      SELECT pg_sleep(3);
+      CREATE TABLE marker (value text);
+      INSERT INTO marker VALUES (current_setting('pgmi.greeting', true));
+steps:
+  - pgmi: [serve]
+    stdin: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}
+      {"jsonrpc":"2.0","method":"notifications/initialized"}
+      {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","params":{"greeting":"hello"}}}}
+      {"jsonrpc":"2.0","id":3,"method":"ping"}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?s)"id":3,"result":\{\}.*"id":2,"result"'
+      stdout_not: ['"isError":true']
+      sql:
+        - query: SELECT value FROM marker
+          rows: [[hello]]

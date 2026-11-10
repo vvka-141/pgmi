@@ -1,0 +1,30 @@
+description: init scaffolds each template, picks minimal without a terminal and without -t, and refuses a non-empty target
+steps:
+  - pgmi: [init, "{workdir}/default"]
+    expect:
+      exit: 0
+      files:
+        default/deploy.sql: ["minimal template"]
+      absent: [default/pgmi.yaml]
+  - pgmi: [init, "{workdir}/basic", -t, basic]
+    expect:
+      exit: 0
+      files:
+        basic/deploy.sql: ["basic template"]
+        basic/pgmi.yaml: ["."]
+        basic/AGENTS.md: ["."]
+  - pgmi: [init, "{workdir}/advanced", -t, advanced]
+    expect:
+      exit: 0
+      files:
+        advanced/deploy.sql: ["advanced template"]
+        advanced/gateways/go/go.mod: ["^module "]
+        advanced/gateways/rust/Cargo.toml: ["\\[package\\]"]
+      absent: [advanced/gateways/go/go.mod.scaffold, advanced/gateways/rust/Cargo.toml.scaffold]
+  - pgmi: [init, "{workdir}/basic", -t, basic]
+    expect:
+      exit: 2
+      stderr: ["not empty"]
+  - pgmi: [init, "{workdir}/x", -t, nosuch]
+    expect:
+      exit: 2

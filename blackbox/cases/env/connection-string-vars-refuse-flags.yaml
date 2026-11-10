@@ -1,0 +1,18 @@
+description: -h, -p or -U next to DATABASE_URL or PGMI_CONNECTION_STRING is refused rather than merged
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -h, "{host}", -d, "{db}"]
+    env: {DATABASE_URL: "{conn}"}
+    expect:
+      exit: 10
+      stderr: ["cannot combine -h with DATABASE_URL"]
+  - pgmi: [deploy, "{project}", -p, "{port}", -d, "{db}"]
+    env: {PGMI_CONNECTION_STRING: "{conn}"}
+    expect:
+      exit: 10
+      stderr: ["PGMI_CONNECTION_STRING"]
+  - pgmi: [deploy, "{project}", -U, "{user}", -d, "{db}"]
+    env: {DATABASE_URL: "{conn}"}
+    expect: {exit: 10}

@@ -1,7 +1,9 @@
 import json
 import re
 import signal
+import socket
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -12,6 +14,16 @@ import psycopg
 
 from pgmi_blackbox.case import Case, Expect, Step
 from pgmi_blackbox.server import Server
+
+_silent: socket.socket | None = None
+
+
+def silent_address() -> str:
+    global _silent
+    if _silent is None:
+        _silent = socket.create_server(("127.0.0.1", 0), backlog=128)
+    host, port = _silent.getsockname()
+    return f"{host}:{port}"
 
 
 @dataclass
@@ -40,6 +52,7 @@ class Workspace:
             "{port}": str(self.server.port),
             "{user}": self.server.user,
             "{password}": self.server.password,
+            "{silent}": silent_address(),
         }
         for key, value in values.items():
             text = text.replace(key, value)
@@ -64,7 +77,7 @@ def run_case(case: Case, ws: Workspace) -> None:
     ws.home.mkdir()
     try:
         _prepare_project(case, ws)
-        pending: list[tuple[str, Step, subprocess.Popen, list[str]]] = []
+        pending: list[tuple[str, Step, Running]] = []
         failures: list[str] = []
         for i, step in enumerate(case.steps):
             label = f"steps[{i}]"
@@ -72,15 +85,15 @@ def run_case(case: Case, ws: Workspace) -> None:
                 time.sleep(step.delay)
             if step.sql is not None:
                 _run_sql(ws, step.sql)
-                failures += _check_sql(ws, step.expect, label)
+                failures += _check_sql(ws, step.expect, label) + _check_files(ws, step.expect)
                 continue
-            proc, argv = _start(ws, step)
+            run = _start(ws, step)
             if step.background:
-                pending.append((label, step, proc, argv))
+                pending.append((label, step, run))
                 continue
-            failures += _check(ws, step.expect, _finish(label, step, proc, argv))
-        for label, step, proc, argv in pending:
-            failures += _check(ws, step.expect, _finish(label, step, proc, argv))
+            failures += _check(ws, step.expect, _finish(label, step, run))
+        for label, step, run in pending:
+            failures += _check(ws, step.expect, _finish(label, step, run))
         if failures:
             raise AssertionError("\n\n".join(failures))
     finally:
@@ -112,32 +125,71 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
         target.write_text(ws.substitute(content))
 
 
-def _start(ws: Workspace, step: Step) -> tuple[subprocess.Popen, list[str]]:
+@dataclass
+class Running:
+    proc: subprocess.Popen
+    argv: list[str]
+    threads: list[threading.Thread]
+    stdout: list[str]
+    stderr: list[str]
+
+
+def _start(ws: Workspace, step: Step) -> Running:
     argv = [str(ws.binary), *(ws.substitute(a) for a in step.args)]
     proc = subprocess.Popen(
         argv,
-        cwd=ws.root,
+        cwd=ws.substitute(step.cwd),
         env=ws.env(step.env),
         stdin=subprocess.PIPE if step.stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    run = Running(proc, argv, [], [], [])
+    for stream, sink in ((proc.stdout, run.stdout), (proc.stderr, run.stderr)):
+        run.threads.append(threading.Thread(target=lambda s=stream, k=sink: k.append(s.read()), daemon=True))
+    if step.stdin is not None:
+        chunks = [ws.substitute(c) if isinstance(c, str) else c for c in step.stdin]
+        run.threads.append(threading.Thread(target=_feed, args=(proc.stdin, chunks), daemon=True))
+    for t in run.threads:
+        t.start()
     if step.signal:
         time.sleep(step.signal.after)
         proc.send_signal(getattr(signal, step.signal.name))
-    return proc, argv
+    return run
 
 
-def _finish(label: str, step: Step, proc: subprocess.Popen, argv: list[str]) -> Outcome:
-    stdin = step.stdin if step.stdin is not None else None
+def _feed(stdin, chunks: list[str | float]) -> None:
     try:
-        out, err = proc.communicate(input=stdin, timeout=step.timeout)
+        for chunk in chunks:
+            if isinstance(chunk, str):
+                stdin.write(chunk)
+                stdin.flush()
+            else:
+                time.sleep(chunk)
+    except BrokenPipeError:
+        pass
+    finally:
+        try:
+            stdin.close()
+        except BrokenPipeError:
+            pass
+
+
+def _finish(label: str, step: Step, run: Running) -> Outcome:
+    try:
+        run.proc.wait(timeout=step.timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        out, err = proc.communicate()
-        raise AssertionError(f"{label}: still running after {step.timeout}s: {' '.join(argv)}\n{err}") from None
-    return Outcome(label, argv, proc.returncode, out, err)
+        run.proc.kill()
+        run.proc.wait()
+        for t in run.threads:
+            t.join(5)
+        raise AssertionError(
+            f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n{''.join(run.stderr)}"
+        ) from None
+    for t in run.threads:
+        t.join(10)
+    return Outcome(label, run.argv, run.proc.returncode, "".join(run.stdout), "".join(run.stderr))
 
 
 def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
@@ -156,6 +208,7 @@ def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
         except json.JSONDecodeError as e:
             problems.append(f"stdout is not JSON: {e}")
     problems += _check_sql(ws, expect, o.step)
+    problems += _check_files(ws, expect)
     if not problems:
         return []
     report = (
@@ -192,6 +245,19 @@ def _json_subset(actual: Any, expected: Any, path: str) -> list[str]:
     return [] if actual == expected else [f"{path} is {actual!r}, expected {expected!r}"]
 
 
+def _check_files(ws: Workspace, expect: Expect) -> list[str]:
+    problems = []
+    for rel, patterns in expect.files.items():
+        path = ws.root / ws.substitute(rel)
+        if not path.is_file():
+            problems.append(f"file {rel} does not exist")
+            continue
+        text = path.read_text(errors="replace")
+        problems += [f"file {rel} lacks /{p}/" for p in patterns if not re.search(p, text, re.MULTILINE)]
+    problems += [f"file {rel} exists" for rel in expect.absent if (ws.root / ws.substitute(rel)).exists()]
+    return problems
+
+
 def _run_sql(ws: Workspace, sql: str) -> None:
     with ws.server.connect(ws.database) as c:
         c.execute(ws.substitute(sql))
@@ -209,8 +275,9 @@ def _check_sql(ws: Workspace, expect: Expect, label: str) -> list[str]:
                 except psycopg.Error as e:
                     problems.append(f"{label}: {check.query.strip()}\n  failed: {e}")
                     continue
-                if rows != list(check.rows):
-                    problems.append(f"{label}: {check.query.strip()}\n  returned {rows}\n  expected {list(check.rows)}")
+                expected = [tuple(_substitute_tree(ws, v) for v in row) for row in check.rows]
+                if rows != expected:
+                    problems.append(f"{label}: {check.query.strip()}\n  returned {rows}\n  expected {expected}")
     except psycopg.OperationalError as e:
         problems.append(f"{label}: cannot connect to {ws.database} for the sql checks: {e}")
     return problems

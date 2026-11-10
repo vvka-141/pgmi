@@ -1,0 +1,14 @@
+description: PGSERVICE is refused, since pgmi reads no service files
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGSERVICE: anything}
+    expect:
+      exit: 10
+      stderr: ["PGSERVICE"]
+  - pgmi: [deploy, "{project}", --connection, "service=anything", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["service"]

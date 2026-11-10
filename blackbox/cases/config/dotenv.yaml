@@ -1,0 +1,17 @@
+description: the project .env is loaded first, a variable already set wins over it, and --json lists the keys it set
+project:
+  files:
+    .env: |
+      PGMI_PARAM_FROM_DOTENV=dotenv
+      PGMI_PARAM_OVERRIDDEN=dotenv
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view WHERE key IN ('from_dotenv', 'overridden');
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    env: {PGMI_PARAM_OVERRIDDEN: shell}
+    expect:
+      exit: 0
+      json: {dotenvKeys: [PGMI_PARAM_FROM_DOTENV]}
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows: [[from_dotenv, dotenv], [overridden, shell]]

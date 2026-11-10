@@ -1,0 +1,14 @@
+description: help and --help print a command's help with its exit codes; an unknown command is a usage error
+steps:
+  - pgmi: [help, deploy]
+    expect: {exit: 0, stdout: ["Exit codes:", "--connection"]}
+  - pgmi: [deploy, --help]
+    expect: {exit: 0, stdout: ["Exit codes:"]}
+  - pgmi: [--help]
+    expect: {exit: 0, stdout: ["deploy", "metadata", "serve"]}
+  - pgmi: [frobnicate]
+    expect: {exit: 2, stderr: ["frobnicate"]}
+  - pgmi: [deploy]
+    expect: {exit: 2}
+  - pgmi: [deploy, a, b]
+    expect: {exit: 2}

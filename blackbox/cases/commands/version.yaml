@@ -1,0 +1,13 @@
+description: version and --version print the version and the session API compatibility level
+steps:
+  - pgmi: [version]
+    expect:
+      exit: 0
+      stdout: ["\\Apgmi \\S+ \\(compat 1\\)", "Commit: ", "Platform: "]
+  - pgmi: [--version]
+    expect:
+      exit: 0
+      stdout: ["\\Apgmi \\S+ \\(compat 1\\)"]
+  - pgmi: [version, extra]
+    expect:
+      exit: 2

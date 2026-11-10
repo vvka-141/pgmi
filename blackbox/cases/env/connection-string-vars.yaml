@@ -1,0 +1,22 @@
+description: PGMI_CONNECTION_STRING and DATABASE_URL supply the connection, the first outranks the second, and deploy names the source
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGMI_CONNECTION_STRING: "{conn}"}
+    expect:
+      exit: 0
+      stderr: ["connection: from PGMI_CONNECTION_STRING"]
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {DATABASE_URL: "{conn}"}
+    expect:
+      exit: 0
+      stderr: ["connection: from DATABASE_URL"]
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env:
+      PGMI_CONNECTION_STRING: "{conn}"
+      DATABASE_URL: "postgresql://nobody@127.0.0.1:1/postgres"
+    expect:
+      exit: 0
+      stderr: ["connection: from PGMI_CONNECTION_STRING"]

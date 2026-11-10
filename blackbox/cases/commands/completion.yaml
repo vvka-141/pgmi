@@ -1,0 +1,12 @@
+description: completion prints a script for each supported shell and refuses another
+steps:
+  - pgmi: [completion, bash]
+    expect: {exit: 0, stdout: ["complete .*pgmi"]}
+  - pgmi: [completion, zsh]
+    expect: {exit: 0, stdout: ["#compdef pgmi"]}
+  - pgmi: [completion, fish]
+    expect: {exit: 0, stdout: ["complete -c pgmi"]}
+  - pgmi: [completion, powershell]
+    expect: {exit: 0, stdout: ["Register-ArgumentCompleter"]}
+  - pgmi: [completion, nosuch]
+    expect: {exit: 2}

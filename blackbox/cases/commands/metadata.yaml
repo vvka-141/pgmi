@@ -1,0 +1,48 @@
+description: metadata plan orders by sort key, validate refuses a bad id, scaffold previews and then writes blocks
+project:
+  files:
+    z.sql: |
+      /*
+      <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true">
+        <sortKeys><key>001/first</key></sortKeys>
+      </pgmi-meta>
+      */
+      SELECT 1;
+    a.sql: |
+      /*
+      <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e02" idempotent="false">
+        <sortKeys><key>002/second</key></sortKeys>
+      </pgmi-meta>
+      */
+      SELECT 2;
+    lib/plain.sql: SELECT 3;
+steps:
+  - pgmi: [metadata, plan, "{project}"]
+    expect:
+      exit: 0
+      stdout: ["(?s)001/first +\\./z\\.sql.*002/second +\\./a\\.sql"]
+  - pgmi: [metadata, plan, "{project}", --json]
+    expect:
+      exit: 0
+      json: {totalFiles: 3}
+      stdout: ["\"sortKey\": \"001/first\""]
+  - pgmi: [metadata, validate, "{project}", --json]
+    expect:
+      exit: 0
+      json: {filesWithMetadata: 2, filesWithoutMetadata: 1, validationPassed: true, duplicateIds: []}
+  - pgmi: [metadata, scaffold, "{project}/lib", --sort-key, 010/lib/]
+    expect:
+      exit: 0
+      stdout: ["\\./plain\\.sql", "Sort key: 010/lib/plain\\.sql", "Idempotent: true"]
+      stderr: ["Preview mode"]
+      files:
+        project/lib/plain.sql: ["\\ASELECT 3;"]
+  - pgmi: [metadata, scaffold, "{project}/lib", --sort-key, 010/lib/, --write]
+    expect:
+      exit: 0
+      files:
+        project/lib/plain.sql: ["<pgmi-meta", "010/lib/", "SELECT 3;"]
+  - pgmi: [metadata, validate, "{project}", --json]
+    expect:
+      exit: 0
+      json: {filesWithMetadata: 3, filesWithoutMetadata: 0, validationPassed: true}

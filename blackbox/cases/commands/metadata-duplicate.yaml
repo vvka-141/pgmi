@@ -1,0 +1,19 @@
+description: two files with the same pgmi-meta id fail validation and name both files
+project:
+  files:
+    one.sql: |
+      /*
+      <pgmi-meta id="1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d" idempotent="true"></pgmi-meta>
+      */
+      SELECT 1;
+    two.sql: |
+      /*
+      <pgmi-meta id="1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d" idempotent="true"></pgmi-meta>
+      */
+      SELECT 2;
+steps:
+  - pgmi: [metadata, validate, "{project}"]
+    expect:
+      exit: 10
+      stdout: ["Duplicate id: 1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d: \\./one\\.sql, \\./two\\.sql"]
+      stderr: ["1 duplicate id"]

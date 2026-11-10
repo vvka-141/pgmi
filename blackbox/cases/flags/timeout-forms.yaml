@@ -1,0 +1,13 @@
+description: --timeout takes Go-style durations; a value that is not one is a usage error
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 90s]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 1h30m]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, banana]
+    expect:
+      exit: 2
+      stderr: ["banana"]

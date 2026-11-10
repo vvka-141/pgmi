@@ -1,0 +1,32 @@
+description: --params-file reads KEY=VALUE files, later files win; a case clash in one file, stdin twice, or a --param without = is exit 10
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view WHERE key IN ('a', 'b');
+    base.env: |
+      a=base
+      b=base
+    over.env: |
+      a=over
+    clash.env: |
+      Token=1
+      token=2
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/base.env", --params-file, "{project}/over.env"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows: [[a, over], [b, base]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/clash.env"]
+    expect: {exit: 10}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "-", --params-file, "-"]
+    expect:
+      exit: 10
+      stderr: ["stdin"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, noequals]
+    expect:
+      exit: 10
+      stderr: ["key=value"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/missing.env"]
+    expect: {exit: 10}

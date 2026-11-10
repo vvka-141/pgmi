@@ -1,0 +1,17 @@
+description: PGHOST, PGPORT, PGUSER, PGPASSWORD and PGDATABASE connect and pick the target with no flags
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (db text, who text); INSERT INTO marker VALUES (current_database(), current_user);
+steps:
+  - pgmi: [deploy, "{project}"]
+    env:
+      PGHOST: "{host}"
+      PGPORT: "{port}"
+      PGUSER: "{user}"
+      PGPASSWORD: "{password}"
+      PGDATABASE: "{db}"
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT db, who FROM marker
+          rows: [["{db}", "{user}"]]

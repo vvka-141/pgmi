@@ -1,0 +1,15 @@
+description: a server that accepts but never answers holds the connection until PGCONNECT_TIMEOUT, or until --timeout, which while connecting is exit 11
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 60s]
+    env: {PGCONNECT_TIMEOUT: "2"}
+    timeout: 30
+    expect:
+      exit: 11
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 3s]
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["--timeout"]

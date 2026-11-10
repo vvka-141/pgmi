@@ -1,0 +1,27 @@
+description: serve answers initialize, lists its 7 tools, runs a tool, survives a malformed line and exits 0 at end of input
+steps:
+  - pgmi: [serve]
+    stdin: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}
+      {"jsonrpc":"2.0","method":"notifications/initialized"}
+      {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+      not json
+      {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}
+      {"jsonrpc":"2.0","id":4,"method":"ping"}
+      {"jsonrpc":"2.0","id":5,"method":"no/such/method"}
+    expect:
+      exit: 0
+      stdout:
+        - '"id":1,"result":\{"protocolVersion":"2025-06-18"'
+        - '"serverInfo":\{"name":"pgmi"'
+        - '"name":"deploy"'
+        - '"name":"init"'
+        - '"name":"metadata_plan"'
+        - '"name":"metadata_validate"'
+        - '"name":"templates_list"'
+        - '"name":"ai_overview"'
+        - '"name":"ai_contract"'
+        - '"id":null,"error":\{"code":-32700'
+        - '"id":3,"result":\{"content":\[\{"type":"text","text":"[^"]*\\"templates\\"'
+        - '"id":4,"result":\{\}'
+        - '"id":5,"error":\{"code":-32601'

@@ -1,0 +1,9 @@
+description: a filesystem failure is a general error, exit 1
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [init, "{project}/deploy.sql/inside", -t, basic]
+    expect:
+      exit: 1
+      stderr: ["deploy\\.sql"]

@@ -1,0 +1,16 @@
+description: application_name is pgmi by default and PGAPPNAME when set
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (app text);
+      INSERT INTO seen VALUES (current_setting('application_name'));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGAPPNAME: blackbox-app}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT app FROM seen ORDER BY ctid
+          rows: [[pgmi], [blackbox-app]]

@@ -1,0 +1,12 @@
+description: an unknown key in pgmi.yaml, or an unknown auth_method, is invalid configuration rather than a silent default
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      connection:
+        usernmae: someone
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["usernmae"]

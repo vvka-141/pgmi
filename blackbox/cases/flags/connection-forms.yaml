@@ -1,0 +1,13 @@
+description: --connection accepts a URI, libpq keyword/value and ADO.NET, and each reaches the same server
+project:
+  files:
+    deploy.sql: CREATE TABLE IF NOT EXISTS marker (n int); INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "host={host} port={port} user={user} password={password} dbname=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Server={host};Port={port};User Id={user};Password={password};Database=postgres", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]

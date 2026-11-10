@@ -1,0 +1,17 @@
+description: a malformed pgmi-meta id or a duplicate id is invalid configuration, exit 10, naming the file
+project:
+  files:
+    bad.sql: |
+      /*
+      <pgmi-meta id="not-a-uuid" idempotent="true"></pgmi-meta>
+      */
+      SELECT 1;
+steps:
+  - pgmi: [metadata, validate, "{project}"]
+    expect:
+      exit: 10
+      stderr: ["bad\\.sql", "UUID"]
+  - pgmi: [metadata, plan, "{project}"]
+    expect:
+      exit: 10
+      stderr: ["bad\\.sql"]
