@@ -63,6 +63,10 @@ pub struct Error {
 - A cargo feature `testhooks`, off in releases, adds a `PGMI_TEST_PANIC`
   trigger so an integration test proves the panic path exits 3. A release
   binary cannot panic on purpose, as the contract says.
+  As built (PGMI-833): the trigger fires in deploy after connection
+  resolution; `tests/panic.rs` runs in CI as
+  `cargo test -p pgmi --features testhooks --test panic`. SIGPIPE is restored
+  with `libc::signal` in a second justified `unsafe` block in `main`.
 
 ## Consequences
 
