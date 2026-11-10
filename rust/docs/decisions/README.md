@@ -17,7 +17,7 @@ them.
 | [0004](0004-postgres-connection-layer.md) | tokio-postgres `connect_raw` with pgmi's own libpq-style resolution; the five decided libpq behaviours; simple protocol and unnamed statements only |
 | [0005](0005-tokio-postgres-fork.md) | Vendored fork published as `pgmi-tokio-postgres` (cargo ignores `[patch]` in published crates); patches as files, offered upstream |
 | [0006](0006-tls.md) | rustls on ring, one verifier for all sslmodes, rustls-native-certs for `system`, own legacy-key decryption and own tokio-postgres TLS adapter |
-| [0007](0007-azure-credentials.md) | azure_identity without default features, pgmi's own chain; Cloud Shell and Arc managed identity added by pgmi |
+| [0007](0007-azure-credentials.md) | azure_identity without default features, pgmi's own chain; certificate service principal via a self-signed client assertion (no OpenSSL); every Entra route listed with its real-Azure coverage |
 | [0008](0008-aws-credentials.md) | aws-config credentials on a ring HTTP client; the RDS token signed with aws-sigv4 directly, not aws-sdk-rds |
 | [0009](0009-google-cloud-sql.md) | Spike B's own dialer; google-cloud-auth without default features; Admin API URL overridable for fakes |
 | [0010](0010-embedded-assets-and-packaging.md) | Own `build.rs` table in `pgmi-shared`; `include` lists; git, package list and embedded list must be equal |
@@ -69,7 +69,8 @@ Every `###` section of the behaviour contract and the records that serve it.
 | Every address's error is reported | 0004 |
 | POSIX character classes in .pgmiignore | 0014 |
 | metadata scaffold stops at the repository root | 0020 |
-| Nothing that cannot be reached is carried over | 0007 (no certificate login), 0009 (no metrics), 0020 (no XSD) |
+| Azure service principal with a certificate | 0007 |
+| Nothing that cannot be reached is carried over | 0007 (no username/password Entra login), 0009 (no metrics), 0020 (no XSD) |
 | sslmode=allow retries with TLS | 0004, 0006 |
 | Unknown connection-string keys are refused before connecting | 0004 |
 | PGPORT may list several ports | 0004 |
@@ -80,13 +81,16 @@ Every `###` section of the behaviour contract and the records that serve it.
 
 - "No password available": the contract was wrong; it now follows libpq
   (fail only when the server asks). (0004)
-- Service Fabric and Azure ML managed identity are written, for parity, and
-  not tested against the platform. Username/password Azure login is dropped:
-  Go never reaches it. (0007)
+- Azure (owner review): Entra sign-in is must-ship. Certificate login for a
+  service principal is added (Go never reached it); username/password Entra
+  login is dropped. Record 0007 lists every route and its real-Azure run.
+  Service Fabric and Azure ML managed identity are written for parity, not
+  tested against the platform. (0007)
 - The Cloud SQL dialer reads gcloud's
   `CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN` as its test seam. (0009)
-- Release: prove GoReleaser OSS on a macOS runner in PGMI-834; GoReleaser Pro
-  comes back to the owner only if that fails. npm platform packages are
+- Release (owner review): the whole release job runs on a macOS runner; no
+  GoReleaser Pro. If that fails, report to the owner; the likely fallback is
+  dropping the affected macOS build. npm platform packages are
   unscoped (`pgmi-cli-<os>-<arch>`), reserved in PGMI-850. (0018)
 - Encrypted PKCS#8 client keys are added: libpq reads them, and a key that
   works with psql should work with pgmi. (0006)

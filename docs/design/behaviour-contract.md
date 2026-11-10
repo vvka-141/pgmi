@@ -322,8 +322,8 @@ Cases: `terminal/init-wizard`, `terminal/non-interactive`, `terminal/pager`, `te
 `--azure`: without a client ID, the default Azure credential chain (Azure CLI
 among others); with `--azure-client-id`, workload identity then managed
 identity; with a tenant ID, a client ID and `AZURE_CLIENT_SECRET` all set, a
-service principal. The token is asked
-for the Azure Database for PostgreSQL resource and sent as the password.
+service principal (Rust also accepts a certificate, see "Azure service
+principal with a certificate"). The token is asked for the Azure Database for PostgreSQL resource and sent as the password.
 `--aws`: an RDS IAM token built locally from the AWS credentials
 (`host:port?Action=connect&DBUser=...&X-Amz-...`, valid 900 s), region from
 `--aws-region`, else `AWS_REGION`, else `AWS_DEFAULT_REGION`, else exit 10.
@@ -368,14 +368,26 @@ directory containing `.git`, and prints `Project root: <path>` on stderr when
 the root differs from the named directory (PGMI-840).
 No case yet: add one with the Rust implementation.
 
+### Azure service principal with a certificate
+
+Go's certificate login is unreachable: it needs `AZURE_CLIENT_ID`, and setting
+it routes to workload and managed identity only. The Rust binary supports it
+(owner, 2026-11-10): with a tenant ID, a client ID and
+`AZURE_CLIENT_CERTIFICATE_PATH` (PEM or PKCS#12, optional
+`AZURE_CLIENT_CERTIFICATE_PASSWORD`), it signs in as that service principal.
+When both a secret and a certificate are set, the secret wins.
+No case: instance discovery always calls `login.microsoftonline.com`; verified
+by the real-Azure runs (PGMI-845).
+
 ### Nothing that cannot be reached is carried over
 
-Go's Azure service-principal certificate login and username/password login
-are unreachable (both need `AZURE_CLIENT_ID`, and setting it routes to workload
-and managed identity only), its Cloud SQL
-connector sends metrics to Cloud Monitoring by default, and its docs claim a
-`schema.xsd` that nothing validates against. The Rust binary has no certificate
-or username/password login, sends no metrics and validates no XSD; the docs line is fixed.
+Go's Azure username/password login (resource-owner password) is unreachable
+for the same reason, fails under multi-factor sign-in, and is dropped (owner,
+2026-11-10). Go's Cloud SQL connector sends metrics to Cloud Monitoring by
+default, and its docs claim a `schema.xsd` that nothing validates against. The
+Rust binary has no username/password Entra login, sends no metrics and
+validates no XSD; the docs line is fixed. PostgreSQL password authentication
+is unaffected.
 No case: none of these is observable from outside without a real cloud.
 
 ## Decided changes (owner, 2026-11-10)

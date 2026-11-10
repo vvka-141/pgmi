@@ -1,6 +1,6 @@
 # 0008: AWS credentials
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted by the owner, 2026-11-10. Ticket: PGMI-829.
 Checked on crates.io / docs.rs, 2026-11-10: aws-config 1.13.1 (2026-11-09,
 rust-version 1.94.1, default features `default-https-client`, `rt-tokio`,
 `credentials-process`, `sso`), aws-smithy-http-client 1.5.2 (feature

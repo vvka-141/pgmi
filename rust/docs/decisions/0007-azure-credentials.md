@@ -1,6 +1,6 @@
 # 0007: Azure credentials
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted by the owner with the Entra condition, 2026-11-10. Ticket: PGMI-829.
 Checked on crates.io / docs.rs, 2026-11-10: azure_identity 1.0.0
 (2026-11-06), azure_core 1.1.0 (2026-11-06), typespec_client_core 1.1.0.
 Facts from the docs and feature tables: azure_identity offers
@@ -19,7 +19,8 @@ CLI among others); with a client ID (`--azure-client-id`, else
 `AZURE_CLIENT_ID`), workload identity then managed identity; with a tenant
 ID, a client ID and `AZURE_CLIENT_SECRET`, a service principal. The token is
 asked for `https://ossrdbms-aad.database.windows.net/.default` and sent as
-the password. Certificate login is not carried over (intended change).
+the password. The Rust binary adds certificate login for a service
+principal (intended change, owner 2026-11-10).
 Azure is the only cloud verified against the real service (PGMI-845).
 
 ## Options
@@ -40,7 +41,15 @@ aws-lc-rs stays out.
 pgmi's routing, first match wins:
 
 1. Tenant ID, client ID and `AZURE_CLIENT_SECRET` all set:
-   `ClientSecretCredential`.
+   `ClientSecretCredential`. Else tenant ID, client ID and
+   `AZURE_CLIENT_CERTIFICATE_PATH`: a service principal with a certificate.
+   azure_identity's `ClientCertificateCredential` needs OpenSSL (its
+   `client_certificate` feature), which record 0006 bans, so pgmi uses
+   `ClientAssertionCredential` with an assertion it signs itself: a JWT
+   (RS256, `x5t#S256` header) signed with the certificate's key, the key read
+   from PEM or PKCS#12 (`AZURE_CLIENT_CERTIFICATE_PASSWORD`) by pure-Rust
+   crates. About 100 lines; the assertion is Microsoft's documented
+   certificate-credential format.
 2. A client ID: `WorkloadIdentityCredential` when
    `AZURE_FEDERATED_TOKEN_FILE` is set, then `ManagedIdentityCredential` with
    that client ID as a user-assigned identity.
@@ -59,6 +68,23 @@ challenge-file handshake against the local agent) as small sources of its
 own, about 120 lines with fakes in the black-box runner, and Service Fabric
 and Azure Machine Learning (about 150 lines) for parity, implemented but not
 tested against the platform, as AWS and Google are.
+
+## Supported Entra routes and their real-Azure coverage
+
+Entra ID sign-in to Azure Database for PostgreSQL is must-ship (owner,
+2026-11-10). PostgreSQL password authentication is a separate path and
+always works.
+
+| Route | How pgmi picks it | Go | Rust | Real-Azure run (PGMI-845) |
+|---|---|---|---|---|
+| Azure CLI (`az login`) | no client ID | yes | yes | yes, both binaries |
+| Service principal, secret | tenant + client ID + `AZURE_CLIENT_SECRET` | yes | yes | yes, both binaries |
+| Service principal, certificate | tenant + client ID + `AZURE_CLIENT_CERTIFICATE_PATH` | unreachable | yes | yes, Rust only (Go cannot reach it) |
+| Managed identity, system-assigned | no client ID, on an Azure host | yes | yes | yes, from an Azure VM, both binaries |
+| Managed identity, user-assigned | `--azure-client-id` on an Azure host | yes | yes | yes, same VM, both binaries |
+| Workload identity (federated token) | client ID + `AZURE_FEDERATED_TOKEN_FILE` | yes | yes | yes, from GitHub Actions OIDC written to the token file, both binaries |
+| Azure Developer CLI | no client ID, after the Azure CLI | yes | yes | no: same token flow as the Azure CLI, from another tool |
+| Managed identity on Arc, Cloud Shell, Service Fabric, Azure ML | as system/user-assigned, on that host | yes | yes | no: each needs its platform; covered by fakes where the protocol allows |
 
 ## Consequences
 

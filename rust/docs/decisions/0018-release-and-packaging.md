@@ -1,6 +1,6 @@
 # 0018: Release pipeline, Python and npm packages
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829. Builds on spikes D and B.
+Status: accepted by the owner, 2026-11-10. Ticket: PGMI-829. Builds on spikes D and B.
 Checked 2026-11-10: GoReleaser v2.20.0 (2026-11-04); the repository runs the
 OSS edition (`distribution: goreleaser`, v2.19.0 in `release.yml`);
 goreleaser.com says the `prebuilt` builder and cargo publishing are
@@ -32,8 +32,9 @@ proposed handing the macOS binaries to GoReleaser as prebuilt artefacts.
 
 ## Decision
 
-Option 2, proven in the snapshot workflow before the switch; option 1 is
-the fallback if zig cross-builds from macOS fail.
+Option 2, proven in the snapshot workflow before the switch. No GoReleaser
+Pro (owner, 2026-11-10): if option 2 fails, report to the owner; the likely
+fallback is dropping the affected macOS build, not paying.
 
 - `.goreleaser.yaml`: two builds with `builder: rust`, one for the two
   `apple-darwin` targets (`tool: cargo`), one for `x86_64`/`aarch64`
@@ -65,7 +66,6 @@ the fallback if zig cross-builds from macOS fail.
 - One release job on a macOS runner costs more runner minutes than Linux.
 - npm platform packages are unscoped, `pgmi-cli-<os>-<arch>` (six names,
   reserved in PGMI-850); a scope would need an npm organisation.
-- GoReleaser Pro goes to the owner only if option 2 fails in PGMI-834.
 
 ## Serves
 
