@@ -27,7 +27,7 @@ them.
 | [0014](0014-pgmiignore-and-sql-lexer.md) | Own clean-room gitignore matcher with POSIX classes; one hand-written SQL lexer for split, macro, checksum, metadata |
 | [0015](0015-checksums.md) | sha2; normaliser on the shared lexer, whitespace set spelled out; golden and cross-binary cases |
 | [0016](0016-environment-and-dotenv.md) | Own `.env`/params parser with a strict mode; environment snapshot map; `.env` keys exported before any thread exists |
-| [0017](0017-mcp-server.md) | Hand-written JSON-RPC server; rmcp 3.9.0 rejected because its transport drops unparsable lines silently |
+| [0017](0017-mcp-server.md) | Hand-written JSON-RPC server, as in Go; rmcp plus pgmi's own transport is the fallback only (rmcp's transport drops unparsable lines silently) |
 | [0018](0018-release-and-packaging.md) | GoReleaser OSS run on a macOS runner (prebuilt import is Pro only); wheels and npm packages assembled from the release binaries |
 | [0019](0019-output.md) | Own stderr Reporter, no tracing subscriber; one serde struct for `--json` and the serve deploy result; jiff timestamps |
 | [0020](0020-metadata-xml.md) | roxmltree for `<pgmi-meta>`, uuid for ids; scaffold stops at `.git` |
@@ -98,6 +98,10 @@ Every `###` section of the behaviour contract and the records that serve it.
   fork and no upstream PR; the layer is permanent. The spike passed six of
   six. Done only with a `pgmi serve` case, a fuzz target and TLS start from
   sslmode. The fork patches stay in `patches/` as reference only. (0005)
+- MCP server (owner review): hand-written, like Go. Done only when it
+  matches Go's behaviour under black-box cases (malformed input included)
+  and the input parser has a fuzz target. rmcp plus pgmi's own transport is
+  the fallback only. (0017)
 
 ## Open questions
 

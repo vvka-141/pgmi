@@ -1,6 +1,7 @@
 # 0017: The MCP server (`pgmi serve`)
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted by the owner, 2026-11-10, with three conditions (below).
+Ticket: PGMI-829. Research: `research-mcp-server.md`.
 Checked on crates.io and in the published source, 2026-11-10: rmcp 3.9.0
 (2026-11-05, the official Rust SDK). It knows protocol versions up to
 `2026-07-28` and `server/discover`. Its stdio transport skips a line it
@@ -34,7 +35,24 @@ echoing `2025-11-25`, `2025-06-18` or `2024-11-05` but never `2025-03-26`.
 
 ## Decision
 
-Option 2.
+Option 2, hand-written like the Go server. It counts as done only when all
+three hold (checklist on PGMI-833, where `pgmi serve` is built):
+
+1. It matches the Go server's behaviour, and black-box cases cover that
+   behaviour, malformed input included: invalid JSON, a non-object, a
+   missing or wrong `jsonrpc`, a bad `id` type, unknown methods, wrong
+   params, an oversized line, a blank line, invalid UTF-8. Each case passes on
+   the Go binary first.
+2. A fuzz target (cargo-fuzz) on the input parser: the line reader and the
+   message decoder never panic, and every line gets one answer or none,
+   exactly as the cases say.
+3. The fallback below stays a fallback.
+
+## Fallback only
+
+rmcp, the official SDK, with pgmi's own stdio transport (about 150 lines on
+its public API) to restore the -32700 answer and its version negotiation
+overridden. Used only if the hand-written server proves unworkable.
 
 - A reader task reads lines; each parse failure answers -32700 with
   `"id": null`. Requests are dispatched by method. Each `tools/call` runs as
