@@ -94,6 +94,7 @@ tls/channel-binding-and-direct
 tls/client-certificate
 tls/default-files
 tls/default-files-good-root
+tls/encrypted-client-key
 tls/require-auth-and-version
 tls/sslmode-flag-overrides
 tls/sslmode-matrix

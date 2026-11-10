@@ -208,9 +208,9 @@ impl Run {
     pub fn secrets(&self) -> Vec<String> {
         self.st
             .spec
-            .as_ref()
-            .and_then(|s| s.password.clone())
-            .into_iter()
+            .iter()
+            .flat_map(|s| [s.password.clone(), s.sslpassword.clone()])
+            .flatten()
             .collect()
     }
 

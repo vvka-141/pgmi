@@ -113,7 +113,7 @@ fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     Ok(certs)
 }
 
-fn read_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
+fn read_key(path: &Path, password: Option<&str>) -> Result<PrivateKeyDer<'static>> {
     let text = std::fs::read(path).map_err(|e| {
         Error::config(format!(
             "could not read private key file \"{}\"",
@@ -121,11 +121,23 @@ fn read_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
         ))
         .with_source(e)
     })?;
-    if text.windows(9).any(|w| w == b"ENCRYPTED") {
-        return Err(Error::config(format!(
-            "private key \"{}\" is encrypted; encrypted client keys are not supported in this build",
-            path.display()
-        )));
+    if super::keys::is_encrypted(&text) {
+        use super::keys::KeyError;
+        return super::keys::decrypt(&text, password).map_err(|e| {
+            Error::config(match e {
+                KeyError::NeedsPassword => format!(
+                    "private key \"{}\" is encrypted; give its password with sslpassword or PGSSLPASSWORD",
+                    path.display()
+                ),
+                KeyError::WrongPassword => format!(
+                    "private key \"{}\": decryption password incorrect",
+                    path.display()
+                ),
+                KeyError::Malformed(m) => {
+                    format!("could not read private key \"{}\": {m}", path.display())
+                }
+            })
+        });
     }
     PrivateKeyDer::from_pem_slice(&text).map_err(|e| {
         Error::config(format!(
@@ -212,7 +224,10 @@ pub fn config(spec: &Spec) -> Result<Tls> {
         .or_else(|| pg.as_ref().and_then(|d| existing(d.join("postgresql.key"))));
     let mut config = match (cert, key) {
         (Some(cert), Some(key)) if cert.is_file() || spec.sslcert.is_some() => builder
-            .with_client_auth_cert(read_certs(&cert)?, read_key(&key)?)
+            .with_client_auth_cert(
+                read_certs(&cert)?,
+                read_key(&key, spec.sslpassword.as_deref())?,
+            )
             .map_err(|e| Error::config(format!("client certificate: {e}")))?,
         _ => builder.with_no_client_auth(),
     };

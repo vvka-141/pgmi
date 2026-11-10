@@ -10,9 +10,15 @@ include = ["Cargo.toml", "src/**", "build.rs"]
 
 [dependencies]
 pgmi-shared = { path = "../../shared", version = "=0.20.0-alpha.1" }
+aes = "0.9.4"
+base64ct = { version = "1.8.0", features = ["alloc"] }
+cbc = "0.2.1"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "error-context", "help", "usage", "suggestions"] }
+des = "0.9.0"
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 jiff = { version = "0.2.42", default-features = false, features = ["std"] }
+md-5 = "0.11.0"
+pkcs8 = { version = "0.11.0", features = ["encryption", "pem", "3des", "sha1-insecure"] }
 roxmltree = "0.21.2"
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12"] }
 rustls-graviola = "0.4.0"
