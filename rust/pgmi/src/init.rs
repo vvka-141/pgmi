@@ -74,9 +74,78 @@ pub fn run(a: &InitArgs) -> Result<()> {
             write(&path, bytes)?;
         }
     }
-    let mut out = std::io::stdout().lock();
-    let _ = writeln!(out, "Wrote {} ({template} template).", target.display());
+    let _ = writeln!(
+        std::io::stderr(),
+        "Wrote {} ({template} template).",
+        target.display()
+    );
+    let absolute = std::path::absolute(&target).unwrap_or_else(|_| target.clone());
+    let mut tree = format!("{}/\n", absolute.display());
+    draw(&absolute, "", &mut tree);
+    tree.push('\n');
+    let _ = std::io::stdout().lock().write_all(tree.as_bytes());
+    let _ =
+        std::io::stderr().write_all(next_steps(template, &target.display().to_string()).as_bytes());
     Ok(())
+}
+
+const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\ncommit them, and edit them as your conventions change. Run \"pgmi ai\" for the\ndocs that match this pgmi version.\n";
+
+fn next_steps(template: &str, target: &str) -> String {
+    match template {
+        "minimal" => format!(
+            "\nNext:\n  pgmi deploy {target} -d mydb\n\ndeploy.sql runs every .sql file in path order. Add files, then change its\nquery to decide what runs. Run \"pgmi ai\" for the docs that match this version.\n"
+        ),
+        "basic" => {
+            format!("\nNext:\n  pgmi deploy {target} -d mydb --param env=dev\n\n{AGENTS_NOTE}")
+        }
+        _ => format!(
+            "Managed-cloud note: the advanced template needs PostgreSQL 18 or newer and the\nuuid-ossp, pgcrypto, pg_trgm, hstore and btree_gist extensions. No superuser\nrequired: deploy as a role with CREATEROLE and CREATEDB. Details:\nhttps://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql\n\nNext:\n  pgmi deploy {target} -d myapp_dev --param env=dev\n\nFor a shared database use env=test or env=prod, with the passwords in\nPGMI_PARAM_* environment variables or a --params-file.\n\n{AGENTS_NOTE}"
+        ),
+    }
+}
+
+fn draw(dir: &Path, indent: &str, out: &mut String) {
+    let mut entries: Vec<(String, bool)> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| {
+                    let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                    (e.file_name().to_string_lossy().into_owned(), is_dir)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    let last = entries.len().saturating_sub(1);
+    for (i, (name, is_dir)) in entries.iter().enumerate() {
+        let (branch, more) = if i == last {
+            ("└── ", "    ")
+        } else {
+            ("├── ", "│   ")
+        };
+        if !is_dir {
+            out.push_str(&format!("{indent}{branch}{name}\n"));
+            continue;
+        }
+        out.push_str(&format!("{indent}{branch}{name}/\n"));
+        let path = dir.join(name);
+        if name == ".git" {
+            continue;
+        }
+        if name == ".agents" && indent.is_empty() {
+            let skills = std::fs::read_dir(path.join("skills"))
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .count()
+                })
+                .unwrap_or(0);
+            out.push_str(&format!("{indent}{more}└── skills/  ({skills} skills)\n"));
+            continue;
+        }
+        draw(&path, &format!("{indent}{more}"), out);
+    }
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<()> {
