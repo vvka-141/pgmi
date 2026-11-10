@@ -17,9 +17,8 @@ Case names are paths under `blackbox/cases/` without `.yaml`.
 `blackbox/selftest/test_contract.py` checks that every case is cited here, that
 every cited case exists, and that each section names cases or a reason.
 
-Sections marked **intended change** describe where the Rust binary differs from
-Go on purpose. **Owner decision** sections hold a recommendation awaiting a yes
-or no.
+The sections under **Intended changes** and **Decided changes** describe where
+the Rust binary differs from Go on purpose.
 
 ## Exit codes
 
@@ -378,48 +377,51 @@ connector sends metrics to Cloud Monitoring by default, and its docs claim a
 login, sends no metrics and validates no XSD; the docs line is fixed.
 No case: none of these is observable from outside without a real cloud.
 
-## Owner decisions
+## Decided changes (owner, 2026-11-10)
 
-### sslmode=allow and a server that requires TLS
+Each was an open question in the first draft; the owner accepted the libpq
+behaviour in every case. The cases still pin Go's behaviour and flip when the
+Rust binary lands.
 
-Go (pgx) never retries `allow` with TLS, so a TLS-only server refuses it;
-libpq retries. **Recommendation: retry, as libpq does** — `allow` exists for
-exactly that case, and the docs call the strings libpq-compatible.
+### sslmode=allow retries with TLS
+
+Go (pgx) never retries `allow` with TLS, so a server that requires TLS refuses
+it. The Rust binary tries plaintext first and, when the server refuses it,
+retries with TLS, as libpq does.
 
 Cases: `tls/tls-only-and-plain-servers`.
 
-### Unknown connection-string keys
+### Unknown connection-string keys are refused before connecting
 
 Go sends an unknown key to the server as a setting, which refuses it (exit 11,
-`unrecognized configuration parameter`). libpq refuses it before connecting.
-**Recommendation: refuse before connecting with exit 10, naming the key**,
-except the three keys `docs/CONNECTIONS.md` documents for single-session servers
+`unrecognized configuration parameter`). The Rust binary refuses it before
+connecting with exit 10, naming the key, as libpq does. The three keys
+`docs/CONNECTIONS.md` documents for single-session servers
 (`default_query_exec_mode`, `statement_cache_capacity`,
-`description_cache_capacity`), which keep their documented meaning.
+`description_cache_capacity`) keep their documented meaning.
 
 Cases: `connection/keywords`.
 
-### PGPORT with several ports
+### PGPORT may list several ports
 
-Go refuses `PGPORT=5432,5433` (exit 10); libpq accepts a list matching
-`PGHOST`. **Recommendation: accept, as libpq does** (the Rust spike already
-does).
+Go refuses `PGPORT=5432,5433` (exit 10). The Rust binary accepts a list matching
+`PGHOST`, as libpq does.
 
 Cases: `connection/target-session-attrs`.
 
-### The message when no password is available
+### No password available
 
-Go sends no password and reports the server's `password authentication failed`;
-the Rust driver stops before connecting. **Recommendation: report
-`no password supplied (checked --connection, PGPASSWORD, ~/.pgpass)`, exit 11.**
+Go sends no password and reports the server's `password authentication failed`.
+The Rust binary stops before connecting and reports `no password supplied`
+naming where it looked (the connection string, `PGPASSWORD`, `~/.pgpass`),
+exit 11.
 
 Cases: `connection/pgpass-world-readable`.
 
-### Encrypted legacy client keys and require_auth
+### Encrypted legacy client keys and require_auth are kept
 
-Both work in Go. No Rust crate decrypts OpenSSL's legacy encrypted keys, and
-tokio-postgres has no `require_auth`. **Recommendation: keep both** (about 50
-lines for the keys, a second small driver patch for `require_auth`), so no
-working setup breaks at the switch.
+Both work in Go and both stay: the Rust binary decrypts OpenSSL's legacy
+encrypted keys with `sslpassword` and honours `require_auth`, so no working
+setup breaks at the switch.
 
 Cases: `tls/encrypted-client-key`, `tls/require-auth-and-version`.
