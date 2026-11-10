@@ -5,6 +5,7 @@ mod session;
 
 use std::future::Future;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -63,6 +64,14 @@ pub struct Context {
     pub verbose: bool,
     pub env: Env,
     pub dotenv_keys: Vec<String>,
+    pub maintenance_db: Option<String>,
+    pub stdin: bool,
+    pub approval: Approval,
+}
+
+pub enum Approval {
+    Prompt,
+    Confirm(Option<String>),
 }
 
 #[derive(Default)]
@@ -82,18 +91,19 @@ struct State {
     contract: bool,
     phase_test: bool,
     failed_files: Vec<String>,
+    deployer: bool,
 }
 
 struct Guard {
     token: CancellationToken,
     deadline: TokioInstant,
     timeout: Duration,
-    interrupted: Arc<std::sync::atomic::AtomicBool>,
+    interrupted: Arc<AtomicBool>,
 }
 
 impl Guard {
     fn stop_error(&self) -> Error {
-        if self.interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.interrupted.load(Ordering::SeqCst) {
             Error::new(Kind::Interrupted, "interrupted")
         } else {
             self.timeout_error()
@@ -135,10 +145,95 @@ impl Guard {
     }
 }
 
+pub struct Run {
+    st: State,
+    log: Arc<Mutex<NoticeLog>>,
+    started: SystemTime,
+    t0: Instant,
+}
+
+impl Run {
+    pub fn start() -> Self {
+        Run {
+            st: State::default(),
+            log: Arc::new(Mutex::new(NoticeLog::default())),
+            started: SystemTime::now(),
+            t0: Instant::now(),
+        }
+    }
+
+    pub async fn deploy(
+        &mut self,
+        ctx: &Context,
+        reporter: &Arc<Reporter>,
+        token: CancellationToken,
+        interrupted: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let timeout = timeout_of(ctx);
+        let guard = Guard {
+            token,
+            deadline: TokioInstant::now() + timeout,
+            timeout,
+            interrupted,
+        };
+        deploy(ctx, &mut self.st, &guard, reporter, self.log.clone()).await
+    }
+
+    pub fn reached_deployer(&self) -> bool {
+        self.st.deployer
+    }
+
+    pub fn database(&self) -> Option<&str> {
+        self.st.database.as_deref()
+    }
+
+    pub fn notice_counts(&self) -> (u64, u64) {
+        self.log
+            .lock()
+            .map(|l| (l.total, l.warning_total))
+            .unwrap_or_default()
+    }
+
+    pub fn location(&self, e: &Error) -> Option<&str> {
+        if e.kind() != Kind::Sql || self.st.failed_unit.is_none() {
+            return None;
+        }
+        Some(match self.st.failed_files.first() {
+            Some(f) => f.as_str(),
+            None if self.st.phase_test => "test",
+            None => "deploy.sql",
+        })
+    }
+
+    pub fn secrets(&self) -> Vec<String> {
+        self.st
+            .spec
+            .as_ref()
+            .and_then(|s| s.password.clone())
+            .into_iter()
+            .collect()
+    }
+
+    pub fn record(&self, ctx: &Context, result: &Result<()>) -> Value {
+        let code = match result {
+            Ok(()) => 0,
+            Err(e) => e.exit_code(),
+        };
+        record(
+            ctx,
+            &self.st,
+            result,
+            code,
+            self.started,
+            self.t0.elapsed(),
+            &self.log,
+            &self.secrets(),
+        )
+    }
+}
+
 pub fn run(ctx: Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
-    let started = SystemTime::now();
-    let t0 = Instant::now();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -149,29 +244,22 @@ pub fn run(ctx: Context) -> u8 {
             return Kind::General.exit_code();
         }
     };
-    let notices = Arc::new(Mutex::new(NoticeLog::default()));
-    let mut state = State::default();
-    let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut run = Run::start();
+    let interrupted = Arc::new(AtomicBool::new(false));
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime.block_on(async {
             let token = CancellationToken::new();
             spawn_signals(token.clone(), interrupted.clone());
-            let timeout = timeout_of(&ctx);
-            let guard = Guard {
-                token,
-                deadline: TokioInstant::now() + timeout,
-                timeout,
-                interrupted: interrupted.clone(),
-            };
-            deploy(&ctx, &mut state, &guard, &reporter, notices.clone()).await
+            run.deploy(&ctx, &reporter, token, interrupted.clone())
+                .await
         })
     }));
     let mut result = caught.unwrap_or_else(|_| Err(crate::error::panic_error().0));
-    if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+    if interrupted.load(Ordering::SeqCst) {
         result = Err(Error::new(Kind::Interrupted, "interrupted"));
     }
     runtime.shutdown_timeout(Duration::from_millis(100));
-    finish(&ctx, &state, result, started, t0, &reporter, &notices)
+    finish(&ctx, &run, result, &reporter)
 }
 
 fn timeout_of(ctx: &Context) -> Duration {
@@ -193,7 +281,7 @@ fn timeout_of(ctx: &Context) -> Duration {
         .unwrap_or(Duration::from_secs(180))
 }
 
-fn spawn_signals(token: CancellationToken, flag: Arc<std::sync::atomic::AtomicBool>) {
+fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
@@ -208,7 +296,7 @@ fn spawn_signals(token: CancellationToken, flag: Arc<std::sync::atomic::AtomicBo
                 _ = int.recv() => {}
                 _ = term.recv() => {}
             }
-            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            flag.store(true, Ordering::SeqCst);
             token.cancel();
             tokio::select! {
                 _ = int.recv() => {}
@@ -219,7 +307,7 @@ fn spawn_signals(token: CancellationToken, flag: Arc<std::sync::atomic::AtomicBo
         #[cfg(not(unix))]
         {
             if tokio::signal::ctrl_c().await.is_ok() {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                flag.store(true, Ordering::SeqCst);
                 token.cancel();
             }
             if tokio::signal::ctrl_c().await.is_ok() {
@@ -273,15 +361,17 @@ async fn deploy(
         y.timeout()?;
     }
     refuse_cloud(a, yaml.as_ref())?;
-    let params = params::collect(
-        Sources {
-            yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
-            env: &ctx.env,
-            files: &a.params_files,
-            flags: &a.params,
-        },
-        &mut std::io::stdin(),
-    )?;
+    let sources = Sources {
+        yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
+        env: &ctx.env,
+        files: &a.params_files,
+        flags: &a.params,
+    };
+    let params = if ctx.stdin {
+        params::collect(sources, &mut std::io::stdin())?
+    } else {
+        params::collect(sources, &mut NoStdin)?
+    };
     let flags = Flags {
         connection: a.connection.clone(),
         host: a.host.clone(),
@@ -294,12 +384,41 @@ async fn deploy(
         sslrootcert: a.sslrootcert.clone(),
     };
     let spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
+    let mut spec = spec;
+    if let Some(m) = &ctx.maintenance_db {
+        spec.maintenance_db = m.clone();
+    }
     st.database = Some(spec.target_db.clone());
     st.spec = Some(spec.clone());
     #[cfg(feature = "testhooks")]
     if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
         test_panic();
     }
+    if a.overwrite
+        && let Approval::Confirm(confirm) = &ctx.approval
+    {
+        let db = &spec.target_db;
+        match confirm {
+            None => {
+                return Err(Error::new(
+                    Kind::Denied,
+                    format!(
+                        "overwrite=true drops database \"{db}\": pass confirmDatabaseName=\"{db}\" to confirm"
+                    ),
+                ));
+            }
+            Some(c) if c != db => {
+                return Err(Error::new(
+                    Kind::Denied,
+                    format!(
+                        "confirmDatabaseName \"{c}\" does not match database \"{db}\"; nothing was deployed and no database was dropped"
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    st.deployer = true;
     let max_size = match ctx.env.non_empty("PGMI_MAX_FILE_SIZE")? {
         None => walk::DEFAULT_MAX_FILE_SIZE,
         Some(v) => v.parse().map_err(|_| {
@@ -337,7 +456,7 @@ async fn deploy(
             reporter.line(&format!("connection: from {label} ({})", spec.describe()));
         }
     }
-    if a.overwrite {
+    if a.overwrite && matches!(ctx.approval, Approval::Prompt) {
         overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
     }
     let sink_reporter = reporter.clone();
@@ -442,6 +561,14 @@ fn test_panic() -> ! {
     panic!("PGMI_TEST_PANIC is set")
 }
 
+struct NoStdin;
+
+impl std::io::Read for NoStdin {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("stdin is not available here"))
+    }
+}
+
 pub fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
@@ -458,26 +585,14 @@ async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
     }))
 }
 
-fn finish(
-    ctx: &Context,
-    st: &State,
-    result: Result<()>,
-    started: SystemTime,
-    t0: Instant,
-    reporter: &Reporter,
-    log: &Mutex<NoticeLog>,
-) -> u8 {
-    let elapsed = t0.elapsed();
+fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> u8 {
+    let st = &run.st;
+    let elapsed = run.t0.elapsed();
     let code = match &result {
         Ok(()) => 0,
         Err(e) => e.exit_code(),
     };
-    let secrets: Vec<String> = st
-        .spec
-        .as_ref()
-        .and_then(|s| s.password.clone())
-        .into_iter()
-        .collect();
+    let secrets = run.secrets();
     if let Some(db) = &st.database {
         match &result {
             Ok(()) => reporter.summary(
@@ -520,17 +635,12 @@ fn finish(
     }
     if let Err(e) = &result {
         reporter.line(&redact(&format!("pgmi: error: {}", e.text()), &secrets));
-        if e.kind() == Kind::Sql && st.failed_unit.is_some() {
-            let location = match st.failed_files.first() {
-                Some(f) => f.as_str(),
-                None if st.phase_test => "test",
-                None => "deploy.sql",
-            };
+        if let Some(location) = run.location(e) {
             reporter.line(&format!("LOCATION: {location}"));
         }
     }
     if ctx.args.json {
-        let record = record(ctx, st, &result, code, started, elapsed, log, &secrets);
+        let record = run.record(ctx, &result);
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();
         let _ = writeln!(out, "{text}");

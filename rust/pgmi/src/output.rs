@@ -81,6 +81,8 @@ pub struct NoticeLog {
     warnings: Vec<Value>,
     tail: VecDeque<Value>,
     dropped: u64,
+    pub total: u64,
+    pub warning_total: u64,
 }
 
 const HEAD: usize = 50;
@@ -91,6 +93,10 @@ impl NoticeLog {
     pub fn push(&mut self, n: &Notice) {
         if n.severity == "LOG" {
             return;
+        }
+        self.total += 1;
+        if n.severity == "WARNING" {
+            self.warning_total += 1;
         }
         let mut v = Map::new();
         v.insert("severity".into(), json!(n.severity));

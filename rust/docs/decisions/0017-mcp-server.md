@@ -92,6 +92,35 @@ overridden. Used only if the hand-written server proves unworkable.
 - When MCP adds a revision, pgmi changes its own code; rmcp stays the
   reference to compare against.
 
+## As built (PGMI-833)
+
+- `serve/wire.rs` is the input parser: a line splitter, a byte-level JSON
+  validator that gives Go's `encoding/json` messages (`invalid character
+  '\xff' looking for beginning of value`, `unexpected end of JSON input`),
+  per-byte U+FFFD decoding inside strings, and Go's struct decoding rules
+  (case-insensitive member names, last duplicate wins, `null` leaves a field
+  unset, the first type error is reported). It depends on std and serde_json
+  only, so the cargo-fuzz target `mcp_decoder` includes it by path; a
+  proptest in `cargo test` checks the same properties.
+- Ids are echoed as written (`1e2`, `-0`), through serde_json's `raw_value`.
+- A bare `null` line gets no answer, as in Go (owner question Q1 still
+  open). A request whose method starts with `notifications/` is never
+  answered, with or without an id, as in Go.
+- `tools.json` is the tool list as Go's `tools/list` prints it (descriptions,
+  input and output schemas), so the 2025 era answer is byte-identical; the
+  2026-07-28 era parses it and sorts keys as Go does. A unit test checks a
+  deploy record and a failure against the output schema's required keys.
+- Failures before the deployer runs (arguments, path, timeout, params,
+  database, `confirmDatabaseName`) answer `{message, exitCode}`; later ones
+  answer the `--json` record plus `message`, as Go does.
+- Each tool call runs on the blocking pool under `Handle::block_on`: the
+  deploy future is not `Send` for every lifetime (a rustc limitation), and
+  this keeps `tokio::spawn`'s `Send` bound off it. A panic arrives as the
+  `JoinError` and answers `isError`, exit code 3, with the hook's stack.
+- `init`, `metadata_plan`, `metadata_validate` and `ai_contract` answer
+  "not implemented in this build" (exit 1) until the commands they wrap land
+  (PGMI-833 part B); their argument checks already match Go.
+
 ## Serves
 
 serve; The --json record (deploy result); Timeout, cancellation,

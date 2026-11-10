@@ -1,0 +1,399 @@
+mod tools;
+pub mod wire;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use serde_json::value::RawValue;
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+use crate::cli::VERSION;
+use crate::env::Env;
+use crate::error::Kind;
+use wire::{Decoded, Field, INVALID_PARAMS, METHOD_NOT_FOUND, Request};
+
+const STATELESS: &str = "2026-07-28";
+const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const META_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
+const UNSUPPORTED_VERSION: i64 = -32022;
+const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
+
+pub fn run(verbose: bool) -> u8 {
+    crate::conn::tls::install();
+    let env = Env::snapshot();
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                format!("pgmi: error: start the runtime: {e}\n").as_bytes(),
+            );
+            return Kind::General.exit_code();
+        }
+    };
+    runtime.block_on(serve(env, verbose));
+    runtime.shutdown_timeout(Duration::from_millis(100));
+    0
+}
+
+struct Server {
+    out: UnboundedSender<String>,
+    calls: Mutex<HashMap<String, CancellationToken>>,
+    root: CancellationToken,
+    env: Env,
+    verbose: bool,
+}
+
+async fn serve(env: Env, verbose: bool) {
+    let (tx, mut rx) = unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        let mut out = tokio::io::stdout();
+        while let Some(mut line) = rx.recv().await {
+            line.push('\n');
+            if out.write_all(line.as_bytes()).await.is_err() || out.flush().await.is_err() {
+                return;
+            }
+        }
+    });
+    let server = Arc::new(Server {
+        out: tx,
+        calls: Mutex::new(HashMap::new()),
+        root: CancellationToken::new(),
+        env,
+        verbose,
+    });
+    let mut tasks = JoinSet::new();
+    let mut stdin = tokio::io::stdin();
+    let mut lines = wire::Lines::default();
+    let mut buf = vec![0u8; 64 * 1024];
+    let stop = stop_signal();
+    tokio::pin!(stop);
+    loop {
+        let n = tokio::select! {
+            n = stdin.read(&mut buf) => n.unwrap_or(0),
+            _ = &mut stop => {
+                server.root.cancel();
+                break;
+            }
+        };
+        if n == 0 {
+            if let Some(line) = lines.finish() {
+                server.handle(&line, &mut tasks);
+            }
+            break;
+        }
+        for line in lines.feed(&buf[..n]) {
+            server.handle(&line, &mut tasks);
+        }
+        while tasks.try_join_next().is_some() {}
+    }
+    tokio::select! {
+        _ = async { while tasks.join_next().await.is_some() {} } => {}
+        _ = &mut stop => {
+            server.root.cancel();
+            while tasks.join_next().await.is_some() {}
+        }
+    }
+    drop(server);
+    let _ = writer.await;
+}
+
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut int), Ok(mut term)) = (
+            signal(SignalKind::interrupt()),
+            signal(SignalKind::terminate()),
+        ) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = int.recv() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+struct Era {
+    stateless: bool,
+}
+
+impl Server {
+    fn send(&self, line: String) {
+        let _ = self.out.send(line);
+    }
+
+    fn handle(self: &Arc<Self>, line: &[u8], tasks: &mut JoinSet<()>) {
+        match wire::decode(line) {
+            Decoded::Skip => {}
+            Decoded::Reply(r) => self.send(r),
+            Decoded::Notification(n) => {
+                if n.method == "notifications/cancelled" {
+                    self.cancel(n.params.as_deref());
+                }
+            }
+            Decoded::Request(r) if r.method.starts_with("notifications/") => {
+                if r.method == "notifications/cancelled" {
+                    self.cancel(r.params.as_deref());
+                }
+            }
+            Decoded::Request(r) => self.request(r, tasks),
+        }
+    }
+
+    fn cancel(&self, params: Option<&RawValue>) {
+        let Some(id) = params
+            .and_then(|p| serde_json::from_str::<wire::Members>(p.get()).ok())
+            .and_then(|m| {
+                m.0.into_iter()
+                    .rev()
+                    .find(|(k, _)| k == "requestId")
+                    .map(|(_, v)| v.get().to_string())
+            })
+        else {
+            return;
+        };
+        if let Ok(calls) = self.calls.lock()
+            && let Some(token) = calls.get(&id)
+        {
+            token.cancel();
+        }
+    }
+
+    fn request(self: &Arc<Self>, r: Request, tasks: &mut JoinSet<()>) {
+        let Some(id) = r.id.clone() else { return };
+        let params: Option<Value> = r
+            .params
+            .as_ref()
+            .and_then(|p| serde_json::from_str(p.get()).ok());
+        let meta = params.as_ref().and_then(|p| p.get("_meta"));
+        let version = meta.and_then(|m| m.get(META_VERSION));
+        let era = Era {
+            stateless: version.is_some() || r.method == "server/discover",
+        };
+        if let Some(v) = version {
+            let requested = v.as_str().unwrap_or_default();
+            if requested != STATELESS {
+                return self.send(wire::error_with(
+                    Some(&id),
+                    UNSUPPORTED_VERSION,
+                    "Unsupported protocol version",
+                    Some(&json!({"requested": requested, "supported": [STATELESS]})),
+                ));
+            }
+            if r.method != "server/discover"
+                && meta.and_then(|m| m.get(META_CAPABILITIES)).is_none()
+            {
+                return self.send(wire::error(
+                    Some(&id),
+                    INVALID_PARAMS,
+                    &format!("missing required _meta field: {META_CAPABILITIES}"),
+                ));
+            }
+        }
+        let not_found = || {
+            wire::error(
+                Some(&id),
+                METHOD_NOT_FOUND,
+                &format!("method not found: {}", r.method),
+            )
+        };
+        match (r.method.as_str(), era.stateless) {
+            ("initialize", false) => self.send(initialize(&id, r.params.as_deref())),
+            ("ping", false) => self.send(wire::result(&id, "{}")),
+            ("tools/list", _) => self.send(tools_list(&id, &era)),
+            ("server/discover", _) => self.send(wire::result(
+                &id,
+                &stateless(json!({
+                    "cacheScope": "public",
+                    "capabilities": {"tools": {}},
+                    "supportedVersions": [STATELESS],
+                    "ttlMs": 3_600_000,
+                })),
+            )),
+            ("tools/call", _) => self.call(id, r.params.as_deref(), era, tasks),
+            _ => self.send(not_found()),
+        }
+    }
+
+    fn call(
+        self: &Arc<Self>,
+        id: String,
+        params: Option<&RawValue>,
+        era: Era,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let invalid = |m: &str| {
+            wire::error(
+                Some(&id),
+                INVALID_PARAMS,
+                &format!("invalid tools/call params: {m}"),
+            )
+        };
+        let Some(params) = params else {
+            return self.send(invalid("unexpected end of JSON input"));
+        };
+        let fields = match wire::go_struct(
+            params,
+            "mcp.callToolParams",
+            "callToolParams",
+            &[("name", Field::String), ("arguments", Field::Raw)],
+        ) {
+            Ok(f) => f,
+            Err(e) => return self.send(invalid(&e)),
+        };
+        let name = fields.string("name").unwrap_or_default();
+        let Some(tool) = tools::Tool::named(&name) else {
+            return self.send(wire::error(
+                Some(&id),
+                INVALID_PARAMS,
+                &format!("unknown tool: {name}"),
+            ));
+        };
+        let arguments = fields.raw("arguments").map(RawValue::to_owned);
+        let token = self.root.child_token();
+        if let Ok(mut calls) = self.calls.lock() {
+            calls.insert(id.clone(), token.clone());
+        }
+        let server = self.clone();
+        tasks.spawn(async move {
+            let env = server.env.clone();
+            let verbose = server.verbose;
+            let task_token = token.clone();
+            let handle = tokio::runtime::Handle::current();
+            let outcome = match tokio::task::spawn_blocking(move || {
+                handle.block_on(tool.call(arguments.as_deref(), &env, verbose, task_token))
+            })
+            .await
+            {
+                Ok(o) => o,
+                Err(e) if e.is_panic() => tools::Outcome::panicked(),
+                Err(_) => tools::Outcome::failed(&crate::error::Error::internal(
+                    "the tool call was aborted",
+                )),
+            };
+            if let Ok(mut calls) = server.calls.lock() {
+                calls.remove(&id);
+            }
+            if token.is_cancelled() {
+                return;
+            }
+            server.send(wire::result(&id, &outcome.render(era.stateless)));
+        });
+    }
+}
+
+fn initialize(id: &str, params: Option<&RawValue>) -> String {
+    let fields = match params.map(|p| {
+        wire::go_struct(
+            p,
+            "mcp.initializeParams",
+            "initializeParams",
+            &[("protocolVersion", Field::String)],
+        )
+    }) {
+        Some(Err(e)) => {
+            return wire::error(
+                Some(id),
+                INVALID_PARAMS,
+                &format!("invalid initialize params: {e}"),
+            );
+        }
+        Some(Ok(f)) => f.string("protocolVersion").unwrap_or_default(),
+        None => String::new(),
+    };
+    if fields.is_empty() {
+        return wire::error(
+            Some(id),
+            INVALID_PARAMS,
+            "missing required parameter: protocolVersion",
+        );
+    }
+    let version = if ECHOED.contains(&fields.as_str()) {
+        fields.as_str()
+    } else {
+        ECHOED[0]
+    };
+    let result = format!(
+        "{{\"protocolVersion\":{},\"capabilities\":{{\"tools\":{{}}}},\"serverInfo\":{}}}",
+        json!(version),
+        server_info()
+    );
+    wire::result(id, &result)
+}
+
+fn server_info() -> Value {
+    json!({"name": "pgmi", "version": VERSION})
+}
+
+const TOOLS: &str = include_str!("tools.json");
+
+fn tools_list(id: &str, era: &Era) -> String {
+    if !era.stateless {
+        return wire::result(id, &format!("{{\"tools\":{}}}", TOOLS.trim_end()));
+    }
+    let tools: Value = serde_json::from_str(TOOLS).unwrap_or_default();
+    wire::result(
+        id,
+        &stateless(json!({"cacheScope": "public", "tools": tools, "ttlMs": 3_600_000})),
+    )
+}
+
+fn stateless(mut v: Value) -> String {
+    if let Value::Object(m) = &mut v {
+        m.insert("_meta".into(), json!({ META_SERVER: server_info() }));
+        m.insert("resultType".into(), json!("complete"));
+    }
+    v.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_json_lists_seven_tools_in_name_order() {
+        let tools: Vec<Value> = serde_json::from_str(TOOLS).unwrap();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "ai_contract",
+                "ai_overview",
+                "deploy",
+                "init",
+                "metadata_plan",
+                "metadata_validate",
+                "templates_list"
+            ]
+        );
+        for name in names {
+            assert!(tools::Tool::named(name).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn initialize_echoes_known_versions() {
+        let raw = RawValue::from_string("{\"protocolVersion\":\"2024-11-05\"}".into()).unwrap();
+        assert!(initialize("1", Some(&raw)).contains("\"protocolVersion\":\"2024-11-05\""));
+        let raw = RawValue::from_string("{\"protocolVersion\":\"2025-03-26\"}".into()).unwrap();
+        assert!(initialize("1", Some(&raw)).contains("\"protocolVersion\":\"2025-11-25\""));
+        assert!(initialize("1", None).contains("missing required parameter: protocolVersion"));
+    }
+}

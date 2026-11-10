@@ -20,9 +20,9 @@ rustls-native-certs = "0.8.5"
 rustls-pki-types = { version = "1.16.0", features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
-serde_json = "1.0.145"
+serde_json = { version = "1.0.145", features = ["raw_value"] }
 sha2 = "0.11.1"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "time", "signal", "sync", "macros", "fs"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "io-std", "time", "signal", "sync", "macros", "fs"] }
 tokio-postgres = { version = "0.7.18", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["tls12"] }
 tokio-util = { version = "0.7.20", default-features = false }

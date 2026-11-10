@@ -24,6 +24,45 @@ fn a_panic_exits_3_and_still_prints_the_json_record() {
 }
 
 #[test]
+fn a_panicking_serve_tool_answers_is_error_and_the_session_goes_on() {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("pgmi-panic-serve-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("deploy.sql"), "SELECT 1;\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pgmi"))
+        .arg("serve")
+        .env_clear()
+        .env("PGMI_TEST_PANIC", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "deploy", "arguments": {"path": dir, "connection": "postgresql://nobody@127.0.0.1:1/target"}}});
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{call}").unwrap();
+    writeln!(
+        stdin,
+        "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}}"
+    )
+    .unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let answers: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let call = answers.iter().find(|a| a["id"] == 1).unwrap();
+    assert_eq!(call["result"]["isError"], true);
+    assert_eq!(call["result"]["structuredContent"]["exitCode"], 3);
+    assert!(call["result"]["structuredContent"]["stack"].is_string());
+    assert!(answers.iter().any(|a| a["id"] == 2));
+}
+
+#[test]
 fn without_the_trigger_nothing_panics() {
     let out = Command::new(env!("CARGO_BIN_EXE_pgmi"))
         .args(["deploy", "/nonexistent-pgmi-project"])

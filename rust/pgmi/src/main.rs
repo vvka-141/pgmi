@@ -7,6 +7,7 @@ mod error;
 mod init;
 mod output;
 mod project;
+mod serve;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -49,12 +50,12 @@ fn run() -> u8 {
         Some(Command::Help { command }) => help(command.as_deref()),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose),
         Some(Command::Init(a)) => init::run(&a),
+        Some(Command::Serve) => return serve::run(cli.verbose),
         Some(
             Command::Info(_)
             | Command::Metadata(_)
             | Command::Templates(_)
             | Command::Ai(_)
-            | Command::Serve(_)
             | Command::Config(_)
             | Command::Completion(_),
         ) => Err(Error::usage(
@@ -89,6 +90,9 @@ fn run_deploy(args: cli::DeployArgs, verbose: bool) -> u8 {
         verbose,
         env,
         dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
+        maintenance_db: None,
+        stdin: true,
+        approval: deploy::Approval::Prompt,
     })
 }
 

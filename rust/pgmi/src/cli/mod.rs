@@ -48,13 +48,33 @@ pub enum Command {
     Templates(Rest),
     #[command(about = "Documentation for AI assistants (not implemented in this build)")]
     Ai(Rest),
-    #[command(about = "MCP server over stdio (not implemented in this build)")]
-    Serve(Rest),
+    #[command(about = "Expose pgmi's commands as MCP tools over stdio", long_about = SERVE_HELP)]
+    Serve,
     #[command(about = "Connection wizard (not implemented in this build)")]
     Config(Rest),
     #[command(about = "Shell completion scripts (not implemented in this build)")]
     Completion(Rest),
 }
+
+const SERVE_HELP: &str = "Expose pgmi's commands as MCP tools over stdio (JSON-RPC 2.0).
+
+Tools: deploy, init, metadata_plan, metadata_validate, templates_list,
+ai_overview, ai_contract. deploy resolves its connection, database, timeout and
+parameters like pgmi deploy: tool arguments, then the server's environment, then
+the project's pgmi.yaml. The project .env is not read.
+
+The server reads JSON-RPC from stdin and writes responses to stdout; all
+diagnostics go to stderr. It exits cleanly on EOF or SIGINT.
+
+A failing tool answers with isError and the session continues. A malformed
+message gets a -32700 parse error with a null id and the session continues.
+Tool calls run concurrently: ping is answered during a deploy, and
+notifications/cancelled stops it. A deploy to a database another deploy
+holds exits 15.
+
+Add it to Claude Code with:
+
+  claude mcp add pgmi -- pgmi serve";
 
 #[derive(Debug, Args)]
 pub struct Rest {
