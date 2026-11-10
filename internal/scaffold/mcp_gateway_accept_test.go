@@ -17,7 +17,7 @@ func TestMCPGateway_AcceptQValues(t *testing.T) {
 	python := findPython(t)
 
 	workDir := t.TempDir()
-	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", "gateway.py"))
+	gateway, err := os.ReadFile(filepath.Join("../../shared/templates", "advanced", "gateways", "python", "gateway.py"))
 	if err != nil {
 		t.Fatalf("read gateway source: %v", err)
 	}

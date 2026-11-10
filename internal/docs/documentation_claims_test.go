@@ -41,7 +41,7 @@ func TestHighlightsCountMatchesDocumentation(t *testing.T) {
 		"../../docs/README.md",
 		"../../docs/HIGHLIGHTS.md",
 		"../../docs/STYLE.md",
-		"../../internal/ai/content/overview.md",
+		"../../shared/ai/overview.md",
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -77,10 +77,10 @@ func TestRollbackClaimsStayWithinPostgreSQLGuarantees(t *testing.T) {
 		"../../docs/TESTING.md",
 		"../../docs/session-api.md",
 		"../../examples/test-gated-deploy/README.md",
-		"../../internal/ai/content/overview.md",
-		"../../internal/scaffold/skills/pgmi-sql/SKILL.md",
-		"../../internal/scaffold/templates/advanced/README.md",
-		"../../internal/scaffold/templates/advanced/__test__/README.md",
+		"../../shared/ai/overview.md",
+		"../../shared/skills/pgmi-sql/SKILL.md",
+		"../../shared/templates/advanced/README.md",
+		"../../shared/templates/advanced/__test__/README.md",
 	}
 
 	for _, path := range paths {

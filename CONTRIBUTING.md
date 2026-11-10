@@ -159,8 +159,8 @@ func TestParser_ParseConnectionString(t *testing.T) {
 ### Agent skills
 
 pgmi ships skills that coding agents copy from: the shared scaffold skills
-(`internal/scaffold/skills/`) and each template's own (`.agents/skills/` under
-`internal/scaffold/templates/<name>/`). An agent writes whatever a skill shows, so a
+(`shared/skills/`) and each template's own (`.agents/skills/` under
+`shared/templates/<name>/`). An agent writes whatever a skill shows, so a
 change that removes, renames or reshapes an API updates every skill that names
 it **in the same commit**:
 
@@ -259,4 +259,4 @@ adoption.
 
 By contributing to pgmi, you agree that your contributions will be licensed under:
 - **MPL-2.0** for tool code
-- **MIT** for template code (in `internal/scaffold/templates/`)
+- **MIT** for template code (in `shared/templates/`)

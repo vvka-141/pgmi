@@ -67,7 +67,7 @@ func leakLines(content []byte) []int {
 }
 
 func TestShippedContentCarriesNoSourceProductVocabulary(t *testing.T) {
-	trees := map[string]fs.FS{"templates": templatesFS, sharedSkillsDir: sharedSkillsFS, "../ai/content": os.DirFS("../ai/content")}
+	trees := map[string]fs.FS{"templates": templatesFS, sharedSkillsDir: sharedSkillsFS, "../../shared/ai": os.DirFS("../../shared/ai")}
 	for name, tree := range trees {
 		root, prefix := ".", name+"/"
 		if name == "templates" || name == sharedSkillsDir {

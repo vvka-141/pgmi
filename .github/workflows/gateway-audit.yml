@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  GATEWAYS: internal/scaffold/templates/advanced/gateways
+  GATEWAYS: shared/templates/advanced/gateways
 
 jobs:
   python:
@@ -52,8 +52,10 @@ jobs:
     continue-on-error: ${{ inputs.advisory == true }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - working-directory: ${{ env.GATEWAYS }}/rust
-        run: |
+      - run: |
+          cp -r "$GATEWAYS/rust" "$RUNNER_TEMP/gateway-rust"
+          cd "$RUNNER_TEMP/gateway-rust"
+          mv Cargo.toml.scaffold Cargo.toml
           docker run --rm -v "$PWD:/src" -w /src rust:1.99.0-trixie \
             sh -c 'cargo install cargo-audit --locked --version 0.22.2 && cargo audit'
 

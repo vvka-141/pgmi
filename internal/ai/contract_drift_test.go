@@ -11,11 +11,11 @@ import (
 )
 
 func TestContract_ViewsExistInSQL(t *testing.T) {
-	schema, err := os.ReadFile("../params/schema.sql")
+	schema, err := os.ReadFile("../../shared/session/schema.sql")
 	if err != nil {
 		t.Fatalf("read schema.sql: %v", err)
 	}
-	apiV1, err := os.ReadFile("../contract/api-v1.sql")
+	apiV1, err := os.ReadFile("../../shared/contract/api-v1.sql")
 	if err != nil {
 		t.Fatalf("read api-v1.sql: %v", err)
 	}
@@ -54,11 +54,11 @@ func TestContract_ViewsExistInSQL(t *testing.T) {
 }
 
 func TestContract_ViewColumnsMatchSchema(t *testing.T) {
-	schema, err := os.ReadFile("../params/schema.sql")
+	schema, err := os.ReadFile("../../shared/session/schema.sql")
 	if err != nil {
 		t.Fatalf("read schema.sql: %v", err)
 	}
-	apiV1, err := os.ReadFile("../contract/api-v1.sql")
+	apiV1, err := os.ReadFile("../../shared/contract/api-v1.sql")
 	if err != nil {
 		t.Fatalf("read api-v1.sql: %v", err)
 	}
@@ -116,11 +116,11 @@ func TestContract_ViewColumnsMatchSchema(t *testing.T) {
 }
 
 func TestContract_FunctionDefaultsMatchSQL(t *testing.T) {
-	schema, err := os.ReadFile("../params/schema.sql")
+	schema, err := os.ReadFile("../../shared/session/schema.sql")
 	if err != nil {
 		t.Fatalf("read schema.sql: %v", err)
 	}
-	apiV1, err := os.ReadFile("../contract/api-v1.sql")
+	apiV1, err := os.ReadFile("../../shared/contract/api-v1.sql")
 	if err != nil {
 		t.Fatalf("read api-v1.sql: %v", err)
 	}

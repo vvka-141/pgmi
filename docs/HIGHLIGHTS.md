@@ -227,7 +227,7 @@ configuration, with no per-route floor, no client negotiation, no read-only rout
 declaration, no `DEFERRABLE` derivation and no replica hint. We are not aware of
 another framework that publishes a route's isolation policy in its OpenAPI document.
 
-→ [Transaction policy](advanced/TRANSACTION-POLICY.md) · [Advanced template overview](advanced/README.md#declarative-per-route-transaction-policy) · [`lib/api/00-transaction-isolation.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/lib/api/00-transaction-isolation.sql)
+→ [Transaction policy](advanced/TRANSACTION-POLICY.md) · [Advanced template overview](advanced/README.md#declarative-per-route-transaction-policy) · [`lib/api/00-transaction-isolation.sql`](https://github.com/vvka-141/pgmi/blob/main/shared/templates/advanced/lib/api/00-transaction-isolation.sql)
 
 ---
 

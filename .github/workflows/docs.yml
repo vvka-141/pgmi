@@ -6,7 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'website/**'
-      - 'internal/ai/content/**'
+      - 'shared/ai/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
       - 'CODE_OF_CONDUCT.md'
@@ -19,7 +19,7 @@ on:
     paths:
       - 'docs/**'
       - 'website/**'
-      - 'internal/ai/content/**'
+      - 'shared/ai/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
       - 'CODE_OF_CONDUCT.md'

@@ -30,7 +30,7 @@ func TestArticleLinksResolve(t *testing.T) {
 
 	var sources []string
 	sources = append(sources, "../../README.md")
-	for _, pattern := range []string{"../../docs/*.md", "../../docs/*/*.md", "../../docs/*/*/*.md", "../../internal/scaffold/templates/*/README.md"} {
+	for _, pattern := range []string{"../../docs/*.md", "../../docs/*/*.md", "../../docs/*/*/*.md", "../../shared/templates/*/README.md"} {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			t.Fatal(err)

@@ -42,11 +42,13 @@ func TestAdvancedScaffoldShipsTheGatewayExamples(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "gateways", "go", "go.mod")); err != nil {
-		t.Errorf("gateways/go must be its own module: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "gateways", "go", "go.mod"+scaffoldSuffix)); err == nil {
-		t.Errorf("go.mod%s must be written as go.mod", scaffoldSuffix)
+	for lang, manifest := range map[string]string{"go": "go.mod", "rust": "Cargo.toml"} {
+		if _, err := os.Stat(filepath.Join(dir, "gateways", lang, manifest)); err != nil {
+			t.Errorf("gateways/%s must be its own package: %v", lang, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "gateways", lang, manifest+scaffoldSuffix)); err == nil {
+			t.Errorf("%s%s must be written as %s", manifest, scaffoldSuffix, manifest)
+		}
 	}
 
 	for _, lang := range gatewayLanguages {

@@ -13,7 +13,7 @@ import (
 // The pgmi ai overview names the skills pgmi init writes; it must list each
 // scaffolded skill directory and nothing else.
 func TestOverviewNamesTheScaffoldedSkills(t *testing.T) {
-	body, err := os.ReadFile("../ai/content/overview.md")
+	body, err := os.ReadFile("../../shared/ai/overview.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestOverviewNamesTheScaffoldedSkills(t *testing.T) {
 	section, _, _ = strings.Cut(section, "\n## ")
 
 	want := map[string]bool{}
-	for _, dir := range []string{"../scaffold/skills", "../scaffold/templates/advanced/.agents/skills"} {
+	for _, dir := range []string{"../../shared/skills", "../../shared/templates/advanced/.agents/skills"} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -59,7 +59,7 @@ func TestReadmeAdvancedTemplateSize(t *testing.T) {
 		t.Skip("README states no line counts")
 	}
 	var sql, tests int
-	err = filepath.WalkDir("../scaffold/templates/advanced", func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir("../../shared/templates/advanced", func(path string, d fs.DirEntry, err error) error {
 		slashed := filepath.ToSlash(path)
 		if err != nil || d.IsDir() || filepath.Ext(path) != ".sql" || strings.Contains(slashed, "/gateways/") {
 			return err
@@ -118,7 +118,7 @@ func TestDocsHaveNoStaleTemplateClaims(t *testing.T) {
 // Operators check these lists against their provider's allow-list before the
 // first deploy, so each must name every extension advanced/deploy.sql creates.
 func TestDocsNameEveryAdvancedExtension(t *testing.T) {
-	deploy, err := os.ReadFile("../scaffold/templates/advanced/deploy.sql")
+	deploy, err := os.ReadFile("../../shared/templates/advanced/deploy.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestDocsNameEveryAdvancedExtension(t *testing.T) {
 		{"../../docs/PRODUCTION.md", "| advanced template |"},
 		{"../../docs/PRODUCTION.md", "**`CREATE EXTENSION`** for"},
 		{"../../docs/templates.md", "- Extensions:"},
-		{"../scaffold/templates/advanced/README.md", "| `extensions` |"},
+		{"../../shared/templates/advanced/README.md", "| `extensions` |"},
 	}
 	for _, p := range places {
 		body, err := os.ReadFile(p.file)

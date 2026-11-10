@@ -66,7 +66,7 @@ func TestValidationErrorPointsAtReachableReference(t *testing.T) {
 		t.Fatal("nil UUID must fail validation")
 	}
 	assertMetadataReference(t, err.Error())
-	if _, err := os.Stat("../scaffold/skills/pgmi-metadata/SKILL.md"); err != nil {
+	if _, err := os.Stat("../../shared/skills/pgmi-metadata/SKILL.md"); err != nil {
 		t.Errorf("the hint names a skill pgmi init no longer scaffolds: %v", err)
 	}
 }

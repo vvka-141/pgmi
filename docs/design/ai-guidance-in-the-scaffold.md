@@ -66,11 +66,11 @@ gateways/                 advanced template only: reference gateways
   README.md, PROTOCOL.md  (TypeScript, Python, Go, C#, Rust); never deployed
 ```
 
-In the pgmi repository the skills come from two trees. `internal/scaffold/skills/`
+In the pgmi repository the skills come from two trees. `shared/skills/`
 reaches the basic and advanced templates (minimal writes no skills): the pgmi skills (workflow, SQL, testing, metadata,
 debugging a deploy, design, the physical and semantic layers) and the
 `postgres-<area>` recipes.
-`internal/scaffold/templates/<name>/.agents/skills/` reaches one template:
+`shared/templates/<name>/.agents/skills/` reaches one template:
 the advanced template adds `pgmi-endpoint`, `pgmi-api-layer` (its layers and
 the API on top), `pgmi-handlers`, `pgmi-api` and `pgmi-mcp`. Skills for pgmi's own contributors (`pgmi-templates`, the review
 skills) are never scaffolded.

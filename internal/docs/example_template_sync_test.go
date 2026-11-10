@@ -31,7 +31,7 @@ var exampleTemplateCopies = []string{
 func TestExampleMatchesBasicTemplate(t *testing.T) {
 	const (
 		example  = "../../examples/test-gated-deploy"
-		template = "../../internal/scaffold/templates/basic"
+		template = "../../shared/templates/basic"
 	)
 
 	read := func(path string) string {

@@ -24,7 +24,7 @@ var emittedEventRe = regexp.MustCompile(`ROW\(''([a-z_]+)''`)
 // A callback receives whatever the generator sends. The contract is the only
 // list of what that can be.
 func TestEveryEmittedTestEventIsDeclared(t *testing.T) {
-	body, err := os.ReadFile("../contract/api-v1.sql")
+	body, err := os.ReadFile("../../shared/contract/api-v1.sql")
 	if err != nil {
 		t.Fatalf("read api-v1.sql: %v", err)
 	}

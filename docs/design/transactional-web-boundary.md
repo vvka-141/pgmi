@@ -7,7 +7,7 @@ weight: 20
 # The transactional web boundary
 
 > **Status: IMPLEMENTED.** All eight layers are in code in
-> `internal/scaffold/templates/advanced/lib/api/`. Layer 4 checks the top level
+> `shared/templates/advanced/lib/api/`. Layer 4 checks the top level
 > of a declared request body and the type or allowed values of a declared query
 > parameter; deeper constraints stay with the handler (see
 > [Known residue](#known-residue)).
@@ -367,5 +367,5 @@ to it in two passes.
 ## See also
 
 - Epic PGMI-298 — delivery of this shape
-- `internal/scaffold/templates/advanced/lib/api/` — implementation
+- `shared/templates/advanced/lib/api/` — implementation
 - [Session API](../session-api.md), [API versioning](api-versioning.md)

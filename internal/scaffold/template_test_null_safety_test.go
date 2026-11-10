@@ -2,12 +2,13 @@ package scaffold_test
 
 import (
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/vvka-141/pgmi/shared"
 )
 
 // NULL-unsafe assertions have been fixed in these templates three times. The
@@ -30,7 +31,7 @@ func TestTemplateTestsAvoidNullUnsafeComparisons(t *testing.T) {
 	root := "templates"
 
 	var offenders []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(shared.Templates, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".sql") {
 			return err
 		}
@@ -39,7 +40,7 @@ func TestTemplateTestsAvoidNullUnsafeComparisons(t *testing.T) {
 			return nil
 		}
 
-		body, readErr := os.ReadFile(path)
+		body, readErr := fs.ReadFile(shared.Templates, path)
 		if readErr != nil {
 			return readErr
 		}

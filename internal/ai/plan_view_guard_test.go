@@ -25,7 +25,7 @@ var selectStar = regexp.MustCompile(`(?i)SELECT\s+(?:\w+\.)?\*`)
 func TestEmbeddedPlanViewExamplesFilterSQLFiles(t *testing.T) {
 	var offenders []string
 
-	err := fs.WalkDir(contentFS, "content", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(contentFS, "ai", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return err
 		}

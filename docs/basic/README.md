@@ -65,7 +65,7 @@ database whose data you keep.
 
 ## Where next
 
-- [Template README](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/basic/README.md): the run-once rule, project structure, tests and parameters
+- [Template README](https://github.com/vvka-141/pgmi/blob/main/shared/templates/basic/README.md): the run-once rule, project structure, tests and parameters
 - [Choosing a template](../templates.md): minimal, basic and advanced compared
 - [Testing](../TESTING.md): `__test__/` directories, fixtures and `pgmi_test()`
 - [Metadata](../METADATA.md): the `<pgmi-meta>` header that marks a file run-once

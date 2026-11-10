@@ -418,7 +418,7 @@ covers `<pgmi-meta>` and sort keys.
 - Sqitch: [the plan file](https://sqitch.org/docs/manual/sqitch-plan/) · [`rework`](https://sqitch.org/docs/manual/sqitch-rework/)
 - Atlas: [migration directory integrity](https://atlasgo.io/concepts/migration-directory-integrity)
 - PostgreSQL: [Populating a Database](https://www.postgresql.org/docs/current/populate.html) · [Collation Support](https://www.postgresql.org/docs/current/collation.html)
-- pgmi internals: [`internal/contract/api-v1.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/contract/api-v1.sql) (pgmi_plan_view) · [`internal/params/schema.sql`](https://github.com/vvka-141/pgmi/blob/main/internal/params/schema.sql) (sort_keys) · [`contract_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/contract/contract_test.go), [`deployer_plan_order_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/services/deployer_plan_order_test.go) (COLLATE "C" enforcement)
+- pgmi internals: [`shared/contract/api-v1.sql`](https://github.com/vvka-141/pgmi/blob/main/shared/contract/api-v1.sql) (pgmi_plan_view) · [`shared/session/schema.sql`](https://github.com/vvka-141/pgmi/blob/main/shared/session/schema.sql) (sort_keys) · [`contract_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/contract/contract_test.go), [`deployer_plan_order_test.go`](https://github.com/vvka-141/pgmi/blob/main/internal/services/deployer_plan_order_test.go) (COLLATE "C" enforcement)
 
 ---
 

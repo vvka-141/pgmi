@@ -1,8 +1,5 @@
 package cli
 
-import _ "embed"
+import "github.com/vvka-141/pgmi/shared"
 
-// ASCII art assets embedded at compile time
-
-//go:embed assets/logo.txt
-var asciiLogo string
+var asciiLogo = shared.Logo

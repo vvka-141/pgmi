@@ -38,7 +38,7 @@ func TestShippedTemplatesSplitAtTheirDocumentedCommit(t *testing.T) {
 			"Deployment lock released", "NOT i.indisvalid", "RAISE NOTICE $ascii$"}},
 	} {
 		t.Run(tc.template, func(t *testing.T) {
-			body, err := os.ReadFile("templates/" + tc.template + "/deploy.sql")
+			body, err := os.ReadFile("../../shared/templates/" + tc.template + "/deploy.sql")
 			if err != nil {
 				t.Fatalf("read deploy.sql: %v", err)
 			}

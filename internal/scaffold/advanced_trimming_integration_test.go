@@ -25,7 +25,7 @@ var advancedTrimmable = [][]string{
 
 // The README's list is the promise; this keeps it equal to what is proved.
 func TestAdvancedReadmeTrimmingListMatchesTheTest(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("templates", "advanced", "README.md"))
+	body, err := os.ReadFile(filepath.Join("../../shared/templates", "advanced", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

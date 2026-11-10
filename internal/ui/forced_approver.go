@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
 	"os"
@@ -12,10 +11,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/vvka-141/pgmi/internal/tui"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/shared"
 )
 
-//go:embed assets/skull.txt
-var dangerSkull string
+var dangerSkull = shared.Skull
 
 type ForcedApprover struct {
 	verbose bool

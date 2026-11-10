@@ -66,7 +66,7 @@ func TestExitCodeTablesMatchTheConstants(t *testing.T) {
 	})
 
 	t.Run("pgmi-debug-deploy invents no codes", func(t *testing.T) {
-		got := tableCodes(read(t, "../../internal/scaffold/skills/pgmi-debug-deploy/SKILL.md"), "## Exit codes")
+		got := tableCodes(read(t, "../../shared/skills/pgmi-debug-deploy/SKILL.md"), "## Exit codes")
 		if len(got) == 0 {
 			t.Fatal("no exit-code rows found — has the diagnosis table moved?")
 		}

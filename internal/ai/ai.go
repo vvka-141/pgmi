@@ -3,16 +3,16 @@
 package ai
 
 import (
-	"embed"
 	"fmt"
+
+	"github.com/vvka-141/pgmi/shared"
 )
 
-//go:embed all:content
-var contentFS embed.FS
+var contentFS = shared.AI
 
 // GetOverview returns the main AI overview document
 func GetOverview() (string, error) {
-	content, err := contentFS.ReadFile("content/overview.md")
+	content, err := contentFS.ReadFile("ai/overview.md")
 	if err != nil {
 		return "", fmt.Errorf("failed to read overview: %w", err)
 	}

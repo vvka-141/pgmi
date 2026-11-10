@@ -18,7 +18,7 @@ func TestDocsExampleFoldersExistOrAreDeclared(t *testing.T) {
 
 	templateFolders := map[string]bool{}
 	for _, tmpl := range []string{"basic", "advanced"} {
-		entries, err := os.ReadDir(filepath.Join("../scaffold/templates", tmpl))
+		entries, err := os.ReadDir(filepath.Join("../../shared/templates", tmpl))
 		if err != nil {
 			t.Fatal(err)
 		}

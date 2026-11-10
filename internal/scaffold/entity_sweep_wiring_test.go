@@ -23,7 +23,7 @@ import (
 // deploy time, then loudly at runtime when the soft-delete views query
 // deleted_at.
 func TestAdvancedDeploySQLWiresTheEntityStandardsSweep(t *testing.T) {
-	body, err := os.ReadFile("templates/advanced/deploy.sql")
+	body, err := os.ReadFile("../../shared/templates/advanced/deploy.sql")
 	if err != nil {
 		t.Fatalf("read advanced deploy.sql: %v", err)
 	}

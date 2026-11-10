@@ -1,7 +1,7 @@
 # sync-ai-content.ps1
 # Refreshes the local .claude/skills/ mirror FROM the skills pgmi scaffolds:
-# internal/scaffold/skills/ (every template) and
-# internal/scaffold/templates/<name>/.agents/skills/ (one template's own).
+# shared/skills/ (every template) and
+# shared/templates/<name>/.agents/skills/ (one template's own).
 # Those tracked trees are the source of truth; .claude/skills/ is gitignored,
 # local-only tooling and must never feed back into them.
 

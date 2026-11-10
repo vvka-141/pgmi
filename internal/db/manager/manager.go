@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/vvka-141/pgmi/internal/db"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/shared"
 )
 
 const (
@@ -23,16 +23,11 @@ const (
 )
 
 var (
-	//go:embed queries/settings.sql
-	querySettings string
-	//go:embed queries/role_settings.sql
-	queryRoleSettings string
-	//go:embed queries/acl.sql
-	queryACL string
-	//go:embed queries/deploy_locked.sql
-	queryDeployLocked string
-	//go:embed queries/restore_gaps.sql
-	queryRestoreGaps string
+	querySettings     = shared.ManagerSettingsSQL
+	queryRoleSettings = shared.ManagerRoleSettingsSQL
+	queryACL          = shared.ManagerACLSQL
+	queryDeployLocked = shared.ManagerDeployLockedSQL
+	queryRestoreGaps  = shared.ManagerRestoreGapsSQL
 )
 
 // Manager implements database lifecycle operations using the DBConnection abstraction.

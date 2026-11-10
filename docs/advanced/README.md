@@ -177,7 +177,7 @@ answers a first request.
   creates one and invites its members. Self-serve creation exists only in
   `api/dev/`, which deploys with `env=dev` alone.
 - **Machine access.** Machine callers use an approved connection or the
-  [jobs login](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/README.md#the-jobs-login-optional).
+  [jobs login](https://github.com/vvka-141/pgmi/blob/main/shared/templates/advanced/README.md#the-jobs-login-optional).
   API keys are not supported. An approved MCP client has its own identity and
   an `agent.*` role, and its permissions cannot exceed those of the person who
   approved it ([details](#multi-tenant-identity-and-rls)).
@@ -201,7 +201,7 @@ business logic.
 
 ![Traditional stack versus application-as-a-dataset: in the template, protocols trigger PostgreSQL transactions and the complexity lives where the data lives](../diagrams/d10-application-as-dataset.drawio.svg)
 
-The scaffolded [`ARCHITECTURE.md`](https://github.com/vvka-141/pgmi/blob/main/internal/scaffold/templates/advanced/ARCHITECTURE.md)
+The scaffolded [`ARCHITECTURE.md`](https://github.com/vvka-141/pgmi/blob/main/shared/templates/advanced/ARCHITECTURE.md)
 develops this in depth — the transaction-first workflow and when *not* to
 choose this template.
 

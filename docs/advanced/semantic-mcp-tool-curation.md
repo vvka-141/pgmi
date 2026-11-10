@@ -23,7 +23,7 @@ aliases:
 This recipe is a **cookbook pattern**, not part of the advanced template. It
 adds an embedding dependency (pgvector + an external embedding model) that
 narrows managed-cloud compatibility and adds runtime cost, so it is deliberately
-kept out of `internal/scaffold/templates/`. Build it in your own project on top
+kept out of `shared/templates/`. Build it in your own project on top
 of the handler registry the advanced template already ships.
 
 The design has three layers, each independently useful:

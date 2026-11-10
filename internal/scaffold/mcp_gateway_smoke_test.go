@@ -29,7 +29,7 @@ func TestMCPGateway_StatusLineIsHTTP(t *testing.T) {
 
 	writeGatewayDependencies(t, workDir)
 
-	gateway, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", "gateway.py"))
+	gateway, err := os.ReadFile(filepath.Join("../../shared/templates", "advanced", "gateways", "python", "gateway.py"))
 	if err != nil {
 		t.Fatalf("read gateway source: %v", err)
 	}
@@ -159,7 +159,7 @@ class ConnectionPool:
 `,
 	}
 	for _, name := range []string{"login_transport.py", "channel.py", "interceptors.py", "resource_server.py"} {
-		source, err := os.ReadFile(filepath.Join("templates", "advanced", "gateways", "python", name))
+		source, err := os.ReadFile(filepath.Join("../../shared/templates", "advanced", "gateways", "python", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}

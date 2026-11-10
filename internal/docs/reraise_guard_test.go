@@ -17,7 +17,7 @@ import (
 var reraiseWithoutErrcode = regexp.MustCompile(`(?is)WHEN\s+OTHERS\s+THEN\s+(?:--[^\n]*\n\s*)*RAISE\s+EXCEPTION\s+'[^']*'[^;]*;`)
 
 func TestDocsDoNotTeachSQLSTATEFlatteningReraise(t *testing.T) {
-	roots := []string{"../../docs", "../../examples", "../../internal/ai/content", "../../internal/scaffold/templates", "../../README.md"}
+	roots := []string{"../../docs", "../../examples", "../../shared/ai", "../../shared/templates", "../../README.md"}
 
 	for _, root := range roots {
 		if _, err := os.Stat(root); os.IsNotExist(err) {

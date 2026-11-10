@@ -7,7 +7,7 @@ weight: 41
 # PostgreSQL recipe format
 
 The scaffold ships PostgreSQL recipes as reference files of the
-`postgres-<area>` skills in `internal/scaffold/skills/`. Each skill's
+`postgres-<area>` skills in `shared/skills/`. Each skill's
 `SKILL.md` is a short index from a situation to a recipe; each recipe is one
 file in that skill's `references/`, 40–120 lines. Why the library is shaped
 this way: [AI guidance ships with the template](ai-guidance-in-the-scaffold.md).
@@ -19,7 +19,7 @@ change capture, analytics, concurrency, time, security). Add a row for it to
 that skill's index. Start a new area only when no existing one fits, and
 route it in both templates' `AGENTS.md`.
 
-The skills in `internal/scaffold/skills/` reach both templates. A recipe there
+The skills in `shared/skills/` reach both templates. A recipe there
 must hold in a basic project: no advanced-template schemas, roles or
 protocols. `TestSharedSkillsNameNoAdvancedOnlyIdentifiers` enforces the
 identifiers.

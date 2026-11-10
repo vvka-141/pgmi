@@ -90,7 +90,7 @@ func TestStepTypeCompleteness(t *testing.T) {
 	// The live half cannot see a value no fixture happens to produce, so the
 	// literals in the function body are checked too.
 	t.Run("the function emits no undeclared value", func(t *testing.T) {
-		body, err := os.ReadFile("../params/schema.sql")
+		body, err := os.ReadFile("../../shared/session/schema.sql")
 		if err != nil {
 			t.Fatalf("read schema.sql: %v", err)
 		}

@@ -1,8 +1,8 @@
 #!/bin/bash
 # sync-ai-content.sh
 # Refreshes the local .claude/skills/ mirror FROM the skills pgmi scaffolds:
-# internal/scaffold/skills/ (every template) and
-# internal/scaffold/templates/<name>/.agents/skills/ (one template's own).
+# shared/skills/ (every template) and
+# shared/templates/<name>/.agents/skills/ (one template's own).
 # Those tracked trees are the source of truth; .claude/skills/ is gitignored,
 # local-only tooling and must never feed back into them.
 
@@ -15,7 +15,7 @@ TARGET_DIR="$REPO_ROOT/.claude/skills"
 echo "Refreshing .claude/skills/ from the scaffold skill trees (tracked -> local)"
 
 synced=0
-for src in "$REPO_ROOT"/internal/scaffold/skills/*/ "$REPO_ROOT"/internal/scaffold/templates/*/.agents/skills/*/; do
+for src in "$REPO_ROOT"/shared/skills/*/ "$REPO_ROOT"/shared/templates/*/.agents/skills/*/; do
     [ -f "$src/SKILL.md" ] || continue
     skill="$(basename "$src")"
     rm -rf "${TARGET_DIR:?}/$skill"

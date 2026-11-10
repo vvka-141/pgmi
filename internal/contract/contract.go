@@ -2,16 +2,15 @@ package contract
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/shared"
 )
 
-//go:embed api-v1.sql
-var apiV1SQL string
+var apiV1SQL = shared.ContractV1
 
 // Version represents an API version identifier.
 type Version string

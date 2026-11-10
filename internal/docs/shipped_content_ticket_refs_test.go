@@ -23,10 +23,10 @@ var ticketRef = regexp.MustCompile(`PGMI-[0-9]+[A-Za-z]?`)
 
 func TestShippedContentCitesNoIssueKeys(t *testing.T) {
 	roots := []string{
-		"../scaffold/templates", // scaffolded into the user's project
-		"../scaffold/skills",    // scaffolded into every project's .agents/skills/
-		"../ai/content",         // embedded in the binary, served by `pgmi ai`
-		"../../examples",        // published as executable documentation
+		"../../shared/templates", // scaffolded into the user's project
+		"../../shared/skills",    // scaffolded into every project's .agents/skills/
+		"../../shared/ai",        // embedded in the binary, served by `pgmi ai`
+		"../../examples",         // published as executable documentation
 	}
 
 	var offenders []string

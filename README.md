@@ -382,6 +382,6 @@ guidelines, [SUPPORT.md](SUPPORT.md) for questions and issue routing, and the
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE). Template code in `internal/scaffold/templates/` is [MIT licensed](internal/scaffold/templates/LICENSE)—code you generate is yours.
+[Mozilla Public License 2.0](LICENSE). Template code in `shared/templates/` is [MIT licensed](shared/templates/LICENSE)—code you generate is yours.
 
 Copyright 2024-2026 Alexey Evlampiev

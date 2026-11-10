@@ -108,5 +108,5 @@ and search — not a second visual representation.
 
 - One diagram, one stable concept; no CLI flag lists or volatile file names
 - Identifiers shown in diagrams (views, functions, step types) must match
-  `internal/params/schema.sql` / `internal/contract/api-v1.sql` exactly
+  `shared/session/schema.sql` / `shared/contract/api-v1.sql` exactly
 - Diagrams are documentation: they are in scope for coherence review

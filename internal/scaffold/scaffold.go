@@ -11,22 +11,21 @@ import (
 	"strings"
 
 	"github.com/vvka-141/pgmi/pkg/pgmi"
+	"github.com/vvka-141/pgmi/shared"
 )
 
-//go:embed all:templates
-var templatesFS embed.FS
+var templatesFS = shared.Templates
 
 // Skills every template ships. They live outside templates/ because each
 // directory there is a template.
-//
-//go:embed all:skills
-var sharedSkillsFS embed.FS
+var sharedSkillsFS = shared.Skills
 
 const sharedSkillsDir = "skills"
 
 // scaffoldSuffix is dropped from a template file's name when it is written. A
-// file named go.mod would make its directory another module, which go:embed
-// leaves out without a word.
+// go.mod would make its directory another Go module and a Cargo.toml another
+// Rust package, and both go:embed and cargo package leave those out without a
+// word.
 const scaffoldSuffix = ".scaffold"
 
 // GetTemplatesFS returns the embedded templates filesystem for testing purposes.

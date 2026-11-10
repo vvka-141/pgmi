@@ -2,17 +2,16 @@ package params
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vvka-141/pgmi/shared"
 )
 
-//go:embed schema.sql
-var schemaSQL string
+var schemaSQL = shared.SessionSchema
 
 // CreateSchema creates the temporary pgmi schema and utility functions.
 // This must be called before loading parameters into the session.

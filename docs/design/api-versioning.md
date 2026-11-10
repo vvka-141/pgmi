@@ -43,7 +43,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 
 ## Pre-Implementation State (Historical)
 
-### Internal Tables (in `internal/params/schema.sql`)
+### Internal Tables (in `shared/session/schema.sql`)
 
 | Table | Purpose | Used By |
 |-------|---------|---------|
@@ -235,7 +235,7 @@ Called by Go preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
-> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `internal/contract/api-v1.sql` for the working implementation.
+> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `shared/contract/api-v1.sql` for the working implementation.
 
 ### Updated Go Preprocessor Flow
 
@@ -582,7 +582,7 @@ make test-integration
 
 11. **Update documentation:**
     - CLAUDE.md - reference views, not tables
-    - `internal/ai/content/` - update embedded docs
+    - `shared/ai/` - update embedded docs
     - Template README files
 
 12. **Add version-specific tests:**
@@ -664,17 +664,17 @@ make test-integration
 
 | File | Changes |
 |------|---------|
-| `internal/params/schema.sql` | Rename tables to `_pgmi_*`, update internal function references |
+| `shared/session/schema.sql` | Rename tables to `_pgmi_*`, update internal function references |
 | `internal/params/api-v1.sql` | **NEW:** Views, public functions, `pgmi_test_generate()` |
 | `internal/files/loader/loader.go` | Update table references to `_pgmi_*` |
 | `internal/preprocessor/preprocessor.go` | Replace inline SQL with `pgmi_test_generate()` call |
 | `internal/services/deployer.go` | Execute `api-v{N}.sql` after schema, before preprocessing |
 | `internal/cli/deploy.go` | Add `--compat` flag |
 | `internal/contract/contract.go` | **NEW:** API version management |
-| `internal/scaffold/templates/advanced/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
-| `internal/scaffold/templates/basic/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
+| `shared/templates/advanced/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
+| `shared/templates/basic/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
 | `CLAUDE.md` | Update session model documentation |
-| `internal/ai/content/` | Update embedded AI documentation |
+| `shared/ai/` | Update embedded AI documentation |
 
 ### Key Test Files
 

@@ -41,7 +41,7 @@ func TestEmbeddedDocsReferenceOnlyRealSessionObjects(t *testing.T) {
 
 	unknown := map[string][]string{}
 
-	err := fs.WalkDir(contentFS, "content", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(contentFS, "ai", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return err
 		}

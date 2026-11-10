@@ -28,7 +28,7 @@ var (
 )
 
 func TestDocumentedDeploySummariesMatchTheRealFormat(t *testing.T) {
-	roots := []string{"../../docs", "../../README.md", "../../internal/ai/content"}
+	roots := []string{"../../docs", "../../README.md", "../../shared/ai"}
 
 	var offenders []string
 	for _, root := range roots {
