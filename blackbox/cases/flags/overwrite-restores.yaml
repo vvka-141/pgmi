@@ -1,0 +1,49 @@
+description: --overwrite puts back the owner, connection limit, database and role-in-database settings, comment and privileges of the database it drops; a role that could not put one back is refused with exit 10, naming it, before anything is dropped
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - sql: |
+      CREATE ROLE "{db}_owner";
+      CREATE ROLE "{db}_reader";
+      CREATE ROLE "{db}_deployer" LOGIN CREATEDB PASSWORD 'deployer-pw';
+      GRANT "{db}_owner" TO "{db}_deployer";
+      ALTER DATABASE "{db}" OWNER TO "{db}_owner";
+      ALTER DATABASE "{db}" CONNECTION LIMIT 7;
+      ALTER DATABASE "{db}" SET statement_timeout = '5s';
+      ALTER DATABASE "{db}" SET search_path = app, "with space", public;
+      ALTER ROLE "{db}_reader" IN DATABASE "{db}" SET work_mem = '8MB';
+      COMMENT ON DATABASE "{db}" IS 'kept across --overwrite';
+      REVOKE TEMPORARY ON DATABASE "{db}" FROM PUBLIC;
+      GRANT CONNECT, TEMPORARY ON DATABASE "{db}" TO "{db}_reader" WITH GRANT OPTION;
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    timeout: 60
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+        - query: SELECT pg_get_userbyid(datdba)::text, datconnlimit FROM pg_database WHERE datname = current_database()
+          rows: [["{db}_owner", 7]]
+        - query: SELECT unnest(s.setconfig) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database() AND s.setrole = 0 ORDER BY 1
+          rows: [["search_path=app, \"with space\", public"], ["statement_timeout=5s"]]
+        - query: SELECT pg_get_userbyid(s.setrole)::text, unnest(s.setconfig) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database() AND s.setrole <> 0
+          rows: [["{db}_reader", "work_mem=8MB"]]
+        - query: SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = current_database()
+          rows: [["kept across --overwrite"]]
+        - query: SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee)::text END, a.privilege_type, a.is_grantable FROM pg_database d, aclexplode(d.datacl) a WHERE d.datname = current_database() AND a.grantee <> d.datdba ORDER BY a.grantee = 0, 1, 2
+          rows: [["{db}_reader", "CONNECT", true], ["{db}_reader", "TEMPORARY", true], ["PUBLIC", "CONNECT", false]]
+  - sql: |
+      ALTER DATABASE "{db}" SET log_min_duration_statement = 1000;
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_deployer:deployer-pw@{host}:{port}/postgres", -d, "{db}", --overwrite, --force]
+    timeout: 60
+    expect:
+      exit: 10
+      stderr: ["setting log_min_duration_statement on the database", "setting work_mem of role {db}_reader in the database", "nothing was dropped"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

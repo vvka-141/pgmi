@@ -283,8 +283,12 @@ countdown when there is no terminal; without `--force` and without a terminal
 it is refused with exit 12 and nothing is dropped. `--force` alone changes
 nothing. End of input at the name prompt is exit 12 (`No input available`);
 SIGINT at the prompt or during the countdown is 130 and drops nothing.
+The recreated database keeps its owner, connection limit, database and
+role-in-database settings, comment and privileges; a deploying role that
+could not put one of them back is refused with exit 10 naming each item, and
+nothing is dropped. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
 
 ### Concurrency
 
