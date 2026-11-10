@@ -74,3 +74,6 @@ test_*/
 /*.jpg
 /blackbox/.venv/
 /blackbox/.pytest_cache/
+
+# Rust build output
+/target/

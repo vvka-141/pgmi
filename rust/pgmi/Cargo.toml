@@ -1,0 +1,15 @@
+[package]
+name = "pgmi"
+description = "PostgreSQL-native execution fabric: deploys a project by running its deploy.sql inside one session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+include = ["Cargo.toml", "src/**", "build.rs"]
+
+[dependencies]
+pgmi-shared = { path = "../../shared", version = "=0.20.0-alpha.1" }
+
+[lints]
+workspace = true

@@ -1,0 +1,34 @@
+[graph]
+all-features = false
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+unused-allowed-license = "allow"
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0", "0BSD"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    { name = "cc", reason = "compiles C (PGMI-855, record 0021)" },
+    { name = "cmake", reason = "compiles C (PGMI-855)" },
+    { name = "bindgen", reason = "C bindings (PGMI-855)" },
+    { name = "pkg-config", reason = "links system C libraries (PGMI-855)" },
+    { name = "vcpkg", reason = "links system C libraries (PGMI-855)" },
+    { name = "openssl", reason = "C (PGMI-855)" },
+    { name = "openssl-sys", reason = "C (PGMI-855)" },
+    { name = "native-tls", reason = "OpenSSL or platform TLS (PGMI-855)" },
+    { name = "aws-lc-rs", reason = "C (PGMI-855)" },
+    { name = "aws-lc-sys", reason = "C (PGMI-855)" },
+    { name = "ring", reason = "C and assembly (PGMI-855)" },
+    { name = "libz-sys", reason = "C (PGMI-855)" },
+    { name = "zstd-sys", reason = "C (PGMI-855)" },
+    { name = "psm", reason = "compiles assembly with cc (PGMI-855)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

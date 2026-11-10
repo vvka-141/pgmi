@@ -29,16 +29,19 @@ crates.io can only contain files under its own directory.
 Option 3, in a crate of its own, `pgmi-shared`, with `shared/Cargo.toml`.
 
 - `build.rs` walks `ai/`, `art/`, `contract/`, `manager/`, `session/`,
-  `skills/` and `templates/`, sorts by path (byte order), skips `*.go`, and
+  `skills/` and `templates/`, sorts by path (byte order), and
   emits `pub static FILES: &[(&str, &[u8])]` with `rerun-if-changed` per
   folder. `src/lib.rs` adds lookups (`file`, `dir`) and nothing else.
 - `include = ["Cargo.toml", "build.rs", "src/**", "ai/**", "art/**",
   "contract/**", "manager/**", "session/**", "skills/**", "templates/**"]`.
   Licence `MPL-2.0 AND MIT` (`shared/templates/LICENSE` is MIT).
-- **The check**, in CI and in the release gate: three lists must be equal,
-  ignoring the crate's own files and `*.go`:
-  `git ls-files shared/`, `cargo package -p pgmi-shared --list`, and the
-  embedded `FILES` paths (printed by a test). A missing dotfile, a stray
+- **The check**, in CI and in the release gate: three lists of the seven
+  folders must be equal: `git ls-files`, `cargo package -p pgmi-shared
+  --list` (`rust/check-package.sh`), and the embedded `FILES` paths (a unit
+  test in `pgmi-shared`). Template `*.go` files are template content and
+  ship; only `shared.go` and `shared_test.go` at the folder's root stay out,
+  since no folder holds them. The Go test that forbids a `Cargo.toml` under
+  `shared/` exempts the crate's own manifest at the root. A missing dotfile, a stray
   untracked file or a nested `.gitignore` swallowing files fails it.
 - `pgmi` depends on `pgmi-shared = "=<same version>"`; both are published
   together, shared first (record 0018). `pgmi`'s own manifest has an

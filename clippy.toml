@@ -1,0 +1,11 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "read the Env snapshot; only main may export .env before threads start (record 0016)" },
+    { path = "std::env::remove_var", reason = "never change the process environment (record 0016)" },
+    { path = "std::env::var", reason = "read the Env snapshot (record 0016)" },
+    { path = "std::env::var_os", reason = "read the Env snapshot (record 0016)" },
+    { path = "std::env::vars", reason = "read the Env snapshot (record 0016)" },
+]

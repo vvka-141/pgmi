@@ -55,6 +55,9 @@ func TestEmbeddedTreesEqualTrackedFiles(t *testing.T) {
 
 func TestNoPackageManifestUnderShared(t *testing.T) {
 	for _, f := range trackedFiles(t, ".") {
+		if f == "Cargo.toml" {
+			continue
+		}
 		switch path.Base(f) {
 		case "go.mod", "Cargo.toml":
 			t.Errorf("%s: a %s makes its folder a separate package, which go:embed and cargo package leave out; name it %s.scaffold",

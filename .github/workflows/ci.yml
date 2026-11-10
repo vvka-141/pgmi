@@ -133,6 +133,42 @@ jobs:
           python -m pip install uv==0.13.6
           cd blackbox && uv run --locked pytest
 
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-apple-darwin x86_64-apple-darwin
+      - name: cargo-deny
+        run: cargo install --locked cargo-deny@0.20.2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --workspace
+      - name: Dependencies (advisories, licences, no C)
+        run: cargo deny --locked check
+      - name: No C compiler on any release target
+        run: rust/check-no-c.sh
+      - name: Static Linux binaries with rust-lld only
+        env:
+          CC: /bin/false
+          CXX: /bin/false
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+        run: |
+          cargo build --locked --release -p pgmi --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
+          file target/x86_64-unknown-linux-musl/release/pgmi target/aarch64-unknown-linux-musl/release/pgmi | tee /dev/stderr | grep -c "static" | grep -qx 2
+          target/x86_64-unknown-linux-musl/release/pgmi --version
+      - name: Packaged files equal tracked files
+        run: rust/check-package.sh
+
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,
   # .pgpass location, CRLF through the head/tail splitter, signal handling.

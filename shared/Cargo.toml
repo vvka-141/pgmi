@@ -1,0 +1,12 @@
+[package]
+name = "pgmi-shared"
+description = "The files every pgmi binary embeds: templates, skills, session SQL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0 AND MIT"
+repository.workspace = true
+include = ["Cargo.toml", "build.rs", "src/**", "ai/**", "art/**", "contract/**", "manager/**", "session/**", "skills/**", "templates/**"]
+
+[lints]
+workspace = true
