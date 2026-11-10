@@ -133,6 +133,55 @@ jobs:
           python -m pip install uv==0.13.6
           cd blackbox && uv run --locked pytest
 
+  # The Rust binary against the cases it passes so far (rust/blackbox-passing.txt),
+  # with the Go binary as the reference for the cross-binary checksum cases.
+  # Non-blocking until the Rust binary passes the whole suite.
+  blackbox-rust:
+    name: Black-box suite (Rust)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build the Go reference
+        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+
+      - name: Build the Rust binary
+        run: |
+          rustup toolchain install
+          cargo build --locked --release -p pgmi
+
+      - name: Run the passing cases
+        env:
+          PGMI_BIN: ${{ github.workspace }}/target/release/pgmi
+          PGMI_REFERENCE_BIN: ${{ runner.temp }}/pgmi-go
+        run: |
+          python -m pip install uv==0.13.6
+          cd blackbox
+          mapfile -t cases < <(sed 's|.*|test_cases.py::test_case[cases/&.yaml]|' ../rust/blackbox-passing.txt)
+          uv run --locked pytest "${cases[@]}"
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

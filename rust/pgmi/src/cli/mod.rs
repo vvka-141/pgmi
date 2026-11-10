@@ -16,7 +16,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
     about = "PostgreSQL-native execution fabric",
     disable_help_flag = true,
     disable_version_flag = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    subcommand_help_heading = "Available Commands"
 )]
 pub struct Cli {
     #[arg(short = 'v', long, global = true, action = ArgAction::SetTrue)]

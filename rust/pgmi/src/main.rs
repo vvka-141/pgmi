@@ -35,7 +35,7 @@ fn run() -> u8 {
         return print_version(false);
     }
     let result = match cli.command {
-        None => help(None),
+        None => bare(),
         Some(Command::Version) => return print_version(true),
         Some(Command::Help { command }) => help(command.as_deref()),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose),
@@ -107,6 +107,26 @@ fn print_version(long: bool) -> u8 {
         Ok(()) => 0,
         Err(_) => Kind::General.exit_code(),
     }
+}
+
+fn bare() -> error::Result<()> {
+    use std::io::IsTerminal;
+    let env = Env::snapshot();
+    let banner =
+        std::io::stderr().is_terminal() && env.non_empty("PGMI_NO_BANNER").ok().flatten().is_none();
+    if !banner {
+        return help(None);
+    }
+    let logo = pgmi_shared::file("art/logo.txt")
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .unwrap_or("pgmi");
+    let text = format!(
+        "{}\n\n  pgmi deploy <path>   Deploy a project\n  pgmi init <path>     Start a project from a template\n  pgmi --help          Full reference\n",
+        logo.trim_end()
+    );
+    std::io::stderr()
+        .write_all(text.as_bytes())
+        .map_err(|e| Error::general("write banner").with_source(e))
 }
 
 fn help(command: Option<&str>) -> error::Result<()> {
