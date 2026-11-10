@@ -49,7 +49,7 @@ fallback is dropping the affected macOS build, not paying.
   `aws-lc-rs` and `openssl-sys`), the packaging check of record 0010, the
   black-box suite against the built binary.
 - **After GoReleaser**, in the same workflow: `cargo publish` for
-  `pgmi-shared`, `pgmi-tokio-postgres` (when changed), `pgmi`; then PyPI,
+  `pgmi-shared`, then `pgmi`; then PyPI,
   then npm; each followed by its Verify Install channel.
 - **PyPI**: wheels assembled by a small script from the release archives,
   not rebuilt by maturin, so every channel ships the same bytes and the

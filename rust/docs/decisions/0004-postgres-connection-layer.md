@@ -24,7 +24,7 @@ decided changes make the Rust binary follow libpq in five places.
 
 ## Decision
 
-Option 1, on the patched fork of record 0005. pgmi's code owns everything
+Option 1, on unpatched tokio-postgres with the connection layer of record 0005. pgmi's code owns everything
 above the wire protocol:
 
 - **Parsing**: URI (several hosts, bracketed IPv6), keyword/value (quoting as
@@ -62,8 +62,8 @@ above the wire protocol:
 - **Startup**: `application_name` defaults to `pgmi` (`PGAPPNAME` wins);
   `options`/`PGOPTIONS` and `PGTZ` reach the server.
 - **During the run**: pgmi drives the `Connection` future itself, so notices
-  arrive while a statement runs; transaction status comes from the fork's
-  `Client::transaction_status()`; cancel uses `cancel_query_raw` over the
+  arrive while a statement runs; transaction status comes from the layer of
+  record 0005; cancel uses `cancel_query_raw` over the
   same TLS setup, then waits up to 2 s for the server to report it.
 - **Loading** the project into the temp tables uses parameterised
   `INSERT ... SELECT * FROM unnest($1::text[], ...)` in batches, all with

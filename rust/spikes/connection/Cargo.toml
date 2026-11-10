@@ -1,0 +1,23 @@
+[package]
+name = "pgmi-spike-connection"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "pgmi"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "signal", "net", "io-util", "fs"] }
+tokio-postgres = "0.7.18"
+tokio-postgres-rustls = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+url = "2.5"
+serde_json = "1"
+futures-util = "0.3"
+
+[profile.release]
+debug = false

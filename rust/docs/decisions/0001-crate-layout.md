@@ -5,8 +5,7 @@ Checked on crates.io / static.rust-lang.org, 2026-11-10: Rust stable 1.99.1
 (2026-10-15); aws-config 1.13.1 declares rust-version 1.94.1, the highest of
 the crates chosen in these records (google-cloud-auth 1.18.0: 1.91,
 serde-saphyr 2.1.1: 1.89, ratatui 0.30.2: 1.88). The crates.io name `pgmi` is
-held by the owner (placeholder 0.0.1); `pgmi-shared` and
-`pgmi-tokio-postgres` are free.
+held by the owner (placeholder 0.0.1); `pgmi-shared` is free.
 
 ## Context
 
@@ -40,7 +39,6 @@ Cargo.toml                    virtual workspace, resolver 3
 Cargo.lock                    committed
 rust-toolchain.toml           1.99.1 for CI and releases
 rust/pgmi/                    package `pgmi`: the binary, all pgmi code as modules
-rust/vendor/tokio-postgres/   package `pgmi-tokio-postgres` (record 0005)
 shared/Cargo.toml, build.rs, src/lib.rs   package `pgmi-shared` (record 0010)
 ```
 

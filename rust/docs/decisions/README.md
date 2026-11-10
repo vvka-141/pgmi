@@ -11,11 +11,11 @@ them.
 
 | Record | Decision |
 |---|---|
-| [0001](0001-crate-layout.md) | Virtual workspace at the repo root: binary `rust/pgmi`, fork `rust/vendor/tokio-postgres`, assets `shared/` (`pgmi-shared`); edition 2024, rust-version 1.94.1, toolchain 1.99.1 |
+| [0001](0001-crate-layout.md) | Virtual workspace at the repo root: binary `rust/pgmi`, assets `shared/` (`pgmi-shared`); edition 2024, rust-version 1.94.1, toolchain 1.99.1 |
 | [0002](0002-errors-and-exit-codes.md) | One `pgmi::Error` carrying its kind from creation; `catch_unwind` + panic hook make a panic exit 3 (or `isError` in serve); SIGPIPE restored |
 | [0003](0003-async-runtime.md) | tokio multi-thread runtime, started after the environment is settled; one cancellation token per deploy |
 | [0004](0004-postgres-connection-layer.md) | tokio-postgres `connect_raw` with pgmi's own libpq-style resolution; the five decided libpq behaviours; simple protocol and unnamed statements only |
-| [0005](0005-tokio-postgres-fork.md) | Vendored fork published as `pgmi-tokio-postgres` (cargo ignores `[patch]` in published crates); patches as files, offered upstream |
+| [0005](0005-tokio-postgres-unpatched.md) | tokio-postgres from crates.io unpatched; a 195-line layer on pgmi's own connection reads the transaction status and enforces `require_auth` (spike: six of six cases pass); the fork patch kept as fallback only |
 | [0006](0006-tls.md) | rustls on ring, one verifier for all sslmodes, rustls-native-certs for `system`, own legacy-key decryption and own tokio-postgres TLS adapter |
 | [0007](0007-azure-credentials.md) | azure_identity without default features, pgmi's own chain; certificate service principal via a self-signed client assertion (no OpenSSL); every Entra route listed with its real-Azure coverage |
 | [0008](0008-aws-credentials.md) | aws-config credentials on a ring HTTP client; the RDS token signed with aws-sigv4 directly, not aws-sdk-rds |
@@ -94,6 +94,10 @@ Every `###` section of the behaviour contract and the records that serve it.
   unscoped (`pgmi-cli-<os>-<arch>`), reserved in PGMI-850. (0018)
 - Encrypted PKCS#8 client keys are added: libpq reads them, and a key that
   works with psql should work with pgmi. (0006)
+- Driver (owner review): tokio-postgres unpatched plus pgmi's own layer, no
+  fork; the spike passed six of six. Done only with a `pgmi serve` case, a
+  fuzz target and TLS start from sslmode. The fork patch stays as the
+  documented fallback. (0005)
 
 ## Open questions
 
