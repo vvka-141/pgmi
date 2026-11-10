@@ -201,6 +201,8 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked --workspace
+      - name: Panic exits 3 (testhooks)
+        run: cargo test --locked -p pgmi --features testhooks --test panic
       - name: Dependencies (advisories, licences, no C)
         run: cargo deny --locked check
       - name: No C compiler on any release target

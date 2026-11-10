@@ -19,11 +19,20 @@ use env::Env;
 use error::{Error, Kind};
 
 fn main() -> ExitCode {
-    std::panic::set_hook(Box::new(|info| {
-        let _ = writeln!(std::io::stderr(), "pgmi: internal error: {info}");
-    }));
+    #[cfg(unix)]
+    restore_sigpipe();
+    error::install_panic_hook();
     let code = std::panic::catch_unwind(run).unwrap_or(Kind::Internal.exit_code());
     ExitCode::from(code)
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn restore_sigpipe() {
+    // SAFETY: called first in main, before any thread exists; SIG_DFL is a valid disposition (record 0002).
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
 }
 
 fn run() -> u8 {

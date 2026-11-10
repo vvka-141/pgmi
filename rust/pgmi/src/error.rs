@@ -143,6 +143,31 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+static LAST_PANIC: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        use std::io::Write;
+        let stack = std::backtrace::Backtrace::force_capture().to_string();
+        let _ = writeln!(std::io::stderr(), "pgmi: internal error: {info}");
+        if let Ok(mut last) = LAST_PANIC.lock() {
+            *last = Some((info.to_string(), stack));
+        }
+    }));
+}
+
+pub fn panic_error() -> (Error, String) {
+    let (message, stack) = LAST_PANIC
+        .lock()
+        .ok()
+        .and_then(|mut l| l.take())
+        .unwrap_or_else(|| ("panic".into(), String::new()));
+    (
+        Error::internal(format!("internal error (panic): {message}")),
+        stack,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

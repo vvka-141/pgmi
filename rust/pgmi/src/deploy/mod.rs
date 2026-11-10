@@ -152,19 +152,21 @@ pub fn run(ctx: Context) -> u8 {
     let notices = Arc::new(Mutex::new(NoticeLog::default()));
     let mut state = State::default();
     let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let result = runtime.block_on(async {
-        let token = CancellationToken::new();
-        spawn_signals(token.clone(), interrupted.clone());
-        let timeout = timeout_of(&ctx);
-        let guard = Guard {
-            token,
-            deadline: TokioInstant::now() + timeout,
-            timeout,
-            interrupted: interrupted.clone(),
-        };
-        deploy(&ctx, &mut state, &guard, &reporter, notices.clone()).await
-    });
-    let mut result = result;
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            let token = CancellationToken::new();
+            spawn_signals(token.clone(), interrupted.clone());
+            let timeout = timeout_of(&ctx);
+            let guard = Guard {
+                token,
+                deadline: TokioInstant::now() + timeout,
+                timeout,
+                interrupted: interrupted.clone(),
+            };
+            deploy(&ctx, &mut state, &guard, &reporter, notices.clone()).await
+        })
+    }));
+    let mut result = caught.unwrap_or_else(|_| Err(crate::error::panic_error().0));
     if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
         result = Err(Error::new(Kind::Interrupted, "interrupted"));
     }
@@ -294,6 +296,10 @@ async fn deploy(
     let spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
     st.database = Some(spec.target_db.clone());
     st.spec = Some(spec.clone());
+    #[cfg(feature = "testhooks")]
+    if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
+        test_panic();
+    }
     let max_size = match ctx.env.non_empty("PGMI_MAX_FILE_SIZE")? {
         None => walk::DEFAULT_MAX_FILE_SIZE,
         Some(v) => v.parse().map_err(|_| {
@@ -428,6 +434,12 @@ async fn deploy(
         .batch_execute("SELECT pg_advisory_unlock_all()")
         .await;
     outcome
+}
+
+#[cfg(feature = "testhooks")]
+#[allow(clippy::panic)]
+fn test_panic() -> ! {
+    panic!("PGMI_TEST_PANIC is set")
 }
 
 pub fn quote_ident(s: &str) -> String {

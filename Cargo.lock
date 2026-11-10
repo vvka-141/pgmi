@@ -563,6 +563,7 @@ dependencies = [
  "clap",
  "futures-util",
  "jiff",
+ "libc",
  "pgmi-shared",
  "proptest",
  "roxmltree",
