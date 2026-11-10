@@ -65,10 +65,13 @@ above the wire protocol:
   arrive while a statement runs; transaction status comes from the layer of
   record 0005; cancel uses `cancel_query_raw` over the
   same TLS setup, then waits up to 2 s for the server to report it.
-- **Loading** the project into the temp tables uses parameterised
-  `INSERT ... SELECT * FROM unnest($1::text[], ...)` in batches, all with
-  unnamed statements, so the session API SQL in `shared/` stays the only
-  definition of the tables.
+- **Loading** the project into the temp tables sends one text parameter
+  holding a JSON array per batch (about 8 MiB) through an unnamed
+  statement, and expands it with `jsonb_array_elements`; source files go
+  through `pg_temp.pgmi_register_file()`, so the session API SQL in
+  `shared/` stays the only definition of the tables (PGMI-832: one shape for
+  files, parameters, metadata and tests, instead of one `unnest` array per
+  column).
 
 ## Consequences
 
