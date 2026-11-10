@@ -20,6 +20,11 @@ pub fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap<String
         out.insert(k.to_lowercase(), v);
     }
     for (name, value) in src.env.with_prefix(ENV_PREFIX) {
+        if name.len() == ENV_PREFIX.len() {
+            return Err(Error::config(format!(
+                "environment variable {name} has no parameter name; name it {ENV_PREFIX}<NAME>"
+            )));
+        }
         if value.is_empty() {
             return Err(Error::config(format!(
                 "environment variable {name} is set but empty; unset it or give it a value"

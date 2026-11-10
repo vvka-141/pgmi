@@ -39,7 +39,17 @@ pub fn run(a: &InitArgs) -> Result<()> {
         if KEPT.iter().any(|k| *k == rel) && path.exists() {
             continue;
         }
-        write(&path, bytes)?;
+        if rel == "deploy.sql" {
+            let mut text = format!(
+                "-- Scaffolded by pgmi {} from the {template} template.\n",
+                crate::cli::VERSION
+            )
+            .into_bytes();
+            text.extend_from_slice(bytes);
+            write(&path, &text)?;
+        } else {
+            write(&path, bytes)?;
+        }
     }
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "Wrote {} ({template} template).", target.display());

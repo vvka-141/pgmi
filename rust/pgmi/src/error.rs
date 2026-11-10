@@ -56,6 +56,7 @@ pub struct SqlDiagnostics {
     pub detail: Option<String>,
     pub hint: Option<String>,
     pub where_: Option<String>,
+    pub internal_query: Option<String>,
 }
 
 #[derive(Debug)]

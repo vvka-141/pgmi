@@ -38,6 +38,12 @@ pub fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
                 detail: db.detail().map(str::to_string),
                 hint: db.hint().map(str::to_string),
                 where_: db.where_().map(str::to_string),
+                internal_query: match db.position() {
+                    Some(tokio_postgres::error::ErrorPosition::Internal { query, .. }) => {
+                        Some(query.clone())
+                    }
+                    _ => None,
+                },
             })
         }
         None => {
@@ -75,11 +81,13 @@ struct State {
     failed_unit: Option<usize>,
     contract: bool,
     phase_test: bool,
+    failed_files: Vec<String>,
 }
 
 struct Guard {
     token: CancellationToken,
     deadline: TokioInstant,
+    timeout: Duration,
     interrupted: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -88,11 +96,18 @@ impl Guard {
         if self.interrupted.load(std::sync::atomic::Ordering::SeqCst) {
             Error::new(Kind::Interrupted, "interrupted")
         } else {
-            Error::new(
-                Kind::Timeout,
-                "the deploy exceeded --timeout; the running statement was cancelled",
-            )
+            self.timeout_error()
         }
+    }
+
+    fn timeout_error(&self) -> Error {
+        Error::new(
+            Kind::Timeout,
+            format!(
+                "the deploy exceeded --timeout {}; the running statement was cancelled",
+                crate::cli::duration::render(self.timeout)
+            ),
+        )
     }
 
     async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
@@ -112,7 +127,7 @@ impl Guard {
         let stopped = tokio::select! {
             r = &mut fut => return r,
             _ = self.token.cancelled() => self.stop_error(),
-            _ = tokio::time::sleep_until(self.deadline) => Error::new(Kind::Timeout, "the deploy exceeded --timeout; the running statement was cancelled"),
+            _ = tokio::time::sleep_until(self.deadline) => self.timeout_error(),
         };
         session.cancel().await;
         let _ = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
@@ -144,6 +159,7 @@ pub fn run(ctx: Context) -> u8 {
         let guard = Guard {
             token,
             deadline: TokioInstant::now() + timeout,
+            timeout,
             interrupted: interrupted.clone(),
         };
         deploy(&ctx, &mut state, &guard, &reporter, notices.clone()).await
@@ -164,6 +180,13 @@ fn timeout_of(ctx: &Context) -> Duration {
                 .ok()
                 .flatten()
                 .and_then(|y| y.timeout().ok().flatten())
+        })
+        .map(|t| {
+            if t.is_zero() {
+                Duration::from_secs(100 * 365 * 24 * 3600)
+            } else {
+                t
+            }
         })
         .unwrap_or(Duration::from_secs(180))
 }
@@ -208,7 +231,7 @@ fn refuse_cloud(a: &DeployArgs, yaml: Option<&ProjectConfig>) -> Result<()> {
     let flags = [a.azure, a.aws, a.google].iter().filter(|f| **f).count();
     if flags > 1 {
         return Err(Error::config(
-            "cannot use multiple cloud authentication methods; choose one of --azure, --aws, --google",
+            "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google",
         ));
     }
     let yaml_method = yaml.and_then(|y| y.connection.auth_method.clone());
@@ -309,7 +332,7 @@ async fn deploy(
         }
     }
     if a.overwrite {
-        overwrite::approve(a, &spec, &ctx.env, reporter)?;
+        overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
     }
     let sink_reporter = reporter.clone();
     let sink_log = log.clone();
@@ -448,27 +471,32 @@ fn finish(
             Ok(()) => reporter.summary(
                 true,
                 &format!(
-                    "{db}: {} files loaded in {}",
+                    "{db}: {} files loaded{} in {}",
                     st.files_loaded.unwrap_or(0),
+                    match st
+                        .paths_ignored
+                        .as_ref()
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len)
+                    {
+                        0 => String::new(),
+                        n => format!(", {n} paths ignored"),
+                    },
                     seconds(elapsed)
                 ),
             ),
             Err(e) => {
                 let mut text = format!("{db}: failed after {}", seconds(elapsed));
+                let committed = st.committed.unwrap_or(0);
                 let mut notes = Vec::new();
-                if let (Some(units), Some(failed)) = (st.units, st.failed_unit) {
-                    let committed = st.committed.unwrap_or(0);
-                    if committed == 0 {
-                        notes.push("nothing committed".to_string());
-                    } else {
-                        notes.push(format!(
-                            "unit {failed} of {units} failed; {committed} earlier unit(s) already committed"
-                        ));
-                    }
-                } else if e.kind() == Kind::Sql && st.units.is_some() && st.committed == Some(0) {
-                    notes.push("nothing committed".to_string());
+                match (st.units, st.failed_unit) {
+                    (Some(units), Some(failed)) if committed > 0 => text.push_str(&format!(
+                        " (unit {failed} of {units} failed; {committed} earlier unit(s) already committed)"
+                    )),
+                    (Some(_), _) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
+                    _ => {}
                 }
-                if st.created == Some(true) && st.committed.unwrap_or(0) == 0 {
+                if st.created == Some(true) && committed == 0 {
                     notes.push(format!("created database \"{db}\", left empty"));
                 }
                 if !notes.is_empty() {
@@ -481,11 +509,12 @@ fn finish(
     if let Err(e) = &result {
         reporter.line(&redact(&format!("pgmi: error: {}", e.text()), &secrets));
         if e.kind() == Kind::Sql && st.failed_unit.is_some() {
-            reporter.line(if st.phase_test {
-                "LOCATION: test"
-            } else {
-                "LOCATION: deploy.sql"
-            });
+            let location = match st.failed_files.first() {
+                Some(f) => f.as_str(),
+                None if st.phase_test => "test",
+                None => "deploy.sql",
+            };
+            reporter.line(&format!("LOCATION: {location}"));
         }
     }
     if ctx.args.json {
@@ -597,9 +626,19 @@ fn record(
                     "phase".into(),
                     json!(if st.phase_test { "test" } else { "deploy" }),
                 );
-                if !st.phase_test {
-                    r.insert("failedFile".into(), json!("deploy.sql"));
-                    r.insert("script".into(), json!("deploy.sql"));
+                match st.failed_files.as_slice() {
+                    [] if !st.phase_test => {
+                        r.insert("failedFile".into(), json!("deploy.sql"));
+                        r.insert("script".into(), json!("deploy.sql"));
+                    }
+                    [] => {}
+                    files => {
+                        r.insert("failedFile".into(), json!(files[0]));
+                        r.insert("script".into(), json!(files[0]));
+                        if files.len() > 1 {
+                            r.insert("failedFileCandidates".into(), json!(files));
+                        }
+                    }
                 }
             }
         }

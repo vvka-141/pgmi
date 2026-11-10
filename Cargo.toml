@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["rust/pgmi", "shared"]
-exclude = ["shared/templates/advanced/gateways/rust", "rust/spikes"]
+exclude = ["shared/templates/advanced/gateways/rust", "rust/spikes", "rust/pgmi/fuzz"]
 
 [workspace.package]
 version = "0.20.0-alpha.1"

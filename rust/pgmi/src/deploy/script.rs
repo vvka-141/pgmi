@@ -147,7 +147,14 @@ fn literal(src: &[u8], t: &Token) -> Option<String> {
 pub fn macros(src: &str) -> Vec<Macro> {
     let bytes = src.as_bytes();
     let toks: Vec<Token> = lexer::tokens(bytes);
-    let sig: Vec<&Token> = toks.iter().filter(|t| t.kind != Kind::Space).collect();
+    let sig: Vec<&Token> = toks
+        .iter()
+        .filter(|t| match t.kind {
+            Kind::Space => t.text(bytes).contains(&0x0b),
+            Kind::LineComment | Kind::BlockComment => false,
+            _ => true,
+        })
+        .collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i < sig.len() {
@@ -296,5 +303,12 @@ mod tests {
             "a X b"
         );
         assert!(macros("CALL pgmi_test('a','b','c')").is_empty());
+        assert_eq!(
+            macros("CALL /* c */ pgmi_test -- c\n( '/a/' /* c */ ) ;").len(),
+            1
+        );
+        assert!(macros("CALL\x0bpgmi_test();").is_empty());
+        assert!(macros("CALL\u{a0}pgmi_test();").is_empty());
+        assert_eq!(macros("CALL\x0c\tpgmi_test\r\n();").len(), 1);
     }
 }

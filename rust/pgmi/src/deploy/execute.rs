@@ -125,6 +125,7 @@ pub async fn run(r: Run<'_>) -> Result<()> {
         if let Err(e) = outcome {
             state.failed_unit = Some(i + 1);
             state.phase_test = macro_units[i] && is_test_failure(&e);
+            state.failed_files = failed_files(&e, project);
             return Err(e);
         }
         if session.tap.status() == IDLE {
@@ -139,6 +140,34 @@ pub async fn run(r: Run<'_>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn executed_text(e: &Error) -> Option<String> {
+    let d = e.sql_diagnostics()?;
+    if let Some(q) = &d.internal_query {
+        return Some(q.clone());
+    }
+    let w = d.where_.as_deref()?;
+    let rest = w.strip_prefix("SQL statement \"")?;
+    let end = rest.rfind("\"\n").or_else(|| rest.rfind('"'))?;
+    Some(rest[..end].to_string())
+}
+
+fn failed_files(e: &Error, project: &Project) -> Vec<String> {
+    let Some(text) = executed_text(e) else {
+        return vec![];
+    };
+    let needle = text.trim();
+    if needle.is_empty() {
+        return vec![];
+    }
+    project
+        .sources
+        .iter()
+        .chain(&project.tests)
+        .filter(|f| crate::project::walk::is_sql(&f.path) && f.content.contains(needle))
+        .map(|f| f.path.clone())
+        .collect()
 }
 
 fn is_test_failure(e: &Error) -> bool {

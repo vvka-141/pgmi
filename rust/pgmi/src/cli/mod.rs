@@ -93,7 +93,7 @@ pub struct DeployArgs {
     pub overwrite: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
     pub force: bool,
-    #[arg(long, value_parser = duration::parse)]
+    #[arg(long, value_parser = duration::parse, help = "Catastrophic failure protection, a Go duration such as 90s or 1h30m; 0 turns it off (default 3m0s)")]
     pub timeout: Option<Duration>,
     #[arg(long)]
     pub compat: Option<String>,

@@ -13,12 +13,14 @@ pub struct Meta {
     pub description: Option<String>,
 }
 
-pub fn block(content: &str) -> Option<&str> {
+const MAX_BLOCK: usize = 10240;
+
+pub fn blocks(content: &str) -> Vec<&str> {
     let src = content.as_bytes();
     lexer::tokens(src)
         .into_iter()
         .filter(|t| t.kind == Kind::BlockComment)
-        .find_map(|t| {
+        .filter_map(|t| {
             let text = content.get(t.start + 2..t.end.saturating_sub(2))?;
             let start = text.find("<pgmi-meta")?;
             let rest = &text[start..];
@@ -31,31 +33,42 @@ pub fn block(content: &str) -> Option<&str> {
                 })?;
             Some(&rest[..end])
         })
+        .collect()
+}
+
+fn parse_bool(s: &str) -> Option<bool> {
+    match s.trim() {
+        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
+        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
+        _ => None,
+    }
 }
 
 pub fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, String> {
-    let Some(xml) = block(content) else {
+    let found = blocks(content);
+    let Some(xml) = found.first().copied() else {
         return Ok(None);
     };
+    if found.len() > 1 {
+        return Err(format!("{path}: more than one <pgmi-meta> block"));
+    }
+    if xml.len() > MAX_BLOCK {
+        return Err(format!(
+            "{path}: <pgmi-meta> block is over {MAX_BLOCK} bytes"
+        ));
+    }
     let doc = roxmltree::Document::parse(xml)
         .map_err(|e| format!("{path}: invalid <pgmi-meta> XML: {e}"))?;
     let root = doc.root_element();
     let id_text = root
         .attribute("id")
         .ok_or_else(|| format!("{path}: <pgmi-meta> has no id attribute"))?;
-    if id_text.len() != 36 {
-        return Err(format!("{path}: invalid id {id_text:?}: not a UUID"));
-    }
-    let id = uuid::Uuid::try_parse(id_text)
+    let id = uuid::Uuid::parse_str(id_text)
         .map_err(|e| format!("{path}: invalid id {id_text:?}: not a UUID ({e})"))?;
     let idempotent = match root.attribute("idempotent") {
-        Some("true") => true,
-        Some("false") => false,
-        Some(o) => {
-            return Err(format!(
-                "{path}: invalid idempotent value {o:?}: expected true or false"
-            ));
-        }
+        Some(v) => parse_bool(v).ok_or_else(|| {
+            format!("{path}: invalid idempotent value {v:?}: expected true or false")
+        })?,
         None => return Err(format!("{path}: <pgmi-meta> has no idempotent attribute")),
     };
     let mut sort_keys = Vec::new();
@@ -129,6 +142,22 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let forms = [
+            "{1B5E3A4C-2D6F-4A8B-9C0D-1E2F3A4B5C6D}",
+            "urn:uuid:1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d",
+            "1b5e3a4c2d6f4a8b9c0d1e2f3a4b5c6d",
+        ];
+        for id in forms {
+            let m = parse(
+                "./f.sql",
+                &format!("/* <pgmi-meta id=\"{id}\" idempotent=\" True \"/> */"),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(m.id, "1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d");
+            assert!(m.idempotent);
+        }
+        assert!(parse("./f.sql", "/* <pgmi-meta id=\" 1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d\" idempotent=\"true\"/> */").is_err());
         let e = parse(
             "./bad.sql",
             "/* <pgmi-meta id=\"not-a-uuid\" idempotent=\"true\"></pgmi-meta> */",

@@ -70,7 +70,7 @@ pub fn load(root: &Path, max_size: u64) -> Result<Project> {
         deploy_sql: read_text(&deploy_path, "deploy.sql", max_size)?,
         ..Project::default()
     };
-    walk(root, root, "", false, &rules, max_size, &mut project)?;
+    walk(root, "", false, &rules, max_size, &mut project)?;
     project.ignored.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(project)
 }
@@ -87,20 +87,24 @@ fn read_text(path: &Path, rel: &str, max_size: u64) -> Result<String> {
     let bytes =
         std::fs::read(path).map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    if bytes.contains(&0) {
+    if let Some(at) = bytes.iter().position(|b| *b == 0) {
         return Err(Error::config(format!(
-            "file ./{rel} is binary; exclude it in .pgmiignore or move it out of the project path"
+            "file ./{rel} has a NUL byte at offset {at}, so it is not text; exclude it in .pgmiignore or move it out of the project path"
         )));
     }
-    String::from_utf8(bytes.to_vec()).map_err(|_| {
-        Error::config(format!(
-            "file ./{rel} is not valid UTF-8 text; exclude it in .pgmiignore or move it out of the project path"
-        ))
+    String::from_utf8(bytes.to_vec()).map_err(|e| {
+        let at = e.utf8_error().valid_up_to();
+        if rel == "deploy.sql" {
+            Error::config(format!("deploy.sql is not valid UTF-8 at byte offset {at}"))
+        } else {
+            Error::config(format!(
+                "file ./{rel} is not valid UTF-8 (byte offset {at}); exclude it in .pgmiignore or move it out of the project path"
+            ))
+        }
     })
 }
 
 fn walk(
-    root: &Path,
     dir: &Path,
     rel: &str,
     in_test: bool,
@@ -120,10 +124,15 @@ fn walk(
         } else {
             format!("{rel}/{name}")
         };
-        let Ok(meta) = std::fs::metadata(&path) else {
+        let Ok(link) = std::fs::symlink_metadata(&path) else {
             continue;
         };
-        let is_dir = meta.is_dir();
+        let is_link = link.file_type().is_symlink();
+        let is_dir = if is_link {
+            std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
+        } else {
+            link.is_dir()
+        };
         let shown = if is_dir {
             format!("./{child}/")
         } else {
@@ -146,9 +155,14 @@ fn walk(
             });
             continue;
         }
+        if is_link {
+            return Err(Error::config(format!(
+                "./{child} is a symlink; pgmi does not follow symbolic links, so hide it in .pgmiignore or replace it with the file"
+            )));
+        }
         if is_dir {
             let test = in_test || name == "__test__" || name == "__tests__";
-            walk(root, &path, &child, test, rules, max_size, out)?;
+            walk(&path, &child, test, rules, max_size, out)?;
             continue;
         }
         if in_test {
@@ -168,7 +182,6 @@ fn walk(
             content,
         });
     }
-    let _ = root;
     Ok(())
 }
 

@@ -74,7 +74,11 @@ pub fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
                     }
                     k += 1;
                 }
-                value = v;
+                value = if q == '"' && mode == Mode::Dotenv {
+                    expand(&v, &out)
+                } else {
+                    v
+                };
                 let mut e = k + 1;
                 while e < chars.len() && chars[e] != '\n' {
                     e += 1;
@@ -94,7 +98,10 @@ pub fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
                     }
                     v.truncate(pos);
                 }
-                value = v.trim().to_string();
+                value = match mode {
+                    Mode::Dotenv => expand(v.trim(), &out),
+                    Mode::Strict => v.trim().to_string(),
+                };
                 i = end + 1;
                 line += 1;
             }
@@ -102,6 +109,40 @@ pub fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
         out.push((key.to_string(), value));
     }
     Ok(out)
+}
+
+fn expand(s: &str, earlier: &[(String, String)]) -> String {
+    let lookup = |name: &str| {
+        earlier
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    };
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find('$') {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + 1..];
+        if let Some(braced) = after.strip_prefix('{')
+            && let Some(close) = braced.find('}')
+        {
+            out.push_str(lookup(&braced[..close]));
+            rest = &braced[close + 1..];
+            continue;
+        }
+        let len = after.find(|c: char| !is_name(c)).unwrap_or(after.len());
+        if len == 0 {
+            out.push('$');
+        } else {
+            out.push_str(lookup(&after[..len]));
+        }
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn find_comment(s: &str) -> Option<usize> {
@@ -136,6 +177,21 @@ mod tests {
         assert_eq!(get(&v, "UNICODE"), "ünï ✓");
         assert_eq!(get(&v, "CRLF"), "crlf");
         assert_eq!(v.len(), 11);
+    }
+
+    #[test]
+    fn expansion_from_earlier_lines() {
+        let v = parse(
+            "BASE=b\nU=x$BASE\nB=x${BASE}y\nD=\"x${BASE}\"\nS='x${BASE}'\nE=a${NOPE}b\nP=5$\n",
+            Mode::Dotenv,
+        )
+        .unwrap();
+        assert_eq!(get(&v, "U"), "xb");
+        assert_eq!(get(&v, "B"), "xby");
+        assert_eq!(get(&v, "D"), "xb");
+        assert_eq!(get(&v, "S"), "x${BASE}");
+        assert_eq!(get(&v, "E"), "ab");
+        assert_eq!(get(&v, "P"), "5$");
     }
 
     #[test]

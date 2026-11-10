@@ -94,6 +94,10 @@ fn print_version(long: bool) -> u8 {
     let mut text = format!("pgmi {} (compat 1)\n", cli::VERSION);
     if long {
         text.push_str(&format!(
+            "Commit: {}\n",
+            option_env!("PGMI_COMMIT").unwrap_or("unknown")
+        ));
+        text.push_str(&format!(
             "Platform: {}/{}\n",
             std::env::consts::OS,
             std::env::consts::ARCH
@@ -125,6 +129,43 @@ fn help(command: Option<&str>) -> error::Result<()> {
         .map_err(|e| Error::general("write help").with_source(e))
 }
 
+fn usage_text(e: &clap::Error) -> String {
+    use clap::error::{ContextKind, ContextValue};
+    let value = |kind| match e.get(kind) {
+        Some(ContextValue::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    match e.kind() {
+        ErrorKind::InvalidSubcommand => {
+            if let Some(cmd) = value(ContextKind::InvalidSubcommand) {
+                return format!(
+                    "unknown command \"{cmd}\" for \"pgmi\"\nRun 'pgmi --help' for usage."
+                );
+            }
+        }
+        ErrorKind::UnknownArgument => {
+            if let Some(arg) = value(ContextKind::InvalidArg) {
+                let short = arg.strip_prefix('-').filter(|r| !r.starts_with('-'));
+                return match short.and_then(|r| r.chars().next()) {
+                    Some(c) => format!("unknown shorthand flag: '{c}' in {arg}"),
+                    None => format!("unknown flag: {arg}"),
+                };
+            }
+        }
+        _ => {}
+    }
+    let text = e.render().to_string();
+    let text = text
+        .trim_end()
+        .strip_prefix("error: ")
+        .unwrap_or(text.trim_end())
+        .to_string();
+    if value(ContextKind::InvalidArg).is_some_and(|a| a.starts_with("--host")) {
+        return format!("{text}\n-h is --host on deploy, as in psql; use --help for help");
+    }
+    text
+}
+
 fn clap_error(e: &clap::Error) -> u8 {
     match e.kind() {
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
@@ -132,9 +173,7 @@ fn clap_error(e: &clap::Error) -> u8 {
             0
         }
         _ => {
-            let text = e.render().to_string();
-            let text = text.strip_prefix("error: ").unwrap_or(&text);
-            let _ = write!(std::io::stderr(), "pgmi: error: {text}");
+            let _ = writeln!(std::io::stderr(), "pgmi: error: {}", usage_text(e));
             Kind::Usage.exit_code()
         }
     }

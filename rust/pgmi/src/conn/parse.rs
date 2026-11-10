@@ -43,6 +43,8 @@ pub const KNOWN: &[&str] = &[
     "target_session_attrs",
     "load_balance_hosts",
     "require_auth",
+    "min_protocol_version",
+    "max_protocol_version",
     "default_query_exec_mode",
     "statement_cache_capacity",
     "description_cache_capacity",

@@ -1,0 +1,22 @@
+[package]
+name = "pgmi-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+tokio = { version = "1.54.1", features = ["io-util"] }
+tokio-postgres = { version = "0.7.18", default-features = false }
+
+[[bin]]
+name = "tap_reader"
+path = "fuzz_targets/tap_reader.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

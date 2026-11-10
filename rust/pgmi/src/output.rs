@@ -36,7 +36,7 @@ impl Reporter {
         if self.verbose {
             let t = self.start.elapsed().as_secs_f64();
             for l in text.lines() {
-                let _ = writeln!(err, "[{t:7.3}s] {l}");
+                let _ = writeln!(err, "[{t:.2}s] {l}");
             }
         } else {
             let _ = writeln!(err, "{text}");

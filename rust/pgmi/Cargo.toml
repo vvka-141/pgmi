@@ -16,6 +16,7 @@ jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 roxmltree = "0.21.2"
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12"] }
 rustls-graviola = "0.4.0"
+rustls-native-certs = "0.8.5"
 rustls-pki-types = { version = "1.16.0", features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }

@@ -2,6 +2,7 @@ pub mod dotenv;
 pub mod params;
 pub mod yaml;
 
+use std::io::Write;
 use std::path::Path;
 
 use crate::env::Env;
@@ -17,8 +18,14 @@ pub fn project_dotenv(project: &Path, env: &Env) -> Result<Vec<(String, String)>
             return Err(Error::config(format!("failed to read {}", path.display())).with_source(e));
         }
     };
-    let pairs = dotenv::parse(&text, dotenv::Mode::Dotenv)
-        .map_err(|e| Error::config(format!("failed to parse {}: {e}", path.display())))?;
+    let Ok(pairs) = dotenv::parse(&text, dotenv::Mode::Dotenv) else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "WARNING: {} could not be parsed, so none of its values were applied",
+            path.display()
+        );
+        return Ok(vec![]);
+    };
     let mut out: Vec<(String, String)> = Vec::new();
     for (k, v) in pairs {
         if env.contains(&k) {

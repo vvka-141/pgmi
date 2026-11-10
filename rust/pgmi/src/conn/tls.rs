@@ -164,9 +164,13 @@ pub fn config(spec: &Spec) -> Result<Tls> {
         let mut roots = RootCertStore::empty();
         match root_path(spec).as_deref() {
             Some("system") => {
-                return Err(Error::config(
-                    "sslrootcert=system is not supported in this build",
-                ));
+                let found = rustls_native_certs::load_native_certs();
+                if found.certs.is_empty() {
+                    return Err(Error::config(
+                        "sslrootcert=system: no certificates found in the system trust store",
+                    ));
+                }
+                roots.add_parsable_certificates(found.certs);
             }
             Some(path) => {
                 roots.add_parsable_certificates(read_certs(Path::new(path))?);

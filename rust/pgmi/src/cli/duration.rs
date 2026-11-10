@@ -45,6 +45,36 @@ pub fn parse(s: &str) -> Result<Duration, String> {
     Duration::try_from_secs_f64(total).map_err(|_| bad())
 }
 
+pub fn render(d: Duration) -> String {
+    if d.is_zero() {
+        return "0s".into();
+    }
+    let nanos = d.as_nanos();
+    if nanos < 1_000_000_000 {
+        return format!("{:?}", d);
+    }
+    let secs = d.as_secs();
+    let (h, m) = (secs / 3600, secs / 60 % 60);
+    let s = (nanos % 60_000_000_000) as f64 / 1e9;
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if h > 0 || m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    let mut sec = format!("{s:.9}");
+    while sec.ends_with('0') {
+        sec.pop();
+    }
+    if sec.ends_with('.') {
+        sec.pop();
+    }
+    out.push_str(&sec);
+    out.push('s');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +90,9 @@ mod tests {
         assert!(parse("10").is_err());
         assert!(parse("").is_err());
         assert!(parse("-5s").is_err());
+        assert_eq!(render(Duration::from_secs(2)), "2s");
+        assert_eq!(render(Duration::from_secs(180)), "3m0s");
+        assert_eq!(render(Duration::from_secs(5400)), "1h30m0s");
+        assert_eq!(render(Duration::from_millis(1500)), "1.5s");
     }
 }

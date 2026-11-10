@@ -285,11 +285,6 @@ pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Resul
             "invalid channel_binding value: \"{channel_binding}\""
         )));
     }
-    if channel_binding == "require" && matches!(sslmode.as_str(), "disable" | "allow") {
-        return Err(Error::config(format!(
-            "channel_binding=require needs TLS, but sslmode is \"{sslmode}\""
-        )));
-    }
     let tsa = f
         .get("target_session_attrs")
         .cloned()
