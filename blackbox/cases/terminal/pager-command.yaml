@@ -1,0 +1,28 @@
+description: the pager command is split on white space and run without a shell; with no pager variable it is less -R; a pager that cannot start prints directly
+home:
+  bin/less: {content: "#!/bin/sh\necho \"$@\" > {workdir}/less-args.txt\ncat > /dev/null\n", mode: "0755"}
+steps:
+  - pgmi: [ai]
+    tty: true
+    env: {PGMI_PAGER: "tee {workdir}/one.txt {workdir}/$NOT_EXPANDED.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      files:
+        one.txt: ["pgmi_plan_view"]
+        $NOT_EXPANDED.txt: ["pgmi_plan_view"]
+  - pgmi: [ai]
+    tty: true
+    env: {PATH: "{home}/bin:/usr/bin:/bin"}
+    timeout: 30
+    expect:
+      exit: 0
+      files:
+        less-args.txt: ["^-R$"]
+  - pgmi: [ai]
+    tty: true
+    env: {PGMI_PAGER: "no-such-pager-program"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["pgmi_plan_view"]

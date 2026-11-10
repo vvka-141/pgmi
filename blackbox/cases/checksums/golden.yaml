@@ -18,6 +18,9 @@ project:
     edge/unicode-literal.sql: "SELECT 'Ärger İstanbul ß';\n"
     edge/tabs-and-blank-lines.sql: "\n\n\tSELECT\t1\t;\n\n\n"
     edge/u-amp.sql: "SELECT U&'d\\0061t\\+000061' AS \"Mixed\";\n"
+    edge/unicode-space-ends.sql: "\u00a0\u3000SELECT 1;\u2028\u0085\n"
+    edge/unicode-space-inside.sql: "SELECT\u00a01;\n"
+    edge/zero-width-ends.sql: "\u200bSELECT 1;\ufeff\n"
     deploy.sql: |
       CREATE TABLE sums AS
       SELECT path, checksum, pgmi_checksum FROM pg_temp.pgmi_source_view;
@@ -48,6 +51,9 @@ steps:
             - [./edge/u-amp.sql, 5f8ff760790ef3b1630931d323c67cd9ec8848e054a7e6a7ea862b3b6292a0c3, 24e4b422018cbe77caa8553d85f3aa05c8df579d3d981c6463791a4e02a6a018]
             - [./edge/unicode-ident.sql, 8d58d51d0be674e2a927f04e6a375d2d4d092ca038a1c07f89d98986f3162e47, 62b0ba5c66b8c37d83c28fe514452e63e87fd8c778f2c1b78cf54c476f961502]
             - [./edge/unicode-literal.sql, 9f7b7f18e7d850ffca384925d17d1e27a1627dcab2f0a1c52f64762931c29981, 3a6620aea968f83c022bf1b4edb84a22ffa04321b282e4443e4cc0b3198501f0]
+            - [./edge/unicode-space-ends.sql, 92caf23eec4b78cbcc000a450ee44ada4662630bd1ac9634de3dfd9cc8306438, 354b7196c9ba5fb4b21cf615bb6ec4cd5c07503c34229feef033fc081a8c03f4]
+            - [./edge/unicode-space-inside.sql, 71d7ab3cd2c52ed5089f5533b94f3a3b65d3f59e3ff0fb532073d9794895cb81, 5790376adc235857b4bf33f448608f5add2869248825420ccb7a2c41318c8f39]
+            - [./edge/zero-width-ends.sql, 9066bf5448da00c6a375bab7af28911837fcb1a789bbf628c9b92f4be595474a, ed17a1812d9e3111e43df8791598262de6917f05bf3bec51bd1052e7be09dbed]
             - [./same/a-plain.sql, a394888eeef6a2b25cde0ecc483d61955af720cf0569acc7bdcffa0afcfc029c, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
             - [./same/b-case-spacing.sql, 1cf40c786f2e5a72c0ade58764967d670337362b39da785a999323978f8ea8b0, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
             - [./same/c-comments.sql, 55edae4900c824e27af58a37e80f6b4f4714a65d4f643ff5690eb46ed371d256, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]

@@ -1,0 +1,13 @@
+description: the project .env sets the process environment the cloud sign-in reads, so AWS credentials and region in .env sign the RDS token
+servers: [fakes]
+project:
+  files:
+    .env: "AWS_ACCESS_KEY_ID=AKIDDOTENV\nAWS_SECRET_ACCESS_KEY=not-a-real-secret\nAWS_REGION=eu-north-1\n"
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --aws, --connection, "host=127.0.0.1 port={recorder_port} user=iam_dotenv dbname=postgres sslmode=require", -d, "{db}"]
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_dotenv", "password": "[^"]*X-Amz-Credential=AKIDDOTENV%2F\d{8}%2Feu-north-1%2Frds-db%2F']

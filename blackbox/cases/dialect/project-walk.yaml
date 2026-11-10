@@ -1,0 +1,32 @@
+description: the project walk never follows a symbolic link (file or directory) unless .pgmiignore hides it, deploy.sql itself may be one, and a file with a NUL byte or invalid UTF-8 is exit 10 naming the file
+project:
+  files:
+    shared/x.sql: SELECT 'outside';
+    link-file/deploy.sql: SELECT 1;
+    link-file/x.sql: {symlink: ../shared/x.sql}
+    link-dir/deploy.sql: SELECT 1;
+    link-dir/lib: {symlink: ../shared}
+    ignored/deploy.sql: {symlink: ../shared/x.sql}
+    ignored/.pgmiignore: "lib\n"
+    ignored/lib: {symlink: ../shared}
+    nul/deploy.sql: SELECT 1;
+    nul/data.bin: {hex: "610062"}
+    utf8/deploy.sql: SELECT 1;
+    utf8/latin1.sql: {hex: "53454c45435420e93b0a"}
+    deploy-utf8/deploy.sql: {hex: "53454c45435420e93b0a"}
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/link-file", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["\\./x\\.sql", "symlink"]}
+  - pgmi: [deploy, "{project}/link-dir", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["\\./lib", "symlink"]}
+  - pgmi: [deploy, "{project}/nul", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["\\./data\\.bin", "NUL byte"]}
+  - pgmi: [deploy, "{project}/utf8", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["\\./latin1\\.sql", "not valid UTF-8"]}
+  - pgmi: [deploy, "{project}/deploy-utf8", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["deploy\\.sql is not valid UTF-8", "offset 7"]}
+  - pgmi: [deploy, "{project}/ignored", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      json: {filesLoaded: 0}

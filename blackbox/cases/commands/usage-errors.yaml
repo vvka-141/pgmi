@@ -1,0 +1,28 @@
+description: errors go to stderr prefixed with the words pgmi and error; an unknown command or subcommand, an unknown shorthand, -h without a value (it is --host), more than one cloud flag, an empty PGMI_PARAM_ name; --param is never split on commas; booleans take =false; --timeout 0 turns the timeout off
+project:
+  files:
+    deploy.sql: CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [bogus]
+    expect: {exit: 2, stderr: ['^pgmi: error: unknown command "bogus"']}
+  - pgmi: [metadata, bogus]
+    expect: {exit: 2}
+  - pgmi: [deploy, "{project}", -x]
+    expect: {exit: 2, stderr: ["^pgmi: error: unknown shorthand flag: 'x' in -x"]}
+  - pgmi: [deploy, "{project}", -h]
+    expect: {exit: 2, stderr: ["-h is --host"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --azure, --aws]
+    expect: {exit: 10, stderr: ["^pgmi: error: .*--azure, --aws, or --google"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_: v}
+    expect: {exit: 10, stderr: ["PGMI_PARAM_ has no parameter name"]}
+  - pgmi: [deploy, --help]
+    expect: {exit: 0, stdout: ["\\(default 3m0s\\)"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "list=a,b", --timeout, "0"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen
+          rows: [[list, "a,b"]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "list=a,b", --overwrite, --force=false, --timeout, "0"]
+    expect: {exit: 12}

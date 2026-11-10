@@ -1,0 +1,15 @@
+description: comments between the macro's tokens do not stop CALL pgmi_test from expanding; NULL as the pattern runs every test
+project:
+  files:
+    a/__test__/test_a.sql: CREATE TABLE ran_a ();
+    deploy.sql: |
+      BEGIN;
+      CALL /* c */ pgmi_test -- c
+      ( '/a/' /* c */ ) ;
+      CALL pgmi_test(NULL);
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      json: {testMacros: 2}

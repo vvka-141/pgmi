@@ -1,0 +1,74 @@
+description: serve answers each malformed line as Go does - parse error or invalid request with a null id, a missing or wrong jsonrpc with the id echoed, a bad id type with a null id, unknown methods and tools, bad tools/call params - ignores blank lines and notifications, reads a 2 MB line and invalid UTF-8, keeps the session going and exits 0 at end of input
+steps:
+  - pgmi: [serve]
+    stdin:
+      - 'not json'
+      - '[]'
+      - '42'
+      - '"text"'
+      - 'null'
+      - '{"jsonrpc":"2.0","id":1,"method":"ping"'
+      - '{"id":2,"method":"ping"}'
+      - '{"jsonrpc":"1.0","id":3,"method":"ping"}'
+      - '{"jsonrpc":2,"id":4,"method":"ping"}'
+      - '{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}'
+      - '{"jsonrpc":"2.0","id":[1],"method":"ping"}'
+      - '{"jsonrpc":"2.0","id":true,"method":"ping"}'
+      - '{"jsonrpc":"2.0","id":null,"method":"ping"}'
+      - '{"jsonrpc":"2.0","id":{"a":1},"method":"tools/call","params":{"name":"templates_list"}}'
+      - '{"jsonrpc":"2.0","id":5,"method":"no/such/method"}'
+      - '{"jsonrpc":"2.0","method":"no/such/notification"}'
+      - '{"jsonrpc":"2.0","id":6,"method":"tools/call"}'
+      - '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":[]}'
+      - '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"no_such_tool"}}'
+      - '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"deploy","arguments":{}}}'
+      - '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"deploy","arguments":"x"}}'
+      - '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"/x","bogus":1}}}'
+      - ''
+      - '   '
+      - {text: '{"jsonrpc":"2.0","id":12,"method":"ping","params":{"pad":"'}
+      - {text: 'a', times: 2000000}
+      - '"}}'
+      - {hex: "fffefd0a"}
+      - {text: '{"jsonrpc":"2.0","id":13,"method":"ping","params":{"x":"'}
+      - {hex: "c328"}
+      - '"}}'
+      - '{"jsonrpc":"2.0","id":14,"method":"initialize","params":{}}'
+      - '{"jsonrpc":"2.0","id":15,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}'
+      - '{"jsonrpc":"2.0","id":"s","method":"ping"}'
+      - '{"jsonrpc":"2.0","id":1.5,"method":"ping"}'
+      - {text: '{"jsonrpc":"2.0","id":16,"method":"ping"}'}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '\A{"jsonrpc":"2.0","id":null,"error":{"code":-32700,'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid request: json: cannot unmarshal array'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid request: json: cannot unmarshal number'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid request: json: cannot unmarshal string'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: unexpected end of JSON input"}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":2,"error":{"code":-32600,'
+        - '(?m)^{"jsonrpc":"2.0","id":3,"error":{"code":-32600,'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid request: json: cannot unmarshal number into Go struct field'
+        - '(?s)(\{"jsonrpc":"2.0","id":null,"error":\{"code":-32600,"message":"id must be a string or number"\}\}\n.*){5}'
+        - '(?m)^{"jsonrpc":"2.0","id":5,"error":{"code":-32601,'
+        - '(?m)^{"jsonrpc":"2.0","id":6,"error":{"code":-32602,'
+        - '(?m)^{"jsonrpc":"2.0","id":7,"error":{"code":-32602,'
+        - '(?m)^{"jsonrpc":"2.0","id":8,"error":{"code":-32602,"message":"unknown tool: no_such_tool"}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":9,"result":{"content":\[{"type":"text","text":"path is required\\nexit code 10"}\],"structuredContent":{"message":"path is required","exitCode":10},"isError":true}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":10,"result":{.*"exitCode":1},"isError":true}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":11,"result":{.*unknown argument \\"bogus\\"; accepted: .*"exitCode":10},"isError":true}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":12,"result":{}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: invalid character ''\\\\xff'''
+        - '(?m)^{"jsonrpc":"2.0","id":13,"result":{}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":14,"error":{"code":-32602,"message":"missing required parameter: protocolVersion"}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":15,"result":{"protocolVersion":"2025-11-25",'
+        - '(?m)^{"jsonrpc":"2.0","id":"s","result":{}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":1.5,"result":{}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":16,"result":{}}$'
+      stdout_not:
+        - 'no/such/notification'
+        - '"id":4,'
+        - '"id":\{'
+        - '"id":\['
+        - '"id":true'

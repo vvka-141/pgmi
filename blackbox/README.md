@@ -34,14 +34,17 @@ project:
     deploy.sql: |
       CREATE TABLE marker (id int);
       SELECT 1/0;
+    data.bin: {hex: "610062"}        # raw bytes
+    link.sql: {symlink: ../x.sql}    # a symbolic link
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_TOKEN: abc}   # optional
-    stdin: "a=b\n"                 # optional; or a list of lines and {wait: seconds}
+    stdin: "a=b\n"                 # optional; or a list of lines, {wait: seconds},
+                                   # {text: "...", times: n} and {hex: "ff0a", times: n} (no newline added)
     cwd: "{project}"               # optional: working directory (default {workdir})
     delay: 0                       # optional: seconds to wait before starting
     background: false              # optional: true checks it after the last step
-    signal: {name: SIGINT, after: 3}  # optional; or a list, each `after` counted from the start
+    signal: {name: SIGINT, after: 3}  # optional, tty too; or a list, each `after` counted from the start
     timeout: 120                   # optional: seconds before the step fails
     tty: true                      # optional: run in a 120x40 pseudo-terminal; stdin is typed as keys
     binary: reference              # optional: run PGMI_REFERENCE_BIN instead of PGMI_BIN

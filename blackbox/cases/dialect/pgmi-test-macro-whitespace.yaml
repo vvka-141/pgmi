@@ -1,0 +1,15 @@
+description: only ASCII white space (space, tab, CR, LF, FF) separates the macro's tokens; a no-break space or a vertical tab after CALL is not the macro, so the text reaches the server unexpanded
+project:
+  files:
+    nbsp/deploy.sql: "BEGIN;\nCALL pgmi_test();\nCOMMIT;\n"
+    vtab/deploy.sql: "BEGIN;\nCALL\vpgmi_test();\nCOMMIT;\n"
+    formfeed/deploy.sql: "BEGIN;\nCALL\f\tpgmi_test\r\n();\nCOMMIT;\n"
+    formfeed/__test__/test_a.sql: SELECT 1;
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/nbsp", --connection, "{conn}", -d, "{db}", --json]
+    expect: {exit: 13, json: {testMacros: 0}}
+  - pgmi: [deploy, "{project}/vtab", --connection, "{conn}", -d, "{db}", --json]
+    expect: {exit: 13, json: {testMacros: 0}}
+  - pgmi: [deploy, "{project}/formfeed", --connection, "{conn}", -d, "{db}", --json]
+    expect: {exit: 0, json: {testMacros: 1}}

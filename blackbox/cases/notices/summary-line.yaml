@@ -1,0 +1,27 @@
+description: the summary line gives the duration in seconds with two decimals, counts ignored paths (dot-files among them), and on failure says what was left behind - nothing committed in atomic mode, the failed unit and committed units in psql mode, a created database left empty
+project:
+  files:
+    ok/deploy.sql: SELECT pg_sleep(1.1);
+    ok/.pgmiignore: "notes.txt\n"
+    ok/notes.txt: ignored
+    atomic/deploy.sql: SELECT 1/0;
+    tail/deploy.sql: |
+      BEGIN;
+      COMMIT;
+      CREATE TABLE tail_one ();
+      SELECT 1/0;
+      CREATE TABLE tail_two ();
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/atomic", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ['^FAILED {db}: failed after \d+\.\d\ds — nothing committed; created database "{db}", left empty$']
+  - pgmi: [deploy, "{project}/ok", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ['^ok {db}: 0 files loaded, 2 paths ignored in 1\.\d\ds$']
+  - pgmi: [deploy, "{project}/tail", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ['^FAILED {db}: failed after \d+\.\d\ds \(unit 3 of 4 failed; 2 earlier unit\(s\) already committed\)$']

@@ -1,0 +1,25 @@
+description: initialize echoes 2025-11-25, 2025-06-18 or 2024-11-05 and answers any other version with 2025-11-25; a request whose _meta names 2026-07-28 is served statelessly - server/discover, results marked resultType complete, clientCapabilities required (-32602), an unknown version -32022 with the supported list, initialize and ping not found
+steps:
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}'
+      - '{"jsonrpc":"2.0","id":3,"method":"server/discover"}'
+      - '{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2030-01-01"}}}'
+      - '{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}'
+      - '{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+      - '{"jsonrpc":"2.0","id":7,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+      - '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"templates_list","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+      - '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"templates_list","_meta":{"io.modelcontextprotocol/protocolVersion":"1.0"}}}'
+    expect:
+      exit: 0
+      stdout:
+        - '(?m)^{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",'
+        - '(?m)^{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-11-25",'
+        - '(?m)^{"jsonrpc":"2.0","id":3,"result":{.*"resultType":"complete","supportedVersions":\["2026-07-28"\],"ttlMs":3600000}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":4,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"requested":"2030-01-01","supported":\["2026-07-28"\]}}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"missing required _meta field: io.modelcontextprotocol/clientCapabilities"}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":6,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"pgmi",.*"cacheScope":"public","resultType":"complete","tools":\[.*"ttlMs":3600000}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":7,"error":{"code":-32601,'
+        - '(?m)^{"jsonrpc":"2.0","id":8,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":.*"resultType":"complete",'
+        - '(?m)^{"jsonrpc":"2.0","id":9,"error":{"code":-32022,'

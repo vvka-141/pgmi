@@ -1,0 +1,22 @@
+description: pgmi with no arguments prints the root help on stdout and exits 0; on a terminal it draws the banner on stderr instead, unless PGMI_NO_BANNER is set
+steps:
+  - pgmi: []
+    expect:
+      exit: 0
+      stdout: ["Usage:", "Available Commands:", "deploy"]
+      stderr_not: ["█"]
+  - pgmi: []
+    tty: true
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["█", "pgmi --help +Full reference"]
+      stdout_not: ["Available Commands:"]
+  - pgmi: []
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Available Commands:"]
+      stdout_not: ["█"]

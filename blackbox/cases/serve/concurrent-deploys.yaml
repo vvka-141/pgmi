@@ -1,0 +1,21 @@
+description: two deploy calls to the same database overlapping in one serve process - the second is refused with exit code 15 in its result while the first completes
+project:
+  files:
+    deploy.sql: |
+      SELECT pg_sleep(4);
+      CREATE TABLE slow_done ();
+steps:
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+      - wait: 2
+      - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?s)"id":3,"result":\{.*"exitCode":15.*"isError":true\}\}\n.*"id":2,"result":\{"content":\[\{"type":"text","text":"deployed {db}: '
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'slow_done'
+          rows: [[1]]

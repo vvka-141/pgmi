@@ -1,0 +1,31 @@
+description: the project .env expands $NAME and ${NAME} in unquoted and double-quoted values, from earlier lines only (a name set only in the environment expands to empty); single quotes keep $ literal; a .env that does not parse is warned about and applies nothing
+project:
+  files:
+    .env: "PGMI_PARAM_BASE=b\nPGMI_PARAM_UNQUOTED=x$PGMI_PARAM_BASE\nPGMI_PARAM_BRACED=x${PGMI_PARAM_BASE}y\nPGMI_PARAM_DOUBLE=\"x${PGMI_PARAM_BASE}\"\nPGMI_PARAM_SINGLE='x${PGMI_PARAM_BASE}'\nPGMI_PARAM_FROM_ENV=a${SHELL_VALUE}b\nPGMI_PARAM_UNSET=a${NOT_SET_ANYWHERE}b\n"
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+    broken/.env: "PGMI_PARAM_GOOD=yes\nthis line is not an assignment\n"
+    broken/deploy.sql: |
+      CREATE TABLE broken_seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {SHELL_VALUE: from-shell}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - [base, b]
+            - [braced, xby]
+            - [double, xb]
+            - [from_env, ab]
+            - [single, "x${PGMI_PARAM_BASE}"]
+            - [unquoted, xb]
+            - [unset, ab]
+  - pgmi: [deploy, "{project}/broken", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["WARNING: .*broken/\\.env could not be parsed, so none of its values were applied"]
+      sql:
+        - query: SELECT count(*) FROM broken_seen
+          rows: [[0]]

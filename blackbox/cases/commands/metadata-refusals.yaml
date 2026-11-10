@@ -1,0 +1,62 @@
+description: a pgmi-meta block that is broken is exit 10 naming the file - idempotent missing or not a boolean, a nil or missing id, a blank sort key or description, an unknown entity, unclosed XML, two blocks in one file, a block over 10240 bytes; a __name__ directory other than __test__ and __tests__ is exit 10; PGMI_MAX_FILE_SIZE caps a file and must be a positive whole number
+project:
+  files:
+    no-idempotent/deploy.sql: SELECT 1;
+    no-idempotent/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    yes/deploy.sql: SELECT 1;
+    yes/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="yes"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    nil-id/deploy.sql: SELECT 1;
+    nil-id/a.sql: '/* <pgmi-meta id="00000000-0000-0000-0000-000000000000" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    no-id/deploy.sql: SELECT 1;
+    no-id/a.sql: '/* <pgmi-meta idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    spaced-id/deploy.sql: SELECT 1;
+    spaced-id/a.sql: '/* <pgmi-meta id=" 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    blank-key/deploy.sql: SELECT 1;
+    blank-key/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>   </key></sortKeys></pgmi-meta> */'
+    blank-description/deploy.sql: SELECT 1;
+    blank-description/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><description>   </description><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    entity/deploy.sql: SELECT 1;
+    entity/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><description>a &nbsp; b</description><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    unclosed/deploy.sql: SELECT 1;
+    unclosed/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>1</key></sortKeys> */'
+    two-blocks/deploy.sql: SELECT 1;
+    two-blocks/a.sql: |
+      /* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */
+      /* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e02" idempotent="true"><sortKeys><key>2</key></sortKeys></pgmi-meta> */
+    dunder/deploy.sql: SELECT 1;
+    dunder/__foo__/a.sql: SELECT 1;
+    big/deploy.sql: SELECT 1;
+    big/big.sql: SELECT '0123456789012345678901234567890123456789';
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [metadata, plan, "{project}/no-idempotent"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql"]}
+  - pgmi: [metadata, plan, "{project}/yes"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", 'idempotent attribute must be true or false, got "yes"']}
+  - pgmi: [metadata, plan, "{project}/nil-id"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "nil UUID"]}
+  - pgmi: [metadata, plan, "{project}/no-id"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "nil UUID"]}
+  - pgmi: [metadata, plan, "{project}/spaced-id"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "not a UUID"]}
+  - pgmi: [metadata, plan, "{project}/blank-key"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "sortKeys\\[0\\] cannot be empty"]}
+  - pgmi: [metadata, plan, "{project}/blank-description"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "description element contains only whitespace"]}
+  - pgmi: [metadata, plan, "{project}/entity"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "nbsp"]}
+  - pgmi: [metadata, plan, "{project}/unclosed"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "unexpected EOF"]}
+  - pgmi: [metadata, plan, "{project}/two-blocks"]
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "Multiple metadata blocks"]}
+  - pgmi: [metadata, plan, "{project}/dunder"]
+    expect: {exit: 10, stderr: ['unsupported directory "__foo__"']}
+  - pgmi: [metadata, plan, "{project}/big"]
+    env: {PGMI_MAX_FILE_SIZE: "40"}
+    expect: {exit: 10, stderr: ["\\./big\\.sql", "exceeds 40-byte limit", "PGMI_MAX_FILE_SIZE"]}
+  - pgmi: [metadata, plan, "{project}/big"]
+    env: {PGMI_MAX_FILE_SIZE: "abc"}
+    expect: {exit: 10, stderr: ["PGMI_MAX_FILE_SIZE"]}
+  - pgmi: [metadata, plan, "{project}/big"]
+    env: {PGMI_MAX_FILE_SIZE: "50"}
+    expect: {exit: 0}

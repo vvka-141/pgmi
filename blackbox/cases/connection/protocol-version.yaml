@@ -1,0 +1,18 @@
+description: max_protocol_version=3.2 is accepted and the deploy works over protocol 3.2, including a --timeout that cancels a running statement (the longer 3.2 cancel key); sslsni=0, sslcertmode=disable and client_encoding are accepted
+project:
+  files:
+    deploy.sql: SELECT 1;
+    slow/deploy.sql: SELECT pg_sleep(30);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?max_protocol_version=3.2&min_protocol_version=3.2", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/slow", --connection, "{conn}?max_protocol_version=3.2", -d, "{db}", --timeout, 2s]
+    timeout: 20
+    expect:
+      exit: 16
+      stderr: ["exceeded --timeout 2s"]
+      sql:
+        - query: SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND query LIKE '%pg_sleep(30)%' AND pid <> pg_backend_pid()
+          rows: [[0]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslsni=0&sslcertmode=disable&client_encoding=UTF8", -d, "{db}"]
+    expect: {exit: 0}

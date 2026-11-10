@@ -1,0 +1,50 @@
+description: metadata ids may be written with braces, urn:uuid:, without hyphens or in upper case and are stored lower-case hyphenated; idempotent takes the boolean spellings 1/t/TRUE; unknown elements and attributes, an XML prolog and a default namespace are ignored, entities and CDATA decoded, repeated sortKeys merged, any uuid version accepted, text after the root element ignored; a block in a line comment or a dollar quote is not metadata; the fallback id of a file without metadata is md5 of its ./path as a uuid, the same in metadata plan and pgmi_plan_view
+project:
+  files:
+    braces.sql: |
+      /* <pgmi-meta id="{0D3B6F0E-5A8E-4F64-9A3E-6A1C2B7D9E01}" idempotent="TRUE"><sortKeys><key>1</key></sortKeys></pgmi-meta> */
+      SELECT 1;
+    urn.sql: |
+      /* <pgmi-meta id="urn:uuid:0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e02" idempotent="1" unknown="x"><other/><description>a &amp; b &#65;</description><sortKeys><key>2</key></sortKeys></pgmi-meta> trailing text */
+      SELECT 2;
+    bare.sql: |
+      /* <pgmi-meta id="0D3B6F0E5A8E4F649A3E6A1C2B7D9E03" idempotent="f"><sortKeys><key> 3 </key><key>4</key><key>4</key></sortKeys></pgmi-meta> */
+      SELECT 3;
+    upper.sql: |
+      /* <PGMI-META id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e04" idempotent="true"></PGMI-META> */
+      SELECT 4;
+    plain.sql: SELECT 5;
+    prolog.sql: |
+      /* <?xml version="1.0"?><pgmi-meta id="0d3b6f0e-5a8e-7f64-9a3e-6a1c2b7d9e05" idempotent=" T " xmlns="urn:x"><sortKeys><key>5</key></sortKeys><sortKeys><key>6</key></sortKeys><description><![CDATA[a<b]]></description></pgmi-meta> */
+      SELECT 6;
+    line-comment.sql: |
+      -- <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e06" idempotent="true"><sortKeys><key>7</key></sortKeys></pgmi-meta>
+      SELECT 7;
+    dollar.sql: |
+      SELECT $$ /* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e07" idempotent="true"><sortKeys><key>8</key></sortKeys></pgmi-meta> */ $$;
+    deploy.sql: |
+      CREATE TABLE plan AS SELECT path, generic_id, id, idempotent, description, sort_key FROM pg_temp.pgmi_plan_view;
+steps:
+  - pgmi: [metadata, plan, "{project}", --json]
+    expect:
+      exit: 0
+      stdout: ['"path": "\./plain\.sql",\s+"sortKey": "\./plain\.sql",\s+"id": "1d622beb-19db-dd1d-f3e3-8c353019e16a"']
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path, id::text, idempotent, description, sort_key FROM plan WHERE id IS NOT NULL ORDER BY sort_key, path
+          rows:
+            - [./bare.sql, 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e03, false, "", " 3 "]
+            - [./braces.sql, 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01, true, "", "1"]
+            - [./urn.sql, 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e02, true, "a & b A", "2"]
+            - [./bare.sql, 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e03, false, "", "4"]
+            - [./bare.sql, 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e03, false, "", "4"]
+            - [./prolog.sql, 0d3b6f0e-5a8e-7f64-9a3e-6a1c2b7d9e05, true, "a<b", "5"]
+            - [./prolog.sql, 0d3b6f0e-5a8e-7f64-9a3e-6a1c2b7d9e05, true, "a<b", "6"]
+        - query: SELECT path, generic_id::text FROM plan WHERE id IS NULL ORDER BY path
+          rows:
+            - [./dollar.sql, 24eb490b-9fa6-3498-57dc-4826c98ee3df]
+            - [./line-comment.sql, 256be341-fb25-3fb8-189f-cd6bb72bf62a]
+            - [./plain.sql, 1d622beb-19db-dd1d-f3e3-8c353019e16a]
+            - [./upper.sql, ea5bbb5e-d1b9-9e0f-0cf8-ffd0b9b2b286]

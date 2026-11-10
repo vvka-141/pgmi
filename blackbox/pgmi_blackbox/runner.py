@@ -224,7 +224,7 @@ def _start(ws: Workspace, step: Step) -> Running:
     binary = ws.reference if step.reference and ws.reference else ws.binary
     argv = [str(binary), *(ws.substitute(a) for a in step.args)]
     if step.tty:
-        return _start_tty(ws, step, argv)
+        return _signal(step, _start_tty(ws, step, argv))
     proc = subprocess.Popen(
         argv,
         cwd=ws.substitute(step.cwd),
@@ -243,9 +243,13 @@ def _start(ws: Workspace, step: Step) -> Running:
         run.threads.append(threading.Thread(target=_feed, args=(proc.stdin, chunks), daemon=True))
     for t in run.threads:
         t.start()
+    return _signal(step, run)
+
+
+def _signal(step: Step, run: Running) -> Running:
     for sig in step.signals:
         time.sleep(max(0.0, run.started + sig.after - time.monotonic()))
-        proc.send_signal(getattr(signal, sig.name))
+        run.proc.send_signal(getattr(signal, sig.name))
     return run
 
 
