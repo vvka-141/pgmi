@@ -44,6 +44,16 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `-v` / `--verbose` (DEBUG notices shown) | ✓ `commands/verbose` |
 | `serve`: initialize, `tools/list` (7 tools), a tool call, malformed message (-32700, session continues), unknown method (-32601), EOF exits 0 | ✓ `serve/session` |
 | `serve`: `deploy` tool with params, ping answered during a deploy, `notifications/cancelled` rolls the deploy back | ✓ `serve/deploy-tool`, `serve/cancel` |
+| `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `rust/docs/decisions/go-review.md` |
+| `serve`: protocol versions, `server/discover`, the 2026-07-28 stateless era | ✓ `serve/protocol-versions` |
+| `serve`: no `.env`, overwrite needs `confirmDatabaseName` (12), unknown argument (10) | ✓ `serve/deploy-guards` |
+| `serve`: deploys in sequence after an open transaction or a failed tail block; overlapping deploys = 15 | ✓ `serve/deploys-in-sequence`, `serve/concurrent-deploys` |
+| `serve`: deploy `timeout` argument (16, not a duration = 10) | ✓ `serve/deploy-timeout` |
+| `init`: `{{PROJECT_NAME}}`, JSON-escaped in `.json` | ✓ `commands/init-project-name`; file modes 0644/0755 ✗ (the runner checks content only) |
+| `pgmi` with no arguments | ✓ `commands/bare` |
+| `pgmi: error:` prefix, unknown subcommand and shorthand, `-h` on deploy, several cloud flags = 10 | ✓ `commands/usage-errors` |
+| metadata id spellings, XML leniency, fallback id; broken blocks = 10 | ✓ `commands/metadata-forms`, `commands/metadata-refusals` |
+| summary line format; `-v` elapsed prefix on notices | ✓ `notices/summary-line`, `notices/verbose-elapsed` |
 
 ## Deploy flags
 
@@ -56,9 +66,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--force` (alone; with `--overwrite`, no countdown without a terminal) | ✓ `flags/overwrite-force` |
 | `--overwrite` without `--force`, no terminal | ✓ `exit-codes/12-overwrite-denied` |
 | `--json` | ✓ `deploy/json-success`, `deploy/json-failure` |
-| `--param` | ✓ `params/precedence` |
+| `--param` (never split on commas) | ✓ `params/precedence`, `commands/usage-errors` |
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
-| `--timeout` (`3s`, `90s`, `1h30m`; not a duration = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms` |
+| `--timeout` (`3s`, `90s`, `1h30m`, `0`; not a duration = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms`, `commands/usage-errors` |
 | `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
 | `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` ✗ (only reaches Entra, see Cloud sign-in) |
 | `--aws`, `--aws-region` | ✓ `cloud/aws-iam-token` |
@@ -78,7 +88,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | ✓ `connection/keywords`, `connection/target-session-attrs`, `tls/require-auth-and-version`, `tls/channel-binding-and-direct` |
 | `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
 | `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal) | ✓ `terminal/colors`, `terminal/force-banner`, `terminal/non-interactive` |
-| `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal) | ✓ `terminal/pager` |
+| no terminal queries outside the wizards | ✓ `terminal/no-terminal-queries` |
+| `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal); split without a shell, default `less -R`, a pager that cannot start | ✓ `terminal/pager`, `terminal/pager-command` |
+| `PGMI_MAX_FILE_SIZE` (cap, not a number = 10) | ✓ `commands/metadata-refusals` |
 | `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` | ✓ `cloud/*`; `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` ✗ (they only reach Entra, see Cloud sign-in) |
 
 ## Project configuration
@@ -88,6 +100,8 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `pgmi.yaml` connection, params, timeout; unknown key = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid` |
 | precedence: flags > environment > `pgmi.yaml` > defaults, with the `connection: from ...` line | ✓ `config/precedence`, `config/pgmi-yaml`, `env/connection-string-vars` |
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
+| `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
+| project walk: symbolic links, NUL bytes, invalid UTF-8, `__name__` directories | ✓ `dialect/project-walk`, `commands/metadata-refusals` |
 | `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class` |
 
 ## Connection layer
@@ -124,6 +138,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 26 | multi-host: a down first host is skipped; both down names both | ✓ `connection/multi-host` |
 | 27 | `target_session_attrs`, all six values, against a primary and a standby | ✓ `connection/target-session-attrs` |
 | 28 | `options=` applied; unknown key sent to the server and refused (exit 11) | ✓ `connection/keywords` |
+| 28a | `max_protocol_version=3.2` deploy and cancel; `sslsni`, `sslcertmode`, `client_encoding` accepted | ✓ `connection/protocol-version` |
 | 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
 | 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root` |
 | 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
@@ -141,7 +156,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 
 | Behaviour | Coverage |
 |---|---|
-| `checksum` and `pgmi_checksum` golden values (CRLF, BOM, no final newline, empty, comments, nested comments, dollar quotes, escapes, `U&`, non-ASCII, keyword case); reformatting keeps `pgmi_checksum`, a literal change does not | ✓ `checksums/golden` (a one-byte mutant fails it) |
+| `checksum` and `pgmi_checksum` golden values (CRLF, BOM, no final newline, empty, comments, nested comments, dollar quotes, escapes, `U&`, non-ASCII, keyword case, Unicode white space at the ends and inside); reformatting keeps `pgmi_checksum`, a literal change does not | ✓ `checksums/golden` (a one-byte mutant fails it) |
 | a database deployed by one binary redeploys with another with no run-once drift | ✓ `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced` (set `PGMI_REFERENCE_BIN`; a one-byte mutant fails both) |
 
 ## Regex dialect
@@ -150,6 +165,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 |---|---|
 | `.pgmiignore` patterns where RE2 and Rust `regex` differ (`&&`, `--` in classes) | ✓ `dialect/pgmiignore` |
 | `CALL pgmi_test(...)` expansion (any case, schema-qualified, pattern), and none inside comments, strings and dollar quotes | ✓ `dialect/pgmi-test-macro`, `execution/pgmi-test-*` |
+| comments between the macro's tokens; ASCII white space only (no NBSP, no VT) | ✓ `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace` |
 
 ## File formats
 
@@ -164,20 +180,26 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Behaviour | Coverage |
 |---|---|
 | `init` wizard, overwrite confirmation (right name / wrong name = 12), `--force` countdown and banner, `config` | ✓ `terminal/*` |
+| end of input at the prompt = 12, SIGINT at the prompt or countdown = 130, Ctrl-C in `config` = 130 | ✓ `terminal/prompt-cancel`; Esc on the first `config` screen ✗ (did not end the wizard under the runner's pty; not investigated) |
 
 ## Cloud sign-in
 
 | Provider | Coverage |
 |---|---|
 | Azure through the Azure CLI (no client ID) | ✓ `cloud/azure-cli` (stub `az` on `PATH`) |
+| Azure PowerShell after the CLI and azd; `AZURE_TOKEN_CREDENTIALS` picks one | ✓ `cloud/azure-powershell` (stub `pwsh` on `PATH`) |
 | Azure managed identity (`--azure-client-id`) | ✓ `cloud/azure-managed-identity` (fake App Service endpoint) |
 | Azure service principal (`AZURE_CLIENT_SECRET`) | ✗ instance discovery always calls `login.microsoftonline.com`; the manual Azure acceptance check in the release checklist covers it |
 | token sign-in refuses `prefer`/`disable` (10) | ✓ `cloud/token-auth-requires-tls` |
 | AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |
 | Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the real dialer ✗ (pgmi offers no Admin API endpoint override; the real-cloud baseline PGMI-845 covers it) |
+| `.env` AWS keys and region reach the token | ✓ `cloud/dotenv-feeds-sdk` |
 | Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it; native sign-in is PGMI-849 |
 
 ## Contract notes
+
+The PGMI-830 review against Go adds its own list, with owner questions, in
+`rust/docs/decisions/go-review.md`.
 
 Oddities found while writing cases. Go is frozen, so they are recorded here and
 decided in the behaviour contract (PGMI-828), not fixed.

@@ -51,9 +51,12 @@ truncated to the first 50, up to 200 WARNINGs from the middle and the last
 
 ## Consequences
 
-- Open question: the duration in the summary line. The docs show `0.41s` and
-  `0.05s` (two decimals); Go's own duration format would print `53.1ms`.
-  Which does the Go binary print? The cases do not pin it.
+- Answered from Go (PGMI-830): seconds with two decimals, always
+  (`format!("{:.2}s", secs)`), plus `, N paths ignored`, ` — nothing
+  committed`, the psql-mode unit counts and `created database "<db>", left
+  empty` as the contract lists them (`notices/summary-line`).
+- Go's JSON escapes `<`, `>`, `&` (and U+2028/U+2029); serde_json does not.
+  The contract is the parsed value, so no escaping formatter is written.
 
 ## Serves
 

@@ -1,0 +1,15 @@
+description: outside the wizards pgmi never queries the terminal (no background-colour or cursor-position request), so a terminal that never answers does not stall it
+steps:
+  - pgmi: [version]
+    tty: true
+    timeout: 15
+    expect: {exit: 0, raw_not: ["\\x1b\\]1[01];\\?", "\\x1b\\[6n", "\\x1b\\[c", "\\x1b\\[>c"]}
+  - pgmi: [deploy, --help]
+    tty: true
+    env: {PGMI_PAGER: cat}
+    timeout: 15
+    expect: {exit: 0, raw_not: ["\\x1b\\]1[01];\\?", "\\x1b\\[6n", "\\x1b\\[c", "\\x1b\\[>c"]}
+  - pgmi: [deploy, "{workdir}", --connection, "postgresql://u@127.0.0.1:1/postgres", -d, x]
+    tty: true
+    timeout: 30
+    expect: {exit: 14, raw_not: ["\\x1b\\]1[01];\\?", "\\x1b\\[6n", "\\x1b\\[c", "\\x1b\\[>c"]}

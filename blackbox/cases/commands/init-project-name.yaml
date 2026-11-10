@@ -1,0 +1,8 @@
+description: init writes the target folder's name where a template says {{PROJECT_NAME}} - as is in text files, JSON-escaped in .json files
+steps:
+  - pgmi: [init, '{workdir}/a<b&c"d', -t, basic]
+    expect:
+      exit: 0
+      files:
+        a<b&c"d/README.md: ['^# a<b&c"d$']
+        a<b&c"d/project.json: ['"app_name": "a(<|\\u003c)b(&|\\u0026)c\\"d"']

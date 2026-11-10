@@ -32,8 +32,14 @@ configuration, refused before any database is created, dropped or written;
 12 overwrite not approved; 13 SQL failed; 14 `deploy.sql` missing; 15 another
 deploy holds the target; 16 `--timeout` exceeded after connecting; 130 SIGINT
 or SIGTERM. Full table: `docs/CLI.md` "Exit Codes".
+An error is one stderr line starting `pgmi: error: `. Usage errors include an
+unknown subcommand, an unknown shorthand, and `-h` without a value on
+`deploy` (it is `--host`; the message says so). More than one of `--azure`,
+`--aws`, `--google` is exit 10. Booleans take `=false`, `--param` is never
+split on commas, and `--timeout 0` turns the timeout off; help shows the
+default as `3m0s`.
 
-Cases: `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`.
+Cases: `commands/usage-errors`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`.
 Exit 3: no case; a release binary cannot panic on purpose.
 
 ## Commands
@@ -52,8 +58,10 @@ Cases: `commands/info`.
 and without a terminal it writes `minimal`; on a terminal it runs the wizard. A
 file named `<name>.scaffold` is written as `<name>`. A target holding anything
 but `pgmi.yaml`, `.env` or `.git` is exit 2; an unknown template is exit 2.
+`{{PROJECT_NAME}}` in a template becomes the target folder's name, as is in
+text files and JSON-escaped in `.json` files.
 
-Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`.
+Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`.
 
 ### Template deployments
 
@@ -73,23 +81,42 @@ or a duplicate id with exit 10, naming the files; `metadata scaffold` previews
 blocks for files without one and writes them with `--write`, honouring
 `--sort-key` and `--idempotent`. Full reference: `docs/METADATA.md`.
 
-Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`.
+The block is the one block comment (`/* */`, nested allowed) containing
+`<pgmi-meta` (case-sensitive); one inside a `--` comment or a dollar quote is
+not metadata. An id may be hyphenated, braced, `urn:uuid:` or 32 hex digits,
+any letter case and any uuid version; it is stored lower-case hyphenated.
+`idempotent` takes the boolean spellings `1`, `t`, `T`, `TRUE`, `true`,
+`True` and their false forms, white space trimmed. Unknown elements and
+attributes, an XML prolog and a default namespace are ignored; standard and
+numeric entities and CDATA are decoded; repeated `<sortKeys>` are merged;
+text after the root element is ignored; a sort key keeps its white space
+and may repeat. Refused with exit 10, naming the file: `idempotent` missing
+or not a boolean, a missing or nil id, an id with spaces, a blank sort key
+or description, an unknown entity, unclosed XML, two blocks, a block over
+10240 bytes. A file without a block gets the id `md5("./<path>")` read as a
+uuid, the same in `metadata plan` and `pgmi_plan_view.generic_id`.
+
+Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`.
 
 ### templates, version, ai, completion, help
 
 `templates list|describe`, `version` and `--version` (`pgmi <version> (compat
 1)`), `ai` (the overview) and `ai contract` (the session API), `completion
 bash|zsh|fish|powershell`, `help <command>` and `--help`. An unknown
-subcommand, template or shell, or extra arguments, is exit 2.
+subcommand, template or shell, or extra arguments, is exit 2. `pgmi` with no
+arguments prints the root help on stdout and exits 0; on a terminal it draws
+the banner on stderr instead, unless `PGMI_NO_BANNER` is set.
 
-Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`.
+Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`.
 
 ### Verbose output
 
 `-v` shows `RAISE DEBUG` from `deploy.sql` and lists ignored paths; without it,
-DEBUG is hidden and NOTICE, INFO and WARNING are shown.
+DEBUG is hidden and NOTICE, INFO and WARNING are shown. With `-v` every notice
+line (DETAIL and HINT included) starts with the seconds since the deploy
+started, `[1.23s] `.
 
-Cases: `commands/verbose`.
+Cases: `commands/verbose`, `notices/verbose-elapsed`.
 
 ### serve
 
@@ -102,16 +129,50 @@ answered during a deploy, and `notifications/cancelled` stops a running deploy,
 which rolls back. End of input exits 0. Full reference: `docs/CLI.md`
 "pgmi serve".
 
-Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`.
+Malformed input, each answered and the session continuing: text that is not
+JSON, including invalid UTF-8 outside a string, is -32700 with a null id;
+JSON that is not a request object (`[]`, a number, a string) or has a member
+of the wrong type (`"jsonrpc": 2`) is -32600 with a null id; a missing or
+wrong `jsonrpc` is -32600 echoing the id; an id that is an object, array,
+boolean or null is -32600 with a null id; `tools/call` without params or with
+params that are not an object is -32602, an unknown tool -32602; wrong tool
+arguments are a tool result with `isError` and the exit code (10 for a
+missing path or an unknown argument). Blank lines and notifications get no
+answer; a 2 MB line is read; invalid UTF-8 inside a string reads as U+FFFD.
+String and number ids (`1.5`) are echoed as sent. Not pinned, owner
+questions Q1 and Q2 in `rust/docs/decisions/go-review.md`: the bare value
+`null` gets no answer, and an id holding invalid UTF-8 is echoed as raw bytes.
+
+`initialize` needs `protocolVersion` (-32602) and echoes `2025-11-25`,
+`2025-06-18` or `2024-11-05`, answering any other version with `2025-11-25`.
+A request whose `_meta` names protocol version `2026-07-28`, and
+`server/discover` always, is served statelessly: results carry
+`resultType: "complete"` and the server info in `_meta`, `tools/list` adds
+`ttlMs` 3600000 and `cacheScope`, a missing client-capabilities field is
+-32602, another version is -32022 with the supported list, and `initialize`
+and `ping` are -32601.
+
+The deploy tool never reads the project `.env`; `overwrite` without a
+matching `confirmDatabaseName` is exit code 12 before connecting. Each deploy
+holds the deploy lock only for its own run: deploys one after another on one
+serve process succeed even after one ended inside an open transaction or
+failed in a tail block, and two overlapping deploys to one database give the
+second exit code 15. The `timeout` argument takes Go duration syntax (default
+3m): running out is exit code 16 with the statement cancelled on the server,
+a value that is not a duration exit code 10. Cloud sign-in reaches serve only
+through `pgmi.yaml` and the environment; the tool has no cloud arguments.
+
+Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`.
 
 ### config
 
 `pgmi config [path]` is a terminal wizard: it asks before replacing the
 connection settings of an existing `pgmi.yaml`, tests the connection, writes
 `pgmi.yaml` keeping the file's comments and other keys, and offers to save the
-password to `~/.pgpass`. Without a terminal it is exit 2.
+password to `~/.pgpass`. Without a terminal it is exit 2. Ctrl-C in the
+wizard is exit 130.
 
-Cases: `terminal/config-wizard`.
+Cases: `terminal/config-wizard`, `terminal/prompt-cancel`.
 
 ## Deploy
 
@@ -122,10 +183,17 @@ exclusions, dot-files and `.pgmiignore` patterns (`.gitignore` syntax: comments,
 globs, classes, `**`, directory patterns, `!`, escapes). A pattern set that
 would hide `deploy.sql` is exit 10. A leading UTF-8 BOM is stripped from every
 file before anything else sees it. Each file is capped at 10 MiB
-(`PGMI_MAX_FILE_SIZE` overrides). Full reference: `docs/DEPLOY-GUIDE.md`
-"What gets loaded".
+(`PGMI_MAX_FILE_SIZE` overrides; it must be a positive whole number of bytes,
+else exit 10). Full reference: `docs/DEPLOY-GUIDE.md` "What gets loaded".
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`.
+The walk never follows a symbolic link: a linked file or directory that
+`.pgmiignore` does not hide is exit 10 naming it; `deploy.sql` itself may be
+a link. A file containing a NUL byte or invalid UTF-8 is exit 10 naming it
+(for `deploy.sql`, with the byte offset). A directory named `__<name>__`
+other than `__test__` and `__tests__` is exit 10. A file larger than the cap
+is exit 10.
+
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`.
 
 ### Session API
 
@@ -147,7 +215,8 @@ first and never overrides a variable already set), `pgmi.yaml` `params`. Keys
 are lower-cased. Each reaches `deploy.sql` as `current_setting('pgmi.<key>')`
 and in `pgmi_parameter_view`. Refused with exit 10: an empty `PGMI_PARAM_*`, a
 `--param` without `=`, a missing params file, two keys differing only in case
-in one file. Full reference: `docs/CLI.md` "Parameter Flags".
+in one file, a `PGMI_PARAM_` with nothing after the prefix. Full reference:
+`docs/CLI.md` "Parameter Flags".
 
 Cases: `params/env-var-reaches-session`, `params/precedence`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
 
@@ -180,9 +249,12 @@ hosts are tried in order and the error names every one tried;
 `standby`, `prefer-standby`. `options=` reaches the server. A connection that
 fails transiently (SQLSTATE class 08, 53300, 57P03, refused, reset, unreachable,
 timeout) is tried 4 times in all, waiting about 0.1 s, 0.2 s, 0.4 s, each line
-on stderr; other failures are not retried.
+on stderr; other failures are not retried. `max_protocol_version` and
+`min_protocol_version` (`3.0`, `3.2`) are accepted, and a deploy and a cancel
+work with both set to `3.2` (Go speaks 3.2 then); `sslsni`, `sslcertmode` and
+`client_encoding` are accepted.
 
-Cases: `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`.
+Cases: `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
 
 ### TLS
 
@@ -209,9 +281,10 @@ database name (a wrong name is exit 12); with `--force` after a countdown, with
 a danger banner on a terminal unless `PGMI_NO_BANNER` is set, and without a
 countdown when there is no terminal; without `--force` and without a terminal
 it is refused with exit 12 and nothing is dropped. `--force` alone changes
-nothing.
+nothing. End of input at the name prompt is exit 12 (`No input available`);
+SIGINT at the prompt or during the countdown is 130 and drops nothing.
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`.
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
 
 ### Concurrency
 
@@ -242,9 +315,13 @@ Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-tra
 `deploy.sql` reaches the server into savepoint-isolated test runs of the
 `__test__/` files; never inside comments, string literals or dollar quotes.
 Outside an explicit transaction block it fails with 25P01. `--json`
-`testMacros` counts the expansions. Full reference: `docs/TESTING.md`.
+`testMacros` counts the expansions. Comments may stand between the macro's
+tokens; only ASCII white space (space, tab, CR, LF, FF) separates them, so
+after a no-break space or a vertical tab the text reaches the server
+unexpanded. `NULL` as the pattern means every test. Full reference:
+`docs/TESTING.md`.
 
-Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`.
+Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`.
 
 ### Notices and the summary line
 
@@ -254,13 +331,20 @@ and above as `WARNING:  <message>`, then `DETAIL:  ...` and `HINT:  ...` lines
 (two spaces after the colon); LOG is not shown. The run ends with one summary line: `ok
 <db>: N files loaded in T` or `FAILED <db>: failed after T ...` when stderr is
 not a terminal, `✓`/`✗` and colours on a terminal; `NO_COLOR` removes colours.
+T is seconds with two decimals (`1.12s`). A success adds `, N paths ignored`
+when discovery left paths out (dot-files count). A failure adds what was
+left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
+unit(s) already committed)` in psql mode, and `created database "<db>", left
+empty` when this run created it.
 
-Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`.
+Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `notices/summary-line`.
 
 ### The --json record
 
 One JSON object on stdout at the end of every run, success or failure, with the
-keys and meanings in `docs/CLI.md` "--json output" (`schemaVersion` 1).
+keys and meanings in `docs/CLI.md` "--json output" (`schemaVersion` 1). The
+parsed value is the contract, not the bytes: Go escapes `<`, `>`, `&` as
+`\u003c` and so on, and indents with two spaces.
 
 Cases: `deploy/json-success`, `deploy/json-failure`, `errors/attribution`, `execution/atomic-head`, `config/dotenv`.
 
@@ -292,7 +376,9 @@ ASCII letters are lower-cased (other bytes are kept); single-quoted strings
 (with `''` and, after a standalone `E`/`e`, backslash escapes), double-quoted
 identifiers (with `""`) and dollar-quoted strings (`$tag$`, the tag starting
 with a letter or `_` and not continuing an identifier) are copied unchanged;
-leading and trailing Unicode white space is trimmed. The values are byte-exact: a database
+leading and trailing Unicode white space is trimmed (the Unicode White_Space
+set, so U+00A0, U+0085, U+2028 and U+3000 go; U+200B and U+FEFF stay; a
+no-break space inside the text is kept). The values are byte-exact: a database
 deployed by one binary must redeploy with another without any run-once file
 reading as edited.
 
@@ -301,29 +387,44 @@ Cases: `checksums/golden`, `checksums/cross-binary-redeploy`, `checksums/cross-b
 ### File formats
 
 `.env` and `--params-file` share one syntax (`KEY=VALUE`, `export`, comments,
-single quotes literal, double quotes with escapes and multiple lines); a params
+single quotes literal, double quotes with escapes and multiple lines). `.env`
+expands `$NAME` and `${NAME}` in unquoted and double-quoted values from the
+lines above only (a name set only in the environment, or nowhere, expands to
+empty); a `.env` that does not parse applies nothing and prints a WARNING
+naming the file, never its text. `.env` values enter the process environment,
+so they reach the cloud sign-in too; a params
 file additionally refuses, with exit 10, a backslash or `$` inside double quotes
 and an unquoted ` #`, which `.env` readers disagree on. `pgmi.yaml` values
 become text: `~` is empty, numbers and booleans as written (`5432.0` stays
 `5432.0`), block scalars keep their final newline.
 
-Cases: `formats/dotenv-edges`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`.
 
 ### Terminal behaviour
 
 Wizards and prompts run only on a terminal and never when `CI` is set or
 `PGMI_NON_INTERACTIVE=1`. Long output (`pgmi ai`) goes through `PGMI_PAGER`,
-else `PAGER`, on a terminal only; `PGMI_PAGER=cat` prints directly.
+else `PAGER`, else `less -R`, on a terminal only; `PGMI_PAGER=cat` prints
+directly. The pager command is split on white space and run without a shell
+(no quoting, no `$` expansion); a pager that cannot start means the output is
+printed directly. Wizards and the pager need stdin and stdout on a terminal,
+prompts stdin and stderr. Outside the wizards pgmi never sends the terminal a
+query (background colour, cursor position, device attributes), so a terminal
+that never answers cannot stall it.
 
-Cases: `terminal/init-wizard`, `terminal/non-interactive`, `terminal/pager`, `terminal/colors`.
+Cases: `terminal/init-wizard`, `terminal/non-interactive`, `terminal/pager`, `terminal/colors`, `terminal/pager-command`, `terminal/no-terminal-queries`.
 
 ### Cloud sign-in
 
-`--azure`: without a client ID, the default Azure credential chain (Azure CLI
-among others); with `--azure-client-id`, workload identity then managed
+`--azure`: without a client ID, the default Azure credential chain: managed
+identity, Azure CLI, Azure Developer CLI, Azure PowerShell (`pwsh`), in that
+order, with `AZURE_TOKEN_CREDENTIALS` naming one of them to use alone; with `--azure-client-id`, workload identity then managed
 identity; with a tenant ID, a client ID and `AZURE_CLIENT_SECRET` all set, a
 service principal (Rust also accepts a certificate, see "Azure service
 principal with a certificate"). The token is asked for the Azure Database for PostgreSQL resource and sent as the password.
+Without an sslmode, Azure defaults to `verify-full`; AWS to `require`, or
+`verify-full` when a root certificate is given. A refused token is exit 11
+naming the user and pointing at `--username`.
 `--aws`: an RDS IAM token built locally from the AWS credentials
 (`host:port?Action=connect&DBUser=...&X-Amz-...`, valid 900 s), region from
 `--aws-region`, else `AWS_REGION`, else `AWS_DEFAULT_REGION`, else exit 10.
@@ -332,9 +433,10 @@ connector with IAM authentication. Lakebase: a token passed as the password,
 no separate path. Real-cloud verification: Azure only (owner decision
 2026-11-10, PGMI-845, pending); AWS and Google are checked against local fakes.
 
-Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/aws-iam-token`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
+Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/aws-iam-token`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
 Service principal and the real Cloud SQL connector: no case; neither can be
-pointed at a local fake (see `blackbox/COVERAGE.md` "Cloud sign-in").
+pointed at a local fake (see `blackbox/COVERAGE.md` "Cloud sign-in"). The
+default sslmodes: no case; the fakes need an explicit sslmode to be reached.
 
 ## Intended changes
 

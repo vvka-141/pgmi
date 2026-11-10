@@ -74,6 +74,21 @@ overridden. Used only if the hand-written server proves unworkable.
 
 ## Consequences
 
+- Condition 1's cases exist (PGMI-830) and pass on Go: `serve/malformed`,
+  `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploy-timeout`,
+  `serve/deploys-in-sequence`, `serve/concurrent-deploys`. Two Go answers
+  are left unpinned and are owner questions in `go-review.md`: the bare
+  line `null` gets no answer (JSON-RPC says -32600), and an id holding
+  invalid UTF-8 is echoed as raw bytes, which makes the response invalid
+  JSON. serde_json refuses invalid UTF-8, but `serve/malformed` requires
+  invalid UTF-8 inside a string to read as U+FFFD (Go does), so the reader
+  decodes each line lossily before parsing; that also makes the second
+  answer valid JSON.
+- Deploys on one serve process are independent: each opens and closes its
+  own connections, so a deploy that ended inside an open transaction leaves
+  no lock behind (`serve/deploys-in-sequence`); keep that, never share a
+  connection between calls.
+
 - When MCP adds a revision, pgmi changes its own code; rmcp stays the
   reference to compare against.
 

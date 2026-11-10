@@ -67,10 +67,17 @@ parentheses, other. On top of it:
 
 - The lexer is shared, so a change for one reader can break another; the
   checksum golden case and the cross-binary cases guard it.
-- Open questions for the owner, needing Go to answer: does the walk follow
-  symbolic links? How is a "binary file" detected (a NUL byte, invalid
-  UTF-8?) and with which exit code? Are comments allowed between the
-  macro's tokens?
+- Answered from Go (PGMI-830): the walk never follows a symbolic link; a
+  linked file or directory not hidden by `.pgmiignore` is exit 10 naming
+  it, and `deploy.sql` itself may be a link (use `symlink_metadata`, read
+  `deploy.sql` through the link). A file with a NUL byte or invalid UTF-8 is
+  exit 10 naming it, with the byte offset for `deploy.sql`; there is no
+  other binary detection (`dialect/project-walk`). Comments may stand
+  between the macro's tokens, because the macro is matched on the masked
+  text where comments are spaces (`dialect/pgmi-test-macro-comments`). Only
+  ASCII white space separates the tokens: write the pattern with
+  `[\t\n\f\r ]`, never Rust's Unicode `\s`, which also matches NBSP and
+  VT (`dialect/pgmi-test-macro-whitespace`).
 
 ## Serves
 

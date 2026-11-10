@@ -54,9 +54,17 @@ pgmi's routing, first match wins:
    `AZURE_FEDERATED_TOKEN_FILE` is set, then `ManagedIdentityCredential` with
    that client ID as a user-assigned identity.
 3. Otherwise, in order: workload identity (when its variables are set),
-   managed identity (system-assigned), Azure CLI, Azure Developer CLI. This
-   is the order of the Azure SDK's `DefaultAzureCredential`, which
-   `docs/CLI.md` promises.
+   managed identity (system-assigned), Azure CLI, Azure Developer CLI,
+   Azure PowerShell. This is the order of the Azure SDK's
+   `DefaultAzureCredential`, which `docs/CLI.md` promises. Azure PowerShell
+   is not in azure_identity: pgmi runs `pwsh -NoProfile -NonInteractive
+   -OutputFormat Text -EncodedCommand <script>` and reads `Token` and
+   `ExpiresOn` from its JSON, as the Go SDK does (about 80 lines).
+   `AZURE_TOKEN_CREDENTIALS` naming one credential (Go's names, such as
+   `AzurePowerShellCredential`) uses that one alone; `dev` and `prod` pick
+   the developer tools or the hosted identities (PGMI-830,
+   `cloud/azure-powershell`). `AZURE_AUTHORITY_HOST` (sovereign clouds) is
+   passed to every credential that talks to Entra.
 
 Each failure is collected; the final error lists every credential tried, exit
 11. The Azure CLI call is bounded by `--timeout`.
@@ -84,6 +92,7 @@ always works.
 | Managed identity, user-assigned | `--azure-client-id` on an Azure host | yes | yes | yes, same VM, both binaries |
 | Workload identity (federated token) | client ID + `AZURE_FEDERATED_TOKEN_FILE` | yes | yes | yes, from GitHub Actions OIDC written to the token file, both binaries |
 | Azure Developer CLI | no client ID, after the Azure CLI | yes | yes | no: same token flow as the Azure CLI, from another tool |
+| Azure PowerShell | no client ID, after azd | yes | yes | no: faked by a stub `pwsh` (`cloud/azure-powershell`) |
 | Managed identity on Arc, Cloud Shell, Service Fabric, Azure ML | as system/user-assigned, on that host | yes | yes | no: each needs its platform; covered by fakes where the protocol allows |
 
 ## Consequences

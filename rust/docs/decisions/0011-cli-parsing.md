@@ -48,8 +48,11 @@ Option 1.
 
 ## Consequences
 
-- Open question: what does bare `pgmi` (no arguments) do and exit with in
-  Go? Cobra prints help and exits 0; confirm and add a case.
+- Answered from Go (PGMI-830): bare `pgmi` prints the root help on stdout
+  and exits 0; on a terminal it draws the banner on stderr instead, unless
+  `PGMI_NO_BANNER` is set (`commands/bare`). Error prefix, `-h` on `deploy`,
+  `--force=false`, `--param` with commas and `--timeout 0`:
+  `commands/usage-errors`.
 - Help text is not byte-identical to Go's; no case requires it.
 
 ## Serves

@@ -46,9 +46,9 @@ bytes:
   and the cross-binary cases against the Go reference until switch day.
 - A file that is not valid UTF-8 is hashed as bytes; what happens to it
   when loaded is the open question in record 0014.
-- Open question: no golden vector has non-ASCII white space at either end
-  (U+00A0, U+3000). Add one from the Go binary before switch day so step 6
-  is pinned, not assumed.
+- Answered from Go (PGMI-830): `checksums/golden` now has vectors with
+  U+00A0, U+3000, U+2028 and U+0085 at the ends (trimmed), U+200B and
+  U+FEFF at the ends (kept), and a no-break space inside the text (kept).
 
 ## Serves
 

@@ -60,9 +60,13 @@ shared/Cargo.toml, build.rs, src/lib.rs   package `pgmi-shared` (record 0010)
 
 - The root `.gitignore` needs `/target/`; it has none today.
 - New files land in `shared/` (`Cargo.toml`, `build.rs`, `src/`). Rust's
-  embed list excludes them (record 0010). Whether Go's embed patterns would
-  pick them up is an open question: it must be checked in Go before the
-  files are added, without changing Go's embedded set.
+  embed list excludes them (record 0010). Answered from Go (PGMI-830): Go's
+  embed patterns name `templates`, `skills`, `ai` and single files under
+  `session`, `contract`, `manager` and `art`, so the new files are not
+  embedded; checked by adding the three files and comparing the package's
+  embedded file list (350 before and after). No black-box case: the
+  embedded set is not visible from outside beyond what `commands/init`
+  already checks.
 - Splitting a module out into its own crate later is cheap. Start with one
   crate.
 

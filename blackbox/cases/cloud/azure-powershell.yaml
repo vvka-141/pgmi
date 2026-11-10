@@ -1,0 +1,40 @@
+description: --azure without a client ID falls through to Azure PowerShell (a stub pwsh on PATH) when the Azure CLI and azd are missing; AZURE_TOKEN_CREDENTIALS names one credential of the chain and skips the others
+servers: [tls, fakes]
+home:
+  bin/pwsh:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/pwsh-calls.log"
+      printf '{"Token": "{azure_token}", "ExpiresOn": 4070908800}\n'
+  both/pwsh:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/pwsh-selected.log"
+      printf '{"Token": "{azure_token}", "ExpiresOn": 4070908800}\n'
+  both/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/az-calls.log"
+      exit 1
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin"}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        home/pwsh-calls.log: ["-NoProfile -NonInteractive -OutputFormat Text -EncodedCommand "]
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/both:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: AzurePowerShellCredential}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        home/pwsh-selected.log: ["-EncodedCommand"]
+      absent: [home/az-calls.log]

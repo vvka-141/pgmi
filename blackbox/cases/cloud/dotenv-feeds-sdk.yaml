@@ -1,4 +1,4 @@
-description: the project .env sets the process environment the cloud sign-in reads, so AWS credentials and region in .env sign the RDS token
+description: the project .env sets the process environment the cloud sign-in reads, so AWS credentials and region in .env sign the RDS token; a refused token names the user and points at --username
 servers: [fakes]
 project:
   files:
@@ -9,5 +9,6 @@ steps:
     timeout: 60
     expect:
       exit: 11
+      stderr: ['token was refused for user "iam_dotenv"', "--username"]
       files:
         "{recorder_log}": ['"user": "iam_dotenv", "password": "[^"]*X-Amz-Credential=AKIDDOTENV%2F\d{8}%2Feu-north-1%2Frds-db%2F']

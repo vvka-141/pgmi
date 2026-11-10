@@ -47,6 +47,8 @@ Own parser; option 2.
   whitespace around key and value trimmed, only the first `=` splits,
   single quotes literal, double quotes with escapes (`\n`, `\"`, `\\`) and
   newlines, an unquoted ` #` starts a comment in `.env`, CRLF accepted.
+  In `.env`, `$NAME` and `${NAME}` in unquoted and double-quoted values
+  expand from keys earlier in the file, else to empty.
   Strict mode (params files) refuses `\` or `$` inside double quotes and an
   unquoted ` #`, exit 10, naming the line and suggesting single quotes.
   Keys are lower-cased for params; two keys in one file differing only in
@@ -54,13 +56,17 @@ Own parser; option 2.
 
 ## Consequences
 
-- Open question: does Go expand `$VAR` or `${VAR}` in `.env` values
-  (unquoted or double-quoted)? Its `.env` case has none. The parser above
-  does not expand; add a case from the Go binary to settle it.
-- Open question: does Go's `.env` also feed the cloud SDK variables? This
-  record assumes yes (common Go `.env` loaders set the process
-  environment, and `dotenvKeys` speaks of keys "not already in the real
-  environment").
+- Answered from Go (PGMI-830): `.env` expands `$NAME` and `${NAME}` in
+  unquoted and double-quoted values, never in single quotes, and only from
+  keys earlier in the same file; a name that is only in the real
+  environment, or nowhere, expands to empty. So the `.env` reader expands;
+  the strict params-file reader still refuses `$`
+  (`formats/dotenv-expansion`). A `.env` that does not parse applies nothing
+  and prints the fixed WARNING naming the file (same case).
+- Answered from Go: `.env` does feed the cloud SDKs; AWS keys and region in
+  `.env` sign the RDS token (`cloud/dotenv-feeds-sdk`). Exporting the keys
+  before any thread exists, as above, keeps that. `pgmi serve` never reads
+  `.env` (`serve/deploy-guards`).
 
 ## Serves
 

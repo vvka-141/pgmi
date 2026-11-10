@@ -57,6 +57,15 @@ Option 2.
   `Cargo.lock` and taken on purpose (record 0001).
 - If the token format ever changes, `cloud/aws-iam-token` fails, which is
   the point of the case.
+- Go's SDK chain also covers two things aws-config does not do by default
+  (PGMI-830 review): a profile `credential_source` of `Ec2InstanceMetadata`
+  or `EcsContainer` (aws-config takes only `Environment`), and the console
+  `login_session` (the `credentials-login` feature, off above). pgmi adds
+  the two `credential_source` values as a custom provider (about 40 lines)
+  and enables `credentials-login` if it stays free of C; otherwise it is
+  listed as dropped in `go-review.md`. No case: both need an AWS host or
+  console session; the IMDS one can be faked with
+  `AWS_EC2_METADATA_SERVICE_ENDPOINT` when the provider is written.
 
 ## Serves
 

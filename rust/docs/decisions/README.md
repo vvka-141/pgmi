@@ -32,6 +32,7 @@ them.
 | [0019](0019-output.md) | Own stderr Reporter, no tracing subscriber; one serde struct for `--json` and the serve deploy result; jiff timestamps |
 | [0020](0020-metadata-xml.md) | roxmltree for `<pgmi-meta>`, uuid for ids; scaffold stops at `.git` |
 | [0021](0021-pure-rust.md) | Pure Rust (PGMI-855): features that keep C out of every cloud crate, a CI gate banning C-compiling crates and checking every target with no C compiler; provider and platform linkers wait for the owner |
+| [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage
 
@@ -106,22 +107,29 @@ Every `###` section of the behaviour contract and the records that serve it.
 
 ## Open questions
 
-Answered in PGMI-830 (review against Go), each with a black-box case:
+Answered in PGMI-830 (review against Go). Findings beyond these are in
+[go-review.md](go-review.md).
 
-1. Does the project walk follow symbolic links? How is a binary file
-   detected, and with which exit code? Comments between the macro's tokens?
-   (0014)
-2. `$VAR` expansion in `.env` values; does `.env` feed the cloud SDK
-   variables? (0016)
-3. Pager: shell or split, and any fallback when no pager variable is set?
-   (0012)
-4. Bare `pgmi` with no arguments: output and exit code. (0011)
-5. Summary-line duration format. (0019)
-6. Accepted id spellings, XML strictness, and the algorithm of the fallback
-   id of a file without metadata (byte-exact if the binary makes it). (0020)
-7. A golden checksum vector with non-ASCII white space at the ends. (0015)
-8. Whether Go's embed patterns in `shared/` would pick up the new
-   `Cargo.toml`, `build.rs` and `src/` files. (0001)
+1. Symbolic links are never followed (exit 10 unless ignored; `deploy.sql`
+   may be one); a NUL byte or invalid UTF-8 is exit 10; comments may stand
+   between the macro's tokens, ASCII white space only. (0014;
+   `dialect/project-walk`, `dialect/pgmi-test-macro-comments`,
+   `dialect/pgmi-test-macro-whitespace`)
+2. `.env` expands `$NAME`/`${NAME}` from earlier lines only; it feeds the
+   cloud SDKs. (0016; `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk`)
+3. Pager split on white space, no shell; default `less -R`; a pager that
+   cannot start prints directly. (0012; `terminal/pager-command`)
+4. Bare `pgmi`: help on stdout, exit 0; banner on stderr on a terminal.
+   (0011; `commands/bare`)
+5. Summary duration: seconds with two decimals. (0019;
+   `notices/summary-line`)
+6. Four id spellings, Go's lenient XML (text after the root ignored, which
+   roxmltree does not do by itself), fallback id `md5("./<path>")`. (0020;
+   `commands/metadata-forms`, `commands/metadata-refusals`)
+7. Golden vectors with Unicode white space at the ends. (0015;
+   `checksums/golden`)
+8. Go does not embed the new `shared/` files. (0001; no case, checked on
+   the embedded file list)
 
 Settled on the first build (PGMI-832):
 

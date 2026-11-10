@@ -1,0 +1,14 @@
+description: with -v every notice line starts with the seconds since the deploy started, two decimals in brackets; without -v there is no prefix
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE NOTICE 'plain-notice'; RAISE WARNING 'warn-notice' USING HINT = 'a hint'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v]
+    expect:
+      exit: 0
+      stderr: ['^\[\d+\.\d\ds\] plain-notice$', '^\[\d+\.\d\ds\] WARNING:  warn-notice$', '^\[\d+\.\d\ds\] HINT:  a hint$']
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ['^plain-notice$', '^WARNING:  warn-notice$', '^HINT:  a hint$']

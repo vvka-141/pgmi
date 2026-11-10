@@ -53,9 +53,10 @@ Option 1 for the two wizards; plain line I/O for the rest.
 
 - The wizards are the largest UI code (the Go ones were about 1,100 lines
   plus tests); the cost is accepted to keep the cases as they are.
-- Open questions: does Go run the pager through a shell or split it, and
-  does it fall back to `less` when neither variable is set? The cases pass
-  either way; the answer decides `PAGER='less -R'` with odd quoting.
+- Answered from Go (PGMI-830): the pager command is split on white space
+  and run without a shell (no quoting, no `$` expansion); with neither
+  variable set it is `less -R`; a pager that cannot start means the output
+  is printed directly (`terminal/pager-command`).
 
 ## Serves
 
