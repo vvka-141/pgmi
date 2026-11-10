@@ -1,0 +1,9 @@
+description: token sign-in refuses an sslmode that could send the token in plaintext (exit 10), for every provider
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={port} user=x dbname=postgres sslmode=prefer", -d, "{db}"]
+    expect: {exit: 10, stderr: ['sslmode "prefer" .* not allowed with Azure']}
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={port} user=x dbname=postgres sslmode=disable", -d, "{db}"]
+    expect: {exit: 10, stderr: ['sslmode "disable" .* not allowed']}

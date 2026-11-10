@@ -81,6 +81,7 @@ Databases a case creates there are dropped afterwards.
 | `tls_only` | refuses connections without TLS | `{tls_only_port}` (and the certificate placeholders) |
 | `replica` | a primary and a hot standby streaming from it | `{primary_port}`, `{standby_port}` |
 | `socket` | its Unix socket directory is shared with the host | `{socket_dir}` |
+| `fakes` | in-process: an HTTP and an HTTPS server answering token requests, and a PostgreSQL front that records the password it is sent (then refuses it) | `{fake_http}`, `{fake_https}`, `{fake_http_log}`, `{fake_https_log}`, `{recorder_port}`, `{recorder_log}`, `{azure_token}`; the `tls` server has `{azure_user}` with that token as password |
 
 The certificates come from `openssl`; Docker and `openssl` must be on `PATH`.
 

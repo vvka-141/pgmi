@@ -4,11 +4,13 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 
+from pgmi_blackbox.fakes import AZURE_TOKEN, start_fakes
 from pgmi_blackbox.server import IMAGE, Server, wait_ready
 
-KINDS = ("tls", "tls_only", "replica", "socket")
+KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
 CERT_USER = "certuser"
 MD5_USER = "md5user"
+AZURE_USER = "azureuser"
 KEY_PASSWORD = "key-passphrase"
 
 _HBA = {
@@ -105,6 +107,7 @@ def make_certs(d: Path) -> dict[str, str]:
         "{client_key_pem}": (d / "client.key").read_text(),
         "{cert_user}": CERT_USER,
         "{md5_user}": MD5_USER,
+        "{azure_user}": AZURE_USER,
         "{client_key_encrypted}": str(d / "client_enc.key"),
         "{key_password}": KEY_PASSWORD,
     }
@@ -151,6 +154,8 @@ def start(kind: str, certs: Path, stack: ExitStack) -> tuple[Server, dict[str, s
         c.execute(f"CREATE ROLE {CERT_USER} LOGIN SUPERUSER PASSWORD 'postgres'")
         c.execute("SET password_encryption = 'md5'")
         c.execute(f"CREATE ROLE {MD5_USER} LOGIN SUPERUSER PASSWORD 'postgres'")
+        c.execute("SET password_encryption = 'scram-sha-256'")
+        c.execute(f"CREATE ROLE {AZURE_USER} LOGIN SUPERUSER PASSWORD '{AZURE_TOKEN}'")
     return server, {f"{{{kind}_port}}": str(port)}
 
 
@@ -260,7 +265,7 @@ class Extras:
         self._root = root
         self._stack = stack
         self._values: dict[str, str] = {}
-        self._servers: dict[str, Server] = {}
+        self._servers: dict[str, Server | None] = {}
 
     def ensure(self, kinds: tuple[str, ...]) -> tuple[dict[str, str], list[Server]]:
         if kinds and "{ca}" not in self._values:
@@ -271,11 +276,15 @@ class Extras:
                     server, values = start_replica(self._stack)
                 elif kind == "socket":
                     server, values = start_socket(self._root, self._stack)
+                elif kind == "fakes":
+                    self._values |= start_fakes(self._root / "fakes", self._root / "certs")
+                    self._servers[kind] = None
+                    continue
                 else:
                     server, values = start(kind, self._root / "certs", self._stack)
                 self._servers[kind] = server
                 self._values |= values
-        return dict(self._values), [self._servers[k] for k in kinds]
+        return dict(self._values), [self._servers[k] for k in kinds if self._servers[k] is not None]
 
 
 EnsureExtras = Callable[[tuple[str, ...]], tuple[dict[str, str], list[Server]]]

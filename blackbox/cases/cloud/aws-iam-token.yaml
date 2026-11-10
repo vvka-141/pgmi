@@ -1,0 +1,37 @@
+description: --aws sends an RDS IAM token built from the AWS credentials as the password, signed for the chosen region; --aws-region beats AWS_REGION; AWS_DEFAULT_REGION is the fallback; no region is exit 10
+servers: [fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=iam_flag dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_flag", "password": "127\.0\.0\.1:{recorder_port}\?Action=connect&DBUser=iam_flag&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F\d{8}%2Fus-west-2%2Frds-db%2Faws4_request&X-Amz-Date=\d{8}T\d{6}Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=[0-9a-f]{64}"']
+  - pgmi: [deploy, "{project}", --aws, --connection, "host=127.0.0.1 port={recorder_port} user=iam_env dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_REGION: eu-central-1}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_env", "password": "[^"]*%2Feu-central-1%2Frds-db%2F']
+  - pgmi: [deploy, "{project}", --aws, --aws-region, ap-south-1, --connection, "host=127.0.0.1 port={recorder_port} user=iam_both dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_REGION: eu-central-1}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_both", "password": "[^"]*%2Fap-south-1%2Frds-db%2F']
+  - pgmi: [deploy, "{project}", --aws, --connection, "host=127.0.0.1 port={recorder_port} user=iam_none dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret}
+    expect: {exit: 10, stderr: ["region"]}
+  - pgmi: [deploy, "{project}", --aws, --connection, "host=127.0.0.1 port={recorder_port} user=iam_default dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_DEFAULT_REGION: sa-east-1}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_default", "password": "[^"]*%2Fsa-east-1%2Frds-db%2F']

@@ -1,0 +1,10 @@
+description: --google needs --google-instance (exit 10); without Application Default Credentials the dialer fails with exit 1 (an unclassified error; see the contract notes)
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --google, -U, someone, -d, "{db}"]
+    expect: {exit: 10, stderr: ["google-instance"]}
+  - pgmi: [deploy, "{project}", --google, --google-instance, "my-project:us-central1:my-instance", -U, someone, -d, "{db}"]
+    timeout: 60
+    expect: {exit: 1, stderr: ["Cloud SQL dialer", "could not find default credentials"]}

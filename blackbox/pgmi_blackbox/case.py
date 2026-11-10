@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 TEMPLATES = ("minimal", "basic", "advanced")
-SERVER_KINDS = ("tls", "tls_only", "replica", "socket")
+SERVER_KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
 
 
 class CaseError(ValueError):

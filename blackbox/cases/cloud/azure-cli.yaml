@@ -1,0 +1,20 @@
+description: --azure without a client ID signs in through the Azure CLI (a stub az on PATH) and deploys with its token, asking for the Azure Database for PostgreSQL resource
+servers: [tls, fakes]
+home:
+  bin/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/az-calls.log"
+      printf '{"accessToken": "{azure_token}", "expiresOn": "2099-01-01 00:00:00.000000", "expires_on": 4070908800, "subscription": "s", "tenant": "t", "tokenType": "Bearer"}\n'
+project:
+  files:
+    deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["get-access-token", "ossrdbms-aad\\.database\\.windows\\.net"]

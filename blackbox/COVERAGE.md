@@ -60,9 +60,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
 | `--timeout` (`3s`, `90s`, `1h30m`; not a duration = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms` |
 | `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
-| `--azure`, `--azure-tenant-id`, `--azure-client-id` | → PGMI-853 |
-| `--aws`, `--aws-region` | → PGMI-853 |
-| `--google`, `--google-instance` | → PGMI-853 |
+| `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` ✗ (only reaches Entra, see Cloud sign-in) |
+| `--aws`, `--aws-region` | ✓ `cloud/aws-iam-token` |
+| `--google`, `--google-instance` | ✓ `cloud/google-arguments` |
 
 ## Environment
 
@@ -79,7 +79,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
 | `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal) | ✓ `terminal/colors`, `terminal/force-banner`, `terminal/non-interactive` |
 | `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal) | ✓ `terminal/pager` |
-| `AZURE_*`, `AWS_REGION`, `AWS_DEFAULT_REGION` | → PGMI-853 |
+| `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` | ✓ `cloud/*`; `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` ✗ (they only reach Entra, see Cloud sign-in) |
 
 ## Project configuration
 
@@ -169,10 +169,13 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 
 | Provider | Coverage |
 |---|---|
-| Azure (each credential choice, flag over env, failure hint) | → PGMI-853 |
-| AWS (token shape, region choice) | → PGMI-853 |
-| Google Cloud SQL | → PGMI-853 |
-| Lakebase (token as password) | → PGMI-853 |
+| Azure through the Azure CLI (no client ID) | ✓ `cloud/azure-cli` (stub `az` on `PATH`) |
+| Azure managed identity (`--azure-client-id`) | ✓ `cloud/azure-managed-identity` (fake App Service endpoint) |
+| Azure service principal (`AZURE_CLIENT_SECRET`) | ✗ instance discovery always calls `login.microsoftonline.com`; the manual Azure acceptance check in the release checklist covers it |
+| token sign-in refuses `prefer`/`disable` (10) | ✓ `cloud/token-auth-requires-tls` |
+| AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |
+| Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the real dialer ✗ (pgmi offers no Admin API endpoint override; the real-cloud baseline PGMI-845 covers it) |
+| Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it; native sign-in is PGMI-849 |
 
 ## Contract notes
 
@@ -193,6 +196,13 @@ decided in the behaviour contract (PGMI-828), not fixed.
   is reported: a certificate failure on 127.0.0.1 shows as "connection refused"
   from `::1` (`tls/system-roots`, seen on GitHub runners). The Rust version should
   report every address's error.
+- `--google` without Application Default Credentials exits 1 (unclassified),
+  where a failed Azure or AWS sign-in exits 11 (`cloud/google-arguments`). The
+  Rust version should use 11.
+- A service principal (`AZURE_CLIENT_SECRET`) always validates the authority
+  host against `login.microsoftonline.com` (instance discovery is on), so it
+  cannot be pointed at a private or test authority. Decide whether Rust keeps
+  that.
 - A POSIX class such as `[[:space:]]` in `.pgmiignore` is refused as an invalid
   pattern, exit 10 (`dialect/pgmiignore-posix-class`); git accepts it. A Go bug
   left in place by the freeze; the Rust version should accept it.
