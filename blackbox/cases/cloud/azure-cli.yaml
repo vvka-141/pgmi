@@ -12,7 +12,7 @@ project:
     deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
 steps:
   - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
-    env: {PATH: "{home}/bin:/usr/bin:/bin"}
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
     timeout: 60
     expect:
       exit: 0

@@ -24,7 +24,7 @@ project:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
-    env: {PATH: "{home}/bin:/usr/bin:/bin"}
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
     timeout: 90
     expect:
       exit: 0
