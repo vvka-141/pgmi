@@ -33,8 +33,10 @@ against local fakes only.
 Option 2.
 
 - aws-config with `default-features = false`, features `rt-tokio`,
-  `credentials-process`, `sso`; its HTTP client built by
-  aws-smithy-http-client with `rustls-ring`, so no aws-lc-rs.
+  `credentials-process`, `sso`; its HTTP client is pgmi's own
+  implementation of aws-smithy-runtime-api's `HttpClient` on the shared
+  reqwest client (about 80 lines), since aws-smithy-http-client offers only
+  ring or aws-lc-rs, both C (record 0021, owner requirement PGMI-855).
 - Credentials from the default chain (`aws_config::defaults(...)`), given
   pgmi's own region, never the region from `~/.aws/config` (the contract
   says no region is exit 10).

@@ -1,6 +1,6 @@
 # 0019: Output: notices, summary line, `--json`, logging
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: serde_json 1.0.154, jiff 0.2.42 (already
 in the build through google-cloud-auth), tracing 0.1.44 (used inside the
 cloud crates), crossterm 0.29.0 (colours).

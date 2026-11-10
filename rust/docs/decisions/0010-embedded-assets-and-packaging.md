@@ -1,6 +1,6 @@
 # 0010: Embedding `shared/` and crates.io packaging
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: rust-embed 8.13.0 (2026-10-07),
 include_dir 0.7.4 (last release 2024-06-17). `shared/` holds 352 files,
 4.4 MB, including dotfiles (`.pgmiignore`, `.gitignore`, `.agents/`) and the

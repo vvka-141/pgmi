@@ -1,6 +1,6 @@
 # 0016: Environment and `.env`
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: dotenvy 0.15.7 (last release 2023-03-22).
 Rust 2024 makes `std::env::set_var` `unsafe`: it is only sound while no other
 thread can read the environment.

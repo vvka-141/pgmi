@@ -45,8 +45,8 @@ fallback is dropping the affected macOS build, not paying.
   the tag, rather than rewriting it. Only `-alpha.N`, `-beta.N`, `-rc.N`
   pre-releases (PEP 440 can parse them). `build.rs` takes the commit from an
   environment variable GoReleaser sets, else `unknown`.
-- Gates added: `cargo deny check` (advisories, licences, bans on
-  `aws-lc-rs` and `openssl-sys`), the packaging check of record 0010, the
+- Gates added: `cargo deny check` (advisories, licences, bans of
+  record 0021), the packaging check of record 0010, the
   black-box suite against the built binary.
 - **After GoReleaser**, in the same workflow: `cargo publish` for
   `pgmi-shared`, then `pgmi`; then PyPI,
@@ -60,6 +60,23 @@ fallback is dropping the affected macOS build, not paying.
 - **npm**: `pgmi-cli` (launcher) with one optional dependency per platform
   carrying the binary and `os`/`cpu` fields, as spike D tested. Launcher
   files outside any `bin/` folder (the root `.gitignore` ignores `bin/`).
+
+## Changed by PGMI-855 (pure Rust, record 0021)
+
+zig is a C compiler, so the zig cross-builds go:
+
+- Linux musl x86_64 and aarch64 link with rustc's `rust-lld`
+  (`CARGO_TARGET_<T>_LINKER=rust-lld`), proven static on 2026-11-10 in a
+  container with gcc, cc and ld removed. That works on the macOS runner
+  too.
+- Darwin links with Apple's linker on the macOS runner, as before.
+- Windows: `windows-gnu` needs mingw's dlltool (a C toolchain), so it goes.
+  Whether Windows links on a Windows runner with the MSVC linker, or with
+  `rust-lld` and `windows-gnullvm` (its dependencies compile without C; the
+  final link is unproven), waits for the owner's answer on platform linkers
+  (record 0021). A Windows runner would mean a second build job feeding the
+  GoReleaser run, which the OSS edition cannot merge; to be worked out with
+  that answer.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # 0015: Checksums
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: sha2 0.11.1 (2026-10-12, rust-version
 1.88), ring 0.17.14 (already in the build for TLS).
 

@@ -1,6 +1,6 @@
 # 0001: Crate layout
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io / static.rust-lang.org, 2026-11-10: Rust stable 1.99.1
 (2026-10-15); aws-config 1.13.1 declares rust-version 1.94.1, the highest of
 the crates chosen in these records (google-cloud-auth 1.18.0: 1.91,

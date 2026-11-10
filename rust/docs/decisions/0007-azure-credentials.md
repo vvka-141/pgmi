@@ -35,8 +35,8 @@ Azure is the only cloud verified against the real service (PGMI-845).
 
 Option 1, with `default-features = false` on both crates (`azure_core`:
 `reqwest`, `tokio`; `azure_identity`: `tokio`), and pgmi enabling reqwest's
-`rustls-no-provider`, so the ring provider of record 0006 is used and
-aws-lc-rs stays out.
+`rustls-no-provider`, so the provider of record 0006 is used and no C
+enters the build (record 0021).
 
 pgmi's routing, first match wins:
 

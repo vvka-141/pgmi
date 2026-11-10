@@ -1,6 +1,6 @@
 # 0011: CLI argument parsing, help and error text
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: clap 4.6.7 (2026-09-14, rust-version
 1.85), clap_complete 4.6.11 (2026-09-15); shell-words 1.1.1.
 

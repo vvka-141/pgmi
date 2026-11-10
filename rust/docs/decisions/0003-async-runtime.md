@@ -1,6 +1,6 @@
 # 0003: Sync or async runtime
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: tokio 1.54.1, tokio-util 0.7.20,
 tokio-postgres 0.7.18 (async only), azure_identity 1.0.0, aws-config 1.13.1,
 google-cloud-auth 1.18.0 (all async only).

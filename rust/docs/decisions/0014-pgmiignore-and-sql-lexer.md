@@ -1,6 +1,6 @@
 # 0014: `.pgmiignore` matching and the SQL lexer
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io / docs.rs, 2026-11-10: ignore 0.4.34 and globset 0.4.21
 (2026-10-27). globset's documented syntax has `{a,b}` alternation, `[ab]`,
 `[!ab]`, and no POSIX classes such as `[[:space:]]`. regex 1.13.1 (not

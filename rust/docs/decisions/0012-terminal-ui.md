@@ -1,6 +1,6 @@
 # 0012: Terminal UI and terminal detection
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: ratatui 0.30.2 (2026-06-19, rust-version
 1.88), crossterm 0.29.0 (2025-04-05; ratatui 0.30 builds on it), inquire
 0.9.4 (2026-02-24), dialoguer 0.12.0 (2025-08-23), shell-words 1.1.1.

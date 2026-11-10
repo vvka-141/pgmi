@@ -1,6 +1,6 @@
 # 0002: Error model and exit codes
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829.
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829.
 Checked on crates.io, 2026-11-10: thiserror 2.0.21, anyhow 1.0.104 (both
 considered, neither chosen for the top-level type); libc (for SIGPIPE).
 

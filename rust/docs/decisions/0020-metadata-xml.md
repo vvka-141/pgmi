@@ -1,6 +1,6 @@
 # 0020: `<pgmi-meta>` blocks and the metadata commands
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829. Not in the required list;
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829. Not in the required list;
 added because the XML reader is a dependency choice of its own.
 Checked on crates.io, 2026-11-10: quick-xml 0.42.0 (2026-08-22), roxmltree
 0.21.2 (2026-10-24, read-only tree, no dependencies), uuid 1.29.2.

@@ -1,6 +1,6 @@
 # 0004: PostgreSQL driver and connection layer
 
-Status: proposed, 2026-11-10. Ticket: PGMI-829. Builds on spike A (verdict go).
+Status: accepted, 2026-11-10 (owner delegated, see PGMI-829). Ticket: PGMI-829. Builds on spike A (verdict go).
 Checked on crates.io, 2026-11-10: tokio-postgres 0.7.18 (2026-06-12,
 rust-version 1.85), postgres-protocol 0.6.12.
 
