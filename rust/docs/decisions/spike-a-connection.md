@@ -29,7 +29,7 @@ archived) that implements just enough of `pgmi deploy` for the connection cases:
   `verify-full`; `require` with a root certificate becomes `verify-ca` as in
   pgx; `sslrootcert=system` reads the platform store (and `SSL_CERT_FILE`).
 - A 25-line patch to tokio-postgres
-  ([spike-a-transaction-status.patch](spike-a-transaction-status.patch)): the
+  ([patches/fork-transaction-status-0.7.18.patch](patches/fork-transaction-status-0.7.18.patch)): the
   codec records the status byte of every ReadyForQuery, including the one after
   an error, and `Client::transaction_status()` returns it.
 - Notices streamed from the connection driver while a statement runs; cancel on
@@ -94,6 +94,7 @@ Consequences for the design (PGMI-829):
 
 - Vendor tokio-postgres with two patches, transaction status (done here) and
   `require_auth`, and offer both upstream. Pin the vendored version.
+  (Superseded by record 0005: no fork, no upstream PR.)
 - Error text is pgmi's own layer: map rustls and tokio-postgres errors to the
   wording the contract fixes, keeping the full cause chain.
 - Encrypted legacy keys: hand-write the decryption or drop the feature in the

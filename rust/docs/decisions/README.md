@@ -95,9 +95,9 @@ Every `###` section of the behaviour contract and the records that serve it.
 - Encrypted PKCS#8 client keys are added: libpq reads them, and a key that
   works with psql should work with pgmi. (0006)
 - Driver (owner review): tokio-postgres unpatched plus pgmi's own layer, no
-  fork; the spike passed six of six. Done only with a `pgmi serve` case, a
-  fuzz target and TLS start from sslmode. The fork patch stays as the
-  documented fallback. (0005)
+  fork and no upstream PR; the layer is permanent. The spike passed six of
+  six. Done only with a `pgmi serve` case, a fuzz target and TLS start from
+  sslmode. The fork patches stay in `patches/` as reference only. (0005)
 
 ## Open questions
 

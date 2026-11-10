@@ -72,17 +72,22 @@ first ticket that builds the real connection code):
 3. TLS start taken from the resolved sslmode, not from watching the wire for
    pgmi's own SSLRequest.
 
-`Client::transaction_status()` is offered upstream as a small PR. pgmi does
-not wait for it or depend on it; if a release ships it, the status half of
-the layer goes.
+The layer is the permanent solution. pgmi offers nothing upstream (owner,
+2026-11-10: a solo project takes on no upstream discussions).
 
 ## Fallback only
 
-If the layer ever fails, the fork comes back: spike A's patch,
-`spike-a-transaction-status.patch` in this folder, adds
-`Client::transaction_status()` to tokio-postgres 0.7.18 in three files. It
-would be published as its own crate, since cargo ignores `[patch]` in a
-published crate. `require_auth` has no patch; the layer's policy half would
+If the layer ever fails, the fork comes back. Two patches in `patches/`,
+kept as reference only:
+
+- `fork-transaction-status-0.7.18.patch`: spike A's patch, adding
+  `Client::transaction_status()` to tokio-postgres 0.7.18 in three files.
+- `transaction-status-master.patch`: the same feature against
+  rust-postgres master of 2026-11-10 (81 lines, a `TransactionStatus` enum,
+  also in the `postgres` crate, with a test that passed the crate's suite).
+
+A fork would be published as its own crate, since cargo ignores `[patch]` in
+a published crate. `require_auth` has no patch; the layer's policy half would
 move into the fork's `connect_raw`.
 
 ## Consequences and risks

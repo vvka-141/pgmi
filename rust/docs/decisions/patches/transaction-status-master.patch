@@ -1,0 +1,267 @@
+From 66ccce8ebdc0c9811d7a177d911d31a253dea9ac Mon Sep 17 00:00:00 2001
+From: Alexey Evlampiev <11870299+AlexeyEvlampiev@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 22:40:09 +0100
+Subject: [PATCH] Add Client::transaction_status
+
+Exposes the transaction status from the most recent ReadyForQuery message,
+so callers can tell whether a simple query or batch left the session idle,
+in a transaction block, or in a failed one.
+---
+ postgres/src/client.rs            |  9 ++++++++-
+ postgres/src/lib.rs               |  2 +-
+ tokio-postgres/src/client.rs      | 29 +++++++++++++++++++++++++++++
+ tokio-postgres/src/codec.rs       |  8 +++++++-
+ tokio-postgres/src/connect_raw.rs | 11 ++++++++++-
+ tokio-postgres/src/lib.rs         |  2 +-
+ tokio-postgres/tests/test/main.rs | 31 +++++++++++++++++++++++++++++++
+ 7 files changed, 87 insertions(+), 5 deletions(-)
+
+diff --git a/postgres/src/client.rs b/postgres/src/client.rs
+index b85756f..8565569 100644
+--- a/postgres/src/client.rs
++++ b/postgres/src/client.rs
+@@ -7,7 +7,7 @@ use std::task::Poll;
+ use std::time::Duration;
+ use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
+ use tokio_postgres::types::{BorrowToSql, ToSql, Type};
+-use tokio_postgres::{Error, Row, SimpleQueryMessage, Socket};
++use tokio_postgres::{Error, Row, SimpleQueryMessage, Socket, TransactionStatus};
+ 
+ /// A synchronous PostgreSQL client.
+ pub struct Client {
+@@ -685,6 +685,13 @@ impl Client {
+         self.client.clear_type_cache();
+     }
+ 
++    /// Returns the transaction status the server reported in its most recent `ReadyForQuery` message.
++    ///
++    /// See [`tokio_postgres::Client::transaction_status`] for details.
++    pub fn transaction_status(&self) -> TransactionStatus {
++        self.client.transaction_status()
++    }
++
+     /// Determines if the client's connection has already closed.
+     ///
+     /// If this returns `true`, the client is no longer usable.
+diff --git a/postgres/src/lib.rs b/postgres/src/lib.rs
+index 20946b5..ffb3e76 100644
+--- a/postgres/src/lib.rs
++++ b/postgres/src/lib.rs
+@@ -72,7 +72,7 @@
+ pub use fallible_iterator;
+ pub use tokio_postgres::{
+     Column, IsolationLevel, Notification, Portal, SimpleQueryMessage, Socket, Statement,
+-    ToStatement, error, row, tls, types,
++    ToStatement, TransactionStatus, error, row, tls, types,
+ };
+ 
+ pub use crate::cancel_token::CancelToken;
+diff --git a/tokio-postgres/src/client.rs b/tokio-postgres/src/client.rs
+index 6d3b03d..abd1761 100644
+--- a/tokio-postgres/src/client.rs
++++ b/tokio-postgres/src/client.rs
+@@ -33,6 +33,7 @@ use std::net::IpAddr;
+ use std::path::PathBuf;
+ use std::pin::pin;
+ use std::sync::Arc;
++use std::sync::atomic::{AtomicU8, Ordering};
+ use std::task::{Context, Poll, ready};
+ #[cfg(feature = "runtime")]
+ use std::time::Duration;
+@@ -174,12 +175,25 @@ pub(crate) enum Addr {
+     Unix(PathBuf),
+ }
+ 
++/// The transaction status of a session, as reported by the server.
++#[derive(Debug, Copy, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum TransactionStatus {
++    /// Not in a transaction block.
++    Idle,
++    /// In a transaction block.
++    InTransaction,
++    /// In a failed transaction block. Queries are rejected until the block is ended.
++    InFailedTransaction,
++}
++
+ /// An asynchronous PostgreSQL client.
+ ///
+ /// The client is one half of what is returned when a connection is established. Users interact with the database
+ /// through this client object.
+ pub struct Client {
+     inner: Arc<InnerClient>,
++    transaction_status: Arc<AtomicU8>,
+     #[cfg(feature = "runtime")]
+     socket_config: Option<SocketConfig>,
+     ssl_mode: SslMode,
+@@ -191,6 +205,7 @@ pub struct Client {
+ impl Client {
+     pub(crate) fn new(
+         sender: mpsc::UnboundedSender<Request>,
++        transaction_status: Arc<AtomicU8>,
+         ssl_mode: SslMode,
+         ssl_negotiation: SslNegotiation,
+         process_id: i32,
+@@ -202,6 +217,7 @@ impl Client {
+                 cached_typeinfo: Default::default(),
+                 buffer: Default::default(),
+             }),
++            transaction_status,
+             #[cfg(feature = "runtime")]
+             socket_config: None,
+             ssl_mode,
+@@ -211,6 +227,19 @@ impl Client {
+         }
+     }
+ 
++    /// Returns the transaction status the server reported in its most recent `ReadyForQuery` message.
++    ///
++    /// The server sends `ReadyForQuery` at the end of every query cycle, so after a query's future has completed this
++    /// is the status that query left the session in. It is useful after `simple_query` or `batch_execute` runs a
++    /// script that may contain its own `BEGIN`, `COMMIT` or `ROLLBACK`.
++    pub fn transaction_status(&self) -> TransactionStatus {
++        match self.transaction_status.load(Ordering::Acquire) {
++            b'T' => TransactionStatus::InTransaction,
++            b'E' => TransactionStatus::InFailedTransaction,
++            _ => TransactionStatus::Idle,
++        }
++    }
++
+     pub(crate) fn inner(&self) -> &Arc<InnerClient> {
+         &self.inner
+     }
+diff --git a/tokio-postgres/src/codec.rs b/tokio-postgres/src/codec.rs
+index 9d07804..c0f1f38 100644
+--- a/tokio-postgres/src/codec.rs
++++ b/tokio-postgres/src/codec.rs
+@@ -3,6 +3,8 @@ use fallible_iterator::FallibleIterator;
+ use postgres_protocol::message::backend;
+ use postgres_protocol::message::frontend::CopyData;
+ use std::io;
++use std::sync::Arc;
++use std::sync::atomic::{AtomicU8, Ordering};
+ use tokio_util::codec::{Decoder, Encoder};
+ 
+ pub enum FrontendMessage {
+@@ -35,7 +37,9 @@ impl FallibleIterator for BackendMessages {
+     }
+ }
+ 
+-pub struct PostgresCodec;
++pub struct PostgresCodec {
++    pub transaction_status: Arc<AtomicU8>,
++}
+ 
+ impl Encoder<FrontendMessage> for PostgresCodec {
+     type Error = io::Error;
+@@ -81,6 +85,8 @@ impl Decoder for PostgresCodec {
+             idx += len;
+ 
+             if header.tag() == backend::READY_FOR_QUERY_TAG {
++                self.transaction_status
++                    .store(src[idx - 1], Ordering::Release);
+                 request_complete = true;
+                 break;
+             }
+diff --git a/tokio-postgres/src/connect_raw.rs b/tokio-postgres/src/connect_raw.rs
+index f0a71c1..570fc9d 100644
+--- a/tokio-postgres/src/connect_raw.rs
++++ b/tokio-postgres/src/connect_raw.rs
+@@ -17,6 +17,8 @@ use std::borrow::Cow;
+ use std::collections::{HashMap, VecDeque};
+ use std::io;
+ use std::pin::Pin;
++use std::sync::Arc;
++use std::sync::atomic::AtomicU8;
+ use std::task::{Context, Poll, ready};
+ use tokio::io::{AsyncRead, AsyncWrite};
+ use tokio_util::codec::Framed;
+@@ -98,8 +100,14 @@ where
+     )
+     .await?;
+ 
++    let transaction_status = Arc::new(AtomicU8::new(b'I'));
+     let mut stream = StartupStream {
+-        inner: Framed::new(stream, PostgresCodec),
++        inner: Framed::new(
++            stream,
++            PostgresCodec {
++                transaction_status: transaction_status.clone(),
++            },
++        ),
+         buf: BackendMessages::empty(),
+         delayed: VecDeque::new(),
+     };
+@@ -116,6 +124,7 @@ where
+     let (sender, receiver) = mpsc::unbounded();
+     let client = Client::new(
+         sender,
++        transaction_status,
+         config.ssl_mode,
+         config.ssl_negotiation,
+         process_id,
+diff --git a/tokio-postgres/src/lib.rs b/tokio-postgres/src/lib.rs
+index a41bb35..3f9389a 100644
+--- a/tokio-postgres/src/lib.rs
++++ b/tokio-postgres/src/lib.rs
+@@ -125,7 +125,7 @@
+ #![warn(rust_2018_idioms, clippy::all, missing_docs)]
+ 
+ pub use crate::cancel_token::CancelToken;
+-pub use crate::client::Client;
++pub use crate::client::{Client, TransactionStatus};
+ pub use crate::config::Config;
+ pub use crate::connection::Connection;
+ pub use crate::copy_in::CopyInSink;
+diff --git a/tokio-postgres/tests/test/main.rs b/tokio-postgres/tests/test/main.rs
+index 66f0f0a..86d203c 100644
+--- a/tokio-postgres/tests/test/main.rs
++++ b/tokio-postgres/tests/test/main.rs
+@@ -16,6 +16,7 @@ use tokio_postgres::tls::{NoTls, NoTlsStream};
+ use tokio_postgres::types::{Kind, Type};
+ use tokio_postgres::{
+     AsyncMessage, Client, Config, Connection, Error, IsolationLevel, SimpleQueryMessage,
++    TransactionStatus,
+ };
+ 
+ mod binary_copy;
+@@ -433,6 +434,36 @@ async fn transaction_commit() {
+     assert_eq!(rows[0].get::<_, &str>(0), "steven");
+ }
+ 
++#[tokio::test]
++async fn transaction_status() {
++    let client = connect("user=postgres").await;
++    assert_eq!(client.transaction_status(), TransactionStatus::Idle);
++
++    client.batch_execute("BEGIN").await.unwrap();
++    assert_eq!(
++        client.transaction_status(),
++        TransactionStatus::InTransaction
++    );
++
++    client.batch_execute("SELECT 1/0").await.unwrap_err();
++    assert_eq!(
++        client.transaction_status(),
++        TransactionStatus::InFailedTransaction
++    );
++
++    client.batch_execute("ROLLBACK").await.unwrap();
++    assert_eq!(client.transaction_status(), TransactionStatus::Idle);
++
++    client
++        .batch_execute("BEGIN; CREATE TEMPORARY TABLE t (); COMMIT; BEGIN")
++        .await
++        .unwrap();
++    assert_eq!(
++        client.transaction_status(),
++        TransactionStatus::InTransaction
++    );
++}
++
+ #[tokio::test]
+ async fn execute_typed() {
+     let client = connect("user=postgres").await;
+-- 
+2.53.0
+

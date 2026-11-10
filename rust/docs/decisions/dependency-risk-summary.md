@@ -34,9 +34,9 @@ else's release.
 ## Recommendation
 
 1. **Driver (accepted 2026-11-10):** upstream tokio-postgres with the layer,
-   no fork. The spike passed the six cases that need it. Done only with a
-   `pgmi serve` case, a fuzz target and TLS start from sslmode (record 0005).
-   `transaction_status()` offered upstream; pgmi does not depend on it.
+   no fork, nothing offered upstream; the layer is permanent. The spike passed
+   the six cases that need it. Done only with a `pgmi serve` case, a fuzz
+   target and TLS start from sslmode (record 0005).
 2. **MCP:** hand-written, as in Go, with rmcp as a test-only conformance check
    and the rmcp-plus-own-transport route as the fallback.
 3. **TLS:** ring now; aws-lc-rs is the planned exit, tested once in the release
