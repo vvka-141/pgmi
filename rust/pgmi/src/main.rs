@@ -1,4 +1,5 @@
 mod cli;
+mod cloud;
 mod commands;
 mod config;
 mod conn;

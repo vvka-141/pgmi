@@ -105,6 +105,21 @@ always works.
   reaches it either (contract, "Nothing that cannot be reached is carried
   over").
 
+## First build (PGMI-833)
+
+- Built: the routing above, `AZURE_TOKEN_CREDENTIALS` (`dev`, `prod`, a
+  credential name, any case), Azure PowerShell through `pwsh`, and the
+  certificate assertion signed by the provider of `tls::provider()`.
+  `cloud/azure-cli`, `cloud/azure-managed-identity` and
+  `cloud/azure-powershell` pass.
+- Not yet: PKCS#12 certificates (PEM holding the certificate and its key
+  only), and the Arc, Cloud Shell, Service Fabric and Azure ML sources.
+- An invalid `AZURE_TOKEN_CREDENTIALS` is exit 10 (Go: 1); it is refused
+  before connecting.
+- In the default chain, system-assigned managed identity over IMDS gets two
+  seconds, so a laptop without IMDS falls through to the CLI quickly.
+
+
 ## Serves
 
 Cloud sign-in; TLS (token sign-in refuses plaintext sslmodes); Nothing that

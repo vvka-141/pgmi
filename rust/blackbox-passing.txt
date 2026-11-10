@@ -4,6 +4,12 @@ cancel/timeout-over-tls
 checksums/cross-binary-redeploy
 checksums/cross-binary-redeploy-advanced
 checksums/golden
+cloud/aws-iam-token
+cloud/azure-cli
+cloud/azure-managed-identity
+cloud/azure-powershell
+cloud/dotenv-feeds-sdk
+cloud/token-auth-requires-tls
 commands/ai
 commands/bare
 commands/completion

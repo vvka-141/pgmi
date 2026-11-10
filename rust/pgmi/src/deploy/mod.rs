@@ -209,7 +209,13 @@ impl Run {
         self.st
             .spec
             .iter()
-            .flat_map(|s| [s.password.clone(), s.sslpassword.clone()])
+            .flat_map(|s| {
+                [
+                    s.password.clone(),
+                    s.sslpassword.clone(),
+                    s.token.as_ref().and_then(|t| t.fixed().map(str::to_string)),
+                ]
+            })
             .flatten()
             .collect()
     }
@@ -317,28 +323,6 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
     });
 }
 
-fn refuse_cloud(a: &DeployArgs, yaml: Option<&ProjectConfig>) -> Result<()> {
-    let flags = [a.azure, a.aws, a.google].iter().filter(|f| **f).count();
-    if flags > 1 {
-        return Err(Error::config(
-            "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google",
-        ));
-    }
-    let yaml_method = yaml.and_then(|y| y.connection.auth_method.clone());
-    if flags > 0
-        || yaml_method.is_some()
-        || a.azure_tenant_id.is_some()
-        || a.azure_client_id.is_some()
-        || a.aws_region.is_some()
-        || a.google_instance.is_some()
-    {
-        return Err(Error::config(
-            "cloud sign-in (--azure, --aws, --google, auth_method) is not implemented in this build of pgmi",
-        ));
-    }
-    Ok(())
-}
-
 async fn deploy(
     ctx: &Context,
     st: &mut State,
@@ -360,7 +344,7 @@ async fn deploy(
     if let Some(y) = &yaml {
         y.timeout()?;
     }
-    refuse_cloud(a, yaml.as_ref())?;
+    let cloud = crate::cloud::select(a, yaml.as_ref())?;
     let sources = Sources {
         yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
         env: &ctx.env,
@@ -383,8 +367,10 @@ async fn deploy(
         sslkey: a.sslkey.clone(),
         sslrootcert: a.sslrootcert.clone(),
     };
-    let spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
-    let mut spec = spec;
+    let mut spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
+    if let Some((provider, req)) = &cloud {
+        crate::cloud::check(*provider, req, &mut spec, &ctx.env)?;
+    }
     if let Some(m) = &ctx.maintenance_db {
         spec.maintenance_db = m.clone();
     }
@@ -469,6 +455,13 @@ async fn deploy(
             Arc::new(move |line: String| r.line(&line))
         },
     };
+    if let Some((provider, req)) = &cloud {
+        let token = guard
+            .connecting(crate::cloud::token(*provider, req, &ctx.env))
+            .await?;
+        spec.token = Some(token);
+        st.spec = Some(spec.clone());
+    }
     if a.overwrite {
         let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
         let recreated = overwrite::recreate(plan, reporter).await?;

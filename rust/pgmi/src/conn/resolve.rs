@@ -71,6 +71,8 @@ pub struct Spec {
     pub target_session_attrs: String,
     pub source: Source,
     pub home: Option<PathBuf>,
+    pub sslmode_set: bool,
+    pub token: Option<crate::cloud::Token>,
 }
 
 const ENV_DEFAULTS: &[(&str, &str)] = &[
@@ -342,6 +344,8 @@ pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Resul
         target_session_attrs: tsa,
         source,
         home: env.home(),
+        sslmode_set: f.contains_key("sslmode"),
+        token: None,
     })
 }
 

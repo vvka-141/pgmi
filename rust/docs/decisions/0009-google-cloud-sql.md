@@ -61,6 +61,19 @@ Option 2, with spike B's dialer:
 - Only the primary IP is supported, as today; private IP and Private Service
   Connect stay out until a flag is asked for.
 
+## First build (PGMI-833)
+
+- Built: the dialer above (`connectSettings`, `generateEphemeralCert`, RSA
+  2048 from `rsa` with `rand::rng()`, TLS 1.3 with the CN or DNS check). The
+  Admin API base is `CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN` plus
+  `sql/v1beta4/`. No fake Admin API exists in the runner yet, so only the
+  missing-credentials path is exercised.
+- Without an ADC file the metadata server gets three seconds before the
+  error reads as Go's "could not find default credentials".
+- `cloud/google-arguments` fails on Rust only by the intended exit code (11,
+  Go 1); the case flips when the Rust binary lands.
+
+
 ## Serves
 
 Cloud sign-in; Google sign-in failure is exit 11; Nothing that cannot be

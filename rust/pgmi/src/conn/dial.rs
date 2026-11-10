@@ -139,6 +139,22 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, spec: &Spec, passfile: &st
     Failure::Fatal(tls::describe_failure(&text, host))
 }
 
+fn refused_token(f: Failure, e: &tokio_postgres::Error, spec: &Spec) -> Failure {
+    let (Some(token), Some(db)) = (&spec.token, e.as_db_error()) else {
+        return f;
+    };
+    if !db.code().code().starts_with("28") {
+        return f;
+    }
+    Failure::Fatal(format!(
+        "{} token was refused for user \"{}\": {} (SQLSTATE {}); if the database role has another name, pass it with --username",
+        token.provider().label(),
+        spec.user,
+        db.message(),
+        db.code().code()
+    ))
+}
+
 fn sslmode_of(mode: &str) -> SslMode {
     match mode {
         "disable" | "allow" => SslMode::Disable,
@@ -160,7 +176,8 @@ struct Attempt<'a> {
 
 async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     let spec = a.spec;
-    let unix = a.host.starts_with('/');
+    let google = spec.token.as_ref().and_then(|t| t.google()).cloned();
+    let unix = a.host.starts_with('/') || google.is_some();
     let mut config = Config::new();
     config
         .user(&spec.user)
@@ -170,8 +187,14 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         .passfile
         .clone()
         .or_else(|| pgpass::default_path(spec.home.as_deref()));
-    let password = match &spec.password {
-        Some(p) => Some(p.clone()),
+    let token = spec
+        .token
+        .as_ref()
+        .map(|t| t.password(a.name, a.port, &spec.user))
+        .transpose()
+        .map_err(Failure::Fatal)?;
+    let password = match token.or_else(|| spec.password.clone()) {
+        Some(p) => Some(p),
         None => match &passfile {
             Some(path) => {
                 let found = pgpass::lookup(path, a.name, a.port, a.db, &spec.user);
@@ -220,7 +243,11 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     };
     let version = Arc::new(Mutex::new(None));
     let run = async {
-        let socket = open(a.host, a.port).await.map_err(|e| {
+        let opened: std::io::Result<Stream> = match &google {
+            Some(g) => g.dial().await.map(|s| Box::new(s) as Stream),
+            None => open(a.host, a.port).await,
+        };
+        let socket = opened.map_err(|e| {
             if classify_io(&e) {
                 Failure::Transient(e.to_string())
             } else {
@@ -231,10 +258,10 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         let notices = a.notices.clone();
         match &tls_config {
             None => {
-                let (client, connection) = config
-                    .connect_raw(stream, NoTls)
-                    .await
-                    .map_err(|e| classify_pg(&e, a.name, spec, &passfile_text))?;
+                let (client, connection) =
+                    config.connect_raw(stream, NoTls).await.map_err(|e| {
+                        refused_token(classify_pg(&e, a.name, spec, &passfile_text), &e, spec)
+                    })?;
                 drive(connection, notices);
                 Ok((client, None))
             }
@@ -248,10 +275,10 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
                     inner: connect.clone(),
                     shared: shared.clone(),
                 };
-                let (client, connection) = config
-                    .connect_raw(stream, tapped)
-                    .await
-                    .map_err(|e| classify_pg(&e, a.name, spec, &passfile_text))?;
+                let (client, connection) =
+                    config.connect_raw(stream, tapped).await.map_err(|e| {
+                        refused_token(classify_pg(&e, a.name, spec, &passfile_text), &e, spec)
+                    })?;
                 drive(connection, notices);
                 Ok((client, Some(connect)))
             }
@@ -377,7 +404,12 @@ impl Dialer {
             |s: &str| s.contains("x509") || s.contains("TLS") || s.contains("certificate");
         for want in passes {
             for (host, port) in &spec.hosts {
-                let addrs = match addresses(host, *port).await {
+                let resolved = if spec.token.as_ref().and_then(|t| t.google()).is_some() {
+                    Ok(vec![host.clone()])
+                } else {
+                    addresses(host, *port).await
+                };
+                let addrs = match resolved {
                     Ok(a) => a,
                     Err(e) => {
                         all_transient = false;

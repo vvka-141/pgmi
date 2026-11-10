@@ -28,14 +28,10 @@ pub struct Connection {
     pub sslkey: Option<String>,
     pub sslrootcert: Option<String>,
     pub auth_method: Option<String>,
-    #[serde(rename = "azure_tenant_id")]
-    pub _azure_tenant_id: Option<String>,
-    #[serde(rename = "azure_client_id")]
-    pub _azure_client_id: Option<String>,
-    #[serde(rename = "aws_region")]
-    pub _aws_region: Option<String>,
-    #[serde(rename = "google_instance")]
-    pub _google_instance: Option<String>,
+    pub azure_tenant_id: Option<String>,
+    pub azure_client_id: Option<String>,
+    pub aws_region: Option<String>,
+    pub google_instance: Option<String>,
 }
 
 impl ProjectConfig {

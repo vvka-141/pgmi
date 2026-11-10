@@ -67,6 +67,15 @@ Option 2.
   console session; the IMDS one can be faked with
   `AWS_EC2_METADATA_SERVICE_ENDPOINT` when the provider is written.
 
+## First build (PGMI-833)
+
+- Built: region rule, credentials from `aws_config::defaults` on pgmi's
+  reqwest `HttpClient`, the token signed with aws-sigv4 once per dial attempt
+  (`host:port?Action=connect&DBUser=...`, no slash before `?`, as the case
+  pins). `cloud/aws-iam-token` and `cloud/dotenv-feeds-sdk` pass.
+- Not yet: the `credential_source` provider and `credentials-login`.
+
+
 ## Serves
 
 Cloud sign-in; TLS (token sign-in refuses plaintext sslmodes).
