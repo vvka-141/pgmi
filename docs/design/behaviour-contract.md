@@ -472,7 +472,8 @@ Cases: `dialect/pgmiignore-posix-class`.
 `pgmi metadata scaffold` stops its search for the project root at the first
 directory containing `.git`, and prints `Project root: <path>` on stderr when
 the root differs from the named directory (PGMI-840).
-No case yet: add one with the Rust implementation.
+No case yet: Go walks past `.git`, so a case cannot pass on both binaries
+before the switch; the Rust unit test `root_search_stops_at_git` pins it.
 
 ### Azure service principal with a certificate
 

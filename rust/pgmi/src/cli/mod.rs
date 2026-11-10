@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod duration;
 
 use std::ffi::OsString;
@@ -7,6 +8,7 @@ use std::time::Duration;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::error::Kind;
+pub use commands::*;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -39,21 +41,21 @@ pub enum Command {
     #[command(about = "Print the version")]
     Version,
     #[command(about = "Show help for a command")]
-    Help { command: Option<String> },
-    #[command(about = "Summarise a project (not implemented in this build)")]
-    Info(Rest),
-    #[command(about = "Inspect <pgmi-meta> blocks (not implemented in this build)")]
-    Metadata(Rest),
-    #[command(about = "List and describe templates (not implemented in this build)")]
-    Templates(Rest),
-    #[command(about = "Documentation for AI assistants (not implemented in this build)")]
-    Ai(Rest),
+    Help { command: Vec<String> },
+    #[command(about = "Show project structure summary (no database required)")]
+    Info(InfoArgs),
+    #[command(about = "Inspect and scaffold <pgmi-meta> blocks (no DB connection)")]
+    Metadata(MetadataArgs),
+    #[command(about = "List or describe project templates")]
+    Templates(TemplatesArgs),
+    #[command(about = "Print pgmi documentation for AI assistants (llms.txt-style)")]
+    Ai(AiArgs),
     #[command(about = "Expose pgmi's commands as MCP tools over stdio", long_about = SERVE_HELP)]
     Serve,
     #[command(about = "Connection wizard (not implemented in this build)")]
     Config(Rest),
-    #[command(about = "Shell completion scripts (not implemented in this build)")]
-    Completion(Rest),
+    #[command(about = "Print a shell completion script to stdout")]
+    Completion(CompletionArgs),
 }
 
 const SERVE_HELP: &str = "Expose pgmi's commands as MCP tools over stdio (JSON-RPC 2.0).

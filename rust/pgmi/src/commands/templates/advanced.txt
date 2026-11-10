@@ -1,0 +1,34 @@
+advanced — Reference app: SQL-native REST/RPC/MCP, multi-tenant RLS, audit
+
+A full SQL-native application built on pgmi, for you to read, trim, and own — not a framework to adopt wholesale. <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/kernel), identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions. More infrastructure than basic, not a higher safety tier — either is production-capable.
+
+Structure:
+  ├── deploy.sql
+  ├── pgmi.yaml
+  ├── session.xml      (deployment parameters and their defaults)
+  ├── README.md
+  ├── ARCHITECTURE.md
+  ├── AGENTS.md        (routing table for coding agents)
+  ├── .agents/
+  │   └── skills/      (project-owned agent skills)
+  ├── data/            (permissions and roles: authorization.json)
+  ├── lib/
+  │   ├── core/        (entity standards, catalogs, change tracking)
+  │   ├── common/      (cast, text, encoding helpers)
+  │   ├── internal/    (environment, job run log, deployment views)
+  │   └── api/         (REST/RPC/MCP routing, handler registry, exchange log)
+  ├── membership/      (users, organizations, identities, RLS)
+  ├── api/             (your handler implementations + examples.sql)
+  ├── gateways/        (reference gateways in five languages; never deployed)
+  └── __test__/
+
+Features:
+  - <pgmi-meta> sortKeys for multi-phase execution ordering
+  - Idempotency via script-UUID tracking in internal.deployment_script
+  - Roles: owner, admin, api and a NOLOGIN kernel role; each executes exactly its list
+  - Sign-in through any OIDC provider at the gateway; the database keeps the sessions behind opaque handles
+  - REST/RPC/MCP routing with handler registry (api.handler)
+  - Row-level security policies on membership tables
+  - Targets stock PostgreSQL 18+ — no superuser, no event trigger; needs CREATEROLE + CREATE EXTENSION
+
+For: SQL-native application stack — scaffold, read, trim to fit

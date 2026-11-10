@@ -14,6 +14,7 @@ aes = "0.9.4"
 base64ct = { version = "1.8.0", features = ["alloc"] }
 cbc = "0.2.1"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "error-context", "help", "usage", "suggestions"] }
+clap_complete = { version = "4.6.11", default-features = false }
 des = "0.9.0"
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 jiff = { version = "0.2.42", default-features = false, features = ["std"] }
@@ -32,7 +33,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "
 tokio-postgres = { version = "0.7.18", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["tls12"] }
 tokio-util = { version = "0.7.20", default-features = false }
-uuid = { version = "1.29.2", default-features = false, features = ["std"] }
+uuid = { version = "1.29.2", default-features = false, features = ["std", "v4"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.191", default-features = false }

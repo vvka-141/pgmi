@@ -1,0 +1,320 @@
+{
+  "stability": "Before pgmi 1.0 this contract may change in a minor release: a view, column or function can be added, renamed or removed. Every change is listed under Upgrading in that release's notes (RELEASES.md). --compat selects a contract version the binary ships (only 1 today) and rejects one it does not; it does not freeze columns across pgmi releases. Pin the pgmi binary version to pin the contract.",
+  "views": [
+    {
+      "name": "pgmi_source_view",
+      "columns": [
+        "path",
+        "name",
+        "directory",
+        "extension",
+        "depth",
+        "content",
+        "size_bytes",
+        "checksum",
+        "pgmi_checksum",
+        "path_parts",
+        "is_sql_file",
+        "is_test_file",
+        "parent_folder_name"
+      ],
+      "note": "path, name and directory are COLLATE \"C\" (as are the path columns of the test views): ORDER BY path runs files in byte order on every server, whatever the database's locale."
+    },
+    {
+      "name": "pgmi_parameter_view",
+      "columns": [
+        "key",
+        "value"
+      ],
+      "note": "key is lower-cased on load, matching the session variable it mirrors: --param apiVersion=2 is stored as 'apiversion'. WHERE key = 'apiVersion' returns no row, silently, while current_setting('pgmi.apiVersion', true) still works because GUC names are case-insensitive. Compare lower-cased."
+    },
+    {
+      "name": "pgmi_runtime_view",
+      "columns": [
+        "pgmi_version",
+        "contract_version"
+      ],
+      "note": "One row: the pgmi binary version running this deploy (as `pgmi version` prints it) and the session-API contract version applied. Lets deploy.sql refuse a binary it was not written for. The PostgreSQL version is current_setting('server_version_num')."
+    },
+    {
+      "name": "pgmi_plan_view",
+      "columns": [
+        "path",
+        "content",
+        "pgmi_checksum",
+        "generic_id",
+        "id",
+        "idempotent",
+        "description",
+        "sort_key",
+        "execution_order"
+      ]
+    },
+    {
+      "name": "pgmi_source_metadata_view",
+      "columns": [
+        "path",
+        "id",
+        "idempotent",
+        "sort_keys",
+        "description"
+      ]
+    },
+    {
+      "name": "pgmi_test_source_view",
+      "columns": [
+        "path",
+        "directory",
+        "filename",
+        "content",
+        "is_fixture"
+      ]
+    },
+    {
+      "name": "pgmi_test_directory_view",
+      "columns": [
+        "path",
+        "parent_path",
+        "depth"
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "pgmi_test_plan",
+      "args": [
+        "p_pattern text DEFAULT NULL"
+      ],
+      "returns": [
+        "ordinal",
+        "step_type",
+        "script_path",
+        "directory",
+        "depth"
+      ]
+    },
+    {
+      "name": "pgmi_test_generate",
+      "args": [
+        "p_pattern text DEFAULT NULL",
+        "p_callback text DEFAULT 'pg_temp.pgmi_test_callback'"
+      ],
+      "returns": [
+        "text"
+      ]
+    },
+    {
+      "name": "pgmi_test_callback",
+      "args": [
+        "e pg_temp.pgmi_test_event"
+      ],
+      "returns": [
+        "void"
+      ]
+    },
+    {
+      "name": "pgmi_validate_pattern",
+      "args": [
+        "p_pattern text"
+      ],
+      "returns": [
+        "text"
+      ]
+    },
+    {
+      "name": "pgmi_has_tests",
+      "args": [
+        "p_directory text",
+        "p_pattern text DEFAULT NULL"
+      ],
+      "returns": [
+        "boolean"
+      ]
+    },
+    {
+      "name": "pgmi_register_file",
+      "args": [
+        "in_path text",
+        "in_content text",
+        "in_checksum text",
+        "in_pgmi_checksum text"
+      ],
+      "returns": [
+        "_pgmi_source"
+      ]
+    },
+    {
+      "name": "pgmi_is_sql_file",
+      "args": [
+        "filename text"
+      ],
+      "returns": [
+        "boolean"
+      ]
+    },
+    {
+      "name": "pgmi_persist_test_plan",
+      "args": [
+        "target_schema text",
+        "p_pattern text DEFAULT NULL"
+      ],
+      "returns": [
+        "void"
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "pgmi_test_event",
+      "fields": [
+        {
+          "name": "event",
+          "type": "text"
+        },
+        {
+          "name": "path",
+          "type": "text"
+        },
+        {
+          "name": "directory",
+          "type": "text"
+        },
+        {
+          "name": "depth",
+          "type": "integer"
+        },
+        {
+          "name": "ordinal",
+          "type": "integer"
+        },
+        {
+          "name": "context",
+          "type": "jsonb"
+        }
+      ],
+      "events": [
+        "suite_start",
+        "fixture_start",
+        "fixture_end",
+        "test_start",
+        "test_end",
+        "rollback",
+        "teardown_start",
+        "teardown_end",
+        "suite_end"
+      ],
+      "note": "Passed to the callback function during CALL pgmi_test(). Custom callbacks must accept (pg_temp.pgmi_test_event) and return void. Schema-qualify the callback name: pgmi_test('pattern', 'pg_temp.my_callback')."
+    }
+  ],
+  "step_types": [
+    "fixture",
+    "test",
+    "teardown"
+  ],
+  "step_types_note": "Values of pgmi_test_plan.step_type — NOT the callback event values. The callback receives pgmi_test_event.event, which uses a different, finer-grained vocabulary (see types.pgmi_test_event.events).",
+  "exit_codes": [
+    {
+      "code": 0,
+      "name": "ExitSuccess",
+      "description": "Deployment/test completed successfully"
+    },
+    {
+      "code": 1,
+      "name": "ExitGeneralError",
+      "description": "Unknown or unclassified error"
+    },
+    {
+      "code": 2,
+      "name": "ExitUsageError",
+      "description": "CLI usage error (missing args, invalid flags)"
+    },
+    {
+      "code": 3,
+      "name": "ExitPanic",
+      "description": "Internal panic (unexpected crash)"
+    },
+    {
+      "code": 10,
+      "name": "ExitConfigError",
+      "description": "Invalid pgmi configuration, rejected before connecting (a parameter your SQL requires is exit 13)"
+    },
+    {
+      "code": 11,
+      "name": "ExitConnectionError",
+      "description": "Failed to connect to database"
+    },
+    {
+      "code": 12,
+      "name": "ExitApprovalDenied",
+      "description": "User denied overwrite approval"
+    },
+    {
+      "code": 13,
+      "name": "ExitExecutionFailed",
+      "description": "SQL execution failed"
+    },
+    {
+      "code": 14,
+      "name": "ExitDeploySQLMissing",
+      "description": "deploy.sql not found"
+    },
+    {
+      "code": 15,
+      "name": "ExitConcurrentDeploy",
+      "description": "Another pgmi deployment is in progress"
+    },
+    {
+      "code": 16,
+      "name": "ExitTimeout",
+      "description": "Operation exceeded --timeout (context deadline exceeded)"
+    },
+    {
+      "code": 130,
+      "name": "ExitInterrupted",
+      "description": "Process interrupted by SIGINT (Ctrl-C)"
+    }
+  ],
+  "macros": [
+    {
+      "form": "CALL pgmi_test()",
+      "description": "Run all tests with default callback. Expands to SAVEPOINT/ROLLBACK TO SAVEPOINT, which PostgreSQL refuses inside the implicit block of a multi-statement query, so the call MUST sit inside an explicit top-level BEGIN ... COMMIT. Without one the deploy fails with 25P01 'SAVEPOINT can only be used in transaction blocks' naming a statement you never wrote."
+    },
+    {
+      "form": "CALL pgmi_test('pattern')",
+      "description": "Filter tests by POSIX regex"
+    },
+    {
+      "form": "CALL pgmi_test('pattern', 'callback')",
+      "description": "Custom callback function"
+    }
+  ],
+  "execution_contract": {
+    "summary": "Before your first top-level COMMIT, atomic mode; after it, psql mode.",
+    "head": "Everything through the first top-level transaction terminator is sent as one unit and runs as a single transaction. A deploy.sql with no top-level terminator is entirely atomic. The scaffolded templates are NOT that shape: they open with BEGIN, COMMIT after the test gate, and keep the DONE banner in the tail, so anything appended to one runs in psql mode.",
+    "tail": "Every top-level statement after that terminator runs on its own with per-statement autocommit, exactly as in psql. An explicit BEGIN ... COMMIT forms a real multi-statement transaction.",
+    "terminators": [
+      "COMMIT",
+      "END",
+      "ROLLBACK",
+      "ABORT",
+      "... optionally followed by WORK or TRANSACTION",
+      "... optionally followed by AND CHAIN (which leaves a chained transaction open)"
+    ],
+    "not_terminators": [
+      "ROLLBACK TO [SAVEPOINT] name (savepoint control, not a transaction end)",
+      "COMMIT PREPARED / ROLLBACK PREPARED (acts on a foreign prepared transaction)",
+      "The END closing a BEGIN ATOMIC function body (the body is stepped over whole, semicolons and all)"
+    ],
+    "consequences": [
+      "Statements between mid-file COMMITs are not implicitly grouped: a later phase that must be atomic writes its own BEGIN ... COMMIT.",
+      "A mid-tail failure stops the deploy but keeps earlier autocommitted statements applied, so tail statements must be idempotent.",
+      "A transaction-scoped advisory lock taken in the head is released by the head's COMMIT and does not guard the tail."
+    ],
+    "not_via_execute": [
+      "CREATE INDEX CONCURRENTLY",
+      "VACUUM",
+      "CREATE DATABASE"
+    ],
+    "not_via_execute_why": "EXECUTE runs statements in a function context, so these are refused with SQLSTATE 25001 ('cannot be executed from a function') whatever the transaction state. Write them at top level in the tail, never inside a plan loop."
+  }
+}

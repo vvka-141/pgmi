@@ -1,4 +1,5 @@
 mod cli;
+mod commands;
 mod config;
 mod conn;
 mod deploy;
@@ -47,18 +48,18 @@ fn run() -> u8 {
     let result = match cli.command {
         None => bare(),
         Some(Command::Version) => return print_version(true),
-        Some(Command::Help { command }) => help(command.as_deref()),
+        Some(Command::Help { command }) => help(&command),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose),
         Some(Command::Init(a)) => init::run(&a),
+        Some(Command::Info(a)) => commands::info::run(&a, &Env::snapshot()),
+        Some(Command::Templates(a)) => commands::templates::run(&a, || help(&["templates"])),
+        Some(Command::Ai(a)) => commands::ai::run(&a, &Env::snapshot()),
+        Some(Command::Metadata(a)) => {
+            commands::metadata::run(&a, &Env::snapshot(), || help(&["metadata"]))
+        }
+        Some(Command::Completion(a)) => commands::completion::run(&a),
         Some(Command::Serve) => return serve::run(cli.verbose),
-        Some(
-            Command::Info(_)
-            | Command::Metadata(_)
-            | Command::Templates(_)
-            | Command::Ai(_)
-            | Command::Config(_)
-            | Command::Completion(_),
-        ) => Err(Error::usage(
+        Some(Command::Config(_)) => Err(Error::usage(
             "this command is not implemented in this build",
         )),
     };
@@ -128,7 +129,7 @@ fn bare() -> error::Result<()> {
     let banner =
         std::io::stderr().is_terminal() && env.non_empty("PGMI_NO_BANNER").ok().flatten().is_none();
     if !banner {
-        return help(None);
+        return help::<&str>(&[]);
     }
     let logo = pgmi_shared::file("art/logo.txt")
         .and_then(|b| std::str::from_utf8(b).ok())
@@ -142,20 +143,21 @@ fn bare() -> error::Result<()> {
         .map_err(|e| Error::general("write banner").with_source(e))
 }
 
-fn help(command: Option<&str>) -> error::Result<()> {
+fn help<S: AsRef<str>>(command: &[S]) -> error::Result<()> {
     use clap::CommandFactory;
-    let mut root = Cli::command();
-    let mut target = match command {
-        None => root,
-        Some(name) => match root.find_subcommand_mut(name) {
+    let mut target = Cli::command();
+    target.build();
+    for name in command {
+        let name = name.as_ref();
+        target = match target.find_subcommand(name) {
             Some(c) => c.clone(),
             None => {
                 return Err(Error::usage(format!(
                     "unknown command {name:?} for \"pgmi\""
                 )));
             }
-        },
-    };
+        };
+    }
     let text = target.render_long_help().to_string();
     std::io::stdout()
         .write_all(text.as_bytes())

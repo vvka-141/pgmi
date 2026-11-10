@@ -22,7 +22,7 @@ pub struct Project {
     pub deploy_sql: String,
     pub sources: Vec<File>,
     pub tests: Vec<File>,
-    pub test_dir_files: usize,
+    pub test_dir_files: Vec<String>,
     pub ignored: Vec<Ignored>,
 }
 
@@ -48,12 +48,36 @@ pub fn check_root(root: &Path) -> Result<()> {
     }
 }
 
+pub fn max_size(env: &crate::env::Env) -> Result<u64> {
+    match env.non_empty("PGMI_MAX_FILE_SIZE")? {
+        None => Ok(DEFAULT_MAX_FILE_SIZE),
+        Some(v) => v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+            Error::config(format!(
+                "PGMI_MAX_FILE_SIZE={v:?}: want a positive whole number of bytes, such as 20971520"
+            ))
+        }),
+    }
+}
+
+fn rules(root: &Path) -> Result<Rules> {
+    match std::fs::read_to_string(root.join(".pgmiignore")) {
+        Ok(text) => Rules::parse(&text).map_err(Error::config),
+        Err(_) => Ok(Rules::default()),
+    }
+}
+
+pub fn scan(root: &Path, max_size: u64) -> Result<Project> {
+    check_root(root)?;
+    let rules = rules(root)?;
+    let mut project = Project::default();
+    walk(root, "", false, &rules, max_size, &mut project)?;
+    project.ignored.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(project)
+}
+
 pub fn load(root: &Path, max_size: u64) -> Result<Project> {
     check_root(root)?;
-    let rules = match std::fs::read_to_string(root.join(".pgmiignore")) {
-        Ok(text) => Rules::parse(&text).map_err(Error::config)?,
-        Err(_) => Rules::default(),
-    };
+    let rules = rules(root)?;
     if rules.ignored("deploy.sql", false) {
         return Err(Error::config(
             ".pgmiignore hides deploy.sql; add !deploy.sql after the pattern that matches it",
@@ -79,8 +103,9 @@ fn read_text(path: &Path, rel: &str, max_size: u64) -> Result<String> {
     let meta = std::fs::metadata(path)
         .map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
     if meta.len() > max_size {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
         return Err(Error::config(format!(
-            "file ./{rel} is {} bytes, over the {max_size}-byte limit (PGMI_MAX_FILE_SIZE)",
+            "failed to read ./{rel}: file {name} is {} bytes, exceeds {max_size}-byte limit (override via PGMI_MAX_FILE_SIZE)",
             meta.len()
         )));
     }
@@ -162,11 +187,16 @@ fn walk(
         }
         if is_dir {
             let test = in_test || name == "__test__" || name == "__tests__";
+            if !test && name.len() > 4 && name.starts_with("__") && name.ends_with("__") {
+                return Err(Error::config(format!(
+                    "unsupported directory {name:?} in path \"./{child}/\"; only __test__ and __tests__ are allowed"
+                )));
+            }
             walk(&path, &child, test, rules, max_size, out)?;
             continue;
         }
         if in_test {
-            out.test_dir_files += 1;
+            out.test_dir_files.push(format!("./{child}"));
             if is_sql(&name) {
                 let content = read_text(&path, &child, max_size)?;
                 out.tests.push(File {

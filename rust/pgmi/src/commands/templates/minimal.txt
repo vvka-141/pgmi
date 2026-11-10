@@ -1,0 +1,14 @@
+minimal — A deploy.sql loop, hello_world.sql and a .pgmiignore; nothing else
+
+The smallest pgmi project: deploy.sql loops over every SQL file in path order and executes it inside one transaction, hello_world.sql raises a notice, and .pgmiignore keeps parameter files and backup copies out of the session. No tables, ledger, tests, parameters, pgmi.yaml or agent skills. Start here to build everything your own way.
+
+Structure:
+  ├── .pgmiignore
+  ├── deploy.sql
+  └── hello_world.sql
+
+Features:
+  - deploy.sql is the README's "entire model in one file" loop
+  - Prints Executing: <path> before each file
+
+For: Building your own deployment from nothing

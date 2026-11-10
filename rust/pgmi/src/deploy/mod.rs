@@ -419,20 +419,13 @@ async fn deploy(
         }
     }
     st.deployer = true;
-    let max_size = match ctx.env.non_empty("PGMI_MAX_FILE_SIZE")? {
-        None => walk::DEFAULT_MAX_FILE_SIZE,
-        Some(v) => v.parse().map_err(|_| {
-            Error::config(format!(
-                "PGMI_MAX_FILE_SIZE must be a whole number of bytes, got {v:?}"
-            ))
-        })?,
-    };
+    let max_size = walk::max_size(&ctx.env)?;
     let root = a.project.clone();
     let project = tokio::task::spawn_blocking(move || walk::load(&root, max_size))
         .await
         .map_err(|e| Error::internal(format!("project loader: {e}")))??;
     let meta = metadata::collect(&project.sources)?;
-    st.files_loaded = Some(project.sources.len() + project.test_dir_files);
+    st.files_loaded = Some(project.sources.len() + project.test_dir_files.len());
     st.paths_ignored = Some(json!(
         project
             .ignored

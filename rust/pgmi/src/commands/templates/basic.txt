@@ -1,0 +1,27 @@
+basic — Two layers: run-once tables, re-run views and functions
+
+A small project in two layers. physical/ holds tables, keys and indexes in run-once files; semantic/ holds the views and writer functions, re-run on every deploy. deploy.sql is short enough to read in one sitting: it refuses a run-once file edited after it ran, runs the files in path order, seeds a demo project on env=dev and gates the commit on the tests.
+
+Structure:
+  ├── deploy.sql
+  ├── project.json
+  ├── pgmi.yaml
+  ├── README.md
+  ├── physical/
+  │   ├── 001_project.sql
+  │   ├── 002_task.sql
+  │   └── __test__/
+  ├── semantic/
+  │   ├── project.sql
+  │   ├── task.sql
+  │   └── __test__/
+  └── __test__/
+      └── test_function_privileges.sql
+
+Features:
+  - Run-once structure with a ledger; a run-once file edited, moved or removed after it ran refuses the deploy
+  - Views as the read surface, writer functions with refusal functions as the only writers
+  - Environment-aware deployment (--param env=production skips dev seeding)
+  - Tests per layer in __test__/ (CALL pgmi_test()) gate the commit
+
+For: Start here. Deploying SQL — small, explicit, any managed provider
