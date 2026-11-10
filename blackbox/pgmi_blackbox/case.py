@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 TEMPLATES = ("minimal", "basic", "advanced")
+SERVER_KINDS = ("tls", "tls_only", "replica", "socket")
 
 
 class CaseError(ValueError):
@@ -30,6 +31,7 @@ class Expect:
     sql: tuple[SqlCheck, ...]
     files: dict[str, tuple[str, ...]]
     absent: tuple[str, ...]
+    stderr_within: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,16 +48,30 @@ class Step:
     stdin: tuple[str | float, ...] | None
     delay: float
     background: bool
-    signal: Signal | None
+    signals: tuple[Signal, ...]
     timeout: float
     cwd: str
     expect: Expect
 
 
 @dataclass(frozen=True, slots=True)
+class Generate:
+    count: int
+    path: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class Project:
     init: str | None
     files: dict[str, str]
+    generate: Generate | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HomeFile:
+    content: str
+    mode: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +80,8 @@ class Case:
     description: str
     project: Project
     steps: tuple[Step, ...]
+    servers: tuple[str, ...] = ()
+    home: dict[str, HomeFile] | None = None
 
 
 class _Reader:
@@ -130,21 +148,57 @@ def load_cases(root: Path, directory: Path) -> list[Case]:
 
 def parse_case(path: str, doc: Any) -> Case:
     r = _Reader(path)
-    doc = r.mapping(doc, "", {"description", "project", "steps"}, {"description", "steps"})
+    doc = r.mapping(doc, "", {"description", "project", "servers", "home", "steps"}, {"description", "steps"})
     description = r.string(doc["description"], "description")
     project = _project(r, doc.get("project", {}))
     steps = doc["steps"]
     if not isinstance(steps, list) or not steps:
         raise r.fail("steps", "must be a non-empty list")
-    return Case(path, description, project, tuple(_step(r, s, f"steps[{i}]") for i, s in enumerate(steps)))
+    servers = r.strings(doc.get("servers", []), "servers")
+    for i, kind in enumerate(servers):
+        if kind not in SERVER_KINDS:
+            raise r.fail(f"servers[{i}]", f"must be one of {', '.join(SERVER_KINDS)}")
+    return Case(
+        path,
+        description,
+        project,
+        tuple(_step(r, s, f"steps[{i}]") for i, s in enumerate(steps)),
+        servers,
+        _home(r, doc.get("home", {})),
+    )
+
+
+def _home(r: _Reader, value: Any) -> dict[str, HomeFile]:
+    if not isinstance(value, dict):
+        raise r.fail("home", "must map paths to contents")
+    files = {}
+    for path, item in value.items():
+        if isinstance(item, str):
+            files[path] = HomeFile(item, 0o600)
+            continue
+        item = r.mapping(item, f"home.{path}", {"content", "mode"}, {"content"})
+        mode = item.get("mode", "0600")
+        if not isinstance(mode, str) or not re.fullmatch(r"0[0-7]{3}", mode):
+            raise r.fail(f"home.{path}.mode", 'must be an octal string such as "0600"')
+        files[path] = HomeFile(r.string(item["content"], f"home.{path}.content"), int(mode, 8))
+    return files
 
 
 def _project(r: _Reader, value: Any) -> Project:
-    value = r.mapping(value, "project", {"init", "files"})
+    value = r.mapping(value, "project", {"init", "files", "generate"})
     init = value.get("init")
     if init is not None and init not in TEMPLATES:
         raise r.fail("project.init", f"must be one of {', '.join(TEMPLATES)}")
-    return Project(init, r.string_map(value.get("files", {}), "project.files"))
+    generate = None
+    if "generate" in value:
+        g = r.mapping(value["generate"], "project.generate", {"count", "path", "content"}, {"count", "path", "content"})
+        count = g["count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise r.fail("project.generate.count", "must be a positive integer")
+        generate = Generate(
+            count, r.string(g["path"], "project.generate.path"), r.string(g["content"], "project.generate.content")
+        )
+    return Project(init, r.string_map(value.get("files", {}), "project.files"), generate)
 
 
 def _step(r: _Reader, value: Any, field: str) -> Step:
@@ -167,7 +221,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         stdin=_stdin(r, value["stdin"], f"{field}.stdin") if "stdin" in value else None,
         delay=r.number(value.get("delay", 0), f"{field}.delay"),
         background=background,
-        signal=_signal(r, value["signal"], f"{field}.signal") if "signal" in value else None,
+        signals=_signals(r, value.get("signal", []), f"{field}.signal"),
         timeout=r.number(value.get("timeout", 120), f"{field}.timeout"),
         cwd=r.string(value.get("cwd", "{workdir}"), f"{field}.cwd"),
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
@@ -189,6 +243,14 @@ def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float, ...]:
     return tuple(chunks)
 
 
+def _signals(r: _Reader, value: Any, field: str) -> tuple[Signal, ...]:
+    if isinstance(value, dict):
+        return (_signal(r, value, field),)
+    if not isinstance(value, list):
+        raise r.fail(field, "must be a signal or a list of signals")
+    return tuple(_signal(r, v, f"{field}[{i}]") for i, v in enumerate(value))
+
+
 def _signal(r: _Reader, value: Any, field: str) -> Signal:
     value = r.mapping(value, field, {"name", "after"}, {"name", "after"})
     name = r.string(value["name"], f"{field}.name")
@@ -198,7 +260,18 @@ def _signal(r: _Reader, value: Any, field: str) -> Signal:
 
 
 def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
-    allowed = {"exit", "stdout", "stdout_not", "stderr", "stderr_not", "json", "sql", "files", "absent"}
+    allowed = {
+        "exit",
+        "stdout",
+        "stdout_not",
+        "stderr",
+        "stderr_not",
+        "stderr_within",
+        "json",
+        "sql",
+        "files",
+        "absent",
+    }
     if not pgmi:
         allowed = {"sql", "files", "absent"}
     value = r.mapping(value, field, allowed, {"exit"} if pgmi else set())
@@ -218,7 +291,23 @@ def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
         sql=tuple(_sql_check(r, c, f"{field}.sql[{i}]") for i, c in enumerate(value.get("sql", []))),
         files=_files(r, value.get("files", {}), f"{field}.files"),
         absent=r.strings(value.get("absent", []), f"{field}.absent"),
+        stderr_within=_within(r, value.get("stderr_within", []), f"{field}.stderr_within"),
     )
+
+
+def _within(r: _Reader, value: Any, field: str) -> tuple[tuple[str, float], ...]:
+    if not isinstance(value, list):
+        raise r.fail(field, "must be a list of {pattern, seconds}")
+    out = []
+    for i, item in enumerate(value):
+        item = r.mapping(item, f"{field}[{i}]", {"pattern", "seconds"}, {"pattern", "seconds"})
+        out.append(
+            (
+                r.patterns([item["pattern"]], f"{field}[{i}].pattern")[0],
+                r.number(item["seconds"], f"{field}[{i}].seconds"),
+            )
+        )
+    return tuple(out)
 
 
 def _files(r: _Reader, value: Any, field: str) -> dict[str, tuple[str, ...]]:

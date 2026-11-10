@@ -1,0 +1,31 @@
+description: 3000 project files and unicode content all reach the session; a path sort key (./...) sorts before 0000/..., byte order; a missing <description> is an empty string
+project:
+  generate:
+    count: 3000
+    path: "gen/f{i}.sql"
+    content: "SELECT {i}; -- ünïcödé ✓ {i}\n"
+  files:
+    meta/no-description.sql: |
+      /*
+      <pgmi-meta id="5f0b8a3c-1e2d-4c6b-9a7f-0e1d2c3b4a59" idempotent="true">
+        <sortKeys><key>0000/first</key></sortKeys>
+      </pgmi-meta>
+      */
+      SELECT 0;
+    deploy.sql: |
+      CREATE TABLE stats AS
+      SELECT (SELECT count(*) FROM pg_temp.pgmi_source_view) AS sources,
+             (SELECT count(*) FROM pg_temp.pgmi_plan_view) AS planned,
+             (SELECT path FROM pg_temp.pgmi_plan_view ORDER BY execution_order LIMIT 1) AS first,
+             (SELECT path FROM pg_temp.pgmi_plan_view ORDER BY execution_order DESC LIMIT 1) AS last,
+             (SELECT description FROM pg_temp.pgmi_plan_view WHERE path = './meta/no-description.sql') AS no_description,
+             (SELECT count(*) FROM pg_temp.pgmi_source_view WHERE content LIKE '%ünïcödé ✓%') AS unicode;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 300
+    expect:
+      exit: 0
+      json: {filesLoaded: 3001}
+      sql:
+        - query: SELECT sources, planned, first, last, no_description, unicode FROM stats
+          rows: [[3001, 3001, ./gen/f00001.sql, ./meta/no-description.sql, '', 3000]]

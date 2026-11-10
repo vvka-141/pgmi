@@ -1,0 +1,11 @@
+description: a syntax error in deploy.sql reports its line
+project:
+  files:
+    deploy.sql: |
+      SELECT 1;
+      SELEC 2;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["SELEC", "42601"]

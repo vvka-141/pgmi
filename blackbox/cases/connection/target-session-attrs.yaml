@@ -1,0 +1,33 @@
+description: target_session_attrs picks the primary or the standby of a pair whatever the host order; a deploy routed to the standby fails read-only
+servers: [replica]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port}/postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port},127.0.0.1:{primary_port}/postgres?target_session_attrs=read-write", -d, "{db}"]
+    delay: 2
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port},127.0.0.1:{primary_port}/postgres?target_session_attrs=primary", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port},127.0.0.1:{standby_port}/postgres?target_session_attrs=read-only", -d, "{db}"]
+    expect: {exit: 13, stderr: ["read-only"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port},127.0.0.1:{standby_port}/postgres?target_session_attrs=standby", -d, "{db}"]
+    expect: {exit: 13, stderr: ["read-only"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port},127.0.0.1:{standby_port}/postgres?target_session_attrs=prefer-standby", -d, "{db}"]
+    expect: {exit: 13, stderr: ["read-only"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port},127.0.0.1:{primary_port}/postgres?target_session_attrs=any", -d, "{db}"]
+    expect: {exit: 13, stderr: ["read-only"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port}/postgres?target_session_attrs=standby", -d, "{db}"]
+    expect: {exit: 11}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port},127.0.0.1:{primary_port}/postgres", -d, "{db}"]
+    env: {PGTARGETSESSIONATTRS: read-write}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env:
+      PGHOST: "127.0.0.1,127.0.0.1"
+      PGPORT: "{standby_port},{primary_port}"
+      PGUSER: "{user}"
+      PGPASSWORD: "{password}"
+    expect: {exit: 10, stderr: ["PGPORT"]}

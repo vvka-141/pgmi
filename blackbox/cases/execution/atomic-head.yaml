@@ -1,0 +1,15 @@
+description: a deploy.sql with no top-level COMMIT is one transaction; a failure commits nothing and --json says so
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE one ();
+      CREATE TABLE two ();
+      SELECT 1/0;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      json: {executionMode: atomic, unitsCommitted: 0}
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname IN ('one', 'two')
+          rows: [[0]]

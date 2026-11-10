@@ -1,0 +1,12 @@
+description: verification failures refuse the connection - wrong CA, hostname mismatch, and require turning into verify-ca when a root certificate is given
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={wrong_ca}", -d, "{db}"]
+    expect: {exit: 11, stderr: ["unknown authority", "--sslrootcert"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-full&sslrootcert={ca}", -d, "{db}"]
+    expect: {exit: 11, stderr: ["127\\.0\\.0\\.1"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require&sslrootcert={wrong_ca}", -d, "{db}"]
+    expect: {exit: 11, stderr: ["unknown authority"]}

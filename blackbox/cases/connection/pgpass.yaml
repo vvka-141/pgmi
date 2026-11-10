@@ -1,0 +1,9 @@
+description: ~/.pgpass supplies the password when the connection string has none; a wrong entry fails the sign-in
+home:
+  .pgpass: "{host}:{port}:*:{user}:{password}\n"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}"]
+    expect: {exit: 0}

@@ -1,0 +1,10 @@
+description: CALL pgmi_test() outside an explicit transaction block fails with 25P01, and inside one runs the tests
+project:
+  files:
+    deploy.sql: CALL pgmi_test();
+    __test__/test_ok.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["25P01"]

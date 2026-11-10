@@ -1,0 +1,11 @@
+description: --sslmode replaces the sslmode of a connection string from DATABASE_URL, and is refused next to --connection
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}", --sslmode, require, --json]
+    env: {DATABASE_URL: "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=disable"}
+    expect: {exit: 0, json: {tls: {enabled: true, sslmode: require}}}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=disable", -d, "{db}", --sslmode, require]
+    expect: {exit: 10, stderr: ["cannot combine --connection with --sslmode"]}

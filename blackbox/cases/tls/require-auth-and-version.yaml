@@ -1,0 +1,15 @@
+description: require_auth refuses a server that asks for another method, and --json reports the TLS version
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{md5_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=disable", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{md5_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=disable&require_auth=scram-sha-256", -d, "{db}"]
+    expect: {exit: 11}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{md5_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=disable", -d, "{db}"]
+    env: {PGREQUIREAUTH: scram-sha-256}
+    expect: {exit: 11}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}", --json]
+    expect: {exit: 0, stdout: ['"version": "TLS ?1\.[23]"']}

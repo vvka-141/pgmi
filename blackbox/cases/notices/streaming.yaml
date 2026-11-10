@@ -1,0 +1,11 @@
+description: a NOTICE reaches stderr while the statement that raised it is still running
+project:
+  files:
+    deploy.sql: DO $$ BEGIN RAISE NOTICE 'early-notice'; PERFORM pg_sleep(4); RAISE NOTICE 'late-notice'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr_within:
+        - {pattern: early-notice, seconds: 2.5}
+      stderr: [late-notice]

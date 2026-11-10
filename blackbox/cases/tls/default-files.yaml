@@ -1,0 +1,12 @@
+description: ~/.postgresql/root.crt is read when no sslrootcert is given, and turns require into verify-ca; postgresql.crt and postgresql.key are the default client certificate
+servers: [tls]
+home:
+  .postgresql/root.crt: "{wrong_ca_pem}"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}"]
+    expect: {exit: 11, stderr: ["unknown authority"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require&sslrootcert={ca}", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true}}}

@@ -1,0 +1,14 @@
+description: with the right CA in ~/.postgresql/root.crt, verify-ca needs no sslrootcert, and the default client certificate signs in a user that requires one
+servers: [tls]
+home:
+  .postgresql/root.crt: "{ca_pem}"
+  .postgresql/postgresql.crt: "{client_cert_pem}"
+  .postgresql/postgresql.key: "{client_key_pem}"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true}}}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca", -d, "{db}"]
+    expect: {exit: 0}

@@ -1,0 +1,19 @@
+description: a deploy.sql that ends inside an open transaction fails, rolls it back, and releases the deploy lock so the next deploy is not exit 15
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      COMMIT;
+      BEGIN;
+      CREATE TABLE left_open ();
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["open transaction"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'left_open'
+          rows: [[0]]

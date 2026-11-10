@@ -1,0 +1,21 @@
+description: a failure inside an explicit BEGIN in the tail rolls that block back and releases the lock, with no stray warning
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      COMMIT;
+      BEGIN;
+      CREATE TABLE in_block ();
+      SELECT 1/0;
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr_not: ["WARNING"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'in_block'
+          rows: [[0]]

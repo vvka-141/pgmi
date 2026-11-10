@@ -1,0 +1,19 @@
+description: a user that requires a client certificate signs in with --sslcert/--sslkey, with PGSSLCERT/PGSSLKEY, and is refused without one
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -h, "{host}", -p, "{tls_port}", -U, "{cert_user}", -d, "{db}", --sslmode, verify-ca, --sslrootcert, "{ca}", --sslcert, "{client_cert}", --sslkey, "{client_key}", --json]
+    env: {PGPASSWORD: "{password}"}
+    expect: {exit: 0, json: {tls: {enabled: true, sslmode: verify-ca}}}
+  - pgmi: [deploy, "{project}", -h, "{host}", -p, "{tls_port}", -U, "{cert_user}", -d, "{db}"]
+    env:
+      PGPASSWORD: "{password}"
+      PGSSLMODE: verify-ca
+      PGSSLROOTCERT: "{ca}"
+      PGSSLCERT: "{client_cert}"
+      PGSSLKEY: "{client_key}"
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}"]
+    expect: {exit: 11}

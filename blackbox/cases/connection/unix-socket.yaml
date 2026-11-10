@@ -1,0 +1,10 @@
+description: a host that is a directory connects over the Unix socket in it, with and without an explicit port
+servers: [socket]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "host={socket_dir} user=postgres password=postgres dbname=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "host={socket_dir} port=5432 user=postgres password=postgres dbname=postgres", -d, "{db}"]
+    expect: {exit: 0}

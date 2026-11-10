@@ -1,0 +1,15 @@
+description: channel_binding=require works over TLS and is refused without it; sslnegotiation=direct connects to a PostgreSQL 18 server
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require&channel_binding=require", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=disable&channel_binding=require", -d, "{db}"]
+    expect: {exit: 11}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require&sslnegotiation=direct", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true}}}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=disable", -d, "{db}"]
+    env: {PGCHANNELBINDING: require}
+    expect: {exit: 11}

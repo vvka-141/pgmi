@@ -1,0 +1,18 @@
+description: notice severities, DETAIL and HINT reach stderr, and a notice raised before an error is printed before it
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN
+        RAISE NOTICE 'n-notice' USING DETAIL = 'n-detail', HINT = 'n-hint';
+        RAISE INFO 'n-info';
+        RAISE WARNING 'n-warning';
+        RAISE LOG 'n-log';
+        RAISE NOTICE 'n-before-error';
+        RAISE EXCEPTION 'n-error';
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: [n-notice, n-detail, n-hint, n-info, "WARNING.*n-warning", "(?s)n-before-error.*n-error"]
+      stderr_not: [n-log]

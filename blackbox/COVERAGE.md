@@ -59,7 +59,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--param` | ✓ `params/precedence` |
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
 | `--timeout` (`3s`, `90s`, `1h30m`; not a duration = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms` |
-| `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert` | → PGMI-854 |
+| `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
 | `--azure`, `--azure-tenant-id`, `--azure-client-id` | → PGMI-853 |
 | `--aws`, `--aws-region` | → PGMI-853 |
 | `--google`, `--google-instance` | → PGMI-853 |
@@ -72,11 +72,11 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGMI_CONNECTION_STRING`, `DATABASE_URL` (and their order, and the `connection: from ...` line) | ✓ `env/connection-string-vars` |
 | `-h`/`-p`/`-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL` = 10 | ✓ `env/connection-string-vars-refuse-flags` |
 | `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGAPPNAME`, `PGCONNECT_TIMEOUT` | ✓ `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout` |
-| `PGPASSFILE`, `~/.pgpass` | → PGMI-854 |
+| `PGPASSFILE`, `~/.pgpass` | ✓ `connection/pgpass*` |
 | `PGSERVICE` and `service=` refused | ✓ `env/pgservice-refused` |
-| `PGSSLMODE`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLROOTCERT`, `PGSSLPASSWORD` | → PGMI-854 |
-| `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | → PGMI-854 |
-| `PGHOSTADDR`, `PGSSLCRL` (ignored) | → PGMI-854 |
+| `PGSSLMODE`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLROOTCERT`, `PGSSLPASSWORD` | ✓ `tls/client-certificate`, `tls/encrypted-client-key` |
+| `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | ✓ `connection/keywords`, `connection/target-session-attrs`, `tls/require-auth-and-version`, `tls/channel-binding-and-direct` |
+| `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
 | `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` | → PGMI-852 (each changes output only on a terminal) |
 | `PGMI_PAGER`, `PAGER` | → PGMI-852 (paging applies on a terminal only) |
 | `AZURE_*`, `AWS_REGION`, `AWS_DEFAULT_REGION` | → PGMI-853 |
@@ -92,12 +92,50 @@ The behaviour contract (PGMI-828) maps each row to a section.
 
 ## Connection layer
 
-The 41 cases in the driver research (`research-pg-driver.md`, "Black-box parity
-tests"): every sslmode incl. fallback, `~/.postgresql/root.crt`,
-`sslrootcert=system`, direct SSL negotiation, channel binding, multi-host and
-`target_session_attrs`, the joined error, unknown connection-string keys,
-NOTICE order, cancel on signal and timeout, transaction-status outcomes.
-→ PGMI-854
+Numbers are the parity cases in the driver research (`research-pg-driver.md`,
+"Black-box parity tests").
+
+| # | Behaviour | Coverage |
+|---|---|---|
+| 1 | no top-level terminator: one transaction, nothing committed on failure, `executionMode=atomic` | ✓ `execution/atomic-head` |
+| 2 | `CREATE INDEX CONCURRENTLY` in the tail | ✓ `execution/tail-autocommit` |
+| 3 | tail failure keeps earlier autocommitted statements, `executionMode=psql` | ✓ `execution/tail-autocommit` |
+| 4 | ending inside an open transaction fails, rolls back, releases the lock | ✓ `execution/open-transaction` |
+| 5 | failure inside an explicit tail `BEGIN` rolls back, releases the lock, no stray WARNING | ✓ `execution/tail-block-fails` |
+| 6 | `CALL pgmi_test()` without `BEGIN` = 25P01; inside a block a failing test fails the deploy | ✓ `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block` |
+| 7 | loader at scale, unicode, missing description, plan order | ✓ `execution/loader-at-scale` (3000 files) |
+| 8 | PGlite single-session server | ✗ needs a PGlite server; the Go integration test against PGlite and the manual check in `docs/CONNECTIONS.md` cover it |
+| 9 | NOTICE streamed while the statement runs | ✓ `notices/streaming` |
+| 10 | severities, DETAIL, HINT, LOG hidden | ✓ `notices/severity`; localized server messages ✗ (no non-English locale in the image) |
+| 11 | a notice before an error prints before it | ✓ `notices/severity` |
+| 12 | syntax error in deploy.sql | ✓ `errors/head-syntax` |
+| 13, 14 | error inside an executed file names the file | ✓ `errors/attribution` |
+| 15 | `--json` failure record: `sqlstate`, `failedFile` | ✓ `errors/attribution` |
+| 16 | 42501 TEMPORARY guidance; wrong password; missing maintenance database; hba reject | ✓ `errors/temporary-privilege`, `errors/connection-failures`, `tls/tls-only-and-plain-servers`; 53300, 57P03 ✗ (server states a case cannot produce reliably) |
+| 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
+| 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
+| 19 | cancel request blocked by a firewall | ✗ needs a firewall between client and server; `internal/db/cancel_integration_test.go` covers it |
+| 20 | SIGINT twice = 130 at once | ✓ `cancel/sigint-twice` |
+| 21 | unreachable host with a connect timeout = 11, not 16 | ✓ `env/pgconnect-timeout` |
+| 22 | URI, keyword/value and ADO.NET forms | ✓ `flags/connection-forms` |
+| 23 | `PG*` variables, `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`, `PGREQUIREAUTH` | ✓ `env/pg-variables`, `connection/keywords`, `connection/target-session-attrs`, `tls/channel-binding-and-direct`, `tls/require-auth-and-version` |
+| 24 | `.pgpass`, wildcard, `PGPASSFILE`, wrong entry, world-readable file ignored | ✓ `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable` |
+| 25 | `service=` / `PGSERVICE` refused | ✓ `env/pgservice-refused` |
+| 26 | multi-host: a down first host is skipped; both down names both | ✓ `connection/multi-host` |
+| 27 | `target_session_attrs`, all six values, against a primary and a standby | ✓ `connection/target-session-attrs` |
+| 28 | `options=` applied; unknown key sent to the server and refused (exit 11) | ✓ `connection/keywords` |
+| 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
+| 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root` |
+| 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
+| 32 | `sslrootcert=system`, with `SSL_CERT_FILE` | ✓ `tls/system-roots` |
+| 33 | server without TLS: prefer plaintext, require refused; TLS-only server: allow refused | ✓ `tls/tls-only-and-plain-servers` |
+| 34 | `sslnegotiation=direct` | ✓ `tls/channel-binding-and-direct`; failure against PostgreSQL 16 ✗ (one server version per run) |
+| 35 | client certificate by flags, by `PGSSL*`, by `~/.postgresql/postgresql.crt`; encrypted key with `sslpassword`/`PGSSLPASSWORD`; wrong password = 10 | ✓ `tls/client-certificate`, `tls/default-files-good-root`, `tls/encrypted-client-key` |
+| 36 | channel binding with an RSA certificate; refused without TLS | ✓ `tls/channel-binding-and-direct`; ECDSA and Ed25519 certificates ✗ (one server certificate per run) |
+| 37 | `require_auth` refuses another method | ✓ `tls/require-auth-and-version` |
+| 38 | `--json` TLS version | ✓ `tls/require-auth-and-version` |
+| 39, 40 | token callbacks per dial, Cloud SQL dialer | ✗ in-process hooks; the cloud cases (PGMI-853) cover them from outside |
+| 41 | static musl build | ✗ a property of the Rust build; PGMI-834 checks it |
 
 ## Checksums
 
@@ -141,4 +179,13 @@ NOTICE order, cancel on signal and timeout, transaction-status outcomes.
 Oddities found while writing cases. Go is frozen, so they are recorded here and
 decided in the behaviour contract (PGMI-828), not fixed.
 
-(none yet)
+- `sslmode=allow` never retries with TLS: against a server that requires TLS it
+  fails (`tls/tls-only-and-plain-servers`). libpq retries. Decide whether Rust
+  copies pgx or libpq.
+- An unknown connection-string key is sent to the server as a setting and
+  refused there, exit 11 (`connection/keywords`). libpq refuses it before
+  connecting. Same decision.
+- `PGPORT` must be one integer: `PGPORT=5432,5433` is exit 10
+  (`connection/target-session-attrs`). libpq accepts a list matching `PGHOST`.
+- A wrong `sslpassword` is exit 10 (configuration), not 11
+  (`tls/encrypted-client-key`).

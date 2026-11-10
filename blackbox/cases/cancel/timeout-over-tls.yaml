@@ -1,0 +1,12 @@
+description: --timeout cancels a statement over a TLS connection too
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(30);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}", --timeout, 2s]
+    timeout: 15
+    expect: {exit: 16}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require&sslnegotiation=direct", -d, "{db}", --timeout, 2s]
+    timeout: 15
+    expect: {exit: 16}

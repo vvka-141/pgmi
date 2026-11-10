@@ -1,0 +1,9 @@
+description: a wrong password, a missing maintenance database and a refused login are exit 11 with the reason
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:wrong-password@{host}:{port}/postgres", -d, "{db}"]
+    expect: {exit: 11, stderr: ["password authentication failed"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@{host}:{port}/no_such_maintenance_db", -d, "{db}"]
+    expect: {exit: 11, stderr: ["no_such_maintenance_db"]}

@@ -1,0 +1,13 @@
+description: an encrypted client key opens with sslpassword; a wrong one is invalid configuration (exit 10)
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_encrypted}&sslpassword={key_password}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_encrypted}&sslpassword=wrong", -d, "{db}"]
+    expect: {exit: 10, stderr: ["decryption password incorrect"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_encrypted}", -d, "{db}"]
+    env: {PGSSLPASSWORD: "{key_password}"}
+    expect: {exit: 0}

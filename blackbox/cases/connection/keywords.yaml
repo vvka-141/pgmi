@@ -1,0 +1,18 @@
+description: options, PGOPTIONS and PGTZ reach the session; an unknown connection-string key is sent to the server as a setting and refused there (exit 11)
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (path text, tz text, work_mem text);
+      INSERT INTO seen VALUES (current_setting('search_path'), current_setting('TimeZone'), current_setting('work_mem'));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?options=-c%20work_mem%3D5MB", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGOPTIONS: "-c work_mem=7MB", PGTZ: Asia/Tokyo}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path, tz, work_mem FROM seen ORDER BY ctid
+          rows: [['"$user", public', Etc/UTC, 5MB], ['"$user", public', Asia/Tokyo, 7MB]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}?no_such_key=1", -d, "{db}"]
+    expect: {exit: 11, stderr: ['unrecognized configuration parameter "no_such_key"']}

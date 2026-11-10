@@ -1,0 +1,14 @@
+description: a .pgpass wildcard line matches, PGPASSFILE points at another file, and a wrong password there fails with exit 11
+home:
+  custom.pass: "*:*:*:{user}:{password}\n"
+  wrong.pass: "*:*:*:{user}:not-the-password\n"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}"]
+    env: {PGPASSFILE: "{home}/custom.pass"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}"]
+    env: {PGPASSFILE: "{home}/wrong.pass"}
+    expect: {exit: 11}

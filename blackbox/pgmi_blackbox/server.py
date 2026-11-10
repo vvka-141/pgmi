@@ -20,9 +20,11 @@ class Server:
     user: str
     password: str
     maintenance_db: str
+    query: str = ""
 
     def uri(self, database: str | None = None) -> str:
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{database or self.maintenance_db}"
+        base = f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{database or self.maintenance_db}"
+        return f"{base}?{self.query}" if self.query else base
 
     def connect(self, database: str | None = None) -> psycopg.Connection:
         return psycopg.connect(self.uri(database), autocommit=True, connect_timeout=10)
@@ -63,13 +65,13 @@ def postgres() -> Iterator[Server]:
         mapped = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True, text=True)
         port = int(mapped.stdout.splitlines()[0].rsplit(":", 1)[1])
         server = Server("127.0.0.1", port, "postgres", "postgres", "postgres")
-        _wait_ready(server)
+        wait_ready(server)
         yield server
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
-def _wait_ready(server: Server, seconds: float = 60) -> None:
+def wait_ready(server: Server, seconds: float = 60) -> None:
     deadline = time.monotonic() + seconds
     while True:
         try:

@@ -1,0 +1,14 @@
+description: CALL pgmi_test() inside BEGIN ... COMMIT runs every test and a failing test fails the deploy
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CALL pgmi_test();
+      COMMIT;
+    __test__/test_ok.sql: SELECT 1;
+    failing/__test__/test_fails.sql: DO $$ BEGIN RAISE EXCEPTION 'test-failure-marker'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["test-failure-marker"]

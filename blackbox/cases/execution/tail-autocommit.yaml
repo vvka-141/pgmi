@@ -1,0 +1,19 @@
+description: after the first COMMIT each statement autocommits, so CREATE INDEX CONCURRENTLY works and a later failure keeps what ran before it
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE t (x int);
+      COMMIT;
+      CREATE INDEX CONCURRENTLY t_x ON t (x);
+      CREATE TABLE after_one ();
+      SELECT 1/0;
+      CREATE TABLE never ();
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      json: {executionMode: psql}
+      sql:
+        - query: SELECT relname FROM pg_class WHERE relname IN ('t', 't_x', 'after_one', 'never') ORDER BY relname
+          rows: [[after_one], [t], [t_x]]

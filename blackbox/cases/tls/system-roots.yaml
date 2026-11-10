@@ -1,0 +1,11 @@
+description: sslrootcert=system verifies against the system trust store, which SSL_CERT_FILE replaces
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full&sslrootcert=system", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full&sslrootcert=system", -d, "{db}"]
+    expect: {exit: 11, stderr: ["unknown authority"]}

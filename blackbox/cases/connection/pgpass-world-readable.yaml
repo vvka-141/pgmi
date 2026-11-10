@@ -1,0 +1,11 @@
+description: a .pgpass readable by others is ignored with a warning, as libpq does, so the sign-in has no password and fails with exit 11
+home:
+  .pgpass:
+    content: "{host}:{port}:*:{user}:{password}\n"
+    mode: "0644"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}"]
+    expect: {exit: 11, stderr: ["WARNING: password file .*has group or world access", "password authentication failed"]}

@@ -1,3 +1,4 @@
+import atexit
 import json
 import re
 import signal
@@ -22,6 +23,7 @@ def silent_address() -> str:
     global _silent
     if _silent is None:
         _silent = socket.create_server(("127.0.0.1", 0), backlog=128)
+        atexit.register(_silent.close)
     host, port = _silent.getsockname()
     return f"{host}:{port}"
 
@@ -31,6 +33,8 @@ class Workspace:
     server: Server
     binary: Path
     root: Path
+    extras: dict[str, str] = field(default_factory=dict)
+    extra_servers: list[Server] = field(default_factory=list)
     database: str = field(default_factory=lambda: f"bb_{uuid.uuid4().hex[:12]}")
 
     @property
@@ -53,7 +57,7 @@ class Workspace:
             "{user}": self.server.user,
             "{password}": self.server.password,
             "{silent}": silent_address(),
-        }
+        } | self.extras
         for key, value in values.items():
             text = text.replace(key, value)
         return text
@@ -70,6 +74,7 @@ class Outcome:
     code: int
     stdout: str
     stderr: str
+    stderr_lines: list[tuple[float, str]] = field(default_factory=list)
 
 
 def run_case(case: Case, ws: Workspace) -> None:
@@ -77,6 +82,11 @@ def run_case(case: Case, ws: Workspace) -> None:
     ws.home.mkdir()
     try:
         _prepare_project(case, ws)
+        for rel, item in (case.home or {}).items():
+            target = ws.home / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(ws.substitute(item.content))
+            target.chmod(item.mode)
         pending: list[tuple[str, Step, Running]] = []
         failures: list[str] = []
         for i, step in enumerate(case.steps):
@@ -101,6 +111,9 @@ def run_case(case: Case, ws: Workspace) -> None:
 
 
 def _drop(ws: Workspace) -> None:
+    for extra in ws.extra_servers:
+        with extra.connect() as c:
+            c.execute(f'DROP DATABASE IF EXISTS "{ws.database}" WITH (FORCE)')
     with ws.server.connect() as c:
         c.execute(f'DROP DATABASE IF EXISTS "{ws.database}" WITH (FORCE)')
         roles = c.execute(
@@ -119,6 +132,11 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
         )
         if done.returncode != 0:
             raise AssertionError(f"project.init failed ({done.returncode}):\n{done.stderr}")
+    g = case.project.generate
+    for i in range(1, g.count + 1) if g else ():
+        target = ws.project / g.path.replace("{i}", f"{i:05d}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(g.content.replace("{i}", str(i)))
     for rel, content in case.project.files.items():
         target = ws.project / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +149,8 @@ class Running:
     argv: list[str]
     threads: list[threading.Thread]
     stdout: list[str]
-    stderr: list[str]
+    stderr: list[tuple[float, str]]
+    started: float
 
 
 def _start(ws: Workspace, step: Step) -> Running:
@@ -145,18 +164,23 @@ def _start(ws: Workspace, step: Step) -> Running:
         stderr=subprocess.PIPE,
         text=True,
     )
-    run = Running(proc, argv, [], [], [])
-    for stream, sink in ((proc.stdout, run.stdout), (proc.stderr, run.stderr)):
-        run.threads.append(threading.Thread(target=lambda s=stream, k=sink: k.append(s.read()), daemon=True))
+    run = Running(proc, argv, [], [], [], time.monotonic())
+    run.threads.append(threading.Thread(target=lambda: run.stdout.append(proc.stdout.read()), daemon=True))
+    run.threads.append(threading.Thread(target=_lines, args=(proc.stderr, run.stderr, run.started), daemon=True))
     if step.stdin is not None:
         chunks = [ws.substitute(c) if isinstance(c, str) else c for c in step.stdin]
         run.threads.append(threading.Thread(target=_feed, args=(proc.stdin, chunks), daemon=True))
     for t in run.threads:
         t.start()
-    if step.signal:
-        time.sleep(step.signal.after)
-        proc.send_signal(getattr(signal, step.signal.name))
+    for sig in step.signals:
+        time.sleep(max(0.0, run.started + sig.after - time.monotonic()))
+        proc.send_signal(getattr(signal, sig.name))
     return run
+
+
+def _lines(stream, sink: list[tuple[float, str]], started: float) -> None:
+    for line in stream:
+        sink.append((time.monotonic() - started, line))
 
 
 def _feed(stdin, chunks: list[str | float]) -> None:
@@ -184,12 +208,18 @@ def _finish(label: str, step: Step, run: Running) -> Outcome:
         run.proc.wait()
         for t in run.threads:
             t.join(5)
+        run.proc.stdout.close()
+        run.proc.stderr.close()
         raise AssertionError(
-            f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n{''.join(run.stderr)}"
+            f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n{''.join(t for _, t in run.stderr)}"
         ) from None
     for t in run.threads:
         t.join(10)
-    return Outcome(label, run.argv, run.proc.returncode, "".join(run.stdout), "".join(run.stderr))
+    run.proc.stdout.close()
+    run.proc.stderr.close()
+    return Outcome(
+        label, run.argv, run.proc.returncode, "".join(run.stdout), "".join(t for _, t in run.stderr), run.stderr
+    )
 
 
 def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
@@ -202,6 +232,12 @@ def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
     ):
         problems += [f"{name} lacks /{p}/" for p in present if not re.search(p, text, re.MULTILINE)]
         problems += [f"{name} has /{p}/" for p in absent if re.search(p, text, re.MULTILINE)]
+    for pattern, seconds in expect.stderr_within:
+        at = next((t for t, line in o.stderr_lines if re.search(pattern, line)), None)
+        if at is None:
+            problems.append(f"stderr lacks /{pattern}/")
+        elif at > seconds:
+            problems.append(f"stderr /{pattern}/ arrived after {at:.1f}s, expected within {seconds}s")
     if expect.json is not None:
         try:
             problems += _json_subset(json.loads(o.stdout), _substitute_tree(ws, expect.json), "$")
@@ -216,8 +252,10 @@ def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
         + "\n  ".join(problems)
         + f"\n--- stdout ---\n{o.stdout.rstrip()}\n--- stderr ---\n{o.stderr.rstrip()}"
     )
-    if ws.server.password:
-        report = report.replace(ws.server.password, "***")
+    pw = ws.server.password
+    if pw:
+        for secret in (f":{pw}@", f"password={pw}", f"Password={pw}", f'"password":"{pw}"'):
+            report = report.replace(secret, secret.replace(pw, "***"))
     return [report]
 
 

@@ -1,0 +1,22 @@
+description: errors name where they happened - deploy.sql line and column, an executed file and its line, and the --json record
+project:
+  files:
+    deploy.sql: |
+      DO $$
+      DECLARE f record;
+      BEGIN
+        FOR f IN SELECT path, content FROM pg_temp.pgmi_source_view WHERE is_sql_file ORDER BY path LOOP
+          EXECUTE f.content;
+        END LOOP;
+      END $$;
+    schema/one.sql: |
+      CREATE TABLE ok (x int);
+      SELECT x
+      FROM no_such_table;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stderr: ["no_such_table", "schema/one\\.sql"]
+      json: {status: failed, exitCode: 13}
+      stdout: ['"sqlstate": "42P01"', '"failedFile": "\./schema/one\.sql"']

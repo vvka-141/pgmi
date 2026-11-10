@@ -1,0 +1,10 @@
+description: PGHOSTADDR and PGSSLCRL are ignored, as documented; pointing them somewhere useless changes nothing
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env:
+      PGHOSTADDR: 10.255.255.1
+      PGSSLCRL: /no/such/file.crl
+    expect: {exit: 0}

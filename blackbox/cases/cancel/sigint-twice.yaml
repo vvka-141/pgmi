@@ -1,0 +1,11 @@
+description: a second SIGINT ends the deploy at once, still with exit 130
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(30);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    signal:
+      - {name: SIGINT, after: 2}
+      - {name: SIGINT, after: 2.3}
+    timeout: 10
+    expect: {exit: 130}
