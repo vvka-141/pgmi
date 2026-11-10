@@ -175,13 +175,17 @@ fn usage_text(e: &clap::Error) -> String {
     match e.kind() {
         ErrorKind::InvalidSubcommand => {
             if let Some(cmd) = value(ContextKind::InvalidSubcommand) {
+                let parent = parent_command();
                 return format!(
-                    "unknown command \"{cmd}\" for \"pgmi\"\nRun 'pgmi --help' for usage."
+                    "unknown command \"{cmd}\" for \"{parent}\"\nRun '{parent} --help' for usage."
                 );
             }
         }
         ErrorKind::UnknownArgument => {
             if let Some(arg) = value(ContextKind::InvalidArg) {
+                if !arg.starts_with('-') {
+                    return format!("unknown command \"{arg}\" for \"{}\"", parent_command());
+                }
                 let short = arg.strip_prefix('-').filter(|r| !r.starts_with('-'));
                 return match short.and_then(|r| r.chars().next()) {
                     Some(c) => format!("unknown shorthand flag: '{c}' in {arg}"),
@@ -201,6 +205,22 @@ fn usage_text(e: &clap::Error) -> String {
         return format!("{text}\n-h is --host on deploy, as in psql; use --help for help");
     }
     text
+}
+
+fn parent_command() -> String {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let mut path = vec!["pgmi".to_string()];
+    for arg in std::env::args().skip(1).filter(|a| !a.starts_with('-')) {
+        match cmd.find_subcommand(&arg) {
+            Some(sub) => {
+                path.push(arg);
+                cmd = sub.clone();
+            }
+            None => break,
+        }
+    }
+    path.join(" ")
 }
 
 fn clap_error(e: &clap::Error) -> u8 {

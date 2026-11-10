@@ -44,7 +44,7 @@ struct Row {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Plan {
+pub struct Plan {
     total_files: usize,
     plan: Vec<Row>,
 }
@@ -79,21 +79,18 @@ fn rows(sources: &[File], metas: &[Meta]) -> Vec<Row> {
     rows
 }
 
-fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
-    let loaded = walk::scan(&r.path, walk::max_size(env)?)
+pub fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
+    let (project, metas) = walk::scan(path, walk::max_size(env)?)
         .and_then(|p| metadata::collect(&p.sources).map(|m| (p, m)))
-        .map_err(|e| {
-            failed(
-                r.json,
-                Error::new(e.kind(), format!("failed to scan directory: {}", e.text())),
-                serde_json::json!({}),
-            )
-        })?;
-    let (project, metas) = loaded;
-    let plan = Plan {
+        .map_err(|e| Error::new(e.kind(), format!("failed to scan directory: {}", e.text())))?;
+    Ok(Plan {
         total_files: project.sources.len(),
         plan: rows(&project.sources, &metas),
-    };
+    })
+}
+
+fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
+    let plan = plan_report(&r.path, env).map_err(|e| failed(r.json, e, serde_json::json!({})))?;
     if r.json {
         return json(&plan);
     }
@@ -133,20 +130,32 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
     stdout(&text)
 }
 
-fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
-    let project = walk::scan(&r.path, walk::max_size(env)?)
-        .map_err(|e| failed(r.json, e, serde_json::json!({"validationPassed": false})))?;
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Validation {
+    pub total_files: usize,
+    pub files_with_metadata: usize,
+    pub files_without_metadata: usize,
+    pub validation_passed: bool,
+    pub duplicate_ids: Vec<String>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<u8>,
+}
+
+pub fn validate_report(
+    path: &Path,
+    env: &Env,
+) -> Result<std::result::Result<Validation, Vec<String>>> {
+    let project = walk::scan(path, walk::max_size(env)?)?;
     let mut files: Vec<File> = project.sources.clone();
     files.extend(project.tests.iter().cloned());
     let total = project.sources.len() + project.test_dir_files.len();
     let scan = metadata::scan(&files);
     if !scan.errors.is_empty() {
-        let e = Error::config(format!("validation failed: {}", scan.errors.join("\n")));
-        return Err(failed(
-            r.json,
-            e,
-            serde_json::json!({"errors": scan.errors, "validationPassed": false}),
-        ));
+        return Ok(Err(scan.errors));
     }
     let by_path: BTreeSet<&str> = scan.metas.iter().map(|m| m.path.as_str()).collect();
     let warnings: Vec<String> = files
@@ -161,36 +170,54 @@ fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
         .map(|(id, p)| metadata::duplicate_line(id, p))
         .collect();
     let with = scan.metas.len();
-    let failure = (!duplicates.is_empty()).then(|| {
+    Ok(Ok(Validation {
+        total_files: total,
+        files_with_metadata: with,
+        files_without_metadata: total - with,
+        validation_passed: duplicates.is_empty(),
+        duplicate_ids: duplicates,
+        warnings,
+        error: None,
+        exit_code: None,
+    }))
+}
+
+fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
+    let report = validate_report(&r.path, env)
+        .map_err(|e| failed(r.json, e, serde_json::json!({"validationPassed": false})))?;
+    let mut v = match report {
+        Ok(v) => v,
+        Err(errors) => {
+            let e = Error::config(format!("validation failed: {}", errors.join("\n")));
+            return Err(failed(
+                r.json,
+                e,
+                serde_json::json!({"errors": errors, "validationPassed": false}),
+            ));
+        }
+    };
+    let failure = (!v.validation_passed).then(|| {
         Error::config(format!(
             "metadata validation failed: {} duplicate id(s)",
-            duplicates.len()
+            v.duplicate_ids.len()
         ))
     });
     if r.json {
-        let mut value = serde_json::json!({
-            "totalFiles": total,
-            "filesWithMetadata": with,
-            "filesWithoutMetadata": total - with,
-            "validationPassed": failure.is_none(),
-            "duplicateIds": duplicates,
-            "warnings": warnings,
-        });
-        if let (Some(e), Some(obj)) = (&failure, value.as_object_mut()) {
-            obj.insert("error".into(), e.text().into());
-            obj.insert("exitCode".into(), e.exit_code().into());
+        if let Some(e) = &failure {
+            v.error = Some(e.text());
+            v.exit_code = Some(e.exit_code());
         }
-        json(&value)?;
+        json(&v)?;
     } else {
         let mut text = format!(
-            "Total files: {total}\nFiles with metadata: {with}\nFiles without metadata: {}\n",
-            total - with
+            "Total files: {}\nFiles with metadata: {}\nFiles without metadata: {}\n",
+            v.total_files, v.files_with_metadata, v.files_without_metadata
         );
-        for d in &duplicates {
+        for d in &v.duplicate_ids {
             text.push_str(&format!("Duplicate id: {d}\n"));
         }
         stdout(&text)?;
-        for w in &warnings {
+        for w in &v.warnings {
             stderr(&format!("warning: {w}\n"));
         }
     }

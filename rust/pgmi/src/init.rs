@@ -7,9 +7,8 @@ use crate::error::{Error, Result};
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
 const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
 
-pub fn run(a: &InitArgs) -> Result<()> {
-    let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
-    if let Ok(entries) = std::fs::read_dir(&target) {
+pub fn check_empty(target: &Path) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(target) {
         let blocking: Vec<String> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -17,12 +16,18 @@ pub fn run(a: &InitArgs) -> Result<()> {
             .collect();
         if !blocking.is_empty() {
             return Err(Error::usage(format!(
-                "{} is not empty ({}); pgmi init writes into an empty directory",
+                "target directory '{}' is not empty ({})\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n• Choose a different location\n• Remove existing files manually\n• Use a new directory name",
                 target.display(),
                 blocking.join(", ")
             )));
         }
     }
+    Ok(())
+}
+
+pub fn run(a: &InitArgs) -> Result<()> {
+    let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
+    check_empty(&target)?;
     let mut connect = false;
     let template = match a.template.as_deref() {
         Some(t) => t,
@@ -40,10 +45,40 @@ pub fn run(a: &InitArgs) -> Result<()> {
         }
         None => "minimal",
     };
-    let name = std::path::absolute(&target)
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "project".into());
+    scaffold(&target, template, None)?;
+    let _ = writeln!(
+        std::io::stderr(),
+        "Wrote {} ({template} template).",
+        target.display()
+    );
+    let absolute = std::path::absolute(&target).unwrap_or_else(|_| target.clone());
+    let mut tree = format!("{}/\n", absolute.display());
+    draw(&absolute, "", &mut tree);
+    tree.push('\n');
+    let _ = std::io::stdout().lock().write_all(tree.as_bytes());
+    let _ =
+        std::io::stderr().write_all(next_steps(template, &target.display().to_string()).as_bytes());
+    if connect {
+        let _ = writeln!(
+            std::io::stderr(),
+            "\nThe connection wizard is not in this build yet; set the connection in {} or pass --connection to pgmi deploy.",
+            target.join("pgmi.yaml").display()
+        );
+    }
+    Ok(())
+}
+
+pub fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()> {
+    let name = match name {
+        Some(n) => n.to_string(),
+        None => std::path::absolute(target)
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "project".into()),
+    };
+    if !crate::commands::templates::NAMES.contains(&template) {
+        return Err(Error::usage(format!("unknown template: {template}")));
+    }
     let prefix = format!("templates/{template}/");
     let mut files: Vec<(String, &'static [u8])> = pgmi_shared::dir(&prefix)
         .map(|(p, b)| (p[prefix.len()..].to_string(), b))
@@ -52,7 +87,7 @@ pub fn run(a: &InitArgs) -> Result<()> {
         files.extend(pgmi_shared::dir("skills/").map(|(p, b)| (format!(".agents/{p}"), b)));
     }
     if files.is_empty() {
-        return Err(Error::usage(format!("unknown template {template:?}")));
+        return Err(Error::usage(format!("unknown template: {template}")));
     }
     for (rel, bytes) in files {
         let rel = rel.strip_suffix(".scaffold").unwrap_or(&rel).to_string();
@@ -89,25 +124,6 @@ pub fn run(a: &InitArgs) -> Result<()> {
         } else {
             write(&path, bytes)?;
         }
-    }
-    let _ = writeln!(
-        std::io::stderr(),
-        "Wrote {} ({template} template).",
-        target.display()
-    );
-    let absolute = std::path::absolute(&target).unwrap_or_else(|_| target.clone());
-    let mut tree = format!("{}/\n", absolute.display());
-    draw(&absolute, "", &mut tree);
-    tree.push('\n');
-    let _ = std::io::stdout().lock().write_all(tree.as_bytes());
-    let _ =
-        std::io::stderr().write_all(next_steps(template, &target.display().to_string()).as_bytes());
-    if connect {
-        let _ = writeln!(
-            std::io::stderr(),
-            "\nThe connection wizard is not in this build yet; set the connection in {} or pass --connection to pgmi deploy.",
-            target.join("pgmi.yaml").display()
-        );
     }
     Ok(())
 }

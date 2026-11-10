@@ -6,7 +6,7 @@ use crate::cli::{AiArgs, AiCommand};
 use crate::env::Env;
 use crate::error::Result;
 
-const CONTRACT: &str = include_str!("contract.json");
+pub const CONTRACT: &str = include_str!("contract.json");
 
 pub fn run(a: &AiArgs, env: &Env) -> Result<()> {
     let text = match a.command {

@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::wire::{self, Members};
 use crate::cli::{Cli, Command, DeployArgs};
+use crate::commands::metadata;
 use crate::deploy::{Approval, Context, Run};
 use crate::env::Env;
 use crate::error::Error;
@@ -38,24 +39,6 @@ const DEPLOY_ARGS: [&str; 10] = [
     "verbose",
 ];
 
-const TEMPLATES: [(&str, &str, &str); 3] = [
-    (
-        "advanced",
-        "Reference app: SQL-native REST/RPC/MCP, multi-tenant RLS, audit",
-        "SQL-native application stack — scaffold, read, trim to fit",
-    ),
-    (
-        "basic",
-        "Two layers: run-once tables, re-run views and functions",
-        "Start here. Deploying SQL — small, explicit, any managed provider",
-    ),
-    (
-        "minimal",
-        "A deploy.sql loop, hello_world.sql and a .pgmiignore; nothing else",
-        "Building your own deployment from nothing",
-    ),
-];
-
 impl Tool {
     pub fn named(name: &str) -> Option<Tool> {
         Some(match name {
@@ -82,25 +65,31 @@ impl Tool {
                 Ok(ctx) => run_deploy(ctx, token).await,
                 Err(e) => Outcome::failed(&e),
             },
-            Tool::Init => {
-                match path_argument(arguments, &["name", "path", "template"], "cli.mcpInitArgs") {
-                    Ok(_) => Outcome::failed(&not_implemented("init")),
+            Tool::Init => match init(arguments) {
+                Ok(v) => Outcome::json(&v),
+                Err(e) => Outcome::failed(&e),
+            },
+            Tool::MetadataPlan => {
+                match path_argument(arguments, &["path"], "cli.mcpPathArgs")
+                    .and_then(|(p, _)| metadata::plan_report(std::path::Path::new(&p), env))
+                {
+                    Ok(plan) => Outcome::json(&plan),
                     Err(e) => Outcome::failed(&e),
                 }
             }
-            Tool::MetadataPlan | Tool::MetadataValidate => {
-                let name = if matches!(self, Tool::MetadataPlan) {
-                    "metadata_plan"
-                } else {
-                    "metadata_validate"
-                };
-                match path_argument(arguments, &["path"], "cli.mcpPathArgs") {
-                    Ok(_) => Outcome::failed(&not_implemented(name)),
+            Tool::MetadataValidate => {
+                match path_argument(arguments, &["path"], "cli.mcpPathArgs")
+                    .and_then(|(p, _)| metadata::validate_report(std::path::Path::new(&p), env))
+                {
+                    Ok(Ok(v)) => Outcome::json(&v),
+                    Ok(Err(errors)) => Outcome::failed(&Error::config(errors.join("\n"))),
                     Err(e) => Outcome::failed(&e),
                 }
             }
             Tool::TemplatesList => {
-                let templates: Vec<Value> = TEMPLATES
+                let mut list = crate::commands::templates::LIST.to_vec();
+                list.sort_by_key(|t| t.0);
+                let templates: Vec<Value> = list
                     .iter()
                     .map(|(name, description, best)| {
                         json!({"bestFor": best, "description": description, "name": name})
@@ -118,13 +107,23 @@ impl Tool {
                     is_error: false,
                 }
             }
-            Tool::AiContract => Outcome::failed(&not_implemented("ai_contract")),
+            Tool::AiContract => Outcome {
+                text: crate::commands::ai::CONTRACT.trim_end().to_string(),
+                structured: None,
+                is_error: false,
+            },
         }
     }
 }
 
-fn not_implemented(tool: &str) -> Error {
-    Error::general(format!("the {tool} tool is not implemented in this build"))
+fn init(arguments: Option<&RawValue>) -> Result<Value, Error> {
+    let (path, args) = path_argument(arguments, &["name", "path", "template"], "cli.mcpInitArgs")?;
+    let template = args.string("template")?.filter(|t| !t.is_empty());
+    let template = template.as_deref().unwrap_or("basic");
+    let target = std::path::Path::new(&path);
+    crate::init::check_empty(target)?;
+    crate::init::scaffold(target, template, args.string("name")?.as_deref())?;
+    Ok(json!({"created": true, "path": path, "template": template}))
 }
 
 #[derive(Serialize)]
@@ -159,7 +158,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn json(v: &Value) -> Self {
+    fn json(v: &impl Serialize) -> Self {
         Outcome {
             text: serde_json::to_string_pretty(v).unwrap_or_default(),
             structured: to_raw_value(v).ok(),
@@ -300,7 +299,7 @@ fn path_argument(
     arguments: Option<&RawValue>,
     accepted: &[&str],
     value_type: &str,
-) -> Result<String, Error> {
+) -> Result<(String, Args), Error> {
     let members = members(arguments, value_type)?;
     check_known(&members, accepted)?;
     let args = Args {
@@ -311,7 +310,7 @@ fn path_argument(
         args.string(key)?;
     }
     match args.string("path")? {
-        Some(p) if !p.is_empty() => Ok(p),
+        Some(p) if !p.is_empty() => Ok((p, args)),
         _ => Err(Error::config("path is required")),
     }
 }
