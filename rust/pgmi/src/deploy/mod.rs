@@ -456,6 +456,9 @@ async fn deploy(
             reporter.line(&format!("connection: from {label} ({})", spec.describe()));
         }
     }
+    if a.overwrite {
+        overwrite::refuse_maintenance(&spec)?;
+    }
     if a.overwrite && matches!(ctx.approval, Approval::Prompt) {
         overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
     }
@@ -474,9 +477,8 @@ async fn deploy(
         },
     };
     if a.overwrite {
-        let recreated = guard
-            .connecting(overwrite::recreate(&dialer, &spec, reporter))
-            .await?;
+        let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
+        let recreated = overwrite::recreate(plan, reporter).await?;
         st.recreated = Some(recreated);
         st.created = Some(!recreated);
     }
