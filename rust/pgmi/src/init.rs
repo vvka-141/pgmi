@@ -9,7 +9,6 @@ const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
 
 pub fn run(a: &InitArgs) -> Result<()> {
     let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
-    let template = a.template.as_deref().unwrap_or("minimal");
     if let Ok(entries) = std::fs::read_dir(&target) {
         let blocking: Vec<String> = entries
             .filter_map(|e| e.ok())
@@ -24,6 +23,23 @@ pub fn run(a: &InitArgs) -> Result<()> {
             )));
         }
     }
+    let mut connect = false;
+    let template = match a.template.as_deref() {
+        Some(t) => t,
+        None if crate::tui::interactive(&crate::env::Env::snapshot()) => {
+            match crate::tui::init::run(&target.display().to_string())? {
+                crate::tui::init::Done::Finished {
+                    template,
+                    connect: c,
+                } => {
+                    connect = c;
+                    template
+                }
+                crate::tui::init::Done::Cancelled => return Err(crate::tui::init::cancelled()),
+            }
+        }
+        None => "minimal",
+    };
     let name = std::path::absolute(&target)
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -86,6 +102,13 @@ pub fn run(a: &InitArgs) -> Result<()> {
     let _ = std::io::stdout().lock().write_all(tree.as_bytes());
     let _ =
         std::io::stderr().write_all(next_steps(template, &target.display().to_string()).as_bytes());
+    if connect {
+        let _ = writeln!(
+            std::io::stderr(),
+            "\nThe connection wizard is not in this build yet; set the connection in {} or pass --connection to pgmi deploy.",
+            target.join("pgmi.yaml").display()
+        );
+    }
     Ok(())
 }
 

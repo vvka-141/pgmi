@@ -10,6 +10,7 @@ mod init;
 mod output;
 mod project;
 mod serve;
+mod tui;
 
 use std::io::Write;
 use std::process::ExitCode;

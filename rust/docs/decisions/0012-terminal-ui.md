@@ -58,6 +58,20 @@ Option 1 for the two wizards; plain line I/O for the rest.
   variable set it is `less -R`; a pager that cannot start means the output
   is printed directly (`terminal/pager-command`).
 
+## First build (PGMI-833)
+
+- The init wizard draws on the alternate screen, as Go's does, not in an
+  inline viewport: ratatui's inline viewport and `Terminal::clear` ask the
+  terminal for the cursor position, and a terminal that never answers
+  (the black-box pty) stalls them. A stage change clears the screen with
+  crossterm and starts a fresh `Terminal`, so the next screen is written
+  whole. The `Wrote ...` line and the tree are printed after the wizard
+  leaves the alternate screen.
+- A pty may deliver Enter as `\n` plus `\r`; Ctrl-J and other control
+  characters are ignored by the select lists.
+- Answering Yes to "Set up the connection now?" prints where to set the
+  connection; the config wizard is not built yet.
+
 ## Serves
 
 Terminal behaviour; init; config; Target database, overwrite and approval;

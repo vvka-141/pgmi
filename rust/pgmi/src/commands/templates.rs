@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 
 pub const NAMES: [&str; 3] = ["minimal", "basic", "advanced"];
 
-const LIST: [(&str, &str, &str); 3] = [
+pub const LIST: [(&str, &str, &str); 3] = [
     (
         "minimal",
         "A deploy.sql loop, hello_world.sql and a .pgmiignore; nothing else",
