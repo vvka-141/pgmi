@@ -370,11 +370,12 @@ No case yet: add one with the Rust implementation.
 
 ### Nothing that cannot be reached is carried over
 
-Go's Azure service-principal certificate login is unreachable (setting
-`AZURE_CLIENT_ID` routes to workload and managed identity first), its Cloud SQL
+Go's Azure service-principal certificate login and username/password login
+are unreachable (both need `AZURE_CLIENT_ID`, and setting it routes to workload
+and managed identity only), its Cloud SQL
 connector sends metrics to Cloud Monitoring by default, and its docs claim a
 `schema.xsd` that nothing validates against. The Rust binary has no certificate
-login, sends no metrics and validates no XSD; the docs line is fixed.
+or username/password login, sends no metrics and validates no XSD; the docs line is fixed.
 No case: none of these is observable from outside without a real cloud.
 
 ## Decided changes (owner, 2026-11-10)
@@ -412,9 +413,10 @@ Cases: `connection/target-session-attrs`.
 ### No password available
 
 Go sends no password and reports the server's `password authentication failed`.
-The Rust binary stops before connecting and reports `no password supplied`
-naming where it looked (the connection string, `PGPASSWORD`, `~/.pgpass`),
-exit 11.
+The Rust binary does what libpq does: when the server asks for a password and
+none was found, it stops and reports `no password supplied` naming where it
+looked (the connection string, `PGPASSWORD`, `~/.pgpass`), exit 11. Trust, peer
+and certificate logins need no password and are unaffected.
 
 Cases: `connection/pgpass-world-readable`.
 
