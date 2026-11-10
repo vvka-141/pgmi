@@ -18,7 +18,7 @@ from typing import Any
 
 import psycopg
 
-from pgmi_blackbox.case import Case, Expect, Step
+from pgmi_blackbox.case import Case, Expect, Step, Symlink
 from pgmi_blackbox.server import Server
 
 _silent: socket.socket | None = None
@@ -154,7 +154,12 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
     for rel, content in case.project.files.items():
         target = ws.project / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(ws.substitute(content).encode())
+        if isinstance(content, Symlink):
+            target.symlink_to(ws.substitute(content.target))
+        elif isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_bytes(ws.substitute(content).encode())
 
 
 @dataclass
@@ -204,11 +209,11 @@ def _read_tty(master: int, sink: list[str], raw: list[str]) -> None:
     sink.append(ANSI.sub("", text).replace("\r", ""))
 
 
-def _feed_tty(master: int, chunks: list[str | float]) -> None:
+def _feed_tty(master: int, chunks: list[str | float | bytes]) -> None:
     for chunk in chunks:
-        if isinstance(chunk, str):
+        if isinstance(chunk, str | bytes):
             try:
-                os.write(master, chunk.encode())
+                os.write(master, chunk.encode() if isinstance(chunk, str) else chunk)
             except OSError:
                 return
         else:
@@ -228,6 +233,7 @@ def _start(ws: Workspace, step: Step) -> Running:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
     )
     run = Running(proc, argv, [], [], [], time.monotonic())
     run.threads.append(threading.Thread(target=lambda: run.stdout.append(proc.stdout.read()), daemon=True))
@@ -248,12 +254,15 @@ def _lines(stream, sink: list[tuple[float, str]], started: float) -> None:
         sink.append((time.monotonic() - started, line))
 
 
-def _feed(stdin, chunks: list[str | float]) -> None:
+def _feed(stdin, chunks: list[str | float | bytes]) -> None:
     try:
         for chunk in chunks:
             if isinstance(chunk, str):
                 stdin.write(chunk)
                 stdin.flush()
+            elif isinstance(chunk, bytes):
+                stdin.buffer.write(chunk)
+                stdin.buffer.flush()
             else:
                 time.sleep(chunk)
     except BrokenPipeError:

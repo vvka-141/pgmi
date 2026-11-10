@@ -47,7 +47,7 @@ class Step:
     args: tuple[str, ...] | None
     sql: str | None
     env: dict[str, str]
-    stdin: tuple[str | float, ...] | None
+    stdin: tuple[str | float | bytes, ...] | None
     delay: float
     background: bool
     signals: tuple[Signal, ...]
@@ -66,9 +66,14 @@ class Generate:
 
 
 @dataclass(frozen=True, slots=True)
+class Symlink:
+    target: str
+
+
+@dataclass(frozen=True, slots=True)
 class Project:
     init: str | None
-    files: dict[str, str]
+    files: dict[str, str | bytes | Symlink]
     generate: Generate | None = None
 
 
@@ -202,7 +207,29 @@ def _project(r: _Reader, value: Any) -> Project:
         generate = Generate(
             count, r.string(g["path"], "project.generate.path"), r.string(g["content"], "project.generate.content")
         )
-    return Project(init, r.string_map(value.get("files", {}), "project.files"), generate)
+    return Project(init, _project_files(r, value.get("files", {})), generate)
+
+
+def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink]:
+    if not isinstance(value, dict):
+        raise r.fail("project.files", "must map paths to contents")
+    files: dict[str, str | bytes | Symlink] = {}
+    for path, item in value.items():
+        at = f"project.files.{path}"
+        if isinstance(item, str):
+            files[path] = item
+            continue
+        item = r.mapping(item, at, {"hex", "symlink"})
+        if len(item) != 1:
+            raise r.fail(at, "needs exactly one of hex or symlink")
+        if "symlink" in item:
+            files[path] = Symlink(r.string(item["symlink"], f"{at}.symlink"))
+            continue
+        try:
+            files[path] = bytes.fromhex(r.string(item["hex"], f"{at}.hex"))
+        except ValueError as e:
+            raise r.fail(f"{at}.hex", f"invalid hex: {e}") from e
+    return files
 
 
 def _step(r: _Reader, value: Any, field: str) -> Step:
@@ -236,18 +263,36 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     )
 
 
-def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float, ...]:
+def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float | bytes, ...]:
     if isinstance(value, str):
         return (value,)
     if not isinstance(value, list):
-        raise r.fail(field, "must be a string or a list of lines and {wait: seconds}")
-    chunks: list[str | float] = []
+        raise r.fail(field, "must be a string or a list of lines, {wait: seconds}, {text: ...} and {hex: ...}")
+    chunks: list[str | float | bytes] = []
     for i, item in enumerate(value):
         if isinstance(item, str):
             chunks.append(item if item.endswith("\n") else item + "\n")
-        else:
-            item = r.mapping(item, f"{field}[{i}]", {"wait"}, {"wait"})
-            chunks.append(r.number(item["wait"], f"{field}[{i}].wait"))
+            continue
+        at = f"{field}[{i}]"
+        item = r.mapping(item, at, {"wait", "text", "hex", "times"})
+        kinds = [k for k in ("wait", "text", "hex") if k in item]
+        if len(kinds) != 1:
+            raise r.fail(at, "needs exactly one of wait, text or hex")
+        if kinds[0] == "wait":
+            if "times" in item:
+                raise r.fail(f"{at}.times", "only goes with text or hex")
+            chunks.append(r.number(item["wait"], f"{at}.wait"))
+            continue
+        times = item.get("times", 1)
+        if isinstance(times, bool) or not isinstance(times, int) or times < 1:
+            raise r.fail(f"{at}.times", "must be a positive integer")
+        if kinds[0] == "text":
+            chunks.append(r.string(item["text"], f"{at}.text") * times)
+            continue
+        try:
+            chunks.append(bytes.fromhex(r.string(item["hex"], f"{at}.hex")) * times)
+        except ValueError as e:
+            raise r.fail(f"{at}.hex", f"invalid hex: {e}") from e
     return tuple(chunks)
 
 
