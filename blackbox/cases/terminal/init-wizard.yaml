@@ -1,0 +1,11 @@
+description: on a terminal, init without -t runs the wizard; Down then Enter picks basic, Enter declines the connection setup
+steps:
+  - pgmi: [init, "{workdir}/wiz"]
+    tty: true
+    stdin: [{wait: 2}, "\x1b[B", {wait: 0.5}, "\r", {wait: 1}, "\r"]
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Select a template", "connection now\\?", "Wrote .* \\(basic template\\)"]
+      files:
+        wiz/deploy.sql: ["basic template"]

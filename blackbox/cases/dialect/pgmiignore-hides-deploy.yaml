@@ -1,0 +1,8 @@
+description: a .pgmiignore that would hide deploy.sql is refused before connecting; !deploy.sql brings it back
+project:
+  files:
+    .pgmiignore: "*.sql\n"
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["deploy\\.sql"]}

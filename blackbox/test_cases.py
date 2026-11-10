@@ -10,6 +10,9 @@ CASES = load_cases(HERE, HERE / "cases")
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.path for c in CASES])
-def test_case(case, server, binary, extras, tmp_path):
+def test_case(case, server, binary, reference, extras, tmp_path):
     values, servers = extras(case.servers)
-    run_case(case, Workspace(server, binary, tmp_path, values, servers))
+    ws = Workspace(
+        server=server, binary=binary, root=tmp_path, extras=values, extra_servers=servers, reference=reference
+    )
+    run_case(case, ws)

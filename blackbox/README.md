@@ -7,6 +7,7 @@ pgmi, so the same cases test the Go binary today and the Rust binary later.
 ```bash
 make blackbox                                  # build ./cmd/pgmi, start postgres:18 in Docker
 PGMI_BIN=/path/to/pgmi make blackbox           # any binary
+PGMI_REFERENCE_BIN=/path/to/go-pgmi make blackbox  # binary for steps marked binary: reference
 PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres make blackbox
 cd blackbox && uv run pytest -k 13-sql         # one case
 ```
@@ -42,12 +43,16 @@ steps:
     background: false              # optional: true checks it after the last step
     signal: {name: SIGINT, after: 3}  # optional; or a list, each `after` counted from the start
     timeout: 120                   # optional: seconds before the step fails
+    tty: true                      # optional: run in a 120x40 pseudo-terminal; stdin is typed as keys
+    binary: reference              # optional: run PGMI_REFERENCE_BIN instead of PGMI_BIN
     expect:
       exit: 13                     # required for a pgmi step
       stdout: [regex, ...]         # each must match
       stdout_not: [regex, ...]     # none may match
       stderr: ["division by zero"]
       stderr_not: []
+      raw: ["\\x1b\\[[0-9;]*m"]     # tty only: regexes on the output before escape codes are stripped
+      raw_not: []
       stderr_within:               # the line arrived within that many seconds of the start
         - {pattern: early-notice, seconds: 2.5}
       json: {status: failed}       # stdout parsed as JSON; these keys must match
@@ -61,7 +66,7 @@ steps:
 ```
 
 Placeholders, replaced in arguments, `env` values, `stdin`, `cwd`, file contents,
-SQL, expected rows, `files` paths and `json` strings: `{project}`, `{db}`, `{conn}`
+SQL, expected rows, `files` paths, `stdout`/`stderr`/`raw`/`files` regexes (escaped) and `json` strings: `{project}`, `{db}`, `{conn}`
 (URI of the maintenance database), `{host}`, `{port}`, `{user}`, `{password}`, `{home}`, `{workdir}`,
 and `{silent}` (a `host:port` that accepts connections and never answers).
 

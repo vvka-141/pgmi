@@ -31,11 +31,11 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `deploy` | ✓ `exit-codes/*`, `deploy/*`, `params/*`; flags below |
 | `info`, `info --json`, missing path = 10 | ✓ `commands/info` |
 | `init` (no `-t` without a terminal = minimal; `-t basic\|advanced`; manifests written without `.scaffold`; non-empty target = 2; unknown template = 2; unwritable target = 1) | ✓ `commands/init`, `commands/init-unwritable` |
-| `init` wizard (terminal, no `-t`) | → PGMI-852 |
-| `config` (wizard, needs a terminal) | → PGMI-852 |
+| `init` wizard (terminal, no `-t`) | ✓ `terminal/init-wizard` |
+| `config` (wizard: tests the connection, keeps pgmi.yaml comments and params, saves to `~/.pgpass`) | ✓ `terminal/config-wizard` |
 | `metadata plan` (+`--json`) | ✓ `commands/metadata`, `commands/metadata-invalid` |
 | `metadata validate` (+`--json`), bad id = 10, duplicate id = 10 | ✓ `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate` |
-| `metadata scaffold` (preview, `--write`, `--sort-key`) | ✓ `commands/metadata`; `--idempotent=false` → PGMI-852 |
+| `metadata scaffold` (preview, `--write`, `--sort-key`, `--idempotent=false`) | ✓ `commands/metadata`, `commands/metadata-scaffold-run-once` |
 | `templates list`, `templates describe <t>`, unknown = 2 | ✓ `commands/templates` |
 | `version`, `--version`, extra argument = 2 | ✓ `commands/version` |
 | `ai`, `ai contract`, unknown subcommand = 2 | ✓ `commands/ai` |
@@ -77,8 +77,8 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGSSLMODE`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLROOTCERT`, `PGSSLPASSWORD` | ✓ `tls/client-certificate`, `tls/encrypted-client-key` |
 | `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | ✓ `connection/keywords`, `connection/target-session-attrs`, `tls/require-auth-and-version`, `tls/channel-binding-and-direct` |
 | `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
-| `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` | → PGMI-852 (each changes output only on a terminal) |
-| `PGMI_PAGER`, `PAGER` | → PGMI-852 (paging applies on a terminal only) |
+| `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal) | ✓ `terminal/colors`, `terminal/force-banner`, `terminal/non-interactive` |
+| `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal) | ✓ `terminal/pager` |
 | `AZURE_*`, `AWS_REGION`, `AWS_DEFAULT_REGION` | → PGMI-853 |
 
 ## Project configuration
@@ -88,7 +88,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `pgmi.yaml` connection, params, timeout; unknown key = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid` |
 | precedence: flags > environment > `pgmi.yaml` > defaults, with the `connection: from ...` line | ✓ `config/precedence`, `config/pgmi-yaml`, `env/connection-string-vars` |
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
-| `.pgmiignore` | → PGMI-852 |
+| `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class` |
 
 ## Connection layer
 
@@ -141,29 +141,29 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 
 | Behaviour | Coverage |
 |---|---|
-| `checksum` and `pgmi_checksum` golden values (CRLF, BOM, no final newline, non-ASCII, comments, keyword case) | → PGMI-852 |
-| a database deployed by one binary redeploys with another with no run-once drift | → PGMI-852 |
+| `checksum` and `pgmi_checksum` golden values (CRLF, BOM, no final newline, empty, comments, nested comments, dollar quotes, escapes, `U&`, non-ASCII, keyword case); reformatting keeps `pgmi_checksum`, a literal change does not | ✓ `checksums/golden` (a one-byte mutant fails it) |
+| a database deployed by one binary redeploys with another with no run-once drift | ✓ `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced` (set `PGMI_REFERENCE_BIN`; a one-byte mutant fails both) |
 
 ## Regex dialect
 
 | Behaviour | Coverage |
 |---|---|
-| `.pgmiignore` patterns where RE2 and Rust `regex` differ | → PGMI-852 |
-| `CALL pgmi_test(...)` expansion, and no expansion inside comments, strings and dollar quotes | → PGMI-852 |
+| `.pgmiignore` patterns where RE2 and Rust `regex` differ (`&&`, `--` in classes) | ✓ `dialect/pgmiignore` |
+| `CALL pgmi_test(...)` expansion (any case, schema-qualified, pattern), and none inside comments, strings and dollar quotes | ✓ `dialect/pgmi-test-macro`, `execution/pgmi-test-*` |
 
 ## File formats
 
 | Format | Coverage |
 |---|---|
-| `.env` edge cases | → PGMI-852 |
-| `--params-file` edge cases | → PGMI-852 |
-| `pgmi.yaml` edge cases | → PGMI-852 |
+| `.env` edge cases | ✓ `formats/dotenv-edges` |
+| `--params-file` edge cases; refuses `\` or `$` in double quotes and an unquoted ` #` (10) | ✓ `formats/params-file-edges` |
+| `pgmi.yaml` edge cases (`~`, numbers, `5432.0`, booleans, folded and literal blocks) | ✓ `formats/pgmi-yaml-edges` |
 
 ## Wizards
 
 | Behaviour | Coverage |
 |---|---|
-| `init` wizard, overwrite confirmation (yes / no), `config` keeps comments in pgmi.yaml | → PGMI-852 |
+| `init` wizard, overwrite confirmation (right name / wrong name = 12), `--force` countdown and banner, `config` | ✓ `terminal/*` |
 
 ## Cloud sign-in
 
@@ -193,3 +193,6 @@ decided in the behaviour contract (PGMI-828), not fixed.
   is reported: a certificate failure on 127.0.0.1 shows as "connection refused"
   from `::1` (`tls/system-roots`, seen on GitHub runners). The Rust version should
   report every address's error.
+- A POSIX class such as `[[:space:]]` in `.pgmiignore` is refused as an invalid
+  pattern, exit 10 (`dialect/pgmiignore-posix-class`); git accepts it. A Go bug
+  left in place by the freeze; the Rust version should accept it.

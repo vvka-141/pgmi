@@ -1,0 +1,36 @@
+description: pgmi.yaml param values that are null, numbers, booleans, quoted or multi-line reach the session as the Go binary renders them
+project:
+  files:
+    pgmi.yaml: |
+      params:
+        nothing: ~
+        empty: ""
+        integer: 42
+        float: 5432.0
+        boolean: true
+        quoted: "007"
+        text: plain text
+        folded: >
+          folded
+          text
+        literal: |
+          line one
+          line two
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - ["boolean", "true"]
+            - ["empty", ""]
+            - ["float", "5432.0"]
+            - ["folded", "folded text\n"]
+            - ["integer", "42"]
+            - ["literal", "line one\nline two\n"]
+            - ["nothing", ""]
+            - ["quoted", "007"]
+            - ["text", "plain text"]

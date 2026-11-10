@@ -1,0 +1,20 @@
+description: on a terminal the summary has a glyph and colors; NO_COLOR turns colors off
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    tty: true
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["✓ {db}: "]
+      raw: ["\\x1b\\[[0-9;]*m"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    tty: true
+    env: {NO_COLOR: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["{db}: "]
+      raw_not: ["\\x1b\\[[0-9;]*m"]

@@ -1,0 +1,32 @@
+description: CI or PGMI_NON_INTERACTIVE=1 turn the wizard and the confirmation off even on a terminal
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [init, "{workdir}/ci"]
+    tty: true
+    env: {CI: "true"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout_not: ["Select a template"]
+      files:
+        ci/deploy.sql: ["minimal template"]
+  - pgmi: [init, "{workdir}/nonint"]
+    tty: true
+    env: {PGMI_NON_INTERACTIVE: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout_not: ["Select a template"]
+      files:
+        nonint/deploy.sql: ["minimal template"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
+    tty: true
+    env: {CI: "true"}
+    timeout: 30
+    expect:
+      exit: 12
+      stdout_not: ["Type the database name"]

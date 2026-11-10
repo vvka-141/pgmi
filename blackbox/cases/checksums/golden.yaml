@@ -1,0 +1,55 @@
+description: checksum and pgmi_checksum of edge-case files equal the values the Go binary produced; reformatting keeps pgmi_checksum, a literal change does not
+project:
+  files:
+    same/a-plain.sql: "SELECT id FROM users WHERE name = 'Ann';\n"
+    same/b-case-spacing.sql: "select   ID\n\tfrom USERS where NAME = 'Ann';\n"
+    same/c-comments.sql: "-- leading comment\nSELECT id /* inline */ FROM users -- trailing\nWHERE name = 'Ann';"
+    same/d-crlf.sql: "SELECT id FROM users\r\nWHERE name = 'Ann';\r\n"
+    same/e-nested-comment.sql: "/* outer /* inner */ still comment */ SELECT id FROM users WHERE name = 'Ann';\n"
+    diff/literal-case.sql: "SELECT id FROM users WHERE name = 'ANN';\n"
+    diff/quoted-ident.sql: "SELECT id FROM \"Users\" WHERE name = 'Ann';\n"
+    edge/bom.sql: "﻿SELECT 1;\n"
+    edge/no-final-newline.sql: "SELECT 1;"
+    edge/empty.sql: ""
+    edge/comment-only.sql: "-- nothing here\n/* or here */\n"
+    edge/dollar-quote.sql: "DO $body$ BEGIN RAISE NOTICE '-- not a comment /* nor this */ KEEP Case'; END $body$;\n"
+    edge/escape-string.sql: "SELECT E'It\\'s -- here', 'it''s /* here */';\n"
+    edge/unicode-ident.sql: "SELECT Ärger, İstanbul, ß FROM Straße;\n"
+    edge/unicode-literal.sql: "SELECT 'Ärger İstanbul ß';\n"
+    edge/tabs-and-blank-lines.sql: "\n\n\tSELECT\t1\t;\n\n\n"
+    edge/u-amp.sql: "SELECT U&'d\\0061t\\+000061' AS \"Mixed\";\n"
+    deploy.sql: |
+      CREATE TABLE sums AS
+      SELECT path, checksum, pgmi_checksum FROM pg_temp.pgmi_source_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(DISTINCT pgmi_checksum) FROM sums WHERE path LIKE './same/%'
+          rows: [[1]]
+        - query: |
+            SELECT count(*) FROM sums d JOIN sums s ON s.path = './same/a-plain.sql'
+            WHERE d.path LIKE './diff/%' AND d.pgmi_checksum = s.pgmi_checksum
+          rows: [[0]]
+        - query: SELECT count(DISTINCT checksum) FROM sums WHERE path LIKE './same/%'
+          rows: [[5]]
+        - query: SELECT path, checksum, pgmi_checksum FROM sums ORDER BY path
+          rows:
+            - [./diff/literal-case.sql, 099005953775757bcf8c421726dacb65fa00b3ea826767b84d92ca2b3ee98fc5, df33159839169ebb98ba4e60805d157581460e4ef3933dbeb177bb519e840b0a]
+            - [./diff/quoted-ident.sql, 5114864a85f2d88007088a747ce5dcf5105bc260c4cf182edb9a8c64327570c0, 66f6443832a5f5c792eab005df078ae58f5a4dda3cc001cfe36019d18699b5c9]
+            - [./edge/bom.sql, b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd, 354b7196c9ba5fb4b21cf615bb6ec4cd5c07503c34229feef033fc081a8c03f4]
+            - [./edge/comment-only.sql, 6232c0377550f240588b9d475eab816dd791800490dd839f95027f34cf677fb0, e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855]
+            - [./edge/dollar-quote.sql, 834bd46c1e63b3faa26594d26c8de6da541b665ab852a2265cfa20f65d2f9cb7, ec1967dddfc430b4500b885c0ab59961717b305e3d4b0e720a87c853e49f7396]
+            - [./edge/empty.sql, e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855, e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855]
+            - [./edge/escape-string.sql, 098f6d73f2f5d13a16bb55dfcbdb7ef83db5da43589c643937ac2087ebcd2df5, d2d84b7be8836cf42fbd3fef9a52ebfa7c5bd6499ab0d0f8206c1527a52d98c0]
+            - [./edge/no-final-newline.sql, 17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a, 354b7196c9ba5fb4b21cf615bb6ec4cd5c07503c34229feef033fc081a8c03f4]
+            - [./edge/tabs-and-blank-lines.sql, d252149182c1f9d959a206f57cc8a2bd50431659845deae711acebf7b2ef71f2, afe03bd0c288ce3de58beb5f60cace51119c9cff02c7c45dc7e0d96da13d96fd]
+            - [./edge/u-amp.sql, 5f8ff760790ef3b1630931d323c67cd9ec8848e054a7e6a7ea862b3b6292a0c3, 24e4b422018cbe77caa8553d85f3aa05c8df579d3d981c6463791a4e02a6a018]
+            - [./edge/unicode-ident.sql, 8d58d51d0be674e2a927f04e6a375d2d4d092ca038a1c07f89d98986f3162e47, 62b0ba5c66b8c37d83c28fe514452e63e87fd8c778f2c1b78cf54c476f961502]
+            - [./edge/unicode-literal.sql, 9f7b7f18e7d850ffca384925d17d1e27a1627dcab2f0a1c52f64762931c29981, 3a6620aea968f83c022bf1b4edb84a22ffa04321b282e4443e4cc0b3198501f0]
+            - [./same/a-plain.sql, a394888eeef6a2b25cde0ecc483d61955af720cf0569acc7bdcffa0afcfc029c, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
+            - [./same/b-case-spacing.sql, 1cf40c786f2e5a72c0ade58764967d670337362b39da785a999323978f8ea8b0, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
+            - [./same/c-comments.sql, 55edae4900c824e27af58a37e80f6b4f4714a65d4f643ff5690eb46ed371d256, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
+            - [./same/d-crlf.sql, 296c8a60374e4a3d57bb517dc019a69da09b5fb8f66c0dfa315b90e41130ebce, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]
+            - [./same/e-nested-comment.sql, b47f89f2dfbdeeb10283089d99cb0fff7f4b412a8fc1ee7daa577230d37f8345, 670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154]

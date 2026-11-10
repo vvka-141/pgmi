@@ -1,0 +1,26 @@
+description: long output on a terminal goes through PGMI_PAGER, else PAGER; PGMI_PAGER=cat prints directly
+steps:
+  - pgmi: [ai]
+    tty: true
+    env: {PGMI_PAGER: "tee {workdir}/pgmi-pager.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      files:
+        pgmi-pager.txt: ["pgmi_plan_view"]
+  - pgmi: [ai]
+    tty: true
+    env: {PAGER: "tee {workdir}/pager.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      files:
+        pager.txt: ["pgmi_plan_view"]
+  - pgmi: [ai]
+    tty: true
+    env: {PGMI_PAGER: cat, PAGER: "tee {workdir}/not-used.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["pgmi_plan_view"]
+      absent: [not-used.txt]

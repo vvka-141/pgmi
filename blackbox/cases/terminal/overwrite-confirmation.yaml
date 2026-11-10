@@ -1,0 +1,31 @@
+description: on a terminal, --overwrite asks for the database name; a wrong name cancels with exit 12, the right one drops and recreates
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
+    tty: true
+    stdin: [{wait: 2}, "not-the-name\r"]
+    timeout: 30
+    expect:
+      exit: 12
+      stdout: ["Type the database name to confirm", "does not match .* Cancelled"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
+    tty: true
+    stdin: [{wait: 2}, "{db}\r"]
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Confirmed\\.", "Recreated database"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

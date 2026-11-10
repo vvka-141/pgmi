@@ -1,0 +1,10 @@
+description: metadata scaffold --idempotent=false writes run-once blocks
+project:
+  files:
+    tables/t.sql: CREATE TABLE t (x int);
+steps:
+  - pgmi: [metadata, scaffold, "{project}/tables", --sort-key, 001/tables/, --idempotent=false, --write]
+    expect:
+      exit: 0
+      files:
+        project/tables/t.sql: ['idempotent="false"', "001/tables/", "CREATE TABLE t"]

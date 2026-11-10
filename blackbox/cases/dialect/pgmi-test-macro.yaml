@@ -1,0 +1,22 @@
+description: CALL pgmi_test() expands in SQL - any case, schema-qualified, with a pattern - and never inside comments, strings or dollar quotes
+project:
+  files:
+    a/__test__/test_a.sql: CREATE TABLE ran_a ();
+    b/__test__/test_b.sql: DO $$ BEGIN RAISE EXCEPTION 'test-b-ran'; END $$;
+    deploy.sql: |
+      BEGIN;
+      -- CALL pgmi_test();
+      /* CALL pgmi_test(); */
+      SELECT 'CALL pgmi_test();';
+      DO $x$ BEGIN RAISE NOTICE 'CALL pgmi_test();'; END $x$;
+      call PG_TEMP.PGMI_TEST ( '/a/' ) ;
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      json: {testMacros: 1}
+      stdout_not: [test-b-ran]
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'ran_a'
+          rows: [[0]]

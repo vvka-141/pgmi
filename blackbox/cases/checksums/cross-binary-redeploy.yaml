@@ -1,0 +1,13 @@
+description: a database deployed by the reference binary (PGMI_REFERENCE_BIN) redeploys with the binary under test without any run-once file reading as edited
+project:
+  init: basic
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    binary: reference
+    timeout: 300
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    timeout: 300
+    expect:
+      exit: 0
+      stderr_not: ["(?i)drift", "(?i)edited after it ran"]

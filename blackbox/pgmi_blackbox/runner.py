@@ -1,9 +1,14 @@
 import atexit
+import fcntl
 import json
+import os
+import pty
 import re
 import signal
 import socket
+import struct
 import subprocess
+import termios
 import threading
 import time
 import uuid
@@ -34,6 +39,7 @@ class Workspace:
     binary: Path
     root: Path
     extras: dict[str, str] = field(default_factory=dict)
+    reference: Path | None = None
     extra_servers: list[Server] = field(default_factory=list)
     database: str = field(default_factory=lambda: f"bb_{uuid.uuid4().hex[:12]}")
 
@@ -46,7 +52,12 @@ class Workspace:
         return self.root / "home"
 
     def substitute(self, text: str) -> str:
-        values = {
+        for key, value in self._values().items():
+            text = text.replace(key, value)
+        return text
+
+    def _values(self) -> dict[str, str]:
+        return {
             "{project}": str(self.project),
             "{home}": str(self.home),
             "{workdir}": str(self.root),
@@ -58,9 +69,11 @@ class Workspace:
             "{password}": self.server.password,
             "{silent}": silent_address(),
         } | self.extras
-        for key, value in values.items():
-            text = text.replace(key, value)
-        return text
+
+    def pattern(self, pattern: str) -> str:
+        for key, value in self._values().items():
+            pattern = pattern.replace(key, re.escape(value))
+        return pattern
 
     def env(self, extra: dict[str, str]) -> dict[str, str]:
         base = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "LANG": "C.UTF-8"}
@@ -75,6 +88,7 @@ class Outcome:
     stdout: str
     stderr: str
     stderr_lines: list[tuple[float, str]] = field(default_factory=list)
+    raw: str = ""
 
 
 def run_case(case: Case, ws: Workspace) -> None:
@@ -140,7 +154,7 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
     for rel, content in case.project.files.items():
         target = ws.project / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(ws.substitute(content))
+        target.write_bytes(ws.substitute(content).encode())
 
 
 @dataclass
@@ -151,10 +165,61 @@ class Running:
     stdout: list[str]
     stderr: list[tuple[float, str]]
     started: float
+    raw: list[str] = field(default_factory=list)
+
+
+ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[@-Z\\-_])")
+
+
+def _start_tty(ws: Workspace, step: Step, argv: list[str]) -> Running:
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    env = ws.env(step.env) | {"TERM": "xterm-256color"}
+    proc = subprocess.Popen(
+        argv, cwd=ws.substitute(step.cwd), env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True
+    )
+    os.close(slave)
+    run = Running(proc, argv, [], [], [], time.monotonic())
+    run.threads.append(threading.Thread(target=_read_tty, args=(master, run.stdout, run.raw), daemon=True))
+    chunks = [ws.substitute(c) if isinstance(c, str) else c for c in (step.stdin or ())]
+    run.threads.append(threading.Thread(target=_feed_tty, args=(master, chunks), daemon=True))
+    for t in run.threads:
+        t.start()
+    return run
+
+
+def _read_tty(master: int, sink: list[str], raw: list[str]) -> None:
+    data = bytearray()
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        data += chunk
+    os.close(master)
+    text = data.decode(errors="replace")
+    raw.append(text)
+    sink.append(ANSI.sub("", text).replace("\r", ""))
+
+
+def _feed_tty(master: int, chunks: list[str | float]) -> None:
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            try:
+                os.write(master, chunk.encode())
+            except OSError:
+                return
+        else:
+            time.sleep(chunk)
 
 
 def _start(ws: Workspace, step: Step) -> Running:
-    argv = [str(ws.binary), *(ws.substitute(a) for a in step.args)]
+    binary = ws.reference if step.reference and ws.reference else ws.binary
+    argv = [str(binary), *(ws.substitute(a) for a in step.args)]
+    if step.tty:
+        return _start_tty(ws, step, argv)
     proc = subprocess.Popen(
         argv,
         cwd=ws.substitute(step.cwd),
@@ -208,17 +273,27 @@ def _finish(label: str, step: Step, run: Running) -> Outcome:
         run.proc.wait()
         for t in run.threads:
             t.join(5)
-        run.proc.stdout.close()
-        run.proc.stderr.close()
+        for stream in (run.proc.stdout, run.proc.stderr):
+            if stream:
+                stream.close()
         raise AssertionError(
-            f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n{''.join(t for _, t in run.stderr)}"
+            f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n"
+            f"--- stdout (last 3000 chars) ---\n{''.join(run.stdout)[-3000:]}\n"
+            f"--- stderr ---\n{''.join(t for _, t in run.stderr)}"
         ) from None
     for t in run.threads:
         t.join(10)
-    run.proc.stdout.close()
-    run.proc.stderr.close()
+    for stream in (run.proc.stdout, run.proc.stderr):
+        if stream:
+            stream.close()
     return Outcome(
-        label, run.argv, run.proc.returncode, "".join(run.stdout), "".join(t for _, t in run.stderr), run.stderr
+        label,
+        run.argv,
+        run.proc.returncode,
+        "".join(run.stdout),
+        "".join(t for _, t in run.stderr),
+        run.stderr,
+        "".join(run.raw),
     )
 
 
@@ -230,10 +305,12 @@ def _check(ws: Workspace, expect: Expect, o: Outcome) -> list[str]:
         ("stdout", o.stdout, expect.stdout, expect.stdout_not),
         ("stderr", o.stderr, expect.stderr, expect.stderr_not),
     ):
-        problems += [f"{name} lacks /{p}/" for p in present if not re.search(p, text, re.MULTILINE)]
-        problems += [f"{name} has /{p}/" for p in absent if re.search(p, text, re.MULTILINE)]
+        problems += [f"{name} lacks /{p}/" for p in present if not re.search(ws.pattern(p), text, re.MULTILINE)]
+        problems += [f"{name} has /{p}/" for p in absent if re.search(ws.pattern(p), text, re.MULTILINE)]
+    problems += [f"raw output lacks /{p}/" for p in expect.raw if not re.search(ws.pattern(p), o.raw)]
+    problems += [f"raw output has /{p}/" for p in expect.raw_not if re.search(ws.pattern(p), o.raw)]
     for pattern, seconds in expect.stderr_within:
-        at = next((t for t, line in o.stderr_lines if re.search(pattern, line)), None)
+        at = next((t for t, line in o.stderr_lines if re.search(ws.pattern(pattern), line)), None)
         if at is None:
             problems.append(f"stderr lacks /{pattern}/")
         elif at > seconds:
@@ -291,7 +368,7 @@ def _check_files(ws: Workspace, expect: Expect) -> list[str]:
             problems.append(f"file {rel} does not exist")
             continue
         text = path.read_text(errors="replace")
-        problems += [f"file {rel} lacks /{p}/" for p in patterns if not re.search(p, text, re.MULTILINE)]
+        problems += [f"file {rel} lacks /{p}/" for p in patterns if not re.search(ws.pattern(p), text, re.MULTILINE)]
     problems += [f"file {rel} exists" for rel in expect.absent if (ws.root / ws.substitute(rel)).exists()]
     return problems
 

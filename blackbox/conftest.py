@@ -3,7 +3,7 @@ from contextlib import ExitStack
 import pytest
 
 from pgmi_blackbox.extras import Extras
-from pgmi_blackbox.server import pgmi_binary, postgres
+from pgmi_blackbox.server import pgmi_binary, postgres, reference_binary
 
 
 @pytest.fixture(scope="session")
@@ -21,3 +21,8 @@ def binary(tmp_path_factory):
 def extras(tmp_path_factory):
     with ExitStack() as stack:
         yield Extras(tmp_path_factory.mktemp("extras"), stack).ensure
+
+
+@pytest.fixture(scope="session")
+def reference():
+    return reference_binary()

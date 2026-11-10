@@ -1,0 +1,46 @@
+description: pgmi config on a terminal tests the connection, writes pgmi.yaml keeping its comments and params, and saves the password to ~/.pgpass, so a deploy then needs no flags
+project:
+  files:
+    deploy.sql: CREATE TABLE seen AS SELECT current_setting('pgmi.env', true) AS env;
+    pgmi.yaml: |
+      # Team notes: keep this comment
+      params:
+        env: dev   # inline note
+steps:
+  - pgmi: [config, "{project}"]
+    tty: true
+    stdin:
+      - {wait: 2}
+      - "\r"
+      - {wait: 1}
+      - "\r"
+      - {wait: 1}
+      - "\x15127.0.0.1"
+      - "\t"
+      - "\x15{port}"
+      - "\t"
+      - "{db}"
+      - "\t"
+      - "\t"
+      - "\t"
+      - "{password}"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 4}
+      - "\r"
+      - {wait: 2}
+      - "y\r"
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["Overwrite connection settings\\?", "Connected to 127\\.0\\.0\\.1:{port}", "Wrote .*pgmi\\.yaml", "Save password to \\.pgpass"]
+      files:
+        project/pgmi.yaml: ["# Team notes: keep this comment", "env: dev +# inline note", "host: 127\\.0\\.0\\.1", "port: {port}", "database: {db}"]
+        home/.pgpass: ["127\\.0\\.0\\.1:{port}:"]
+  - pgmi: [deploy, "{project}"]
+    expect:
+      exit: 0
+      stderr: ["connection: from pgmi\\.yaml"]
+      sql:
+        - query: SELECT env FROM seen
+          rows: [[dev]]

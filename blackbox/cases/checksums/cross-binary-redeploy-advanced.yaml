@@ -1,0 +1,11 @@
+description: the advanced template deployed by the reference binary redeploys with the binary under test
+project:
+  init: advanced
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    binary: reference
+    timeout: 300
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    timeout: 300
+    expect: {exit: 0}

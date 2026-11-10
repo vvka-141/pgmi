@@ -1,0 +1,21 @@
+description: on a terminal, --overwrite --force shows the danger banner and a countdown; PGMI_NO_BANNER hides the banner but keeps the pause
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    tty: true
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["╔═+╗", "DROP DATABASE \"{db}\" in \\d+s"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["DROP DATABASE \"{db}\" in \\d+s"]
+      stdout_not: ["╔"]

@@ -1,0 +1,24 @@
+description: the project .env parser - quotes, export, comments, multi-line values, = in values, spaces, escapes - gives the values the Go binary gives
+project:
+  files:
+    .env: "PGMI_PARAM_PLAIN=plain value\nexport PGMI_PARAM_EXPORTED=exported\nPGMI_PARAM_SINGLE='single $HOME \\n kept'\nPGMI_PARAM_DOUBLE=\"double \\n escape\"\nPGMI_PARAM_MULTI=\"line one\nline two\"\nPGMI_PARAM_EQUALS=a=b=c\nPGMI_PARAM_INLINE=value # inline comment\nPGMI_PARAM_HASH=\"quoted # not a comment\"\n# PGMI_PARAM_COMMENTED=never\n  PGMI_PARAM_SPACED  =  spaced  \nPGMI_PARAM_UNICODE=ünï ✓\nPGMI_PARAM_CRLF=crlf\r\n"
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - ["crlf", "crlf"]
+            - ["double", "double \n escape"]
+            - ["equals", "a=b=c"]
+            - ["exported", "exported"]
+            - ["hash", "quoted # not a comment"]
+            - ["inline", "value"]
+            - ["multi", "line one\nline two"]
+            - ["plain", "plain value"]
+            - ["single", "single $HOME \\n kept"]
+            - ["spaced", "spaced"]
+            - ["unicode", "ünï ✓"]

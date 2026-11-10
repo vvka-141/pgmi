@@ -94,3 +94,13 @@ def pgmi_binary(build_dir: Path) -> Path:
     out = build_dir / "pgmi"
     subprocess.run(["go", "build", "-o", str(out), "./cmd/pgmi"], cwd=REPO, check=True)
     return out
+
+
+def reference_binary() -> Path | None:
+    given = os.environ.get("PGMI_REFERENCE_BIN")
+    if not given:
+        return None
+    path = Path(given).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"PGMI_REFERENCE_BIN={given} is not a file")
+    return path

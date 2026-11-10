@@ -32,6 +32,8 @@ class Expect:
     files: dict[str, tuple[str, ...]]
     absent: tuple[str, ...]
     stderr_within: tuple[tuple[str, float], ...]
+    raw: tuple[str, ...]
+    raw_not: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,8 @@ class Step:
     signals: tuple[Signal, ...]
     timeout: float
     cwd: str
+    reference: bool
+    tty: bool
     expect: Expect
 
 
@@ -203,7 +207,9 @@ def _project(r: _Reader, value: Any) -> Project:
 
 def _step(r: _Reader, value: Any, field: str) -> Step:
     value = r.mapping(
-        value, field, {"pgmi", "sql", "env", "stdin", "delay", "background", "signal", "timeout", "cwd", "expect"}
+        value,
+        field,
+        {"pgmi", "sql", "env", "stdin", "delay", "background", "signal", "timeout", "cwd", "binary", "tty", "expect"},
     )
     if ("pgmi" in value) == ("sql" in value):
         raise r.fail(field, "needs exactly one of pgmi or sql")
@@ -224,6 +230,8 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         signals=_signals(r, value.get("signal", []), f"{field}.signal"),
         timeout=r.number(value.get("timeout", 120), f"{field}.timeout"),
         cwd=r.string(value.get("cwd", "{workdir}"), f"{field}.cwd"),
+        reference=_binary(r, value.get("binary", "test"), f"{field}.binary"),
+        tty=_flag(r, value.get("tty", False), f"{field}.tty"),
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
     )
 
@@ -241,6 +249,18 @@ def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float, ...]:
             item = r.mapping(item, f"{field}[{i}]", {"wait"}, {"wait"})
             chunks.append(r.number(item["wait"], f"{field}[{i}].wait"))
     return tuple(chunks)
+
+
+def _flag(r: _Reader, value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise r.fail(field, "must be true or false")
+    return value
+
+
+def _binary(r: _Reader, value: Any, field: str) -> bool:
+    if value not in ("test", "reference"):
+        raise r.fail(field, "must be test or reference")
+    return value == "reference"
 
 
 def _signals(r: _Reader, value: Any, field: str) -> tuple[Signal, ...]:
@@ -271,6 +291,8 @@ def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
         "sql",
         "files",
         "absent",
+        "raw",
+        "raw_not",
     }
     if not pgmi:
         allowed = {"sql", "files", "absent"}
@@ -292,6 +314,8 @@ def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
         files=_files(r, value.get("files", {}), f"{field}.files"),
         absent=r.strings(value.get("absent", []), f"{field}.absent"),
         stderr_within=_within(r, value.get("stderr_within", []), f"{field}.stderr_within"),
+        raw=r.patterns(value.get("raw", []), f"{field}.raw"),
+        raw_not=r.patterns(value.get("raw_not", []), f"{field}.raw_not"),
     )
 
 

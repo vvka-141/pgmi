@@ -1,0 +1,8 @@
+description: a POSIX character class in .pgmiignore is refused today (exit 10), a Go bug kept by the freeze; see COVERAGE.md contract notes
+project:
+  files:
+    .pgmiignore: "sp[[:space:]]ace.sql\n"
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["\\.pgmiignore line 1", "invalid pattern"]}

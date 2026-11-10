@@ -1,0 +1,41 @@
+description: .pgmiignore patterns - comments, globs, classes (including & and - that Rust regex reads specially), **, directories, ! and an escaped # - select exactly the files Go loads
+project:
+  files:
+    .pgmiignore: |
+      # a comment line
+      *.bak
+      [Bb]uild/
+      **/scratch/
+      *.[oa]
+      [!a-m]*.tmp
+      docs/**
+      !docs/keep.sql
+      odd[&&]name.sql
+      dash[--]x.sql
+      \#hash.sql
+    a.sql: SELECT 1;
+    b.bak: x
+    Build/x.sql: SELECT 1;
+    build/y.sql: SELECT 1;
+    sub/scratch/z.sql: SELECT 1;
+    sub/keep/z.sql: SELECT 1;
+    lib.o: x
+    lib.a: x
+    lib.c: x
+    n.tmp: x
+    c.tmp: x
+    docs/drop.sql: SELECT 1;
+    docs/keep.sql: SELECT 1;
+    odd&name.sql: SELECT 1;
+    oddname.sql: SELECT 1;
+    dash-x.sql: SELECT 1;
+    dashx.sql: SELECT 1;
+    "#hash.sql": SELECT 1;
+    deploy.sql: CREATE TABLE loaded AS SELECT path FROM pg_temp.pgmi_source_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM loaded ORDER BY path COLLATE "C"
+          rows: [[./a.sql], [./c.tmp], [./dashx.sql], [./docs/keep.sql], [./lib.c], [./oddname.sql], [./sub/keep/z.sql]]
