@@ -124,7 +124,9 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
         #[cfg(unix)]
         Peer::Socket(path) => Ok(Stream::Unix(tokio::net::UnixStream::connect(path).await?)),
         #[cfg(not(unix))]
-        Peer::Socket(_) => Err(std::io::Error::other("Unix sockets are not supported here")),
+        Peer::Socket(path) => Err(std::io::Error::other(format!(
+            "Unix sockets are not supported here: {path}"
+        ))),
         Peer::Google(token) => match token.google() {
             Some(g) => Ok(Stream::CloudSql(Box::new(g.dial(tcp).await?))),
             None => Err(std::io::Error::other("no Cloud SQL dialer")),

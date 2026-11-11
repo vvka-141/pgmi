@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -39,7 +41,6 @@ impl Fakes {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
     let root = std::env::temp_dir().join(format!("pgmi-cloudsql-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

@@ -233,7 +233,7 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::{EmbeddedFs, MemFs, OsFs};
+    use crate::vfs::{EmbeddedFs, MemFs};
 
     const MAX: u64 = DEFAULT_MAX_FILE_SIZE;
 
@@ -638,7 +638,7 @@ mod tests {
             for (name, body) in files {
                 std::fs::write(d.join(name), body).unwrap();
             }
-            let fs = OsFs::new(d.path());
+            let fs = crate::vfs::OsFs::new(d.path());
             (d, fs)
         };
         let bad = std::ffi::OsStr::from_bytes(b"caf\xe9.sql");
