@@ -164,7 +164,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 34 | `sslnegotiation=direct` | ✓ `tls/channel-binding-and-direct`; failure against PostgreSQL 16 ✗ (one server version per run) |
 | 35 | client certificate by flags, by `PGSSL*`, by `~/.postgresql/postgresql.crt`; encrypted key with `sslpassword`/`PGSSLPASSWORD`; wrong password = 10; half a pair = 10; `disable` reads neither | ✓ `tls/client-certificate`, `tls/client-certificate-pairs`, `tls/default-files-good-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key` |
 | 36 | channel binding with an RSA certificate; refused without TLS | ✓ `tls/channel-binding-and-direct`; ECDSA and Ed25519 certificates ✗ (one server certificate per run) |
-| 37 | `require_auth` refuses another method | ✓ `tls/require-auth-and-version` |
+| 37 | `require_auth` refuses another method; a mistyped method is 10 before any host lookup | ✓ `tls/require-auth-and-version` |
 | 38 | `--json` TLS version | ✓ `tls/require-auth-and-version` |
 | 39, 40 | token callbacks per dial, Cloud SQL dialer | ✗ in-process hooks; the cloud cases (PGMI-853) cover them from outside |
 | 41 | static musl build | ✗ a property of the Rust build; PGMI-834 checks it |

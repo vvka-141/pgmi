@@ -362,7 +362,8 @@ explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate 
 `sslpassword`, a wrong one is exit 10. Each of the three paths comes from
 the flag, else the connection string, else `PGSSL*`, else `pgmi.yaml`, with or
 without a connection string. `channel_binding=require` needs TLS;
-`sslnegotiation=direct` is supported; `require_auth` refuses another method.
+`sslnegotiation=direct` is supported; `require_auth` refuses another method,
+and a method it does not know is exit 10 before any host lookup.
 `--sslmode` replaces the sslmode of a string from the environment. Token
 sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. When that
 sslmode came from `pgmi.yaml`, the Rust binary names the line and the fix
