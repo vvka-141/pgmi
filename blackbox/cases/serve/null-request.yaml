@@ -1,0 +1,11 @@
+description: a line holding only the JSON value null is not a request; Go ignores it, Rust answers -32600 with a null id as JSON-RPC 2.0 asks (owner decision 2026-11-11, contract "Decided changes")
+steps:
+  - pgmi: [serve]
+    stdin:
+      - 'null'
+      - '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+    expect:
+      exit: 0
+      stdout: ['\A{"jsonrpc":"2.0","id":1,"result":{}}\n\Z']
+      rust:
+        stdout: ['\A{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid request: a request must be a JSON object, not null"}}\n{"jsonrpc":"2.0","id":1,"result":{}}\n\Z']

@@ -62,7 +62,11 @@ pub fn decode(line: &[u8]) -> Decoded {
         Err(e) => return Decoded::Reply(error(None, PARSE_ERROR, &format!("parse error: {e}"))),
     };
     if kind(raw) == "null" {
-        return Decoded::Skip;
+        return Decoded::Reply(error(
+            None,
+            INVALID_REQUEST,
+            "invalid request: a request must be a JSON object, not null",
+        ));
     }
     let fields = match go_struct(
         raw,
@@ -562,7 +566,23 @@ mod tests {
     #[test]
     fn requests() {
         assert!(matches!(decode(b"   "), Decoded::Skip));
-        assert!(matches!(decode(b"null"), Decoded::Skip));
+        let Decoded::Request(r) =
+            decode(b"{\"jsonrpc\":\"2.0\",\"id\":\"a\xffb\",\"method\":\"ping\"}")
+        else {
+            panic!("not a request")
+        };
+        let id = r.id.unwrap_or_default();
+        assert_eq!(
+            serde_json::from_str::<String>(&id).ok().as_deref(),
+            Some("a\u{fffd}b")
+        );
+        let Decoded::Reply(r) = decode(b"null") else {
+            panic!("null was not answered")
+        };
+        assert_eq!(
+            r,
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"invalid request: a request must be a JSON object, not null\"}}"
+        );
         assert!(matches!(
             decode(b"{\"method\":\"x\"}"),
             Decoded::Notification(_)

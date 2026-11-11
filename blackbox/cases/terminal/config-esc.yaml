@@ -1,0 +1,10 @@
+description: Esc on the first screen of the config wizard cancels it with exit 12 (question Q5; the Esc byte goes alone, as a terminal sends it, not followed by a newline)
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [config, "{project}"]
+    tty: true
+    stdin: [{wait: 2}, {hex: "1b"}, {wait: 6}]
+    timeout: 20
+    expect: {exit: 12}

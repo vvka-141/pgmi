@@ -143,9 +143,9 @@ params that are not an object is -32602, an unknown tool -32602; wrong tool
 arguments are a tool result with `isError` and the exit code (10 for a
 missing path or an unknown argument). Blank lines and notifications get no
 answer; a 2 MB line is read; invalid UTF-8 inside a string reads as U+FFFD.
-String and number ids (`1.5`) are echoed as sent. Not pinned, owner
-questions Q1 and Q2 in `rust/docs/decisions/go-review.md`: the bare value
-`null` gets no answer, and an id holding invalid UTF-8 is echoed as raw bytes.
+String and number ids (`1.5`) are echoed as sent. The bare value `null`
+and an id holding invalid UTF-8 differ between the binaries: see "serve
+answers a bare null and never echoes invalid bytes" under Decided changes.
 
 `initialize` needs `protocolVersion` (-32602) and echoes `2025-11-25`,
 `2025-06-18` or `2024-11-05`, answering any other version with `2025-11-25`.
@@ -177,7 +177,7 @@ password to `~/.pgpass`. A `pgmi.yaml` that does not parse is replaced only
 after a confirmation. Without a terminal it is exit 2. Declining a prompt or
 Esc on the first screen is exit 12; Ctrl-C in the wizard is exit 130.
 
-Cases: `terminal/config-wizard`, `terminal/prompt-cancel`, `terminal/config-refusals`, `terminal/config-replace-unparseable`.
+Cases: `terminal/config-wizard`, `terminal/prompt-cancel`, `terminal/config-refusals`, `terminal/config-replace-unparseable`, `terminal/config-esc`.
 
 ## Deploy
 
@@ -663,6 +663,16 @@ setup breaks at the switch.
 
 Cases: `tls/encrypted-client-key`, `tls/require-auth-and-version`.
 
+### serve answers a bare null and never echoes invalid bytes (owner, 2026-11-11)
+
+Go ignores a line holding only `null`; JSON-RPC 2.0 calls it an invalid
+request. The Rust binary answers it with `-32600` and a null id. Go echoes an
+id holding invalid UTF-8 as raw bytes, so its answer is not valid JSON; the
+Rust binary reads each line lossily and echoes U+FFFD, so every answer is
+valid JSON (questions Q1 and Q2 in `rust/docs/decisions/go-review.md`).
+
+Cases: `serve/null-request`; Q2 by the Rust unit tests of `serve::wire`.
+
 ### Three smaller differences (owner, 2026-11-11)
 
 After the user confirms replacing a `pgmi.yaml` it cannot read as settings, the Rust
@@ -697,6 +707,8 @@ release notes take their "Behaviour changes" section from this table.
 | `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
+| `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
+| `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
 | Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |

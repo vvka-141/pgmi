@@ -114,9 +114,11 @@ serve/deploy-timeout
 serve/deploy-tool
 serve/deploys-in-sequence
 serve/malformed
+serve/null-request
 serve/protocol-versions
 serve/session
 terminal/colors
+terminal/config-esc
 terminal/config-refusals
 terminal/config-replace-unparseable
 terminal/config-wizard
