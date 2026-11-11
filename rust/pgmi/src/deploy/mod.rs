@@ -1137,6 +1137,28 @@ mod tests {
         assert_eq!(guard.stop_error().text(), "interrupted");
     }
 
+    #[tokio::test]
+    async fn a_server_answering_fewer_columns_is_an_error_not_a_panic() {
+        use crate::conn::dial::fake;
+        let (listener, port) = fake::listen().await;
+        tokio::spawn(fake::one_column(listener, "180000"));
+        let spec = fake::spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
+        ));
+        let session = fake::quiet().connect(&spec, "d").await.unwrap();
+        let e = check_server(&session).await.unwrap_err();
+        assert_eq!(e.exit_code(), 11, "{}", e.text());
+        assert!(
+            e.text().starts_with("read the server version: "),
+            "{}",
+            e.text()
+        );
+        assert_eq!(
+            first_value(&session, "SELECT 1").await.unwrap().as_deref(),
+            Some("180000")
+        );
+    }
+
     #[test]
     fn a_password_the_dialer_found_is_redacted_like_the_specs() {
         let secrets = Secrets::default();

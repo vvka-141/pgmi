@@ -721,7 +721,93 @@ impl Session {
 }
 
 #[cfg(test)]
+pub(crate) mod fake {
+    use std::sync::Arc;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    use super::Dialer;
+    use crate::conn::resolve::{Flags, Spec, resolve};
+
+    pub(crate) fn quiet() -> Dialer {
+        Dialer {
+            notices: Arc::new(|_| {}),
+            log: Arc::new(|_| {}),
+            secret: Arc::new(|_| {}),
+        }
+    }
+
+    pub(crate) fn spec_for(conn: &str) -> Spec {
+        let flags = Flags {
+            connection: Some(conn.into()),
+            ..Default::default()
+        };
+        resolve(&flags, &crate::env::Env::default(), None).unwrap()
+    }
+
+    pub(crate) async fn listen() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    pub(crate) async fn signed_in(listener: &TcpListener) -> std::io::Result<TcpStream> {
+        let (mut socket, _) = listener.accept().await?;
+        let len = socket.read_u32().await?;
+        let mut startup = vec![0; usize::try_from(len).unwrap_or(0).saturating_sub(4)];
+        socket.read_exact(&mut startup).await?;
+        socket
+            .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+            .await?;
+        Ok(socket)
+    }
+
+    fn frame(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        out.extend_from_slice(&u32::try_from(body.len() + 4).unwrap().to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// Answers every simple query with one text column holding `value`.
+    pub(crate) async fn one_column(listener: TcpListener, value: &'static str) {
+        let Ok(mut socket) = signed_in(&listener).await else {
+            return;
+        };
+        let mut description = vec![0, 1, b'x', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0xff, 0xff];
+        description.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0, 0]);
+        let mut row = vec![0, 1];
+        row.extend_from_slice(&u32::try_from(value.len()).unwrap().to_be_bytes());
+        row.extend_from_slice(value.as_bytes());
+        let answer = [
+            frame(b'T', &description),
+            frame(b'D', &row),
+            frame(b'C', b"SELECT 1\0"),
+            frame(b'Z', b"I"),
+        ]
+        .concat();
+        loop {
+            let Ok(tag) = socket.read_u8().await else {
+                return;
+            };
+            let Ok(len) = socket.read_u32().await else {
+                return;
+            };
+            let mut body = vec![0; usize::try_from(len).unwrap_or(0).saturating_sub(4)];
+            if socket.read_exact(&mut body).await.is_err() || tag == b'X' {
+                return;
+            }
+            if tag == b'Q' && socket.write_all(&answer).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::fake::{quiet, spec_for};
     use super::*;
 
     fn sqlstate(e: &Error) -> Option<&str> {
@@ -820,32 +906,10 @@ mod tests {
     }
 
     async fn silent_after_startup(listener: tokio::net::TcpListener) -> std::io::Result<usize> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let (mut socket, _) = listener.accept().await?;
-        let len = socket.read_u32().await?;
-        let mut startup = vec![0; usize::try_from(len).unwrap_or(0).saturating_sub(4)];
-        socket.read_exact(&mut startup).await?;
-        socket
-            .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
-            .await?;
+        use tokio::io::AsyncReadExt;
+        let mut socket = super::fake::signed_in(&listener).await?;
         let mut rest = Vec::new();
         socket.read_to_end(&mut rest).await
-    }
-
-    fn quiet() -> Dialer {
-        Dialer {
-            notices: Arc::new(|_| {}),
-            log: Arc::new(|_| {}),
-            secret: Arc::new(|_| {}),
-        }
-    }
-
-    fn spec_for(conn: &str) -> Spec {
-        let flags = super::super::resolve::Flags {
-            connection: Some(conn.into()),
-            ..Default::default()
-        };
-        super::super::resolve::resolve(&flags, &crate::env::Env::default(), None).unwrap()
     }
 
     #[tokio::test]
@@ -899,6 +963,18 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn a_probe_answered_with_too_few_columns_is_a_failure_not_a_panic() {
+        let (listener, port) = super::fake::listen().await;
+        tokio::spawn(super::fake::one_column(listener, "off"));
+        let spec = spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable target_session_attrs=read-write"
+        ));
+        let e = quiet().connect(&spec, "d").await.err().unwrap();
+        assert_eq!(e.exit_code(), 11, "{}", e.text());
+        assert!(e.text().contains("127.0.0.1:"), "{}", e.text());
     }
 
     #[tokio::test]
