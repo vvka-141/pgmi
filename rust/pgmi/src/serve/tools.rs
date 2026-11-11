@@ -459,16 +459,16 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
         .deploy(&ctx, &reporter, token, Arc::new(AtomicBool::new(false)))
         .await;
     let secrets = run.secrets();
-    let record = run.record(&ctx, &result);
+    let mut record = run.record(&ctx, &result);
     match &result {
         Ok(()) => {
             let (notices, warnings) = run.notice_counts();
             let text = format!(
                 "deployed {}: {} files loaded, {} paths ignored, {notices} notices ({warnings} warnings) in {}ms; the full record is in structuredContent",
                 run.database().unwrap_or_default(),
-                record["filesLoaded"].as_u64().unwrap_or(0),
-                record["pathsIgnored"].as_u64().unwrap_or(0),
-                record["durationMs"].as_u64().unwrap_or(0),
+                record.files_loaded.unwrap_or(0),
+                record.paths_ignored.unwrap_or(0),
+                record.duration_ms,
             );
             Outcome {
                 text,
@@ -486,16 +486,13 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
                 text.push_str(&format!("\nLOCATION: {location}"));
             }
             text.push_str(&format!("\nexit code {}", e.exit_code()));
-            if let Some(phase) = record["phase"].as_str() {
+            if let Some(phase) = record.phase {
                 text.push_str(&format!(", phase {phase}"));
             }
-            let mut structured = record;
-            if let Value::Object(m) = &mut structured {
-                m.insert("message".into(), json!(message));
-            }
+            record.message = Some(message);
             Outcome {
                 text,
-                structured: to_raw_value(&structured).ok(),
+                structured: to_raw_value(&record).ok(),
                 is_error: true,
             }
         }
@@ -589,7 +586,7 @@ mod tests {
         let schema =
             &tools.iter().find(|t| t["name"] == "deploy").unwrap()["outputSchema"]["anyOf"];
         let ctx = deploy_context(Some(&raw("{\"path\":\"/\"}")), &Env::default(), false).unwrap();
-        let mut record = Run::start().record(&ctx, &Ok(()));
+        let mut record = serde_json::to_value(Run::start().record(&ctx, &Ok(()))).unwrap();
         record["database"] = json!("db");
         record["filesLoaded"] = json!(0);
         for key in schema[0]["required"].as_array().unwrap() {

@@ -1,6 +1,7 @@
 mod approve;
 mod execute;
 mod overwrite;
+mod record;
 mod request;
 pub(crate) mod script;
 mod session;
@@ -11,11 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use serde_json::{Map, Value, json};
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
-use crate::VERSION;
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
 use crate::conn::dial::{Dialer, Session};
@@ -24,10 +23,12 @@ use crate::conn::tls;
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
-use crate::output::{Notice, NoticeLog, Reporter, seconds, timestamp};
+use crate::output::{Notice, NoticeLog, Reporter, seconds};
 use crate::project::{metadata, walk};
 
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
+pub(crate) use record::DeployRecord;
+use record::Tls;
 pub(crate) use request::Request;
 
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
@@ -74,24 +75,58 @@ pub(crate) struct Context {
     pub(crate) approver: Box<dyn Approver>,
 }
 
+/// How far a deploy got, one typed result per phase; the summary line and
+/// the `--json` record are read from it.
 #[derive(Default)]
-struct State {
-    spec: Option<Spec>,
-    database: Option<String>,
-    server_version: Option<String>,
-    tls: Option<Value>,
-    created: Option<bool>,
-    recreated: Option<bool>,
-    files_loaded: Option<usize>,
-    paths_ignored: Option<Value>,
-    test_macros: Option<usize>,
-    units: Option<usize>,
-    committed: Option<usize>,
-    failed_unit: Option<usize>,
+pub(crate) struct Progress {
     contract: bool,
-    phase_test: bool,
-    failed_files: Vec<String>,
+    spec: Option<Spec>,
     deployer: bool,
+    loaded: Option<Loaded>,
+    provision: Provision,
+    server: Option<ServerInfo>,
+    execution: Option<Execution>,
+}
+
+impl Progress {
+    fn database(&self) -> Option<&str> {
+        self.spec.as_ref().map(|s| s.target_db.as_str())
+    }
+
+    fn failure(&self) -> Option<&Failure> {
+        self.execution.as_ref()?.failure.as_ref()
+    }
+}
+
+struct Loaded {
+    files: usize,
+    ignored: Vec<walk::Ignored>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Provision {
+    #[default]
+    Existing,
+    Created,
+    Recreated,
+}
+
+struct ServerInfo {
+    version: Option<String>,
+    tls: Tls,
+}
+
+pub(crate) struct Execution {
+    test_macros: usize,
+    units: usize,
+    committed: usize,
+    failure: Option<Failure>,
+}
+
+pub(crate) struct Failure {
+    unit: usize,
+    test: bool,
+    files: Vec<String>,
 }
 
 struct Guard {
@@ -146,7 +181,7 @@ impl Guard {
 }
 
 pub(crate) struct Run {
-    st: State,
+    st: Progress,
     log: Arc<Mutex<NoticeLog>>,
     started: SystemTime,
     t0: Instant,
@@ -155,7 +190,7 @@ pub(crate) struct Run {
 impl Run {
     pub(crate) fn start() -> Self {
         Run {
-            st: State::default(),
+            st: Progress::default(),
             log: Arc::new(Mutex::new(NoticeLog::default())),
             started: SystemTime::now(),
             t0: Instant::now(),
@@ -184,7 +219,7 @@ impl Run {
     }
 
     pub(crate) fn database(&self) -> Option<&str> {
-        self.st.database.as_deref()
+        self.st.database()
     }
 
     pub(crate) fn notice_counts(&self) -> (u64, u64) {
@@ -195,12 +230,13 @@ impl Run {
     }
 
     pub(crate) fn location(&self, e: &Error) -> Option<&str> {
-        if e.kind() != Kind::Sql || self.st.failed_unit.is_none() {
+        if e.kind() != Kind::Sql {
             return None;
         }
-        Some(match self.st.failed_files.first() {
-            Some(f) => f.as_str(),
-            None if self.st.phase_test => "test",
+        let f = self.st.failure()?;
+        Some(match f.files.first() {
+            Some(file) => file.as_str(),
+            None if f.test => "test",
             None => "deploy.sql",
         })
     }
@@ -218,20 +254,18 @@ impl Run {
             .collect()
     }
 
-    pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> Value {
-        let code = match result {
-            Ok(()) => 0,
-            Err(e) => e.exit_code(),
-        };
-        record(
-            ctx,
+    pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {
+        let secrets = self.secrets();
+        DeployRecord::new(
             &self.st,
             result,
-            code,
-            self.started,
-            self.t0.elapsed(),
-            &self.log,
-            &self.secrets(),
+            record::Facts {
+                dotenv_keys: &ctx.dotenv_keys,
+                started: self.started,
+                elapsed: self.t0.elapsed(),
+                notices: self.log.lock().ok().map(|l| l.finish()),
+                secrets: &secrets,
+            },
         )
     }
 }
@@ -332,7 +366,7 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
 
 async fn deploy(
     ctx: &Context,
-    st: &mut State,
+    st: &mut Progress,
     guard: &Guard,
     reporter: &Arc<Reporter>,
     log: Arc<Mutex<NoticeLog>>,
@@ -374,7 +408,6 @@ async fn deploy(
     if let Some(m) = &a.maintenance_db {
         spec.maintenance_db = m.clone();
     }
-    st.database = Some(spec.target_db.clone());
     st.spec = Some(spec.clone());
     #[cfg(feature = "testhooks")]
     if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
@@ -390,22 +423,16 @@ async fn deploy(
         .await
         .map_err(|e| Error::internal(format!("project loader: {e}")))??;
     let meta = metadata::collect(&project.sources)?;
-    st.files_loaded = Some(project.sources.len() + project.test_dir_files.len());
-    st.paths_ignored = Some(json!(
-        project
-            .ignored
-            .iter()
-            .map(|i| json!({"path": i.path, "rule": i.rule}))
-            .collect::<Vec<_>>()
-    ));
-    st.test_macros = Some(0);
+    let files_loaded = project.sources.len() + project.test_dir_files.len();
+    st.loaded = Some(Loaded {
+        files: files_loaded,
+        ignored: project.ignored.clone(),
+    });
     if ctx.verbose {
         for i in &project.ignored {
             reporter.line(&format!("ignored {} ({})", i.path, i.rule));
         }
     }
-    st.created = Some(false);
-    st.recreated = Some(false);
     if !spec.source.typed() {
         let label = spec.source.label();
         if label == "defaults" {
@@ -448,8 +475,11 @@ async fn deploy(
         let recreated = guard
             .running(&plan.maintenance, overwrite::recreate(&plan, reporter))
             .await?;
-        st.recreated = Some(recreated);
-        st.created = Some(!recreated);
+        st.provision = if recreated {
+            Provision::Recreated
+        } else {
+            Provision::Created
+        };
     }
     let session = match guard
         .connecting(dialer.connect(&spec, &spec.target_db))
@@ -473,7 +503,7 @@ async fn deploy(
                         .map_err(|e| sql_error("create the target database", &e))
                 })
                 .await?;
-            st.created = Some(true);
+            st.provision = Provision::Created;
             drop(maintenance);
             guard
                 .connecting(dialer.connect(&spec, &spec.target_db))
@@ -489,12 +519,14 @@ async fn deploy(
                 .flatten())
         })
         .await?;
-    st.server_version = version;
-    st.tls = Some(json!({
-        "enabled": session.tls_enabled(),
-        "version": session.tls_version,
-        "sslmode": tls::effective_mode(&spec),
-    }));
+    st.server = Some(ServerInfo {
+        version,
+        tls: Tls {
+            enabled: session.tls_enabled(),
+            sslmode: tls::effective_mode(&spec),
+            version: session.tls_version.clone(),
+        },
+    });
     let locked = guard
         .running(&session, async {
             first_value(
@@ -521,7 +553,8 @@ async fn deploy(
         meta: &meta,
         params: &params,
         verbose: ctx.verbose,
-        state: st,
+        files_loaded,
+        execution: &mut st.execution,
     })
     .await;
     let cleanup = async {
@@ -595,24 +628,22 @@ fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> 
     code
 }
 
-fn summary(st: &State, result: &Result<()>, elapsed: Duration) -> Option<(bool, String)> {
-    let db = st.database.as_deref()?;
+fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool, String)> {
+    let db = p.database()?;
     let e = match result {
         Ok(()) => {
-            let ignored = match st
-                .paths_ignored
+            let (files, ignored) = p
+                .loaded
                 .as_ref()
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len)
-            {
+                .map_or((0, 0), |l| (l.files, l.ignored.len()));
+            let ignored = match ignored {
                 0 => String::new(),
                 n => format!(", {n} paths ignored"),
             };
             return Some((
                 true,
                 format!(
-                    "{db}: {} files loaded{ignored} in {}",
-                    st.files_loaded.unwrap_or(0),
+                    "{db}: {files} files loaded{ignored} in {}",
                     seconds(elapsed)
                 ),
             ));
@@ -620,16 +651,20 @@ fn summary(st: &State, result: &Result<()>, elapsed: Duration) -> Option<(bool, 
         Err(e) => e,
     };
     let mut text = format!("{db}: failed after {}", seconds(elapsed));
-    let committed = st.committed.unwrap_or(0);
+    let committed = p.execution.as_ref().map_or(0, |x| x.committed);
     let mut notes = Vec::new();
-    match (st.units, st.failed_unit) {
-        (Some(units), Some(failed)) if committed > 0 => text.push_str(&format!(
-            " (unit {failed} of {units} failed; {committed} earlier unit(s) already committed)"
-        )),
-        (Some(_), _) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
+    match &p.execution {
+        Some(x) if committed > 0 && x.failure.is_some() => {
+            let failed = x.failure.as_ref().map_or(0, |f| f.unit);
+            text.push_str(&format!(
+                " (unit {failed} of {} failed; {committed} earlier unit(s) already committed)",
+                x.units
+            ));
+        }
+        Some(_) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
         _ => {}
     }
-    if st.created == Some(true) && committed == 0 {
+    if p.loaded.is_some() && p.provision == Provision::Created && committed == 0 {
         notes.push(format!("created database \"{db}\", left empty"));
     }
     if !notes.is_empty() {
@@ -638,129 +673,10 @@ fn summary(st: &State, result: &Result<()>, elapsed: Duration) -> Option<(bool, 
     Some((false, text))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record(
-    ctx: &Context,
-    st: &State,
-    result: &Result<()>,
-    code: u8,
-    started: SystemTime,
-    elapsed: Duration,
-    log: &Mutex<NoticeLog>,
-    secrets: &[String],
-) -> Value {
-    let mut r = Map::new();
-    r.insert(
-        "status".into(),
-        json!(if code == 0 { "success" } else { "failed" }),
-    );
-    r.insert("exitCode".into(), json!(code));
-    r.insert("schemaVersion".into(), json!(1));
-    r.insert("pgmiVersion".into(), json!(VERSION));
-    r.insert(
-        "contractVersion".into(),
-        if st.contract { json!("1") } else { Value::Null },
-    );
-    r.insert("serverVersion".into(), json!(st.server_version));
-    r.insert("tls".into(), st.tls.clone().unwrap_or(Value::Null));
-    r.insert(
-        "target".into(),
-        match &st.spec {
-            Some(s) => {
-                let (h, p) = s.first();
-                json!({"host": h, "port": p, "database": s.target_db})
-            }
-            None => Value::Null,
-        },
-    );
-    r.insert(
-        "connectionSource".into(),
-        json!(st.spec.as_ref().map(|s| s.source.label())),
-    );
-    r.insert("overrides".into(), json!([]));
-    r.insert("dotenvKeys".into(), json!(ctx.dotenv_keys));
-    r.insert("startedAt".into(), json!(timestamp(started)));
-    r.insert("finishedAt".into(), json!(timestamp(started + elapsed)));
-    r.insert("database".into(), json!(st.database));
-    r.insert("created".into(), json!(st.created));
-    r.insert("recreated".into(), json!(st.recreated));
-    r.insert("durationMs".into(), json!(elapsed.as_millis() as u64));
-    r.insert("filesLoaded".into(), json!(st.files_loaded));
-    let ignored = st.paths_ignored.clone().unwrap_or_else(|| json!([]));
-    r.insert(
-        "pathsIgnored".into(),
-        if st.paths_ignored.is_some() {
-            json!(ignored.as_array().map_or(0, Vec::len))
-        } else {
-            Value::Null
-        },
-    );
-    r.insert("ignoredPaths".into(), ignored);
-    r.insert("testMacros".into(), json!(st.test_macros));
-    if let Ok(l) = log.lock() {
-        let (notices, dropped) = l.finish();
-        r.insert("notices".into(), notices);
-        if let Some(d) = dropped {
-            r.insert("noticesTruncated".into(), json!(d));
-        }
-    }
-    if let Some(u) = st.units {
-        r.insert("executionUnits".into(), json!(u));
-        r.insert("unitsCommitted".into(), json!(st.committed.unwrap_or(0)));
-    }
-    if let Err(e) = result {
-        if st.units.is_some() && st.failed_unit.is_some() {
-            r.insert(
-                "executionMode".into(),
-                json!(if st.committed.unwrap_or(0) == 0 {
-                    "atomic"
-                } else {
-                    "psql"
-                }),
-            );
-        }
-        r.insert("error".into(), json!(redact(&e.text(), secrets)));
-        if let Some(d) = e.sql_diagnostics() {
-            if let Some(s) = &d.sqlstate {
-                r.insert("sqlstate".into(), json!(s));
-            }
-            if let Some(s) = &d.detail {
-                r.insert("detail".into(), json!(s));
-            }
-            if let Some(s) = &d.hint {
-                r.insert("hint".into(), json!(s));
-            }
-            if let Some(s) = &d.where_ {
-                r.insert("where".into(), json!(s));
-            }
-            if st.failed_unit.is_some() {
-                r.insert(
-                    "phase".into(),
-                    json!(if st.phase_test { "test" } else { "deploy" }),
-                );
-                match st.failed_files.as_slice() {
-                    [] if !st.phase_test => {
-                        r.insert("failedFile".into(), json!("deploy.sql"));
-                        r.insert("script".into(), json!("deploy.sql"));
-                    }
-                    [] => {}
-                    files => {
-                        r.insert("failedFile".into(), json!(files[0]));
-                        r.insert("script".into(), json!(files[0]));
-                        if files.len() > 1 {
-                            r.insert("failedFileCandidates".into(), json!(files));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Value::Object(r)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
 
     #[test]
     fn a_cancelled_deploy_is_not_a_timeout() {
@@ -776,18 +692,46 @@ mod tests {
         assert_eq!(guard.stop_error().text(), "interrupted");
     }
 
-    fn loaded(db: &str) -> State {
-        State {
-            database: Some(db.into()),
-            files_loaded: Some(3),
-            paths_ignored: Some(json!([])),
-            created: Some(false),
-            ..State::default()
+    fn spec(db: &str) -> Spec {
+        let flags = resolve::Flags {
+            connection: Some(format!("postgresql://u:s3cret-pw@db.example:6543/{db}")),
+            ..resolve::Flags::default()
+        };
+        resolve::resolve(&flags, &Env::default(), None).unwrap()
+    }
+
+    fn loaded(db: &str) -> Progress {
+        Progress {
+            contract: true,
+            spec: Some(spec(db)),
+            deployer: true,
+            loaded: Some(Loaded {
+                files: 3,
+                ignored: Vec::new(),
+            }),
+            ..Progress::default()
         }
     }
 
-    fn summary_of(st: &State, result: &Result<()>) -> Option<(bool, String)> {
-        summary(st, result, Duration::from_millis(1234))
+    fn executed(committed: usize, failure: Option<Failure>) -> Option<Execution> {
+        Some(Execution {
+            test_macros: 1,
+            units: 3,
+            committed,
+            failure,
+        })
+    }
+
+    fn failure(unit: usize, test: bool, files: &[&str]) -> Option<Failure> {
+        Some(Failure {
+            unit,
+            test,
+            files: files.iter().map(|f| f.to_string()).collect(),
+        })
+    }
+
+    fn summary_of(p: &Progress, result: &Result<()>) -> Option<(bool, String)> {
+        summary(p, result, Duration::from_millis(1234))
     }
 
     #[test]
@@ -796,41 +740,45 @@ mod tests {
             summary_of(&loaded("app"), &Ok(())),
             Some((true, "app: 3 files loaded in 1.23s".into()))
         );
-        let st = State {
-            paths_ignored: Some(json!([{"path": "a"}, {"path": "b"}])),
+        let ignored = |path: &str| walk::Ignored {
+            path: path.into(),
+            rule: "built-in",
+        };
+        let p = Progress {
+            loaded: Some(Loaded {
+                files: 3,
+                ignored: vec![ignored("a"), ignored("b")],
+            }),
             ..loaded("app")
         };
         assert_eq!(
-            summary_of(&st, &Ok(())).unwrap().1,
+            summary_of(&p, &Ok(())).unwrap().1,
             "app: 3 files loaded, 2 paths ignored in 1.23s"
         );
-        assert_eq!(summary_of(&State::default(), &Ok(())), None);
+        assert_eq!(summary_of(&Progress::default(), &Ok(())), None);
     }
 
     #[test]
     fn a_failed_summary_says_what_was_committed() {
         let sql = Err(Error::sql("boom"));
-        let atomic = State {
-            units: Some(3),
-            committed: Some(0),
-            failed_unit: Some(1),
+        let atomic = Progress {
+            execution: executed(0, failure(1, false, &[])),
             ..loaded("app")
         };
         assert_eq!(
             summary_of(&atomic, &sql),
             Some((false, "app: failed after 1.23s — nothing committed".into()))
         );
-        let psql = State {
-            committed: Some(2),
-            failed_unit: Some(3),
-            ..atomic
+        let psql = Progress {
+            execution: executed(2, failure(3, false, &[])),
+            ..loaded("app")
         };
         assert_eq!(
             summary_of(&psql, &sql).unwrap().1,
             "app: failed after 1.23s (unit 3 of 3 failed; 2 earlier unit(s) already committed)"
         );
-        let created = State {
-            created: Some(true),
+        let created = Progress {
+            provision: Provision::Created,
             ..loaded("app")
         };
         assert_eq!(
@@ -839,10 +787,8 @@ mod tests {
                 .1,
             "app: failed after 1.23s — created database \"app\", left empty"
         );
-        let created_then_sql = State {
-            units: Some(1),
-            committed: Some(0),
-            failed_unit: Some(1),
+        let created_then_sql = Progress {
+            execution: executed(0, failure(1, false, &[])),
             ..created
         };
         assert_eq!(
@@ -851,32 +797,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_error_line_never_shows_the_password() {
-        let env = Env::default();
-        let flags = resolve::Flags {
-            connection: Some("postgresql://u:s3cret-pw@db.example:6543/app".into()),
-            ..resolve::Flags::default()
-        };
-        let mut run = Run::start();
-        run.st = State {
-            spec: Some(resolve::resolve(&flags, &env, None).unwrap()),
-            units: Some(1),
-            committed: Some(0),
-            failed_unit: Some(1),
-            ..loaded("app")
-        };
-        let ctx = Context {
+    fn context() -> Context {
+        Context {
             request: Request::default(),
             verbose: false,
-            env,
-            dotenv_keys: Vec::new(),
+            env: Env::default(),
+            dotenv_keys: vec!["PGPASSWORD".into()],
             stdin: false,
             approver: Box::new(ConfirmedName(None)),
+        }
+    }
+
+    #[test]
+    fn the_error_line_never_shows_the_password() {
+        let mut run = Run::start();
+        run.st = Progress {
+            execution: executed(0, failure(1, false, &[])),
+            ..loaded("app")
         };
         let (reporter, out) = crate::output::Captured::reporter(false, false, false);
         let code = finish(
-            &ctx,
+            &context(),
             &run,
             Err(Error::sql("password s3cret-pw rejected")),
             &reporter,
@@ -888,6 +829,191 @@ mod tests {
         assert_eq!(lines[1], "pgmi: error: password *** rejected");
         assert_eq!(lines[2], "LOCATION: deploy.sql");
         assert_eq!(lines.len(), 3, "{text}");
+    }
+
+    fn sql_failure(message: &str) -> Error {
+        Error::sql(message).with_sql(crate::error::SqlDiagnostics {
+            sqlstate: Some("22012".into()),
+            detail: Some("d".into()),
+            hint: Some("h".into()),
+            where_: Some("w".into()),
+            internal_query: None,
+        })
+    }
+
+    fn record_of(p: Progress, result: &Result<()>) -> Value {
+        let mut run = Run::start();
+        run.st = p;
+        let record = run.record(&context(), result);
+        let text = serde_json::to_string(&record).unwrap();
+        let sorted = serde_json::to_value(&record).unwrap();
+        assert_eq!(text, sorted.to_string(), "keys must stay in byte order");
+        sorted
+    }
+
+    #[test]
+    fn a_record_before_anything_ran_is_mostly_null() {
+        let r = record_of(Progress::default(), &Err(Error::config("bad")));
+        let keys: Vec<&str> = r.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "connectionSource",
+                "contractVersion",
+                "created",
+                "database",
+                "dotenvKeys",
+                "durationMs",
+                "error",
+                "exitCode",
+                "filesLoaded",
+                "finishedAt",
+                "ignoredPaths",
+                "notices",
+                "overrides",
+                "pathsIgnored",
+                "pgmiVersion",
+                "recreated",
+                "schemaVersion",
+                "serverVersion",
+                "startedAt",
+                "status",
+                "target",
+                "testMacros",
+                "tls"
+            ]
+        );
+        for key in [
+            "connectionSource",
+            "contractVersion",
+            "created",
+            "database",
+            "filesLoaded",
+            "pathsIgnored",
+            "recreated",
+            "serverVersion",
+            "target",
+            "testMacros",
+            "tls",
+        ] {
+            assert!(r[key].is_null(), "{key}: {}", r[key]);
+        }
+        assert_eq!(r["status"], "failed");
+        assert_eq!(r["exitCode"], 10);
+        assert_eq!(r["schemaVersion"], 1);
+        assert_eq!(r["ignoredPaths"], json!([]));
+        assert_eq!(r["overrides"], json!([]));
+        assert_eq!(r["notices"], json!([]));
+        assert_eq!(r["dotenvKeys"], json!(["PGPASSWORD"]));
+    }
+
+    #[test]
+    fn a_successful_record_carries_the_phases_it_passed() {
+        let p = Progress {
+            provision: Provision::Recreated,
+            server: Some(ServerInfo {
+                version: Some("18.1".into()),
+                tls: Tls {
+                    enabled: true,
+                    sslmode: "verify-full".into(),
+                    version: Some("TLSv1.3".into()),
+                },
+            }),
+            execution: executed(3, None),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Ok(()));
+        assert_eq!(r["status"], "success");
+        assert_eq!(r["exitCode"], 0);
+        assert_eq!(r["contractVersion"], "1");
+        assert_eq!(r["database"], "app");
+        assert_eq!(
+            r["target"],
+            json!({"database": "app", "host": "db.example", "port": 6543})
+        );
+        assert_eq!(r["connectionSource"], "--connection");
+        assert_eq!(
+            (r["created"].clone(), r["recreated"].clone()),
+            (json!(false), json!(true))
+        );
+        assert_eq!(r["filesLoaded"], 3);
+        assert_eq!(r["pathsIgnored"], 0);
+        assert_eq!(r["testMacros"], 1);
+        assert_eq!(r["executionUnits"], 3);
+        assert_eq!(r["unitsCommitted"], 3);
+        assert_eq!(r["serverVersion"], "18.1");
+        assert_eq!(
+            r["tls"],
+            json!({"enabled": true, "sslmode": "verify-full", "version": "TLSv1.3"})
+        );
+        for key in ["error", "executionMode", "phase", "failedFile", "sqlstate"] {
+            assert!(r.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_failure_record_names_the_file_mode_and_phase() {
+        let p = Progress {
+            execution: executed(2, failure(3, false, &["./a.sql", "./b.sql"])),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Err(sql_failure("division by zero, password s3cret-pw")));
+        assert_eq!(r["executionMode"], "psql");
+        assert_eq!(r["phase"], "deploy");
+        assert_eq!(r["failedFile"], "./a.sql");
+        assert_eq!(r["script"], "./a.sql");
+        assert_eq!(r["failedFileCandidates"], json!(["./a.sql", "./b.sql"]));
+        assert_eq!(r["error"], "division by zero, password ***");
+        assert_eq!(
+            [&r["sqlstate"], &r["detail"], &r["hint"], &r["where"]],
+            [&json!("22012"), &json!("d"), &json!("h"), &json!("w")]
+        );
+
+        let p = Progress {
+            execution: executed(0, failure(1, false, &["./only.sql"])),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Err(sql_failure("x")));
+        assert_eq!(r["executionMode"], "atomic");
+        assert_eq!(r["failedFile"], "./only.sql");
+        assert!(r.get("failedFileCandidates").is_none());
+
+        let p = Progress {
+            execution: executed(0, failure(1, false, &[])),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Err(sql_failure("x")));
+        assert_eq!(r["failedFile"], "deploy.sql");
+        assert_eq!(r["script"], "deploy.sql");
+
+        let p = Progress {
+            execution: executed(0, failure(1, true, &[])),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Err(sql_failure("x")));
+        assert_eq!(r["phase"], "test");
+        assert!(r.get("failedFile").is_none() && r.get("script").is_none());
+    }
+
+    #[test]
+    fn a_failure_without_sql_diagnostics_has_no_phase() {
+        let p = Progress {
+            execution: executed(0, failure(3, false, &[])),
+            ..loaded("app")
+        };
+        let r = record_of(
+            p,
+            &Err(Error::sql("deploy.sql ended inside an open transaction")),
+        );
+        assert_eq!(r["executionMode"], "atomic");
+        assert!(r.get("phase").is_none() && r.get("failedFile").is_none());
+        assert!(r.get("sqlstate").is_none());
+
+        let r = record_of(loaded("app"), &Err(sql_failure("session tables")));
+        assert_eq!(r["testMacros"], 0);
+        assert!(r.get("executionMode").is_none() && r.get("phase").is_none());
+        assert!(r.get("executionUnits").is_none());
+        assert_eq!(r["sqlstate"], "22012");
     }
 
     #[test]

@@ -10,7 +10,7 @@ pub(crate) struct File {
     pub(crate) content: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct Ignored {
     pub(crate) path: String,
     pub(crate) rule: &'static str,

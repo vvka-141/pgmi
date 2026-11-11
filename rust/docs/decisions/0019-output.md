@@ -39,10 +39,16 @@ truncated to the first 50, up to 200 WARNINGs from the middle and the last
   to the Reporter and, for `--json` and `serve`, to a `NoticeLog` that keeps
   the first 50, a bounded WARNING buffer, and a ring of the last 150, and
   counts the rest for `noticesTruncated`.
-- `DeployRecord` is one serde struct in the documented key order: provenance
+- `DeployRecord` is one serde struct: provenance
   keys always present (`null` where the docs say), diagnostic keys
   `skip_serializing_if = "Option::is_none"`. The same struct is the
-  `serve` deploy result, so the two cannot drift.
+  `serve` deploy result, so the two cannot drift. As built
+  (`deploy/record.rs`, record 0022 step 8) its fields are declared in byte
+  order of their JSON names, the order the earlier `serde_json::Map`
+  (a `BTreeMap`) printed; a unit test checks it against a `Value`
+  round trip. It is filled from `deploy::Progress`, one typed result per
+  phase (project loaded, database provisioned, server reached, units
+  executed, failure).
 - `startedAt`/`finishedAt`: jiff, UTC, milliseconds (`...T14:02:11.402Z`).
 - Redaction: one function that removes the password and token from any
   string (connection strings in every format, `password=`, the AWS

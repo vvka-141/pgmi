@@ -49,13 +49,14 @@ Option 3.
       src/error.rs          Error, Kind, chain(), redact(), Secret
       src/env.rs            Env
       src/vfs.rs            Vfs, OsFs, EmbeddedFs; MemFs (cfg(test) or feature testkit)
-      src/output.rs         Reporter<sink>, NoticeLog, Notice, Severity, DeployRecord
+      src/output.rs         Reporter<sink>, NoticeLog, Notice, Severity
       src/templates.rs      Template enum, catalogue, render() (pure)
       src/duration.rs       Go-style durations (cli, yaml, MCP)
       src/project/          walk, ignore, lexer, checksum, metadata, script
       src/config/           yaml, params, dotenv, edit
       src/conn/             resolve, parse, pgpass, tls, tap, dial, retry, cloud/
-      src/deploy/           Request, run(), session, execute, overwrite, Approver
+      src/deploy/           Request, run(), session, execute, overwrite, Approver,
+                            Progress, DeployRecord
       src/serve/            server (transport-generic), wire, tools (Toolbox)
       src/cli/              clap types and From<DeployArgs> for deploy::Request
       src/commands/         init, info, metadata, templates, ai, config, completion
@@ -223,6 +224,18 @@ land before or between steps, each with a black-box case.
    call runs.
 8. **`DeployRecord`.** Replace `State` and `record()`; pure tests of the
    failure record (`failed_files`, `executionMode`, `phase`).
+   Done 2026-11-11: `deploy::Progress` holds typed phase results
+   (`Loaded`, `Provision`, `ServerInfo`, `Execution` with an optional
+   `Failure`); `execute::run` fills only the `Execution`. The record is
+   `#[derive(Serialize)] DeployRecord` in `deploy/record.rs` (not
+   `output.rs`: it is built from `Progress`), fields in byte order of
+   their names so the JSON is unchanged; `serve` sets its `message` and
+   reads its counts. The `--json` output of the step 7 and step 8
+   binaries was compared byte for byte (timestamps and duration
+   normalised) on a success, a psql-mode failure with two candidate
+   files, a test failure, an open transaction and a refused `--compat`.
+   Unit tests cover the null and absent rules, the failure keys,
+   `executed_text`, `failed_files` and `is_test_failure`.
 9. **Types and secrets.** Enums for connection settings and severity;
    `Secret`; non-empty hosts; port resolver group 5 and
    `FormattingNeverPrintsSecrets`.

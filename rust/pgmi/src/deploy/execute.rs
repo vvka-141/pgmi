@@ -5,7 +5,7 @@ use tokio_postgres::types::Type;
 
 use super::script::{self, Unit};
 use super::session::{self, Load};
-use super::{Guard, State, sql_error};
+use super::{Execution, Failure, Guard, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
 use crate::conn::tap::IDLE;
@@ -22,7 +22,8 @@ pub(crate) struct Run<'a> {
     pub(crate) meta: &'a [Meta],
     pub(crate) params: &'a BTreeMap<String, String>,
     pub(crate) verbose: bool,
-    pub(crate) state: &'a mut State,
+    pub(crate) files_loaded: usize,
+    pub(crate) execution: &'a mut Option<Execution>,
 }
 
 async fn generate(
@@ -52,7 +53,8 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
         meta,
         params,
         verbose,
-        state,
+        files_loaded,
+        execution,
     } = r;
     reporter.line("Preparing session: scanning files, loading parameters");
     guard
@@ -70,7 +72,7 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             ),
         )
         .await?;
-    reporter.line(&format!("Loaded {} files", state.files_loaded.unwrap_or(0)));
+    reporter.line(&format!("Loaded {files_loaded} files"));
     if !params.is_empty() {
         reporter.line(&format!("Loaded {} parameter(s)", params.len()));
     }
@@ -112,9 +114,12 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             line: unit.line,
         });
     }
-    state.test_macros = Some(count);
-    state.units = Some(units.len());
-    state.committed = Some(0);
+    let execution = execution.insert(Execution {
+        test_macros: count,
+        units: units.len(),
+        committed: 0,
+        failure: None,
+    });
     reporter.line("Executing deploy.sql");
     for (i, unit) in units.iter().enumerate() {
         let outcome = guard
@@ -127,18 +132,24 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             })
             .await;
         if let Err(e) = outcome {
-            state.failed_unit = Some(i + 1);
-            state.phase_test = macro_units[i] && is_test_failure(&e);
-            state.failed_files = failed_files(&e, project);
+            execution.failure = Some(Failure {
+                unit: i + 1,
+                test: macro_units[i] && is_test_failure(&e),
+                files: failed_files(&e, project),
+            });
             return Err(e);
         }
         if session.tap.status() == IDLE {
-            state.committed = Some(i + 1);
+            execution.committed = i + 1;
         }
     }
     if session.tap.status() != IDLE {
         let _ = session.client.batch_execute("ROLLBACK").await;
-        state.failed_unit = Some(units.len());
+        execution.failure = Some(Failure {
+            unit: units.len(),
+            test: false,
+            files: Vec::new(),
+        });
         return Err(Error::sql(
             "deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT",
         ));
@@ -178,4 +189,90 @@ fn is_test_failure(e: &Error) -> bool {
     e.sql_diagnostics()
         .and_then(|d| d.where_.as_deref())
         .is_some_and(|w| w.contains("pgmi_test"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::SqlDiagnostics;
+    use crate::project::walk::File;
+
+    fn failed(where_: Option<&str>, internal_query: Option<&str>) -> Error {
+        Error::sql("boom").with_sql(SqlDiagnostics {
+            where_: where_.map(str::to_string),
+            internal_query: internal_query.map(str::to_string),
+            ..SqlDiagnostics::default()
+        })
+    }
+
+    fn file(path: &str, content: &str) -> File {
+        File {
+            path: path.into(),
+            content: content.into(),
+        }
+    }
+
+    #[test]
+    fn executed_text_prefers_the_internal_query() {
+        let e = failed(
+            Some(
+                "SQL statement \"SELECT 2\"\nPL/pgSQL function inline_code_block line 3 at EXECUTE",
+            ),
+            Some("SELECT 1/0"),
+        );
+        assert_eq!(executed_text(&e).as_deref(), Some("SELECT 1/0"));
+    }
+
+    #[test]
+    fn executed_text_reads_the_statement_out_of_where() {
+        let e = failed(
+            Some(
+                "SQL statement \"SELECT \"q\" FROM t\"\nPL/pgSQL function inline_code_block line 3 at EXECUTE",
+            ),
+            None,
+        );
+        assert_eq!(executed_text(&e).as_deref(), Some("SELECT \"q\" FROM t"));
+        let e = failed(Some("SQL statement \"SELECT 1\""), None);
+        assert_eq!(executed_text(&e).as_deref(), Some("SELECT 1"));
+        assert_eq!(
+            executed_text(&failed(Some("PL/pgSQL function f() line 1"), None)),
+            None
+        );
+        assert_eq!(executed_text(&failed(None, None)), None);
+        assert_eq!(executed_text(&Error::sql("no diagnostics")), None);
+    }
+
+    #[test]
+    fn failed_files_are_the_sql_files_that_hold_the_statement() {
+        let project = Project {
+            sources: vec![
+                file("./a.sql", "CREATE TABLE a();\nSELECT 1/0;\n"),
+                file("./b.sql", "SELECT 2;"),
+                file("./notes.txt", "SELECT 1/0"),
+            ],
+            tests: vec![file("./__test__/t.sql", "  SELECT 1/0  ")],
+            ..Project::default()
+        };
+        assert_eq!(
+            failed_files(&failed(None, Some("  SELECT 1/0\n")), &project),
+            ["./a.sql", "./__test__/t.sql"]
+        );
+        assert!(failed_files(&failed(None, Some("SELECT 3")), &project).is_empty());
+        assert!(failed_files(&failed(None, Some("  \n")), &project).is_empty());
+        assert!(failed_files(&Error::sql("x"), &project).is_empty());
+    }
+
+    #[test]
+    fn a_test_failure_is_one_raised_under_pgmi_test() {
+        assert!(is_test_failure(&failed(
+            Some("PL/pgSQL function pg_temp.pgmi_test_callback(text) line 4 at RAISE"),
+            None
+        )));
+        assert!(!is_test_failure(&failed(
+            Some("PL/pgSQL function f() line 1"),
+            None
+        )));
+        assert!(!is_test_failure(&failed(None, None)));
+        assert!(!is_test_failure(&Error::sql("x")));
+    }
 }
