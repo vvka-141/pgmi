@@ -149,11 +149,11 @@ fn tls_keys_are_read_or_refused() {
         resolve(&fl, &Env::default(), None)
     };
     let s = spec("").unwrap();
-    assert!(s.sslsni && !s.sslcertmode_disable);
+    assert!(s.sslsni && s.sslcertmode == SslCertMode::Allow);
     assert_eq!(s.tls_versions.len(), 2);
     let s = spec("ssl_min_protocol_version=TLSv1.3 sslsni=0 sslcertmode=disable").unwrap();
     assert_eq!(s.tls_versions, [&rustls::version::TLS13]);
-    assert!(!s.sslsni && s.sslcertmode_disable);
+    assert!(!s.sslsni && s.sslcertmode == SslCertMode::Disable);
     let s = spec("ssl_max_protocol_version=TLSv1.2").unwrap();
     assert_eq!(s.tls_versions, [&rustls::version::TLS12]);
     for bad in [
@@ -1236,7 +1236,7 @@ fn tls_and_protocol_variables_are_honoured() {
     let s = from_env("PGSSLSNI", "0").unwrap();
     assert!(!s.sslsni);
     let s = from_env("PGSSLCERTMODE", "disable").unwrap();
-    assert!(s.sslcertmode_disable);
+    assert_eq!(s.sslcertmode, SslCertMode::Disable);
     from_env("PGMINPROTOCOLVERSION", "3.0").unwrap();
     from_env("PGMAXPROTOCOLVERSION", "3.2").unwrap();
     let mut env = Env::default();
@@ -1432,4 +1432,79 @@ fn a_named_client_encoding_beats_pgclientencoding_and_auto_is_refused() {
             "{e}"
         );
     }
+}
+
+#[test]
+fn the_sslmode_source_names_where_the_mode_came_from() {
+    let yaml = Connection {
+        sslmode: Some("disable".into()),
+        sslmode_line: Some(4),
+        ..Connection::default()
+    };
+    let mut env = Env::default();
+    let mut fl = flags();
+    fl.database = Some("d".into());
+    let s = resolve(&fl, &env, Some(&yaml)).unwrap();
+    assert_eq!(s.sslmode_source, SslModeSource::Yaml { line: Some(4) });
+    assert_eq!(s.sslmode_source.to_string(), "pgmi.yaml");
+    let mut string = conn("host=h dbname=d");
+    let s = resolve(&string, &env, Some(&yaml)).unwrap();
+    assert_eq!(
+        s.sslmode_source.yaml_line(),
+        None,
+        "pgmi.yaml's mode is not used beside a string"
+    );
+    string.connection = Some("host=h dbname=d sslmode=require".into());
+    let s = resolve(&string, &env, None).unwrap();
+    assert_eq!(
+        s.sslmode_source,
+        SslModeSource::String(Source::ConnectionFlag)
+    );
+    assert_eq!(s.sslmode_source.to_string(), "--connection");
+    env.insert("PGSSLMODE", "require");
+    let s = resolve(&fl, &env, Some(&yaml)).unwrap();
+    assert_eq!(s.sslmode_source.to_string(), "PGSSLMODE");
+    fl.sslmode = Some(SslMode::Require);
+    let s = resolve(&fl, &env, Some(&yaml)).unwrap();
+    assert_eq!(s.sslmode_source, SslModeSource::Flag);
+    assert_eq!(s.sslmode_source.to_string(), "--sslmode");
+}
+
+#[test]
+fn require_auth_is_parsed_and_an_invalid_value_kept_for_the_connect() {
+    let spec = |s: &str| {
+        resolve(
+            &conn(&format!("host=h dbname=d {s}")),
+            &Env::default(),
+            None,
+        )
+    };
+    assert_eq!(spec("").unwrap().require_auth, RequireAuth::Any);
+    assert_eq!(
+        spec("require_auth=").unwrap().require_auth,
+        RequireAuth::Any
+    );
+    assert!(matches!(
+        spec("require_auth=scram-sha-256").unwrap().require_auth,
+        RequireAuth::Only(_)
+    ));
+    let bad = spec("require_auth=scram-sha265").unwrap().require_auth;
+    assert_eq!(
+        bad.policy().unwrap_err().to_string(),
+        "invalid require_auth method: \"scram-sha265\""
+    );
+    let mixed = spec("require_auth=md5,!password").unwrap().require_auth;
+    assert!(matches!(
+        mixed,
+        RequireAuth::Invalid(super::tap::Error::MixedPolicy(_))
+    ));
+}
+
+#[test]
+fn a_string_that_does_not_parse_keeps_the_parse_error_as_its_source() {
+    let e = Error::from(resolve(&conn("host=h port"), &Env::default(), None).unwrap_err());
+    assert_eq!(e.exit_code(), 10);
+    let source = std::error::Error::source(&e).expect("the parse error is kept");
+    assert!(source.downcast_ref::<ParseError>().is_some(), "{source}");
+    assert!(e.text().starts_with("--connection: "), "{}", e.text());
 }

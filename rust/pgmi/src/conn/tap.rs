@@ -8,7 +8,7 @@ use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::task::{Context, Poll, ready};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -65,15 +65,27 @@ impl From<u8> for TxStatus {
 pub struct Shared {
     status: AtomicU8,
     policy: Option<Policy>,
+    asked_password: AtomicBool,
 }
 
 impl Shared {
     pub fn new(require_auth: Option<&str>) -> Result<Arc<Self>, Error> {
-        let policy = require_auth.map(Policy::parse).transpose()?;
-        Ok(Arc::new(Shared {
+        Ok(Self::with_policy(require_auth.map(str::parse).transpose()?))
+    }
+
+    #[must_use]
+    pub fn with_policy(policy: Option<Policy>) -> Arc<Self> {
+        Arc::new(Shared {
             status: AtomicU8::new(b'I'),
             policy,
-        }))
+            asked_password: AtomicBool::new(false),
+        })
+    }
+
+    /// Whether the server asked for a password: cleartext, MD5 or SASL.
+    #[must_use]
+    pub fn asked_password(&self) -> bool {
+        self.asked_password.load(Ordering::Acquire)
     }
 
     /// The status of the last `ReadyForQuery` read so far; `Idle` before any.
@@ -108,14 +120,18 @@ impl FromStr for AuthMethod {
     }
 }
 
-struct Policy {
+/// A parsed `require_auth` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Policy {
     text: String,
     negated: bool,
     methods: Vec<AuthMethod>,
 }
 
-impl Policy {
-    fn parse(text: &str) -> Result<Self, Error> {
+impl FromStr for Policy {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self, Error> {
         let items: Vec<&str> = text.split(',').map(str::trim).collect();
         let negated = items.first().is_some_and(|i| i.starts_with('!'));
         let mut methods = vec![];
@@ -131,7 +147,9 @@ impl Policy {
             methods,
         })
     }
+}
 
+impl Policy {
     fn allows(&self, method: AuthMethod) -> bool {
         self.methods.contains(&method) != self.negated
     }
@@ -209,6 +227,9 @@ impl Parser {
                 }
                 b'R' if before < 4 && self.body_len == 4 => {
                     let code = u32::from_be_bytes(self.body);
+                    if matches!(code, 3 | 5 | 10) {
+                        shared.asked_password.store(true, Ordering::Release);
+                    }
                     if let Some(policy) = &shared.policy {
                         policy.check(code, self.asked)?;
                     }

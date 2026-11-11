@@ -8,13 +8,15 @@ use std::time::Duration;
 use rand::seq::SliceRandom;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::config::{
-    ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation,
+    ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation as PgSslNegotiation,
 };
 use tokio_postgres::error::DbError;
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
 use super::pgpass;
-use super::resolve::{ChannelBinding, LoadBalanceHosts, Spec, SslMode, TargetSessionAttrs};
+use super::resolve::{
+    ChannelBinding, LoadBalanceHosts, Spec, SslMode, SslNegotiation, TargetSessionAttrs,
+};
 use super::retry::{self, Cause};
 use super::socket::Tcp;
 use super::tap::{self, Start, Tap, TapConnect};
@@ -312,19 +314,23 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     }
     let mode = if unix { SslMode::Disable } else { a.tls_mode };
     config.ssl_mode(sslmode_of(mode));
-    if spec.sslnegotiation_direct && !unix {
-        config.ssl_negotiation(SslNegotiation::Direct);
+    if spec.sslnegotiation == SslNegotiation::Direct && !unix {
+        config.ssl_negotiation(PgSslNegotiation::Direct);
     }
     config.channel_binding(match spec.channel_binding {
         ChannelBinding::Require => PgChannelBinding::Require,
         ChannelBinding::Disable => PgChannelBinding::Disable,
         ChannelBinding::Prefer => PgChannelBinding::Prefer,
     });
-    let shared = tap::Shared::new(spec.require_auth.as_deref())
-        .map_err(|e| DialFailure::Config(e.to_string()))?;
+    let shared = tap::Shared::with_policy(
+        spec.require_auth
+            .policy()
+            .map_err(|e| DialFailure::Config(e.to_string()))?
+            .cloned(),
+    );
     let start = match sslmode_of(mode) {
         PgSslMode::Disable => Start::Plain,
-        _ if spec.sslnegotiation_direct => Start::Direct,
+        _ if spec.sslnegotiation == SslNegotiation::Direct => Start::Direct,
         _ => Start::Negotiated,
     };
     let passfile_text = passfile
@@ -514,7 +520,9 @@ impl Dialer {
     /// satisfies `target_session_attrs`. A round whose failures were all
     /// transient is retried with backoff (`conn::retry`).
     pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
-        tap::Shared::new(spec.require_auth.as_deref()).map_err(|e| Error::config(e.to_string()))?;
+        spec.require_auth
+            .policy()
+            .map_err(|e| Error::config(e.to_string()))?;
         if spec.sslmode() != SslMode::Disable {
             super::tls::require_cpu()?;
         }

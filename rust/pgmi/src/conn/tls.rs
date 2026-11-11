@@ -18,7 +18,7 @@ use sha2::Digest;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
 
-use super::resolve::{Spec, SslMode};
+use super::resolve::{Spec, SslCertMode, SslMode, SslNegotiation};
 use crate::error::{Error, Result, Secret};
 
 pub(crate) fn provider() -> Arc<CryptoProvider> {
@@ -278,7 +278,7 @@ fn root_path(spec: &Spec) -> Option<String> {
 }
 
 fn client_pair(spec: &Spec) -> Result<Option<(PathBuf, PathBuf)>> {
-    if spec.sslcertmode_disable {
+    if spec.sslcertmode == SslCertMode::Disable {
         return Ok(None);
     }
     let defaults = spec
@@ -383,7 +383,7 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
         None => builder.with_no_client_auth(),
     };
     config.enable_sni = spec.sslsni;
-    if spec.sslnegotiation_direct {
+    if spec.sslnegotiation == SslNegotiation::Direct {
         config.alpn_protocols = vec![b"postgresql".to_vec()];
     }
     Ok(Tls {

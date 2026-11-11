@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::parse::{self, Fields, ParseError};
 use super::socket::{Keepalive, Tcp};
+use super::tap;
 use crate::config::yaml::Connection as YamlConnection;
 use crate::env::Env;
 use crate::error::{Error, Kind, Secret};
@@ -53,6 +54,14 @@ impl Source {
     /// from the environment, pgmi.yaml or the defaults.
     pub(crate) fn typed(self) -> bool {
         matches!(self, Source::ConnectionFlag | Source::Flags)
+    }
+
+    /// Whether the source is a whole connection string.
+    pub(crate) fn is_string(self) -> bool {
+        matches!(
+            self,
+            Source::ConnectionFlag | Source::PgmiConnectionString | Source::DatabaseUrl
+        )
     }
 
     /// The environment variable the source is, which a project `.env` may
@@ -145,6 +154,102 @@ keywords!(LoadBalanceHosts {
     Disable = "disable",
     Random = "random",
 });
+
+keywords!(
+    /// `direct`: TLS from the first byte, ALPN `postgresql`.
+    SslNegotiation {
+        Postgres = "postgres",
+        Direct = "direct",
+    }
+);
+
+keywords!(
+    /// `disable`: never send a client certificate, even one in `~/.postgresql`.
+    SslCertMode {
+        Allow = "allow",
+        Disable = "disable",
+    }
+);
+
+/// Where the requested sslmode came from, named when a cloud sign-in
+/// refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SslModeSource {
+    Flag,
+    String(Source),
+    Env,
+    Yaml { line: Option<usize> },
+}
+
+impl SslModeSource {
+    fn of(
+        flags: &Flags,
+        fields: &Fields,
+        source: Source,
+        env: &Env,
+        yaml: Option<&YamlConnection>,
+    ) -> Result<Self> {
+        Ok(if flags.sslmode.is_some() {
+            SslModeSource::Flag
+        } else if fields.contains_key("sslmode") {
+            SslModeSource::String(source)
+        } else if env.non_empty("PGSSLMODE")?.is_some() {
+            SslModeSource::Env
+        } else {
+            SslModeSource::Yaml {
+                line: yaml
+                    .filter(|_| !source.is_string())
+                    .and_then(|y| y.sslmode_line),
+            }
+        })
+    }
+
+    /// The `pgmi.yaml` line the mode came from.
+    pub(crate) fn yaml_line(self) -> Option<usize> {
+        match self {
+            SslModeSource::Yaml { line } => line,
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SslModeSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SslModeSource::Flag => "--sslmode",
+            SslModeSource::String(source) => source.label(),
+            SslModeSource::Env => "PGSSLMODE",
+            SslModeSource::Yaml { .. } => "pgmi.yaml",
+        })
+    }
+}
+
+/// `require_auth`, parsed here; an invalid value is refused when connecting
+/// starts, where Go refuses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RequireAuth {
+    Any,
+    Only(tap::Policy),
+    Invalid(tap::Error),
+}
+
+impl RequireAuth {
+    fn parse(text: Option<String>) -> Self {
+        match text.filter(|t| !t.is_empty()).map(|t| t.parse()) {
+            None => RequireAuth::Any,
+            Some(Ok(policy)) => RequireAuth::Only(policy),
+            Some(Err(e)) => RequireAuth::Invalid(e),
+        }
+    }
+
+    pub(crate) fn policy(&self) -> std::result::Result<Option<&tap::Policy>, &tap::Error> {
+        match self {
+            RequireAuth::Any => Ok(None),
+            RequireAuth::Only(p) => Ok(Some(p)),
+            RequireAuth::Invalid(e) => Err(e),
+        }
+    }
+}
 
 impl SslMode {
     /// Whether the mode may fall back to, or start with, a plaintext session.
@@ -269,6 +374,9 @@ impl From<ResolveError> for Error {
     fn from(e: ResolveError) -> Self {
         match e {
             ResolveError::Env(e) => e,
+            ResolveError::Parse { source, error } => {
+                Error::new(Kind::Config, source.label()).with_source(error)
+            }
             other => Error::new(Kind::Config, other.to_string()),
         }
     }
@@ -330,24 +438,17 @@ pub(crate) struct Spec {
     pub(crate) target_db: String,
     /// The mode asked for; `sslmode()` is the one used.
     pub(crate) requested_sslmode: Option<SslMode>,
-    /// Where `requested_sslmode` came from: `--sslmode`, `PGSSLMODE`, the
-    /// connection string's source or pgmi.yaml.
-    pub(crate) sslmode_source: &'static str,
-    /// The `pgmi.yaml` line `requested_sslmode` came from.
-    pub(crate) sslmode_line: Option<usize>,
+    pub(crate) sslmode_source: SslModeSource,
     pub(crate) sslrootcert: Option<String>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslpassword: Option<Secret>,
-    /// `sslnegotiation=direct`: TLS from the first byte, ALPN `postgresql`.
-    pub(crate) sslnegotiation_direct: bool,
+    pub(crate) sslnegotiation: SslNegotiation,
     pub(crate) sslsni: bool,
-    /// `sslcertmode=disable`: never send a client certificate, even one in
-    /// `~/.postgresql`.
-    pub(crate) sslcertmode_disable: bool,
+    pub(crate) sslcertmode: SslCertMode,
     pub(crate) tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
     pub(crate) channel_binding: ChannelBinding,
-    pub(crate) require_auth: Option<String>,
+    pub(crate) require_auth: RequireAuth,
     pub(crate) application_name: String,
     pub(crate) connect_timeout: Option<Duration>,
     pub(crate) options: Option<String>,
@@ -416,45 +517,63 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
         });
     }
 
-    let mut f = Fields::new();
-    let mut string_db = None;
-    let source;
-    if let Some((text, src)) = &string {
-        f = parse::parse(text).map_err(|error| ResolveError::Parse {
-            source: *src,
-            error,
-        })?;
-        string_db = f.remove("dbname").filter(|d| !d.is_empty());
-        source = *src;
-    } else {
-        source = host_source(flags, env, yaml)?;
+    let given = Given::read(flags, env, yaml, string)?;
+    let secrets = given.secrets(env)?;
+    finish(flags, env, yaml, given).map_err(|e| e.redact(&secrets))
+}
+
+/// The settings one source gave, before the environment, pgmi.yaml and the
+/// flags fill the gaps.
+struct Given {
+    fields: Fields,
+    source: Source,
+    string_db: Option<String>,
+}
+
+impl Given {
+    fn read(
+        flags: &Flags,
+        env: &Env,
+        yaml: Option<&YamlConnection>,
+        string: Option<(String, Source)>,
+    ) -> Result<Self> {
+        if let Some((text, source)) = string {
+            let mut fields =
+                parse::parse(&text).map_err(|error| ResolveError::Parse { source, error })?;
+            let string_db = fields.remove("dbname").filter(|d| !d.is_empty());
+            return Ok(Given {
+                fields,
+                source,
+                string_db,
+            });
+        }
+        let mut fields = Fields::new();
         for (k, v) in [
             ("host", &flags.host),
             ("port", &flags.port),
             ("user", &flags.username),
         ] {
             if let Some(v) = v {
-                f.insert(k.into(), v.clone());
+                fields.insert(k.into(), v.clone());
             }
         }
+        Ok(Given {
+            fields,
+            source: host_source(flags, env, yaml)?,
+            string_db: None,
+        })
     }
-    let mut secrets: Vec<String> = ["password", "sslpassword"]
-        .iter()
-        .filter_map(|k| f.get(*k).cloned())
-        .collect();
-    for name in ["PGPASSWORD", "PGSSLPASSWORD"] {
-        secrets.extend(env.non_empty(name)?.map(str::to_string));
+
+    fn secrets(&self, env: &Env) -> Result<Vec<String>> {
+        let mut secrets: Vec<String> = ["password", "sslpassword"]
+            .iter()
+            .filter_map(|k| self.fields.get(*k).cloned())
+            .collect();
+        for name in ["PGPASSWORD", "PGSSLPASSWORD"] {
+            secrets.extend(env.non_empty(name)?.map(str::to_string));
+        }
+        Ok(secrets)
     }
-    finish(
-        flags,
-        env,
-        yaml,
-        f,
-        string_db.as_deref(),
-        source,
-        string.is_none(),
-    )
-    .map_err(|e| e.redact(&secrets))
 }
 
 /// The connection string that wins, and where it came from: `--connection`,
@@ -491,24 +610,89 @@ pub(crate) fn source(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) ->
     }
 }
 
-fn finish(
+fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given) -> Result<Spec> {
+    let Given {
+        mut fields,
+        source,
+        string_db,
+    } = given;
+    let sslmode_source = SslModeSource::of(flags, &fields, source, env, yaml)?;
+    merge(&mut fields, flags, env, yaml, source)?;
+    let f = &mut fields;
+    let (target_db, maintenance_db) = databases(flags, string_db.as_deref(), env, yaml)?;
+    let hosts = take_hosts(f)?;
+    let tls = TlsSettings::take(f)?;
+    check_protocol(f)?;
+    let channel_binding = keyword(f, "channel_binding", ChannelBinding::Prefer)?;
+    let target_session_attrs = keyword(f, "target_session_attrs", TargetSessionAttrs::Any)?;
+    let load_balance_hosts = keyword(f, "load_balance_hosts", LoadBalanceHosts::Disable)?;
+    let connect_timeout = connect_timeout(f.remove("connect_timeout"))?;
+    let tcp = tcp(f)?;
+    let client_encoding = client_encoding(f)?;
+    without_gssapi(f)?;
+    session_neutral(f)?;
+    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
+        f.remove(k);
+    }
+    let user = match f.remove("user") {
+        Some(u) => u,
+        None => env
+            .non_empty("USER")?
+            .or(env.non_empty("USERNAME")?)
+            .unwrap_or("postgres")
+            .to_string(),
+    };
+    let application_name = f.remove("application_name");
+    let fallback_application_name = f.remove("fallback_application_name");
+    let spec = Spec {
+        hosts,
+        user,
+        password: f.remove("password").map(Secret::from),
+        passfile: f.remove("passfile").map(PathBuf::from),
+        maintenance_db,
+        target_db,
+        requested_sslmode: tls.requested_sslmode,
+        sslmode_source,
+        sslrootcert: tls.sslrootcert,
+        sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),
+        sslkey: f.remove("sslkey").filter(|v| !v.is_empty()),
+        sslpassword: f.remove("sslpassword").map(Secret::from),
+        sslnegotiation: tls.negotiation,
+        sslsni: tls.sni,
+        sslcertmode: tls.certmode,
+        tls_versions: tls.versions,
+        channel_binding,
+        require_auth: RequireAuth::parse(f.remove("require_auth")),
+        application_name: application_name
+            .or(fallback_application_name)
+            .unwrap_or_else(|| "pgmi".into()),
+        connect_timeout,
+        options: f.remove("options").filter(|o| !o.trim().is_empty()),
+        timezone: env.non_empty("PGTZ")?.map(str::to_string),
+        target_session_attrs,
+        load_balance_hosts,
+        tcp,
+        client_encoding,
+        source,
+        pg_files: env.pg_files(),
+        token: None,
+    };
+    match fields.into_keys().next() {
+        Some(k) => Err(ResolveError::Unhandled(k)),
+        None => Ok(spec),
+    }
+}
+
+/// Fills what the source left out: the environment, then pgmi.yaml (its
+/// server settings only when no connection string was given), then the
+/// flags, which replace.
+fn merge(
+    f: &mut Fields,
     flags: &Flags,
     env: &Env,
     yaml: Option<&YamlConnection>,
-    mut f: Fields,
-    string_db: Option<&str>,
     source: Source,
-    no_string: bool,
-) -> Result<Spec> {
-    let sslmode_source = if flags.sslmode.is_some() {
-        "--sslmode"
-    } else if f.contains_key("sslmode") {
-        source.label()
-    } else if env.non_empty("PGSSLMODE")?.is_some() {
-        "PGSSLMODE"
-    } else {
-        "pgmi.yaml"
-    };
+) -> Result<()> {
     for (env_name, key) in ENV_DEFAULTS {
         let given = if *key == "sslcertmode" {
             env.get(env_name)?
@@ -521,7 +705,7 @@ fn finish(
             f.insert((*key).into(), v.to_string());
         }
     }
-    if let Some(y) = yaml.filter(|_| no_string) {
+    if let Some(y) = yaml.filter(|_| !source.is_string()) {
         for (k, v) in [
             ("host", &y.host),
             ("port", &y.port),
@@ -558,8 +742,17 @@ fn finish(
             f.insert(k.into(), v.clone());
         }
     }
+    Ok(())
+}
 
-    let target_db = flags
+/// The database to deploy to, and the one to connect to for creating it.
+fn databases(
+    flags: &Flags,
+    string_db: Option<&str>,
+    env: &Env,
+    yaml: Option<&YamlConnection>,
+) -> Result<(String, String)> {
+    let target = flags
         .database
         .clone()
         .or_else(|| string_db.map(str::to_string))
@@ -567,59 +760,82 @@ fn finish(
         .or_else(|| yaml.and_then(|y| y.database.clone()))
         .filter(|d| !d.is_empty())
         .ok_or(ResolveError::NoDatabase)?;
-    let maintenance_db = if flags.database.is_some() {
-        string_db.map(str::to_string)
-    } else {
-        None
-    }
-    .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
-    .unwrap_or_else(|| "postgres".into());
+    let maintenance = flags
+        .database
+        .as_ref()
+        .and(string_db)
+        .map(str::to_string)
+        .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
+        .unwrap_or_else(|| "postgres".into());
+    Ok((target, maintenance))
+}
 
+fn take_hosts(f: &mut Fields) -> Result<Hosts> {
     let hostaddr = f.remove("hostaddr").filter(|a| !a.trim().is_empty());
     let host_text = f.remove("host").or_else(|| hostaddr.clone());
-    let hosts = hosts(
+    hosts(
         host_text.as_deref().unwrap_or("localhost"),
         f.remove("port").as_deref().unwrap_or("5432"),
         hostaddr.as_deref(),
-    )?;
+    )
+}
 
-    let sslrootcert = f.remove("sslrootcert").filter(|v| !v.is_empty());
-    let system_roots = sslrootcert.as_deref() == Some("system");
-    let requested_sslmode = f
-        .remove("sslmode")
-        .map(|m| setting::<SslMode>("sslmode", &m))
-        .transpose()?;
-    if system_roots && let Some(mode) = requested_sslmode.filter(|m| *m != SslMode::VerifyFull) {
-        return Err(ResolveError::WeakForSystemRoots(mode));
+struct TlsSettings {
+    requested_sslmode: Option<SslMode>,
+    sslrootcert: Option<String>,
+    negotiation: SslNegotiation,
+    sni: bool,
+    certmode: SslCertMode,
+    versions: Vec<&'static rustls::SupportedProtocolVersion>,
+}
+
+impl TlsSettings {
+    fn take(f: &mut Fields) -> Result<Self> {
+        let sslrootcert = f.remove("sslrootcert").filter(|v| !v.is_empty());
+        let system_roots = sslrootcert.as_deref() == Some("system");
+        let requested_sslmode = f
+            .remove("sslmode")
+            .map(|m| setting::<SslMode>("sslmode", &m))
+            .transpose()?;
+        if system_roots && let Some(mode) = requested_sslmode.filter(|m| *m != SslMode::VerifyFull)
+        {
+            return Err(ResolveError::WeakForSystemRoots(mode));
+        }
+        let sslmode = requested_sslmode.unwrap_or(if system_roots {
+            SslMode::VerifyFull
+        } else {
+            SslMode::Prefer
+        });
+        let negotiation = keyword(f, "sslnegotiation", SslNegotiation::Postgres)?;
+        if negotiation == SslNegotiation::Direct && sslmode.allows_plaintext() {
+            return Err(ResolveError::WeakForDirect(sslmode));
+        }
+        let sni = match f.remove("sslsni").as_deref().unwrap_or("") {
+            "" | "1" => true,
+            "0" => false,
+            o => return Err(value("sslsni", o)),
+        };
+        let certmode = match f.remove("sslcertmode") {
+            Some(m) if m == "require" => return Err(ResolveError::CertModeRequire),
+            Some(m) => setting("sslcertmode", &m)?,
+            None => SslCertMode::Allow,
+        };
+        let versions = tls_versions(
+            f.remove("ssl_min_protocol_version").as_ref(),
+            f.remove("ssl_max_protocol_version").as_ref(),
+        )?;
+        Ok(TlsSettings {
+            requested_sslmode,
+            sslrootcert,
+            negotiation,
+            sni,
+            certmode,
+            versions,
+        })
     }
-    let sslmode = requested_sslmode.unwrap_or(if system_roots {
-        SslMode::VerifyFull
-    } else {
-        SslMode::Prefer
-    });
-    let direct = match f.remove("sslnegotiation").as_deref().unwrap_or("postgres") {
-        "postgres" => false,
-        "direct" => true,
-        o => return Err(value("sslnegotiation", o)),
-    };
-    if direct && sslmode.allows_plaintext() {
-        return Err(ResolveError::WeakForDirect(sslmode));
-    }
-    let sslsni = match f.remove("sslsni").as_deref().unwrap_or("") {
-        "" | "1" => true,
-        "0" => false,
-        o => return Err(value("sslsni", o)),
-    };
-    let sslcertmode_disable = match f.remove("sslcertmode").as_deref() {
-        None | Some("allow") => false,
-        Some("disable") => true,
-        Some("require") => return Err(ResolveError::CertModeRequire),
-        Some(o) => return Err(value("sslcertmode", o)),
-    };
-    let tls_versions = tls_versions(
-        f.remove("ssl_min_protocol_version").as_ref(),
-        f.remove("ssl_max_protocol_version").as_ref(),
-    )?;
+}
+
+fn check_protocol(f: &mut Fields) -> Result<()> {
     let min_protocol = f.remove("min_protocol_version");
     for (key, given) in [
         ("min_protocol_version", &min_protocol),
@@ -630,40 +846,31 @@ fn finish(
             Some(o) => return Err(value(key, o)),
         }
     }
-    if let Some(v) = min_protocol.filter(|v| v.as_str() != "3.0") {
-        return Err(ResolveError::ProtocolUnsupported(v));
+    match min_protocol.filter(|v| v.as_str() != "3.0") {
+        Some(v) => Err(ResolveError::ProtocolUnsupported(v)),
+        None => Ok(()),
     }
-    let channel_binding = f
-        .remove("channel_binding")
-        .map_or(Ok(ChannelBinding::Prefer), |v| {
-            setting("channel_binding", &v)
-        })?;
-    let target_session_attrs = f
-        .remove("target_session_attrs")
-        .map_or(Ok(TargetSessionAttrs::Any), |v| {
-            setting("target_session_attrs", &v)
-        })?;
-    let load_balance_hosts = f
-        .remove("load_balance_hosts")
-        .map_or(Ok(LoadBalanceHosts::Disable), |v| {
-            setting("load_balance_hosts", &v)
-        })?;
-    let connect_timeout = match f.remove("connect_timeout") {
-        None => None,
-        Some(t) => {
-            let n: i64 = t
-                .trim()
-                .parse()
-                .map_err(|_| ResolveError::ConnectTimeout(t.clone()))?;
-            u64::try_from(n)
-                .ok()
-                .filter(|n| *n > 0)
-                .map(|n| Duration::from_secs(n.max(2)))
-        }
-    };
-    let tcp = tcp(&mut f)?;
-    let client_encoding = f.remove("client_encoding").filter(|e| !e.trim().is_empty());
-    if client_encoding
+}
+
+fn keyword<T: FromStr<Err = Unknown>>(f: &mut Fields, key: &'static str, default: T) -> Result<T> {
+    f.remove(key).map_or(Ok(default), |v| setting(key, &v))
+}
+
+fn connect_timeout(given: Option<String>) -> Result<Option<Duration>> {
+    let Some(t) = given else { return Ok(None) };
+    let n: i64 = t
+        .trim()
+        .parse()
+        .map_err(|_| ResolveError::ConnectTimeout(t.clone()))?;
+    Ok(u64::try_from(n)
+        .ok()
+        .filter(|n| *n > 0)
+        .map(|n| Duration::from_secs(n.max(2))))
+}
+
+fn client_encoding(f: &mut Fields) -> Result<Option<String>> {
+    let encoding = f.remove("client_encoding").filter(|e| !e.trim().is_empty());
+    if encoding
         .as_deref()
         .is_some_and(|e| e.trim().eq_ignore_ascii_case("auto"))
     {
@@ -672,61 +879,7 @@ fn finish(
             why: "pgmi does not derive an encoding from the locale; name one, such as UTF8 or LATIN1, or remove it to use the database's encoding",
         });
     }
-    without_gssapi(&mut f)?;
-    session_neutral(&mut f)?;
-    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
-        f.remove(k);
-    }
-    let user = match f.remove("user") {
-        Some(u) => u,
-        None => env
-            .non_empty("USER")?
-            .or(env.non_empty("USERNAME")?)
-            .unwrap_or("postgres")
-            .to_string(),
-    };
-    let application_name = f.remove("application_name");
-    let fallback_application_name = f.remove("fallback_application_name");
-    let spec = Spec {
-        hosts,
-        user,
-        password: f.remove("password").map(Secret::from),
-        passfile: f.remove("passfile").map(PathBuf::from),
-        maintenance_db,
-        target_db,
-        requested_sslmode,
-        sslmode_line: yaml
-            .filter(|_| no_string && sslmode_source == "pgmi.yaml")
-            .and_then(|y| y.sslmode_line),
-        sslmode_source,
-        sslrootcert,
-        sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),
-        sslkey: f.remove("sslkey").filter(|v| !v.is_empty()),
-        sslpassword: f.remove("sslpassword").map(Secret::from),
-        sslnegotiation_direct: direct,
-        sslsni,
-        sslcertmode_disable,
-        tls_versions,
-        channel_binding,
-        require_auth: f.remove("require_auth").filter(|r| !r.is_empty()),
-        application_name: application_name
-            .or(fallback_application_name)
-            .unwrap_or_else(|| "pgmi".into()),
-        connect_timeout,
-        options: f.remove("options").filter(|o| !o.trim().is_empty()),
-        timezone: env.non_empty("PGTZ")?.map(str::to_string),
-        target_session_attrs,
-        load_balance_hosts,
-        tcp,
-        client_encoding,
-        source,
-        pg_files: env.pg_files(),
-        token: None,
-    };
-    match f.into_keys().next() {
-        Some(k) => Err(ResolveError::Unhandled(k)),
-        None => Ok(spec),
-    }
+    Ok(encoding)
 }
 
 fn whole(f: &mut Fields, key: &'static str) -> Result<Option<u32>> {

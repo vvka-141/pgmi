@@ -178,17 +178,19 @@ pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &En
             });
             Ok(())
         }
-        Some(mode) if mode.allows_plaintext() => Err(Error::config(match spec.sslmode_line {
-            Some(line) => format!(
-                "sslmode \"{mode}\" from pgmi.yaml line {line} is not allowed with {} authentication: it can send the token without TLS; change that line to \"sslmode: verify-full\", or delete it to use the default for token sign-in",
-                provider.label()
-            ),
-            None => format!(
-                "sslmode \"{mode}\" from {} is not allowed with {} authentication: it can send the token without TLS; use require, verify-ca or verify-full",
-                spec.sslmode_source,
-                provider.label()
-            ),
-        })),
+        Some(mode) if mode.allows_plaintext() => {
+            Err(Error::config(match spec.sslmode_source.yaml_line() {
+                Some(line) => format!(
+                    "sslmode \"{mode}\" from pgmi.yaml line {line} is not allowed with {} authentication: it can send the token without TLS; change that line to \"sslmode: verify-full\", or delete it to use the default for token sign-in",
+                    provider.label()
+                ),
+                None => format!(
+                    "sslmode \"{mode}\" from {} is not allowed with {} authentication: it can send the token without TLS; use require, verify-ca or verify-full",
+                    spec.sslmode_source,
+                    provider.label()
+                ),
+            }))
+        }
         Some(_) => Ok(()),
     }
 }
