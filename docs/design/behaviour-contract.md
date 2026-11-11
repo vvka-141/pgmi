@@ -435,7 +435,11 @@ the server, gives the server 2 s to report the cancel, and is exit 16; running o
 SIGTERM cancels and is exit 130; a second SIGINT ends at once, still 130.
 Cancel works over TLS and over direct TLS negotiation. A timeout longer than a
 Go duration holds (about 2562047h) is refused: exit 2 on the flag, 10 in
-`pgmi.yaml` and in the MCP deploy tool.
+`pgmi.yaml` and in the MCP deploy tool. The ROLLBACK of a deploy.sql that
+ended inside an open transaction, and the lock release after every deploy,
+get 3 s; a server that does not answer by then has its connection closed,
+which rolls back as well (Rust integration test
+`a_rollback_the_server_never_answers_does_not_hang_the_deploy`).
 
 Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`.
 

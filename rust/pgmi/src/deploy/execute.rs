@@ -159,7 +159,6 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
         }
     }
     if session.tap.status() != IDLE {
-        let _ = session.client.batch_execute("ROLLBACK").await;
         execution.failure = Some(Failure {
             unit: units.len(),
             blame: Blame::default(),
