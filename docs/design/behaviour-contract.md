@@ -214,7 +214,9 @@ The session speaks the target database's own encoding (`client_encoding` is set
 to `server_encoding`), as Go's driver does by never sending one: on a LATIN1
 database every byte pgmi sends, paths and file text included, is stored as
 sent, so non-LATIN1 characters never fail with 22P05 and `generic_id` is the
-md5 of the path's UTF-8 bytes on every encoding.
+md5 of the path's UTF-8 bytes on every encoding. A `client_encoding` the user
+names (connection string, or `PGCLIENTENCODING` in the Rust binary) wins over
+this; see "Every accepted connection key is honoured or refused".
 
 Cases: `execution/loader-at-scale`, `params/precedence`, `commands/ai`, `flags/compat`, `deploy/latin1-database`.
 
@@ -755,9 +757,12 @@ exit 10 when it needs something pgmi has not:
   `gssdelegation=1` and any `gsslib` are exit 10.
 - `sslcompression=0` is honoured (pgmi's TLS never compresses);
   `sslcompression=1` is exit 10.
-- `client_encoding`: pgmi always speaks UTF-8, so `UTF8` (any spelling, or
-  `UNICODE`) is honoured and any other value is exit 10. Go sends it to the
-  server and connects, so non-ASCII text is stored garbled.
+- `client_encoding`: the named encoding is set on the session in place of
+  the database's own, in both binaries, so the server converts from it
+  (`LATIN1` on a UTF8 database stores UTF-8 file text as LATIN1 characters,
+  as in Go). The Rust binary also reads `PGCLIENTENCODING`, as libpq does;
+  Go ignores it. `auto` (libpq: from the locale) is exit 10 (Go: 11, from
+  the server); an encoding the server does not know is exit 11 in both.
 - `default_query_exec_mode`, `statement_cache_capacity`,
   `description_cache_capacity`: checked as pgx does (exit 10 for a bad value,
   in both binaries); pgmi never names prepared statements, so every mode
@@ -806,7 +811,8 @@ release notes take their "Behaviour changes" section from this table.
 | `hostaddr` | exit 10 (keyword form) or 11 (URI) | honoured, no lookup | owner 2026-11-11 |
 | `gssencmode=require`, `gssdelegation=1`, `gsslib`, `sslcompression=1` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | A bad `tcp_user_timeout`, `keepalives*` or `load_balance_hosts` value | exit 11 | exit 10 | owner 2026-11-11 |
-| `client_encoding` other than UTF8 | connects, non-ASCII stored garbled | newly refused before connecting, exit 10 | owner 2026-11-11 |
+| `PGCLIENTENCODING` | ignored | sets the session's `client_encoding`, as libpq does | owner 2026-11-11 |
+| `client_encoding=auto` | exit 11 (the server refuses the value) | refused before connecting, exit 10 | owner 2026-11-11 |
 | Server asks for a password and none was found | exit 11, the server's `password authentication failed` | exit 11, `no password supplied` naming where it looked | owner 2026-11-10 |
 | Encrypted legacy client keys, `require_auth` | work | work (kept) | owner 2026-11-10 |
 | Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |

@@ -1240,12 +1240,9 @@ fn gssapi_keys_are_honoured_without_gssapi_and_refused_when_they_need_it() {
 }
 
 #[test]
-fn sslcompression_client_encoding_and_pgx_keys_are_checked() {
+fn sslcompression_and_pgx_keys_are_checked() {
     for ok in [
         "sslcompression=0",
-        "client_encoding=UTF8",
-        "client_encoding=utf-8",
-        "client_encoding=unicode",
         "default_query_exec_mode=simple_protocol",
         "statement_cache_capacity=-1",
     ] {
@@ -1255,13 +1252,32 @@ fn sslcompression_client_encoding_and_pgx_keys_are_checked() {
         not_supported("sslcompression=1"),
         "sslcompression=1 is not supported: pgmi's TLS never compresses, which is the safe choice; remove it or set 0"
     );
-    assert_eq!(
-        not_supported("client_encoding=LATIN1"),
-        "client_encoding=LATIN1 is not supported: pgmi always sends and reads UTF-8; remove it or set UTF8"
-    );
-    not_supported("client_encoding=auto");
     invalid("sslcompression=yes", "sslcompression");
     invalid("default_query_exec_mode=bogus", "default_query_exec_mode");
     invalid("statement_cache_capacity=x", "statement_cache_capacity");
     invalid("description_cache_capacity=x", "description_cache_capacity");
+}
+
+#[test]
+fn a_named_client_encoding_beats_pgclientencoding_and_auto_is_refused() {
+    let env = Env::from_pairs(&[("PGCLIENTENCODING", "LATIN1")]);
+    let with = |s: &str, env: &Env| {
+        resolve(&conn(&format!("host=h dbname=d {s}")), env, None).map(|s| s.client_encoding)
+    };
+    assert_eq!(with("", &Env::default()).unwrap(), None);
+    assert_eq!(with("", &env).unwrap().as_deref(), Some("LATIN1"));
+    assert_eq!(
+        with("client_encoding=WIN1252", &env).unwrap().as_deref(),
+        Some("WIN1252")
+    );
+    assert_eq!(with("client_encoding=''", &Env::default()).unwrap(), None);
+    for auto in ["client_encoding=auto", "client_encoding=AUTO"] {
+        let e = refused(keyword(auto));
+        assert!(matches!(e, ResolveError::NotSupported { .. }), "{e:?}");
+        assert!(
+            e.to_string()
+                .starts_with("client_encoding=auto is not supported: pgmi does not derive an encoding from the locale"),
+            "{e}"
+        );
+    }
 }

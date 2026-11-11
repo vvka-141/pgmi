@@ -328,6 +328,9 @@ pub(crate) struct Spec {
     pub(crate) target_session_attrs: TargetSessionAttrs,
     pub(crate) load_balance_hosts: LoadBalanceHosts,
     pub(crate) tcp: Tcp,
+    /// The session's `client_encoding` when the user named one; otherwise
+    /// the deploy matches the database's encoding.
+    pub(crate) client_encoding: Option<String>,
     pub(crate) source: Source,
     pub(crate) pg_files: Option<crate::env::PgFiles>,
     pub(crate) token: Option<crate::conn::cloud::Token>,
@@ -351,6 +354,7 @@ const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGTARGETSESSIONATTRS", "target_session_attrs"),
     ("PGCHANNELBINDING", "channel_binding"),
     ("PGREQUIREAUTH", "require_auth"),
+    ("PGCLIENTENCODING", "client_encoding"),
 ];
 
 pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
@@ -580,6 +584,16 @@ fn finish(
         }
     };
     let tcp = tcp(&mut f)?;
+    let client_encoding = f.remove("client_encoding").filter(|e| !e.trim().is_empty());
+    if client_encoding
+        .as_deref()
+        .is_some_and(|e| e.trim().eq_ignore_ascii_case("auto"))
+    {
+        return Err(ResolveError::NotSupported {
+            setting: "client_encoding=auto".into(),
+            why: "pgmi does not derive an encoding from the locale; name one, such as UTF8 or LATIN1, or remove it to use the database's encoding",
+        });
+    }
     without_gssapi(&mut f)?;
     session_neutral(&mut f)?;
     for k in ["requirepeer", "sslcrl", "sslcrldir"] {
@@ -623,6 +637,7 @@ fn finish(
         target_session_attrs,
         load_balance_hosts,
         tcp,
+        client_encoding,
         source,
         pg_files: env.pg_files(),
         token: None,
@@ -707,19 +722,6 @@ fn session_neutral(f: &mut Fields) -> Result<()> {
             });
         }
         Some(o) => return Err(value("sslcompression", o)),
-    }
-    if let Some(enc) = f.remove("client_encoding") {
-        let name = enc
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect::<String>()
-            .to_ascii_lowercase();
-        if !matches!(name.as_str(), "utf8" | "unicode") {
-            return Err(ResolveError::NotSupported {
-                setting: format!("client_encoding={enc}"),
-                why: "pgmi always sends and reads UTF-8; remove it or set UTF8",
-            });
-        }
     }
     match f.remove("default_query_exec_mode").as_deref() {
         None

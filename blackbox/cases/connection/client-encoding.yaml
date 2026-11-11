@@ -1,4 +1,4 @@
-description: client_encoding=UTF8 works in both binaries; Go sends client_encoding=LATIN1 to the server and connects, so a non-ASCII literal is stored garbled; the Rust binary always speaks UTF-8 and refuses another client_encoding before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+description: a client_encoding the connection string names wins over matching the database's encoding, so LATIN1 on a UTF8 database stores the UTF-8 bytes of 'é' as two characters in both binaries; PGCLIENTENCODING is ignored by Go and honoured by the Rust binary, as libpq does; client_encoding=auto is refused by the server in Go (exit 11) and before connecting by the Rust binary (exit 10); an unknown encoding is exit 11 in both (contract "Every accepted connection key is honoured or refused")
 project:
   files:
     deploy.sql: |
@@ -17,9 +17,23 @@ steps:
       sql:
         - query: SELECT count(*) FILTER (WHERE v <> 'é') FROM seen
           rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGCLIENTENCODING: LATIN1}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FILTER (WHERE v <> 'é') FROM seen
+          rows: [[1]]
       rust:
-        exit: 10
-        stderr: ['client_encoding=LATIN1 is not supported: pgmi always sends and reads UTF-8']
         sql:
           - query: SELECT count(*) FILTER (WHERE v <> 'é') FROM seen
-            rows: [[0]]
+            rows: [[2]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}?client_encoding=auto", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['invalid value for parameter "client_encoding": "auto"']
+      rust: {exit: 10, stderr: ['client_encoding=auto is not supported: pgmi does not derive an encoding from the locale']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?client_encoding=bogus", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['invalid value for parameter "client_encoding": "bogus"']

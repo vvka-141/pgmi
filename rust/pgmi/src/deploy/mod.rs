@@ -517,15 +517,10 @@ async fn deploy(
         Err(e) => return Err(e),
     };
     guard
-        .running(&session, async {
-            session
-                .client
-                .batch_execute(
-                    "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
-                )
-                .await
-                .map_err(|e| sql_error("match the client encoding to the database", &e))
-        })
+        .running(
+            &session,
+            client_encoding(&session, spec.client_encoding.as_deref()),
+        )
         .await?;
     let version = guard
         .running(&session, async {
@@ -604,6 +599,32 @@ impl std::io::Read for NoStdin {
 
 pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+async fn client_encoding(session: &Session, named: Option<&str>) -> Result<()> {
+    let Some(encoding) = named else {
+        return session
+            .client
+            .batch_execute(
+                "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
+            )
+            .await
+            .map_err(|e| sql_error("match the client encoding to the database", &e));
+    };
+    session
+        .client
+        .query_typed(
+            "SELECT set_config('client_encoding', $1, false)",
+            &[(&encoding, tokio_postgres::types::Type::TEXT)],
+        )
+        .await
+        .map(drop)
+        .map_err(|e| {
+            let reason = e
+                .as_db_error()
+                .map_or_else(|| crate::error::chain(&e), |d| d.message().to_string());
+            Error::connection(format!("client_encoding \"{encoding}\": {reason}"))
+        })
 }
 
 async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
