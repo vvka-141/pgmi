@@ -50,10 +50,16 @@ pub const KNOWN: &[&str] = &[
     "description_cache_capacity",
 ];
 
+const HIDDEN: &str = "not shown, it may hold a password";
+
 pub fn parse(s: &str) -> Result<Fields> {
     let t = s.trim();
     let fields = if t.starts_with("postgresql://") || t.starts_with("postgres://") {
         uri(t)?
+    } else if !t.contains('=') {
+        return Err(Error::config(
+            "invalid connection string (not shown, it may hold a password): use postgresql://user@host:5432/dbname, host=... dbname=..., or Host=...;Database=...",
+        ));
     } else if looks_like_ado(t) {
         ado(t)?
     } else {
@@ -78,6 +84,16 @@ fn check(f: &Fields) -> Result<()> {
         if !KNOWN.contains(&k.as_str()) {
             return Err(Error::config(format!("invalid connection option \"{k}\"")));
         }
+    }
+    if let Some(ports) = f.get("port")
+        && ports
+            .split(',')
+            .map(str::trim)
+            .any(|p| !p.is_empty() && p.parse::<u16>().ok().is_none_or(|n| n == 0))
+    {
+        return Err(Error::config(format!(
+            "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
+        )));
     }
     Ok(())
 }
@@ -178,7 +194,7 @@ fn keyword(s: &str) -> Result<Fields> {
         while chars.next_if(|c| c.is_whitespace()).is_some() {}
         if chars.next() != Some('=') {
             return Err(Error::config(format!(
-                "invalid connection string: missing \"=\" after \"{key}\""
+                "invalid connection string ({HIDDEN}): a key has no \"=\" after it"
             )));
         }
         while chars.next_if(|c| c.is_whitespace()).is_some() {}
@@ -212,9 +228,11 @@ fn keyword(s: &str) -> Result<Fields> {
 fn ado(s: &str) -> Result<Fields> {
     let mut out = Fields::new();
     for part in s.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-        let (k, v) = part
-            .split_once('=')
-            .ok_or_else(|| Error::config(format!("invalid connection string part \"{part}\"")))?;
+        let (k, v) = part.split_once('=').ok_or_else(|| {
+            Error::config(format!(
+                "invalid connection string ({HIDDEN}): a part has no \"=\""
+            ))
+        })?;
         let v = v.trim().to_string();
         let key = k.trim().to_ascii_lowercase().replace([' ', '_'], "");
         let name = match key.as_str() {
@@ -305,5 +323,23 @@ mod tests {
         let e = parse("postgresql://h/db?bogus=1").unwrap_err();
         assert_eq!(e.text(), "invalid connection option \"bogus\"");
         assert!(parse("postgresql://h/db?statement_cache_capacity=0").is_ok());
+    }
+
+    #[test]
+    fn errors_never_echo_the_input() {
+        for (input, secret) in [
+            ("postgres:/admin:S3cretPw@db/x", "S3cretPw"),
+            ("Host=h;Password=ab;cdSecret", "cdSecret"),
+            ("postgresql://u:Qz/ss@h/db", "Qz"),
+            ("postgresql://u:Secret9/x@h:5432/db", "Secret9"),
+            ("postgresql://u@h:Secret9/db", "Secret9"),
+            ("host=h password=S3cret junkSecret", "junkSecret"),
+            ("host=h port=Secret9", "Secret9"),
+            ("Host=h;Password=x;Port=Secret9", "Secret9"),
+        ] {
+            let e = parse(input).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{input}");
+            assert!(!e.text().contains(secret), "{input}: {}", e.text());
+        }
     }
 }

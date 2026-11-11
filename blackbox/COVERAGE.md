@@ -132,7 +132,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 19 | cancel request blocked by a firewall | ✗ needs a firewall between client and server; `internal/db/cancel_integration_test.go` covers it |
 | 20 | SIGINT twice = 130 at once | ✓ `cancel/sigint-twice` |
 | 21 | unreachable host with a connect timeout = 11, not 16 | ✓ `env/pgconnect-timeout` |
-| 22 | URI, keyword/value and ADO.NET forms | ✓ `flags/connection-forms` |
+| 22 | URI, keyword/value and ADO.NET forms; a string that does not parse is not echoed | ✓ `flags/connection-forms`, `errors/connection-string-secrets` |
 | 23 | `PG*` variables, `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`, `PGREQUIREAUTH` | ✓ `env/pg-variables`, `connection/keywords`, `connection/target-session-attrs`, `tls/channel-binding-and-direct`, `tls/require-auth-and-version` |
 | 24 | `.pgpass`, wildcard, `PGPASSFILE`, wrong entry, world-readable file ignored | ✓ `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable` |
 | 25 | `service=` / `PGSERVICE` refused | ✓ `env/pgservice-refused` |
@@ -143,7 +143,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
 | 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root` |
 | 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
-| 32 | `sslrootcert=system`, with `SSL_CERT_FILE` | ✓ `tls/system-roots` |
+| 32 | `sslrootcert=system`, with `SSL_CERT_FILE`; it makes `verify-full` the default | ✓ `tls/system-roots` |
 | 33 | server without TLS: prefer plaintext, require refused; TLS-only server: allow refused | ✓ `tls/tls-only-and-plain-servers` |
 | 34 | `sslnegotiation=direct` | ✓ `tls/channel-binding-and-direct`; failure against PostgreSQL 16 ✗ (one server version per run) |
 | 35 | client certificate by flags, by `PGSSL*`, by `~/.postgresql/postgresql.crt`; encrypted key with `sslpassword`/`PGSSLPASSWORD`; wrong password = 10 | ✓ `tls/client-certificate`, `tls/default-files-good-root`, `tls/encrypted-client-key` |

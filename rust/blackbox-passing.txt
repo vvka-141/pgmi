@@ -60,6 +60,7 @@ env/pgservice-refused
 env/pg-variables
 errors/attribution
 errors/connection-failures
+errors/connection-string-secrets
 errors/head-syntax
 errors/temporary-privilege
 execution/atomic-head

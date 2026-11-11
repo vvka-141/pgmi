@@ -163,6 +163,25 @@ pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Resul
             }
         }
     }
+    let mut secrets: Vec<String> = ["password", "sslpassword"]
+        .iter()
+        .filter_map(|k| f.get(*k).cloned())
+        .collect();
+    for name in ["PGPASSWORD", "PGSSLPASSWORD"] {
+        secrets.extend(env.non_empty(name)?.map(str::to_string));
+    }
+    finish(flags, env, yaml, f, string_db, source, string.is_none()).map_err(|e| e.redact(&secrets))
+}
+
+fn finish(
+    flags: &Flags,
+    env: &Env,
+    yaml: Option<&YamlConnection>,
+    mut f: Fields,
+    string_db: Option<String>,
+    source: Source,
+    no_string: bool,
+) -> Result<Spec> {
     for (env_name, key) in ENV_DEFAULTS {
         if !f.contains_key(*key)
             && let Some(v) = env.non_empty(env_name)?
@@ -170,7 +189,7 @@ pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Resul
             f.insert((*key).into(), v.to_string());
         }
     }
-    if let Some(y) = yaml.filter(|_| string.is_none()) {
+    if let Some(y) = yaml.filter(|_| no_string) {
         for (k, v) in [
             ("host", &y.host),
             ("port", &y.port),
@@ -252,13 +271,25 @@ pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Resul
         })
         .collect();
 
-    let sslmode = f.get("sslmode").cloned().unwrap_or_else(|| "prefer".into());
+    let system_roots = f.get("sslrootcert").map(String::as_str) == Some("system");
+    let sslmode = f.get("sslmode").cloned().unwrap_or_else(|| {
+        if system_roots {
+            "verify-full".into()
+        } else {
+            "prefer".into()
+        }
+    });
     if !matches!(
         sslmode.as_str(),
         "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
     ) {
         return Err(Error::config(format!(
             "invalid sslmode value: \"{sslmode}\""
+        )));
+    }
+    if system_roots && sslmode != "verify-full" {
+        return Err(Error::config(format!(
+            "weak sslmode \"{sslmode}\" may not be used with sslrootcert=system (use \"verify-full\")"
         )));
     }
     let sslnegotiation = f
@@ -415,6 +446,37 @@ mod tests {
                 .text()
                 .contains("PGSERVICE")
         );
+    }
+
+    #[test]
+    fn errors_redact_the_password() {
+        let mut fl = flags();
+        fl.database = Some("d".into());
+        fl.connection = Some("host=h password=Sekrit1 sslmode=Sekrit1".into());
+        let e = resolve(&fl, &Env::default(), None).unwrap_err();
+        assert!(!e.text().contains("Sekrit1"), "{}", e.text());
+        fl.connection = Some("host=h".into());
+        let env = Env::from_pairs(&[("PGPASSWORD", "Sekrit2"), ("PGSSLMODE", "Sekrit2")]);
+        let e = resolve(&fl, &env, None).unwrap_err();
+        assert!(!e.text().contains("Sekrit2"), "{}", e.text());
+    }
+
+    #[test]
+    fn system_roots_mean_verify_full() {
+        let mut fl = flags();
+        fl.database = Some("d".into());
+        fl.connection = Some("host=h sslrootcert=system".into());
+        let s = resolve(&fl, &Env::default(), None).unwrap();
+        assert_eq!(s.sslmode, "verify-full");
+        for weak in ["disable", "allow", "prefer", "require", "verify-ca"] {
+            fl.connection = Some(format!("host=h sslrootcert=system sslmode={weak}"));
+            let e = resolve(&fl, &Env::default(), None).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{weak}");
+            assert!(e.text().contains("sslrootcert=system"), "{}", e.text());
+        }
+        let env = Env::from_pairs(&[("PGSSLROOTCERT", "system"), ("PGSSLMODE", "require")]);
+        fl.connection = Some("host=h".into());
+        assert_eq!(resolve(&fl, &env, None).unwrap_err().exit_code(), 10);
     }
 
     #[test]

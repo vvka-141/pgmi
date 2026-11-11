@@ -474,14 +474,13 @@ impl Form {
             }
             Method::Uri => {
                 required(0, "connection string")?;
-                let f = crate::conn::parse::parse(&self.value(0))
-                    .map_err(|e| (0, format!("invalid connection string: {}", e.text())))?;
+                let f = crate::conn::parse::parse(&self.value(0)).map_err(|e| (0, e.text()))?;
                 let get = |k: &str| f.get(k).cloned().unwrap_or_default();
                 let port = match f.get("port") {
                     None => 5432,
-                    Some(p) => p.parse::<u16>().map_err(|_| {
-                        (0, format!("invalid connection string: invalid port {p:?}"))
-                    })?,
+                    Some(p) => p
+                        .parse::<u16>()
+                        .map_err(|_| (0, "invalid connection string: give one port".to_string()))?,
                 };
                 Settings {
                     host: or(get("host"), "localhost"),

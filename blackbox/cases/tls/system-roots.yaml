@@ -1,4 +1,4 @@
-description: sslrootcert=system verifies against the system trust store, which SSL_CERT_FILE replaces (where localhost also resolves to ::1, only the last address's error is shown)
+description: sslrootcert=system verifies against the system trust store, which SSL_CERT_FILE replaces, and makes verify-full the default sslmode (where localhost also resolves to ::1, only the last address's error is shown)
 servers: [tls]
 project:
   files:
@@ -9,3 +9,9 @@ steps:
     expect: {exit: 0}
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full&sslrootcert=system", -d, "{db}"]
     expect: {exit: 11, stderr: ["unknown authority|refused"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslrootcert=system", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect: {exit: 11, stderr: ["127\\.0\\.0\\.1"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslrootcert=system", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect: {exit: 0}

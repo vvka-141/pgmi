@@ -492,6 +492,28 @@ When both a secret and a certificate are set, the secret wins.
 No case: instance discovery always calls `login.microsoftonline.com`; verified
 by the real-Azure runs (PGMI-845).
 
+### sslrootcert=system refuses a weaker sslmode
+
+Go (pgx) turns any sslmode into `verify-full` when `sslrootcert=system`, even
+an explicit `disable` or `require`. Without an sslmode both binaries use
+`verify-full`. With an explicit weaker sslmode the Rust binary refuses with
+exit 10 (`weak sslmode "require" may not be used with sslrootcert=system`), as
+libpq does.
+
+Cases: `tls/system-roots` (the default). The refusal: Rust unit test
+`system_roots_mean_verify_full`.
+
+### Connection-string errors never echo the string
+
+Go hides a URI that does not parse, but echoes a stray keyword
+(`missing "=" after "junk"`), an ADO.NET part and a port value. The Rust
+binary never quotes connection-string input in an error, on stderr, in
+`--json` or in the MCP answer, and redacts the password and `sslpassword` from
+every later refusal of the resolved connection.
+
+Cases: `errors/connection-string-secrets` (the forms Go hides too); Rust unit
+tests `errors_never_echo_the_input`, `errors_redact_the_password`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable

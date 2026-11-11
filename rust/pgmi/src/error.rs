@@ -106,6 +106,11 @@ impl Error {
         self
     }
 
+    pub fn redact(mut self, secrets: &[String]) -> Self {
+        self.message = crate::output::redact(&self.message, secrets);
+        self
+    }
+
     pub fn kind(&self) -> Kind {
         self.kind
     }
