@@ -96,7 +96,9 @@ numeric entities and CDATA are decoded; repeated `<sortKeys>` are merged;
 text after the root element is ignored; a sort key keeps its white space
 and may repeat. Refused with exit 10, naming the file: `idempotent` missing
 or not a boolean, a missing or nil id, an id with spaces, a blank sort key
-or description, an unknown entity, unclosed XML, two blocks, a block over
+or description, an unknown entity, unclosed XML, two blocks (in the Rust
+binary also two `<pgmi-meta` elements in one comment, see "Two metadata
+elements in one comment are refused"), a block over
 10240 bytes. A file without a block gets the id `md5("./<path>")` read as a
 uuid, the same in `metadata plan` and `pgmi_plan_view.generic_id`.
 
@@ -670,6 +672,19 @@ Cases: none (Go's answer is not deterministic); Rust unit tests
 `a_request_id_already_in_flight_is_refused`,
 `request_ids_match_by_value_not_by_spelling`.
 
+### Two metadata elements in one comment are refused
+
+Owner-decided 2026-11-11 (PGMI-868).
+
+Go reads the first `<pgmi-meta>` element of a comment and ignores the rest,
+so a second element with another id or other sort keys in the same `/* */`
+is silently dropped. The Rust binary refuses it as it refuses two blocks in
+separate comments: exit 10, `Multiple metadata blocks found`, naming the
+file. A second element that is not even well-formed counts too.
+
+Cases: none (Go accepts it); Rust unit test
+`two_elements_in_one_comment_are_refused`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable
@@ -883,6 +898,7 @@ release notes take their "Behaviour changes" section from this table.
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
+| Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
 | `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |

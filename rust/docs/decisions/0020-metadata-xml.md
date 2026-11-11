@@ -53,7 +53,9 @@ roxmltree (the research had proposed quick-xml; a tree is less code here).
     malformed, so pgmi hands roxmltree only the text up to the end of the
     root element (found with roxmltree's own error position, or by parsing
     `<pgmi-meta` .. `</pgmi-meta>`), or this record falls back to
-    quick-xml's reader, which stops after the root.
+    quick-xml's reader, which stops after the root. A second `<pgmi-meta`
+    after the root, in the same comment, is not ignored: it counts as a
+    second block, exit 10 (PGMI-868, a decided change from Go).
   - The fallback id is `md5("./<path>")` read as a uuid, computed by the
     binary for `metadata plan` and by the session SQL for
     `pgmi_plan_view.generic_id`; both are pinned by `commands/metadata-forms`.

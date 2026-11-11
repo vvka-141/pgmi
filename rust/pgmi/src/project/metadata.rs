@@ -21,20 +21,39 @@ pub(crate) fn blocks(content: &str) -> Vec<&str> {
     lexer::tokens(src)
         .into_iter()
         .filter(|t| t.kind == Kind::BlockComment)
-        .filter_map(|t| {
-            let text = content.get(t.start + 2..t.end.saturating_sub(2))?;
-            let start = text.find("<pgmi-meta")?;
-            let rest = &text[start..];
-            let end = rest
-                .find("</pgmi-meta>")
-                .map(|e| e + "</pgmi-meta>".len())
-                .or_else(|| {
-                    let close = rest.find('>')?;
-                    (rest[..close].ends_with('/')).then_some(close + 1)
-                })?;
-            Some(&rest[..end])
-        })
+        .filter_map(|t| content.get(t.start + 2..t.end.saturating_sub(2)))
+        .flat_map(elements)
         .collect()
+}
+
+fn elements(mut text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    while let Some(start) = text.find("<pgmi-meta") {
+        let rest = &text[start..];
+        match element_end(rest) {
+            Some(end) => {
+                out.push(&rest[..end]);
+                text = &rest[end..];
+            }
+            None => {
+                if !out.is_empty() {
+                    out.push(rest);
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn element_end(element: &str) -> Option<usize> {
+    let close = element.find('>')?;
+    if element[..close].ends_with('/') {
+        return Some(close + 1);
+    }
+    element
+        .find("</pgmi-meta>")
+        .map(|e| e + "</pgmi-meta>".len())
 }
 
 fn parse_bool(s: &str) -> Option<bool> {
@@ -394,6 +413,25 @@ mod tests {
             fallback_id("./plain.sql"),
             "1d622beb-19db-dd1d-f3e3-8c353019e16a"
         );
+    }
+
+    #[test]
+    fn two_elements_in_one_comment_are_refused() {
+        let one = "<pgmi-meta id=\"1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d\" idempotent=\"true\"></pgmi-meta>";
+        let two = "<pgmi-meta id=\"0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01\" idempotent=\"false\"/>";
+        for content in [
+            format!("/* {one}\n{two} */\nSELECT 1;"),
+            format!("/* {two} {one} */"),
+            format!("/* {one} <pgmi-meta id=\"x\" */"),
+            format!("/* {one} */ /* {two} */"),
+        ] {
+            let e = parse("./a.sql", &content).unwrap_err();
+            assert!(
+                matches!(&e, MetaError::Multiple { path } if path == "./a.sql"),
+                "{content}: {e}"
+            );
+        }
+        assert!(parse("./a.sql", &format!("/* {one} */")).unwrap().is_some());
     }
 
     #[test]
