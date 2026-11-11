@@ -130,10 +130,16 @@ Option 3, in `conn/cloud/databricks.rs`.
   `cloud/databricks-*` against a fake workspace on the runner's HTTPS fake,
   trusted through `SSL_CERT_FILE`, and the `tls` server's `lakebaseuser`
   whose password is the fake credential.
-- To verify on real Lakebase (PGMI-849 step 6): that `all-apis` covers the
-  `postgres` API scope; that the default credential lives an hour and
-  `expire_time` parses; that `verify-full` passes against the endpoint's
-  certificate with the system store (else the docs keep `sslmode=require`);
-  the M2M route from a job's service principal and the Azure route; and
-  whether a pgmi subprocess inside a serverless job sees credentials at all
-  (research open risk).
+- Verified on real Lakebase, 2026-11-11 (PGMI-849 step 6, Azure Databricks,
+  PostgreSQL 18): `all-apis` covers the `postgres` API scope; the credential
+  lives 3601 s and the real `expire_time` parses; `verify-full` passes
+  against the endpoint's certificate with the system store; the Azure route
+  (chosen from the host name), a personal access token and OAuth M2M work,
+  M2M also from a serverless job; `-d` on a new database creates it and
+  reconnects. A pgmi subprocess inside a job sees no credentials until the
+  job's script sets `DATABRICKS_HOST` and a token or client secret. An
+  invalid personal access token is answered with 403, so the 403 advice
+  names the token too. Not verified: the Databricks CLI route (its login
+  needs a browser) and a job running as the service principal itself (needs
+  an account-level role grant); the 55-minute refresh was not exercised on
+  real Lakebase (the fake covers it).

@@ -30,7 +30,7 @@ steps:
   - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
     env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}-403", SSL_CERT_FILE: "{ca}"}
     timeout: 60
-    expect: {exit: 11, stderr: ["may not get a credential for projects/p/branches/b/endpoints/e \\(403 Forbidden\\): User does not have permission"]}
+    expect: {exit: 11, stderr: ["may not get a credential for projects/p/branches/b/endpoints/e \\(403 Forbidden\\): User does not have permission", "check the token"]}
   - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/missing", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
     env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}"}
     timeout: 60

@@ -65,9 +65,14 @@ pgmi deploy . --databricks \
   -d myapp --param env=dev
 ```
 
-> **Not yet checked on real Lakebase.** This path is tested against a fake
-> Databricks API only. Until the real run is recorded here, keep the
-> credential-as-password route above for anything that matters.
+> **Checked on real Lakebase** on 2026-11-11 (Azure Databricks, PostgreSQL 18):
+> the Azure CLI sign-in, a personal access token, and OAuth M2M from a
+> workstation and from a serverless job, each deploying with `verify-full`
+> and no `PGPASSWORD`. The Databricks CLI route was not checked: it needs
+> `databricks auth login` (a browser) first. The credential lasts one hour.
+> A project scaffolded by `pgmi init` sets `sslmode: prefer` in `pgmi.yaml`,
+> which `--databricks` refuses: pass `--sslmode verify-full` or edit
+> `pgmi.yaml`.
 
 - **The endpoint** comes from `--databricks-endpoint`, else
   `PGMI_DATABRICKS_ENDPOINT`, in the form
@@ -96,12 +101,18 @@ pgmi deploy . --databricks \
   database refuses fails with exit 11 and a hint naming Databricks, the user
   and `--username`.
 - **TLS.** Without an sslmode pgmi uses `verify-full` against the system trust
-  store; if your endpoint's certificate does not pass, set `--sslmode
-  require`. `disable`, `allow` and `prefer` are refused.
+  store, and the endpoint's certificate passes it. `disable`, `allow` and
+  `prefer` are refused.
+- **From a job.** pgmi started as a subprocess of a job sees no Databricks
+  credentials of its own. The job's script sets `DATABRICKS_HOST`, and either
+  `DATABRICKS_TOKEN` (for example from the SDK's `w.config.authenticate()`, the
+  job's identity) or a service principal's `DATABRICKS_CLIENT_ID` and
+  `DATABRICKS_CLIENT_SECRET` from a secret scope.
 - **Failures.** No endpoint, no workspace, an `http` workspace or an unknown
   `DATABRICKS_AUTH_TYPE` stop the deploy before connecting (exit 10). A
   workspace that refuses (401, 403, 404) or stays unavailable after three
-  tries is exit 11, with the reason the API gave. No token is printed, also
+  tries is exit 11, with the reason the API gave. An invalid personal access
+  token is answered with 403, not 401. No token is printed, also
   not with `--verbose` or `--json`.
 
 Only the identity that created the project has a Postgres role from the start.

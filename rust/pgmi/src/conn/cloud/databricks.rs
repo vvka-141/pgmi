@@ -513,7 +513,7 @@ fn refusal(status: StatusCode, endpoint: &str, host: &str, body: &str) -> String
             "Databricks at {host} did not accept the sign-in ({status}){why}; check DATABRICKS_HOST and the token, client secret or CLI login"
         ),
         StatusCode::FORBIDDEN => format!(
-            "the signed-in Databricks identity may not get a credential for {endpoint} ({status}){why}; check its permissions on the Lakebase project"
+            "the signed-in Databricks identity may not get a credential for {endpoint} ({status}){why}; check the token (Databricks answers 403 for an invalid one) and the identity's permissions on the Lakebase project"
         ),
         StatusCode::NOT_FOUND => format!(
             "Databricks at {host} has no Lakebase endpoint {endpoint} ({status}){why}; check --databricks-endpoint and DATABRICKS_HOST"
@@ -874,6 +874,7 @@ mod tests {
             r403.contains(&format!("credential for {ep} (403 Forbidden): no access")),
             "{r403}"
         );
+        assert!(r403.contains("check the token"), "{r403}");
         let r404 = refusal(StatusCode::NOT_FOUND, ep, h, "not json");
         assert!(r404.contains("has no Lakebase endpoint"), "{r404}");
         assert!(r404.contains("--databricks-endpoint"), "{r404}");
