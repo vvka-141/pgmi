@@ -5,8 +5,7 @@ use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 use tokio_util::sync::CancellationToken;
 
-use super::{quote_ident, sql_error};
-use crate::cli::DeployArgs;
+use super::{Request, quote_ident, sql_error};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::resolve::Spec;
 use crate::env::Env;
@@ -31,7 +30,7 @@ fn banner(db: &str) -> String {
 }
 
 pub(crate) async fn approve(
-    a: &DeployArgs,
+    request: &Request,
     spec: &Spec,
     env: &Env,
     reporter: &Reporter,
@@ -39,7 +38,7 @@ pub(crate) async fn approve(
 ) -> Result<()> {
     let db = spec.target_db.clone();
     let interrupted = || Error::new(Kind::Interrupted, "interrupted");
-    if a.force {
+    if request.force {
         if !interactive(env) {
             reporter.line(&format!("--force: dropping and recreating \"{db}\""));
             return Ok(());

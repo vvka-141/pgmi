@@ -90,11 +90,10 @@ fn run_deploy(
         env.insert(k, v);
     }
     deploy::run(deploy::Context {
-        args,
+        request: args.into(),
         verbose,
         env,
         dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
-        maintenance_db: None,
         stdin: true,
         approval: deploy::Approval::Prompt,
     })

@@ -103,8 +103,8 @@ The lib target is not published as a library API (0001 still holds).
   flags, cloud request, params sources, timeout, overwrite/force,
   compat, json. `From<cli::DeployArgs>`; the MCP tool builds it directly.
   `cloud::select` and `overwrite` take it. Removes the clap re-parse in
-  serve and likely makes the deploy future `Send` (retry `tokio::spawn`
-  in serve; if it holds, record 0017's blocking-pool workaround goes).
+  serve. It did not make the deploy future `Send` (step 5, record 0017),
+  so the blocking-pool workaround stays.
 - **`Approver`.** `async fn approve(&self, db: &str, token) -> Result<()>`
   (or an enum with a boxed terminal variant): `Terminal` (current prompt and
   `--force` countdown), `ConfirmedName(Option<String>)` (serve), and test
@@ -185,6 +185,15 @@ land before or between steps, each with a black-box case.
    as Go's `os.ReadDir` does (the order was the OS's before).
 5. **`deploy::Request`.** `From<DeployArgs>`; serve builds it directly;
    `cloud::select`, `overwrite` take it; try `tokio::spawn` for tool calls.
+   Done 2026-11-11: `deploy::Request` holds the project path, the
+   connection `Flags`, the maintenance database (serve only), the cloud
+   providers asked for and the cloud `Request`, params, params files,
+   timeout, overwrite, force, compat and json; `cli` converts
+   `DeployArgs`, serve fills it from the tool arguments without clap.
+   `cloud::select` takes the providers and the cloud request rather than
+   the whole `deploy::Request`, so `conn` does not depend on `deploy`.
+   Nothing below `cli`/`commands` names clap. `tokio::spawn` still fails
+   rustc's auto-trait check; record 0017 says where and why.
 6. **`Approver` and Reporter sink.** Unit tests for the summary line,
    refusal texts, `--force` countdown cancel (with `tokio::time::pause`).
 7. **Serve over any transport.** `serve(input, output, toolbox, stop)`;

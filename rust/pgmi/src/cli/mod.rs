@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::conn::cloud::{self, Provider};
+use crate::conn::resolve::Flags;
 use crate::error::Kind;
 pub(crate) use commands::*;
 
@@ -141,6 +143,48 @@ pub(crate) struct DeployArgs {
     pub(crate) google_instance: Option<String>,
 }
 
+impl From<DeployArgs> for crate::deploy::Request {
+    fn from(a: DeployArgs) -> Self {
+        let cloud = [
+            (a.azure, Provider::Azure),
+            (a.aws, Provider::Aws),
+            (a.google, Provider::Google),
+        ]
+        .into_iter()
+        .filter_map(|(asked, p)| asked.then_some(p))
+        .collect();
+        crate::deploy::Request {
+            project: a.project,
+            connection: Flags {
+                connection: a.connection,
+                host: a.host,
+                port: a.port,
+                username: a.username,
+                database: a.database,
+                sslmode: a.sslmode,
+                sslcert: a.sslcert,
+                sslkey: a.sslkey,
+                sslrootcert: a.sslrootcert,
+            },
+            maintenance_db: None,
+            cloud,
+            cloud_request: cloud::Request {
+                tenant_id: a.azure_tenant_id,
+                client_id: a.azure_client_id,
+                aws_region: a.aws_region,
+                google_instance: a.google_instance,
+            },
+            params: a.params,
+            params_files: a.params_files,
+            timeout: a.timeout,
+            overwrite: a.overwrite,
+            force: a.force,
+            compat: a.compat,
+            json: a.json,
+        }
+    }
+}
+
 pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
     match s {
         "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
@@ -213,5 +257,100 @@ mod tests {
         assert!(!d.force && d.json);
         assert_eq!(d.timeout, Some(Duration::from_secs(5400)));
         assert!(Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).is_err());
+    }
+
+    fn request(args: &[&str]) -> crate::deploy::Request {
+        let cli = Cli::try_parse_from(["pgmi", "deploy"].iter().chain(args)).unwrap();
+        let Some(Command::Deploy(d)) = cli.command else {
+            panic!()
+        };
+        (*d).into()
+    }
+
+    #[test]
+    fn deploy_flags_become_a_request() {
+        let r = request(&[
+            "proj",
+            "--connection",
+            "postgres://x",
+            "-h",
+            "h",
+            "-p",
+            "6000",
+            "-U",
+            "u",
+            "-d",
+            "db",
+            "--sslmode",
+            "require",
+            "--sslcert",
+            "c",
+            "--sslkey",
+            "k",
+            "--sslrootcert",
+            "r",
+            "--overwrite",
+            "--force",
+            "--compat",
+            "1",
+            "--json",
+            "--param",
+            "a=b",
+            "--params-file",
+            "f",
+            "--aws",
+            "--aws-region",
+            "eu",
+            "--azure-tenant-id",
+            "t",
+            "--azure-client-id",
+            "c",
+            "--google-instance",
+            "p:r:i",
+        ]);
+        assert_eq!(r.project, std::path::Path::new("proj"));
+        let c = &r.connection;
+        assert_eq!(
+            [
+                &c.connection,
+                &c.host,
+                &c.port,
+                &c.username,
+                &c.database,
+                &c.sslmode,
+                &c.sslcert,
+                &c.sslkey,
+                &c.sslrootcert
+            ]
+            .map(|v| v.as_deref()),
+            [
+                Some("postgres://x"),
+                Some("h"),
+                Some("6000"),
+                Some("u"),
+                Some("db"),
+                Some("require"),
+                Some("c"),
+                Some("k"),
+                Some("r")
+            ]
+        );
+        assert!(r.overwrite && r.force && r.json);
+        assert_eq!(r.compat.as_deref(), Some("1"));
+        assert_eq!(r.params, ["a=b"]);
+        assert_eq!(r.params_files, ["f"]);
+        assert_eq!(r.cloud, [Provider::Aws]);
+        assert_eq!(r.cloud_request.aws_region.as_deref(), Some("eu"));
+        assert_eq!(r.cloud_request.tenant_id.as_deref(), Some("t"));
+        assert_eq!(r.cloud_request.client_id.as_deref(), Some("c"));
+        assert_eq!(r.cloud_request.google_instance.as_deref(), Some("p:r:i"));
+        assert!(r.maintenance_db.is_none() && r.timeout.is_none());
+    }
+
+    #[test]
+    fn every_cloud_flag_is_kept_so_select_can_refuse_two() {
+        let r = request(&[".", "--azure", "--aws", "--google"]);
+        assert_eq!(r.cloud, [Provider::Azure, Provider::Aws, Provider::Google]);
+        assert!(request(&["."]).cloud.is_empty());
     }
 }

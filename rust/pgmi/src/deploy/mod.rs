@@ -1,5 +1,6 @@
 mod execute;
 mod overwrite;
+mod request;
 pub(crate) mod script;
 mod session;
 
@@ -14,17 +15,18 @@ use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
 use crate::VERSION;
-use crate::cli::DeployArgs;
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
 use crate::conn::dial::{Dialer, Session};
-use crate::conn::resolve::{self, Flags, Spec};
+use crate::conn::resolve::{self, Spec};
 use crate::conn::tls;
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
 use crate::output::{Notice, NoticeLog, Reporter, seconds, timestamp};
 use crate::project::{metadata, walk};
+
+pub(crate) use request::Request;
 
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
     match e.as_db_error() {
@@ -62,11 +64,10 @@ pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
 }
 
 pub(crate) struct Context {
-    pub(crate) args: DeployArgs,
+    pub(crate) request: Request,
     pub(crate) verbose: bool,
     pub(crate) env: Env,
     pub(crate) dotenv_keys: Vec<String>,
-    pub(crate) maintenance_db: Option<String>,
     pub(crate) stdin: bool,
     pub(crate) approval: Approval,
 }
@@ -278,10 +279,10 @@ fn deadline(timeout: Duration) -> TokioInstant {
 }
 
 fn timeout_of(ctx: &Context) -> Duration {
-    ctx.args
+    ctx.request
         .timeout
         .or_else(|| {
-            ProjectConfig::load(&crate::vfs::OsFs::new(&ctx.args.project))
+            ProjectConfig::load(&crate::vfs::OsFs::new(&ctx.request.project))
                 .ok()
                 .flatten()
                 .and_then(|y| y.timeout().ok().flatten())
@@ -339,7 +340,7 @@ async fn deploy(
     reporter: &Arc<Reporter>,
     log: Arc<Mutex<NoticeLog>>,
 ) -> Result<()> {
-    let a = &ctx.args;
+    let a = &ctx.request;
     if let Some(c) = &a.compat
         && c != "1"
     {
@@ -353,7 +354,7 @@ async fn deploy(
     if let Some(y) = &yaml {
         y.timeout()?;
     }
-    let cloud = crate::conn::cloud::select(a, yaml.as_ref())?;
+    let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, yaml.as_ref())?;
     let sources = Sources {
         yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
         env: &ctx.env,
@@ -365,22 +366,15 @@ async fn deploy(
     } else {
         params::collect(sources, &mut NoStdin)?
     };
-    let flags = Flags {
-        connection: a.connection.clone(),
-        host: a.host.clone(),
-        port: a.port.clone(),
-        username: a.username.clone(),
-        database: a.database.clone(),
-        sslmode: a.sslmode.clone(),
-        sslcert: a.sslcert.clone(),
-        sslkey: a.sslkey.clone(),
-        sslrootcert: a.sslrootcert.clone(),
-    };
-    let mut spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
+    let mut spec = resolve::resolve(
+        &a.connection,
+        &ctx.env,
+        yaml.as_ref().map(|y| &y.connection),
+    )?;
     if let Some((provider, req)) = &cloud {
         crate::conn::cloud::check(*provider, req, &mut spec, &ctx.env)?;
     }
-    if let Some(m) = &ctx.maintenance_db {
+    if let Some(m) = &a.maintenance_db {
         spec.maintenance_db = m.clone();
     }
     st.database = Some(spec.target_db.clone());
@@ -651,7 +645,7 @@ fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> 
             reporter.line(&format!("LOCATION: {location}"));
         }
     }
-    if ctx.args.json {
+    if ctx.request.json {
         let record = run.record(ctx, &result);
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();

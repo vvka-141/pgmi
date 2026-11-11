@@ -6,7 +6,6 @@ mod http;
 
 use std::sync::Arc;
 
-use crate::cli::DeployArgs;
 use crate::config::yaml::ProjectConfig;
 use crate::conn::resolve::Spec;
 use crate::env::Env;
@@ -89,37 +88,30 @@ impl Token {
 }
 
 pub(crate) fn select(
-    a: &DeployArgs,
+    asked: &[Provider],
+    req: &Request,
     yaml: Option<&ProjectConfig>,
 ) -> Result<Option<(Provider, Request)>> {
-    let flags = [a.azure, a.aws, a.google].iter().filter(|f| **f).count();
-    if flags > 1 {
+    if asked.len() > 1 {
         return Err(Error::config(
             "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google",
         ));
     }
     let y = yaml.map(|y| y.connection.clone()).unwrap_or_default();
-    let provider = if a.azure {
-        Provider::Azure
-    } else if a.aws {
-        Provider::Aws
-    } else if a.google {
-        Provider::Google
-    } else {
-        match y.auth_method.as_deref() {
-            Some("azure") => Provider::Azure,
-            Some("aws") => Provider::Aws,
-            Some("google") => Provider::Google,
-            _ => return Ok(None),
-        }
+    let provider = match (asked.first(), y.auth_method.as_deref()) {
+        (Some(p), _) => *p,
+        (None, Some("azure")) => Provider::Azure,
+        (None, Some("aws")) => Provider::Aws,
+        (None, Some("google")) => Provider::Google,
+        (None, _) => return Ok(None),
     };
     Ok(Some((
         provider,
         Request {
-            tenant_id: a.azure_tenant_id.clone().or(y.azure_tenant_id),
-            client_id: a.azure_client_id.clone().or(y.azure_client_id),
-            aws_region: a.aws_region.clone().or(y.aws_region),
-            google_instance: a.google_instance.clone().or(y.google_instance),
+            tenant_id: req.tenant_id.clone().or(y.azure_tenant_id),
+            client_id: req.client_id.clone().or(y.azure_client_id),
+            aws_region: req.aws_region.clone().or(y.aws_region),
+            google_instance: req.google_instance.clone().or(y.google_instance),
         },
     )))
 }
@@ -167,5 +159,58 @@ pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Resul
         Provider::Google => google::dialer(req, env)
             .await
             .map(|d| Token::Google(Arc::new(d))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn yaml(text: &str) -> ProjectConfig {
+        ProjectConfig::parse(text).unwrap()
+    }
+
+    #[test]
+    fn two_providers_are_refused() {
+        let e = select(&[Provider::Azure, Provider::Aws], &Request::default(), None).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google"
+        );
+    }
+
+    #[test]
+    fn no_provider_anywhere_is_none() {
+        assert!(select(&[], &Request::default(), None).unwrap().is_none());
+        let y = yaml("connection:\n  aws_region: eu-west-1\n");
+        assert!(
+            select(&[], &Request::default(), Some(&y))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_flag_beats_the_yaml_auth_method_and_flag_values_beat_yaml_values() {
+        let y = yaml(
+            "connection:\n  auth_method: azure\n  aws_region: from-yaml\n  azure_tenant_id: t\n",
+        );
+        let asked = Request {
+            aws_region: Some("from-flag".into()),
+            ..Request::default()
+        };
+        let (p, r) = select(&[Provider::Aws], &asked, Some(&y)).unwrap().unwrap();
+        assert_eq!(p, Provider::Aws);
+        assert_eq!(r.aws_region.as_deref(), Some("from-flag"));
+        assert_eq!(r.tenant_id.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn the_yaml_auth_method_applies_without_a_flag() {
+        let y = yaml("connection:\n  auth_method: google\n  google_instance: p:r:i\n");
+        let (p, r) = select(&[], &Request::default(), Some(&y)).unwrap().unwrap();
+        assert_eq!(p, Provider::Google);
+        assert_eq!(r.google_instance.as_deref(), Some("p:r:i"));
     }
 }

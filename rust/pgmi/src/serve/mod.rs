@@ -281,7 +281,7 @@ impl Server {
             let task_token = token.clone();
             let handle = tokio::runtime::Handle::current();
             let outcome = match tokio::task::spawn_blocking(move || {
-                handle.block_on(tool.call(arguments.as_deref(), &env, verbose, task_token))
+                handle.block_on(tool.call(arguments, env, verbose, task_token))
             })
             .await
             {

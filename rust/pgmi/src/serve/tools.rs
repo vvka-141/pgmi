@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::wire::{self, Members};
-use crate::cli::{Cli, Command, DeployArgs};
 use crate::commands::{init, metadata};
-use crate::deploy::{Approval, Context, Run};
+use crate::conn::resolve::Flags;
+use crate::deploy::{Approval, Context, Request, Run};
 use crate::env::Env;
 use crate::error::Error;
 use crate::error::redact;
@@ -57,11 +57,13 @@ impl Tool {
 
     pub(crate) async fn call(
         self,
-        arguments: Option<&RawValue>,
-        env: &Env,
+        arguments: Option<Box<RawValue>>,
+        env: Env,
         verbose: bool,
         token: CancellationToken,
     ) -> Outcome {
+        let arguments = arguments.as_deref();
+        let env = &env;
         match self {
             Tool::Deploy => match deploy_context(arguments, env, verbose) {
                 Ok(ctx) => run_deploy(ctx, token).await,
@@ -381,19 +383,24 @@ fn deploy_context(
                 .map_err(|e| Error::config(format!("invalid timeout: time: {e}")))?,
         ),
     };
-    let mut args = deploy_args(&path)?;
-    args.connection = connection;
-    args.database = database;
-    args.timeout = timeout;
-    args.overwrite = overwrite;
-    args.params = params;
-    args.params_files = params_files;
     Ok(Context {
-        args,
+        request: Request {
+            project: path,
+            connection: Flags {
+                connection,
+                database,
+                ..Flags::default()
+            },
+            maintenance_db: maintenance,
+            params,
+            params_files,
+            timeout,
+            overwrite,
+            ..Request::default()
+        },
         verbose,
         env: env.clone(),
         dotenv_keys: Vec::new(),
-        maintenance_db: maintenance,
         stdin: false,
         approval: Approval::Confirm(confirm),
     })
@@ -446,21 +453,6 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
                 is_error: true,
             }
         }
-    }
-}
-
-fn deploy_args(path: &std::path::Path) -> Result<DeployArgs, Error> {
-    use clap::Parser;
-    let parsed = Cli::try_parse_from([
-        std::ffi::OsStr::new("pgmi"),
-        std::ffi::OsStr::new("deploy"),
-        std::ffi::OsStr::new("--"),
-        path.as_os_str(),
-    ])
-    .map_err(|e| Error::internal(format!("map deploy arguments: {e}")))?;
-    match parsed.command {
-        Some(Command::Deploy(a)) => Ok(*a),
-        _ => Err(Error::internal("map deploy arguments")),
     }
 }
 
@@ -521,11 +513,14 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(ctx.args.database.as_deref(), Some("-d"));
-        assert_eq!(ctx.args.timeout, Some(std::time::Duration::from_secs(2)));
-        assert_eq!(ctx.args.params, ["k=v"]);
-        assert_eq!(ctx.args.params_files, ["a", "b"]);
-        assert!(ctx.args.overwrite && !ctx.stdin);
+        let r = &ctx.request;
+        assert_eq!(r.project, std::path::Path::new("/"));
+        assert_eq!(r.connection.database.as_deref(), Some("-d"));
+        assert_eq!(r.timeout, Some(std::time::Duration::from_secs(2)));
+        assert_eq!(r.params, ["k=v"]);
+        assert_eq!(r.params_files, ["a", "b"]);
+        assert!(r.overwrite && !r.force && !r.json && r.compat.is_none() && r.cloud.is_empty());
+        assert!(!ctx.stdin);
         assert!(matches!(ctx.approval, Approval::Confirm(Some(ref d)) if d == "-d"));
     }
 

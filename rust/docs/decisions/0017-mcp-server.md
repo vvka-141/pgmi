@@ -118,6 +118,17 @@ overridden. Used only if the hand-written server proves unworkable.
   deploy future is not `Send` for every lifetime (a rustc limitation), and
   this keeps `tokio::spawn`'s `Send` bound off it. A panic arrives as the
   `JoinError` and answers `isError`, exit code 3, with the hook's stack.
+  Retried with `tokio::spawn` after `deploy::Request` (record 0022 step 5,
+  2026-11-11): the tool call now owns its arguments and the request, yet
+  rustc still refuses "implementation of `Send` is not general enough"
+  (rust-lang/rust#64552, #110338) deep inside: borrowed `&str` arguments
+  held across an `.await` in `conn::dial` (`addresses`, `matches_attrs`,
+  the host and sslmode loops, tokio's `ToSocketAddrs` calls), the
+  `tokio-postgres` calls with a borrowed query inside `Guard::running`, and
+  `select!` over `&CancellationToken`. Each site can be made to pass by
+  owning its data, but a dozen were needed and every new borrowed call
+  would break `serve` again, so the workaround stays until the trait
+  solver accepts the future as written.
 - `init`, `metadata_plan`, `metadata_validate` and `ai_contract` answer
   "not implemented in this build" (exit 1) until the commands they wrap land
   (PGMI-833 part B); their argument checks already match Go.
