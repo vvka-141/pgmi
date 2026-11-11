@@ -697,6 +697,7 @@ release notes take their "Behaviour changes" section from this table.
 | Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |
 | `AZURE_TOKEN_CREDENTIALS` naming no credential | exit 1 | exit 10 | owner 2026-11-11 |
 | Wizards | full-screen | full-screen (kept) | owner 2026-11-11 |
+| TLS or cloud sign-in on an x86-64 CPU without AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX (before about 2014), or an arm64 CPU without NEON, AES, PMULL, SHA2 | works | newly refused before connecting, exit 10, naming the missing features; `sslmode=disable` and commands without a database still run (record 0021) | owner 2026-11-11 |
 
 No case of its own: each row's section above names its cases or its Rust unit
 test.
