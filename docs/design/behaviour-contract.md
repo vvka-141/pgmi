@@ -369,9 +369,11 @@ Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`.
 `--timeout` (default 3m, Go duration syntax) cancels the running statement on
 the server, gives the server 2 s to report the cancel, and is exit 16; running out while connecting is exit 11. SIGINT or
 SIGTERM cancels and is exit 130; a second SIGINT ends at once, still 130.
-Cancel works over TLS and over direct TLS negotiation.
+Cancel works over TLS and over direct TLS negotiation. A timeout longer than a
+Go duration holds (about 2562047h) is refused: exit 2 on the flag, 10 in
+`pgmi.yaml` and in the MCP deploy tool.
 
-Cases: `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`.
+Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`.
 
 ### Checksums
 
