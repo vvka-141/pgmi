@@ -76,9 +76,14 @@ binary's half: loading, the session API, the execution contract and the test
 macro under real projects.
 
 A function in `public` owned by another role, such as a hosting provider's,
-does not fail the basic template's privilege test.
+does not fail the basic template's privilege test. Before anything changes, a
+first advanced deploy names what the login lacks (`CREATEDB`, `CREATEROLE`)
+and, when the server has Azure's `azure.extensions`, the template's extensions
+missing from it. On a database with the role `databricks_superuser` and the
+schema `__db_system` (Lakebase), `provider_role_pattern` and
+`provider_schemas` default to Lakebase's values (record 0024).
 
-Cases: `deploy/basic-template-converges`, `deploy/basic-template-provider-functions`, `deploy/advanced-template-converges`, `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced`.
+Cases: `deploy/basic-template-converges`, `deploy/basic-template-provider-functions`, `deploy/advanced-template-converges`, `deploy/advanced-template-preflight`, `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced`.
 
 ### metadata
 
@@ -1025,6 +1030,8 @@ release notes take their "Behaviour changes" section from this table.
 | A non-ASCII letter glued to `CALL` (`ÄCALL pgmi_test()`) | expanded | left to the server, as PostgreSQL reads one identifier | owner 2026-11-11 |
 | `--overwrite -d POSTGRES` with maintenance database `postgres` | refused (case-insensitive) | allowed: names compared exactly | owner 2026-11-11 |
 | Wizard selection lists | stop at the ends | wrap around | owner 2026-11-11 |
+| Advanced template: a login without `CREATEDB`/`CREATEROLE`, or extensions Azure has not allow-listed | fails partway, exit 13 | named before anything changes, exit 13 | owner 2026-11-11 |
+| Advanced template on Lakebase without `provider_role_pattern`/`provider_schemas` | refused by the guards, exit 13 | detected; deploys | owner 2026-11-11 |
 | Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |

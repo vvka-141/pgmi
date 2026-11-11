@@ -22,6 +22,17 @@ pgmi deploy . -d {{PROJECT_NAME}} --param env=prod
 Edit `pgmi.yaml` to set connection defaults (host, port, username) so you
 don't need to repeat them on every command.
 
+### On a managed host
+
+Deploy as a login with `CREATEDB`, such as the server's administrator login,
+and sign in the way the host expects: `--azure` (Azure Database for
+PostgreSQL), `--aws` with `--sslrootcert` and the RDS certificate bundle
+(Amazon RDS and Aurora), `--google --google-instance <project:region:instance>`
+(Google Cloud SQL). On Databricks Lakebase, connect to the maintenance
+database `databricks_postgres` ([Lakebase guide](https://vvka-141.github.io/pgmi/docs/lakebase/)).
+Connect to the server directly, not through a transaction pooler: a deploy is
+one session.
+
 ## What This Does
 
 1. Refuses the deploy if a run-once file changed after it ran here (below)

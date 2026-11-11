@@ -1,0 +1,18 @@
+description: the advanced template checks what the host must allow before anything changes, naming it - a login without CREATEROLE on a first deploy, and extensions missing from Azure's azure.extensions list
+project:
+  init: advanced
+steps:
+  - sql: DROP ROLE IF EXISTS "{db}_plain"; CREATE ROLE "{db}_plain" LOGIN PASSWORD 'plain-874-pw' CREATEDB
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_plain:plain-874-pw@{host}:{port}/postgres", -d, "{db}", --param, env=dev]
+    timeout: 120
+    expect:
+      exit: 13
+      stderr: ['The login {db}_plain lacks CREATEROLE', 'ALTER ROLE {db}_plain CREATEDB CREATEROLE']
+  - sql: ALTER DATABASE "{db}" OWNER TO CURRENT_USER; DROP ROLE "{db}_plain"; ALTER DATABASE "{db}" SET azure.extensions = 'pgcrypto, HSTORE'
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    timeout: 120
+    expect:
+      exit: 13
+      stderr: ['does not allow the extension\(s\) btree_gist,pg_trgm,uuid-ossp', '--name azure.extensions --value PGCRYPTO,HSTORE,BTREE_GIST,PG_TRGM,UUID-OSSP']

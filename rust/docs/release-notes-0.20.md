@@ -37,3 +37,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   PostgreSQL reads it, so pgmi no longer expands it. `--overwrite -d POSTGRES`
   compares database names exactly, as PostgreSQL does. The wizards' lists
   wrap around at both ends.
+- **The advanced template on managed hosts.** A first deploy names a login's
+  missing `CREATEDB` or `CREATEROLE`, and the extensions Azure has not
+  allow-listed, before it changes anything. On Databricks Lakebase it sets
+  `provider_role_pattern` and `provider_schemas` itself. Both template
+  READMEs say what each host needs.

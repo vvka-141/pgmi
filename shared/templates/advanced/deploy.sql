@@ -89,6 +89,15 @@ BEGIN
 END $$;
 
 
+-- Databricks Lakebase, told by two marks every Lakebase database carries. Its
+-- defaults let the guards pass the provider's own roles and schema, so one
+-- mark alone does not count.
+CREATE FUNCTION pg_temp.on_lakebase()
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT to_regrole('databricks_superuser') IS NOT NULL
+       AND to_regnamespace('__db_system') IS NOT NULL
+$$;
+
 -- Each parameter's default, beside its value. A parameter without one is
 -- required, and a blank value counts as not given. env has none: a deploy that
 -- does not say which environment it targets must not be treated as dev.
@@ -107,8 +116,8 @@ SET default_value = CASE key
     WHEN 'exchange_retention_days' THEN '30'
     WHEN 'www_authenticate' THEN 'Session'
     WHEN 'api_base_path' THEN '/api'
-    WHEN 'provider_role_pattern' THEN ''
-    WHEN 'provider_schemas' THEN '[]'
+    WHEN 'provider_role_pattern' THEN CASE WHEN pg_temp.on_lakebase() THEN 'databricks\_%' ELSE '' END
+    WHEN 'provider_schemas' THEN CASE WHEN pg_temp.on_lakebase() THEN '["__db_system"]' ELSE '[]' END
 END;
 
 UPDATE pg_temp.deployment_parameter
@@ -376,6 +385,44 @@ BEGIN
     END IF;
 END $$;
 
+
+CREATE FUNCTION pg_temp.required_extension()
+RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $$
+    SELECT name FROM (VALUES ('btree_gist'), ('hstore'), ('pg_trgm'), ('pgcrypto'), ('uuid-ossp')) AS r(name)
+$$;
+
+-- What the host must allow, checked before anything changes, so a managed
+-- host's missing grant is one clear error instead of a failure halfway. The
+-- role attributes matter on a first deploy only; a redeploy finds its roles
+-- and its database owner in place.
+DO $$
+DECLARE
+    v_missing text;
+    v_allowed text := current_setting('azure.extensions', true);
+BEGIN
+    SELECT string_agg(a.attribute, ' and ' ORDER BY a.attribute) INTO v_missing
+    FROM pg_roles r
+    CROSS JOIN LATERAL (VALUES ('CREATEDB', r.rolcreatedb), ('CREATEROLE', r.rolcreaterole)) a(attribute, held)
+    WHERE r.rolname = current_user AND NOT r.rolsuper AND NOT a.held
+      AND to_regclass('internal.environment') IS NULL;
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'The login % lacks %: a first deploy of the advanced template creates its roles and hands the database to them', current_user, v_missing
+            USING ERRCODE = 'insufficient_privilege',
+                  HINT = format('Deploy as the server''s administrator login, or have one run: ALTER ROLE %I CREATEDB CREATEROLE;', current_user);
+    END IF;
+
+    SELECT string_agg(e, ',' ORDER BY e) INTO v_missing
+    FROM pg_temp.required_extension() e
+    WHERE v_allowed IS NOT NULL
+      AND NOT EXISTS (SELECT FROM pg_extension x WHERE x.extname = e)
+      AND upper(e) <> ALL (string_to_array(upper(regexp_replace(v_allowed, '\s', '', 'g')), ','));
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'The server does not allow the extension(s) % that the advanced template needs', v_missing
+            USING ERRCODE = 'feature_not_supported',
+                  HINT = format('On Azure, add them to the server parameter azure.extensions, keeping what it lists: az postgres flexible-server parameter set --resource-group <group> --server-name <server> --name azure.extensions --value %s',
+                                upper(concat_ws(',', NULLIF(regexp_replace(v_allowed, '\s', '', 'g'), ''), v_missing)));
+    END IF;
+END $$;
 
 CREATE FUNCTION pg_temp.deployment_setting(p_key text, p_required boolean DEFAULT true)
 RETURNS TEXT LANGUAGE plpgsql AS $$
@@ -698,7 +745,7 @@ DECLARE
 BEGIN
     FOR v_ext IN
         SELECT r.name, e.extnamespace::regnamespace::text AS schema, e.extrelocatable
-        FROM (VALUES ('uuid-ossp'), ('pgcrypto'), ('pg_trgm'), ('hstore'), ('btree_gist')) AS r(name)
+        FROM pg_temp.required_extension() AS r(name)
         LEFT JOIN pg_extension e ON e.extname = r.name
         ORDER BY r.name
     LOOP

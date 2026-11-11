@@ -63,6 +63,7 @@ connection/target-session-attrs
 connection/tcp-user-timeout
 connection/unix-socket
 deploy/advanced-template-converges
+deploy/advanced-template-preflight
 deploy/basic-template-converges
 deploy/basic-template-provider-functions
 deploy/json-failure

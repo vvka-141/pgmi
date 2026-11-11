@@ -273,6 +273,15 @@ impl Guard {
     }
 }
 
+fn spec_secrets(s: &Spec) -> Vec<String> {
+    [&s.password, &s.sslpassword]
+        .into_iter()
+        .flatten()
+        .map(|p| p.expose().to_string())
+        .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
+        .collect()
+}
+
 /// The secrets of a deploy: its connection's passwords and sign-in tokens,
 /// read again for each notice because a token can be renewed mid-deploy.
 #[derive(Clone, Default)]
@@ -286,18 +295,10 @@ impl Secrets {
     }
 
     fn list(&self) -> Vec<String> {
-        let Ok(s) = self.0.lock() else {
-            return Vec::new();
-        };
-        s.iter()
-            .flat_map(|s| {
-                [&s.password, &s.sslpassword]
-                    .into_iter()
-                    .flatten()
-                    .map(|p| p.expose().to_string())
-                    .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
-            })
-            .collect()
+        self.0
+            .lock()
+            .map(|s| s.iter().flat_map(spec_secrets).collect())
+            .unwrap_or_default()
     }
 
     fn notice(&self, mut n: Notice) -> Notice {
@@ -397,7 +398,7 @@ impl Run {
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.secrets.list()
+        self.st.spec.iter().flat_map(spec_secrets).collect()
     }
 
     pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {

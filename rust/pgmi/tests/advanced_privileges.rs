@@ -247,6 +247,41 @@ fn access_baseline() {
 
 const PROVIDER_ROLES: [&str; 3] = ["pgmi_lbx_reader", "pgmi_lbx_writer", "pgmi_lbx_control"];
 
+/// What Lakebase puts in every database: the schema `__db_system` and event
+/// triggers that grant its roles on every new schema and table.
+fn provider_fixture(reader: &str, writer: &str, control: &str) -> String {
+    r"
+CREATE SCHEMA __db_system AUTHORIZATION {control};
+
+CREATE FUNCTION public.grant_usage_on_new_schema() RETURNS event_trigger LANGUAGE plpgsql AS $$
+DECLARE c record;
+BEGIN
+    FOR c IN SELECT object_identity FROM pg_event_trigger_ddl_commands() WHERE command_tag = 'CREATE SCHEMA' LOOP
+        EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %s TO {writer}', c.object_identity);
+        EXECUTE format('GRANT USAGE ON SCHEMA %s TO {reader}', c.object_identity);
+    END LOOP;
+END $$;
+
+CREATE FUNCTION public.grant_select_on_new_objects() RETURNS event_trigger LANGUAGE plpgsql AS $$
+DECLARE c record;
+BEGIN
+    FOR c IN SELECT object_identity FROM pg_event_trigger_ddl_commands()
+             WHERE command_tag IN ('CREATE TABLE', 'CREATE VIEW') AND object_type IN ('table', 'view') LOOP
+        EXECUTE format('GRANT SELECT ON %s TO {reader}', c.object_identity);
+        EXECUTE format('GRANT ALL ON %s TO {control}', c.object_identity);
+    END LOOP;
+END $$;
+
+CREATE EVENT TRIGGER on_create_schema ON ddl_command_end WHEN TAG IN ('CREATE SCHEMA')
+    EXECUTE FUNCTION public.grant_usage_on_new_schema();
+CREATE EVENT TRIGGER on_create_table_or_view ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'CREATE VIEW')
+    EXECUTE FUNCTION public.grant_select_on_new_objects();
+"
+        .replace("{reader}", reader)
+        .replace("{writer}", writer)
+        .replace("{control}", control)
+}
+
 fn drop_provider_roles(pg: &common::Pg, db: &str) {
     let admin = pg.admin();
     let mut roles: Vec<String> = ["_admin", "_api", "_kernel", "_owner", "_jobs"]
@@ -271,35 +306,11 @@ fn deploys_beside_provider_grants() {
     }
     create_database(&pg, &db);
     let target = db.client();
-    target.exec(
-        r"
-CREATE SCHEMA __db_system AUTHORIZATION pgmi_lbx_control;
-
-CREATE FUNCTION public.grant_usage_on_new_schema() RETURNS event_trigger LANGUAGE plpgsql AS $$
-DECLARE c record;
-BEGIN
-    FOR c IN SELECT object_identity FROM pg_event_trigger_ddl_commands() WHERE command_tag = 'CREATE SCHEMA' LOOP
-        EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %s TO pgmi_lbx_writer', c.object_identity);
-        EXECUTE format('GRANT USAGE ON SCHEMA %s TO pgmi_lbx_reader', c.object_identity);
-    END LOOP;
-END $$;
-
-CREATE FUNCTION public.grant_select_on_new_objects() RETURNS event_trigger LANGUAGE plpgsql AS $$
-DECLARE c record;
-BEGIN
-    FOR c IN SELECT object_identity FROM pg_event_trigger_ddl_commands()
-             WHERE command_tag IN ('CREATE TABLE', 'CREATE VIEW') AND object_type IN ('table', 'view') LOOP
-        EXECUTE format('GRANT SELECT ON %s TO pgmi_lbx_reader', c.object_identity);
-        EXECUTE format('GRANT ALL ON %s TO pgmi_lbx_control', c.object_identity);
-    END LOOP;
-END $$;
-
-CREATE EVENT TRIGGER on_create_schema ON ddl_command_end WHEN TAG IN ('CREATE SCHEMA')
-    EXECUTE FUNCTION public.grant_usage_on_new_schema();
-CREATE EVENT TRIGGER on_create_table_or_view ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'CREATE VIEW')
-    EXECUTE FUNCTION public.grant_select_on_new_objects();
-",
-    );
+    target.exec(&provider_fixture(
+        "pgmi_lbx_reader",
+        "pgmi_lbx_writer",
+        "pgmi_lbx_control",
+    ));
 
     let p = Project::init("advanced");
     let mut params = vec![
@@ -399,4 +410,60 @@ CREATE EVENT TRIGGER on_create_table_or_view ON ddl_command_end WHEN TAG IN ('CR
     drop(target);
     drop(db);
     drop_provider_roles(&pg, name);
+}
+
+const LAKEBASE_ROLES: [&str; 3] = [
+    "databricks_reader_874",
+    "databricks_writer_874",
+    "databricks_superuser",
+];
+
+#[test]
+fn lakebase_is_detected_and_deploys_without_provider_settings() {
+    let Some(pg) = pg() else { return };
+    let name = "pgmi_rs_b_advanced_lakebase";
+    let db = pg.database(name);
+    let admin = pg.admin();
+    let drop_roles = || {
+        for role in ["_admin", "_api", "_kernel", "_owner", "_jobs"]
+            .iter()
+            .map(|s| format!("{name}{s}"))
+            .chain(LAKEBASE_ROLES.iter().map(|r| (*r).to_string()))
+        {
+            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {}", ident(&role)));
+        }
+    };
+    drop_roles();
+    for role in LAKEBASE_ROLES {
+        admin.exec(&format!("CREATE ROLE {role} NOLOGIN"));
+    }
+    create_database(&pg, &db);
+    let target = db.client();
+    target.exec(&provider_fixture(
+        LAKEBASE_ROLES[0],
+        LAKEBASE_ROLES[1],
+        LAKEBASE_ROLES[2],
+    ));
+    let p = Project::init("advanced");
+    let params = [
+        ("env", "test"),
+        ("database_admin_password", "TestPassword123!"),
+    ];
+    for run in ["first", "second"] {
+        ok(
+            deploy(&pg, &p, &db, false, &params),
+            &format!("{run} deploy on a Lakebase-shaped database, no provider settings"),
+        );
+    }
+    let create: bool = target.one(
+        "SELECT has_schema_privilege('databricks_writer_874', 'core', 'CREATE')",
+        &[],
+    );
+    assert!(
+        !create,
+        "the detected pattern must revoke the provider's CREATE on core"
+    );
+    drop(target);
+    drop(db);
+    drop_roles();
 }

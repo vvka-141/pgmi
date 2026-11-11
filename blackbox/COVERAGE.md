@@ -38,6 +38,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `metadata scaffold` (preview, `--write`, `--sort-key`, `--idempotent=false`) | ✓ `commands/metadata`, `commands/metadata-scaffold-run-once` |
 | `templates list`, `templates describe <t>`, unknown = 2 | ✓ `commands/templates` |
 | basic template on a host whose provider owns PUBLIC-executable functions in `public` (Lakebase) deploys | ✓ `deploy/basic-template-provider-functions` |
+| advanced template: first-deploy check of the login's attributes and Azure's extension list | ✓ `deploy/advanced-template-preflight` |
 | `version`, `--version`, extra argument = 2 | ✓ `commands/version` |
 | `ai`, `ai contract`, unknown subcommand = 2 | ✓ `commands/ai` |
 | `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion` |

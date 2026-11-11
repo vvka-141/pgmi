@@ -10,7 +10,7 @@ Choose it when the database should hold the business logic and serve REST, RPC a
 
 **Requires PostgreSQL 18 or newer.** `deploy.sql` refuses an older server before it creates any objects; the empty database pgmi created for the deploy stays.
 
-**No superuser required.** A login with `CREATEROLE` and `CREATEDB` deploys it: `deploy.sql` grants itself the roles it creates. [Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql) shows the statement that creates that login. `TestAdvancedTemplate_DeploysWithoutSuperuser` deploys it twice that way. Entity lifecycle standards (`created_at`/`deleted_at`) are enforced by a deploy-end sweep over `pg_temp` functions — no DDL event trigger, no superuser privilege. Runs on managed providers that offer PostgreSQL 18, such as AWS RDS, Cloud SQL and Neon.
+**No superuser required.** A login with `CREATEROLE` and `CREATEDB` deploys it: `deploy.sql` grants itself the roles it creates. [Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql) shows the statement that creates that login. `TestAdvancedTemplate_DeploysWithoutSuperuser` deploys it twice that way. Entity lifecycle standards (`created_at`/`deleted_at`) are enforced by a deploy-end sweep over `pg_temp` functions — no DDL event trigger, no superuser privilege. For a managed host, see [On a managed host](#on-a-managed-host).
 
 ## Deployment Architecture
 
@@ -148,6 +148,24 @@ In CI, map the secret straight to the variable
 missing secret arrives empty and pgmi refuses it (exit 10). Stdin
 (`--params-file -`) and a private params file also work; see the
 [pgmi Security Guide](https://github.com/vvka-141/pgmi/blob/main/docs/SECURITY.md#pipeline-patterns).
+
+### On a managed host
+
+Every host needs the same three things: PostgreSQL 18, a login with
+`CREATEDB` and `CREATEROLE` (the server's administrator login has both), and
+the extensions `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` and `btree_gist`.
+A first deploy checks the login and Azure's extension list before it changes
+anything, and names what is missing.
+
+| Host | Before the first deploy |
+|---|---|
+| Azure Database for PostgreSQL | Add the five extensions to the server parameter `azure.extensions`, keeping what it lists: `az postgres flexible-server parameter set --resource-group <group> --server-name <server> --name azure.extensions --value UUID-OSSP,PGCRYPTO,PG_TRGM,HSTORE,BTREE_GIST`. Sign in with `--azure` |
+| Amazon RDS and Aurora | Sign in with `--aws`; pass the RDS certificate bundle with `--sslrootcert` |
+| Google Cloud SQL | Sign in with `--google --google-instance <project:region:instance>`. An IAM user needs `ALTER ROLE "<user>" CREATEDB CREATEROLE`, run as `postgres` |
+| Databricks Lakebase | Connect to the maintenance database `databricks_postgres` ([Lakebase guide](https://vvka-141.github.io/pgmi/docs/lakebase/)). The deploy recognises Lakebase and sets `provider_role_pattern` and `provider_schemas` itself |
+
+Connect to the server directly, not through a transaction pooler (PgBouncer
+on port 6432, RDS Proxy): a deploy is one session.
 
 ### 2. Test the Examples
 
@@ -467,8 +485,8 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 | `exchange_retention_days` | `30` | No | Days the exchange log keeps a row: the retention of the `purge_exchanges` job and the default of `POST /admin/maintenance/purge-exchanges` |
 | `api_base_path` | `/api` | No | The path the gateway serves REST under; the OpenAPI `servers` url, so generated clients and `/docs` call the right paths |
 | `www_authenticate` | `Session` | No | The `WWW-Authenticate` challenge on a 401 (RFC 9110 §15.5.2), e.g. `Bearer realm="app"` |
-| `provider_role_pattern` | empty | No | A managed provider's own roles, as a `LIKE` pattern (Lakebase: `databricks\_%`); every deploy revokes their `CREATE` on the template's schemas and `extensions` and their whole-table privileges (`TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN`) on its tables; the guards ignore their `USAGE` on schemas, their row-level DML on membership tables and event-trigger functions another role keeps in `public`. Refused when it matches a template role. Row-level security still binds them ([Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#grants-a-provider-makes-on-its-own)) |
-| `provider_schemas` | `[]` | No | A managed provider's own schemas, as a JSON array (Lakebase: `["__db_system"]`); the schema guard leaves them out. Refused when it names a template schema |
+| `provider_role_pattern` | `databricks\_%` on Lakebase, else empty | No | A managed provider's own roles, as a `LIKE` pattern (Lakebase: `databricks\_%`); every deploy revokes their `CREATE` on the template's schemas and `extensions` and their whole-table privileges (`TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN`) on its tables; the guards ignore their `USAGE` on schemas, their row-level DML on membership tables and event-trigger functions another role keeps in `public`. Refused when it matches a template role. Row-level security still binds them ([Production Guide](https://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#grants-a-provider-makes-on-its-own)) |
+| `provider_schemas` | `["__db_system"]` on Lakebase, else `[]` | No | A managed provider's own schemas, as a JSON array (Lakebase: `["__db_system"]`); the schema guard leaves them out. Refused when it names a template schema |
 | `database_owner_role` | `<dbname>_owner` | No | Owner role (NOLOGIN). An existing owner, kernel or api role on which another login holds ADMIN, or an owner, admin or kernel role with a member the deploy did not grant, is refused (22023), never adopted |
 | `database_admin_role` | `<dbname>_admin` | No | Admin role (LOGIN, full access). The deploy creates it; an existing role that is not a member of this database's owner role is refused (22023), never adopted |
 | `database_api_role` | `<dbname>_api` | No | API group role (NOLOGIN, permission bundle) |
