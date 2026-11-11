@@ -1075,6 +1075,7 @@ release notes take their "Behaviour changes" section from this table.
 | `sslcrl`, `sslcrldir`, `requirepeer`, `sslcertmode=require` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |
+| Encrypted client key whose PBKDF2 or PKCS#12 iteration count is above 1,000,000, or whose scrypt N·r·p is above 2^23 (openssl writes 2048 and 2^17) | derived, however long it takes | newly refused, exit 10, naming the file (Rust unit tests `a_key_whose_encryption_would_run_for_hours_is_refused_by_name`, `keys_openssl_writes_open_and_a_runaway_cost_is_refused`) | owner 2026-11-11 |
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
