@@ -6,7 +6,8 @@ use crate::commands::config::stopped;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::templates::Template;
-use crate::tui::connection::Done;
+use crate::tui;
+use crate::tui::init::Done;
 use crate::vfs::{Kind, OsFs, Vfs};
 
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
@@ -45,18 +46,16 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
     let template = match a.template.as_deref() {
         Some(t) => template(t)?,
         None if crate::tui::interactive(env) => {
-            match crate::tui::init::run(&target.display().to_string())? {
-                crate::tui::init::Done::Finished { template, connect } => {
-                    if connect {
-                        connection = Some(match crate::tui::connection::run(None, env, runtime)? {
-                            Done::Finished(s) => s,
-                            Done::Cancelled => return Err(stopped("init", false)),
-                            Done::Interrupted => return Err(stopped("init", true)),
-                        });
-                    }
+            match tui::init::run(&target.display().to_string(), env, runtime)? {
+                Done::Finished {
+                    template,
+                    connection: settings,
+                } => {
+                    connection = settings;
                     template
                 }
-                crate::tui::init::Done::Cancelled => return Err(crate::tui::init::cancelled()),
+                Done::Cancelled => return Err(tui::init::cancelled()),
+                Done::Interrupted => return Err(stopped("init", true)),
             }
         }
         None => Template::Minimal,

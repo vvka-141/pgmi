@@ -152,6 +152,7 @@ terminal/force-banner
 terminal/force-countdown-timeout
 terminal/init-wizard
 terminal/init-wizard-connection
+terminal/init-wizard-connection-esc
 terminal/no-terminal-queries
 terminal/non-interactive
 terminal/overwrite-confirmation

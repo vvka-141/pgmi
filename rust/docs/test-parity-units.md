@@ -177,9 +177,9 @@ its own screen, so Go's embedded-wizard tests map to the two wizards apart.
 | TestConnectionWizard_WithInitialConfigPrefillsHostForm | tui::connection::tests::an_existing_config_prefills_the_host_form |
 | TestConnectionWizard_KeepsTheExistingTLSSettings | tui::connection::tests::existing_tls_is_kept_but_a_token_never_gets_a_plaintext_capable_mode, existing_settings_seed_the_form_and_keep_tls |
 | TestInitWizard_NoConnection_QuitsAtSetupChoice | tui::init::tests::down_enter_enter_picks_basic_without_connection |
-| TestInitWizard_ConnectionEmbedded_SingleProgram | tui::init::tests::yes_asks_for_the_connection_wizard; black-box terminal/init-wizard-connection |
-| TestInitWizard_CtrlCInterrupts, _CtrlCInConnectionWizardInterrupts | tui::init::tests::ctrl_c_stops_init_on_either_screen; tui::connection::tests::esc_walks_back_and_ctrl_c_interrupts |
-| TestInitWizard_ConnectionCancelledViaEsc | not ported: Rust behaves differently, see below |
+| TestInitWizard_ConnectionEmbedded_SingleProgram | tui::init::tests::yes_runs_the_connection_wizard_and_finishes_with_its_settings; black-box terminal/init-wizard-connection |
+| TestInitWizard_CtrlCInterrupts, _CtrlCInConnectionWizardInterrupts | tui::init::tests::ctrl_c_stops_init_on_every_screen; tui::connection::tests::esc_walks_back_and_ctrl_c_interrupts |
+| TestInitWizard_ConnectionCancelledViaEsc | tui::init::tests::esc_on_the_connection_wizard_returns_to_the_setup_question; black-box terminal/init-wizard-connection-esc (PGMI-869) |
 | TestInitWizard_View_TemplateStep, _RadioRowsAlign | tui::init::tests::the_template_screen_lists_every_template_with_aligned_radios |
 | TestInitWizard_View_DirectoryStep, _BlockedDirectoryStaysOnTheDirectoryStep, _CheckDirBlocking | dropped from the wizard: Rust has no directory step, the target is the argument. The blocking check is commands::init::tests::git_pgmi_yaml_and_env_do_not_block, any_other_entry_blocks |
 | TestInitWizard_StepsFit, _EmbeddedWizardGetsWindowSize | dropped: each wizard draws its own full screen at the terminal's size |
@@ -214,5 +214,3 @@ its own screen, so Go's embedded-wizard tests map to the two wizards apart.
   quoted name it drops.
 - **Provider and template lists wrap** at both ends in Rust; Go stops at the
   first and last entry.
-- **Esc on the connection wizard's first screen during `pgmi init`**: Go returns
-  to "Set up the connection now?"; Rust ends init with exit 12.

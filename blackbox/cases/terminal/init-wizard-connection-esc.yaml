@@ -1,0 +1,26 @@
+description: on a terminal, Esc on the connection wizard's first screen during init goes back to "Set up the connection now?" instead of ending init; answering No there scaffolds without connection settings
+steps:
+  - pgmi: [init, "{workdir}/wiz"]
+    tty: true
+    stdin:
+      - {wait: 2}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - {hex: "1b"}
+      - {wait: 2}
+      - "\x1b[A"
+      - {wait: 0.5}
+      - "\r"
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Wrote .*\\(basic template\\)"]
+      stdout_not: ["Wrote .*pgmi\\.yaml", "cancelled"]
+      files:
+        wiz/pgmi.yaml: ["# pgmi project configuration"]

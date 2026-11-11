@@ -83,7 +83,10 @@ Option 1 for the two wizards; plain line I/O for the rest.
 - The `[Y/n]` prompts (overwrite settings, unparseable file, `.pgpass`) are a
   line read from stdin outside the wizard; end of input is No.
 - `init`: Yes to "Set up the connection now?" runs the same wizard after the
-  template screen and before scaffolding (cancelling it cancels init); the
+  template screen and before scaffolding, inside the init wizard (one
+  screen, one event loop, `tui::drive`). Esc on its first screen returns to
+  "Set up the connection now?" and Ctrl-C ends init (exit 130), as in Go
+  (PGMI-869; Esc ended init with exit 12 before). The
   settings are written into the scaffolded `pgmi.yaml` and the next steps
   name the chosen database (`terminal/init-wizard-connection`).
 - `.pgpass` is replaced through a temporary file and a rename, mode 0600, the

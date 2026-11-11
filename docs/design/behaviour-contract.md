@@ -65,7 +65,7 @@ text files and JSON-escaped in `.json` files. Answering Yes to "Set up the
 connection now?" runs the `config` wizard and writes its settings into the
 scaffolded `pgmi.yaml`.
 
-Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`.
+Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
 
 ### Template deployments
 

@@ -1,7 +1,6 @@
-use std::sync::mpsc;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -654,9 +653,9 @@ pub(crate) enum Done {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Effect {
+pub(crate) enum Effect<D = Done> {
     Test(Box<Settings>),
-    Done(Done),
+    Done(D),
 }
 
 pub(crate) struct Wizard {
@@ -950,44 +949,37 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         .unwrap_or_else(|_| Err("timeout: no answer within 10s".into()))
 }
 
+impl super::Steps for Wizard {
+    type Done = Done;
+
+    fn update(&mut self, key: KeyEvent) -> Option<Effect> {
+        Wizard::update(self, key)
+    }
+
+    fn tested(&mut self, result: std::result::Result<String, String>) {
+        Wizard::tested(self, result);
+    }
+
+    fn tick(&mut self) {
+        Wizard::tick(self);
+    }
+
+    fn screen(&self) -> (u8, u8, u8) {
+        let (stage, test) = self.page();
+        (0, stage, test)
+    }
+
+    fn view(&self) -> Paragraph<'static> {
+        Wizard::view(self)
+    }
+}
+
 pub(crate) fn run(
     initial: Option<Connection>,
     env: &Env,
     runtime: &tokio::runtime::Handle,
 ) -> Result<Done> {
-    let mut wizard = Wizard::new(initial);
-    let mut screen = super::Screen::open()?;
-    let (tx, rx) = mpsc::channel();
-    let mut page = wizard.page();
-    loop {
-        screen
-            .0
-            .draw(|f| f.render_widget(wizard.view(), f.area()))
-            .map_err(super::io)?;
-        if let Ok(result) = rx.try_recv() {
-            wizard.tested(result);
-        } else if crossterm::event::poll(Duration::from_millis(100)).map_err(super::io)? {
-            if let Event::Key(key) = crossterm::event::read().map_err(super::io)? {
-                match wizard.update(key) {
-                    Some(Effect::Done(done)) => return Ok(done),
-                    Some(Effect::Test(s)) => {
-                        let tx = tx.clone();
-                        let env = env.clone();
-                        runtime.spawn(async move {
-                            let _ = tx.send(test(*s, env).await);
-                        });
-                    }
-                    None => {}
-                }
-            }
-        } else {
-            wizard.tick();
-        }
-        if wizard.page() != page {
-            page = wizard.page();
-            screen.reset()?;
-        }
-    }
+    super::drive(&mut Wizard::new(initial), env, runtime)
 }
 
 #[cfg(test)]

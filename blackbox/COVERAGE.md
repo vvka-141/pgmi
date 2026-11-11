@@ -31,7 +31,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `deploy` | ✓ `exit-codes/*`, `deploy/*`, `params/*`; flags below |
 | `info`, `info --json`, missing path = 10 | ✓ `commands/info` |
 | `init` (no `-t` without a terminal = minimal; `-t basic\|advanced`; manifests written without `.scaffold`; non-empty target = 2; unknown template = 2; unwritable target = 1) | ✓ `commands/init`, `commands/init-unwritable` |
-| `init` wizard (terminal, no `-t`) | ✓ `terminal/init-wizard`, `terminal/init-wizard-connection` |
+| `init` wizard (terminal, no `-t`) | ✓ `terminal/init-wizard`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc` |
 | `config` (wizard: tests the connection, keeps pgmi.yaml comments and params, saves to `~/.pgpass`) | ✓ `terminal/config-wizard`, `terminal/config-refusals`, `terminal/config-replace-unparseable` |
 | `metadata plan` (+`--json`) | ✓ `commands/metadata`, `commands/metadata-invalid` |
 | `metadata validate` (+`--json`), bad id = 10, duplicate id = 10 | ✓ `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate` |
