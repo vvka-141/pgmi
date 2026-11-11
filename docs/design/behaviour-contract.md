@@ -51,9 +51,13 @@ Exit 3: no case; a release binary cannot panic on purpose. The Rust build proves
 
 `pgmi info [path]` summarises a project without a database: template, whether
 `deploy.sql` and `pgmi.yaml` exist, file counts, directories; `--json` gives
-the same as an object. A missing path is exit 10.
+the same as an object. A missing path is exit 10. It scans the project as
+`deploy` and `metadata` do: a `<pgmi-meta>` block that does not parse, or a
+`.pgmiignore` that hides `deploy.sql`, is exit 10 (`failed to scan
+directory: ...`); `metadata plan`, `validate` and `scaffold` refuse that
+`.pgmiignore` the same way.
 
-Cases: `commands/info`, `commands/info-scaffolded-by`.
+Cases: `commands/info`, `commands/info-scaffolded-by`, `commands/info-metadata-refusals`.
 
 ### init
 
