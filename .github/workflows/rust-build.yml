@@ -1,0 +1,64 @@
+name: Rust build
+
+on:
+  push:
+    branches: [main]
+    paths: ['rust/**', 'shared/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'deny.toml', '.github/workflows/rust-build.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, target: x86_64-unknown-linux-musl, linker: rust-lld}
+          - {os: ubuntu-latest, target: aarch64-unknown-linux-musl, linker: rust-lld}
+          - {os: macos-latest, target: aarch64-apple-darwin}
+          - {os: macos-latest, target: x86_64-apple-darwin}
+          - {os: windows-latest, target: x86_64-pc-windows-msvc}
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - name: Build without a C compiler
+        shell: bash
+        env:
+          CC: /bin/false
+          CXX: /bin/false
+        run: |
+          if [ -n "${{ matrix.linker }}" ]; then
+            t=$(echo "${{ matrix.target }}" | tr a-z- A-Z_)
+            export "CARGO_TARGET_${t}_LINKER=${{ matrix.linker }}"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then unset CC CXX; fi
+          cargo build --locked --release -p pgmi --target ${{ matrix.target }}
+      - name: Check the binary
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/pgmi
+          [ -f "$bin" ] || bin="$bin.exe"
+          ls -l "$bin"
+          case "${{ matrix.target }}" in
+            *linux-musl) file "$bin" | grep -q 'static' ;;
+            *apple-darwin) otool -L "$bin" ;;
+            *windows*) ;;
+          esac
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl|aarch64-apple-darwin|x86_64-pc-windows-msvc) "$bin" --version ;;
+          esac
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pgmi-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/pgmi*
+          retention-days: 7
