@@ -273,3 +273,4 @@ decided in the behaviour contract (PGMI-828), not fixed.
 | a nested `deploy.sql` is loaded; `--verbose` names ignored paths | ✓ `dialect/nested-deploy-sql-loaded` |
 | a parameter value never reaches the statement text pgmi echoes on an error | ✓ `errors/parameter-value-not-in-statement-echo` |
 | a client ID without a secret signs in as that identity, never through the Azure CLI | ✓ `cloud/azure-client-id-never-uses-the-cli` |
+| AWS temporary credentials (`AWS_SESSION_TOKEN`) and a named profile (`AWS_PROFILE`) sign the RDS token | ✓ `cloud/aws-session-token-and-profile` |

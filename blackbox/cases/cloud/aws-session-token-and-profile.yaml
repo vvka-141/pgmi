@@ -1,0 +1,25 @@
+description: --aws signs the RDS token with temporary credentials (AWS_SESSION_TOKEN rides in the token) and with a named profile's credentials (AWS_PROFILE), as CICD.md lists
+servers: [fakes]
+home:
+  .aws/credentials: |
+    [pgmi-874]
+    aws_access_key_id = AKIDPROFILE
+    aws_secret_access_key = not-a-real-secret
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=iam_session dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: ASIAEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_SESSION_TOKEN: session-token-874}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_session", "password": "[^"]*X-Amz-Credential=ASIAEXAMPLE%2F[^"]*X-Amz-Security-Token=session-token-874']
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=iam_profile dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_PROFILE: pgmi-874, AWS_SHARED_CREDENTIALS_FILE: "{home}/.aws/credentials", AWS_CONFIG_FILE: "{home}/.aws/none"}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_profile", "password": "[^"]*X-Amz-Credential=AKIDPROFILE%2F']

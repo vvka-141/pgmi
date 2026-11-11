@@ -569,7 +569,7 @@ over a wrong `AZURE_TENANT_ID`; a principal without a database role is exit 11
 naming the user (`check that the signed-in identity has a database role and
 that --username matches it`); a wrong tenant is exit 11 (`AADSTS90002`).
 
-Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`.
+Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust dialer is checked against the runner's fake Admin API by

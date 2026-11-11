@@ -8,6 +8,7 @@ checksums/cross-binary-redeploy-advanced
 checksums/golden
 cloud/aws-credential-source
 cloud/aws-iam-token
+cloud/aws-session-token-and-profile
 cloud/azure-cli
 cloud/azure-client-id-never-uses-the-cli
 cloud/azure-cloud-shell
