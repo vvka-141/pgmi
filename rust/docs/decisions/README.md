@@ -32,6 +32,7 @@ them.
 | [0019](0019-output.md) | Own stderr Reporter, no tracing subscriber; one serde struct for `--json` and the serve deploy result; jiff timestamps |
 | [0020](0020-metadata-xml.md) | roxmltree for `<pgmi-meta>`, uuid for ids; scaffold stops at `.git` |
 | [0021](0021-pure-rust.md) | Pure Rust (PGMI-855): features that keep C out of every cloud crate, a CI gate banning C-compiling crates and checking every target with no C compiler; graviola and the platform linkers accepted by the owner (2026-11-11) |
+| [0022](0022-library-layout-and-seams.md) | One package with a lib target and a thin bin; `pub(crate)` by default; seams only where a test double exists (`Vfs`, `Approver`, Reporter sink, serve over any transport); `deploy::Request`, `DeployRecord`, typed settings and `Secret`; an ordered refactor plan that keeps the black-box suite green after each step |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage

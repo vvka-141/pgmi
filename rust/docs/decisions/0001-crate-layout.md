@@ -49,7 +49,8 @@ shared/Cargo.toml, build.rs, src/lib.rs   package `pgmi-shared` (record 0010)
   among the dependencies. Resolver 3 (the 2024 default) picks dependency
   versions that respect it, which helps `cargo install pgmi` on older
   toolchains. Raise it only when a deliberate dependency update needs it.
-- Modules in `rust/pgmi/src/`: `cli`, `env`, `config` (pgmi.yaml, params),
+- Modules in `rust/pgmi/src/` (superseded by record 0022, which sets the
+  target layout): `cli`, `env`, `config` (pgmi.yaml, params),
   `conn` (resolution, pgpass, tls, cloud/{azure,aws,google}), `project`
   (walk, ignore, lexer, checksum, metadata), `deploy` (session, execute,
   overwrite, lock), `output`, `serve`, `tui`, `error`, `vfs` (the read-only
