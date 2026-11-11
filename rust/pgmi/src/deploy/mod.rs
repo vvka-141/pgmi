@@ -447,9 +447,6 @@ async fn deploy(
     if a.overwrite {
         overwrite::refuse_maintenance(&spec)?;
     }
-    if a.overwrite && matches!(ctx.approval, Approval::Prompt) {
-        overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
-    }
     let sink_reporter = reporter.clone();
     let sink_log = log.clone();
     let dialer = Dialer {
@@ -473,6 +470,9 @@ async fn deploy(
     }
     if a.overwrite {
         let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
+        if plan.drops_a_database() && matches!(ctx.approval, Approval::Prompt) {
+            overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
+        }
         let recreated = guard
             .running(&plan.maintenance, overwrite::recreate(&plan, reporter))
             .await?;

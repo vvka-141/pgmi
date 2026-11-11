@@ -1,0 +1,10 @@
+description: --overwrite on a database that does not exist yet creates it without announcing a drop
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    expect:
+      exit: 0
+      stderr: ["does not exist; creating"]
+      stderr_not: ["dropping and recreating", "DROP DATABASE"]

@@ -114,6 +114,12 @@ pub(crate) struct Plan {
     snapshot: Option<Snapshot>,
 }
 
+impl Plan {
+    pub(crate) fn drops_a_database(&self) -> bool {
+        self.snapshot.is_some()
+    }
+}
+
 struct Snapshot {
     locale: Option<String>,
     owner: String,

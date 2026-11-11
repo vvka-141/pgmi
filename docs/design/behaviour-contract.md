@@ -297,7 +297,7 @@ role-in-database settings, comment and privileges; a deploying role that
 could not put one of them back is refused with exit 10 naming each item, and
 nothing is dropped. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
 
 ### Concurrency
 

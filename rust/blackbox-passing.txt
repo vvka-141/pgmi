@@ -92,6 +92,7 @@ flags/compat
 flags/connection-forms
 flags/granular-flags
 flags/overwrite-force
+flags/overwrite-new-database
 flags/overwrite-restores
 flags/params-file
 flags/timeout-forms
