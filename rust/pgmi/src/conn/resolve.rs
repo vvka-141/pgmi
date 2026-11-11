@@ -19,7 +19,7 @@ pub(crate) struct Flags {
     pub(crate) port: Option<String>,
     pub(crate) username: Option<String>,
     pub(crate) database: Option<String>,
-    pub(crate) sslmode: Option<String>,
+    pub(crate) sslmode: Option<SslMode>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslrootcert: Option<String>,
@@ -69,6 +69,8 @@ macro_rules! keywords {
         }
 
         impl $name {
+            pub(crate) const ALL: &'static [Self] = &[$($name::$variant),+];
+
             pub(crate) const fn as_str(self) -> &'static str {
                 match self {
                     $($name::$variant => $text),+
@@ -80,10 +82,11 @@ macro_rules! keywords {
             type Err = Unknown;
 
             fn from_str(s: &str) -> std::result::Result<Self, Unknown> {
-                match s {
-                    $($text => Ok($name::$variant),)+
-                    _ => Err(Unknown),
-                }
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|v| v.as_str() == s)
+                    .ok_or(Unknown)
             }
         }
 
@@ -470,8 +473,10 @@ fn finish(
             }
         }
     }
+    if let Some(m) = flags.sslmode {
+        f.insert("sslmode".into(), m.as_str().into());
+    }
     for (k, v) in [
-        ("sslmode", &flags.sslmode),
         ("sslcert", &flags.sslcert),
         ("sslkey", &flags.sslkey),
         ("sslrootcert", &flags.sslrootcert),

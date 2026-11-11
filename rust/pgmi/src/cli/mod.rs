@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::conn::cloud::{self, Provider};
-use crate::conn::resolve::Flags;
+use crate::conn::resolve::{Flags, SslMode};
 use crate::error::{Kind, Secret};
 pub(crate) use commands::*;
 
@@ -105,8 +105,8 @@ pub(crate) struct DeployArgs {
     pub(crate) username: Option<String>,
     #[arg(short = 'd', long)]
     pub(crate) database: Option<String>,
-    #[arg(long, value_parser = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"])]
-    pub(crate) sslmode: Option<String>,
+    #[arg(long, value_enum)]
+    pub(crate) sslmode: Option<SslMode>,
     #[arg(long)]
     pub(crate) sslcert: Option<String>,
     #[arg(long)]
@@ -193,6 +193,16 @@ impl From<DeployArgs> for crate::deploy::Request {
             compat: a.compat,
             json: a.json,
         }
+    }
+}
+
+impl clap::ValueEnum for SslMode {
+    fn value_variants<'a>() -> &'a [Self] {
+        SslMode::ALL
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(clap::builder::PossibleValue::new(self.as_str()))
     }
 }
 
@@ -356,7 +366,6 @@ mod tests {
                 &c.port,
                 &c.username,
                 &c.database,
-                &c.sslmode,
                 &c.sslcert,
                 &c.sslkey,
                 &c.sslrootcert
@@ -367,12 +376,12 @@ mod tests {
                 Some("6000"),
                 Some("u"),
                 Some("db"),
-                Some("require"),
                 Some("c"),
                 Some("k"),
                 Some("r")
             ]
         );
+        assert_eq!(c.sslmode, Some(SslMode::Require));
         assert!(r.overwrite && r.force && r.json);
         assert_eq!(r.compat.as_deref(), Some("1"));
         assert_eq!(r.params, ["a=b"]);

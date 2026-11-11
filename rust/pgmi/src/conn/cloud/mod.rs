@@ -111,12 +111,8 @@ pub(crate) fn select(
         )));
     }
     let y = yaml.map(|y| y.connection.clone()).unwrap_or_default();
-    let provider = match (asked.first(), y.auth_method.as_deref()) {
-        (Some(p), _) => *p,
-        (None, Some("azure")) => Provider::Azure,
-        (None, Some("aws")) => Provider::Aws,
-        (None, Some("google")) => Provider::Google,
-        (None, _) => return Ok(None),
+    let Some(provider) = asked.first().copied().or(y.auth_method) else {
+        return Ok(None);
     };
     Ok(Some((
         provider,

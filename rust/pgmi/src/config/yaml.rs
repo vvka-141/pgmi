@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::conn::cloud::Provider;
 use crate::error::{Error, Result};
 use crate::vfs::Vfs;
 
@@ -27,11 +28,26 @@ pub(crate) struct Connection {
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslrootcert: Option<String>,
-    pub(crate) auth_method: Option<String>,
+    /// `auth_method` as written; `parse` turns it into `auth_method`.
+    #[serde(rename = "auth_method")]
+    pub(crate) auth_method_text: Option<String>,
+    #[serde(skip)]
+    pub(crate) auth_method: Option<Provider>,
     pub(crate) azure_tenant_id: Option<String>,
     pub(crate) azure_client_id: Option<String>,
     pub(crate) aws_region: Option<String>,
     pub(crate) google_instance: Option<String>,
+}
+
+fn auth_method(text: &str) -> Result<Provider> {
+    match text {
+        "azure" => Ok(Provider::Azure),
+        "aws" => Ok(Provider::Aws),
+        "google" => Ok(Provider::Google),
+        _ => Err(Error::config(format!(
+            "failed to load pgmi.yaml: invalid auth_method {text:?}: expected azure, aws or google"
+        ))),
+    }
 }
 
 impl ProjectConfig {
@@ -50,15 +66,15 @@ impl ProjectConfig {
         if text.trim().is_empty() {
             return Ok(Self::default());
         }
-        let cfg: ProjectConfig = serde_saphyr::from_str(text)
+        let mut cfg: ProjectConfig = serde_saphyr::from_str(text)
             .map_err(|e| Error::config(format!("failed to load pgmi.yaml: {e}")))?;
-        if let Some(m) = &cfg.connection.auth_method
-            && !matches!(m.as_str(), "azure" | "aws" | "google")
-        {
-            return Err(Error::config(format!(
-                "failed to load pgmi.yaml: invalid auth_method {m:?}: expected azure, aws or google"
-            )));
-        }
+        let c = &mut cfg.connection;
+        c.auth_method = c
+            .auth_method_text
+            .take()
+            .as_deref()
+            .map(auth_method)
+            .transpose()?;
         Ok(cfg)
     }
 
@@ -154,6 +170,9 @@ mod tests {
             let e = ProjectConfig::load(&fs).unwrap_err();
             assert_eq!(e.exit_code(), 10, "{}", e.text());
             assert!(e.text().starts_with(text), "{}", e.text());
+            if text.contains("auth_method") {
+                assert_eq!(e.text(), text);
+            }
         }
     }
 

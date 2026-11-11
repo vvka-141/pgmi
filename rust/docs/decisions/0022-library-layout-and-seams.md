@@ -126,7 +126,7 @@ The lib target is not published as a library API (0001 still holds).
   results; the `State` bag and `record()` go. Serve reuses it.
 - **Types.** `SslMode`, `ChannelBinding`, `TargetSessionAttrs`,
   `Severity`, `Template`, `IgnoreRule`, `AuthMethod` as `cloud::Provider`
-  via serde; `Secret(String)` with a redacting `Debug` for `password`,
+  at the `pgmi.yaml` edge (step 9); `Secret(String)` with a redacting `Debug` for `password`,
   `sslpassword`, tokens; `Spec` hosts non-empty by construction.
 - **Errors.** Keep 0002's single `Error`. Add module enums only where a
   caller or test branches: `conn::parse::ParseError`,
@@ -264,6 +264,18 @@ land before or between steps, each with a black-box case.
    not ported: `PGPORT=" 5432 "` is accepted (libpq does too, Go refuses;
    a row in the contract's 0.20 table); two granular flags beside an
    environment string name only the first.
+   PGMI-869: `pgmi.yaml`'s `auth_method` is an `Option<cloud::Provider>`,
+   read from the text right after serde in `ProjectConfig::parse` (a serde
+   error would carry serde-saphyr's location prefix and change the
+   refusal's text; `databricks` has no yaml form), and `--sslmode`
+   is `Option<SslMode>` through `clap::ValueEnum` (same possible-values
+   error). Left as text on purpose: `sslmode` in `pgmi.yaml` and in the
+   wizard's settings, because the resolver validates it from every source
+   with one message and only for commands that connect, as Go does;
+   `--template`, because `init` refuses an unknown name with exit 2 and
+   `unknown template: <name>`, which clap would reword; and `--compat`,
+   because deploy refuses it inside the deployer, so the refusal reaches
+   the `--json` record with exit 10.
 10. **Typed module errors and `conn::retry`.** Port groups 6 and 7.
     Done 2026-11-11: `ParseError`, `ResolveError` and `MetaError` as
     record 0002 now says; tests match variants instead of substrings

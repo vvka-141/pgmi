@@ -401,7 +401,7 @@ fn only_pg_host_port_or_user_in_the_environment() {
 fn the_sslmode_flag_beats_pgsslmode_which_beats_the_default() {
     let env = Env::from_pairs(&[("PGSSLMODE", "disable"), ("PGDATABASE", "d")]);
     let mut fl = flags();
-    fl.sslmode = Some("require".into());
+    fl.sslmode = Some(SslMode::Require);
     assert_eq!(
         resolve(&fl, &env, None).unwrap().sslmode(),
         SslMode::Require
@@ -780,7 +780,7 @@ fn a_server_flag_next_to_an_environment_string_is_refused() {
         host: Some("h".into()),
         port: Some("5471".into()),
         username: Some("u".into()),
-        sslmode: Some("require".into()),
+        sslmode: Some(SslMode::Require),
         ..Flags::default()
     };
     one(
@@ -796,7 +796,7 @@ fn a_server_flag_next_to_an_environment_string_is_refused() {
 #[test]
 fn the_sslmode_flag_applies_to_an_environment_string() {
     let mut fl = flags();
-    fl.sslmode = Some("disable".into());
+    fl.sslmode = Some(SslMode::Disable);
     let env = Env::from_pairs(&[(
         "DATABASE_URL",
         "postgresql://u:p@envhost:6009/envdb?sslmode=require",
@@ -812,7 +812,7 @@ fn the_sslmode_flag_applies_to_an_environment_string() {
 #[test]
 fn the_connection_flag_and_the_sslmode_flag_are_refused_together() {
     let mut fl = conn("postgresql://u@h/db");
-    fl.sslmode = Some("require".into());
+    fl.sslmode = Some(SslMode::Require);
     let e = refused(resolve(&fl, &Env::default(), None));
     assert_eq!(
         e.to_string(),
@@ -857,7 +857,7 @@ fn sslmode_sources(mode: &str) -> Vec<SslSource> {
     let with_host = |sslmode: Option<&str>| Flags {
         host: Some("db.example.com".into()),
         database: Some("d".into()),
-        sslmode: sslmode.map(str::to_string),
+        sslmode: sslmode.map(|m| m.parse().unwrap()),
         ..Flags::default()
     };
     vec![
@@ -975,7 +975,7 @@ fn without_a_token_the_prefer_default_and_weak_modes_stay() {
     fl.database = Some("d".into());
     let s = resolve(&fl, &Env::default(), None).unwrap();
     assert_eq!(s.sslmode(), SslMode::Prefer);
-    fl.sslmode = Some("disable".into());
+    fl.sslmode = Some(SslMode::Disable);
     assert_eq!(
         resolve(&fl, &Env::default(), None).unwrap().sslmode(),
         SslMode::Disable
@@ -987,7 +987,7 @@ fn without_a_token_the_prefer_default_and_weak_modes_stay() {
     let s = token_check(Provider::Google, google.clone(), &[], None).unwrap();
     assert_eq!(s.sslmode(), SslMode::Prefer);
     let mut fl = google;
-    fl.sslmode = Some("disable".into());
+    fl.sslmode = Some(SslMode::Disable);
     let s = token_check(Provider::Google, fl, &[], None).unwrap();
     assert_eq!(s.sslmode(), SslMode::Disable);
 }
