@@ -1,0 +1,26 @@
+description: with a client ID and no secret, --azure signs in as that identity (here managed identity) and never asks the Azure CLI, whose signed-in user is not the identity named (CONNECTIONS.md "Which identity signs in")
+servers: [tls, fakes]
+home:
+  bin/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/az-calls.log"
+      printf '{"accessToken": "{azure_token}", "expiresOn": "2099-01-01 00:00:00.000000", "expires_on": 4070908800, "subscription": "s", "tenant": "t", "tokenType": "Bearer"}\n'
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --azure-client-id, 11111111-1111-1111-1111-111111111111, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", IDENTITY_ENDPOINT: "{fake_http}/msi/token", IDENTITY_HEADER: secret-header}
+    timeout: 60
+    expect:
+      exit: 0
+      absent: [home/az-calls.log]
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["get-access-token"]

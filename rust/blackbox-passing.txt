@@ -9,6 +9,7 @@ checksums/golden
 cloud/aws-credential-source
 cloud/aws-iam-token
 cloud/azure-cli
+cloud/azure-client-id-never-uses-the-cli
 cloud/azure-cloud-shell
 cloud/azure-managed-identity
 cloud/azure-ml
