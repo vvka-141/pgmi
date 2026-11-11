@@ -75,15 +75,15 @@ async fn serve(env: Env, verbose: bool) {
     let mut stdin = tokio::io::stdin();
     let mut lines = wire::Lines::default();
     let mut buf = vec![0u8; 64 * 1024];
-    let stop = stop_signal();
-    tokio::pin!(stop);
+    let root = server.root.clone();
+    let signals = tokio::spawn(async move {
+        stop_signal().await;
+        root.cancel();
+    });
     loop {
         let n = tokio::select! {
             n = stdin.read(&mut buf) => n.unwrap_or(0),
-            _ = &mut stop => {
-                server.root.cancel();
-                break;
-            }
+            () = server.root.cancelled() => break,
         };
         if n == 0 {
             if let Some(line) = lines.finish() {
@@ -96,13 +96,8 @@ async fn serve(env: Env, verbose: bool) {
         }
         while tasks.try_join_next().is_some() {}
     }
-    tokio::select! {
-        _ = async { while tasks.join_next().await.is_some() {} } => {}
-        _ = &mut stop => {
-            server.root.cancel();
-            while tasks.join_next().await.is_some() {}
-        }
-    }
+    while tasks.join_next().await.is_some() {}
+    signals.abort();
     drop(server);
     let _ = writer.await;
 }
