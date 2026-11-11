@@ -218,10 +218,13 @@ first and never overrides a variable already set), `pgmi.yaml` `params`. Keys
 are lower-cased. Each reaches `deploy.sql` as `current_setting('pgmi.<key>')`
 and in `pgmi_parameter_view`. Refused with exit 10: an empty `PGMI_PARAM_*`, a
 `--param` without `=`, a missing params file, two keys differing only in case
-in one file, a `PGMI_PARAM_` with nothing after the prefix. Full reference:
-`docs/CLI.md` "Parameter Flags".
+in one file or in two `--param` flags, a `PGMI_PARAM_` with nothing after the
+prefix, a key that is not a PostgreSQL identifier of 1-63 characters (letter
+or underscore first, then letters, digits, underscores), and a value holding
+a NUL byte. All are refused before connecting. Full reference: `docs/CLI.md`
+"Parameter Flags".
 
-Cases: `params/env-var-reaches-session`, `params/precedence`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
+Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-key`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
 
 ### Connection sources
 
