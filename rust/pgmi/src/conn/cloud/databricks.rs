@@ -7,7 +7,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use reqwest::StatusCode;
 
-use super::Request;
+use super::Options;
 use super::azure;
 use super::http::{client, encode};
 use crate::env::Env;
@@ -103,12 +103,12 @@ impl std::fmt::Debug for Settings {
     }
 }
 
-pub(crate) fn settings(req: &Request, env: &Env) -> Result<Settings> {
+pub(crate) fn settings(req: &Options, env: &Env) -> Result<Settings> {
     settings_with(req, env, |p| std::fs::read_to_string(p))
 }
 
 fn settings_with(
-    req: &Request,
+    req: &Options,
     env: &Env,
     read: impl Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Settings> {
@@ -139,7 +139,7 @@ fn settings_with(
     })
 }
 
-fn endpoint(req: &Request, env: &Env) -> Result<String> {
+fn endpoint(req: &Options, env: &Env) -> Result<String> {
     let value = match req
         .databricks_endpoint
         .as_deref()
@@ -327,13 +327,13 @@ fn fresh(expires: Option<Timestamp>, now: Timestamp) -> bool {
 
 pub(crate) struct Lakebase {
     settings: Settings,
-    request: Request,
+    request: Options,
     env: Env,
     current: Mutex<Option<Credential>>,
     minted: Mutex<Vec<String>>,
 }
 
-pub(crate) async fn lakebase(req: &Request, env: &Env) -> Result<Lakebase> {
+pub(crate) async fn lakebase(req: &Options, env: &Env) -> Result<Lakebase> {
     let source = Lakebase {
         settings: settings(req, env)?,
         request: req.clone(),
@@ -617,10 +617,10 @@ async fn send(
 mod tests {
     use super::*;
 
-    fn req(endpoint: Option<&str>) -> Request {
-        Request {
+    fn req(endpoint: Option<&str>) -> Options {
+        Options {
             databricks_endpoint: endpoint.map(str::to_string),
-            ..Request::default()
+            ..Options::default()
         }
     }
 
@@ -909,7 +909,7 @@ mod tests {
                     },
                 ],
             },
-            request: Request::default(),
+            request: Options::default(),
             env: Env::default(),
             current: Mutex::new(Some(Credential {
                 token: Secret::from("lakebase-secret"),

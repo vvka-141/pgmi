@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::templates::Template;
 use crate::tui;
 use crate::tui::init::Done;
-use crate::vfs::{Kind, OsFs, Vfs};
+use crate::vfs::{FileKind, OsFs, Vfs};
 
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
 
@@ -121,7 +121,7 @@ fn writable(
         !(KEPT.contains(&rel.as_str())
             && target
                 .stat(rel)
-                .is_ok_and(|s| !(s.link && s.kind == Kind::Other)))
+                .is_ok_and(|s| !(s.link && s.kind == FileKind::Other)))
     })
 }
 
@@ -165,7 +165,7 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
         } else {
             ("├── ", "│   ")
         };
-        if entry.stat.link || entry.stat.kind != Kind::Dir {
+        if entry.stat.link || entry.stat.kind != FileKind::Dir {
             out.push_str(&format!("{indent}{branch}{name}\n"));
             continue;
         }
@@ -181,7 +181,7 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
         if name == ".agents" && indent.is_empty() {
             let skills = fs
                 .read_dir(&format!("{child}/skills"))
-                .map(|e| e.iter().filter(|e| e.stat.kind == Kind::Dir).count())
+                .map(|e| e.iter().filter(|e| e.stat.kind == FileKind::Dir).count())
                 .unwrap_or(0);
             out.push_str(&format!("{indent}{more}└── skills/  ({skills} skills)\n"));
             continue;

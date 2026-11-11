@@ -12,7 +12,7 @@ pub(crate) struct Request {
     pub(crate) connection: Flags,
     pub(crate) maintenance_db: Option<String>,
     pub(crate) cloud: Vec<Provider>,
-    pub(crate) cloud_request: cloud::Request,
+    pub(crate) cloud_request: cloud::Options,
     pub(crate) params: Vec<String>,
     pub(crate) params_files: Vec<String>,
     pub(crate) timeout: Option<Duration>,

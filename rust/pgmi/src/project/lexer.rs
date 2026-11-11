@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub(crate) enum TokenKind {
     Space,
     LineComment,
     BlockComment,
@@ -16,7 +16,7 @@ pub(crate) enum Kind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Token {
-    pub(crate) kind: Kind,
+    pub(crate) kind: TokenKind,
     pub(crate) start: usize,
     pub(crate) end: usize,
 }
@@ -29,12 +29,12 @@ impl Token {
     pub(crate) fn is_trivia(&self) -> bool {
         matches!(
             self.kind,
-            Kind::Space | Kind::LineComment | Kind::BlockComment
+            TokenKind::Space | TokenKind::LineComment | TokenKind::BlockComment
         )
     }
 
     pub(crate) fn is_word(&self, src: &[u8], word: &str) -> bool {
-        self.kind == Kind::Word && self.text(src).eq_ignore_ascii_case(word.as_bytes())
+        self.kind == TokenKind::Word && self.text(src).eq_ignore_ascii_case(word.as_bytes())
     }
 }
 
@@ -60,12 +60,12 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
             while i < src.len() && is_space(src[i]) {
                 i += 1;
             }
-            Kind::Space
+            TokenKind::Space
         } else if b == b'-' && src.get(i + 1) == Some(&b'-') {
             while i < src.len() && src[i] != b'\n' {
                 i += 1;
             }
-            Kind::LineComment
+            TokenKind::LineComment
         } else if b == b'/' && src.get(i + 1) == Some(&b'*') {
             i += 2;
             let mut depth = 1;
@@ -80,13 +80,13 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
                     i += 1;
                 }
             }
-            Kind::BlockComment
+            TokenKind::BlockComment
         } else if b == b'\'' {
             i = quoted(src, i, b'\'', false);
-            Kind::Str
+            TokenKind::Str
         } else if b == b'"' {
             i = quoted(src, i, b'"', false);
-            Kind::QuotedIdent
+            TokenKind::QuotedIdent
         } else if b == b'$' && dollar_tag(src, i).is_some() && !follows_ident(src, i) {
             let tag_end = dollar_tag(src, i).unwrap_or(i + 1);
             let tag = &src[i..tag_end];
@@ -101,7 +101,7 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
                 }
                 i += 1;
             }
-            Kind::Dollar
+            TokenKind::Dollar
         } else if is_ident_start(b) {
             while i < src.len() && is_ident(src[i]) {
                 i += 1;
@@ -109,7 +109,7 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
             let word = &src[start..i];
             if (word == b"E" || word == b"e") && src.get(i) == Some(&b'\'') {
                 i = quoted(src, i, b'\'', true);
-                Kind::Str
+                TokenKind::Str
             } else if (word == b"U" || word == b"u")
                 && src.get(i) == Some(&b'&')
                 && matches!(src.get(i + 1), Some(b'\'') | Some(b'"'))
@@ -117,21 +117,21 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
                 let q = src[i + 1];
                 i = quoted(src, i + 1, q, false);
                 if q == b'"' {
-                    Kind::QuotedIdent
+                    TokenKind::QuotedIdent
                 } else {
-                    Kind::Str
+                    TokenKind::Str
                 }
             } else {
-                Kind::Word
+                TokenKind::Word
             }
         } else {
             i += 1;
             match b {
-                b';' => Kind::Semicolon,
-                b'(' => Kind::LParen,
-                b')' => Kind::RParen,
-                b',' => Kind::Comma,
-                _ => Kind::Other,
+                b';' => TokenKind::Semicolon,
+                b'(' => TokenKind::LParen,
+                b')' => TokenKind::RParen,
+                b',' => TokenKind::Comma,
+                _ => TokenKind::Other,
             }
         };
         out.push(Token {
@@ -185,10 +185,10 @@ fn quoted(src: &[u8], open: usize, q: u8, backslash: bool) -> usize {
 mod tests {
     use super::*;
 
-    fn kinds(s: &str) -> Vec<(Kind, String)> {
+    fn kinds(s: &str) -> Vec<(TokenKind, String)> {
         tokens(s.as_bytes())
             .into_iter()
-            .filter(|t| t.kind != Kind::Space)
+            .filter(|t| t.kind != TokenKind::Space)
             .map(|t| {
                 (
                     t.kind,
@@ -203,28 +203,28 @@ mod tests {
         let k = kinds(
             "SELECT E'a\\'b', 'c''d', \"x\"\"y\", $f$ ; $f$, $$x$$ -- c\n/* a /* b */ c */ a$b$ U&'x';",
         );
-        assert_eq!(k[1], (Kind::Str, "E'a\\'b'".into()));
-        assert_eq!(k[3], (Kind::Str, "'c''d'".into()));
-        assert_eq!(k[5], (Kind::QuotedIdent, "\"x\"\"y\"".into()));
-        assert_eq!(k[7], (Kind::Dollar, "$f$ ; $f$".into()));
-        assert_eq!(k[9], (Kind::Dollar, "$$x$$".into()));
-        assert_eq!(k[10].0, Kind::LineComment);
-        assert_eq!(k[11], (Kind::BlockComment, "/* a /* b */ c */".into()));
-        assert_eq!(k[12], (Kind::Word, "a$b$".into()));
-        assert_eq!(k[13], (Kind::Str, "U&'x'".into()));
-        assert_eq!(k[14].0, Kind::Semicolon);
+        assert_eq!(k[1], (TokenKind::Str, "E'a\\'b'".into()));
+        assert_eq!(k[3], (TokenKind::Str, "'c''d'".into()));
+        assert_eq!(k[5], (TokenKind::QuotedIdent, "\"x\"\"y\"".into()));
+        assert_eq!(k[7], (TokenKind::Dollar, "$f$ ; $f$".into()));
+        assert_eq!(k[9], (TokenKind::Dollar, "$$x$$".into()));
+        assert_eq!(k[10].0, TokenKind::LineComment);
+        assert_eq!(k[11], (TokenKind::BlockComment, "/* a /* b */ c */".into()));
+        assert_eq!(k[12], (TokenKind::Word, "a$b$".into()));
+        assert_eq!(k[13], (TokenKind::Str, "U&'x'".into()));
+        assert_eq!(k[14].0, TokenKind::Semicolon);
     }
 
     #[test]
     fn plain_string_keeps_backslash_literal() {
         let k = kinds("'a\\' x");
-        assert_eq!(k[0], (Kind::Str, "'a\\'".into()));
+        assert_eq!(k[0], (TokenKind::Str, "'a\\'".into()));
     }
 
     #[test]
     fn positional_parameter_is_not_a_dollar_quote() {
         let k = kinds("$1 + $2");
-        assert_eq!(k[0], (Kind::Other, "$".into()));
+        assert_eq!(k[0], (TokenKind::Other, "$".into()));
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
         let comments = |s: &str| -> Vec<String> {
             kinds(s)
                 .into_iter()
-                .filter(|(k, _)| matches!(k, Kind::LineComment | Kind::BlockComment))
+                .filter(|(k, _)| matches!(k, TokenKind::LineComment | TokenKind::BlockComment))
                 .map(|(_, t)| t)
                 .collect()
         };

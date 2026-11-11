@@ -131,7 +131,7 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
     }
 }
 
-enum Failure {
+enum DialFailure {
     Transient(String),
     ConnectionRefused,
     Fatal(String),
@@ -148,17 +148,17 @@ fn refuses_auth(e: &tap::Error) -> bool {
     matches!(e, tap::Error::AuthRequirement { .. })
 }
 
-fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure {
+fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> DialFailure {
     if let Some(db) = e.as_db_error() {
         let code = db.code().code();
         let text = format!("{} (SQLSTATE {code})", db.message());
         if retry::transient(Cause::Sqlstate(code)) {
-            return Failure::Transient(text);
+            return DialFailure::Transient(text);
         }
         if code == "28000" {
-            return Failure::Refused(text);
+            return DialFailure::Refused(text);
         }
-        return Failure::Server(text, code.to_string());
+        return DialFailure::Server(text, code.to_string());
     }
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(c) = cur {
@@ -168,42 +168,42 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure
                 .and_then(|i| i.downcast_ref::<tap::Error>())
                 .is_some_and(refuses_auth)
             {
-                return Failure::Fatal(io.to_string());
+                return DialFailure::Fatal(io.to_string());
             }
             if io.kind() == std::io::ErrorKind::ConnectionRefused {
-                return Failure::ConnectionRefused;
+                return DialFailure::ConnectionRefused;
             }
             if classify_io(io) {
-                return Failure::Transient(io.to_string());
+                return DialFailure::Transient(io.to_string());
             }
         }
         if c.downcast_ref::<tap::Error>().is_some_and(refuses_auth) {
-            return Failure::Fatal(crate::error::chain(e));
+            return DialFailure::Fatal(crate::error::chain(e));
         }
         cur = c.source();
     }
     let text = crate::error::chain(e);
     if text.contains("password missing") {
-        return Failure::Fatal(format!(
+        return DialFailure::Fatal(format!(
             "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
         ));
     }
-    Failure::Fatal(tls::describe_failure(&text, host))
+    DialFailure::Fatal(tls::describe_failure(&text, host))
 }
 
 fn refused_token(
-    f: Failure,
+    f: DialFailure,
     e: &tokio_postgres::Error,
     spec: &Spec,
     db_name: Option<&str>,
-) -> Failure {
+) -> DialFailure {
     let (Some(token), Some(db)) = (&spec.token, e.as_db_error()) else {
         return f;
     };
     if !db.code().code().starts_with("28") {
         return f;
     }
-    Failure::Fatal(refused_token_text(
+    DialFailure::Fatal(refused_token_text(
         token.provider().label(),
         &spec.user,
         db_name.unwrap_or(&spec.target_db),
@@ -237,7 +237,7 @@ struct Attempt<'a> {
     log: LogSink,
 }
 
-async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
+async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     let spec = a.spec;
     let google = spec.token.as_ref().and_then(|t| t.google()).cloned();
     let unix = a.host.starts_with('/') || google.is_some();
@@ -254,7 +254,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         Some(t) => Some(
             t.password(a.name, a.port, &spec.user)
                 .await
-                .map_err(Failure::Fatal)?,
+                .map_err(DialFailure::Fatal)?,
         ),
         None => None,
     };
@@ -295,7 +295,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         ChannelBinding::Prefer => PgChannelBinding::Prefer,
     });
     let shared = tap::Shared::new(spec.require_auth.as_deref())
-        .map_err(|e| Failure::Config(e.to_string()))?;
+        .map_err(|e| DialFailure::Config(e.to_string()))?;
     let start = match sslmode_of(mode) {
         PgSslMode::Disable => Start::Plain,
         _ if spec.sslnegotiation_direct => Start::Direct,
@@ -308,7 +308,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     let tls_config = if matches!(sslmode_of(mode), PgSslMode::Disable) {
         None
     } else {
-        Some(tls::config(spec).map_err(|e| Failure::Config(e.text()))?)
+        Some(tls::config(spec).map_err(|e| DialFailure::Config(e.text()))?)
     };
     let version = Arc::new(Mutex::new(None));
     let run = async {
@@ -321,11 +321,11 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         };
         let (socket, peer) = opened.map_err(|e| {
             if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                Failure::ConnectionRefused
+                DialFailure::ConnectionRefused
             } else if classify_io(&e) {
-                Failure::Transient(e.to_string())
+                DialFailure::Transient(e.to_string())
             } else {
-                Failure::Fatal(e.to_string())
+                DialFailure::Fatal(e.to_string())
             }
         })?;
         let stream = Tap::socket(socket, shared.clone(), start);
@@ -371,7 +371,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     let (client, tls, peer, connection) = match spec.connect_timeout {
         Some(t) => tokio::time::timeout(t, run)
             .await
-            .map_err(|_| Failure::Transient("timeout expired".into()))??,
+            .map_err(|_| DialFailure::Transient("timeout expired".into()))??,
         None => run.await?,
     };
     let tls_version = version.lock().ok().and_then(|v| v.clone());
@@ -550,8 +550,8 @@ impl Dialer {
                         })
                         .await;
                         match r {
-                            Err(Failure::Refused(t)) if mode == SslMode::Allow => {
-                                outcome = Some(Err(Failure::Refused(t)));
+                            Err(DialFailure::Refused(t)) if mode == SslMode::Allow => {
+                                outcome = Some(Err(DialFailure::Refused(t)));
                             }
                             other => {
                                 outcome = Some(other);
@@ -573,21 +573,21 @@ impl Dialer {
                                 errors.push(format!("{label}: {e}"));
                             }
                         },
-                        Some(Err(Failure::Config(t))) => {
+                        Some(Err(DialFailure::Config(t))) => {
                             return Err((Error::config(t), false));
                         }
-                        Some(Err(Failure::ConnectionRefused)) => {
+                        Some(Err(DialFailure::ConnectionRefused)) => {
                             errors.push(format!("connection refused to {host}:{port}"));
                         }
-                        Some(Err(Failure::Transient(t))) => {
+                        Some(Err(DialFailure::Transient(t))) => {
                             errors.push(format!("{label}: {t}"));
                         }
-                        Some(Err(Failure::Server(t, code))) => {
+                        Some(Err(DialFailure::Server(t, code))) => {
                             all_transient = false;
                             codes.push(code);
                             errors.push(format!("{label}: {t}"));
                         }
-                        Some(Err(Failure::Fatal(t) | Failure::Refused(t))) => {
+                        Some(Err(DialFailure::Fatal(t) | DialFailure::Refused(t))) => {
                             all_transient = false;
                             errors.push(format!("{label}: {t}"));
                         }

@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 pub(crate) const NOT_REGULAR: &str = "not a regular file (a named pipe, socket or device)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub(crate) enum FileKind {
     File,
     Dir,
     Other,
@@ -21,7 +21,7 @@ pub(crate) enum Kind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Stat {
-    pub(crate) kind: Kind,
+    pub(crate) kind: FileKind,
     pub(crate) link: bool,
     pub(crate) len: u64,
 }
@@ -114,9 +114,9 @@ fn os_stat(path: &Path) -> io::Result<Stat> {
         Some(meta)
     };
     let kind = match &target {
-        Some(m) if m.is_dir() => Kind::Dir,
-        Some(m) if m.is_file() => Kind::File,
-        _ => Kind::Other,
+        Some(m) if m.is_dir() => FileKind::Dir,
+        Some(m) if m.is_file() => FileKind::File,
+        _ => FileKind::Other,
     };
     Ok(Stat {
         kind,
@@ -181,7 +181,7 @@ pub(crate) fn files(fs: &impl Vfs) -> io::Result<Vec<(String, Vec<u8>)>> {
             } else {
                 format!("{rel}/{name}")
             };
-            if entry.stat.kind == Kind::Dir {
+            if entry.stat.kind == FileKind::Dir {
                 walk(fs, &child, out)?;
             } else {
                 let body = fs.read(&child)?;
@@ -201,7 +201,7 @@ enum Node {
     File(Vec<u8>),
     Dir,
     Link(Option<Box<Node>>),
-    Unreadable(Kind),
+    Unreadable(FileKind),
 }
 
 #[cfg(test)]
@@ -212,10 +212,10 @@ impl Node {
             n => (Some(n), false),
         };
         let (kind, len) = match target {
-            Some(Node::File(b)) => (Kind::File, b.len() as u64),
-            Some(Node::Dir) => (Kind::Dir, 0),
+            Some(Node::File(b)) => (FileKind::File, b.len() as u64),
+            Some(Node::Dir) => (FileKind::Dir, 0),
             Some(Node::Unreadable(k)) => (*k, 0),
-            _ => (Kind::Other, 0),
+            _ => (FileKind::Other, 0),
         };
         Stat { kind, link, len }
     }
@@ -274,19 +274,19 @@ impl MemFs {
 
     #[must_use]
     pub(crate) fn unreadable_file(mut self, rel: &str) -> Self {
-        self.insert(rel, Node::Unreadable(Kind::File));
+        self.insert(rel, Node::Unreadable(FileKind::File));
         self
     }
 
     #[must_use]
     pub(crate) fn unreadable_dir(mut self, rel: &str) -> Self {
-        self.insert(rel, Node::Unreadable(Kind::Dir));
+        self.insert(rel, Node::Unreadable(FileKind::Dir));
         self
     }
 
     #[must_use]
     pub(crate) fn special(mut self, rel: &str) -> Self {
-        self.insert(rel, Node::Unreadable(Kind::Other));
+        self.insert(rel, Node::Unreadable(FileKind::Other));
         self
     }
 
@@ -340,7 +340,7 @@ impl Vfs for MemFs {
         if matches!(node, Node::Unreadable(_)) {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        if node.stat().kind != Kind::Dir {
+        if node.stat().kind != FileKind::Dir {
             return Err(io::ErrorKind::NotADirectory.into());
         }
         let prefix = if rel.is_empty() {
@@ -402,14 +402,14 @@ impl Vfs for EmbeddedFs {
     fn stat(&self, rel: &str) -> io::Result<Stat> {
         if let Some(b) = pgmi_shared::file(&self.key(rel)) {
             return Ok(Stat {
-                kind: Kind::File,
+                kind: FileKind::File,
                 link: false,
                 len: b.len() as u64,
             });
         }
         if self.children(rel).next().is_some() {
             return Ok(Stat {
-                kind: Kind::Dir,
+                kind: FileKind::Dir,
                 link: false,
                 len: 0,
             });
@@ -434,7 +434,7 @@ impl Vfs for EmbeddedFs {
                 Some((dir, _)) => (
                     dir,
                     Stat {
-                        kind: Kind::Dir,
+                        kind: FileKind::Dir,
                         link: false,
                         len: 0,
                     },
@@ -442,7 +442,7 @@ impl Vfs for EmbeddedFs {
                 None => (
                     tail,
                     Stat {
-                        kind: Kind::File,
+                        kind: FileKind::File,
                         link: false,
                         len: body.len() as u64,
                     },
@@ -484,10 +484,10 @@ mod tests {
             names,
             ["a", "b.sql", "l"].map(|n| Name::Utf8(n.to_string()))
         );
-        assert_eq!(fs.stat("a").unwrap().kind, Kind::Dir);
+        assert_eq!(fs.stat("a").unwrap().kind, FileKind::Dir);
         assert_eq!(fs.stat("a/z.sql").unwrap().len, 2);
         let l = fs.stat("l").unwrap();
-        assert!(l.link && l.kind == Kind::Dir);
+        assert!(l.link && l.kind == FileKind::Dir);
         assert_eq!(
             fs.read("a").unwrap_err().kind(),
             io::ErrorKind::IsADirectory
@@ -501,11 +501,11 @@ mod tests {
         let top = fs.read_dir("").unwrap();
         assert!(
             top.iter()
-                .any(|e| e.name.as_str() == "deploy.sql" && e.stat.kind == Kind::File)
+                .any(|e| e.name.as_str() == "deploy.sql" && e.stat.kind == FileKind::File)
         );
         assert!(
             top.iter()
-                .any(|e| e.name.as_str() == "physical" && e.stat.kind == Kind::Dir)
+                .any(|e| e.name.as_str() == "physical" && e.stat.kind == FileKind::Dir)
         );
         let names: Vec<_> = top.iter().map(|e| e.name.as_str()).collect();
         let mut sorted = names.clone();

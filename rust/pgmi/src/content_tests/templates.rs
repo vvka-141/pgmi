@@ -3,7 +3,7 @@ use regex_lite::Regex;
 use super::{embedded, read, repo_file, scaffold};
 use crate::config::yaml::ProjectConfig;
 use crate::deploy::script;
-use crate::project::lexer::{self, Kind};
+use crate::project::lexer::{self, TokenKind};
 use crate::project::walk::{self, DEFAULT_MAX_FILE_SIZE};
 use crate::templates::Template;
 use crate::vfs::{self, EmbeddedFs, MemFs, Vfs};
@@ -254,7 +254,10 @@ fn gateway_problem_codes_are_namespaced() {
 fn code_only(sql: &str) -> String {
     let mut out = sql.as_bytes().to_vec();
     for t in lexer::tokens(sql.as_bytes()) {
-        if matches!(t.kind, Kind::LineComment | Kind::BlockComment | Kind::Str) {
+        if matches!(
+            t.kind,
+            TokenKind::LineComment | TokenKind::BlockComment | TokenKind::Str
+        ) {
             for b in &mut out[t.start..t.end] {
                 if *b != b'\n' {
                     *b = b' ';
@@ -441,7 +444,7 @@ fn overview_names_the_scaffolded_skills() {
     for prefix in ["skills", "templates/advanced/.agents/skills"] {
         let fs = EmbeddedFs::new(prefix);
         for e in fs.read_dir("").unwrap() {
-            if e.stat.kind == crate::vfs::Kind::Dir {
+            if e.stat.kind == crate::vfs::FileKind::Dir {
                 want.push(e.name.as_str().to_string());
             }
         }

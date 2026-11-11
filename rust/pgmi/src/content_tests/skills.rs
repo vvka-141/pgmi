@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use super::{embedded, read, scaffold, tree};
 use crate::templates::Template;
-use crate::vfs::{EmbeddedFs, Kind, MemFs, Vfs};
+use crate::vfs::{EmbeddedFs, FileKind, MemFs, Vfs};
 
 const MAX_NAME: usize = 64;
 const MAX_DESCRIPTION: usize = 1024;
@@ -136,7 +136,7 @@ fn validate_skill(fs: &impl Vfs, dir: &str) -> Vec<String> {
     if let Ok(refs) = fs.read_dir(&format!("{dir}/references")) {
         for r in refs {
             let name = r.name.as_str();
-            if r.stat.kind == Kind::Dir {
+            if r.stat.kind == FileKind::Dir {
                 fail(format!(
                     "references/{name} is a directory: keep references one level deep"
                 ));
@@ -185,7 +185,7 @@ fn skill_dirs(fs: &impl Vfs, root: &str) -> Vec<String> {
     fs.read_dir(root)
         .unwrap_or_else(|e| panic!("read {root}: {e}"))
         .into_iter()
-        .filter(|e| e.stat.kind == Kind::Dir)
+        .filter(|e| e.stat.kind == FileKind::Dir)
         .map(|e| e.name.as_str().to_string())
         .collect()
 }

@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::project::lexer::{self, Kind, Token};
+use crate::project::lexer::{self, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unit {
@@ -9,7 +9,7 @@ pub(crate) struct Unit {
 
 fn words<'a>(src: &'a [u8], toks: &[Token]) -> Vec<&'a [u8]> {
     toks.iter()
-        .filter(|t| !t.is_trivia() && t.kind != Kind::Semicolon)
+        .filter(|t| !t.is_trivia() && t.kind != TokenKind::Semicolon)
         .map(|t| t.text(src))
         .collect()
 }
@@ -60,7 +60,7 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     let mut atomic = 0usize;
     let mut prev_word: Option<&[u8]> = None;
     for t in &toks {
-        if t.kind == Kind::Word {
+        if t.kind == TokenKind::Word {
             let w = t.text(bytes);
             if atomic == 0 {
                 if eq(w, "ATOMIC") && prev_word.is_some_and(|p| eq(p, "BEGIN")) {
@@ -75,7 +75,7 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
         } else if !t.is_trivia() {
             prev_word = None;
         }
-        if t.kind == Kind::Semicolon && atomic == 0 {
+        if t.kind == TokenKind::Semicolon && atomic == 0 {
             out.push((start, t.end));
             start = t.end;
         }
@@ -101,7 +101,7 @@ pub(crate) fn split(src: &str) -> Vec<Unit> {
     let has_code = |s: usize, e: usize| {
         lexer::tokens(&bytes[s..e])
             .iter()
-            .any(|t| !t.is_trivia() && t.kind != Kind::Semicolon)
+            .any(|t| !t.is_trivia() && t.kind != TokenKind::Semicolon)
     };
     let tail_from = match head_end {
         None => {
@@ -153,8 +153,8 @@ pub(crate) fn macros(src: &str) -> Vec<Macro> {
     let sig: Vec<&Token> = toks
         .iter()
         .filter(|t| match t.kind {
-            Kind::Space => t.text(bytes).contains(&0x0b),
-            Kind::LineComment | Kind::BlockComment => false,
+            TokenKind::Space => t.text(bytes).contains(&0x0b),
+            TokenKind::LineComment | TokenKind::BlockComment => false,
             _ => true,
         })
         .collect();
@@ -178,7 +178,7 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
     let mut j = i + 1;
     if sig.get(j)?.is_word(src, "pg_temp") {
         let dot = sig.get(j + 1)?;
-        if dot.kind != Kind::Other || dot.text(src) != b"." {
+        if dot.kind != TokenKind::Other || dot.text(src) != b"." {
             return None;
         }
         j += 2;
@@ -187,7 +187,7 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
         return None;
     }
     j += 1;
-    if sig.get(j)?.kind != Kind::LParen {
+    if sig.get(j)?.kind != TokenKind::LParen {
         return None;
     }
     j += 1;
@@ -195,16 +195,16 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
     loop {
         let t = sig.get(j)?;
         match t.kind {
-            Kind::RParen => break,
-            Kind::Str => args.push(Some(literal(src, t)?)),
-            Kind::Word if t.is_word(src, "NULL") => args.push(None),
+            TokenKind::RParen => break,
+            TokenKind::Str => args.push(Some(literal(src, t)?)),
+            TokenKind::Word if t.is_word(src, "NULL") => args.push(None),
             _ => return None,
         }
         j += 1;
         let t = sig.get(j)?;
         match t.kind {
-            Kind::RParen => break,
-            Kind::Comma if args.len() < 2 => j += 1,
+            TokenKind::RParen => break,
+            TokenKind::Comma if args.len() < 2 => j += 1,
             _ => return None,
         }
     }

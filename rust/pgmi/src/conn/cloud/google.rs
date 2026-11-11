@@ -10,7 +10,7 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use serde::Deserialize;
 
-use super::Request;
+use super::Options;
 use super::http::client;
 use crate::conn::socket::Tcp;
 use crate::conn::tls::Names;
@@ -127,7 +127,7 @@ async fn access_token(scope: &str, env: &Env) -> Result<String> {
     }
 }
 
-pub(crate) async fn dialer(req: &Request, env: &Env) -> Result<Dialer> {
+pub(crate) async fn dialer(req: &Options, env: &Env) -> Result<Dialer> {
     let instance = req.google_instance.clone().unwrap_or_default();
     let (project, _region, name) = instance_parts(&instance)?;
     let admin = access_token(ADMIN_SCOPE, env).await?;

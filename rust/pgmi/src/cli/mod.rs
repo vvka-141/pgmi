@@ -178,7 +178,7 @@ impl From<DeployArgs> for crate::deploy::Request {
             },
             maintenance_db: None,
             cloud,
-            cloud_request: cloud::Request {
+            cloud_request: cloud::Options {
                 tenant_id: a.azure_tenant_id,
                 client_id: a.azure_client_id,
                 aws_region: a.aws_region,

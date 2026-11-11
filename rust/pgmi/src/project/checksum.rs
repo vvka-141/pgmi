@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use super::lexer::{self, Kind};
+use super::lexer::{self, TokenKind};
 
 pub(crate) fn raw(content: &[u8]) -> String {
     hex(&Sha256::digest(content))
@@ -19,8 +19,10 @@ pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
     let mut pending_space = false;
     for t in lexer::tokens(src) {
         match t.kind {
-            Kind::Space | Kind::LineComment | Kind::BlockComment => pending_space = true,
-            Kind::Str | Kind::QuotedIdent | Kind::Dollar => {
+            TokenKind::Space | TokenKind::LineComment | TokenKind::BlockComment => {
+                pending_space = true
+            }
+            TokenKind::Str | TokenKind::QuotedIdent | TokenKind::Dollar => {
                 if pending_space {
                     out.push(b' ');
                     pending_space = false;

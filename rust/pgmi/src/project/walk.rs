@@ -1,6 +1,6 @@
 use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
-use crate::vfs::{Kind as FileKind, NOT_REGULAR, Name, Vfs};
+use crate::vfs::{FileKind, NOT_REGULAR, Name, Vfs};
 
 pub(crate) const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 

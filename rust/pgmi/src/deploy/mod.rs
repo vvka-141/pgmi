@@ -658,7 +658,7 @@ async fn deploy(
             ),
         ));
     }
-    let outcome = execute::run(execute::Run {
+    let outcome = execute::run(execute::Input {
         session: &session,
         guard,
         reporter,

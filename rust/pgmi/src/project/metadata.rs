@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::lexer::{self, Kind};
+use super::lexer::{self, TokenKind};
 use super::walk::{File, is_sql};
 use crate::error::{Error, Result};
 
@@ -20,7 +20,7 @@ pub(crate) fn blocks(content: &str) -> Vec<&str> {
     let src = content.as_bytes();
     lexer::tokens(src)
         .into_iter()
-        .filter(|t| t.kind == Kind::BlockComment)
+        .filter(|t| t.kind == TokenKind::BlockComment)
         .filter_map(|t| content.get(t.start + 2..t.end.saturating_sub(2)))
         .flat_map(elements)
         .collect()
@@ -249,7 +249,7 @@ fn element_text(node: roxmltree::Node<'_, '_>) -> String {
 fn unclosed_block(content: &str) -> bool {
     lexer::tokens(content.as_bytes())
         .into_iter()
-        .filter(|t| t.kind == Kind::BlockComment)
+        .filter(|t| t.kind == TokenKind::BlockComment)
         .any(|t| {
             content
                 .get(t.start..t.end)

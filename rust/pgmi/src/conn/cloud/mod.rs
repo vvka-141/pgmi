@@ -42,7 +42,7 @@ impl Provider {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Request {
+pub(crate) struct Options {
     pub(crate) tenant_id: Option<String>,
     pub(crate) client_id: Option<String>,
     pub(crate) aws_region: Option<String>,
@@ -107,9 +107,9 @@ impl Token {
 
 pub(crate) fn select(
     asked: &[Provider],
-    req: &Request,
+    req: &Options,
     yaml: Option<&ProjectConfig>,
-) -> Result<Option<(Provider, Request)>> {
+) -> Result<Option<(Provider, Options)>> {
     if asked.len() > 1 {
         let choices = if asked.contains(&Provider::Databricks) {
             "--azure, --aws, --google, or --databricks"
@@ -126,7 +126,7 @@ pub(crate) fn select(
     };
     Ok(Some((
         provider,
-        Request {
+        Options {
             tenant_id: req.tenant_id.clone().or(y.azure_tenant_id),
             client_id: req.client_id.clone().or(y.azure_client_id),
             aws_region: req.aws_region.clone().or(y.aws_region),
@@ -136,7 +136,7 @@ pub(crate) fn select(
     )))
 }
 
-pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &Env) -> Result<()> {
+pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &Env) -> Result<()> {
     match provider {
         Provider::Google => {
             if req.google_instance.as_deref().is_none_or(str::is_empty) {
@@ -171,7 +171,7 @@ pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &En
     }
 }
 
-pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
+pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
         Provider::Azure => azure::token(req, env, azure::POSTGRES)
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn two_providers_are_refused() {
-        let e = select(&[Provider::Azure, Provider::Aws], &Request::default(), None).unwrap_err();
+        let e = select(&[Provider::Azure, Provider::Aws], &Options::default(), None).unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert_eq!(
             e.text(),
@@ -205,7 +205,7 @@ mod tests {
         );
         let e = select(
             &[Provider::Databricks, Provider::Google],
-            &Request::default(),
+            &Options::default(),
             None,
         )
         .unwrap_err();
@@ -220,10 +220,10 @@ mod tests {
 
     #[test]
     fn no_provider_anywhere_is_none() {
-        assert!(select(&[], &Request::default(), None).unwrap().is_none());
+        assert!(select(&[], &Options::default(), None).unwrap().is_none());
         let y = yaml("connection:\n  aws_region: eu-west-1\n");
         assert!(
-            select(&[], &Request::default(), Some(&y))
+            select(&[], &Options::default(), Some(&y))
                 .unwrap()
                 .is_none()
         );
@@ -234,9 +234,9 @@ mod tests {
         let y = yaml(
             "connection:\n  auth_method: azure\n  aws_region: from-yaml\n  azure_tenant_id: t\n",
         );
-        let asked = Request {
+        let asked = Options {
             aws_region: Some("from-flag".into()),
-            ..Request::default()
+            ..Options::default()
         };
         let (p, r) = select(&[Provider::Aws], &asked, Some(&y)).unwrap().unwrap();
         assert_eq!(p, Provider::Aws);
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn the_yaml_auth_method_applies_without_a_flag() {
         let y = yaml("connection:\n  auth_method: google\n  google_instance: p:r:i\n");
-        let (p, r) = select(&[], &Request::default(), Some(&y)).unwrap().unwrap();
+        let (p, r) = select(&[], &Options::default(), Some(&y)).unwrap().unwrap();
         assert_eq!(p, Provider::Google);
         assert_eq!(r.google_instance.as_deref(), Some("p:r:i"));
     }

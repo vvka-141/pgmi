@@ -15,7 +15,7 @@ use crate::output::Reporter;
 use crate::project::metadata::Meta;
 use crate::project::walk::{File, Project};
 
-pub(crate) struct Run<'a> {
+pub(crate) struct Input<'a> {
     pub(crate) session: &'a Session,
     pub(crate) guard: &'a Guard,
     pub(crate) reporter: &'a Arc<Reporter>,
@@ -45,8 +45,8 @@ async fn generate(
         .ok_or_else(|| Error::sql("pgmi_test_generate() returned nothing"))
 }
 
-pub(crate) async fn run(r: Run<'_>) -> Result<()> {
-    let Run {
+pub(crate) async fn run(r: Input<'_>) -> Result<()> {
+    let Input {
         session,
         guard,
         reporter,

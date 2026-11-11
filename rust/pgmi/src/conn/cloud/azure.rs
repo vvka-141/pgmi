@@ -11,7 +11,7 @@ use azure_identity::{
 };
 use base64ct::{Base64, Base64UrlUnpadded, Encoding};
 
-use super::Request;
+use super::Options;
 use crate::env::Env;
 use crate::error::{Error, Result};
 
@@ -61,7 +61,7 @@ struct Ids {
     client: Option<String>,
 }
 
-fn ids(req: &Request, env: &Env) -> Result<Ids> {
+fn ids(req: &Options, env: &Env) -> Result<Ids> {
     let pick = |flag: &Option<String>, name: &str| -> Result<Option<String>> {
         Ok(match flag.as_deref().filter(|v| !v.is_empty()) {
             Some(v) => Some(v.to_string()),
@@ -127,7 +127,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
     Ok((picked, true))
 }
 
-pub(crate) async fn token(req: &Request, env: &Env, audience: Audience) -> Result<String> {
+pub(crate) async fn token(req: &Options, env: &Env, audience: Audience) -> Result<String> {
     let ids = ids(req, env)?;
     let (kinds, chain) = plan(&ids, env)?;
     let probing = chain

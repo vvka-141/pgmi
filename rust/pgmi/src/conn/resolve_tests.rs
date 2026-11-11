@@ -837,10 +837,10 @@ fn token_check(
 ) -> crate::error::Result<Spec> {
     let env = Env::from_pairs(env);
     let mut spec = resolve(&fl, &env, y)?;
-    let req = cloud::Request {
+    let req = cloud::Options {
         aws_region: Some("us-east-1".into()),
         google_instance: Some("p:r:i".into()),
-        ..cloud::Request::default()
+        ..cloud::Options::default()
     };
     cloud::check(provider, &req, &mut spec, &env)?;
     Ok(spec)
