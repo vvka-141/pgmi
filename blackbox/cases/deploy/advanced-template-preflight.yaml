@@ -9,7 +9,8 @@ steps:
     expect:
       exit: 13
       stderr: ['The login {db}_plain lacks CREATEROLE', 'ALTER ROLE {db}_plain CREATEDB CREATEROLE']
-  - sql: ALTER DATABASE "{db}" OWNER TO CURRENT_USER; DROP ROLE "{db}_plain"; ALTER DATABASE "{db}" SET azure.extensions = 'pgcrypto, HSTORE'
+  - sql: ALTER DATABASE "{db}" OWNER TO CURRENT_USER; DROP OWNED BY "{db}_plain"
+  - sql: DROP ROLE "{db}_plain"; ALTER DATABASE "{db}" SET azure.extensions = 'pgcrypto, HSTORE'
     database: maintenance
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
     timeout: 120
