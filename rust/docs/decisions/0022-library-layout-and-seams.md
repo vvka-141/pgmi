@@ -167,7 +167,15 @@ land before or between steps, each with a black-box case.
    `init` read through it). Still to do: the `Name` enum, and
    `pgmi.yaml`/`.env` read through it. Port scanner group 1 (1.2) to `MemFs`; one test loads every embedded
    template through `EmbeddedFs` and checks checksums and metadata (Go
-   `TestTemplateStructureWithoutFilesystem`).
+   `TestTemplateStructureWithoutFilesystem`). Done 2026-11-11, with
+   `Vfs::read_to_string` (fails as `std::fs::read_to_string` does) and
+   `info`'s scaffold line read through `Vfs` too. Not ported:
+   `TestIgnoreMatcherAgreesWithGit` (needs git and a disk),
+   `TestParseIgnoreRefusesInvalidPatterns` and
+   `TestParseIgnoreMatchesNonASCII`: the Rust matcher follows git's
+   byte-wise wildmatch (record 0014), so `[z-a]` matches nothing instead
+   of being refused, and `?` matches one byte, not one character. That
+   difference from Go needs an owner decision, not a refactor.
 4. **Templates and init.** `Template` enum; `check_empty` over `Vfs`; port
    the rest of scaffold group 9 (pure `render` and `draw` over `Vfs` landed
    with step 3).

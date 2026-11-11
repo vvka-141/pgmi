@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::vfs::Vfs;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,9 +35,8 @@ pub(crate) struct Connection {
 }
 
 impl ProjectConfig {
-    pub(crate) fn load(project: &Path) -> Result<Option<Self>> {
-        let path = project.join("pgmi.yaml");
-        let text = match std::fs::read_to_string(&path) {
+    pub(crate) fn load(project: &impl Vfs) -> Result<Option<Self>> {
+        let text = match project.read_to_string("pgmi.yaml") {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
@@ -107,6 +106,45 @@ mod tests {
         let e = ProjectConfig::parse("connection:\n  usernmae: someone\n").unwrap_err();
         assert!(e.text().contains("usernmae"), "{}", e.text());
         assert_eq!(e.exit_code(), 10);
+    }
+
+    #[test]
+    fn load_reads_pgmi_yaml_from_the_project() {
+        use crate::vfs::MemFs;
+        assert!(ProjectConfig::load(&MemFs::default()).unwrap().is_none());
+        let empty = ProjectConfig::load(&MemFs::default().file("pgmi.yaml", "  \n"))
+            .unwrap()
+            .unwrap();
+        assert!(empty.connection.host.is_none() && empty.params.is_empty());
+        let cfg = ProjectConfig::load(&MemFs::default().file("pgmi.yaml", "timeout: 90s\n"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cfg.timeout().unwrap(),
+            Some(std::time::Duration::from_secs(90))
+        );
+        for (fs, text) in [
+            (
+                MemFs::default().file("pgmi.yaml", "connection: [unclosed\n"),
+                "failed to load pgmi.yaml: ",
+            ),
+            (
+                MemFs::default().file("pgmi.yaml", "connection:\n  auth_method: kerberos\n"),
+                "failed to load pgmi.yaml: invalid auth_method \"kerberos\": expected azure, aws or google",
+            ),
+            (
+                MemFs::default().unreadable_file("pgmi.yaml"),
+                "failed to load pgmi.yaml: ",
+            ),
+            (
+                MemFs::default().file("pgmi.yaml", b"timeout: \xff\n"),
+                "failed to load pgmi.yaml: stream did not contain valid UTF-8",
+            ),
+        ] {
+            let e = ProjectConfig::load(&fs).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{}", e.text());
+            assert!(e.text().starts_with(text), "{}", e.text());
+        }
     }
 
     #[test]

@@ -189,7 +189,7 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
     let entries = fs.read_dir(rel).unwrap_or_default();
     let last = entries.len().saturating_sub(1);
     for (i, entry) in entries.iter().enumerate() {
-        let name = &entry.name;
+        let name = entry.name.as_str();
         let (branch, more) = if i == last {
             ("└── ", "    ")
         } else {
@@ -201,7 +201,7 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
         }
         out.push_str(&format!("{indent}{branch}{name}/\n"));
         let child = if rel.is_empty() {
-            name.clone()
+            name.to_string()
         } else {
             format!("{rel}/{name}")
         };

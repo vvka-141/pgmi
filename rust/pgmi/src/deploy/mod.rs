@@ -281,7 +281,7 @@ fn timeout_of(ctx: &Context) -> Duration {
     ctx.args
         .timeout
         .or_else(|| {
-            ProjectConfig::load(&ctx.args.project)
+            ProjectConfig::load(&crate::vfs::OsFs::new(&ctx.args.project))
                 .ok()
                 .flatten()
                 .and_then(|y| y.timeout().ok().flatten())
@@ -348,8 +348,8 @@ async fn deploy(
         )));
     }
     st.contract = true;
-    crate::vfs::OsFs::project(&a.project)?;
-    let yaml = ProjectConfig::load(&a.project)?;
+    let fs = crate::vfs::OsFs::project(&a.project)?;
+    let yaml = ProjectConfig::load(&fs)?;
     if let Some(y) = &yaml {
         y.timeout()?;
     }

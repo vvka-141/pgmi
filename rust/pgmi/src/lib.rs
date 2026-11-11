@@ -79,7 +79,7 @@ fn run_deploy(
     export: impl Fn(&str, &str),
 ) -> u8 {
     conn::tls::install();
-    let dotenv = match config::project_dotenv(&args.project, &env) {
+    let dotenv = match config::project_dotenv(&vfs::OsFs::new(&args.project), &env) {
         Ok(d) => d,
         Err(e) => {
             let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());

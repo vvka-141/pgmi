@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -9,6 +9,7 @@ use crate::config::yaml::ProjectConfig;
 use crate::env::Env;
 use crate::error::Result;
 use crate::project::{metadata, walk};
+use crate::vfs::Vfs;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,8 +27,8 @@ struct Info {
     directories: serde_json::Map<String, serde_json::Value>,
 }
 
-fn scaffolded(root: &Path) -> Option<(String, String)> {
-    let text = std::fs::read_to_string(root.join("deploy.sql")).ok()?;
+fn scaffolded(project: &impl Vfs) -> Option<(String, String)> {
+    let text = project.read_to_string("deploy.sql").ok()?;
     let line = text.lines().next()?;
     let rest = line.strip_prefix("-- Scaffolded by ")?;
     let (by, tail) = rest.rsplit_once(" from the ")?;
@@ -47,8 +48,8 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     let fs = crate::vfs::OsFs::project(&root)?;
     let project = walk::scan(&fs, walk::max_size(env)?)?;
     let shown = std::path::absolute(&root).unwrap_or_else(|_| root.clone());
-    let detected = scaffolded(&root);
-    let config_file = match ProjectConfig::load(&root) {
+    let detected = scaffolded(&fs);
+    let config_file = match ProjectConfig::load(&fs) {
         Ok(None) => "absent".to_string(),
         Ok(Some(_)) => "ok".to_string(),
         Err(e) => format!("error: {}", e.text()),

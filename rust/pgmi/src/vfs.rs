@@ -23,10 +23,25 @@ pub(crate) struct Stat {
     pub(crate) len: u64,
 }
 
+/// A directory entry's name. `Lossy` is a name that is not valid UTF-8,
+/// shown with U+FFFD in place of the bad bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Name {
+    Utf8(String),
+    Lossy(String),
+}
+
+impl Name {
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Name::Utf8(n) | Name::Lossy(n) => n,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
-    pub(crate) name: String,
-    pub(crate) utf8: bool,
+    pub(crate) name: Name,
     pub(crate) stat: Stat,
 }
 
@@ -35,6 +50,16 @@ pub(crate) trait Vfs {
     fn stat(&self, rel: &str) -> io::Result<Stat>;
     fn read(&self, rel: &str) -> io::Result<Vec<u8>>;
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>>;
+
+    /// Reads a file as UTF-8 text, failing as `std::fs::read_to_string` does.
+    fn read_to_string(&self, rel: &str) -> io::Result<String> {
+        String::from_utf8(self.read(rel)?).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    }
 
     fn display(&self, rel: &str) -> String {
         if rel.is_empty() {
@@ -115,13 +140,13 @@ impl Vfs for OsFs {
         for entry in std::fs::read_dir(self.path(rel))? {
             let entry = entry?;
             let stat = os_stat(&entry.path())?;
-            let (name, utf8) = match entry.file_name().into_string() {
-                Ok(n) => (n, true),
-                Err(n) => (n.to_string_lossy().into_owned(), false),
+            let name = match entry.file_name().into_string() {
+                Ok(n) => Name::Utf8(n),
+                Err(n) => Name::Lossy(n.to_string_lossy().into_owned()),
             };
-            out.push(Entry { name, utf8, stat });
+            out.push(Entry { name, stat });
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
         Ok(out)
     }
 }
@@ -129,10 +154,11 @@ impl Vfs for OsFs {
 pub(crate) fn files(fs: &impl Vfs) -> io::Result<Vec<(String, Vec<u8>)>> {
     fn walk(fs: &impl Vfs, rel: &str, out: &mut Vec<(String, Vec<u8>)>) -> io::Result<()> {
         for entry in fs.read_dir(rel)? {
+            let name = entry.name.as_str();
             let child = if rel.is_empty() {
-                entry.name
+                name.to_string()
             } else {
-                format!("{rel}/{}", entry.name)
+                format!("{rel}/{name}")
             };
             if entry.stat.kind == Kind::Dir {
                 walk(fs, &child, out)?;
@@ -301,8 +327,7 @@ impl Vfs for MemFs {
             .take_while(|(k, _)| k.starts_with(&prefix))
             .filter(|(k, _)| k.len() > prefix.len() && !k[prefix.len()..].contains('/'))
             .map(|(k, n)| Entry {
-                name: k[prefix.len()..].to_string(),
-                utf8: true,
+                name: Name::Utf8(k[prefix.len()..].to_string()),
                 stat: n.stat(),
             })
             .collect())
@@ -396,19 +421,18 @@ impl Vfs for EmbeddedFs {
                     },
                 ),
             };
-            if out.last().is_some_and(|e| e.name == name) {
+            if out.last().is_some_and(|e| e.name.as_str() == name) {
                 continue;
             }
             out.push(Entry {
-                name: name.to_string(),
-                utf8: true,
+                name: Name::Utf8(name.to_string()),
                 stat,
             });
         }
         if out.is_empty() {
             self.stat(rel)?;
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
         Ok(out)
     }
 }
@@ -429,7 +453,10 @@ mod tests {
             .into_iter()
             .map(|e| e.name)
             .collect();
-        assert_eq!(names, ["a", "b.sql", "l"]);
+        assert_eq!(
+            names,
+            ["a", "b.sql", "l"].map(|n| Name::Utf8(n.to_string()))
+        );
         assert_eq!(fs.stat("a").unwrap().kind, Kind::Dir);
         assert_eq!(fs.stat("a/z.sql").unwrap().len, 2);
         let l = fs.stat("l").unwrap();
@@ -447,11 +474,11 @@ mod tests {
         let top = fs.read_dir("").unwrap();
         assert!(
             top.iter()
-                .any(|e| e.name == "deploy.sql" && e.stat.kind == Kind::File)
+                .any(|e| e.name.as_str() == "deploy.sql" && e.stat.kind == Kind::File)
         );
         assert!(
             top.iter()
-                .any(|e| e.name == "physical" && e.stat.kind == Kind::Dir)
+                .any(|e| e.name.as_str() == "physical" && e.stat.kind == Kind::Dir)
         );
         let names: Vec<_> = top.iter().map(|e| e.name.as_str()).collect();
         let mut sorted = names.clone();
@@ -471,8 +498,22 @@ mod tests {
 
     #[test]
     fn os_fs_refuses_a_missing_or_file_root() {
-        let e = OsFs::project(Path::new("/definitely/not/here")).unwrap_err();
+        let missing = Path::new("/definitely/not/here");
+        let e = OsFs::project(missing).unwrap_err();
         assert_eq!(e.exit_code(), 10);
-        assert!(e.text().contains("does not exist"));
+        assert_eq!(
+            e.text(),
+            "project path \"/definitely/not/here\" does not exist"
+        );
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let e = OsFs::project(&file).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            format!(
+                "\"{}\" is a file; pass the project directory",
+                file.display()
+            )
+        );
     }
 }

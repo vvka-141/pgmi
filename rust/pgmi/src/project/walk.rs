@@ -1,6 +1,6 @@
 use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
-use crate::vfs::{Kind as FileKind, Vfs};
+use crate::vfs::{Kind as FileKind, Name, Vfs};
 
 pub(crate) const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -138,21 +138,29 @@ fn walk(
         ))
     })?;
     for entry in entries {
-        let name = entry.name;
-        let child = if rel.is_empty() {
-            name.clone()
-        } else {
-            format!("{rel}/{name}")
-        };
         let is_dir = entry.stat.kind == FileKind::Dir;
-        if !entry.utf8 {
-            if name.starts_with('.') || rules.ignored(&child, is_dir) {
-                continue;
+        let join = |name: &str| {
+            if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{rel}/{name}")
             }
-            return Err(Error::config(format!(
-                "the name of ./{child} is not valid UTF-8; rename it, or hide it in .pgmiignore"
-            )));
-        }
+        };
+        let (name, child) = match entry.name {
+            Name::Utf8(name) => {
+                let child = join(&name);
+                (name, child)
+            }
+            Name::Lossy(name) => {
+                let child = join(&name);
+                if name.starts_with('.') || rules.ignored(&child, is_dir) {
+                    continue;
+                }
+                return Err(Error::config(format!(
+                    "the name of ./{child} is not valid UTF-8; rename it, or hide it in .pgmiignore"
+                )));
+            }
+        };
         let shown = if is_dir {
             format!("./{child}/")
         } else {
@@ -299,8 +307,134 @@ mod tests {
 
     #[test]
     fn pgmiignore_may_not_hide_deploy_sql() {
-        let text = refused(&project().file(".pgmiignore", "*.sql\n"));
-        assert!(text.contains("!deploy.sql"), "{text}");
+        for pattern in ["deploy.sql", "*.sql", "*"] {
+            let text = refused(&project().file(".pgmiignore", format!("{pattern}\n")));
+            assert!(text.contains("!deploy.sql"), "{pattern}: {text}");
+        }
+    }
+
+    #[test]
+    fn pgmiignore_may_re_include_deploy_sql() {
+        let fs = project()
+            .file("scratch.sql", "SELECT 1;")
+            .file(".pgmiignore", "*.sql\n!deploy.sql\n");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(p.deploy_sql, "SELECT 1;");
+        assert!(p.sources.is_empty(), "{:?}", paths(&p.sources));
+    }
+
+    #[test]
+    fn an_ignored_directory_is_not_read() {
+        let fs = project()
+            .file("clients/go/bin/tool", b"\0\x01 not text")
+            .unreadable_dir("clients/locked")
+            .file(".pgmiignore", "clients/\n");
+        let p = load(&fs, MAX).unwrap();
+        assert!(p.sources.is_empty());
+        let clients: Vec<_> = p
+            .ignored
+            .iter()
+            .filter(|i| i.path.starts_with("./clients"))
+            .map(|i| (i.path.as_str(), i.rule))
+            .collect();
+        assert_eq!(clients, [("./clients/", ".pgmiignore")]);
+    }
+
+    #[test]
+    fn built_in_exclusions_are_not_read_and_apply_at_any_depth() {
+        let fs = project()
+            .file("migrations/001_users.sql", "CREATE TABLE users (id int);")
+            .file("__test__/test_users.sql", "SELECT 1;")
+            .file(".git/index", b"DIRC\0\0\0\x02binary")
+            .unreadable_file(".git/locked")
+            .file(".venv/lib/site.py", "import sys")
+            .file("node_modules/pkg/index.js", "module.exports = {};")
+            .file("api/__pycache__/gen.cpython-312.pyc", b"\x03\xf3\r\n")
+            .file("api/handlers.sql", "SELECT 1;");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(
+            paths(&p.sources),
+            ["./api/handlers.sql", "./migrations/001_users.sql"]
+        );
+        assert_eq!(paths(&p.tests), ["./__test__/test_users.sql"]);
+        let ignored: Vec<_> = p
+            .ignored
+            .iter()
+            .map(|i| (i.path.as_str(), i.rule))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                ("./.git/", "built-in"),
+                ("./.venv/", "built-in"),
+                ("./api/__pycache__/", "built-in"),
+                ("./node_modules/", "built-in"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_project_with_only_deploy_sql_has_no_sources() {
+        let p = load(&project(), MAX).unwrap();
+        assert!(p.sources.is_empty() && p.tests.is_empty() && p.ignored.is_empty());
+    }
+
+    #[test]
+    fn root_level_test_files_keep_their_path() {
+        let fs = project()
+            .file("migrations/001_users.sql", "CREATE TABLE users();")
+            .file("__test__/00_fixture.sql", "INSERT INTO users VALUES (1);")
+            .file("__test__/test_users.sql", "SELECT * FROM users;");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(paths(&p.sources), ["./migrations/001_users.sql"]);
+        assert_eq!(
+            paths(&p.tests),
+            ["./__test__/00_fixture.sql", "./__test__/test_users.sql"]
+        );
+    }
+
+    #[test]
+    fn deploy_sql_loses_its_bom_and_must_be_utf8() {
+        let fs = MemFs::default().file("deploy.sql", b"\xef\xbb\xbfSELECT 1;");
+        assert_eq!(load(&fs, MAX).unwrap().deploy_sql, "SELECT 1;");
+        let text = refused(&MemFs::default().file("deploy.sql", b"SELECT \xff;"));
+        assert_eq!(text, "deploy.sql is not valid UTF-8 at byte offset 7");
+    }
+
+    #[test]
+    fn errors_name_the_file_exactly_once() {
+        let text = refused(&project().file("data/blob.bin", b"ok\0binary"));
+        assert_eq!(text.matches("data/blob.bin").count(), 1, "{text}");
+        assert!(text.contains("./data/blob.bin"), "{text}");
+        for (path, content) in [
+            (
+                "migrations/001_users.sql",
+                "/*\n<pgmi-meta idempotent=\"false\">\n</pgmi-meta>\n*/\nSELECT 1;",
+            ),
+            (
+                "migrations/002_orders.sql",
+                "/*\n<pgmi-meta id=\"550e8400-e29b-41d4-a716-446655440000\" idempotent=\"false\">\n  <description>unclosed\n</pgmi-meta>\n*/\nSELECT 1;",
+            ),
+        ] {
+            let p = load(&project().file(path, content), MAX).unwrap();
+            let e = super::super::metadata::collect(&p.sources).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{}", e.text());
+            assert_eq!(e.text().matches(path).count(), 1, "{}", e.text());
+            assert!(e.text().contains(&format!("./{path}")), "{}", e.text());
+        }
+    }
+
+    #[test]
+    fn max_file_size_comes_from_the_environment() {
+        let env = |v: &str| crate::env::Env::from_pairs(&[("PGMI_MAX_FILE_SIZE", v)]);
+        assert_eq!(max_size(&crate::env::Env::default()).unwrap(), MAX);
+        assert_eq!(max_size(&env("")).unwrap(), MAX);
+        assert_eq!(max_size(&env("20971520")).unwrap(), 20_971_520);
+        for bad in ["0", "-1", "10MB", "1.5"] {
+            let e = max_size(&env(bad)).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{bad}");
+            assert!(e.text().contains("PGMI_MAX_FILE_SIZE"), "{}", e.text());
+        }
     }
 
     #[test]
@@ -388,6 +522,61 @@ mod tests {
             assert!(!p.deploy_sql.is_empty(), "{name}");
             super::super::metadata::collect(&p.sources)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.text()));
+        }
+    }
+
+    #[test]
+    fn every_embedded_template_has_checksummed_sql_without_a_disk() {
+        use super::super::checksum;
+        let keywords = [
+            "SELECT",
+            "CREATE",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "ALTER",
+            "DO $$",
+            "BEGIN",
+            "RAISE NOTICE",
+        ];
+        for name in crate::templates::NAMES {
+            let fs = EmbeddedFs::new(&format!("templates/{name}"));
+            let p = load(&fs, MAX).unwrap_or_else(|e| panic!("{name}: {}", e.text()));
+            assert!(p.deploy_sql.contains("pg_temp.pgmi"), "{name}");
+            let sql: Vec<_> = p
+                .sources
+                .iter()
+                .chain(&p.tests)
+                .filter(|f| is_sql(&f.path))
+                .collect();
+            assert!(!sql.is_empty(), "{name}");
+            for f in sql {
+                let upper = f.content.trim().to_ascii_uppercase();
+                assert!(
+                    keywords.iter().any(|k| upper.contains(k)),
+                    "{name}: {} has no SQL",
+                    f.path
+                );
+                let raw = checksum::raw(f.content.as_bytes());
+                let normalized = checksum::normalized(f.content.as_bytes());
+                for sum in [&raw, &normalized] {
+                    assert!(
+                        sum.len() == 64 && sum.bytes().all(|b| b.is_ascii_hexdigit()),
+                        "{name}: {} checksum {sum}",
+                        f.path
+                    );
+                }
+            }
+        }
+        for (name, dirs) in [
+            ("basic", ["physical", "semantic"]),
+            ("advanced", ["api", "lib"]),
+        ] {
+            let fs = EmbeddedFs::new(&format!("templates/{name}"));
+            assert!(!fs.read("README.md").unwrap().is_empty(), "{name}");
+            for dir in dirs {
+                assert_eq!(fs.stat(dir).unwrap().kind, FileKind::Dir, "{name}/{dir}");
+            }
         }
     }
 
