@@ -35,6 +35,8 @@ pub(crate) struct Load<'a> {
 
 const BATCH_BYTES: usize = 8 << 20;
 
+/// Fills the session tables, then gives them planner statistics: autovacuum
+/// never sees a temp table, and pgmi's plan and test queries join them.
 pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
@@ -116,6 +118,15 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
             json!(rows),
         )
         .await?;
+    }
+    if !l.sources.is_empty() || !l.tests.is_empty() {
+        client
+            .batch_execute(
+                "ANALYZE pg_temp._pgmi_source, pg_temp._pgmi_source_metadata, \
+                 pg_temp._pgmi_test_source, pg_temp._pgmi_test_directory",
+            )
+            .await
+            .map_err(|e| sql_error("analyze the session tables", &e))?;
     }
     client
         .batch_execute(shared_sql("contract/api-v1.sql")?)

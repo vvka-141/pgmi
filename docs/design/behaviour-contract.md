@@ -233,7 +233,8 @@ embeds these files unchanged, so they are the contract. `pgmi ai contract`
 prints the same as JSON. `--compat 1` selects this interface version (the only
 one); any other value is exit 10. Plan order: sort key, then path, byte order; a file
 without metadata sorts by its path; a missing `<description>` is an empty
-string. Full reference: `docs/session-api.md`.
+string. The session tables are analysed after loading, so deploy.sql and
+pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). Full reference: `docs/session-api.md`.
 
 The session speaks the target database's own encoding (`client_encoding` is set
 to `server_encoding`), as Go's driver does by never sending one: on a LATIN1

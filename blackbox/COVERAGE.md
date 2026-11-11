@@ -123,6 +123,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 5 | failure inside an explicit tail `BEGIN` rolls back, releases the lock, no stray WARNING | ✓ `execution/tail-block-fails` |
 | 6 | `CALL pgmi_test()` without `BEGIN` = 25P01; inside a block a failing test fails the deploy | ✓ `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block` |
 | 7 | loader at scale, unicode, missing description, plan order | ✓ `execution/loader-at-scale` (3000 files) |
+| 7a | session tables analysed after loading (planner statistics) | ✓ `deploy/session-tables-analyzed` |
 | 8 | PGlite single-session server | ✗ needs a PGlite server; the Go integration test against PGlite and the manual check in `docs/CONNECTIONS.md` cover it |
 | 9 | NOTICE streamed while the statement runs | ✓ `notices/streaming` |
 | 10 | severities, DETAIL, HINT, LOG hidden | ✓ `notices/severity`; localized server messages ✗ (no non-English locale in the image) |

@@ -69,6 +69,7 @@ deploy/basic-template-provider-functions
 deploy/json-failure
 deploy/json-success
 deploy/latin1-database
+deploy/session-tables-analyzed
 dialect/call-glued-to-a-non-ascii-letter
 dialect/pgmiignore
 dialect/pgmiignore-hides-deploy

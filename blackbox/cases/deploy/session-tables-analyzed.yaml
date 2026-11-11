@@ -1,0 +1,19 @@
+description: the session tables have planner statistics before deploy.sql runs (pgmi runs ANALYZE after loading; autovacuum never sees a temp table), so pgmi's own plan queries do not run on default estimates
+project:
+  files:
+    a.sql: SELECT 1;
+    __test__/test_a.sql: SELECT 1;
+    deploy.sql: |
+      DO $$
+      BEGIN
+          IF EXISTS (SELECT FROM pg_class
+                     WHERE oid IN ('pg_temp._pgmi_source'::regclass, 'pg_temp._pgmi_test_source'::regclass,
+                                   'pg_temp._pgmi_test_directory'::regclass)
+                       AND reltuples < 0) THEN
+              RAISE EXCEPTION 'session tables never analyzed';
+          END IF;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
