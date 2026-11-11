@@ -62,15 +62,16 @@ Option 3.
       src/commands/         init, info, metadata, templates, ai, config, completion
       src/tui/              wizards (state machines), screen, event loops
       fuzz/                 links pgmi; no #[path]
-      tests/                library-level integration tests (real PostgreSQL)
+      tests/                end-to-end tests: the built binary against a real PostgreSQL
 
 Dependencies point down only: `cli` -> `commands`/`deploy`/`serve` ->
 `conn`, `project`, `config`, `templates` -> `vfs`, `env`, `error`,
 `output`, `duration`. Nothing below `commands` names clap or the terminal.
 
-`pub(crate)` is the default. `pub` only for what `tests/` and `fuzz/` link
+`pub(crate)` is the default. `pub` only for what `fuzz/` links
 (`serve::wire`, `conn::tap`, `conn::parse`, `serve::serve`,
-`deploy::run`), each with a doc comment saying it is not a stable API.
+`deploy::run`; the files in `tests/` run `CARGO_BIN_EXE_pgmi`, the binary
+as users run it, and link nothing), each with a doc comment saying it is not a stable API.
 Parsers the fuzz targets reach through `pub(crate)` items are checked by
 `invariants`, which exists only in tests and with the `fuzzing` feature the
 fuzz crate turns on (PGMI-864, PGMI-870).
@@ -95,9 +96,10 @@ The lib target is not published as a library API (0001 still holds).
   `commands::init::{check_empty, draw}`, `commands::info`,
   `commands::metadata` (read side). Not taken by: `conn::pgpass` and
   `conn::tls` (files outside the project, tested with temp dirs as now),
-  `--params-file` (arbitrary paths; `params::collect` gets a
-  `read: impl Fn(&Path) -> io::Result<String>` like it gets stdin), and the
-  write side.
+  `--params-file` (arbitrary paths, read with `std::fs` and tested in a
+  `testdir::TempDir`; only stdin is injected, as a `Read`), and the write
+  side. (Corrected in PGMI-869: an earlier draft promised a `read` closure
+  that was never needed.)
 - **Writes stay `std::fs`, behind pure planners.** `Template::render(name,
   version) -> io::Result<Vec<(String, Vec<u8>)>>` is pure; `commands::init`
   writes the plan. `metadata scaffold
@@ -346,12 +348,42 @@ these, allowed workspace-wide:
 | `struct_excessive_bools` | `DeployArgs` mirrors Go's boolean flags for clap. |
 | `naive_bytecount` | One newline count in a test; not worth a dependency. |
 
+### Review B (PGMI-858) items PGMI-869 did not take
+
+- **m1** The remaining `Result<_, String>` (cloud providers, `serve::wire`,
+  `project::ignore`, `duration`, the dialer's address lookup, the wizard's
+  test) have no caller that branches on them; `conn::tap`, which had one,
+  now returns `tap::Error`. A `cloud::Error` with `#[source]` would keep
+  the reqwest chain but must render Go's texts unchanged; left for a
+  change that touches the cloud providers.
+- **m2** `Error::source()` is implemented; `Display` still renders the
+  chain, because every printer, the `--json` record and MCP read
+  `Error::text()` and moving them to `error::chain` changes no output but
+  every call site. `ResolveError::Env(Error)` stays: the only env failure
+  is a non-UTF-8 value, already a config error.
+- **m4** `--params-file -` stays a string and `Context::stdin` a flag: the
+  "stdin given N times" refusal and its text live in `params::collect`,
+  as in Go, and an enum would only move that check.
+- **m6** The deploy orchestrator is still one function; `too_many_lines`
+  is allowed above. Splitting it into one function per phase is a
+  separate change.
+- **m10** The unported Go groups (`internal/cli/pgpass_test.go`,
+  `internal/ui/approver_test.go`, `internal/cli/serve_*_test.go`) are test
+  porting, PGMI-863's kind of work; listed in `rust/docs/test-parity-units.md`.
+- **s1, s2, s3** `Progress`'s phase booleans, `Spec`'s TLS booleans and
+  `Env`'s per-lookup allocation are left: each is a local change with no
+  bug behind it. **s5** The DB tests still skip when `PGMI_TEST_CONN` is
+  unset; CI sets `PGMI_REQUIRE_DB`, which turns a skip into a failure.
+- Done elsewhere: m9 (`testdir::TempDir`, PGMI-870), m13 (CI lints the
+  `testhooks` build and the fuzz crate).
+
 ## Consequences
 
 - Every Go unit test whose subject exists in Rust gets a Rust counterpart
   reachable without a disk, server or terminal, except database behaviour,
   which moves to library-level integration tests.
-- `tests/` and `fuzz/` link the library; no file is compiled twice.
+- `fuzz/` links the library and `tests/` runs the binary; no file is
+  compiled twice.
 - 0001's module list, 0003's runtime note, 0017's blocking-pool note and
   0019's `DeployRecord` are brought in line with the code in the commits
   that change them.

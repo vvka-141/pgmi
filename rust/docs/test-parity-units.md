@@ -184,6 +184,13 @@ its own screen, so Go's embedded-wizard tests map to the two wizards apart.
 | TestInitWizard_View_DirectoryStep, _BlockedDirectoryStaysOnTheDirectoryStep, _CheckDirBlocking | dropped from the wizard: Rust has no directory step, the target is the argument. The blocking check is commands::init::tests::git_pgmi_yaml_and_env_do_not_block, any_other_entry_blocks |
 | TestInitWizard_StepsFit, _EmbeddedWizardGetsWindowSize | dropped: each wizard draws its own full screen at the terminal's size |
 
+## Not yet mapped
+
+Review B's m10 (PGMI-858): `internal/cli/pgpass_test.go` (15 tests),
+`internal/ui/approver_test.go` (17) and `internal/cli/serve_*_test.go` (33)
+have Rust counterparts only in part (`conn::pgpass`, `deploy::approve`,
+`serve`); their tests still need the unit-by-unit mapping above.
+
 ## Rust fixed where the ports failed
 
 - **Case twins in `pgmi.yaml` and `PGMI_PARAM_*`.** Rust kept whichever
