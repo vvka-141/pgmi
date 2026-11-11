@@ -96,7 +96,7 @@ func overrideLines(overrides []Override) []string {
 	return lines
 }
 
-// The scaffolded pgmi.yaml says sslmode: prefer, which is also what a string
+// A pgmi.yaml that says sslmode: prefer matches what a string
 // without sslmode gets, so nothing was replaced.
 func TestEnvOverrides_DefaultSSLModeIsNoOverride(t *testing.T) {
 	pc := &config.ProjectConfig{Connection: config.ConnectionConfig{Database: "myapp", SSLMode: "prefer"}}

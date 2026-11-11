@@ -1,0 +1,13 @@
+description: the basic template's privilege test ignores functions in public that another role owns, such as a hosting provider's (Lakebase puts cloud_admin's there)
+project:
+  init: basic
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: |
+      CREATE FUNCTION public.provider_hook() RETURNS int LANGUAGE sql AS 'SELECT 1';
+      ALTER FUNCTION public.provider_hook() OWNER TO pg_database_owner;
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
+    timeout: 300
+    expect:
+      exit: 0

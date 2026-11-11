@@ -314,6 +314,8 @@ pub(crate) struct Spec {
     /// Where `requested_sslmode` came from: `--sslmode`, `PGSSLMODE`, the
     /// connection string's source or pgmi.yaml.
     pub(crate) sslmode_source: &'static str,
+    /// The `pgmi.yaml` line `requested_sslmode` came from.
+    pub(crate) sslmode_line: Option<usize>,
     pub(crate) sslrootcert: Option<String>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
@@ -634,6 +636,9 @@ fn finish(
         maintenance_db,
         target_db,
         requested_sslmode,
+        sslmode_line: yaml
+            .filter(|_| no_string && sslmode_source == "pgmi.yaml")
+            .and_then(|y| y.sslmode_line),
         sslmode_source,
         sslrootcert,
         sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),

@@ -143,6 +143,14 @@ fn scaffolded_pgmi_yaml_sets_no_env() {
     }
 }
 
+#[test]
+fn scaffolded_pgmi_yaml_sets_no_sslmode() {
+    for t in [Template::Basic, Template::Advanced] {
+        let cfg = ProjectConfig::load(&scaffold(t)).unwrap().unwrap();
+        assert_eq!(cfg.connection.sslmode, None, "{t}");
+    }
+}
+
 const GATEWAY_DEMO_HEADER: &str =
     "Demo code from pgmi. Do not copy this file into the project as is.";
 

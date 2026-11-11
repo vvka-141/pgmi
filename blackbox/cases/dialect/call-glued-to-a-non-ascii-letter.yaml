@@ -1,0 +1,21 @@
+description: a non-ASCII letter glued to CALL makes one identifier, as in PostgreSQL's lexer (scan.l ident_start [A-Za-z\200-\377_]), so the Rust binary leaves it to the server, which names the whole word; Go expanded the macro (contract, "Behaviour changes in 0.20")
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      ÄCALL pgmi_test();
+      COMMIT;
+    spaced/deploy.sql: |
+      BEGIN;
+      SELECT 'Ä' AS x; CALL pgmi_test();
+      COMMIT;
+    spaced/__test__/test_one.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      rust:
+        stderr: ['syntax error at or near "ÄCALL"']
+  - pgmi: [deploy, "{project}/spaced", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0

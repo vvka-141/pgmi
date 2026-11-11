@@ -3,11 +3,13 @@ DECLARE
     v_open text;
 BEGIN
     -- PostgreSQL grants EXECUTE on every new function to PUBLIC, so any role
-    -- that can connect could call it.
+    -- that can connect could call it. Only the deploying role's functions are
+    -- the project's: a hosting provider may own functions in public too.
     SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text)
     INTO v_open
     FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
       AND has_function_privilege('public', p.oid, 'EXECUTE')
       AND NOT EXISTS (
           SELECT 1 FROM pg_depend d

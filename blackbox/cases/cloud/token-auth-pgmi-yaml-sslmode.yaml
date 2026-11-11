@@ -1,0 +1,15 @@
+description: a pgmi.yaml that still says sslmode prefer is refused with token sign-in (exit 10); the Rust binary names the line and the fix (contract, "Behaviour changes in 0.20")
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      connection:
+        host: 127.0.0.1
+        sslmode: prefer
+steps:
+  - pgmi: [deploy, "{project}", --azure, --port, "{port}", -U, x, -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ['sslmode "prefer" .*not allowed with Azure']
+      rust:
+        stderr: ['sslmode "prefer" from pgmi.yaml line 3 is not allowed with Azure Entra ID authentication: .*change that line to "sslmode: verify-full", or delete it']

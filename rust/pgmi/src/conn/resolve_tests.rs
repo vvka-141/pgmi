@@ -934,6 +934,37 @@ fn token_auth_refuses_an_sslmode_that_allows_plaintext() {
 }
 
 #[test]
+fn a_refused_sslmode_from_pgmi_yaml_names_its_line_and_the_fix() {
+    let fl = Flags {
+        host: Some("db.example.com".into()),
+        database: Some("d".into()),
+        ..Flags::default()
+    };
+    let y = Connection {
+        sslmode: Some("prefer".into()),
+        sslmode_line: Some(9),
+        ..Connection::default()
+    };
+    for provider in [Provider::Azure, Provider::Aws, Provider::Databricks] {
+        let env: &[(&str, &str)] = &[
+            (
+                "PGMI_DATABRICKS_ENDPOINT",
+                "projects/p/branches/b/endpoints/e",
+            ),
+            ("DATABRICKS_HOST", "https://w.example.com"),
+        ];
+        let e = refused_before_connecting(token_check(provider, &fl, env, Some(&y)));
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "sslmode \"prefer\" from pgmi.yaml line 9 is not allowed with {} authentication: it can send the token without TLS; change that line to \"sslmode: verify-full\", or delete it to use the default for token sign-in",
+                provider.label()
+            )
+        );
+    }
+}
+
+#[test]
 fn token_auth_accepts_a_tls_only_sslmode() {
     for mode in [SslMode::Require, SslMode::VerifyCa, SslMode::VerifyFull] {
         for (name, fl, env, y) in sslmode_sources(mode.as_str()) {

@@ -75,7 +75,10 @@ templates themselves are shared files (`shared/templates/`), so this checks the
 binary's half: loading, the session API, the execution contract and the test
 macro under real projects.
 
-Cases: `deploy/basic-template-converges`, `deploy/advanced-template-converges`, `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced`.
+A function in `public` owned by another role, such as a hosting provider's,
+does not fail the basic template's privilege test.
+
+Cases: `deploy/basic-template-converges`, `deploy/basic-template-provider-functions`, `deploy/advanced-template-converges`, `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced`.
 
 ### metadata
 
@@ -309,10 +312,13 @@ explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate 
 `sslpassword`, a wrong one is exit 10. `channel_binding=require` needs TLS;
 `sslnegotiation=direct` is supported; `require_auth` refuses another method.
 `--sslmode` replaces the sslmode of a string from the environment. Token
-sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. `--json`
+sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. When that
+sslmode came from `pgmi.yaml`, the Rust binary names the line and the fix
+(`sslmode: verify-full`, or delete the line). `pgmi init` writes no sslmode
+(owner 2026-11-11, PGMI-873; case `cloud/token-auth-pgmi-yaml-sslmode`). `--json`
 reports `tls.enabled`, `tls.version` (`TLS 1.3`), `tls.sslmode`.
 
-Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`.
+Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`, `cloud/token-auth-pgmi-yaml-sslmode`.
 
 ### Target database, overwrite and approval
 
@@ -396,7 +402,7 @@ macro and does not contain `pgmi_test` anywhere (any case), stderr says `N test
 file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run` after
 `Executing deploy.sql`; the deploy goes on.
 
-Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`, `dialect/pgmi-test-macro-arguments`, `notices/unused-tests`
+Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`, `dialect/pgmi-test-macro-arguments`, `dialect/call-glued-to-a-non-ascii-letter`, `notices/unused-tests`
 
 ### Notices and the summary line
 
@@ -412,7 +418,7 @@ left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
 unit(s) already committed)` in psql mode, and `created database "<db>", left
 empty` when this run created it.
 
-Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `notices/summary-line`.
+Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`.
 
 ### The --json record
 
@@ -736,6 +742,60 @@ file. A second element that is not even well-formed counts too.
 Cases: none (Go accepts it); Rust unit test
 `two_elements_in_one_comment_are_refused`.
 
+### Known secrets are shown as ***
+
+Owner-decided 2026-11-11 (PGMI-868).
+
+Go prints what the server sends. The Rust binary replaces the exact value of
+each secret it knows with `***` before anything leaves it: the connection
+password, `sslpassword`, and every sign-in token (Azure, AWS, Google,
+Databricks, renewed ones included). This covers notices (message, DETAIL,
+HINT) on stderr, in `--json` and in serve answers, and errors on the same
+three paths. Values shorter than three bytes are left alone, so a one-letter
+password does not blank out every letter. No pattern is guessed.
+
+Cases: `notices/secrets-redacted`.
+
+### A non-ASCII letter glued to CALL belongs to the word
+
+Owner-decided 2026-11-11 (PGMI-863).
+
+PostgreSQL's lexer reads any byte from 0x80 up as part of an identifier
+(`scan.l`: `ident_start [A-Za-z\200-\377_]`; "letters with diacritical marks
+and non-Latin letters", SQL Syntax, Identifiers and Key Words). So `ÄCALL
+pgmi_test()` is the identifier `ÄCALL`, not a CALL. The Rust binary leaves it
+to the server, which names `ÄCALL` in its syntax error; Go expanded the macro.
+A no-break space glued to CALL is the same case. Only ASCII white space
+separates the macro's tokens; a vertical tab does not, which matches
+PostgreSQL 15 (16 and later treat it as white space).
+
+Cases: `dialect/call-glued-to-a-non-ascii-letter`; Rust unit test
+`a_non_ascii_character_glued_to_call_is_part_of_the_word`.
+
+### -d POSTGRES is not the maintenance database
+
+Owner-decided 2026-11-11 (PGMI-863).
+
+`--overwrite` refuses to drop the maintenance database. Go compared the names
+ignoring case, so `-d POSTGRES --overwrite` was refused. Database names are
+case-sensitive in PostgreSQL, and the Rust binary compares them exactly: only
+`postgres` (or the configured maintenance database) is protected.
+
+Cases: none (needs a second database named in capitals on the shared
+server); Rust unit test
+`the_maintenance_database_is_never_the_overwrite_target`.
+
+### Wizard lists wrap around
+
+Owner-decided 2026-11-11 (PGMI-863).
+
+In the `init` and `config` wizards, the selection lists (providers,
+templates) wrap from the last entry to the first and back. Go stopped at the
+ends.
+
+Cases: none; Rust unit tests `moves_and_picks` (the shared list) and
+`the_provider_list_wraps_at_both_ends`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable
@@ -958,6 +1018,13 @@ release notes take their "Behaviour changes" section from this table.
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
 | `serve`: a cancel or a repeated id spelled with escapes (`"\u006aob"` for `"job"`) | missed | matched by the decoded string | owner 2026-11-11 |
 | Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
+| `pgmi init`: `sslmode` in the scaffolded `pgmi.yaml` | `prefer`, refused with token sign-in | not written; the default applies (`prefer`, or TLS only with token sign-in) | owner 2026-11-11 |
+| Token sign-in refusing `sslmode: prefer` from `pgmi.yaml` | names the source | names the file line and the fix; exit 10 both | owner 2026-11-11 |
+| Basic template's privilege test | fails on any PUBLIC-executable function in `public`, also a hosting provider's | checks only the deploying role's functions | owner 2026-11-11 |
+| Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve | printed | shown as `***` | owner 2026-11-11 |
+| A non-ASCII letter glued to `CALL` (`ÄCALL pgmi_test()`) | expanded | left to the server, as PostgreSQL reads one identifier | owner 2026-11-11 |
+| `--overwrite -d POSTGRES` with maintenance database `postgres` | refused (case-insensitive) | allowed: names compared exactly | owner 2026-11-11 |
+| Wizard selection lists | stop at the ends | wrap around | owner 2026-11-11 |
 | Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |

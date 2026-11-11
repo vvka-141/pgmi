@@ -25,6 +25,9 @@ pub(crate) struct Connection {
     pub(crate) database: Option<String>,
     pub(crate) maintenance_database: Option<String>,
     pub(crate) sslmode: Option<String>,
+    /// The line of `sslmode:` in the block form, for error messages.
+    #[serde(skip)]
+    pub(crate) sslmode_line: Option<usize>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslrootcert: Option<String>,
@@ -48,6 +51,22 @@ fn auth_method(text: &str) -> Result<Provider> {
                 "failed to load pgmi.yaml: invalid auth_method {text:?}: expected azure, aws or google"
             ))
         })
+}
+
+fn sslmode_line(text: &str) -> Option<usize> {
+    let mut in_connection = false;
+    for (n, line) in text.lines().enumerate() {
+        let body = line.trim_start();
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        if body.len() == line.len() {
+            in_connection = line.starts_with("connection:");
+        } else if in_connection && body.starts_with("sslmode:") {
+            return Some(n + 1);
+        }
+    }
+    None
 }
 
 impl ProjectConfig {
@@ -75,6 +94,7 @@ impl ProjectConfig {
             .as_deref()
             .map(auth_method)
             .transpose()?;
+        c.sslmode_line = c.sslmode.as_ref().and_then(|_| sslmode_line(text));
         Ok(cfg)
     }
 
@@ -174,6 +194,17 @@ mod tests {
                 assert_eq!(e.text(), text);
             }
         }
+    }
+
+    #[test]
+    fn sslmode_line_is_found_in_the_connection_block() {
+        let cfg = ProjectConfig::parse(
+            "# c\nparams:\n  sslmode: x\nconnection:\n  host: h\n  # sslmode: verify-full\n  sslmode: prefer   # x\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.connection.sslmode_line, Some(7));
+        let cfg = ProjectConfig::parse("connection: {sslmode: prefer}\n").unwrap();
+        assert_eq!(cfg.connection.sslmode_line, None);
     }
 
     #[test]

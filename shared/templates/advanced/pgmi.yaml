@@ -6,7 +6,7 @@ connection:
   database: mydb              # Target database (change this!)
   host: localhost             # PostgreSQL host
   port: 5432                  # PostgreSQL port
-  sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  # sslmode: verify-full      # Default: prefer; TLS only with cloud sign-in (--azure, --aws, --google)
   # username: postgres        # PostgreSQL user (default: current OS user)
 
 # Parameters passed to deploy.sql

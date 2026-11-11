@@ -273,9 +273,46 @@ impl Guard {
     }
 }
 
+/// The secrets of a deploy: its connection's passwords and sign-in tokens,
+/// read again for each notice because a token can be renewed mid-deploy.
+#[derive(Clone, Default)]
+struct Secrets(Arc<Mutex<Option<Spec>>>);
+
+impl Secrets {
+    fn set(&self, spec: &Spec) {
+        if let Ok(mut s) = self.0.lock() {
+            *s = Some(spec.clone());
+        }
+    }
+
+    fn list(&self) -> Vec<String> {
+        let Ok(s) = self.0.lock() else {
+            return Vec::new();
+        };
+        s.iter()
+            .flat_map(|s| {
+                [&s.password, &s.sslpassword]
+                    .into_iter()
+                    .flatten()
+                    .map(|p| p.expose().to_string())
+                    .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
+            })
+            .collect()
+    }
+
+    fn notice(&self, mut n: Notice) -> Notice {
+        let secrets = self.list();
+        n.message = redact(&n.message, &secrets);
+        n.detail = n.detail.map(|d| redact(&d, &secrets));
+        n.hint = n.hint.map(|h| redact(&h, &secrets));
+        n
+    }
+}
+
 pub(crate) struct Run {
     st: Progress,
     log: Arc<Mutex<NoticeLog>>,
+    secrets: Secrets,
     started: SystemTime,
     t0: Instant,
 }
@@ -285,6 +322,7 @@ impl Run {
         Run {
             st: Progress::default(),
             log: Arc::new(Mutex::new(NoticeLog::default())),
+            secrets: Secrets::default(),
             started: SystemTime::now(),
             t0: Instant::now(),
         }
@@ -310,6 +348,7 @@ impl Run {
             &guard,
             reporter,
             self.log.clone(),
+            self.secrets.clone(),
         ))
         .await
     }
@@ -358,17 +397,7 @@ impl Run {
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.st
-            .spec
-            .iter()
-            .flat_map(|s| {
-                [&s.password, &s.sslpassword]
-                    .into_iter()
-                    .flatten()
-                    .map(|p| p.expose().to_string())
-                    .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
-            })
-            .collect()
+        self.secrets.list()
     }
 
     pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {
@@ -475,6 +504,7 @@ async fn deploy(
     guard: &Guard,
     reporter: &Arc<Reporter>,
     log: Arc<Mutex<NoticeLog>>,
+    secrets: Secrets,
 ) -> Result<()> {
     let a = &ctx.request;
     if let Some(c) = &a.compat
@@ -528,6 +558,7 @@ async fn deploy(
         spec.maintenance_db = m.clone();
     }
     st.spec = Some(spec.clone());
+    secrets.set(&spec);
     #[cfg(feature = "testhooks")]
     if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
         test_panic();
@@ -563,8 +594,11 @@ async fn deploy(
     }
     let sink_reporter = reporter.clone();
     let sink_log = log.clone();
+    let sink_secrets = secrets.clone();
+    let line_secrets = secrets.clone();
     let dialer = Dialer {
         notices: Arc::new(move |n: Notice| {
+            let n = sink_secrets.notice(n);
             sink_reporter.notice(&n);
             if let Ok(mut l) = sink_log.lock() {
                 l.push(&n);
@@ -572,7 +606,7 @@ async fn deploy(
         }),
         log: {
             let r = reporter.clone();
-            Arc::new(move |line: String| r.line(&line))
+            Arc::new(move |line: String| r.line(&redact(&line, &line_secrets.list())))
         },
     };
     if let Some((provider, req)) = &cloud {
@@ -583,6 +617,7 @@ async fn deploy(
             .await?;
         spec.token = Some(token);
         st.spec = Some(spec.clone());
+        secrets.set(&spec);
     }
     let _overwrite = if a.overwrite {
         Some(overwrite(ctx, st, guard, reporter, &dialer, &spec).await?)

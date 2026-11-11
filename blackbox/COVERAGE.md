@@ -37,6 +37,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `metadata validate` (+`--json`), bad id = 10, duplicate id = 10 | ✓ `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate` |
 | `metadata scaffold` (preview, `--write`, `--sort-key`, `--idempotent=false`) | ✓ `commands/metadata`, `commands/metadata-scaffold-run-once` |
 | `templates list`, `templates describe <t>`, unknown = 2 | ✓ `commands/templates` |
+| basic template on a host whose provider owns PUBLIC-executable functions in `public` (Lakebase) deploys | ✓ `deploy/basic-template-provider-functions` |
 | `version`, `--version`, extra argument = 2 | ✓ `commands/version` |
 | `ai`, `ai contract`, unknown subcommand = 2 | ✓ `commands/ai` |
 | `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion` |
@@ -129,6 +130,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 13, 14 | error inside an executed file names the file | ✓ `errors/attribution` |
 | 15 | `--json` failure record: `sqlstate`, `failedFile` | ✓ `errors/attribution` |
 | 15a | the connection password never reaches `--json` through DETAIL, HINT or CONTEXT | ✓ `errors/diagnostics-secrets` |
+| 15b | the connection password printed in a notice, an error, `--json` or a serve answer is `***` (Rust; Go prints it) | ✓ `notices/secrets-redacted` |
 | 16 | 42501 TEMPORARY guidance; wrong password; missing maintenance database; hba reject | ✓ `errors/temporary-privilege`, `errors/connection-failures`, `tls/tls-only-and-plain-servers`; 53300, 57P03 ✗ (server states a case cannot produce reliably) |
 | 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
@@ -172,6 +174,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | `.pgmiignore` patterns where RE2 and Rust `regex` differ (`&&`, `--` in classes) | ✓ `dialect/pgmiignore` |
 | `CALL pgmi_test(...)` expansion (any case, schema-qualified, pattern), and none inside comments, strings and dollar quotes | ✓ `dialect/pgmi-test-macro`, `execution/pgmi-test-*` |
 | comments between the macro's tokens; ASCII white space only (no NBSP, no VT) | ✓ `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace` |
+| a non-ASCII letter glued to `CALL` is one identifier, as in PostgreSQL (Rust; Go expands) | ✓ `dialect/call-glued-to-a-non-ascii-letter` |
 
 ## File formats
 
@@ -201,6 +204,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Azure managed identity on Azure Arc | ✗ the key file must sit in `/var/opt/azcmagent/tokens`, which a case cannot write; Rust unit tests cover the file checks |
 | Azure service principal (`AZURE_CLIENT_SECRET`) | ✗ instance discovery always calls `login.microsoftonline.com`; the manual Azure acceptance check in the release checklist covers it |
 | token sign-in refuses `prefer`/`disable` (10) | ✓ `cloud/token-auth-requires-tls` |
+| `sslmode: prefer` from `pgmi.yaml` with token sign-in: the line and the fix (Rust) | ✓ `cloud/token-auth-pgmi-yaml-sslmode` |
 | AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |
 | AWS profile `credential_source` (`Ec2InstanceMetadata`, `EcsContainer`) with `role_arn` | ✓ `cloud/aws-credential-source` (fake IMDS, container endpoint and STS through `AWS_ENDPOINT_URL_STS`); `Environment` has no case, since environment keys win before the profile in both SDKs |
 | AWS console sign-in (`login_session`) | ✗ needs the sign-in service and its DPoP-bound cache; aws-config's `credentials-login` is enabled in Rust |
