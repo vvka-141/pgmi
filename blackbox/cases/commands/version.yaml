@@ -1,13 +1,13 @@
-description: version and --version print the version and the session API compatibility level
+description: version and --version print the version and the session API compatibility level, then commit, build time and platform in Go's names (amd64, arm64, darwin); version adds the repository
 steps:
   - pgmi: [version]
     expect:
       exit: 0
-      stdout: ["\\Apgmi \\S+ \\(compat 1\\)", "Commit: ", "Platform: "]
+      stdout: ["\\Apgmi \\S+ \\(compat 1\\)\\nCommit: \\S+, Built: \\S+, Platform: (linux|darwin|windows)/(amd64|arm64)\\nRepository: https://github.com/vvka-141/pgmi\\n\\Z"]
   - pgmi: [--version]
     expect:
       exit: 0
-      stdout: ["\\Apgmi \\S+ \\(compat 1\\)"]
+      stdout: ["\\Apgmi \\S+ \\(compat 1\\)\\nCommit: \\S+, Built: \\S+, Platform: (linux|darwin|windows)/(amd64|arm64)\\n\\Z"]
   - pgmi: [version, extra]
     expect:
       exit: 2

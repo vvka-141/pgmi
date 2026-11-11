@@ -26,7 +26,6 @@ mod tui;
 mod vfs;
 
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::io::Write;
 
 use cli::usage::{clap_error, help};
@@ -143,23 +142,28 @@ fn run_deploy(
     )
 }
 
-fn print_version(long: bool) -> u8 {
-    let mut out = std::io::stdout().lock();
-    let mut text = format!("pgmi {VERSION} (compat 1)\n");
-    if long {
-        let _ = writeln!(
-            text,
-            "Commit: {}",
-            option_env!("PGMI_COMMIT").unwrap_or("unknown")
-        );
-        let _ = writeln!(
-            text,
-            "Platform: {}/{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
+/// `pgmi --version` and `pgmi version`, line for line as Go prints them: the
+/// greppable first line, then commit, build time and platform in Go's names;
+/// `version` adds the repository.
+fn print_version(repository: bool) -> u8 {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        arch => arch,
+    };
+    let mut text = format!(
+        "pgmi {VERSION} (compat 1)\nCommit: {}, Built: {}, Platform: {os}/{arch}\n",
+        option_env!("PGMI_COMMIT").unwrap_or("unknown"),
+        option_env!("PGMI_BUILD_DATE").unwrap_or("unknown"),
+    );
+    if repository {
+        text.push_str("Repository: https://github.com/vvka-141/pgmi\n");
     }
-    match out.write_all(text.as_bytes()) {
+    match std::io::stdout().lock().write_all(text.as_bytes()) {
         Ok(()) => 0,
         Err(_) => Kind::General.exit_code(),
     }
