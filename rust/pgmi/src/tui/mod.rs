@@ -2,8 +2,10 @@ pub(crate) mod connection;
 pub(crate) mod init;
 pub(crate) mod select;
 
+use std::cell::Cell;
 use std::io::{BufRead, IsTerminal, Stdout, Write};
-use std::sync::mpsc;
+use std::panic::PanicHookInfo;
+use std::sync::{Once, mpsc};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEvent};
@@ -90,14 +92,37 @@ pub(crate) fn io(e: std::io::Error) -> Error {
 
 pub(crate) struct Screen(pub Terminal<CrosstermBackend<Stdout>>);
 
+thread_local! {
+    static OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
+type Hook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+fn leave() {
+    let _ = execute!(std::io::stdout(), LeaveAlternateScreen, cursor::Show);
+    let _ = terminal::disable_raw_mode();
+}
+
+fn restoring(previous: Hook, leave: impl Fn() + Sync + Send + 'static) -> Hook {
+    Box::new(move |info| {
+        if OPEN.replace(false) {
+            leave();
+        }
+        previous(info);
+    })
+}
+
 impl Screen {
     pub(crate) fn open() -> Result<Self> {
+        static HOOK: Once = Once::new();
+        HOOK.call_once(|| std::panic::set_hook(restoring(std::panic::take_hook(), leave)));
         terminal::enable_raw_mode().map_err(io)?;
         let mut out = std::io::stdout();
         if let Err(e) = execute!(out, EnterAlternateScreen, cursor::Hide) {
             let _ = terminal::disable_raw_mode();
             return Err(io(e));
         }
+        OPEN.set(true);
         Terminal::new(CrosstermBackend::new(out))
             .map(Self)
             .map_err(io)
@@ -112,7 +137,47 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        let _ = execute!(self.0.backend_mut(), LeaveAlternateScreen, cursor::Show);
-        let _ = terminal::disable_raw_mode();
+        if OPEN.replace(false) {
+            leave();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn a_panic_leaves_the_screen_before_its_message_prints() {
+        static SEEN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
+        thread_local! {
+            static MINE: Cell<bool> = const { Cell::new(false) };
+        }
+        let saved: Arc<Hook> = Arc::new(std::panic::take_hook());
+        let inner = saved.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            if MINE.get() {
+                SEEN.lock().unwrap().push("message");
+            } else {
+                inner(info);
+            }
+        }));
+        std::panic::set_hook(restoring(std::panic::take_hook(), || {
+            if MINE.get() {
+                SEEN.lock().unwrap().push("leave");
+            }
+        }));
+        let outcome = std::thread::spawn(|| {
+            MINE.set(true);
+            OPEN.set(true);
+            std::panic::panic_any("in the wizard");
+        })
+        .join();
+        drop(std::panic::take_hook());
+        std::panic::set_hook(Box::new(move |info| saved(info)));
+        assert!(outcome.is_err());
+        assert_eq!(*SEEN.lock().unwrap(), ["leave", "message"]);
     }
 }
