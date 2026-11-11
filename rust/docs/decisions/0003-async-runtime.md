@@ -47,12 +47,10 @@ is built, once per run and only for the commands that need one. `deploy`
 gets it after the project `.env` is exported and `serve` gets it as is;
 both own it and end it with `shutdown_timeout(100 ms)` after their own
 cleanup. `init` and `config` lend a `Handle` to the connection wizard,
-whose "test connection" runs on the blocking pool with
-`Handle::block_on`, as a `serve` tool call does (the dial future is not
-`Send`, record 0017); the runtime then ends with `shutdown_background`, so
-a test still in flight does not hold the exit, as the old detached thread
-did not. No other module builds a runtime or calls `block_on` outside a
-blocking-pool closure.
+whose "test connection" is a spawned task (the dial future is `Send` since
+PGMI-869, record 0017); the runtime then ends with `shutdown_background`,
+so a test still in flight does not hold the exit, as the old detached
+thread did not. No other module builds a runtime or calls `block_on`.
 
 ## Consequences
 

@@ -895,9 +895,8 @@ pub(crate) fn run(
                     Some(Effect::Test(s)) => {
                         let tx = tx.clone();
                         let env = env.clone();
-                        let handle = runtime.clone();
-                        runtime.spawn_blocking(move || {
-                            let _ = tx.send(handle.block_on(test(*s, env)));
+                        runtime.spawn(async move {
+                            let _ = tx.send(test(*s, env).await);
                         });
                     }
                     None => {}

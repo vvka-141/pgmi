@@ -26,14 +26,13 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
 
     fn tool(&self, name: &str) -> Option<Self::Tool>;
 
-    /// Runs one call. The server polls the future on a blocking-pool thread
-    /// (record 0017), so it need not be `Send`.
+    /// Runs one call on its own task; a panic becomes the call's answer.
     fn call(
         &self,
         tool: Self::Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
-    ) -> impl std::future::Future<Output = Outcome>;
+    ) -> impl std::future::Future<Output = Outcome> + Send;
 }
 
 /// pgmi's own tools.
@@ -58,7 +57,7 @@ impl Toolbox for Tools {
         tool: Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
-    ) -> impl std::future::Future<Output = Outcome> {
+    ) -> impl std::future::Future<Output = Outcome> + Send {
         tool.call(arguments, self.env.clone(), self.verbose, token)
     }
 }
@@ -108,13 +107,22 @@ impl Tool {
         verbose: bool,
         token: CancellationToken,
     ) -> Outcome {
-        let arguments = arguments.as_deref();
-        let env = &env;
-        match self {
-            Tool::Deploy => match deploy_context(arguments, env, verbose) {
+        if let Tool::Deploy = self {
+            return match deploy_context(arguments.as_deref(), &env, verbose) {
                 Ok(ctx) => run_deploy(ctx, token).await,
                 Err(e) => Outcome::failed(&e),
-            },
+            };
+        }
+        match tokio::task::spawn_blocking(move || self.answer(arguments.as_deref(), &env)).await {
+            Ok(o) => o,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
+        }
+    }
+
+    fn answer(self, arguments: Option<&RawValue>, env: &Env) -> Outcome {
+        match self {
+            Tool::Deploy => Outcome::failed(&Error::internal("deploy runs on the runtime")),
             Tool::Init => match init(arguments) {
                 Ok(v) => Outcome::json(&v),
                 Err(e) => Outcome::failed(&e),

@@ -10,8 +10,8 @@ use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
 
 /// Decides whether `--overwrite` may drop the target database.
-#[async_trait(?Send)]
-pub(crate) trait Approver {
+#[async_trait]
+pub(crate) trait Approver: Send + Sync {
     /// Refuses before anything connects, when the answer is already known.
     fn before_connecting(&self, _db: &str) -> Result<()> {
         Ok(())
@@ -77,7 +77,7 @@ fn banner(db: &str) -> String {
     out
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Approver for Terminal {
     async fn approve_drop(
         &self,
@@ -144,7 +144,7 @@ impl Approver for Terminal {
 /// `serve`: the caller confirms by naming the database in the tool call.
 pub(crate) struct ConfirmedName(pub(crate) Option<String>);
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Approver for ConfirmedName {
     fn before_connecting(&self, db: &str) -> Result<()> {
         match &self.0 {

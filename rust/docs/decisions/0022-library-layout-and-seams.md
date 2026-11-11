@@ -196,12 +196,14 @@ land before or between steps, each with a black-box case.
    `DeployArgs`, serve fills it from the tool arguments without clap.
    `cloud::select` takes the providers and the cloud request rather than
    the whole `deploy::Request`, so `conn` does not depend on `deploy`.
-   Nothing below `cli`/`commands` names clap. `tokio::spawn` still fails
-   rustc's auto-trait check; record 0017 says where and why.
+   Nothing below `cli`/`commands` names clap. `tokio::spawn` still failed
+   rustc's auto-trait check; PGMI-869 found the two causes and `serve`
+   spawns its calls (record 0017).
 6. **`Approver` and Reporter sink.** Unit tests for the summary line,
    refusal texts, `--force` countdown cancel (with `tokio::time::pause`).
    Done 2026-11-11: `deploy::approve` holds the `Approver` trait
-   (`async_trait(?Send)`, so `Context` keeps a `Box<dyn Approver>`) with
+   (`Approver: Send + Sync` since PGMI-869, so `Context` keeps a
+   `Box<dyn Approver>` and the deploy future is `Send`) with
    two calls: `before_connecting` (serve's `ConfirmedName` refuses a
    missing or wrong name there) and `approve_drop` right before an
    existing database is dropped (`Terminal`: the typed confirmation, or

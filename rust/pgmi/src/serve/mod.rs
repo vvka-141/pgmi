@@ -350,12 +350,8 @@ impl<T: Toolbox> Server<T> {
         tasks.spawn(async move {
             let tools = server.tools.clone();
             let task_token = token.clone();
-            let handle = tokio::runtime::Handle::current();
-            let outcome = match tokio::task::spawn_blocking(move || {
-                handle.block_on(tools.call(tool, arguments, task_token))
-            })
-            .await
-            {
+            let call = tokio::spawn(async move { tools.call(tool, arguments, task_token).await });
+            let outcome = match call.await {
                 Ok(o) => o,
                 Err(e) if e.is_panic() => Outcome::panicked(),
                 Err(_) => {

@@ -119,21 +119,20 @@ overridden. Used only if the hand-written server proves unworkable.
 - Failures before the deployer runs (arguments, path, timeout, params,
   database, `confirmDatabaseName`) answer `{message, exitCode}`; later ones
   answer the `--json` record plus `message`, as Go does.
-- Each tool call runs on the blocking pool under `Handle::block_on`: the
-  deploy future is not `Send` for every lifetime (a rustc limitation), and
-  this keeps `tokio::spawn`'s `Send` bound off it. A panic arrives as the
-  `JoinError` and answers `isError`, exit code 3, with the hook's stack.
-  Retried with `tokio::spawn` after `deploy::Request` (record 0022 step 5,
-  2026-11-11): the tool call now owns its arguments and the request, yet
-  rustc still refuses "implementation of `Send` is not general enough"
-  (rust-lang/rust#64552, #110338) deep inside: borrowed `&str` arguments
-  held across an `.await` in `conn::dial` (`addresses`, `matches_attrs`,
-  the host and sslmode loops, tokio's `ToSocketAddrs` calls), the
-  `tokio-postgres` calls with a borrowed query inside `Guard::running`, and
-  `select!` over `&CancellationToken`. Each site can be made to pass by
-  owning its data, but a dozen were needed and every new borrowed call
-  would break `serve` again, so the workaround stays until the trait
-  solver accepts the future as written.
+- Each tool call runs on its own `tokio::spawn` task (PGMI-869). A panic
+  arrives as the `JoinError` and answers `isError`, exit code 3, with the
+  hook's stack. `deploy` runs on the runtime; the other tools walk the disk
+  synchronously and run under `spawn_blocking`. Until PGMI-869 each call ran
+  on the blocking pool under `Handle::block_on`, because the deploy future was
+  not `Send`. This record blamed the trait solver (rust-lang/rust#64552,
+  #110338); the causes were ours. `Approver` was `#[async_trait(?Send)]`
+  without a `Send + Sync` bound, so `&Context` was `!Send`. And the socket was
+  a `Box<dyn Io>`: tokio-postgres's TLS handshake and cancel futures hold
+  `<Connect as TlsConnect<S>>::Stream`, and inside a generator the trait
+  object's lifetime is erased, so rustc looked for `TlsConnect<Box<dyn Io +
+  '0>>` for every `'0` while `Connect` implements it only for `'static`. The
+  socket is now an enum (`Tcp`, `Unix`, `CloudSql`) with no lifetime, and the
+  dozen borrow sites the earlier attempt chased were symptoms of that one.
 - The writer task watches the session (PGMI-868): a failed write cancels
   the session token, which stops the reader and every call; after the
   reader ends, the remaining answers get 2 s (`DRAIN`), so a client that

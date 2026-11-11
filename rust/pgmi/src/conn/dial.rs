@@ -1,9 +1,11 @@
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use futures_util::future::poll_fn;
 use rand::seq::SliceRandom;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::config::{
     ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation,
 };
@@ -19,9 +21,51 @@ use super::tls::{self, Connect};
 use crate::error::{Error, Result};
 use crate::output::{Notice, Severity};
 
-pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
-type Stream = Box<dyn Io>;
+enum Stream {
+    Tcp(tokio::net::TcpStream),
+    #[cfg(unix)]
+    Unix(tokio::net::UnixStream),
+    CloudSql(Box<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>),
+}
+
+macro_rules! each_stream {
+    ($self:ident, $s:ident => $e:expr) => {
+        match $self.get_mut() {
+            Stream::Tcp($s) => $e,
+            #[cfg(unix)]
+            Stream::Unix($s) => $e,
+            Stream::CloudSql($s) => $e,
+        }
+    };
+}
+
+impl AsyncRead for Stream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        each_stream!(self, s => Pin::new(s).poll_read(cx, buf))
+    }
+}
+
+impl AsyncWrite for Stream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        each_stream!(self, s => Pin::new(s).poll_write(cx, buf))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        each_stream!(self, s => Pin::new(s).poll_flush(cx))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        each_stream!(self, s => Pin::new(s).poll_shutdown(cx))
+    }
+}
 
 pub(crate) type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 pub(crate) type LogSink = Arc<dyn Fn(String) + Send + Sync>;
@@ -66,7 +110,7 @@ async fn open(host: &str, port: u16, tcp: &Tcp) -> std::io::Result<(Stream, Peer
     let stream = tokio::net::TcpStream::connect((host, port)).await?;
     tcp.apply(&stream)?;
     let peer = Peer::Tcp(stream.peer_addr()?);
-    Ok((Box::new(stream), peer))
+    Ok((Stream::Tcp(stream), peer))
 }
 
 async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
@@ -74,14 +118,14 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
         Peer::Tcp(addr) => {
             let stream = tokio::net::TcpStream::connect(addr).await?;
             tcp.apply(&stream)?;
-            Ok(Box::new(stream))
+            Ok(Stream::Tcp(stream))
         }
         #[cfg(unix)]
-        Peer::Socket(path) => Ok(Box::new(tokio::net::UnixStream::connect(path).await?)),
+        Peer::Socket(path) => Ok(Stream::Unix(tokio::net::UnixStream::connect(path).await?)),
         #[cfg(not(unix))]
         Peer::Socket(_) => Err(std::io::Error::other("Unix sockets are not supported here")),
         Peer::Google(token) => match token.google() {
-            Some(g) => Ok(Box::new(g.dial(tcp).await?)),
+            Some(g) => Ok(Stream::CloudSql(Box::new(g.dial(tcp).await?))),
             None => Err(std::io::Error::other("no Cloud SQL dialer")),
         },
     }
