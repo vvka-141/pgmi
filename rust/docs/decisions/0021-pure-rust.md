@@ -107,6 +107,24 @@ cc and ld removed.
   timing advisory (RUSTSEC-2023-0071) concerns its own private-key
   operations, which pgmi does not call.
 
+## Dependency hygiene (PGMI-869)
+
+- Every version lives once, in the root `[workspace.dependencies]`; members
+  write `name.workspace = true`. The fuzz crate is its own workspace
+  (cargo-fuzz, nightly) and keeps its two lines.
+- One base64 crate in pgmi's own code: `base64ct` (the RustCrypto one the
+  key parser already used); the `base64` crate stays only as a transitive
+  dependency. `futures-util` is a dev-dependency; the dialer uses
+  `std::future::poll_fn`.
+- `deny.toml` warns on duplicate versions. The ones accepted today are
+  listed in `bans.skip` with the crate that pulls each (aws-config's
+  RustCrypto 0.10 stack beside pgmi's 0.11, base64 0.22/0.23, syn 2/3,
+  hashbrown under yaml-edit, wasi under whoami), so a new duplicate shows
+  up as a warning in review.
+- CI job `rust-msrv` checks the workspace with the `rust-version` that
+  Cargo.toml declares (1.94.1), read from the file, so the declared minimum
+  is tested and not just stated.
+
 ## Serves
 
 Distribution (one static file); TLS; Cloud sign-in.

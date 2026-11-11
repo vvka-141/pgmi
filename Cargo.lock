@@ -2409,7 +2409,6 @@ dependencies = [
  "aws-smithy-types",
  "azure_core",
  "azure_identity",
- "base64 0.22.1",
  "base64ct",
  "cbc",
  "clap",

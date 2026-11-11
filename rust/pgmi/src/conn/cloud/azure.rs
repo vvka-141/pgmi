@@ -9,8 +9,7 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
-use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64ct::{Base64, Base64UrlUnpadded, Encoding};
 
 use super::Request;
 use crate::env::Env;
@@ -263,7 +262,7 @@ async fn powershell(
 ) -> std::result::Result<String, String> {
     let script = powershell_script(tenant, audience.resource);
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let encoded = STANDARD.encode(utf16);
+    let encoded = Base64::encode_string(&utf16);
     let child = tokio::process::Command::new("pwsh")
         .args([
             "-NoProfile",
@@ -316,9 +315,8 @@ mod certificate {
     use rustls_pki_types::{CertificateDer, PrivateKeyDer};
     use sha2::Digest;
 
-    use super::{Ids, URL_SAFE_NO_PAD};
+    use super::{Base64UrlUnpadded, Encoding, Ids};
     use crate::env::Env;
-    use base64::Engine;
 
     pub(crate) struct Assertion {
         key: std::sync::Arc<dyn rustls::sign::SigningKey>,
@@ -393,7 +391,7 @@ mod certificate {
             let tenant = ids.tenant.clone().unwrap_or_default();
             Ok(Self {
                 key,
-                thumbprint: URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(cert.as_ref())),
+                thumbprint: Base64UrlUnpadded::encode_string(&sha2::Sha256::digest(cert.as_ref())),
                 audience: format!("{authority}/{tenant}/oauth2/v2.0/token"),
                 client: ids.client.clone().unwrap_or_default(),
             })
@@ -417,15 +415,18 @@ mod certificate {
             });
             let input = format!(
                 "{}.{}",
-                URL_SAFE_NO_PAD.encode(header.to_string()),
-                URL_SAFE_NO_PAD.encode(claims.to_string())
+                Base64UrlUnpadded::encode_string(header.to_string().as_bytes()),
+                Base64UrlUnpadded::encode_string(claims.to_string().as_bytes())
             );
             let signer = self
                 .key
                 .choose_scheme(&[SignatureScheme::RSA_PKCS1_SHA256])
                 .ok_or("the certificate key is not an RSA key")?;
             let signature = signer.sign(input.as_bytes()).map_err(|e| e.to_string())?;
-            Ok(format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature)))
+            Ok(format!(
+                "{input}.{}",
+                Base64UrlUnpadded::encode_string(&signature)
+            ))
         }
     }
 

@@ -296,6 +296,24 @@ jobs:
           path: rust/pgmi/fuzz/artifacts/
           if-no-files-found: ignore
 
+  # The rust-version Cargo.toml declares, not the pinned toolchain, so the
+  # minimum stays true (record 0021).
+  rust-msrv:
+    name: Rust (minimum version)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Declared rust-version
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+      - name: Check the workspace
+        run: cargo +"$MSRV" check --locked --workspace --all-targets
+
   # The Rust unit tests on the platforms whose code is cfg-gated: path
   # handling, the Windows environment and APPDATA, key-file modes, Unix
   # sockets, signals. Integration tests need PostgreSQL in a Linux container
