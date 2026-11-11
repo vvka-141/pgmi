@@ -5,6 +5,7 @@ use crate::cli::InitArgs;
 use crate::commands::config::stopped;
 use crate::error::{Error, Result};
 use crate::tui::connection::Done;
+use crate::vfs::{self, EmbeddedFs, Kind, OsFs, Vfs};
 
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
 const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
@@ -59,7 +60,7 @@ pub fn run(a: &InitArgs) -> Result<()> {
     );
     let absolute = std::path::absolute(&target).unwrap_or_else(|_| target.clone());
     let mut tree = format!("{}/\n", absolute.display());
-    draw(&absolute, "", &mut tree);
+    draw(&OsFs::new(&absolute), "", "", &mut tree);
     tree.push('\n');
     let _ = std::io::stdout().lock().write_all(tree.as_bytes());
     let mut db = None;
@@ -96,56 +97,71 @@ pub fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()>
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "project".into()),
     };
-    if !crate::commands::templates::NAMES.contains(&template) {
-        return Err(Error::usage(format!("unknown template: {template}")));
-    }
-    let prefix = format!("templates/{template}/");
-    let mut files: Vec<(String, &'static [u8])> = pgmi_shared::dir(&prefix)
-        .map(|(p, b)| (p[prefix.len()..].to_string(), b))
-        .collect();
-    if template != "minimal" {
-        files.extend(pgmi_shared::dir("skills/").map(|(p, b)| (format!(".agents/{p}"), b)));
-    }
-    if files.is_empty() {
-        return Err(Error::usage(format!("unknown template: {template}")));
-    }
-    for (rel, bytes) in files {
-        let rel = rel.strip_suffix(".scaffold").unwrap_or(&rel).to_string();
+    for (rel, bytes) in render(template, &name)? {
         let path = target.join(&rel);
-        if KEPT.iter().any(|k| *k == rel) && path.exists() {
+        if KEPT.contains(&rel.as_str()) && path.exists() {
             continue;
         }
-        let name_bytes;
-        let bytes = match std::str::from_utf8(bytes) {
-            Ok(text) if text.contains(PLACEHOLDER) => {
-                let value = if rel.ends_with(".json") {
-                    let quoted = serde_json::to_string(&name).unwrap_or_default();
-                    quoted
-                        .strip_prefix('"')
-                        .and_then(|q| q.strip_suffix('"'))
-                        .unwrap_or_default()
-                        .to_string()
-                } else {
-                    name.clone()
-                };
-                name_bytes = text.replace(PLACEHOLDER, &value).into_bytes();
-                &name_bytes[..]
-            }
-            _ => bytes,
-        };
-        if rel == "deploy.sql" {
-            let mut text = format!(
-                "-- Scaffolded by pgmi {} from the {template} template.\n",
-                crate::cli::VERSION
-            )
-            .into_bytes();
-            text.extend_from_slice(bytes);
-            write(&path, &text)?;
-        } else {
-            write(&path, bytes)?;
-        }
+        write(&path, &bytes)?;
     }
     Ok(())
+}
+
+pub fn render(template: &str, name: &str) -> Result<Vec<(String, Vec<u8>)>> {
+    let unknown = || Error::usage(format!("unknown template: {template}"));
+    if !crate::commands::templates::NAMES.contains(&template) {
+        return Err(unknown());
+    }
+    let read = |e: std::io::Error| Error::internal(format!("embedded template {template}: {e}"));
+    let mut files = vfs::files(&EmbeddedFs::new(&format!("templates/{template}"))).map_err(read)?;
+    if files.is_empty() {
+        return Err(unknown());
+    }
+    if template != "minimal" {
+        files.extend(
+            vfs::files(&EmbeddedFs::new("skills"))
+                .map_err(read)?
+                .into_iter()
+                .map(|(p, b)| (format!(".agents/skills/{p}"), b)),
+        );
+    }
+    Ok(files
+        .into_iter()
+        .map(|(rel, bytes)| {
+            let rel = rel.strip_suffix(".scaffold").unwrap_or(&rel).to_string();
+            let bytes = fill(&rel, bytes, name);
+            if rel == "deploy.sql" {
+                let mut text = format!(
+                    "-- Scaffolded by pgmi {} from the {template} template.\n",
+                    crate::cli::VERSION
+                )
+                .into_bytes();
+                text.extend_from_slice(&bytes);
+                (rel, text)
+            } else {
+                (rel, bytes)
+            }
+        })
+        .collect())
+}
+
+fn fill(rel: &str, bytes: Vec<u8>, name: &str) -> Vec<u8> {
+    match std::str::from_utf8(&bytes) {
+        Ok(text) if text.contains(PLACEHOLDER) => {
+            let value = if rel.ends_with(".json") {
+                let quoted = serde_json::to_string(name).unwrap_or_default();
+                quoted
+                    .strip_prefix('"')
+                    .and_then(|q| q.strip_suffix('"'))
+                    .unwrap_or_default()
+                    .to_string()
+            } else {
+                name.to_string()
+            };
+            text.replace(PLACEHOLDER, &value).into_bytes()
+        }
+        _ => bytes,
+    }
 }
 
 const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\ncommit them, and edit them as your conventions change. Run \"pgmi ai\" for the\ndocs that match this pgmi version.\n";
@@ -169,46 +185,38 @@ fn next_steps(template: &str, target: &str, db: Option<&str>) -> String {
     }
 }
 
-fn draw(dir: &Path, indent: &str, out: &mut String) {
-    let mut entries: Vec<(String, bool)> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| {
-                    let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-                    (e.file_name().to_string_lossy().into_owned(), is_dir)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    entries.sort();
+fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
+    let entries = fs.read_dir(rel).unwrap_or_default();
     let last = entries.len().saturating_sub(1);
-    for (i, (name, is_dir)) in entries.iter().enumerate() {
+    for (i, entry) in entries.iter().enumerate() {
+        let name = &entry.name;
         let (branch, more) = if i == last {
             ("└── ", "    ")
         } else {
             ("├── ", "│   ")
         };
-        if !is_dir {
+        if entry.stat.link || entry.stat.kind != Kind::Dir {
             out.push_str(&format!("{indent}{branch}{name}\n"));
             continue;
         }
         out.push_str(&format!("{indent}{branch}{name}/\n"));
-        let path = dir.join(name);
+        let child = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
         if name == ".git" {
             continue;
         }
         if name == ".agents" && indent.is_empty() {
-            let skills = std::fs::read_dir(path.join("skills"))
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter(|e| e.path().is_dir())
-                        .count()
-                })
+            let skills = fs
+                .read_dir(&format!("{child}/skills"))
+                .map(|e| e.iter().filter(|e| e.stat.kind == Kind::Dir).count())
                 .unwrap_or(0);
             out.push_str(&format!("{indent}{more}└── skills/  ({skills} skills)\n"));
             continue;
         }
-        draw(&path, &format!("{indent}{more}"), out);
+        draw(fs, &child, &format!("{indent}{more}"), out);
     }
 }
 
@@ -219,4 +227,90 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     std::fs::write(path, bytes)
         .map_err(|e| Error::general(format!("write {}", path.display())).with_source(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::walk;
+    use crate::vfs::MemFs;
+
+    fn rendered(template: &str, name: &str) -> MemFs {
+        MemFs::from_files(render(template, name).unwrap())
+    }
+
+    #[test]
+    fn every_template_scaffolds_a_project_that_loads_in_memory() {
+        for t in crate::commands::templates::NAMES {
+            let fs = rendered(t, "shop");
+            let p = walk::load(&fs, walk::DEFAULT_MAX_FILE_SIZE)
+                .unwrap_or_else(|e| panic!("{t}: {}", e.text()));
+            assert!(
+                p.deploy_sql.starts_with(&format!(
+                    "-- Scaffolded by pgmi {} from the {t} template.\n",
+                    crate::cli::VERSION
+                )),
+                "{t}"
+            );
+            crate::project::metadata::collect(&p.sources)
+                .unwrap_or_else(|e| panic!("{t}: {}", e.text()));
+            let all = vfs::files(&fs).unwrap();
+            assert!(
+                all.iter().all(|(_, b)| !b
+                    .windows(PLACEHOLDER.len())
+                    .any(|w| w == PLACEHOLDER.as_bytes())),
+                "{t}: placeholder left"
+            );
+            assert!(all.iter().all(|(p, _)| !p.ends_with(".scaffold")), "{t}");
+        }
+    }
+
+    #[test]
+    fn skills_ship_with_basic_and_advanced_only() {
+        let has_skills = |t| {
+            render(t, "x")
+                .unwrap()
+                .iter()
+                .any(|(p, _)| p.starts_with(".agents/skills/"))
+        };
+        assert!(has_skills("basic"));
+        assert!(has_skills("advanced"));
+        assert!(!has_skills("minimal"));
+    }
+
+    #[test]
+    fn the_project_name_is_json_escaped_in_json_files() {
+        let fs = rendered("basic", "a\"b");
+        let json = String::from_utf8(fs.read("project.json").unwrap()).unwrap();
+        assert!(json.contains(r#""app_name": "a\"b""#), "{json}");
+        let readme = String::from_utf8(fs.read("README.md").unwrap()).unwrap();
+        assert!(readme.starts_with("# a\"b\n"), "{readme}");
+    }
+
+    #[test]
+    fn scaffold_suffix_is_dropped() {
+        let files = render("advanced", "x").unwrap();
+        assert!(files.iter().any(|(p, _)| p == "gateways/go/go.mod"));
+    }
+
+    #[test]
+    fn unknown_template_is_a_usage_error() {
+        assert_eq!(render("nope", "x").unwrap_err().exit_code(), 2);
+    }
+
+    #[test]
+    fn the_tree_summarises_skills_and_skips_git() {
+        let fs = MemFs::default()
+            .file("deploy.sql", "")
+            .file(".git/HEAD", "")
+            .file(".agents/skills/a/SKILL.md", "")
+            .file(".agents/skills/b/SKILL.md", "")
+            .file("lib/x.sql", "");
+        let mut out = String::new();
+        draw(&fs, "", "", &mut out);
+        assert_eq!(
+            out,
+            "├── .agents/\n│   └── skills/  (2 skills)\n├── .git/\n├── deploy.sql\n└── lib/\n    └── x.sql\n"
+        );
+    }
 }

@@ -1,7 +1,6 @@
-use std::path::{Path, PathBuf};
-
 use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
+use crate::vfs::{Kind as FileKind, Vfs};
 
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -35,19 +34,6 @@ pub fn is_sql(name: &str) -> bool {
     .any(|e| lower.ends_with(e))
 }
 
-pub fn check_root(root: &Path) -> Result<()> {
-    let display = root.display();
-    match std::fs::metadata(root) {
-        Err(_) => Err(Error::config(format!(
-            "project path \"{display}\" does not exist"
-        ))),
-        Ok(m) if !m.is_dir() => Err(Error::config(format!(
-            "\"{display}\" is a file; pass the project directory"
-        ))),
-        Ok(_) => Ok(()),
-    }
-}
-
 pub fn max_size(env: &crate::env::Env) -> Result<u64> {
     match env.non_empty("PGMI_MAX_FILE_SIZE")? {
         None => Ok(DEFAULT_MAX_FILE_SIZE),
@@ -59,63 +45,64 @@ pub fn max_size(env: &crate::env::Env) -> Result<u64> {
     }
 }
 
-fn rules(root: &Path) -> Result<Rules> {
-    let path = root.join(".pgmiignore");
-    match std::fs::read(&path) {
+fn rules(fs: &impl Vfs) -> Result<Rules> {
+    match fs.read(".pgmiignore") {
         Ok(bytes) => Rules::parse(&String::from_utf8_lossy(&bytes)).map_err(Error::config),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Rules::default()),
         Err(e) => Err(Error::config(format!(
             "could not read {}: {e}",
-            path.display()
+            fs.display(".pgmiignore")
         ))),
     }
 }
 
-pub fn scan(root: &Path, max_size: u64) -> Result<Project> {
-    check_root(root)?;
-    let rules = rules(root)?;
+pub fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
+    let rules = rules(fs)?;
     let mut project = Project::default();
-    walk(root, "", false, &rules, max_size, &mut project)?;
+    walk(fs, "", false, &rules, max_size, &mut project)?;
     project.ignored.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(project)
 }
 
-pub fn load(root: &Path, max_size: u64) -> Result<Project> {
-    check_root(root)?;
-    let rules = rules(root)?;
+pub fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
+    let rules = rules(fs)?;
     if rules.ignored("deploy.sql", false) {
         return Err(Error::config(
             ".pgmiignore hides deploy.sql; add !deploy.sql after the pattern that matches it",
         ));
     }
-    let deploy_path = root.join("deploy.sql");
-    if !deploy_path.is_file() {
+    if !fs
+        .stat("deploy.sql")
+        .is_ok_and(|s| s.kind == FileKind::File)
+    {
         return Err(Error::new(
             Kind::NoDeploySql,
-            format!("deploy.sql not found in {}", root.display()),
+            format!("deploy.sql not found in {}", fs.display("")),
         ));
     }
     let mut project = Project {
-        deploy_sql: read_text(&deploy_path, "deploy.sql", max_size)?,
+        deploy_sql: read_text(fs, "deploy.sql", max_size)?,
         ..Project::default()
     };
-    walk(root, "", false, &rules, max_size, &mut project)?;
+    walk(fs, "", false, &rules, max_size, &mut project)?;
     project.ignored.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(project)
 }
 
-fn read_text(path: &Path, rel: &str, max_size: u64) -> Result<String> {
-    let meta = std::fs::metadata(path)
+fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
+    let stat = fs
+        .stat(rel)
         .map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
-    if meta.len() > max_size {
+    if stat.len > max_size {
         let name = rel.rsplit('/').next().unwrap_or(rel);
         return Err(Error::config(format!(
             "failed to read ./{rel}: file {name} is {} bytes, exceeds {max_size}-byte limit (override via PGMI_MAX_FILE_SIZE)",
-            meta.len()
+            stat.len
         )));
     }
-    let bytes =
-        std::fs::read(path).map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
+    let bytes = fs
+        .read(rel)
+        .map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
     if let Some(at) = bytes.iter().position(|b| *b == 0) {
         return Err(Error::config(format!(
@@ -135,55 +122,32 @@ fn read_text(path: &Path, rel: &str, max_size: u64) -> Result<String> {
 }
 
 fn walk(
-    dir: &Path,
+    fs: &impl Vfs,
     rel: &str,
     in_test: bool,
     rules: &Rules,
     max_size: u64,
     out: &mut Project,
 ) -> Result<()> {
-    let mut entries: Vec<(std::result::Result<String, String>, PathBuf)> = std::fs::read_dir(dir)
-        .map_err(|e| Error::general(format!("read directory {}", dir.display())).with_source(e))?
-        .filter_map(|e| e.ok())
-        .map(|e| {
-            let name = e
-                .file_name()
-                .into_string()
-                .map_err(|n| n.to_string_lossy().into_owned());
-            (name, e.path())
-        })
-        .collect();
-    entries.sort();
-    for (name, path) in entries {
-        let join = |name: &str| {
-            if rel.is_empty() {
-                name.to_string()
-            } else {
-                format!("{rel}/{name}")
-            }
-        };
-        let name = match name {
-            Ok(n) => n,
-            Err(lossy) => {
-                let child = join(&lossy);
-                if lossy.starts_with('.') || rules.ignored(&child, path.is_dir()) {
-                    continue;
-                }
-                return Err(Error::config(format!(
-                    "the name of ./{child} is not valid UTF-8; rename it, or hide it in .pgmiignore"
-                )));
-            }
-        };
-        let child = join(&name);
-        let Ok(link) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        let is_link = link.file_type().is_symlink();
-        let is_dir = if is_link {
-            std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
+    let entries = fs.read_dir(rel).map_err(|e| {
+        Error::general(format!("read directory {}", fs.display(rel))).with_source(e)
+    })?;
+    for entry in entries {
+        let name = entry.name;
+        let child = if rel.is_empty() {
+            name.clone()
         } else {
-            link.is_dir()
+            format!("{rel}/{name}")
         };
+        let is_dir = entry.stat.kind == FileKind::Dir;
+        if !entry.utf8 {
+            if name.starts_with('.') || rules.ignored(&child, is_dir) {
+                continue;
+            }
+            return Err(Error::config(format!(
+                "the name of ./{child} is not valid UTF-8; rename it, or hide it in .pgmiignore"
+            )));
+        }
         let shown = if is_dir {
             format!("./{child}/")
         } else {
@@ -206,7 +170,7 @@ fn walk(
             });
             continue;
         }
-        if is_link {
+        if entry.stat.link {
             return Err(Error::config(format!(
                 "./{child} is a symlink; pgmi does not follow symbolic links, so hide it in .pgmiignore or replace it with the file"
             )));
@@ -218,13 +182,13 @@ fn walk(
                     "unsupported directory {name:?} in path \"./{child}/\"; only __test__ and __tests__ are allowed"
                 )));
             }
-            walk(&path, &child, test, rules, max_size, out)?;
+            walk(fs, &child, test, rules, max_size, out)?;
             continue;
         }
         if in_test {
             out.test_dir_files.push(format!("./{child}"));
             if is_sql(&name) {
-                let content = read_text(&path, &child, max_size)?;
+                let content = read_text(fs, &child, max_size)?;
                 out.tests.push(File {
                     path: format!("./{child}"),
                     content,
@@ -232,7 +196,7 @@ fn walk(
             }
             continue;
         }
-        let content = read_text(&path, &child, max_size)?;
+        let content = read_text(fs, &child, max_size)?;
         out.sources.push(File {
             path: format!("./{child}"),
             content,
@@ -244,56 +208,185 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vfs::{EmbeddedFs, MemFs, OsFs};
 
-    fn project(tag: &str, files: &[(&std::ffi::OsStr, &[u8])]) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("pgmi-walk-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("deploy.sql"), "SELECT 1;").unwrap();
-        for (name, body) in files {
-            std::fs::write(d.join(name), body).unwrap();
-        }
-        d
+    const MAX: u64 = DEFAULT_MAX_FILE_SIZE;
+
+    fn project() -> MemFs {
+        MemFs::default().file("deploy.sql", "SELECT 1;")
+    }
+
+    fn paths(files: &[File]) -> Vec<&str> {
+        files.iter().map(|f| f.path.as_str()).collect()
+    }
+
+    fn refused(fs: &MemFs) -> String {
+        let e = load(fs, MAX).unwrap_err();
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        e.text()
     }
 
     #[test]
-    fn pgmiignore_is_read_lossily_and_read_errors_refuse() {
-        let os = std::ffi::OsStr::new;
-        let d = project(
-            "lossy",
-            &[
-                (os(".pgmiignore"), b"# caf\xe9\nskip.sql\n"),
-                (os("a.sql"), b"SELECT 1;"),
-                (os("skip.sql"), b"SELECT 1;"),
-            ],
+    fn sources_tests_and_test_files_are_split_in_path_order() {
+        let fs = project()
+            .file("b/2.sql", "SELECT 2;")
+            .file("a.sql", "SELECT 1;")
+            .file("b/__test__/t.sql", "SELECT 3;")
+            .file("b/__test__/notes.md", "n")
+            .file("README.md", "r");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(p.deploy_sql, "SELECT 1;");
+        assert_eq!(paths(&p.sources), ["./README.md", "./a.sql", "./b/2.sql"]);
+        assert_eq!(paths(&p.tests), ["./b/__test__/t.sql"]);
+        assert_eq!(
+            p.test_dir_files,
+            ["./b/__test__/notes.md", "./b/__test__/t.sql"]
         );
-        let p = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap();
-        let paths: Vec<_> = p.sources.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["./a.sql"]);
-        let d = project("dir", &[]);
-        std::fs::create_dir(d.join(".pgmiignore")).unwrap();
-        let e = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap_err();
-        assert_eq!(e.exit_code(), 10);
-        assert!(e.text().contains(".pgmiignore"), "{}", e.text());
+    }
+
+    #[test]
+    fn hidden_and_tool_directories_are_ignored_built_in() {
+        let fs = project()
+            .file(".git/config", "x")
+            .file("node_modules/m.js", "x")
+            .file("__pycache__/c.pyc", "x")
+            .file("keep.sql", "SELECT 1;");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(paths(&p.sources), ["./keep.sql"]);
+        let ignored: Vec<_> = p
+            .ignored
+            .iter()
+            .map(|i| (i.path.as_str(), i.rule))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                ("./.git/", "built-in"),
+                ("./__pycache__/", "built-in"),
+                ("./node_modules/", "built-in")
+            ]
+        );
+    }
+
+    #[test]
+    fn pgmiignore_hides_files_and_is_read_lossily() {
+        let fs = project()
+            .file(".pgmiignore", b"# caf\xe9\nskip.sql\ndocs/\n")
+            .file("a.sql", "SELECT 1;")
+            .file("skip.sql", "SELECT 1;")
+            .file("docs/x.md", "x");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(paths(&p.sources), ["./a.sql"]);
+        let rules: Vec<_> = p
+            .ignored
+            .iter()
+            .map(|i| (i.path.as_str(), i.rule))
+            .collect();
+        assert!(rules.contains(&("./skip.sql", ".pgmiignore")));
+        assert!(rules.contains(&("./docs/", ".pgmiignore")));
+    }
+
+    #[test]
+    fn an_unreadable_pgmiignore_refuses() {
+        let text = refused(&project().dir(".pgmiignore"));
+        assert!(text.contains(".pgmiignore"), "{text}");
+    }
+
+    #[test]
+    fn pgmiignore_may_not_hide_deploy_sql() {
+        let text = refused(&project().file(".pgmiignore", "*.sql\n"));
+        assert!(text.contains("!deploy.sql"), "{text}");
+    }
+
+    #[test]
+    fn deploy_sql_missing_or_a_directory_is_exit_14() {
+        for fs in [MemFs::default(), MemFs::default().dir("deploy.sql")] {
+            let e = load(&fs, MAX).unwrap_err();
+            assert_eq!(e.exit_code(), 14, "{}", e.text());
+        }
+        assert!(scan(&MemFs::default(), MAX).is_ok());
+    }
+
+    #[test]
+    fn symlinks_are_refused_unless_hidden() {
+        for fs in [
+            project().link_to_file("l.sql"),
+            project().link_to_dir("l"),
+            project().dangling_link("l"),
+        ] {
+            assert!(refused(&fs).contains("symlink"));
+        }
+        let fs = project().link_to_dir("l").file(".pgmiignore", "l/\n");
+        assert!(load(&fs, MAX).unwrap().sources.is_empty());
+    }
+
+    #[test]
+    fn only_test_directories_may_use_dunder_names() {
+        assert!(refused(&project().file("__init__/x.sql", "SELECT 1;")).contains("__init__"));
+        let fs = project().file("__tests__/__deep__/x.sql", "SELECT 1;");
+        assert_eq!(
+            paths(&load(&fs, MAX).unwrap().tests),
+            ["./__tests__/__deep__/x.sql"]
+        );
+    }
+
+    #[test]
+    fn text_rules_bom_nul_utf8_and_size() {
+        let fs = project().file("a.sql", b"\xef\xbb\xbfSELECT 1;");
+        assert_eq!(load(&fs, MAX).unwrap().sources[0].content, "SELECT 1;");
+        assert!(refused(&project().file("a.sql", b"SELECT\0")).contains("NUL byte at offset 6"));
+        assert!(refused(&project().file("a.sql", b"SELECT \xff")).contains("byte offset 7"));
+        let big = project().file("a.sql", "x".repeat(11));
+        let e = load(&big, 10).unwrap_err();
+        assert!(e.text().contains("exceeds 10-byte limit"), "{}", e.text());
+        assert!(load(&big, 11).is_ok());
+    }
+
+    #[test]
+    fn non_text_files_in_test_directories_are_listed_not_read() {
+        let fs = project().file("__test__/blob.bin", b"\0\0");
+        let p = load(&fs, MAX).unwrap();
+        assert!(p.tests.is_empty());
+        assert_eq!(p.test_dir_files, ["./__test__/blob.bin"]);
+    }
+
+    #[test]
+    fn every_embedded_template_loads_in_memory() {
+        for name in ["basic", "advanced", "minimal"] {
+            let fs = EmbeddedFs::new(&format!("templates/{name}"));
+            let p = load(&fs, MAX).unwrap_or_else(|e| panic!("{name}: {}", e.text()));
+            assert!(!p.deploy_sql.is_empty(), "{name}");
+            super::super::metadata::collect(&p.sources)
+                .unwrap_or_else(|e| panic!("{name}: {}", e.text()));
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn non_utf8_file_name_is_refused_unless_hidden() {
         use std::os::unix::ffi::OsStrExt;
+        let os_project = |tag: &str, files: &[(&std::ffi::OsStr, &[u8])]| {
+            let d = std::env::temp_dir().join(format!("pgmi-walk-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("deploy.sql"), "SELECT 1;").unwrap();
+            for (name, body) in files {
+                std::fs::write(d.join(name), body).unwrap();
+            }
+            OsFs::new(d)
+        };
         let bad = std::ffi::OsStr::from_bytes(b"caf\xe9.sql");
-        let d = project("bad", &[(bad, b"SELECT 1;")]);
-        let e = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap_err();
+        let e = load(&os_project("bad", &[(bad, b"SELECT 1;")]), MAX).unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert!(e.text().contains("./caf\u{fffd}.sql"), "{}", e.text());
-        let d = project(
+        let fs = os_project(
             "hidden",
             &[
                 (bad, b"SELECT 1;"),
                 (std::ffi::OsStr::new(".pgmiignore"), b"caf*.sql\n"),
             ],
         );
-        assert!(load(&d, DEFAULT_MAX_FILE_SIZE).unwrap().sources.is_empty());
+        assert!(load(&fs, MAX).unwrap().sources.is_empty());
     }
 
     #[test]

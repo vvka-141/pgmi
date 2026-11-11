@@ -346,7 +346,7 @@ async fn deploy(
         )));
     }
     st.contract = true;
-    walk::check_root(&a.project)?;
+    crate::vfs::OsFs::project(&a.project)?;
     let yaml = ProjectConfig::load(&a.project)?;
     if let Some(y) = &yaml {
         y.timeout()?;
@@ -413,8 +413,8 @@ async fn deploy(
     }
     st.deployer = true;
     let max_size = walk::max_size(&ctx.env)?;
-    let root = a.project.clone();
-    let project = tokio::task::spawn_blocking(move || walk::load(&root, max_size))
+    let fs = crate::vfs::OsFs::new(a.project.clone());
+    let project = tokio::task::spawn_blocking(move || walk::load(&fs, max_size))
         .await
         .map_err(|e| Error::internal(format!("project loader: {e}")))??;
     let meta = metadata::collect(&project.sources)?;

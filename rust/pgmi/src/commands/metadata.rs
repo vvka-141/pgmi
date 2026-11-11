@@ -81,7 +81,9 @@ fn rows(sources: &[File], metas: &[Meta]) -> Vec<Row> {
 }
 
 pub fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
-    let (project, metas) = walk::scan(path, walk::max_size(env)?)
+    let max_size = walk::max_size(env)?;
+    let (project, metas) = crate::vfs::OsFs::project(path)
+        .and_then(|fs| walk::scan(&fs, max_size))
         .and_then(|p| metadata::collect(&p.sources).map(|m| (p, m)))
         .map_err(|e| Error::new(e.kind(), format!("failed to scan directory: {}", e.text())))?;
     Ok(Plan {
@@ -150,7 +152,8 @@ pub fn validate_report(
     path: &Path,
     env: &Env,
 ) -> Result<std::result::Result<Validation, Vec<String>>> {
-    let project = walk::scan(path, walk::max_size(env)?)?;
+    let max_size = walk::max_size(env)?;
+    let project = walk::scan(&crate::vfs::OsFs::project(path)?, max_size)?;
     let mut files: Vec<File> = project.sources.clone();
     files.extend(project.tests.iter().cloned());
     let total = project.sources.len() + project.test_dir_files.len();
@@ -262,14 +265,15 @@ pub fn block(id: &str, idempotent: bool, description: &str, key: &str) -> String
 }
 
 fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
-    walk::check_root(&a.path)?;
+    crate::vfs::OsFs::project(&a.path)?;
     let named = std::path::absolute(&a.path).unwrap_or_else(|_| a.path.clone());
     let root = project_root(&a.path);
     if root != named {
         stderr(&format!("Project root: {}\n", root.display()));
     }
     stderr("Scanning SQL files...\n");
-    let project = walk::scan(&root, walk::max_size(env)?)?;
+    let max_size = walk::max_size(env)?;
+    let project = walk::scan(&crate::vfs::OsFs::project(&root)?, max_size)?;
     let metas = metadata::collect(&project.sources)?;
     let under = named
         .strip_prefix(&root)

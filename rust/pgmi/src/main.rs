@@ -11,6 +11,7 @@ mod output;
 mod project;
 mod serve;
 mod tui;
+mod vfs;
 
 use std::io::Write;
 use std::process::ExitCode;

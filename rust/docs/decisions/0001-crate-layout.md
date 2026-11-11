@@ -52,7 +52,10 @@ shared/Cargo.toml, build.rs, src/lib.rs   package `pgmi-shared` (record 0010)
 - Modules in `rust/pgmi/src/`: `cli`, `env`, `config` (pgmi.yaml, params),
   `conn` (resolution, pgpass, tls, cloud/{azure,aws,google}), `project`
   (walk, ignore, lexer, checksum, metadata), `deploy` (session, execute,
-  overwrite, lock), `output`, `serve`, `tui`, `error`.
+  overwrite, lock), `output`, `serve`, `tui`, `error`, `vfs` (the read-only
+  `Vfs` seam: `OsFs` for the disk, `EmbeddedFs` over `pgmi-shared`, and an
+  in-memory `MemFs` for tests; the project walker, `.pgmiignore` and `init`
+  read through it).
 - Release profile: `lto = "thin"`, `codegen-units = 1`, `strip = true`,
   `panic = "unwind"` (record 0002 depends on unwinding).
 
