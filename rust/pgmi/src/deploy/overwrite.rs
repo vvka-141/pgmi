@@ -109,7 +109,7 @@ const LIST_GUCS: [&str; 6] = [
 ];
 
 pub struct Plan {
-    maintenance: Session,
+    pub maintenance: Session,
     db: String,
     snapshot: Option<Snapshot>,
 }
@@ -391,7 +391,7 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     out
 }
 
-pub async fn recreate(plan: Plan, reporter: &Reporter) -> Result<bool> {
+pub async fn recreate(plan: &Plan, reporter: &Reporter) -> Result<bool> {
     let Plan {
         maintenance,
         db,
@@ -400,16 +400,16 @@ pub async fn recreate(plan: Plan, reporter: &Reporter) -> Result<bool> {
     let work = async {
         let c = &maintenance.client;
         if snapshot.is_some() {
-            c.batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", quote_ident(&db)))
+            c.batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", quote_ident(db)))
                 .await
                 .map_err(|e| sql_error("drop the target database", &e))?;
         }
-        c.batch_execute(&create_sql(&db, snapshot.as_ref()))
+        c.batch_execute(&create_sql(db, snapshot.as_ref()))
             .await
             .map_err(|e| sql_error("create the target database", &e))?;
         let mut failed = Vec::new();
         if let Some(s) = &snapshot {
-            for (item, sql) in restore_sql(&db, s) {
+            for (item, sql) in restore_sql(db, s) {
                 if let Err(e) = c.batch_execute(&sql).await {
                     failed.push(format!("{item}: {}", sql_error("restore", &e).text()));
                 }

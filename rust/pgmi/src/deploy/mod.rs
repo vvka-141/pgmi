@@ -106,7 +106,7 @@ impl Guard {
         if self.interrupted.load(Ordering::SeqCst) {
             Error::new(Kind::Interrupted, "interrupted")
         } else {
-            self.timeout_error()
+            Error::new(Kind::Interrupted, "the deploy was cancelled")
         }
     }
 
@@ -471,7 +471,9 @@ async fn deploy(
     }
     if a.overwrite {
         let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
-        let recreated = overwrite::recreate(plan, reporter).await?;
+        let recreated = guard
+            .running(&plan.maintenance, overwrite::recreate(&plan, reporter))
+            .await?;
         st.recreated = Some(recreated);
         st.created = Some(!recreated);
     }
@@ -771,6 +773,20 @@ fn record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cancelled_deploy_is_not_a_timeout() {
+        let guard = Guard {
+            token: CancellationToken::new(),
+            deadline: deadline(Duration::from_secs(60)),
+            timeout: Duration::from_secs(60),
+            interrupted: Arc::new(AtomicBool::new(false)),
+        };
+        let e = guard.stop_error();
+        assert!(!e.text().contains("--timeout"), "{}", e.text());
+        guard.interrupted.store(true, Ordering::SeqCst);
+        assert_eq!(guard.stop_error().text(), "interrupted");
+    }
 
     #[test]
     fn a_huge_timeout_never_overflows_the_deadline() {
