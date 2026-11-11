@@ -17,6 +17,12 @@ def test_minimal_case_parses():
     assert case.steps[0].expect.files == {}
 
 
+def test_sql_steps_run_on_the_case_database_unless_told_maintenance():
+    doc = {**MINIMAL, "steps": [{"sql": "SELECT 1"}, {"sql": "SELECT 2", "database": "maintenance"}]}
+    steps = parse_case("cases/x.yaml", doc).steps
+    assert [s.maintenance for s in steps] == [False, True]
+
+
 def test_stdin_list_keeps_lines_and_waits():
     doc = {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": ["a", {"wait": 2}, "b\n"], "expect": {"exit": 0}}]}
     assert parse_case("cases/x.yaml", doc).steps[0].stdin == ("a\n", 2.0, "b\n")
@@ -88,6 +94,11 @@ def test_stdin_text_and_hex_repeat_without_newline():
             "steps[0].expect.rust.stderr[0]",
         ),
         ({**MINIMAL, "steps": [{"sql": "SELECT 1", "expect": {"rust": {"exit": 1}}}]}, "steps[0].expect.rust.exit"),
+        ({**MINIMAL, "steps": [{"sql": "SELECT 1", "database": "postgres"}]}, "steps[0].database"),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "database": "maintenance", "expect": {"exit": 0}}]},
+            "steps[0].database",
+        ),
     ],
 )
 def test_malformed_case_names_file_and_field(doc, field):

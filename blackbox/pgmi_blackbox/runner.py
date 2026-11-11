@@ -108,7 +108,7 @@ def run_case(case: Case, ws: Workspace) -> None:
             if step.delay:
                 time.sleep(step.delay)
             if step.sql is not None:
-                _run_sql(ws, step.sql)
+                _run_sql(ws, step.sql, maintenance=step.maintenance)
                 failures += _check_sql(ws, step.expect, label) + _check_files(ws, step.expect)
                 continue
             run = _start(ws, step)
@@ -386,8 +386,8 @@ def _check_files(ws: Workspace, expect: Expect) -> list[str]:
     return problems
 
 
-def _run_sql(ws: Workspace, sql: str) -> None:
-    with ws.server.connect(ws.database) as c:
+def _run_sql(ws: Workspace, sql: str, maintenance: bool = False) -> None:
+    with ws.server.connect(None if maintenance else ws.database) as c:
         c.execute(ws.substitute(sql))
 
 

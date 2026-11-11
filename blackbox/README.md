@@ -68,6 +68,8 @@ steps:
       absent: [project/out.txt]    # paths that must not exist
       rust: {exit: 10, stderr: []} # optional: these keys replace the ones above under PGMI_IMPL=rust
   - sql: SELECT pg_advisory_lock(1)   # a step can also run SQL against {db}
+  - sql: CREATE DATABASE "{db}" ENCODING 'LATIN1' TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'
+    database: maintenance             # or against the maintenance database ({db} does not exist yet)
 ```
 
 `PGMI_IMPL` (`go` or `rust`, default `go`; any other value fails the run)

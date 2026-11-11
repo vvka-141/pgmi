@@ -57,6 +57,7 @@ class Step:
     cwd: str
     reference: bool
     tty: bool
+    maintenance: bool
     expect: Expect
 
 
@@ -246,10 +247,26 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     value = r.mapping(
         value,
         field,
-        {"pgmi", "sql", "env", "stdin", "delay", "background", "signal", "timeout", "cwd", "binary", "tty", "expect"},
+        {
+            "pgmi",
+            "sql",
+            "database",
+            "env",
+            "stdin",
+            "delay",
+            "background",
+            "signal",
+            "timeout",
+            "cwd",
+            "binary",
+            "tty",
+            "expect",
+        },
     )
     if ("pgmi" in value) == ("sql" in value):
         raise r.fail(field, "needs exactly one of pgmi or sql")
+    if "database" in value and ("sql" not in value or value["database"] not in ("target", "maintenance")):
+        raise r.fail(f"{field}.database", "goes with sql and is target or maintenance")
     args = r.strings(value["pgmi"], f"{field}.pgmi") if "pgmi" in value else None
     sql = r.string(value["sql"], f"{field}.sql") if "sql" in value else None
     if args is not None and "expect" not in value:
@@ -269,6 +286,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         cwd=r.string(value.get("cwd", "{workdir}"), f"{field}.cwd"),
         reference=_binary(r, value.get("binary", "test"), f"{field}.binary"),
         tty=_flag(r, value.get("tty", False), f"{field}.tty"),
+        maintenance=value.get("database") == "maintenance",
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
     )
 
