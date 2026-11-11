@@ -4,14 +4,11 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 
+from pgmi_blackbox.certs import AZURE_USER, CERT_USER, MD5_USER, make_certs
 from pgmi_blackbox.fakes import AZURE_TOKEN, start_fakes
 from pgmi_blackbox.server import IMAGE, Server, wait_ready
 
 KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
-CERT_USER = "certuser"
-MD5_USER = "md5user"
-AZURE_USER = "azureuser"
-KEY_PASSWORD = "key-passphrase"
 
 _HBA = {
     "tls": (
@@ -23,94 +20,6 @@ _HBA = {
     ),
     "tls_only": "local all all trust\nhostssl all all all scram-sha-256\nhostnossl all all all reject\n",
 }
-
-
-def _openssl(*args: str, cwd: Path) -> None:
-    subprocess.run(["openssl", *args], cwd=cwd, check=True, capture_output=True)
-
-
-def make_certs(d: Path) -> dict[str, str]:
-    d.mkdir(parents=True, exist_ok=True)
-    for ca in ("ca", "wrong_ca"):
-        _openssl(
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "2",
-            "-subj",
-            f"/CN=pgmi-blackbox-{ca}",
-            "-keyout",
-            f"{ca}.key",
-            "-out",
-            f"{ca}.crt",
-            cwd=d,
-        )
-    leaves = {"server": ("localhost", "subjectAltName=DNS:localhost"), "client": (CERT_USER, None)}
-    for name, (cn, ext) in leaves.items():
-        _openssl(
-            "req",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-subj",
-            f"/CN={cn}",
-            "-keyout",
-            f"{name}.key",
-            "-out",
-            f"{name}.csr",
-            cwd=d,
-        )
-        args = [
-            "x509",
-            "-req",
-            "-in",
-            f"{name}.csr",
-            "-CA",
-            "ca.crt",
-            "-CAkey",
-            "ca.key",
-            "-CAcreateserial",
-            "-days",
-            "2",
-            "-out",
-            f"{name}.crt",
-        ]
-        if ext:
-            (d / f"{name}.ext").write_text(ext + "\n")
-            args += ["-extfile", f"{name}.ext"]
-        _openssl(*args, cwd=d)
-    _openssl(
-        "rsa",
-        "-in",
-        "client.key",
-        "-aes256",
-        "-traditional",
-        "-passout",
-        f"pass:{KEY_PASSWORD}",
-        "-out",
-        "client_enc.key",
-        cwd=d,
-    )
-    for key in d.glob("*.key"):
-        key.chmod(0o600)
-    return {
-        "{ca}": str(d / "ca.crt"),
-        "{wrong_ca}": str(d / "wrong_ca.crt"),
-        "{client_cert}": str(d / "client.crt"),
-        "{client_key}": str(d / "client.key"),
-        "{ca_pem}": (d / "ca.crt").read_text(),
-        "{wrong_ca_pem}": (d / "wrong_ca.crt").read_text(),
-        "{client_cert_pem}": (d / "client.crt").read_text(),
-        "{client_key_pem}": (d / "client.key").read_text(),
-        "{cert_user}": CERT_USER,
-        "{md5_user}": MD5_USER,
-        "{azure_user}": AZURE_USER,
-        "{client_key_encrypted}": str(d / "client_enc.key"),
-        "{key_password}": KEY_PASSWORD,
-    }
 
 
 def start(kind: str, certs: Path, stack: ExitStack) -> tuple[Server, dict[str, str]]:

@@ -66,8 +66,21 @@ Option 2, with spike B's dialer:
 - Built: the dialer above (`connectSettings`, `generateEphemeralCert`, RSA
   2048 from `rsa` with `rand::rng()`, TLS 1.3 with the CN or DNS check). The
   Admin API base is `CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN` plus
-  `sql/v1beta4/`. No fake Admin API exists in the runner yet, so only the
-  missing-credentials path is exercised.
+  `sql/v1beta4/`.
+- The black-box `fakes` server carries a fake Admin API: an
+  `authorized_user` ADC file whose `token_uri` is the fake, `connectSettings`
+  (primary IP `127.0.0.x`, the fake server CA, `GOOGLE_MANAGED_INTERNAL_CA`),
+  `generateEphemeralCert` (signs the posted public key with `openssl x509
+  -new -force_pubkey`), and a TLS 1.3 listener on `127.0.0.x:3307` that
+  requires a client certificate from that CA and then records the startup
+  user and password like the recorder. The Go binary cannot be pointed at it
+  (its connector reads no endpoint override), so there is no case; the Rust
+  integration test `tests/google_cloud_sql.rs` runs the binary through it and
+  checks both Admin API calls, the token as the password and the user. It
+  needs `python3` and `openssl` on the test machine (both are in CI and in
+  `pgmi-rust-dev`) and runs on Linux only (other loopback addresses).
+- A refused IAM token names the default host (`localhost:5432`) rather than
+  the instance in the error line; cosmetic, left as is.
 - Without an ADC file the metadata server gets three seconds before the
   error reads as Go's "could not find default credentials".
 - `cloud/google-arguments` fails on Rust only by the intended exit code (11,

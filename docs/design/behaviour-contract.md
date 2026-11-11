@@ -442,7 +442,9 @@ no separate path. Real-cloud verification: Azure only (owner decision
 
 Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/aws-iam-token`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
 Service principal and the real Cloud SQL connector: no case; neither can be
-pointed at a local fake (see `blackbox/COVERAGE.md` "Cloud sign-in"). The
+pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
+sign-in"); the Rust dialer is checked against the runner's fake Admin API by
+a Rust integration test. The
 default sslmodes: no case; the fakes need an explicit sslmode to be reached.
 
 ## Intended changes
