@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{BufRead, IsTerminal};
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,9 +72,9 @@ fn banner(db: &str) -> String {
     let mut out = format!("╔{rule}╗\n");
     for l in std::iter::once("").chain(lines).chain(std::iter::once("")) {
         let pad = " ".repeat(width - l.chars().count());
-        out.push_str(&format!("║  {l}{pad}  ║\n"));
+        let _ = writeln!(out, "║  {l}{pad}  ║");
     }
-    out.push_str(&format!("╚{rule}╝"));
+    let _ = write!(out, "╚{rule}╝");
     out
 }
 
@@ -98,8 +99,8 @@ impl Approver for Terminal {
                     "--force: DROP DATABASE \"{db}\" in {left}s. Ctrl-C aborts."
                 ));
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
-                    _ = token.cancelled() => return Err(interrupted()),
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    () = token.cancelled() => return Err(interrupted()),
                 }
             }
             return Ok(());
@@ -121,7 +122,7 @@ impl Approver for Terminal {
             r = read => r
                 .map_err(|e| Error::internal(format!("prompt: {e}")))?
                 .map_err(|e| Error::new(Kind::Denied, "approval denied").with_source(e))?,
-            _ = token.cancelled() => return Err(interrupted()),
+            () = token.cancelled() => return Err(interrupted()),
         };
         let Some(line) = line else {
             return Err(Error::new(

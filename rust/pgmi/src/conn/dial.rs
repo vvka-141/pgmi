@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -276,10 +277,10 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     }
     let mut options = spec.options.clone().unwrap_or_default();
     if let Some(tz) = &spec.timezone {
-        options.push_str(&format!(" -c TimeZone={tz}"));
+        let _ = write!(options, " -c TimeZone={tz}");
     }
     if let Some(t) = spec.tcp.user_timeout {
-        options.push_str(&format!(" -c tcp_user_timeout={}", t.as_millis()));
+        let _ = write!(options, " -c tcp_user_timeout={}", t.as_millis());
     }
     if !options.trim().is_empty() {
         config.options(options.trim());
@@ -303,8 +304,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     };
     let passfile_text = passfile
         .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "~/.pgpass".into());
+        .map_or_else(|| "~/.pgpass".into(), |p| p.display().to_string());
     let tls_config = if matches!(sslmode_of(mode), PgSslMode::Disable) {
         None
     } else {
@@ -612,9 +612,10 @@ fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u1
     let mut message = format!("connect to \"{db}\": {joined}");
     if joined.contains("connection refused") {
         let (h, p) = first;
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
-        ));
+        );
     }
     if ["x509", "TLS", "certificate"]
         .iter()
@@ -692,7 +693,7 @@ mod tests {
     #[test]
     fn a_connect_error_keeps_the_sqlstate_every_host_agreed_on() {
         let one = |codes: &[&str]| {
-            let codes: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
+            let codes: Vec<String> = codes.iter().map(ToString::to_string).collect();
             connect_error("d", &["h:5432: refused".into()], &codes, ("h", 5432))
         };
         let e = one(&["42501"]);
@@ -705,7 +706,7 @@ mod tests {
 
     #[test]
     fn a_connect_error_names_every_host_and_hints_at_the_cause() {
-        let errors = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let errors = |e: &[&str]| e.iter().map(ToString::to_string).collect::<Vec<_>>();
         let e = connect_error(
             "app",
             &errors(&["connection refused to a:1", "b:2: timeout expired"]),

@@ -12,6 +12,7 @@ pub struct Env {
 }
 
 impl Env {
+    #[must_use]
     pub fn snapshot() -> Self {
         Self::from_os(std::env::vars_os())
     }

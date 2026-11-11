@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use unicode_normalization::UnicodeNormalization;
 
 use super::tree;
@@ -30,7 +31,10 @@ const DENYLIST: [&str; 20] = [
 
 fn denylisted(token: &str) -> bool {
     let sum = Sha256::digest(format!("{SALT}{token}").as_bytes());
-    let hex: String = sum.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = sum.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
     DENYLIST.contains(&hex.as_str())
 }
 

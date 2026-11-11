@@ -23,6 +23,7 @@ impl Default for Lines {
 }
 
 impl Lines {
+    #[must_use]
     pub fn with_limit(limit: usize) -> Self {
         Lines {
             buf: Vec::new(),

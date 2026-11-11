@@ -288,7 +288,9 @@ impl Input {
             return vec![Span::raw(shown.iter().collect::<String>())];
         }
         let before: String = shown[..self.cursor].iter().collect();
-        let at: String = shown.get(self.cursor).map_or(" ".into(), |c| c.to_string());
+        let at: String = shown
+            .get(self.cursor)
+            .map_or(" ".into(), std::string::ToString::to_string);
         let after: String = shown
             .get(self.cursor + 1..)
             .map_or(String::new(), |r| r.iter().collect());

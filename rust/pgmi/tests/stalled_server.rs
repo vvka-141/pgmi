@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -79,7 +80,7 @@ fn a_rollback_the_server_never_answers_does_not_hang_the_deploy() {
         config.get_user().unwrap_or("postgres")
     );
     if let Some(password) = config.get_password() {
-        url.push_str(&format!("&password={}", String::from_utf8_lossy(password)));
+        let _ = write!(url, "&password={}", String::from_utf8_lossy(password));
     }
     let project = Project::empty();
     project.write("deploy.sql", "BEGIN;\nCREATE TABLE left_open (n int);\n");

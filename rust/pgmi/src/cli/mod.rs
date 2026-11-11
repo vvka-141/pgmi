@@ -1,6 +1,7 @@
 pub(crate) mod commands;
 pub(crate) mod usage;
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -217,7 +218,7 @@ pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
 fn exit_codes_help() -> String {
     let mut out = String::from("Exit codes:\n  0    success\n");
     for (kind, text) in Kind::TABLE {
-        out.push_str(&format!("  {:<4} {text}\n", kind.exit_code()));
+        let _ = writeln!(out, "  {:<4} {text}", kind.exit_code());
     }
     out
 }
@@ -276,7 +277,7 @@ mod tests {
         };
         assert_eq!(d.host.as_deref(), Some("db"));
         assert!(!d.force && d.json);
-        assert_eq!(d.timeout, Some(Duration::from_secs(5400)));
+        assert_eq!(d.timeout, Some(Duration::from_mins(90)));
         let e = Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).unwrap_err();
         assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
         assert!(e.to_string().contains("invalid duration \"banana\""), "{e}");
@@ -300,7 +301,7 @@ mod tests {
             assert!(text.contains("[redacted]"), "{text}");
         }
         assert_eq!(
-            d.connection.as_ref().map(|c| c.expose()),
+            d.connection.as_ref().map(Secret::expose),
             Some("postgresql://deployer:pw-must-not-appear@db.internal/app")
         );
     }

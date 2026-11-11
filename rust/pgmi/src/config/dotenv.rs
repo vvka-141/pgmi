@@ -117,8 +117,7 @@ fn expand(s: &str, earlier: &[(String, String)]) -> String {
             .iter()
             .rev()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("")
+            .map_or("", |(_, v)| v.as_str())
     };
     let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out = String::with_capacity(s.len());

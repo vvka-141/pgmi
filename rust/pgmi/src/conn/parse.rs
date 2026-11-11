@@ -226,7 +226,7 @@ fn decode(s: &str) -> Result<String> {
 }
 
 fn uri(s: &str) -> Result<Fields> {
-    let rest = s.split_once("://").map(|x| x.1).unwrap_or(s);
+    let rest = s.split_once("://").map_or(s, |x| x.1);
     let (before_query, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, path) = before_query.split_once('/').unwrap_or((before_query, ""));
     let (userinfo, hostlist) = match authority.rsplit_once('@') {

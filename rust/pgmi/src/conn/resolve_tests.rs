@@ -5,7 +5,7 @@ use super::parse::ParseError;
 use super::resolve::*;
 use crate::config::yaml::Connection;
 use crate::env::Env;
-use crate::error::Error;
+use crate::error::{Error, Secret};
 
 fn flags() -> Flags {
     Flags::default()
@@ -63,7 +63,7 @@ fn string_and_target() {
         ("app", "postgres")
     );
     assert_eq!(hosts(&s), vec![("h".to_string(), 6000)]);
-    assert_eq!(s.password.as_ref().map(|p| p.expose()), Some("p"));
+    assert_eq!(s.password.as_ref().map(Secret::expose), Some("p"));
 }
 
 #[test]
@@ -496,9 +496,9 @@ fn pgport_edge_cases() {
 fn the_password_comes_from_pgpassword_when_nothing_else_names_one() {
     let env = Env::from_pairs(&[("PGPASSWORD", "secretpass"), ("PGDATABASE", "d")]);
     let s = resolve(&flags(), &env, None).unwrap();
-    assert_eq!(s.password.as_ref().map(|p| p.expose()), Some("secretpass"));
+    assert_eq!(s.password.as_ref().map(Secret::expose), Some("secretpass"));
     let s = resolve(&conn("postgresql://u:own@h/d"), &env, None).unwrap();
-    assert_eq!(s.password.as_ref().map(|p| p.expose()), Some("own"));
+    assert_eq!(s.password.as_ref().map(Secret::expose), Some("own"));
 }
 
 #[test]
@@ -696,7 +696,7 @@ fn certificate_flags_beat_the_environment_which_beats_pgmi_yaml() {
     assert_eq!(s.sslcert.as_deref(), Some("flag.crt"));
     assert_eq!(s.sslkey.as_deref(), Some("env.key"));
     assert_eq!(s.sslrootcert.as_deref(), Some("env-ca.crt"));
-    assert_eq!(s.sslpassword.as_ref().map(|p| p.expose()), Some("env-pass"));
+    assert_eq!(s.sslpassword.as_ref().map(Secret::expose), Some("env-pass"));
 }
 
 #[test]
@@ -716,7 +716,7 @@ fn a_strings_certificates_beat_the_environment() {
     assert_eq!(s.sslrootcert.as_deref(), Some("/from/conn-ca.crt"));
     assert_eq!(s.sslcert.as_deref(), Some("/from/conn.crt"));
     assert_eq!(s.sslkey.as_deref(), Some("/from/conn.key"));
-    assert_eq!(s.sslpassword.as_ref().map(|p| p.expose()), Some("fromconn"));
+    assert_eq!(s.sslpassword.as_ref().map(Secret::expose), Some("fromconn"));
 
     let s = resolve(
         &conn("postgresql://u@h/db?sslmode=verify-full&sslcert=/from/conn.crt"),
@@ -727,7 +727,7 @@ fn a_strings_certificates_beat_the_environment() {
     assert_eq!(s.sslcert.as_deref(), Some("/from/conn.crt"));
     assert_eq!(s.sslrootcert.as_deref(), Some("/from/env-ca.crt"));
     assert_eq!(s.sslkey.as_deref(), Some("/from/env.key"));
-    assert_eq!(s.sslpassword.as_ref().map(|p| p.expose()), Some("fromenv"));
+    assert_eq!(s.sslpassword.as_ref().map(Secret::expose), Some("fromenv"));
 }
 
 #[test]
@@ -831,12 +831,12 @@ fn an_unknown_key_in_a_string_is_refused_before_connecting() {
 
 fn token_check(
     provider: Provider,
-    fl: Flags,
+    fl: &Flags,
     env: &[(&str, &str)],
     y: Option<&Connection>,
 ) -> crate::error::Result<Spec> {
     let env = Env::from_pairs(env);
-    let mut spec = resolve(&fl, &env, y)?;
+    let mut spec = resolve(fl, &env, y)?;
     let req = cloud::Options {
         aws_region: Some("us-east-1".into()),
         google_instance: Some("p:r:i".into()),
@@ -912,8 +912,7 @@ fn token_auth_refuses_an_sslmode_that_allows_plaintext() {
         for (name, fl, env, y) in sslmode_sources(mode) {
             for provider in [Provider::Azure, Provider::Aws] {
                 let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                let e =
-                    refused_before_connecting(token_check(provider, fl.clone(), &env, y.as_ref()));
+                let e = refused_before_connecting(token_check(provider, &fl, &env, y.as_ref()));
                 let text = e.to_string();
                 let from = match name {
                     "flag" => "--sslmode",
@@ -940,7 +939,7 @@ fn token_auth_accepts_a_tls_only_sslmode() {
         for (name, fl, env, y) in sslmode_sources(mode.as_str()) {
             for provider in [Provider::Azure, Provider::Aws] {
                 let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                let s = token_check(provider, fl.clone(), &env, y.as_ref())
+                let s = token_check(provider, &fl, &env, y.as_ref())
                     .unwrap_or_else(|e| panic!("{name}: {e}"));
                 assert_eq!(s.sslmode(), mode, "{name}");
             }
@@ -957,13 +956,13 @@ fn token_auth_defaults_to_a_verifying_sslmode() {
     };
     let string = conn("postgresql://u@db.example.com/postgres");
     for fl in [granular, string] {
-        let s = token_check(Provider::Azure, fl.clone(), &[], None).unwrap();
+        let s = token_check(Provider::Azure, &fl, &[], None).unwrap();
         assert_eq!(s.sslmode(), SslMode::VerifyFull);
-        let s = token_check(Provider::Aws, fl.clone(), &[], None).unwrap();
+        let s = token_check(Provider::Aws, &fl, &[], None).unwrap();
         assert_eq!(s.sslmode(), SslMode::Require);
         let mut fl = fl;
         fl.sslrootcert = Some("/etc/ssl/rds-global-bundle.pem".into());
-        let s = token_check(Provider::Aws, fl, &[], None).unwrap();
+        let s = token_check(Provider::Aws, &fl, &[], None).unwrap();
         assert_eq!(s.sslmode(), SslMode::VerifyFull);
     }
 }
@@ -984,11 +983,11 @@ fn without_a_token_the_prefer_default_and_weak_modes_stay() {
         database: Some("d".into()),
         ..Flags::default()
     };
-    let s = token_check(Provider::Google, google.clone(), &[], None).unwrap();
+    let s = token_check(Provider::Google, &google, &[], None).unwrap();
     assert_eq!(s.sslmode(), SslMode::Prefer);
     let mut fl = google;
     fl.sslmode = Some(SslMode::Disable);
-    let s = token_check(Provider::Google, fl, &[], None).unwrap();
+    let s = token_check(Provider::Google, &fl, &[], None).unwrap();
     assert_eq!(s.sslmode(), SslMode::Disable);
 }
 

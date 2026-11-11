@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use tokio_postgres::Row;
@@ -186,18 +187,18 @@ fn locale_clause(own: &[String]) -> String {
     );
     match field(3) {
         "i" => {
-            out.push_str(&format!(
-                " LOCALE_PROVIDER icu ICU_LOCALE {}",
-                literal(field(4))
-            ));
+            let _ = write!(out, " LOCALE_PROVIDER icu ICU_LOCALE {}", literal(field(4)));
             if !field(5).is_empty() {
-                out.push_str(&format!(" ICU_RULES {}", literal(field(5))));
+                let _ = write!(out, " ICU_RULES {}", literal(field(5)));
             }
         }
-        "b" => out.push_str(&format!(
-            " LOCALE_PROVIDER builtin BUILTIN_LOCALE {}",
-            literal(field(4))
-        )),
+        "b" => {
+            let _ = write!(
+                out,
+                " LOCALE_PROVIDER builtin BUILTIN_LOCALE {}",
+                literal(field(4))
+            );
+        }
         _ => out.push_str(" LOCALE_PROVIDER libc"),
     }
     out
@@ -260,9 +261,9 @@ fn create_sql(db: &str, snapshot: Option<&Snapshot>) -> String {
         if let Some(l) = &s.locale {
             sql.push_str(l);
         }
-        sql.push_str(&format!(" OWNER {}", quote_ident(&s.owner)));
+        let _ = write!(sql, " OWNER {}", quote_ident(&s.owner));
         if s.connlimit >= 0 {
-            sql.push_str(&format!(" CONNECTION LIMIT {}", s.connlimit));
+            let _ = write!(sql, " CONNECTION LIMIT {}", s.connlimit);
         }
     }
     sql
@@ -364,15 +365,14 @@ pub(crate) async fn recreate(
         });
         Ok(())
     };
-    match tokio::time::timeout(RECREATE, work).await {
-        Ok(r) => r,
-        Err(_) => {
-            maintenance.cancel().await;
-            Err(Error::new(
-                Kind::Timeout,
-                format!("--overwrite of \"{db}\" did not finish within 60s"),
-            ))
-        }
+    if let Ok(r) = tokio::time::timeout(RECREATE, work).await {
+        r
+    } else {
+        maintenance.cancel().await;
+        Err(Error::new(
+            Kind::Timeout,
+            format!("--overwrite of \"{db}\" did not finish within 60s"),
+        ))
     }
 }
 
@@ -446,7 +446,7 @@ mod tests {
                 options: vec!["work_mem=8MB".into()],
             }],
             acl: Some(vec![
-                ("".into(), "CONNECT".into(), false),
+                (String::new(), "CONNECT".into(), false),
                 ("r".into(), "TEMPORARY".into(), true),
             ]),
         };

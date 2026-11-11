@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
 
 use aws_config::{BehaviorVersion, Region};
@@ -61,7 +62,7 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     Ok(Signer {
         credentials,
         region,
-        minted: Default::default(),
+        minted: std::sync::Mutex::default(),
     })
 }
 
@@ -93,7 +94,7 @@ impl Signer {
         let query = format!("Action=connect&DBUser={}", encode(user));
         let url = format!("https://{host}:{port}/?{query}");
         let mut settings = SigningSettings::default();
-        settings.expires_in = Some(Duration::from_secs(900));
+        settings.expires_in = Some(Duration::from_mins(15));
         settings.signature_location = SignatureLocation::QueryParams;
         let identity = self.credentials.clone().into();
         let params = v4::SigningParams::builder()
@@ -112,7 +113,7 @@ impl Signer {
             .into_parts();
         let mut token = format!("{host}:{port}?{query}");
         for (name, value) in instructions.params() {
-            token.push_str(&format!("&{name}={}", encode(value)));
+            let _ = write!(token, "&{name}={}", encode(value));
         }
         Ok(token)
     }
@@ -181,7 +182,7 @@ mod tests {
         let s = Signer {
             credentials: Credentials::new("AKIDEXAMPLE", "secret", None, None, "test"),
             region: "us-west-2".into(),
-            minted: Default::default(),
+            minted: std::sync::Mutex::default(),
         };
         let t = s
             .token_at(

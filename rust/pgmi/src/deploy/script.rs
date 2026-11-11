@@ -292,7 +292,9 @@ pub(crate) fn expand(src: &str, found: &[Macro], generated: &[String]) -> (Strin
         let line = newlines(&src[..m.start]) + 1;
         let span = newlines(g);
         let first = line.saturating_add_signed(shift);
-        shift += span as isize - newlines(&src[m.start..m.end]) as isize;
+        shift = shift
+            .saturating_add_unsigned(span)
+            .saturating_sub_unsigned(newlines(&src[m.start..m.end]));
         spans.push(Span {
             line,
             first,

@@ -26,6 +26,7 @@ mod tui;
 mod vfs;
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::io::Write;
 
 use clap::Parser;
@@ -133,7 +134,7 @@ fn run_deploy(
     let approver = Box::new(deploy::Terminal::new(request.force, &env));
     deploy::run(
         runtime,
-        deploy::Context {
+        &deploy::Context {
             request,
             verbose,
             env,
@@ -148,15 +149,17 @@ fn print_version(long: bool) -> u8 {
     let mut out = std::io::stdout().lock();
     let mut text = format!("pgmi {VERSION} (compat 1)\n");
     if long {
-        text.push_str(&format!(
-            "Commit: {}\n",
+        let _ = writeln!(
+            text,
+            "Commit: {}",
             option_env!("PGMI_COMMIT").unwrap_or("unknown")
-        ));
-        text.push_str(&format!(
-            "Platform: {}/{}\n",
+        );
+        let _ = writeln!(
+            text,
+            "Platform: {}/{}",
             std::env::consts::OS,
             std::env::consts::ARCH
-        ));
+        );
     }
     match out.write_all(text.as_bytes()) {
         Ok(()) => 0,

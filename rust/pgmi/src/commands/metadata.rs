@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -125,10 +126,11 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
     );
     for (c, row) in cells.iter().zip(&plan.plan) {
         let note = if row.is_sql_file { "" } else { "  (not SQL)" };
-        text.push_str(&format!(
-            "{:<w0$}{:<w1$}{:<w2$}{}{note}\n",
+        let _ = writeln!(
+            text,
+            "{:<w0$}{:<w1$}{:<w2$}{}{note}",
             c[0], c[1], c[2], row.idempotent
-        ));
+        );
     }
     stdout(&text)
 }
@@ -222,7 +224,7 @@ fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
             v.total_files, v.files_with_metadata, v.files_without_metadata
         );
         for d in &v.duplicate_ids {
-            text.push_str(&format!("Duplicate id: {d}\n"));
+            let _ = writeln!(text, "Duplicate id: {d}");
         }
         stdout(&text)?;
         for w in &v.warnings {
@@ -311,25 +313,24 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     let (mut none, mut mixed) = (Vec::new(), Vec::new());
     for f in &todo {
         let name = f.path.rsplit('/').next().unwrap_or(&f.path);
-        let prefix = match &given {
-            Some(p) => p.clone(),
-            None => {
-                let dir = directory(&f.path);
-                let found: BTreeSet<&str> = metas
-                    .iter()
-                    .filter(|m| directory(&m.path) == dir)
-                    .flat_map(|m| m.sort_keys.iter().map(|k| prefix_of(k)))
-                    .collect();
-                match found.len() {
-                    0 => {
-                        none.push(f.path.as_str());
-                        continue;
-                    }
-                    1 => found.into_iter().next().unwrap_or_default().to_string(),
-                    _ => {
-                        mixed.push(f.path.as_str());
-                        continue;
-                    }
+        let prefix = if let Some(p) = &given {
+            p.clone()
+        } else {
+            let dir = directory(&f.path);
+            let found: BTreeSet<&str> = metas
+                .iter()
+                .filter(|m| directory(&m.path) == dir)
+                .flat_map(|m| m.sort_keys.iter().map(|k| prefix_of(k)))
+                .collect();
+            match found.len() {
+                0 => {
+                    none.push(f.path.as_str());
+                    continue;
+                }
+                1 => found.into_iter().next().unwrap_or_default().to_string(),
+                _ => {
+                    mixed.push(f.path.as_str());
+                    continue;
                 }
             }
         };

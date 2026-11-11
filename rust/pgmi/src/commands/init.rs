@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -72,23 +73,20 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
         .write_all(tree(&OsFs::new(&absolute)).as_bytes());
     let mut db = None;
     if let Some(s) = &connection {
-        match crate::commands::config::save(&target, s, false) {
-            Err(e) => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "WARNING: could not save connection: {}",
-                    e.text()
-                );
-            }
-            Ok(()) => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "Wrote {}",
-                    target.join("pgmi.yaml").display()
-                );
-                crate::commands::config::offer_pgpass(s, env);
-                db = s.database.as_deref();
-            }
+        if let Err(e) = crate::commands::config::save(&target, s, false) {
+            let _ = writeln!(
+                std::io::stderr(),
+                "WARNING: could not save connection: {}",
+                e.text()
+            );
+        } else {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Wrote {}",
+                target.join("pgmi.yaml").display()
+            );
+            crate::commands::config::offer_pgpass(s, env);
+            db = s.database.as_deref();
         }
     }
     let _ = std::io::stderr()
@@ -166,10 +164,10 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
             ("├── ", "│   ")
         };
         if entry.stat.link || entry.stat.kind != FileKind::Dir {
-            out.push_str(&format!("{indent}{branch}{name}\n"));
+            let _ = writeln!(out, "{indent}{branch}{name}");
             continue;
         }
-        out.push_str(&format!("{indent}{branch}{name}/\n"));
+        let _ = writeln!(out, "{indent}{branch}{name}/");
         let child = if rel.is_empty() {
             name.to_string()
         } else {
@@ -179,11 +177,10 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
             continue;
         }
         if name == ".agents" && indent.is_empty() {
-            let skills = fs
-                .read_dir(&format!("{child}/skills"))
-                .map(|e| e.iter().filter(|e| e.stat.kind == FileKind::Dir).count())
-                .unwrap_or(0);
-            out.push_str(&format!("{indent}{more}└── skills/  ({skills} skills)\n"));
+            let skills = fs.read_dir(&format!("{child}/skills")).map_or(0, |e| {
+                e.iter().filter(|e| e.stat.kind == FileKind::Dir).count()
+            });
+            let _ = writeln!(out, "{indent}{more}└── skills/  ({skills} skills)");
             continue;
         }
         draw(fs, &child, &format!("{indent}{more}"), out);

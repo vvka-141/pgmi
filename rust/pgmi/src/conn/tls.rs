@@ -202,7 +202,7 @@ pub(crate) struct Tls {
 
 fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let certs: Vec<_> = CertificateDer::pem_file_iter(path)
-        .and_then(|it| it.collect::<std::result::Result<Vec<_>, _>>())
+        .and_then(std::iter::Iterator::collect::<std::result::Result<Vec<_>, _>>)
         .map_err(|e| {
             Error::config(format!(
                 "could not read certificate file \"{}\": {e}",
@@ -662,7 +662,7 @@ mod tests {
         let tbs = [0x30, 0x01, 0x00];
         let mut cert_body = tbs.to_vec();
         cert_body.extend(alg);
-        let mut der = vec![0x30, cert_body.len() as u8];
+        let mut der = vec![0x30, u8::try_from(cert_body.len()).unwrap()];
         der.extend(&cert_body);
         assert_eq!(signature_oid(&der), Some(&alg[4..]));
         assert_eq!(end_point_hash(&der).len(), 48);

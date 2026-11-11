@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -26,7 +27,7 @@ pub(crate) const KEYS: [&str; 14] = [
 pub(crate) fn fresh(values: &[(&str, Option<String>)]) -> String {
     let mut out = String::from("connection:\n");
     for (k, v) in values.iter().filter_map(|(k, v)| Some((k, v.as_ref()?))) {
-        out.push_str(&format!("  {k}: {}\n", scalar(v)));
+        let _ = writeln!(out, "  {k}: {}", scalar(v));
     }
     out
 }

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,9 +88,8 @@ pub(crate) async fn token(
                 .body(body)
         }
         Source::MachineLearning => {
-            let id = client_id
-                .map(str::to_string)
-                .unwrap_or_else(|| var(env, "DEFAULT_IDENTITY_CLIENT_ID"));
+            let id =
+                client_id.map_or_else(|| var(env, "DEFAULT_IDENTITY_CLIENT_ID"), str::to_string);
             let url = query(
                 &var(env, "MSI_ENDPOINT"),
                 &[
@@ -229,8 +229,10 @@ struct Thumbprint {
 fn sha1_hex(der: &[u8]) -> String {
     sha1::Sha1::digest(der)
         .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect()
+        .fold(String::with_capacity(40), |mut s, b| {
+            let _ = write!(s, "{b:02X}");
+            s
+        })
 }
 
 impl ServerCertVerifier for Thumbprint {

@@ -67,7 +67,7 @@ fn parse_runnable_blocks(source: &str, markdown: &str) -> Result<Vec<Block>, Str
                 _ => return Err(format!("{source}: unknown runnable attribute {field:?}")),
             }
         }
-        if b.tail == !b.target.is_empty() {
+        if b.tail != b.target.is_empty() {
             return Err(format!(
                 "{source}: a runnable block needs exactly one of target=<path> or kind=tail"
             ));

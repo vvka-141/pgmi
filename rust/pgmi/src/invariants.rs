@@ -96,7 +96,9 @@ impl Conn {
             dbname: or(&self.dbname, "d"),
             user: or(&self.user, "u"),
             password: format!("Zq{}qZ", self.password),
-            sslmode: self.sslmode.map(|m| m % SSLMODES.len() as u8),
+            sslmode: self
+                .sslmode
+                .map(|m| u8::try_from(SSLMODES.len()).map_or(m, |n| m % n)),
             application_name: self.application_name.clone(),
         }
     }
@@ -638,7 +640,10 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
         .iter()
         .map(|(k, v)| (k.clone(), v.replace('\'', "")))
         .collect();
-    let text: String = single.iter().map(|(k, v)| format!("{k}='{v}'\n")).collect();
+    let text = single.iter().fold(String::new(), |mut s, (k, v)| {
+        let _ = writeln!(s, "{k}='{v}'");
+        s
+    });
     for mode in [Mode::Dotenv, Mode::Strict] {
         let got = dotenv::parse(&text, mode).map_err(|e| format!("{mode:?} {text:?}: {e}"))?;
         ensure!(got == single, "{mode:?} {text:?} read as {got:?}");
@@ -647,18 +652,16 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
         .iter()
         .map(|(k, v)| (k.clone(), v.replace('$', "")))
         .collect();
-    let text: String = double
-        .iter()
-        .map(|(k, v)| {
-            let v = v
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            format!("export {k}=\"{v}\"\r\n")
-        })
-        .collect();
+    let text = double.iter().fold(String::new(), |mut s, (k, v)| {
+        let v = v
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        let _ = write!(s, "export {k}=\"{v}\"\r\n");
+        s
+    });
     let got = dotenv::parse(&text, Mode::Dotenv).map_err(|e| format!("{text:?}: {e}"))?;
     ensure!(got == double, "{text:?} read as {got:?}");
     Ok(())

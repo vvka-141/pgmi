@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ pub(crate) fn encode(s: &str) -> String {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
             out.push(b as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            let _ = write!(out, "%{b:02X}");
         }
     }
     out

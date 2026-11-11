@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -493,9 +494,9 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
             let message = redact(&e.text(), &secrets);
             let mut text = message.clone();
             text.push_str(&redact(&run.diagnostics(e), &secrets));
-            text.push_str(&format!("\nexit code {}", e.exit_code()));
+            let _ = write!(text, "\nexit code {}", e.exit_code());
             if let Some(phase) = record.phase {
-                text.push_str(&format!(", phase {phase}"));
+                let _ = write!(text, ", phase {phase}");
             }
             record.message = Some(message);
             Outcome {
@@ -660,7 +661,7 @@ mod tests {
                 (Some(s), _) => conforms(s, val).map_err(|e| format!("{k}: {e}"))?,
                 (None, Some(Value::Bool(false))) => return Err(format!("{k} is not declared")),
                 (None, Some(extra @ Value::Object(_))) => {
-                    conforms(extra, val).map_err(|e| format!("{k}: {e}"))?
+                    conforms(extra, val).map_err(|e| format!("{k}: {e}"))?;
                 }
                 (None, _) => {}
             }

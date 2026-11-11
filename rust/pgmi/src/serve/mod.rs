@@ -211,7 +211,7 @@ impl<T: Toolbox> Server<T> {
                     self.cancel(r.params.as_deref());
                 }
             }
-            Decoded::Request(r) => self.request(r, tasks),
+            Decoded::Request(r) => self.request(&r, tasks),
         }
     }
 
@@ -234,7 +234,7 @@ impl<T: Toolbox> Server<T> {
         }
     }
 
-    fn request(self: &Arc<Self>, r: Request, tasks: &mut JoinSet<()>) {
+    fn request(self: &Arc<Self>, r: &Request, tasks: &mut JoinSet<()>) {
         let Some(id) = r.id.clone() else { return };
         let params: Option<Value> = r
             .params
@@ -285,7 +285,7 @@ impl<T: Toolbox> Server<T> {
                     "ttlMs": 3_600_000,
                 })),
             )),
-            ("tools/call", _) => self.call(id, r.params.as_deref(), era, tasks),
+            ("tools/call", _) => self.call(id, r.params.as_deref(), &era, tasks),
             _ => self.send(not_found()),
         }
     }
@@ -294,7 +294,7 @@ impl<T: Toolbox> Server<T> {
         self: &Arc<Self>,
         id: String,
         params: Option<&RawValue>,
-        era: Era,
+        era: &Era,
         tasks: &mut JoinSet<()>,
     ) {
         let invalid = |m: &str| {
@@ -326,6 +326,7 @@ impl<T: Toolbox> Server<T> {
         };
         let arguments = fields.raw("arguments").map(RawValue::to_owned);
         let Some(key) = CallId::of(&id) else { return };
+        let stateless = era.stateless;
         let token = self.root.child_token();
         let Ok(mut calls) = self.calls.lock() else {
             return;
@@ -364,7 +365,7 @@ impl<T: Toolbox> Server<T> {
             if token.is_cancelled() {
                 return;
             }
-            let answer = wire::result(&id, &outcome.render(era.stateless));
+            let answer = wire::result(&id, &outcome.render(stateless));
             tokio::select! {
                 _ = server.out.send(answer) => {}
                 () = server.root.cancelled() => {}

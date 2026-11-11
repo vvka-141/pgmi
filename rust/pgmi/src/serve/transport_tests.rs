@@ -51,7 +51,7 @@ fn fakes() -> (Arc<Fakes>, Probes) {
 impl Toolbox for Fakes {
     type Tool = Fake;
 
-    fn list(&self) -> &str {
+    fn list(&self) -> &'static str {
         r#"[{"name":"echo"}]"#
     }
 

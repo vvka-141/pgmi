@@ -1,6 +1,7 @@
 use super::script::LineMap;
 use crate::error::SqlDiagnostics;
 use crate::project::walk::{File, is_sql};
+use std::fmt::Write as _;
 
 /// The execution unit a failure happened in: its text as sent, where it
 /// starts in `deploy.sql`, and how its lines map back after macro expansion.
@@ -64,33 +65,36 @@ impl Blame {
     pub(crate) fn render(&self, out: &mut String) {
         match &self.location {
             Some(loc) => match &loc.line {
-                None => out.push_str(&format!("\nLOCATION: {}", loc.script)),
+                None => {
+                    let _ = write!(out, "\nLOCATION: {}", loc.script);
+                }
                 Some(l) => {
-                    out.push_str(&format!("\nLOCATION: {} line {}", loc.script, l.number));
+                    let _ = write!(out, "\nLOCATION: {} line {}", loc.script, l.number);
                     if l.column > 0 {
-                        out.push_str(&format!(", column {}", l.column));
+                        let _ = write!(out, ", column {}", l.column);
                     }
                     if !l.text.is_empty() {
                         let prefix = format!("LINE {}: ", l.number);
-                        out.push_str(&format!("\n{prefix}{}", l.text));
+                        let _ = write!(out, "\n{prefix}{}", l.text);
                         if l.column > 0 {
                             let pad = prefix.chars().count() + l.column - 1;
-                            out.push_str(&format!("\n{}^", " ".repeat(pad)));
+                            let _ = write!(out, "\n{}^", " ".repeat(pad));
                         }
                     }
                 }
             },
             None => {
                 if let Some(f) = &self.file {
-                    out.push_str(&format!("\nLOCATION: {f}"));
+                    let _ = write!(out, "\nLOCATION: {f}");
                 }
             }
         }
         if self.candidates.len() > 1 {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "\nThe same text is in {}; the error is in whichever of them deploy.sql ran.",
                 self.candidates.join(", ")
-            ));
+            );
         }
     }
 }

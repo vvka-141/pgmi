@@ -1,6 +1,7 @@
 //! Go-style durations such as `90s` or `1h30m`, for `--timeout`, `pgmi.yaml`
 //! and the MCP deploy tool.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 pub(crate) fn parse(s: &str) -> Result<Duration, String> {
@@ -59,17 +60,17 @@ pub(crate) fn render(d: Duration) -> String {
     }
     let nanos = d.as_nanos();
     if nanos < 1_000_000_000 {
-        return format!("{:?}", d);
+        return format!("{d:?}");
     }
     let secs = d.as_secs();
     let (h, m) = (secs / 3600, secs / 60 % 60);
     let s = (nanos % 60_000_000_000) as f64 / 1e9;
     let mut out = String::new();
     if h > 0 {
-        out.push_str(&format!("{h}h"));
+        let _ = write!(out, "{h}h");
     }
     if h > 0 || m > 0 {
-        out.push_str(&format!("{m}m"));
+        let _ = write!(out, "{m}m");
     }
     let mut sec = format!("{s:.9}");
     while sec.ends_with('0') {
@@ -98,8 +99,8 @@ mod tests {
     #[test]
     fn go_forms() {
         assert_eq!(parse("90s").unwrap(), Duration::from_secs(90));
-        assert_eq!(parse("1h30m").unwrap(), Duration::from_secs(5400));
-        assert_eq!(parse("1.5h").unwrap(), Duration::from_secs(5400));
+        assert_eq!(parse("1h30m").unwrap(), Duration::from_mins(90));
+        assert_eq!(parse("1.5h").unwrap(), Duration::from_mins(90));
         assert_eq!(parse("300ms").unwrap(), Duration::from_millis(300));
         assert_eq!(parse("0").unwrap(), Duration::ZERO);
         for s in ["banana", "10", "", "1.5.5s", "5x"] {
@@ -111,7 +112,7 @@ mod tests {
         );
         assert_eq!(render(Duration::from_secs(2)), "2s");
         assert_eq!(render(Duration::from_secs(180)), "3m0s");
-        assert_eq!(render(Duration::from_secs(5400)), "1h30m0s");
+        assert_eq!(render(Duration::from_mins(90)), "1h30m0s");
         assert_eq!(render(Duration::from_millis(1500)), "1.5s");
     }
 }

@@ -2,6 +2,7 @@ include!(concat!(env!("OUT_DIR"), "/files.rs"));
 
 /// The embedded file at `path`, relative to `shared/` with `/` separators
 /// (`templates/basic/deploy.sql`); `None` when nothing is embedded there.
+#[must_use]
 pub fn file(path: &str) -> Option<&'static [u8]> {
     FILES
         .binary_search_by(|(p, _)| p.cmp(&path))

@@ -82,7 +82,7 @@ impl Db {
     pub fn client_as(&self, user: &str, password: &str) -> Client {
         let mut config = Config::from_str(&self.conn).expect("PGMI_TEST_CONN");
         config.dbname(&self.name).user(user).password(password);
-        Client::from_config(config)
+        Client::from_config(&config)
     }
 
     pub fn url_as(&self, user: &str, password: &str) -> String {
@@ -134,10 +134,10 @@ impl Client {
         if let Some(db) = db {
             config.dbname(db);
         }
-        Client::from_config(config)
+        Client::from_config(&config)
     }
 
-    fn from_config(config: Config) -> Client {
+    fn from_config(config: &Config) -> Client {
         Client::try_from_config(config).expect("connect to the test server")
     }
 
@@ -148,10 +148,10 @@ impl Client {
     ) -> Result<Client, tokio_postgres::Error> {
         let mut config = Config::from_str(&db.conn).expect("PGMI_TEST_CONN");
         config.dbname(&db.name).user(user).password(password);
-        Client::try_from_config(config)
+        Client::try_from_config(&config)
     }
 
-    fn try_from_config(config: Config) -> Result<Client, tokio_postgres::Error> {
+    fn try_from_config(config: &Config) -> Result<Client, tokio_postgres::Error> {
         use futures_util::StreamExt;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -160,7 +160,7 @@ impl Client {
         let notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = notices.clone();
         let client = rt.block_on(async {
-            let stream = tokio::net::TcpStream::connect(endpoint(&config))
+            let stream = tokio::net::TcpStream::connect(endpoint(config))
                 .await
                 .expect("reach the test server over TCP");
             let (client, mut connection) = config.connect_raw(stream, NoTls).await?;

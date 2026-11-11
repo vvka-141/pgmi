@@ -43,7 +43,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The transaction status of the last ReadyForQuery. A byte other than `I`
+/// The transaction status of the last `ReadyForQuery`. A byte other than `I`
 /// or `E` counts as a block in progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxStatus {
@@ -76,7 +76,7 @@ impl Shared {
         }))
     }
 
-    /// The status of the last ReadyForQuery read so far; `Idle` before any.
+    /// The status of the last `ReadyForQuery` read so far; `Idle` before any.
     pub fn status(&self) -> TxStatus {
         self.status.load(Ordering::Acquire).into()
     }
@@ -205,7 +205,7 @@ impl Parser {
             bytes = &bytes[take..];
             match self.tag {
                 b'Z' if before == 0 && self.body_len >= 1 => {
-                    shared.status.store(self.body[0], Ordering::Release)
+                    shared.status.store(self.body[0], Ordering::Release);
                 }
                 b'R' if before < 4 && self.body_len == 4 => {
                     let code = u32::from_be_bytes(self.body);
@@ -356,7 +356,7 @@ mod tests {
 
     fn frame(tag: u8, body: &[u8]) -> Vec<u8> {
         let mut v = vec![tag];
-        v.extend(((body.len() + 4) as u32).to_be_bytes());
+        v.extend(u32::try_from(body.len() + 4).unwrap().to_be_bytes());
         v.extend(body);
         v
     }

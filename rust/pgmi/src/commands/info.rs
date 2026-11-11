@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -87,14 +88,15 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     }
     let mut text = format!("Project: {}\nTemplate: {}\n", info.path, info.template);
     if let Some(s) = &info.scaffolded {
-        text.push_str(&format!("Scaffolded by: {s}\n"));
+        let _ = writeln!(text, "Scaffolded by: {s}");
     }
     text.push_str(if info.deploy_sql {
         "deploy.sql: ok present\n"
     } else {
         "deploy.sql: FAILED missing\n"
     });
-    text.push_str(&format!(
+    let _ = write!(
+        text,
         "pgmi.yaml: {}\n\nFiles\n  Total:    {}\n  SQL:      {}\n  Tests:    {}\n  Metadata: {} / {}\n\nDirectories\n",
         info.config_file,
         info.total_files,
@@ -102,9 +104,9 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
         info.test_files,
         info.metadata_with,
         info.total_files
-    ));
+    );
     for (dir, n) in &dirs {
-        text.push_str(&format!("  {dir:<30} {n} files\n"));
+        let _ = writeln!(text, "  {dir:<30} {n} files");
     }
     stdout(&text)
 }

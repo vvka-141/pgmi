@@ -326,6 +326,26 @@ switch day. That port landed 2026-11-11 (PGMI-862): linters in
 - No database trait: SQL is tested against a real server.
 - No further crates.
 
+### Lints (PGMI-869)
+
+`[workspace.lints.clippy]` turns on `pedantic` (CI's `-D warnings` makes it
+fatal) on top of `all`. The pedantic lints that fire are fixed, except
+these, allowed workspace-wide:
+
+| Lint | Why it stays allowed |
+|---|---|
+| `missing_errors_doc` | The library is pgmi's own; its `pub` surface exists for the fuzz targets (0001). |
+| `too_many_lines` | Test bodies and the phase-ordered orchestrators; splitting `deploy` into one function per phase is review B's m6, not done in PGMI-869. |
+| `items_after_statements` | Integration tests declare a helper next to the step that uses it. |
+| `assert_is_empty` | `assert!(v.is_empty())` reads better than the `[] as [T; 0]` comparison the lint rewrites it to. |
+| `case_sensitive_file_extension_comparisons` | Extensions compare case-sensitively, as in Go; changing it changes which files run. |
+| `cast_precision_loss` | Duration rendering repeats Go's float arithmetic; tests compute ratios. |
+| `unnecessary_wraps` | Test helpers return the `Option` the field under test holds. |
+| `struct_field_names` | Field names follow the `--json`/MCP keys (`validationPassed`) and the flag groups. |
+| `many_single_char_names` | The byte-level parsers (dotenv, MCP wire) use `i`, `j`, `b`, `c` cursors. |
+| `struct_excessive_bools` | `DeployArgs` mirrors Go's boolean flags for clap. |
+| `naive_bytecount` | One newline count in a test; not worth a dependency. |
+
 ## Consequences
 
 - Every Go unit test whose subject exists in Rust gets a Rust counterpart

@@ -5,6 +5,7 @@ mod common;
 
 use adv::{PW, deployed, scaffold};
 use common::{Client, pg};
+use std::fmt::Write as _;
 
 const OK_BODY: &str =
     "BEGIN\n RETURN api.json_response(200, jsonb_build_object('ok', true));\nEND;";
@@ -119,7 +120,7 @@ impl Policy {
     fn begin(&self) -> String {
         let mut s = "BEGIN".to_string();
         if let Some(iso) = &self.isolation {
-            s.push_str(&format!(" ISOLATION LEVEL {iso}"));
+            let _ = write!(s, " ISOLATION LEVEL {iso}");
         }
         if self.read_only {
             s.push_str(" READ ONLY");

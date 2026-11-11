@@ -96,7 +96,7 @@ mod tests {
     fn moves_and_picks() {
         let mut s = Select {
             prompt: "p".into(),
-            choices: vec![("a".into(), "".into()), ("b".into(), "".into())],
+            choices: vec![("a".into(), String::new()), ("b".into(), String::new())],
             help: "",
             cursor: 0,
         };

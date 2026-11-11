@@ -433,7 +433,16 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
     for name in ["PGPASSWORD", "PGSSLPASSWORD"] {
         secrets.extend(env.non_empty(name)?.map(str::to_string));
     }
-    finish(flags, env, yaml, f, string_db, source, string.is_none()).map_err(|e| e.redact(&secrets))
+    finish(
+        flags,
+        env,
+        yaml,
+        f,
+        string_db.as_deref(),
+        source,
+        string.is_none(),
+    )
+    .map_err(|e| e.redact(&secrets))
 }
 
 fn finish(
@@ -441,7 +450,7 @@ fn finish(
     env: &Env,
     yaml: Option<&YamlConnection>,
     mut f: Fields,
-    string_db: Option<String>,
+    string_db: Option<&str>,
     source: Source,
     no_string: bool,
 ) -> Result<Spec> {
@@ -492,13 +501,13 @@ fn finish(
     let target_db = flags
         .database
         .clone()
-        .or_else(|| string_db.clone())
+        .or_else(|| string_db.map(str::to_string))
         .or(env.non_empty("PGDATABASE")?.map(str::to_string))
         .or_else(|| yaml.and_then(|y| y.database.clone()))
         .filter(|d| !d.is_empty())
         .ok_or(ResolveError::NoDatabase)?;
     let maintenance_db = if flags.database.is_some() {
-        string_db.clone()
+        string_db.map(str::to_string)
     } else {
         None
     }

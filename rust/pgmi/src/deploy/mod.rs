@@ -7,6 +7,7 @@ mod request;
 pub(crate) mod script;
 mod session;
 
+use std::fmt::Write as _;
 use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -203,8 +204,8 @@ impl Guard {
     async fn waiting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
-            _ = self.token.cancelled() => Err(self.stop_error()),
-            _ = tokio::time::sleep_until(self.deadline) => Err(self.expired_error()),
+            () = self.token.cancelled() => Err(self.stop_error()),
+            () = tokio::time::sleep_until(self.deadline) => Err(self.expired_error()),
         }
     }
 
@@ -230,7 +231,7 @@ impl Guard {
             r = tokio::task::spawn_blocking(work) => {
                 r.map_err(|e| Error::internal(format!("blocking task: {e}")))?
             }
-            _ = self.token.cancelled() => Err(self.stop_error()),
+            () = self.token.cancelled() => Err(self.stop_error()),
         }
     }
 
@@ -247,8 +248,8 @@ impl Guard {
     async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
-            _ = self.token.cancelled() => Err(self.stop_error()),
-            _ = tokio::time::sleep_until(self.deadline) => Err(Error::connection("--timeout ran out while connecting")),
+            () = self.token.cancelled() => Err(self.stop_error()),
+            () = tokio::time::sleep_until(self.deadline) => Err(Error::connection("--timeout ran out while connecting")),
         }
     }
 
@@ -263,8 +264,8 @@ impl Guard {
         tokio::pin!(fut);
         let stopped = tokio::select! {
             r = &mut fut => return r,
-            _ = self.token.cancelled() => self.stop_error(),
-            _ = tokio::time::sleep_until(self.deadline) => self.timeout_error(),
+            () = self.token.cancelled() => self.stop_error(),
+            () = tokio::time::sleep_until(self.deadline) => self.timeout_error(),
         };
         session.cancel().await;
         let _ = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
@@ -303,7 +304,14 @@ impl Run {
             timeout,
             interrupted,
         };
-        deploy(ctx, &mut self.st, &guard, reporter, self.log.clone()).await
+        Box::pin(deploy(
+            ctx,
+            &mut self.st,
+            &guard,
+            reporter,
+            self.log.clone(),
+        ))
+        .await
     }
 
     pub(crate) fn reached_deployer(&self) -> bool {
@@ -340,7 +348,7 @@ impl Run {
             ),
         ] {
             if let Some(v) = value.filter(|v| !v.is_empty()) {
-                out.push_str(&format!("\n{label}: {v}"));
+                let _ = write!(out, "\n{label}: {v}");
             }
         }
         if let Some(b) = blame {
@@ -358,7 +366,7 @@ impl Run {
                     .into_iter()
                     .flatten()
                     .map(|p| p.expose().to_string())
-                    .chain(s.token.iter().flat_map(|t| t.secrets()))
+                    .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
             })
             .collect()
     }
@@ -379,7 +387,7 @@ impl Run {
     }
 }
 
-pub(crate) fn run(runtime: Runtime, ctx: Context) -> u8 {
+pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let mut run = Run::start();
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -387,8 +395,7 @@ pub(crate) fn run(runtime: Runtime, ctx: Context) -> u8 {
         runtime.block_on(async {
             let token = CancellationToken::new();
             spawn_signals(token.clone(), interrupted.clone());
-            run.deploy(&ctx, &reporter, token, interrupted.clone())
-                .await
+            run.deploy(ctx, &reporter, token, interrupted.clone()).await
         })
     }));
     let mut result = caught.unwrap_or_else(|_| Err(crate::error::panic_error().0));
@@ -396,7 +403,7 @@ pub(crate) fn run(runtime: Runtime, ctx: Context) -> u8 {
         result = Err(Error::new(Kind::Interrupted, "interrupted"));
     }
     runtime.shutdown_timeout(Duration::from_millis(100));
-    finish(&ctx, &run, result, &reporter)
+    finish(ctx, &run, &result, &reporter)
 }
 
 const CLEANUP: Duration = Duration::from_secs(3);
@@ -404,7 +411,7 @@ const CLEANUP: Duration = Duration::from_secs(3);
 fn deadline(timeout: Duration) -> TokioInstant {
     let now = TokioInstant::now();
     now.checked_add(timeout)
-        .or_else(|| now.checked_add(Duration::from_secs(100 * 365 * 24 * 3600)))
+        .or_else(|| now.checked_add(Duration::from_hours(876_000)))
         .unwrap_or(now)
 }
 
@@ -417,14 +424,13 @@ fn timeout_of(ctx: &Context) -> Duration {
                 .flatten()
                 .and_then(|y| y.timeout().ok().flatten())
         })
-        .map(|t| {
+        .map_or(Duration::from_secs(180), |t| {
             if t.is_zero() {
-                Duration::from_secs(100 * 365 * 24 * 3600)
+                Duration::from_hours(876_000)
             } else {
                 t
             }
         })
-        .unwrap_or(Duration::from_secs(180))
 }
 
 fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
@@ -485,7 +491,10 @@ async fn deploy(
         y.timeout()?;
     }
     let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, yaml.as_ref())?;
-    let yaml_params = yaml.as_ref().map(|y| y.param_values()).unwrap_or_default();
+    let yaml_params = yaml
+        .as_ref()
+        .map(super::config::yaml::ProjectConfig::param_values)
+        .unwrap_or_default();
     let (env, files, flags, stdin) = (
         ctx.env.clone(),
         a.params_files.clone(),
@@ -568,7 +577,9 @@ async fn deploy(
     };
     if let Some((provider, req)) = &cloud {
         let token = guard
-            .connecting(crate::conn::cloud::token(*provider, req, &ctx.env))
+            .connecting(Box::pin(crate::conn::cloud::token(
+                *provider, req, &ctx.env,
+            )))
             .await?;
         spec.token = Some(token);
         st.spec = Some(spec.clone());
@@ -815,23 +826,23 @@ async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
     }))
 }
 
-fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> u8 {
+fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) -> u8 {
     let st = &run.st;
     let elapsed = run.t0.elapsed();
-    let code = match &result {
+    let code = match result {
         Ok(()) => 0,
         Err(e) => e.exit_code(),
     };
     let secrets = run.secrets();
-    if let Some((ok, text)) = summary(st, &result, elapsed) {
+    if let Some((ok, text)) = summary(st, result, elapsed) {
         reporter.summary(ok, &text);
     }
-    if let Err(e) = &result {
+    if let Err(e) = result {
         let text = format!("pgmi: error: {}{}", e.text(), run.diagnostics(e));
         reporter.line(&redact(&blame::redact_sql_passwords(&text), &secrets));
     }
     if ctx.request.json {
-        let record = run.record(ctx, &result);
+        let record = run.record(ctx, result);
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();
         let _ = writeln!(out, "{text}");
@@ -867,10 +878,11 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
     match &p.execution {
         Some(x) if committed > 0 && x.failure.is_some() => {
             let failed = x.failure.as_ref().map_or(0, |f| f.unit);
-            text.push_str(&format!(
+            let _ = write!(
+                text,
                 " (unit {failed} of {} failed; {committed} earlier unit(s) already committed)",
                 x.units
-            ));
+            );
         }
         Some(_) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
         _ => {}
@@ -885,7 +897,7 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
         notes.push(format!("{verb} database \"{db}\"{left}"));
     }
     if !notes.is_empty() {
-        text.push_str(&format!(" — {}", notes.join("; ")));
+        let _ = write!(text, " — {}", notes.join("; "));
     }
     Some((false, text))
 }
@@ -1014,8 +1026,8 @@ mod tests {
 
     fn in_file(files: &[&str], line: Option<blame::Line>) -> blame::Blame {
         blame::Blame {
-            candidates: files.iter().map(|f| f.to_string()).collect(),
-            file: files.first().map(|f| f.to_string()),
+            candidates: files.iter().map(ToString::to_string).collect(),
+            file: files.first().map(ToString::to_string),
             location: line.map(|l| blame::Location {
                 script: files[0].to_string(),
                 line: Some(l),
@@ -1137,7 +1149,7 @@ mod tests {
         let code = finish(
             &context(),
             &run,
-            Err(Error::sql("password s3cret-pw rejected")),
+            &Err(Error::sql("password s3cret-pw rejected")),
             &reporter,
         );
         assert_eq!(code, 13);
@@ -1161,7 +1173,7 @@ mod tests {
             ..loaded("app")
         };
         let (reporter, out) = crate::output::Captured::reporter(false, false, false);
-        finish(&context(), &run, Err(sql_failure("boom")), &reporter);
+        finish(&context(), &run, &Err(sql_failure("boom")), &reporter);
         let text = out.text();
         let lines: Vec<&str> = text.lines().skip(1).collect();
         assert_eq!(
@@ -1425,7 +1437,7 @@ mod tests {
     #[test]
     fn a_huge_timeout_never_overflows_the_deadline() {
         let far = deadline(Duration::MAX);
-        assert!(far > TokioInstant::now() + Duration::from_secs(365 * 24 * 3600));
+        assert!(far > TokioInstant::now() + Duration::from_hours(8760));
     }
 
     #[test]

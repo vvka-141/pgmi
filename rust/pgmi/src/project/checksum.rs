@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 use super::lexer::{self, TokenKind};
 
@@ -11,7 +12,12 @@ pub(crate) fn normalized(content: &[u8]) -> String {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
@@ -20,7 +26,7 @@ pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
     for t in lexer::tokens(src) {
         match t.kind {
             TokenKind::Space | TokenKind::LineComment | TokenKind::BlockComment => {
-                pending_space = true
+                pending_space = true;
             }
             TokenKind::Str | TokenKind::QuotedIdent | TokenKind::Dollar => {
                 if pending_space {

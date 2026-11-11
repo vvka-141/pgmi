@@ -29,7 +29,7 @@ pub(crate) fn transient(cause: Cause<'_>) -> bool {
 }
 
 /// Whether a failed host-name lookup may succeed when tried again: the
-/// resolver answered "try again" (EAI_AGAIN; WSATRY_AGAIN on Windows) or
+/// resolver answered "try again" (`EAI_AGAIN`; `WSATRY_AGAIN` on Windows) or
 /// timed out. A name that does not exist is final.
 pub(crate) fn transient_lookup(e: &io::Error) -> bool {
     const WSATRY_AGAIN: i32 = 11002;

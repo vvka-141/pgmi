@@ -30,17 +30,14 @@ fn elements(mut text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     while let Some(start) = text.find("<pgmi-meta") {
         let rest = &text[start..];
-        match element_end(rest) {
-            Some(end) => {
-                out.push(&rest[..end]);
-                text = &rest[end..];
+        if let Some(end) = element_end(rest) {
+            out.push(&rest[..end]);
+            text = &rest[end..];
+        } else {
+            if !out.is_empty() {
+                out.push(rest);
             }
-            None => {
-                if !out.is_empty() {
-                    out.push(rest);
-                }
-                break;
-            }
+            break;
         }
     }
     out
@@ -178,15 +175,14 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
     let doc = roxmltree::Document::parse(xml).map_err(|e| xml_error(path, &e))?;
     let root = doc.root_element();
     let mut problems = Vec::new();
-    let idempotent = match root.attribute("idempotent") {
-        Some(v) => Some(parse_bool(v).ok_or_else(|| MetaError::Idempotent {
+    let idempotent = if let Some(v) = root.attribute("idempotent") {
+        Some(parse_bool(v).ok_or_else(|| MetaError::Idempotent {
             path: path.to_string(),
             value: v.to_string(),
-        })?),
-        None => {
-            problems.push("idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n  false: the script runs once per id (tracked one-time migration).".to_string());
-            None
-        }
+        })?)
+    } else {
+        problems.push("idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n  false: the script runs once per id (tracked one-time migration).".to_string());
+        None
     };
     let id = match root.attribute("id").unwrap_or("") {
         "" => None,
@@ -203,7 +199,7 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
     }
     let mut sort_keys = Vec::new();
     let mut description = None;
-    for child in root.children().filter(|c| c.is_element()) {
+    for child in root.children().filter(roxmltree::Node::is_element) {
         match child.tag_name().name() {
             "description" => {
                 let text = element_text(child);
@@ -241,7 +237,7 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
 
 fn element_text(node: roxmltree::Node<'_, '_>) -> String {
     node.children()
-        .filter(|c| c.is_text())
+        .filter(roxmltree::Node::is_text)
         .filter_map(|c| c.text())
         .collect()
 }

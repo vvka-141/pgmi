@@ -249,9 +249,10 @@ fn contract_test_event_type_matches_the_live_session() {
     assert!(!types.is_empty(), "the contract declares no types");
     for t in types {
         let name = t["name"].as_str().expect("name");
-        let got = live.get(name).map(strings).unwrap_or_else(|| {
-            panic!("{name} is in the contract but the session creates no such type")
-        });
+        let got = live.get(name).map_or_else(
+            || panic!("{name} is in the contract but the session creates no such type"),
+            strings,
+        );
         let want: Vec<String> = t["fields"]
             .as_array()
             .expect("fields")

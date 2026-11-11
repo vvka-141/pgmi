@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -111,7 +112,7 @@ impl Reporter {
         if self.verbose {
             let t = self.start.elapsed().as_secs_f64();
             for l in text.lines() {
-                out.push_str(&format!("[{t:.2}s] {l}\n"));
+                let _ = writeln!(out, "[{t:.2}s] {l}");
             }
         } else {
             out.push_str(text);
@@ -129,10 +130,10 @@ impl Reporter {
             s => format!("{}:  {}", s.as_str(), n.message),
         };
         if let Some(d) = &n.detail {
-            text.push_str(&format!("\nDETAIL:  {d}"));
+            let _ = write!(text, "\nDETAIL:  {d}");
         }
         if let Some(h) = &n.hint {
-            text.push_str(&format!("\nHINT:  {h}"));
+            let _ = write!(text, "\nHINT:  {h}");
         }
         self.line(&text);
     }

@@ -138,7 +138,7 @@ fn deploy_history_views() {
         &p,
         &[(
             "core/catalog_probe_sync.sql",
-            &format!("{}SELECT 1;\n", SYNC_PROBE),
+            &format!("{SYNC_PROBE}SELECT 1;\n"),
         )],
     );
     ok(deploy(&pg, &p, &db, false, DEV), "second deploy");

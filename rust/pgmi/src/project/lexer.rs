@@ -112,7 +112,7 @@ pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
                 TokenKind::Str
             } else if (word == b"U" || word == b"u")
                 && src.get(i) == Some(&b'&')
-                && matches!(src.get(i + 1), Some(b'\'') | Some(b'"'))
+                && matches!(src.get(i + 1), Some(b'\'' | b'"'))
             {
                 let q = src[i + 1];
                 i = quoted(src, i + 1, q, false);

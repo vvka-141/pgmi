@@ -2,6 +2,7 @@ use super::{stderr, stdout};
 use crate::cli::{TemplatesArgs, TemplatesCommand};
 use crate::error::{Error, Result};
 use crate::templates::Template;
+use std::fmt::Write as _;
 
 pub(crate) fn unknown(name: &str) -> Error {
     let mut names = Template::ALL.map(Template::name);
@@ -18,12 +19,13 @@ pub(crate) fn run(a: &TemplatesArgs, help: impl FnOnce() -> Result<()>) -> Resul
         Some(TemplatesCommand::List) => {
             let mut text = String::new();
             for t in Template::ALL {
-                text.push_str(&format!(
+                let _ = write!(
+                    text,
                     "{:<12} {}\n               for: {}\n",
                     t.name(),
                     t.summary(),
                     t.best_for()
-                ));
+                );
             }
             stdout(&text)?;
             stderr("\nScaffold one with: pgmi init <path> -t <template>\n");

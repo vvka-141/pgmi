@@ -132,9 +132,8 @@ fn legacy(text: &str, password: &str) -> Result<PrivateKeyDer<'static>, KeyError
     let iv = hex(iv_hex.trim()).ok_or_else(|| malformed("DEK-Info IV is not hex"))?;
     let key_len = match cipher.trim() {
         "AES-128-CBC" => 16,
-        "AES-192-CBC" => 24,
+        "AES-192-CBC" | "DES-EDE3-CBC" => 24,
         "AES-256-CBC" => 32,
-        "DES-EDE3-CBC" => 24,
         other => return Err(KeyError::Malformed(format!("unsupported cipher {other}"))),
     };
     let iv_len = if cipher.trim() == "DES-EDE3-CBC" {
