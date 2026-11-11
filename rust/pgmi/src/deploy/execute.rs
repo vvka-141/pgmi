@@ -39,7 +39,7 @@ async fn generate(
             &[(&pattern, Type::TEXT), (&callback, Type::TEXT)],
         )
         .await
-        .map_err(|e| sql_error("expand CALL pgmi_test()", &e))?;
+        .map_err(|e| sql_error("expand CALL pgmi_test()", e))?;
     rows.first()
         .and_then(|r| r.try_get::<_, Option<String>>(0).ok().flatten())
         .ok_or_else(|| Error::sql("pgmi_test_generate() returned nothing"))
@@ -115,7 +115,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
                     .client
                     .batch_execute("SET client_min_messages = debug")
                     .await
-                    .map_err(|e| sql_error("enable DEBUG notices", &e))
+                    .map_err(|e| sql_error("enable DEBUG notices", e))
             })
             .await?;
     }
@@ -136,7 +136,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
                     .client
                     .batch_execute(&unit.text)
                     .await
-                    .map_err(|e| sql_error("execute deploy.sql", &e))
+                    .map_err(|e| sql_error("execute deploy.sql", e))
             })
             .await;
         if let Err(e) = outcome {

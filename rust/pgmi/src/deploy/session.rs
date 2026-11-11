@@ -21,7 +21,7 @@ async fn load_json(client: &Client, sql: &str, payload: serde_json::Value) -> Re
     client
         .query_typed(sql, &[(&text, Type::TEXT)])
         .await
-        .map_err(|e| sql_error("load the project into the session", &e))?;
+        .map_err(|e| sql_error("load the project into the session", e))?;
     Ok(())
 }
 
@@ -41,7 +41,7 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
-        .map_err(|e| sql_error_needing("create the session tables", &e, Some(Needs::Temporary)))?;
+        .map_err(|e| sql_error_needing("create the session tables", e, Some(Needs::Temporary)))?;
     load_json(
         client,
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",
@@ -126,12 +126,12 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
                  pg_temp._pgmi_test_source, pg_temp._pgmi_test_directory",
             )
             .await
-            .map_err(|e| sql_error("analyze the session tables", &e))?;
+            .map_err(|e| sql_error("analyze the session tables", e))?;
     }
     client
         .batch_execute(shared_sql("contract/api-v1.sql")?)
         .await
-        .map_err(|e| sql_error("create the session API views", &e))?;
+        .map_err(|e| sql_error("create the session API views", e))?;
     Ok(())
 }
 

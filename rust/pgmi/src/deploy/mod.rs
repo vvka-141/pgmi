@@ -7,6 +7,7 @@ mod request;
 pub(crate) mod script;
 mod session;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::io::Write;
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
+use crate::conn::cloud::{self, Provider};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::overrides::{Override, overrides};
 use crate::conn::resolve::{self, Source, Spec};
@@ -30,6 +32,7 @@ use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
 use crate::output::{Notice, NoticeLog, Reporter, seconds};
 use crate::project::{metadata, walk};
+use crate::vfs::OsFs;
 
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
 pub(crate) use blame::redact_sql_passwords;
@@ -67,13 +70,13 @@ fn created_elsewhere(e: Error) -> Error {
     }
 }
 
-pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
+pub(crate) fn sql_error(context: &str, e: tokio_postgres::Error) -> Error {
     sql_error_needing(context, e, None)
 }
 
 pub(crate) fn sql_error_needing(
     context: &str,
-    e: &tokio_postgres::Error,
+    e: tokio_postgres::Error,
     needs: Option<Needs>,
 ) -> Error {
     match e.as_db_error() {
@@ -101,8 +104,16 @@ pub(crate) fn sql_error_needing(
                 internal_position,
             })
         }
-        None => Error::connection(format!("{context}: {}", crate::error::chain(e))),
+        None => Error::connection(context).with_source(e),
     }
+}
+
+/// Where `--params-file -` reads from: the process's stdin for the CLI;
+/// none for `serve`, whose stdin carries the MCP session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stdin {
+    Process,
+    Unavailable,
 }
 
 pub(crate) struct Context {
@@ -110,19 +121,52 @@ pub(crate) struct Context {
     pub(crate) verbose: bool,
     pub(crate) env: Env,
     pub(crate) dotenv_keys: Vec<String>,
-    pub(crate) stdin: bool,
+    pub(crate) stdin: Stdin,
     pub(crate) approver: Box<dyn Approver>,
+}
+
+/// The session API version a deploy runs against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContractVersion {
+    V1,
+}
+
+impl ContractVersion {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ContractVersion::V1 => "1",
+        }
+    }
+
+    fn of(compat: Option<&str>) -> Result<Self> {
+        match compat {
+            None | Some("1") => Ok(ContractVersion::V1),
+            Some(c) => Err(Error::config(format!(
+                "unsupported API version \"{c}\"; supported: 1"
+            ))),
+        }
+    }
+}
+
+/// How far a deploy got before anything ran on the server: `Deploying`
+/// once the parameters are read and an overwrite was approved, the point
+/// from which the record counts files, tests and timings.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Phase {
+    #[default]
+    Preparing,
+    Deploying,
 }
 
 /// How far a deploy got, one typed result per phase; the summary line and
 /// the `--json` record are read from it.
 #[derive(Default)]
 pub(crate) struct Progress {
-    contract: bool,
+    contract: Option<ContractVersion>,
+    phase: Phase,
     connection_source: Option<Source>,
     overrides: Vec<Override>,
     spec: Option<Spec>,
-    deployer: bool,
     loaded: Option<Loaded>,
     provision: Provision,
     server: Option<ServerInfo>,
@@ -130,6 +174,10 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
+    fn reached(&self, phase: Phase) -> bool {
+        self.phase >= phase
+    }
+
     fn database(&self) -> Option<&str> {
         self.spec.as_ref().map(|s| s.target_db.as_str())
     }
@@ -253,7 +301,7 @@ impl Guard {
         self.waiting(async {
             tokio::task::spawn_blocking(work)
                 .await
-                .map_err(|e| Error::internal(format!("blocking task: {e}")))?
+                .map_err(|e| Error::internal("blocking task").with_source(e))?
         })
         .await
     }
@@ -266,7 +314,7 @@ impl Guard {
     ) -> Result<T> {
         tokio::select! {
             r = tokio::task::spawn_blocking(work) => {
-                r.map_err(|e| Error::internal(format!("blocking task: {e}")))?
+                r.map_err(|e| Error::internal("blocking task").with_source(e))?
             }
             () = self.token.cancelled() => Err(self.stop_error()),
         }
@@ -319,53 +367,30 @@ impl Guard {
     }
 }
 
-fn spec_secrets(s: &Spec) -> Vec<String> {
-    [&s.password, &s.sslpassword]
-        .into_iter()
-        .flatten()
-        .map(|p| p.expose().to_string())
-        .chain(s.token.iter().flat_map(super::conn::cloud::Token::secrets))
-        .collect()
-}
-
-#[derive(Default)]
-struct Known {
-    spec: Option<Spec>,
-    found: Vec<String>,
-}
-
-/// The secrets of a deploy: its connection's passwords and sign-in tokens,
-/// read again for each notice because a token can be renewed mid-deploy,
-/// and the passwords the dialer found in a password file.
+/// The secrets of a deploy, each added where it becomes known: the
+/// connection's passwords once it is resolved, and every password or
+/// sign-in token the dialer presents, renewed tokens included. Shared with
+/// the dialer's callbacks, so an append-only set behind a short lock.
 #[derive(Clone, Default)]
-struct Secrets(Arc<Mutex<Known>>);
+struct Secrets(Arc<Mutex<Vec<String>>>);
 
 impl Secrets {
-    fn set(&self, spec: &Spec) {
-        if let Ok(mut s) = self.0.lock() {
-            s.spec = Some(spec.clone());
+    fn insert(&self, secret: &str) {
+        if let Ok(mut s) = self.0.lock()
+            && !s.iter().any(|f| f == secret)
+        {
+            s.push(secret.to_string());
         }
     }
 
-    fn found(&self, secret: &str) {
-        if let Ok(mut s) = self.0.lock()
-            && !s.found.iter().any(|f| f == secret)
-        {
-            s.found.push(secret.to_string());
+    fn resolved(&self, spec: &Spec) {
+        for p in [&spec.password, &spec.sslpassword].into_iter().flatten() {
+            self.insert(p.expose());
         }
     }
 
     fn list(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|s| {
-                s.spec
-                    .iter()
-                    .flat_map(spec_secrets)
-                    .chain(s.found.iter().cloned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.0.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     fn notice(&self, mut n: Notice) -> Notice {
@@ -403,26 +428,28 @@ impl Run {
         token: CancellationToken,
         interrupted: Arc<AtomicBool>,
     ) -> Result<()> {
-        let timeout = timeout_of(ctx);
+        let contract = ContractVersion::of(ctx.request.compat.as_deref());
+        self.st.contract = contract.as_ref().ok().copied();
+        let yaml = ProjectConfig::load(&OsFs::project(&ctx.request.project)?)?;
+        let yaml_timeout = yaml.as_ref().map(ProjectConfig::timeout).transpose()?;
+        let timeout = limit(ctx.request.timeout.or(yaml_timeout.flatten()));
         let guard = Guard {
             token,
             deadline: deadline(timeout),
             timeout,
             interrupted,
         };
-        Box::pin(deploy(
+        let steps = Steps {
             ctx,
-            &mut self.st,
-            &guard,
+            guard: &guard,
             reporter,
-            self.log.clone(),
-            self.secrets.clone(),
-        ))
-        .await
+            secrets: &self.secrets,
+        };
+        Box::pin(steps.deploy(&mut self.st, yaml.as_ref(), contract, &self.log)).await
     }
 
     pub(crate) fn reached_deployer(&self) -> bool {
-        self.st.deployer
+        self.st.reached(Phase::Deploying)
     }
 
     pub(crate) fn database(&self) -> Option<&str> {
@@ -465,12 +492,7 @@ impl Run {
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.st
-            .spec
-            .iter()
-            .flat_map(spec_secrets)
-            .chain(self.secrets.list())
-            .collect()
+        self.secrets.list()
     }
 
     pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {
@@ -523,22 +545,14 @@ fn deadline(timeout: Duration) -> TokioInstant {
         .unwrap_or(now)
 }
 
-fn timeout_of(ctx: &Context) -> Duration {
-    ctx.request
-        .timeout
-        .or_else(|| {
-            ProjectConfig::load(&crate::vfs::OsFs::new(&ctx.request.project))
-                .ok()
-                .flatten()
-                .and_then(|y| y.timeout().ok().flatten())
-        })
-        .map_or(Duration::from_secs(180), |t| {
-            if t.is_zero() {
-                Duration::from_hours(876_000)
-            } else {
-                t
-            }
-        })
+fn limit(timeout: Option<Duration>) -> Duration {
+    timeout.map_or(Duration::from_secs(180), |t| {
+        if t.is_zero() {
+            Duration::from_hours(876_000)
+        } else {
+            t
+        }
+    })
 }
 
 const INTERRUPTED: &str = "pgmi: interrupted, cancelling deployment... (again to quit at once)";
@@ -584,240 +598,350 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>, reporter: Arc<
     });
 }
 
-async fn deploy(
-    ctx: &Context,
-    st: &mut Progress,
-    guard: &Guard,
-    reporter: &Arc<Reporter>,
-    log: Arc<Mutex<NoticeLog>>,
-    secrets: Secrets,
-) -> Result<()> {
-    let a = &ctx.request;
-    let unsupported = a
-        .compat
-        .as_ref()
-        .filter(|c| *c != "1")
-        .map(|c| Error::config(format!("unsupported API version \"{c}\"; supported: 1")));
-    st.contract = unsupported.is_none();
-    let fs = crate::vfs::OsFs::project(&a.project)?;
-    let yaml = ProjectConfig::load(&fs)?;
-    if let Some(y) = &yaml {
-        y.timeout()?;
-    }
-    let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, &ctx.env, yaml.as_ref())?;
-    let yaml_connection = yaml.as_ref().map(|y| &y.connection);
-    st.connection_source = Some(resolve::source(&a.connection, &ctx.env, yaml_connection)?);
-    st.overrides = overrides(&a.connection, &ctx.env, yaml_connection)?;
-    let mut spec = resolve::resolve(&a.connection, &ctx.env, yaml_connection)?;
-    if let Some((provider, req)) = &cloud {
-        crate::conn::cloud::check(*provider, req, &mut spec, &ctx.env)?;
-    }
-    if let Some(m) = &a.maintenance_db {
-        spec.maintenance_db = m.clone();
-    }
-    st.spec = Some(spec.clone());
-    secrets.set(&spec);
-    for line in provenance(
-        &spec,
-        &crate::config::dotenv_path(&a.project),
-        &ctx.dotenv_keys,
-        &st.overrides,
-        ctx.env.non_empty("PGOPTIONS")?.is_some(),
-    ) {
-        reporter.line(&line);
-    }
-    let yaml_params = yaml
-        .as_ref()
-        .map(super::config::yaml::ProjectConfig::param_values)
-        .unwrap_or_default();
-    let (env, files, flags, stdin) = (
-        ctx.env.clone(),
-        a.params_files.clone(),
-        a.params.clone(),
-        ctx.stdin,
-    );
-    let (notes, verbose) = (reporter.clone(), ctx.verbose);
-    let params = guard
-        .interruptible(move || {
-            let note = |n: String| {
-                if verbose {
-                    notes.verbose(&n);
-                }
-            };
-            let sources = Sources {
-                yaml: yaml_params,
-                env: &env,
-                files: &files,
-                flags: &flags,
-                note: &note,
-            };
-            if stdin {
-                params::collect(sources, &mut std::io::stdin())
-            } else {
-                params::collect(sources, &mut NoStdin)
-            }
-        })
-        .await?;
-    #[cfg(feature = "testhooks")]
-    if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
-        test_panic();
-    }
-    if a.overwrite {
-        ctx.approver.before_connecting(&spec.target_db)?;
-    }
-    st.deployer = true;
-    let max_size = walk::max_size(&ctx.env)?;
-    let fs = crate::vfs::OsFs::new(a.project.clone());
-    let project = guard.blocking(move || walk::load(&fs, max_size)).await?;
-    let scanned = metadata::scan(&project.sources);
-    scanned
-        .readable()
-        .map_err(walk::scan_failed(Some(&a.project.display().to_string())))?;
-    let meta = scanned.unique()?;
-    if let Some(e) = unsupported {
-        return Err(e);
-    }
-    let files_loaded = project.sources.len() + project.test_dir_files.len();
-    st.loaded = Some(Loaded {
-        files: files_loaded,
-        ignored: project.ignored.clone(),
-    });
-    if ctx.verbose {
-        for i in &project.ignored {
-            reporter.line(&format!("ignored {} ({})", i.path, i.rule));
-        }
-    }
-    if a.overwrite {
-        overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
-    }
-    let sink_reporter = reporter.clone();
-    let sink_log = log.clone();
-    let sink_secrets = secrets.clone();
-    let line_secrets = secrets.clone();
-    let dialer = Dialer {
-        notices: Arc::new(move |n: Notice| {
-            let n = sink_secrets.notice(n);
-            sink_reporter.notice(&n);
-            if let Ok(mut l) = sink_log.lock() {
-                l.push(&n);
-            }
-        }),
-        log: {
-            let r = reporter.clone();
-            Arc::new(move |line: String| r.line(&redact(&line, &line_secrets.list())))
-        },
-        secret: {
-            let s = secrets.clone();
-            Arc::new(move |found: &str| s.found(found))
-        },
-    };
-    if let Some((provider, req)) = &cloud {
-        let token = guard
-            .connecting(Box::pin(crate::conn::cloud::token(
-                *provider, req, &ctx.env,
-            )))
+/// The connection a deploy resolved before reading anything else.
+struct Target {
+    spec: Spec,
+    cloud: Option<(Provider, cloud::Options)>,
+}
+
+/// The project as loaded from disk, with its checked metadata.
+struct LoadedProject {
+    project: walk::Project,
+    meta: Vec<metadata::Meta>,
+}
+
+/// What every phase of one deploy shares.
+struct Steps<'a> {
+    ctx: &'a Context,
+    guard: &'a Guard,
+    reporter: &'a Arc<Reporter>,
+    secrets: &'a Secrets,
+}
+
+impl Steps<'_> {
+    async fn deploy(
+        &self,
+        st: &mut Progress,
+        yaml: Option<&ProjectConfig>,
+        contract: Result<ContractVersion>,
+        log: &Arc<Mutex<NoticeLog>>,
+    ) -> Result<()> {
+        let request = &self.ctx.request;
+        let Target { mut spec, cloud } = self.target(st, yaml)?;
+        self.report_provenance(st, &spec)?;
+        let params = self
+            .params(yaml.map(ProjectConfig::param_values).unwrap_or_default())
             .await?;
-        spec.token = Some(token);
-        st.spec = Some(spec.clone());
-        secrets.set(&spec);
-    }
-    let _overwrite = if a.overwrite {
-        Some(overwrite(ctx, st, guard, reporter, &dialer, &spec).await?)
-    } else {
-        None
-    };
-    let session = match guard
-        .connecting(dialer.connect(&spec, &spec.target_db))
-        .await
-    {
-        Ok(s) => s,
-        Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {
-            let maintenance = guard
-                .connecting(dialer.connect(&spec, &spec.maintenance_db))
-                .await?;
-            guard
-                .running(&maintenance, check_server(&maintenance))
-                .await?;
-            reporter.line(&format!(
-                "Database \"{}\" does not exist; creating",
-                spec.target_db
-            ));
-            guard
-                .running(&maintenance, async {
-                    maintenance
-                        .client
-                        .batch_execute(&format!("CREATE DATABASE {}", quote_ident(&spec.target_db)))
-                        .await
-                        .map_err(|e| {
-                            created_elsewhere(sql_error_needing(
-                                "create the target database",
-                                &e,
-                                Some(Needs::CreateDb),
-                            ))
-                        })
-                })
-                .await?;
-            st.provision = Provision::Created;
-            drop(maintenance);
-            guard
-                .connecting(dialer.connect(&spec, &spec.target_db))
-                .await?
+        #[cfg(feature = "testhooks")]
+        if self.ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
+            test_panic();
         }
-        Err(e) => return Err(e),
-    };
-    guard.running(&session, check_server(&session)).await?;
-    guard
-        .running(
-            &session,
-            client_encoding(&session, spec.client_encoding.as_deref()),
+        if request.overwrite {
+            self.ctx.approver.before_connecting(&spec.target_db)?;
+        }
+        st.phase = Phase::Deploying;
+        let loaded = self.load().await?;
+        contract?;
+        self.record_loaded(st, &loaded);
+        if request.overwrite {
+            overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
+        }
+        let dialer = self.dialer(log);
+        if let Some((provider, options)) = &cloud {
+            spec.token = Some(self.sign_in(*provider, options).await?);
+        }
+        let _maintenance = if request.overwrite {
+            Some(self.overwrite(st, &dialer, &spec).await?)
+        } else {
+            None
+        };
+        let session = self.open(st, &dialer, &spec).await?;
+        st.server = Some(self.server_info(&session, &spec).await?);
+        self.lock(&session, &spec.target_db).await?;
+        let outcome = execute::run(execute::Input {
+            session: &session,
+            guard: self.guard,
+            reporter: self.reporter,
+            project: &loaded.project,
+            meta: &loaded.meta,
+            params: &params,
+            verbose: self.ctx.verbose,
+            files_loaded: loaded.files(),
+            execution: &mut st.execution,
+        })
+        .await;
+        release(&session).await;
+        outcome
+    }
+
+    fn target(&self, st: &mut Progress, yaml: Option<&ProjectConfig>) -> Result<Target> {
+        let (request, env) = (&self.ctx.request, &self.ctx.env);
+        let cloud = cloud::select(&request.cloud, &request.cloud_request, env, yaml)?;
+        let yaml_connection = yaml.map(|y| &y.connection);
+        st.connection_source = Some(resolve::source(&request.connection, env, yaml_connection)?);
+        st.overrides = overrides(&request.connection, env, yaml_connection)?;
+        let mut spec = resolve::resolve(&request.connection, env, yaml_connection)?;
+        if let Some((provider, options)) = &cloud {
+            cloud::check(*provider, options, &mut spec, env)?;
+        }
+        if let Some(m) = &request.maintenance_db {
+            spec.maintenance_db.clone_from(m);
+        }
+        st.spec = Some(spec.clone());
+        self.secrets.resolved(&spec);
+        Ok(Target { spec, cloud })
+    }
+
+    fn report_provenance(&self, st: &Progress, spec: &Spec) -> Result<()> {
+        for line in provenance(
+            spec,
+            &crate::config::dotenv_path(&self.ctx.request.project),
+            &self.ctx.dotenv_keys,
+            &st.overrides,
+            self.ctx.env.non_empty("PGOPTIONS")?.is_some(),
+        ) {
+            self.reporter.line(&line);
+        }
+        Ok(())
+    }
+
+    async fn params(&self, yaml: Vec<(String, String)>) -> Result<BTreeMap<String, String>> {
+        let request = &self.ctx.request;
+        let (env, files, flags, stdin) = (
+            self.ctx.env.clone(),
+            request.params_files.clone(),
+            request.params.clone(),
+            self.ctx.stdin,
+        );
+        let (notes, verbose) = (self.reporter.clone(), self.ctx.verbose);
+        self.guard
+            .interruptible(move || {
+                let note = |n: String| {
+                    if verbose {
+                        notes.verbose(&n);
+                    }
+                };
+                let sources = Sources {
+                    yaml,
+                    env: &env,
+                    files: &files,
+                    flags: &flags,
+                    note: &note,
+                };
+                match stdin {
+                    Stdin::Process => params::collect(sources, Some(&mut std::io::stdin())),
+                    Stdin::Unavailable => params::collect(sources, None),
+                }
+            })
+            .await
+    }
+
+    async fn load(&self) -> Result<LoadedProject> {
+        let project_path = &self.ctx.request.project;
+        let max_size = walk::max_size(&self.ctx.env)?;
+        let fs = OsFs::new(project_path.clone());
+        let project = self
+            .guard
+            .blocking(move || walk::load(&fs, max_size))
+            .await?;
+        let scanned = metadata::scan(&project.sources);
+        scanned
+            .readable()
+            .map_err(walk::scan_failed(Some(&project_path.display().to_string())))?;
+        let meta = scanned.unique()?;
+        Ok(LoadedProject { project, meta })
+    }
+
+    fn record_loaded(&self, st: &mut Progress, loaded: &LoadedProject) {
+        st.loaded = Some(Loaded {
+            files: loaded.files(),
+            ignored: loaded.project.ignored.clone(),
+        });
+        if self.ctx.verbose {
+            for i in &loaded.project.ignored {
+                self.reporter
+                    .line(&format!("ignored {} ({})", i.path, i.rule));
+            }
+        }
+    }
+
+    fn dialer(&self, log: &Arc<Mutex<NoticeLog>>) -> Dialer {
+        let (reporter, log, secrets) = (self.reporter.clone(), log.clone(), self.secrets.clone());
+        let line_reporter = self.reporter.clone();
+        let line_secrets = self.secrets.clone();
+        let found = self.secrets.clone();
+        Dialer {
+            notices: Arc::new(move |n: Notice| {
+                let n = secrets.notice(n);
+                reporter.notice(&n);
+                if let Ok(mut l) = log.lock() {
+                    l.push(&n);
+                }
+            }),
+            log: Arc::new(move |line: String| {
+                line_reporter.line(&redact(&line, &line_secrets.list()));
+            }),
+            secret: Arc::new(move |secret: &str| found.insert(secret)),
+        }
+    }
+
+    async fn sign_in(&self, provider: Provider, options: &cloud::Options) -> Result<cloud::Token> {
+        let token = self
+            .guard
+            .connecting(Box::pin(cloud::token(provider, options, &self.ctx.env)))
+            .await?;
+        for secret in token.secrets() {
+            self.secrets.insert(&secret);
+        }
+        Ok(token)
+    }
+
+    async fn overwrite(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
+        let (guard, db) = (self.guard, spec.target_db.as_str());
+        let maintenance = guard
+            .connecting(dialer.connect(spec, &spec.maintenance_db))
+            .await?;
+        guard
+            .running(&maintenance, check_server(&maintenance))
+            .await?;
+        let exists = guard
+            .running(&maintenance, overwrite::claim(&maintenance, db))
+            .await?;
+        let snapshot = if exists {
+            guard
+                .waiting(
+                    self.ctx
+                        .approver
+                        .approve_drop(db, self.reporter, &guard.token),
+                )
+                .await?;
+            guard
+                .running(&maintenance, overwrite::snapshot(&maintenance, db))
+                .await?
+        } else {
+            None
+        };
+        guard.check()?;
+        overwrite::recreate(
+            &maintenance,
+            db,
+            snapshot.as_ref(),
+            self.reporter,
+            &mut st.provision,
         )
         .await?;
-    let version = guard
-        .running(&session, async {
-            Ok(first_value(&session, "SHOW server_version")
-                .await
-                .ok()
-                .flatten())
-        })
-        .await?;
-    st.server = Some(ServerInfo {
-        version,
-        tls: Tls {
-            enabled: session.tls_enabled(),
-            sslmode: tls::effective_mode(&spec),
-            version: session.tls_version.clone(),
-        },
-    });
-    let locked = guard
-        .running(&session, async {
-            first_value(
-                &session,
-                "SELECT pg_try_advisory_lock(hashtextextended('pgmi.deploy.' || current_database(), 0))::text",
-            )
-            .await
-        })
-        .await?;
-    if locked.as_deref() != Some("true") {
-        return Err(Error::new(
-            Kind::Locked,
-            format!(
-                "another pgmi deploy is already running against \"{}\"; wait for it to finish",
-                spec.target_db
-            ),
-        ));
+        guard.check()?;
+        Ok(maintenance)
     }
-    let outcome = execute::run(execute::Input {
-        session: &session,
-        guard,
-        reporter,
-        project: &project,
-        meta: &meta,
-        params: &params,
-        verbose: ctx.verbose,
-        files_loaded,
-        execution: &mut st.execution,
-    })
-    .await;
+
+    /// Connects to the target database, creating it first through the
+    /// maintenance database when the server says it does not exist.
+    async fn open(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
+        let guard = self.guard;
+        match guard
+            .connecting(dialer.connect(spec, &spec.target_db))
+            .await
+        {
+            Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {}
+            opened => return opened,
+        }
+        let maintenance = guard
+            .connecting(dialer.connect(spec, &spec.maintenance_db))
+            .await?;
+        guard
+            .running(&maintenance, check_server(&maintenance))
+            .await?;
+        self.reporter.line(&format!(
+            "Database \"{}\" does not exist; creating",
+            spec.target_db
+        ));
+        guard
+            .running(&maintenance, create_database(&maintenance, &spec.target_db))
+            .await?;
+        st.provision = Provision::Created;
+        drop(maintenance);
+        guard
+            .connecting(dialer.connect(spec, &spec.target_db))
+            .await
+    }
+
+    async fn server_info(&self, session: &Session, spec: &Spec) -> Result<ServerInfo> {
+        let guard = self.guard;
+        guard.running(session, check_server(session)).await?;
+        guard
+            .running(
+                session,
+                client_encoding(session, spec.client_encoding.as_deref()),
+            )
+            .await?;
+        let version = guard
+            .running(session, async {
+                Ok(first_value(session, "SHOW server_version")
+                    .await
+                    .ok()
+                    .flatten())
+            })
+            .await?;
+        Ok(ServerInfo {
+            version,
+            tls: Tls {
+                enabled: session.tls_enabled(),
+                sslmode: tls::effective_mode(spec),
+                version: session.tls_version.clone(),
+            },
+        })
+    }
+
+    async fn lock(&self, session: &Session, db: &str) -> Result<()> {
+        let locked = self
+            .guard
+            .running(session, async {
+                session
+                    .client
+                    .query_typed(
+                        "SELECT pg_try_advisory_lock(hashtextextended('pgmi.deploy.' || current_database(), 0))",
+                        &[],
+                    )
+                    .await
+                    .and_then(|rows| rows.first().map(|r| r.try_get::<_, bool>(0)).transpose())
+                    .map_err(|e| sql_error("query the server", e))
+            })
+            .await?;
+        if locked != Some(true) {
+            return Err(Error::new(
+                Kind::Locked,
+                format!(
+                    "another pgmi deploy is already running against \"{db}\"; wait for it to finish"
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl LoadedProject {
+    fn files(&self) -> usize {
+        self.project.sources.len() + self.project.test_dir_files.len()
+    }
+}
+
+async fn create_database(maintenance: &Session, db: &str) -> Result<()> {
+    maintenance
+        .client
+        .batch_execute(&format!("CREATE DATABASE {}", quote_ident(db)))
+        .await
+        .map_err(|e| {
+            created_elsewhere(sql_error_needing(
+                "create the target database",
+                e,
+                Some(Needs::CreateDb),
+            ))
+        })
+}
+
+/// Rolls back an open transaction and releases the deploy lock; a session
+/// that does not answer within `CLEANUP` is closed instead.
+async fn release(session: &Session) {
     let cleanup = async {
         if session.tap.status() != crate::conn::tap::TxStatus::Idle {
             session.client.batch_execute("ROLLBACK").await?;
@@ -830,62 +954,12 @@ async fn deploy(
     if !matches!(tokio::time::timeout(CLEANUP, cleanup).await, Ok(Ok(()))) {
         session.disconnect();
     }
-    outcome
-}
-
-async fn overwrite(
-    ctx: &Context,
-    st: &mut Progress,
-    guard: &Guard,
-    reporter: &Reporter,
-    dialer: &Dialer,
-    spec: &Spec,
-) -> Result<Session> {
-    let db = spec.target_db.as_str();
-    let maintenance = guard
-        .connecting(dialer.connect(spec, &spec.maintenance_db))
-        .await?;
-    guard
-        .running(&maintenance, check_server(&maintenance))
-        .await?;
-    let exists = guard
-        .running(&maintenance, overwrite::claim(&maintenance, db))
-        .await?;
-    let snapshot = if exists {
-        guard
-            .waiting(ctx.approver.approve_drop(db, reporter, &guard.token))
-            .await?;
-        guard
-            .running(&maintenance, overwrite::snapshot(&maintenance, db))
-            .await?
-    } else {
-        None
-    };
-    guard.check()?;
-    overwrite::recreate(
-        &maintenance,
-        db,
-        snapshot.as_ref(),
-        reporter,
-        &mut st.provision,
-    )
-    .await?;
-    guard.check()?;
-    Ok(maintenance)
 }
 
 #[cfg(feature = "testhooks")]
 #[allow(clippy::panic)]
 fn test_panic() -> ! {
     panic!("PGMI_TEST_PANIC is set")
-}
-
-struct NoStdin;
-
-impl std::io::Read for NoStdin {
-    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::other("stdin is not available here"))
-    }
 }
 
 pub(crate) fn quote_ident(s: &str) -> String {
@@ -900,7 +974,7 @@ async fn client_encoding(session: &Session, named: Option<&str>) -> Result<()> {
                 "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
             )
             .await
-            .map_err(|e| sql_error("match the client encoding to the database", &e));
+            .map_err(|e| sql_error("match the client encoding to the database", e));
     };
     session
         .client
@@ -937,13 +1011,13 @@ async fn check_server(session: &Session) -> Result<()> {
             "SELECT current_setting('server_version_num'), current_setting('server_version')",
         )
         .await
-        .map_err(|e| sql_error("read the server version", &e))?;
+        .map_err(|e| sql_error("read the server version", e))?;
     let (num, text) = match first_row(&rows) {
         Some(r) => {
             let read = |i| {
                 r.try_get(i)
                     .map(|v| v.unwrap_or_default().to_string())
-                    .map_err(|e| sql_error("read the server version", &e))
+                    .map_err(|e| sql_error("read the server version", e))
             };
             (read(0)?, read(1)?)
         }
@@ -966,9 +1040,9 @@ async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
         .client
         .simple_query(sql)
         .await
-        .map_err(|e| sql_error("query the server", &e))?;
+        .map_err(|e| sql_error("query the server", e))?;
     first_row(&rows)
-        .map(|r| r.try_get(0).map_err(|e| sql_error("query the server", &e)))
+        .map(|r| r.try_get(0).map_err(|e| sql_error("query the server", e)))
         .transpose()
         .map(|v| v.flatten().map(str::to_string))
 }
@@ -995,7 +1069,7 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
     }
     if ctx.request.json {
         let mut record = run.record(ctx, result);
-        if let Some(n) = note.filter(|_| !st.deployer) {
+        if let Some(n) = note.filter(|_| !st.reached(Phase::Deploying)) {
             record.note_error(&n);
         }
         let mut out = std::io::stdout().lock();
@@ -1058,6 +1132,15 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    impl Run {
+        fn at(&mut self, p: Progress) {
+            if let Some(spec) = &p.spec {
+                self.secrets.resolved(spec);
+            }
+            self.st = p;
+        }
+    }
 
     fn guard(timeout: Duration) -> Guard {
         Guard {
@@ -1167,8 +1250,8 @@ mod tests {
     #[test]
     fn a_password_the_dialer_found_is_redacted_like_the_specs() {
         let secrets = Secrets::default();
-        secrets.set(&spec("d"));
-        secrets.found("from-pgpass");
+        secrets.resolved(&spec("d"));
+        secrets.insert("from-pgpass");
         let n = secrets.notice(Notice {
             severity: crate::output::Severity::Notice,
             message: "a=from-pgpass b=s3cret-pw".into(),
@@ -1194,10 +1277,10 @@ mod tests {
 
     fn loaded(db: &str) -> Progress {
         Progress {
-            contract: true,
+            contract: Some(ContractVersion::V1),
             connection_source: Some(Source::ConnectionFlag),
             spec: Some(spec(db)),
-            deployer: true,
+            phase: Phase::Deploying,
             loaded: Some(Loaded {
                 files: 3,
                 ignored: Vec::new(),
@@ -1378,7 +1461,7 @@ mod tests {
         run.st = Progress {
             spec: Some(spec("app")),
             connection_source: Some(Source::ConnectionFlag),
-            deployer: true,
+            phase: Phase::Deploying,
             ..Progress::default()
         };
         let began = serde_json::to_value(run.record(&context(), &refused)).unwrap();
@@ -1419,7 +1502,7 @@ mod tests {
             verbose: false,
             env: Env::default(),
             dotenv_keys: vec!["PGPASSWORD".into()],
-            stdin: false,
+            stdin: Stdin::Unavailable,
             approver: Box::new(ConfirmedName(None)),
         }
     }
@@ -1431,6 +1514,7 @@ mod tests {
             execution: executed(0, failure(1, blame::Blame::default())),
             ..loaded("app")
         };
+        run.secrets.resolved(run.st.spec.as_ref().unwrap());
         let (reporter, out) = crate::output::Captured::reporter(false, false, false);
         let code = finish(
             &context(),
@@ -1490,7 +1574,7 @@ mod tests {
 
     fn record_of(p: Progress, result: &Result<()>) -> Value {
         let mut run = Run::start();
-        run.st = p;
+        run.at(p);
         let record = run.record(&context(), result);
         let text = serde_json::to_string(&record).unwrap();
         let sorted = serde_json::to_value(&record).unwrap();
@@ -1900,7 +1984,7 @@ mod tests {
 
         let mut run = Run::start();
         run.st = Progress {
-            deployer: true,
+            phase: Phase::Deploying,
             ..resolved
         };
         let (reporter, out) = crate::output::Captured::reporter(false, false, false);
@@ -1924,7 +2008,7 @@ mod tests {
         record.note_error("(connection defaults)");
         let r = serde_json::to_value(&record).unwrap();
         assert_eq!(r["error"], "bad\n(connection defaults)");
-        run.st.deployer = true;
+        run.st.phase = Phase::Deploying;
         let mut ok = run.record(&context(), &Ok(()));
         ok.note_error("(connection defaults)");
         assert!(serde_json::to_value(&ok).unwrap().get("error").is_none());
@@ -1943,7 +2027,7 @@ mod tests {
             ..Progress::default()
         };
         let mut run = Run::start();
-        run.st = p;
+        run.at(p);
         let text =
             serde_json::to_string(&run.record(&context(), &Err(Error::connection("refused"))))
                 .unwrap();

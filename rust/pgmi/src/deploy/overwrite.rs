@@ -47,12 +47,12 @@ async fn rows(client: &tokio_postgres::Client, sql: &str, db: &str) -> Result<Ve
     client
         .query_typed(sql, &[(&db, Type::TEXT)])
         .await
-        .map_err(|e| sql_error("read the target database", &e))
+        .map_err(|e| sql_error("read the target database", e))
 }
 
 fn get<'a, T: tokio_postgres::types::FromSql<'a>>(r: &'a Row, i: usize) -> Result<T> {
     r.try_get(i)
-        .map_err(|e| sql_error("read the target database", &e))
+        .map_err(|e| sql_error("read the target database", e))
 }
 
 fn text(r: &Row, i: usize) -> Result<String> {
@@ -122,13 +122,8 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
             gaps.join("\n  ")
         )));
     }
-    let locked = rows(
-        c,
-        &format!("SELECT ({})::text", manager_sql("deploy_locked")?),
-        db,
-    )
-    .await?;
-    if first::<String>(&locked)?.as_deref() == Some("true") {
+    let locked = rows(c, manager_sql("deploy_locked")?, db).await?;
+    if first::<bool>(&locked)? == Some(true) {
         return Err(Error::new(
             Kind::Locked,
             format!(
@@ -342,12 +337,12 @@ pub(crate) async fn recreate(
         if snapshot.is_some() {
             c.batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", quote_ident(db)))
                 .await
-                .map_err(|e| sql_error("drop the target database", &e))?;
+                .map_err(|e| sql_error("drop the target database", e))?;
         }
         c.batch_execute(&create_sql(db, snapshot))
             .await
             .map_err(|e| {
-                sql_error_needing("create the target database", &e, Some(Needs::CreateDb))
+                sql_error_needing("create the target database", e, Some(Needs::CreateDb))
             })?;
         *provision = if snapshot.is_some() {
             Provision::Recreated
@@ -358,7 +353,7 @@ pub(crate) async fn recreate(
         if let Some(s) = snapshot {
             for (item, sql) in restore_sql(db, s) {
                 if let Err(e) = c.batch_execute(&sql).await {
-                    failed.push(format!("{item}: {}", sql_error("restore", &e).text()));
+                    failed.push(format!("{item}: {}", sql_error("restore", e).text()));
                 }
             }
         }

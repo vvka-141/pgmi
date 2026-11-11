@@ -58,7 +58,10 @@ fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> R
     Ok(())
 }
 
-pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap<String, String>> {
+pub(crate) fn collect(
+    src: Sources<'_>,
+    mut stdin: Option<&mut dyn Read>,
+) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     let mut keys: Vec<String> = Vec::new();
     no_case_twins("pgmi.yaml params", src.yaml.iter().map(|(k, _)| k.as_str()))?;
@@ -108,7 +111,10 @@ pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap
         (src.note)(format!("Loading parameters from file: {file}"));
         let (name, text) = if file == "-" {
             let mut s = String::new();
-            stdin.read_to_string(&mut s).map_err(|e| {
+            let input = stdin.as_mut().ok_or_else(|| {
+                Error::config("failed to read params file - (stdin): stdin is not available here")
+            })?;
+            input.read_to_string(&mut s).map_err(|e| {
                 Error::config("failed to read params file - (stdin)").with_source(e)
             })?;
             ("- (stdin)".to_string(), s)
@@ -197,7 +203,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            &mut "a=file\nb=file\n".as_bytes(),
+            Some(&mut "a=file\nb=file\n".as_bytes()),
         )
         .unwrap();
         assert_eq!(out["a"], "flag");
@@ -220,7 +226,7 @@ mod tests {
                 flags: &flags,
                 note: &|n| notes.borrow_mut().push(n),
             },
-            &mut "a=secret-file\nc=1\nC2=2\n".as_bytes(),
+            Some(&mut "a=secret-file\nc=1\nC2=2\n".as_bytes()),
         )
         .unwrap();
         assert_eq!(
@@ -246,7 +252,7 @@ mod tests {
                     flags,
                     note: &|_| {},
                 },
-                &mut input.as_bytes(),
+                Some(&mut input.as_bytes()),
             )
         };
         let e = run(&env, &[], &[], "").unwrap_err();
@@ -302,7 +308,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            &mut &stdin[..],
+            Some(&mut &stdin[..]),
         )
     }
 

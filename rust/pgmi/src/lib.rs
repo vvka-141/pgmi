@@ -136,7 +136,7 @@ fn run_deploy(
             verbose,
             env,
             dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
-            stdin: true,
+            stdin: deploy::Stdin::Process,
             approver,
         },
     )

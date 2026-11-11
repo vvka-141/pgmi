@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::blame::redact_sql_passwords;
-use super::{Failure, Progress, Provision};
+use super::{ContractVersion, Failure, Phase, Progress, Provision};
 use crate::VERSION;
 use crate::conn::overrides::Override;
 use crate::conn::resolve::Source;
@@ -119,15 +119,15 @@ impl DeployRecord {
         let mut record = DeployRecord {
             column: None,
             connection_source: p.connection_source.map(Source::label),
-            contract_version: p.contract.then_some("1"),
+            contract_version: p.contract.map(ContractVersion::as_str),
             created: loaded
                 .map(|_| p.provision == Provision::Created)
-                .or(p.deployer.then_some(false)),
+                .or(p.reached(Phase::Deploying).then_some(false)),
             database: p.database().map(str::to_string),
             detail: None,
             dotenv_keys: facts.dotenv_keys.to_vec(),
             duration_ms: p
-                .deployer
+                .reached(Phase::Deploying)
                 .then(|| u64::try_from(facts.elapsed.as_millis()).unwrap_or(u64::MAX)),
             error: None,
             execution_mode: None,
@@ -135,7 +135,9 @@ impl DeployRecord {
             exit_code,
             failed_file: None,
             failed_file_candidates: None,
-            files_loaded: loaded.map(|l| l.files).or(p.deployer.then_some(0)),
+            files_loaded: loaded
+                .map(|l| l.files)
+                .or(p.reached(Phase::Deploying).then_some(0)),
             finished_at: timestamp(facts.started + facts.elapsed),
             hint: None,
             ignored_paths: loaded.map(|l| l.ignored.clone()).unwrap_or_default(),
@@ -144,12 +146,14 @@ impl DeployRecord {
             notices,
             notices_truncated,
             overrides: p.overrides.clone(),
-            paths_ignored: loaded.map(|l| l.ignored.len()).or(p.deployer.then_some(0)),
+            paths_ignored: loaded
+                .map(|l| l.ignored.len())
+                .or(p.reached(Phase::Deploying).then_some(0)),
             pgmi_version: VERSION,
             phase: None,
             recreated: loaded
                 .map(|_| p.provision == Provision::Recreated)
-                .or(p.deployer.then_some(false)),
+                .or(p.reached(Phase::Deploying).then_some(false)),
             schema_version: 1,
             script: None,
             script_expanded: None,
@@ -168,7 +172,7 @@ impl DeployRecord {
             }),
             test_macros: execution
                 .map(|x| x.test_macros)
-                .or((loaded.is_some() || p.deployer).then_some(0)),
+                .or((loaded.is_some() || p.reached(Phase::Deploying)).then_some(0)),
             tls: p.server.as_ref().map(|s| s.tls.clone()),
             units_committed: execution.map(|x| x.committed),
             where_: None,
