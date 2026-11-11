@@ -292,7 +292,7 @@ explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate 
 sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. `--json`
 reports `tls.enabled`, `tls.version` (`TLS 1.3`), `tls.sslmode`.
 
-Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`.
+Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`.
 
 ### Target database, overwrite and approval
 
@@ -475,7 +475,10 @@ naming the user and pointing at `--username`.
 (`host:port?Action=connect&DBUser=...&X-Amz-...`, valid 900 s), region from
 `--aws-region`, else `AWS_REGION`, else `AWS_DEFAULT_REGION`, else exit 10.
 `--google`: needs `--google-instance` (exit 10); connects through the Cloud SQL
-connector with IAM authentication. Lakebase: a token passed as the password,
+connector with IAM authentication, signed in with Application Default
+Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else gcloud's
+`application_default_credentials.json` under `%APPDATA%\gcloud` on Windows
+and `~/.config/gcloud` elsewhere, else the metadata server. Lakebase: a token passed as the password,
 no separate path. Real-cloud verification: Azure only (owner decision
 2026-11-10); AWS and Google are checked against local fakes. Observed on a
 real Flexible Server (PGMI-845, 2026-11-11, Go): the Azure CLI, a service
@@ -695,6 +698,18 @@ setup breaks at the switch.
 
 Cases: `tls/encrypted-client-key`, `tls/require-auth-and-version`.
 
+### Encrypted PKCS#8 client keys open
+
+Go cannot parse an encrypted PKCS#8 key (`ENCRYPTED PRIVATE KEY`, what
+`openssl pkcs8 -topk8` writes) and refuses it with exit 10 (`failed to parse
+private key`), with or without a password. The Rust binary opens it with
+`sslpassword`/`PGSSLPASSWORD`, as libpq does: PBES2 (PBKDF2 or scrypt with
+AES-CBC or DES-EDE3-CBC) and PKCS#12 PBE-SHA1-3DES (`-v1 PBE-SHA1-3DES`). A
+wrong password is exit 10 `decryption password incorrect`; a missing one is
+exit 10 asking for `sslpassword` or `PGSSLPASSWORD`.
+
+Cases: `tls/encrypted-pkcs8-client-key`.
+
 ### serve answers a bare null and never echoes invalid bytes (owner, 2026-11-11)
 
 Go ignores a line holding only `null`; JSON-RPC 2.0 calls it an invalid
@@ -815,6 +830,8 @@ release notes take their "Behaviour changes" section from this table.
 | `client_encoding=auto` | exit 11 (the server refuses the value) | refused before connecting, exit 10 | owner 2026-11-11 |
 | Server asks for a password and none was found | exit 11, the server's `password authentication failed` | exit 11, `no password supplied` naming where it looked | owner 2026-11-10 |
 | Encrypted legacy client keys, `require_auth` | work | work (kept) | owner 2026-11-10 |
+| Encrypted PKCS#8 client key (PBES2 or PBE-SHA1-3DES) | refused, exit 10 | opens with `sslpassword` | owner 2026-11-10 |
+| Windows: Google ADC file `%APPDATA%\gcloud\application_default_credentials.json` | read | read | no change |
 | Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |
 | `AZURE_TOKEN_CREDENTIALS` naming no credential | exit 1 | exit 10 | owner 2026-11-11 |
 | Wizards | full-screen | full-screen (kept) | owner 2026-11-11 |

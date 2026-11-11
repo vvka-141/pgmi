@@ -76,6 +76,32 @@ def make_certs(d: Path) -> dict[str, str]:
         "client_enc.key",
         cwd=d,
     )
+    openssl(
+        "pkcs8",
+        "-topk8",
+        "-v1",
+        "PBE-SHA1-3DES",
+        "-in",
+        "client.key",
+        "-passout",
+        f"pass:{KEY_PASSWORD}",
+        "-out",
+        "client_pbe3des.key",
+        cwd=d,
+    )
+    openssl(
+        "pkcs8",
+        "-topk8",
+        "-v2",
+        "aes-256-cbc",
+        "-in",
+        "client.key",
+        "-passout",
+        f"pass:{KEY_PASSWORD}",
+        "-out",
+        "client_pbes2.key",
+        cwd=d,
+    )
     for key in d.glob("*.key"):
         key.chmod(0o600)
     return {
@@ -91,5 +117,7 @@ def make_certs(d: Path) -> dict[str, str]:
         "{md5_user}": MD5_USER,
         "{azure_user}": AZURE_USER,
         "{client_key_encrypted}": str(d / "client_enc.key"),
+        "{client_key_pbe_sha1_3des}": str(d / "client_pbe3des.key"),
+        "{client_key_pbes2}": str(d / "client_pbes2.key"),
         "{key_password}": KEY_PASSWORD,
     }

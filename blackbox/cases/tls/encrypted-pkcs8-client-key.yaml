@@ -1,0 +1,30 @@
+description: >-
+  an encrypted PKCS#8 client key (ENCRYPTED PRIVATE KEY) under PBES2 or PBE-SHA1-3DES; Go cannot parse
+  either and refuses with exit 10, the Rust binary opens both with sslpassword as libpq does
+  (behaviour-contract "Encrypted PKCS#8 client keys open")
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_pbe_sha1_3des}&sslpassword={key_password}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["failed to parse private key"]
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_pbes2}", -d, "{db}"]
+    env: {PGSSLPASSWORD: "{key_password}"}
+    expect:
+      exit: 10
+      stderr: ["failed to parse private key"]
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_pbe_sha1_3des}&sslpassword=wrong", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["failed to parse private key"]
+      rust: {stderr: ["decryption password incorrect"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}&sslcert={client_cert}&sslkey={client_key_pbe_sha1_3des}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["failed to parse private key"]
+      rust: {stderr: ["is encrypted; give its password with sslpassword or PGSSLPASSWORD"]}

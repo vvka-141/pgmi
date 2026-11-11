@@ -74,10 +74,6 @@ impl Env {
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub(crate) fn home(&self) -> Option<PathBuf> {
-        self.home_for(cfg!(windows))
-    }
-
     pub(crate) fn pg_files(&self) -> Option<PgFiles> {
         self.pg_files_for(cfg!(windows))
     }

@@ -32,6 +32,7 @@ futures-util = { version = "0.3.31", default-features = false, features = ["std"
 jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 md-5 = "0.11.0"
 p12-keystore = "0.4.1"
+pkcs12 = { version = "0.2.0-rc.0", default-features = false, features = ["kdf"] }
 pkcs8 = { version = "0.11.0", features = ["encryption", "pem", "3des", "sha1-insecure"] }
 rsa = "0.10.0"
 async-trait = "0.1"

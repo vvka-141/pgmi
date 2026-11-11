@@ -68,6 +68,11 @@ fn pkcs8(text: &str, password: &str) -> Result<PrivateKeyDer<'static>, KeyError>
     use pkcs8::der::Decode;
     let start = text.find(ENCRYPTED_PKCS8).unwrap_or(0);
     let block = pem(&text[start..])?;
+    if let Ok(info) = pkcs12::pbe_params::EncryptedPrivateKeyInfo::from_der(&block.der)
+        && info.encryption_algorithm.oid == pkcs12::PKCS_12_PBE_WITH_SHAAND3_KEY_TRIPLE_DES_CBC
+    {
+        return pbe_sha1_3des(&info, password);
+    }
     let info = pkcs8::EncryptedPrivateKeyInfoRef::from_der(&block.der)
         .map_err(|e| KeyError::Malformed(e.to_string()))?;
     let doc = info
@@ -78,6 +83,39 @@ fn pkcs8(text: &str, password: &str) -> Result<PrivateKeyDer<'static>, KeyError>
         return Err(KeyError::WrongPassword);
     }
     Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)))
+}
+
+fn pbe_sha1_3des(
+    info: &pkcs12::pbe_params::EncryptedPrivateKeyInfo,
+    password: &str,
+) -> Result<PrivateKeyDer<'static>, KeyError> {
+    use pkcs12::kdf::{Pkcs12KeyType, derive_key_utf8};
+    let params = info
+        .encryption_algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| KeyError::Malformed("PBE-SHA1-3DES without parameters".into()))?
+        .decode_as::<pkcs12::pbe_params::Pkcs12PbeParams>()
+        .map_err(|e| KeyError::Malformed(e.to_string()))?;
+    if params.iterations < 1 {
+        return Err(KeyError::Malformed(
+            "PBE-SHA1-3DES iteration count is not positive".into(),
+        ));
+    }
+    let salt = params.salt.as_bytes();
+    let derive = |kind, len| {
+        derive_key_utf8::<sha1::Sha1>(password, salt, kind, params.iterations, len)
+            .map_err(|_| KeyError::WrongPassword)
+    };
+    let key = derive(Pkcs12KeyType::EncryptionKey, 24)?;
+    let iv = derive(Pkcs12KeyType::Iv, 8)?;
+    let mut data = info.encrypted_data.as_bytes().to_vec();
+    let plain = run::<cbc::Decryptor<des::TdesEde3>>(&key, &iv, &mut data)
+        .ok_or(KeyError::WrongPassword)?;
+    if !is_der_sequence(&plain) {
+        return Err(KeyError::WrongPassword);
+    }
+    Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(plain)))
 }
 
 fn legacy(text: &str, password: &str) -> Result<PrivateKeyDer<'static>, KeyError> {
@@ -199,6 +237,24 @@ mod tests {
         let mut long = vec![0x30, 0x82, 0x01, 0x00];
         long.resize(4 + 256, 0);
         assert!(is_der_sequence(&long));
+    }
+
+    #[test]
+    fn pbe_sha1_3des_pkcs8_opens_like_openssl() {
+        let encrypted = include_bytes!("cloud/testdata/client-ec-pbe-sha1-3des.pem");
+        let plain = pem(include_str!("cloud/testdata/client-ec.pk8.pem"))
+            .unwrap()
+            .der;
+        assert!(is_encrypted(encrypted));
+        assert_eq!(
+            decrypt(encrypted, Some("key-passphrase")),
+            Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(plain)))
+        );
+        assert_eq!(
+            decrypt(encrypted, Some("wrong")),
+            Err(KeyError::WrongPassword)
+        );
+        assert_eq!(decrypt(encrypted, None), Err(KeyError::NeedsPassword));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use crate::error::{Error, Result};
 const ADMIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.admin";
 const LOGIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.login";
 const PORT: u16 = 3307;
+const ADC_FILE: &str = "application_default_credentials.json";
 
 pub(crate) struct Dialer {
     address: String,
@@ -92,12 +94,21 @@ fn instance_parts(name: &str) -> Result<(String, String, String)> {
     }
 }
 
+fn adc_well_known(env: &Env, windows: bool) -> Option<PathBuf> {
+    let root = Path::new(
+        env.non_empty(if windows { "APPDATA" } else { "HOME" })
+            .ok()??,
+    );
+    Some(if windows {
+        root.join("gcloud").join(ADC_FILE)
+    } else {
+        root.join(".config").join("gcloud").join(ADC_FILE)
+    })
+}
+
 async fn access_token(scope: &str, env: &Env) -> Result<String> {
     let adc_file = env.non_empty("GOOGLE_APPLICATION_CREDENTIALS")?.is_some()
-        || env.home().is_some_and(|h| {
-            h.join(".config/gcloud/application_default_credentials.json")
-                .is_file()
-        });
+        || adc_well_known(env, cfg!(windows)).is_some_and(|p| p.is_file());
     let creds = google_cloud_auth::credentials::Builder::default()
         .with_scopes([scope])
         .build_access_token_credentials()
@@ -228,5 +239,41 @@ mod tests {
             ("example.com:proj".into(), "us-central1".into(), "db".into())
         );
         assert!(instance_parts("proj:db").is_err());
+    }
+
+    #[test]
+    fn adc_file_on_windows_is_under_appdata() {
+        let env = Env::from_pairs(&[
+            ("APPDATA", r"C:\Users\a\AppData\Roaming"),
+            ("HOME", "/c/Users/a"),
+            ("USERPROFILE", r"C:\Users\a"),
+        ]);
+        assert_eq!(
+            adc_well_known(&env, true),
+            Some(
+                Path::new(r"C:\Users\a\AppData\Roaming")
+                    .join("gcloud")
+                    .join("application_default_credentials.json")
+            )
+        );
+        assert_eq!(
+            adc_well_known(&Env::from_pairs(&[("HOME", "/c/Users/a")]), true),
+            None
+        );
+    }
+
+    #[test]
+    fn adc_file_on_unix_is_under_home_config() {
+        let env = Env::from_pairs(&[("HOME", "/home/a"), ("APPDATA", "/ignored")]);
+        assert_eq!(
+            adc_well_known(&env, false),
+            Some(PathBuf::from(
+                "/home/a/.config/gcloud/application_default_credentials.json"
+            ))
+        );
+        assert_eq!(
+            adc_well_known(&Env::from_pairs(&[("APPDATA", "/ignored")]), false),
+            None
+        );
     }
 }

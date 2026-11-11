@@ -2424,6 +2424,7 @@ dependencies = [
  "md-5",
  "p12-keystore",
  "pgmi-shared",
+ "pkcs12",
  "pkcs8",
  "proptest",
  "rand",

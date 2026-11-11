@@ -90,7 +90,7 @@ Databases a case creates there are dropped afterwards.
 
 | Kind | What | Placeholders |
 |---|---|---|
-| `tls` | TLS on, certificate for `localhost` only (so `127.0.0.1` fails verify-full), signed by a throwaway CA; `{cert_user}` must present a client certificate; `{md5_user}` signs in with md5 | `{tls_port}`, `{ca}`, `{wrong_ca}`, `{client_cert}`, `{client_key}`, `{client_key_encrypted}`, `{key_password}`, `{ca_pem}`, `{wrong_ca_pem}`, `{client_cert_pem}`, `{client_key_pem}`, `{cert_user}`, `{md5_user}` |
+| `tls` | TLS on, certificate for `localhost` only (so `127.0.0.1` fails verify-full), signed by a throwaway CA; `{cert_user}` must present a client certificate; `{md5_user}` signs in with md5 | `{tls_port}`, `{ca}`, `{wrong_ca}`, `{client_cert}`, `{client_key}`, `{client_key_encrypted}`, `{client_key_pbes2}`, `{client_key_pbe_sha1_3des}`, `{key_password}`, `{ca_pem}`, `{wrong_ca_pem}`, `{client_cert_pem}`, `{client_key_pem}`, `{cert_user}`, `{md5_user}` |
 | `tls_only` | refuses connections without TLS | `{tls_only_port}` (and the certificate placeholders) |
 | `replica` | a primary and a hot standby streaming from it | `{primary_port}`, `{standby_port}` |
 | `socket` | its Unix socket directory is shared with the host | `{socket_dir}` |

@@ -82,7 +82,12 @@ Option 2, with spike B's dialer:
 - A refused IAM token names the default host (`localhost:5432`) rather than
   the instance in the error line; cosmetic, left as is.
 - Without an ADC file the metadata server gets three seconds before the
-  error reads as Go's "could not find default credentials".
+  error reads as Go's "could not find default credentials". The ADC file is
+  `GOOGLE_APPLICATION_CREDENTIALS`, else gcloud's well-known file:
+  `%APPDATA%\gcloud\application_default_credentials.json` on Windows (even
+  when `HOME` is set), `$HOME/.config/gcloud/...` elsewhere, as Go's
+  `cloud.google.com/go/auth` and google-cloud-auth 1.18.0 both look. pgmi
+  reads the path from its `Env` snapshot; unit tests pin both platforms.
 - `cloud/google-arguments` fails on Rust only by the intended exit code (11,
   Go 1); the case flips when the Rust binary lands.
 
