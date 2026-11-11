@@ -433,7 +433,7 @@ fn deploy_context(
         request: Request {
             project: path,
             connection: Flags {
-                connection,
+                connection: connection.map(Into::into),
                 database,
                 ..Flags::default()
             },

@@ -246,9 +246,10 @@ impl Run {
             .spec
             .iter()
             .flat_map(|s| {
-                [s.password.clone(), s.sslpassword.clone()]
+                [&s.password, &s.sslpassword]
                     .into_iter()
                     .flatten()
+                    .map(|p| p.expose().to_string())
                     .chain(s.token.iter().flat_map(|t| t.secrets()))
             })
             .collect()
@@ -694,7 +695,7 @@ mod tests {
 
     fn spec(db: &str) -> Spec {
         let flags = resolve::Flags {
-            connection: Some(format!("postgresql://u:s3cret-pw@db.example:6543/{db}")),
+            connection: Some(format!("postgresql://u:s3cret-pw@db.example:6543/{db}").into()),
             ..resolve::Flags::default()
         };
         resolve::resolve(&flags, &Env::default(), None).unwrap()
@@ -915,7 +916,7 @@ mod tests {
                 version: Some("18.1".into()),
                 tls: Tls {
                     enabled: true,
-                    sslmode: "verify-full".into(),
+                    sslmode: crate::conn::resolve::SslMode::VerifyFull,
                     version: Some("TLSv1.3".into()),
                 },
             }),

@@ -1,14 +1,16 @@
+use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use super::parse::{self, Fields};
 use crate::config::yaml::Connection as YamlConnection;
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Secret};
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Flags {
-    pub(crate) connection: Option<String>,
+    pub(crate) connection: Option<Secret>,
     pub(crate) host: Option<String>,
     pub(crate) port: Option<String>,
     pub(crate) username: Option<String>,
@@ -43,38 +45,135 @@ impl Source {
         }
     }
 
+    /// Whether the server was named on the command line rather than taken
+    /// from the environment, pgmi.yaml or the defaults.
     pub(crate) fn typed(self) -> bool {
         matches!(self, Source::ConnectionFlag | Source::Flags)
     }
 }
 
+/// A value a connection setting does not accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Unknown;
+
+macro_rules! keywords {
+    ($(#[$meta:meta])* $name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            pub(crate) const fn as_str(self) -> &'static str {
+                match self {
+                    $($name::$variant => $text),+
+                }
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = Unknown;
+
+            fn from_str(s: &str) -> std::result::Result<Self, Unknown> {
+                match s {
+                    $($text => Ok($name::$variant),)+
+                    _ => Err(Unknown),
+                }
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    };
+}
+
+keywords!(SslMode {
+    Disable = "disable",
+    Allow = "allow",
+    Prefer = "prefer",
+    Require = "require",
+    VerifyCa = "verify-ca",
+    VerifyFull = "verify-full",
+});
+
+keywords!(ChannelBinding {
+    Disable = "disable",
+    Prefer = "prefer",
+    Require = "require",
+});
+
+keywords!(TargetSessionAttrs {
+    Any = "any",
+    ReadWrite = "read-write",
+    ReadOnly = "read-only",
+    Primary = "primary",
+    Standby = "standby",
+    PreferStandby = "prefer-standby",
+});
+
+impl SslMode {
+    /// Whether the mode may fall back to, or start with, a plaintext session.
+    pub(crate) fn allows_plaintext(self) -> bool {
+        matches!(self, SslMode::Disable | SslMode::Allow | SslMode::Prefer)
+    }
+}
+
+impl serde::Serialize for SslMode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+/// The servers to try, in order; never empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hosts {
+    first: (String, u16),
+    rest: Vec<(String, u16)>,
+}
+
+impl Hosts {
+    pub(crate) fn first(&self) -> (&str, u16) {
+        (self.first.0.as_str(), self.first.1)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, u16)> {
+        std::iter::once(&self.first)
+            .chain(&self.rest)
+            .map(|(h, p)| (h.as_str(), *p))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Spec {
-    pub(crate) hosts: Vec<(String, u16)>,
+    pub(crate) hosts: Hosts,
     pub(crate) user: String,
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<Secret>,
     pub(crate) passfile: Option<PathBuf>,
     pub(crate) maintenance_db: String,
     pub(crate) target_db: String,
-    pub(crate) sslmode: String,
+    /// The mode asked for; `sslmode()` is the one used.
+    pub(crate) requested_sslmode: Option<SslMode>,
     pub(crate) sslrootcert: Option<String>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
-    pub(crate) sslpassword: Option<String>,
+    pub(crate) sslpassword: Option<Secret>,
     pub(crate) sslnegotiation_direct: bool,
     pub(crate) sslsni: bool,
     pub(crate) sslcertmode_disable: bool,
     pub(crate) tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
-    pub(crate) channel_binding: String,
+    pub(crate) channel_binding: ChannelBinding,
     pub(crate) require_auth: Option<String>,
     pub(crate) application_name: String,
     pub(crate) connect_timeout: Option<Duration>,
     pub(crate) options: Option<String>,
     pub(crate) timezone: Option<String>,
-    pub(crate) target_session_attrs: String,
+    pub(crate) target_session_attrs: TargetSessionAttrs,
     pub(crate) source: Source,
     pub(crate) pg_files: Option<crate::env::PgFiles>,
-    pub(crate) sslmode_set: bool,
     pub(crate) token: Option<crate::conn::cloud::Token>,
 }
 
@@ -123,7 +222,7 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
                 "cannot combine --connection with --sslmode; put sslmode in the connection string",
             ));
         }
-        Some((c.clone(), Source::ConnectionFlag))
+        Some((c.expose().to_string(), Source::ConnectionFlag))
     } else if let Some(c) = env.non_empty("PGMI_CONNECTION_STRING")? {
         Some((c.to_string(), Source::PgmiConnectionString))
     } else {
@@ -146,12 +245,11 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
         string_db = f.remove("dbname").filter(|d| !d.is_empty());
         source = *src;
     } else {
-        let y = yaml.cloned().unwrap_or_default();
         source = if flags.host.is_some() {
             Source::Flags
         } else if env.non_empty("PGHOST")?.is_some() {
             Source::PgHost
-        } else if y.host.is_some() {
+        } else if yaml.is_some_and(|y| y.host.is_some()) {
             Source::Yaml
         } else {
             Source::Defaults
@@ -238,68 +336,31 @@ fn finish(
     .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
     .unwrap_or_else(|| "postgres".into());
 
-    let host_text = f.get("host").cloned().unwrap_or_else(|| "localhost".into());
-    let hosts: Vec<String> = host_text.split(',').map(|h| h.trim().to_string()).collect();
-    let port_text = f.get("port").cloned().unwrap_or_else(|| "5432".into());
-    let ports: Vec<u16> = port_text
-        .split(',')
-        .map(|p| {
-            let p = p.trim();
-            if p.is_empty() {
-                return Ok(5432);
-            }
-            p.parse::<u16>()
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or_else(|| Error::config(format!("invalid port \"{p}\"")))
-        })
-        .collect::<Result<_>>()?;
-    if ports.len() != 1 && ports.len() != hosts.len() {
-        return Err(Error::config(format!(
-            "could not match {} port numbers to {} hosts",
-            ports.len(),
-            hosts.len()
-        )));
-    }
-    let hosts = hosts
-        .into_iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let h = if h.is_empty() {
-                "localhost".to_string()
-            } else {
-                h
-            };
-            (h, if ports.len() == 1 { ports[0] } else { ports[i] })
-        })
-        .collect();
+    let hosts = hosts(
+        f.get("host").map_or("localhost", String::as_str),
+        f.get("port").map_or("5432", String::as_str),
+    )?;
 
     let system_roots = f.get("sslrootcert").map(String::as_str) == Some("system");
-    let sslmode = f.get("sslmode").cloned().unwrap_or_else(|| {
-        if system_roots {
-            "verify-full".into()
-        } else {
-            "prefer".into()
-        }
+    let requested_sslmode = f
+        .get("sslmode")
+        .map(|m| setting::<SslMode>("sslmode", m))
+        .transpose()?;
+    if system_roots && let Some(mode) = requested_sslmode.filter(|m| *m != SslMode::VerifyFull) {
+        return Err(Error::config(format!(
+            "weak sslmode \"{mode}\" may not be used with sslrootcert=system (use \"verify-full\")"
+        )));
+    }
+    let sslmode = requested_sslmode.unwrap_or(if system_roots {
+        SslMode::VerifyFull
+    } else {
+        SslMode::Prefer
     });
-    if !matches!(
-        sslmode.as_str(),
-        "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
-    ) {
-        return Err(Error::config(format!(
-            "invalid sslmode value: \"{sslmode}\""
-        )));
-    }
-    if system_roots && sslmode != "verify-full" {
-        return Err(Error::config(format!(
-            "weak sslmode \"{sslmode}\" may not be used with sslrootcert=system (use \"verify-full\")"
-        )));
-    }
-    let sslnegotiation = f
+    let direct = match f
         .get("sslnegotiation")
         .map(String::as_str)
-        .unwrap_or("postgres");
-    let direct = match sslnegotiation {
+        .unwrap_or("postgres")
+    {
         "postgres" => false,
         "direct" => true,
         o => {
@@ -308,7 +369,7 @@ fn finish(
             )));
         }
     };
-    if direct && matches!(sslmode.as_str(), "disable" | "allow" | "prefer") {
+    if direct && sslmode.allows_plaintext() {
         return Err(Error::config(format!(
             "weak sslmode \"{sslmode}\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"
         )));
@@ -336,25 +397,14 @@ fn finish(
     )?;
     let channel_binding = f
         .get("channel_binding")
-        .cloned()
-        .unwrap_or_else(|| "prefer".into());
-    if !matches!(channel_binding.as_str(), "disable" | "prefer" | "require") {
-        return Err(Error::config(format!(
-            "invalid channel_binding value: \"{channel_binding}\""
-        )));
-    }
-    let tsa = f
+        .map_or(Ok(ChannelBinding::Prefer), |v| {
+            setting("channel_binding", v)
+        })?;
+    let target_session_attrs = f
         .get("target_session_attrs")
-        .cloned()
-        .unwrap_or_else(|| "any".into());
-    if !matches!(
-        tsa.as_str(),
-        "any" | "read-write" | "read-only" | "primary" | "standby" | "prefer-standby"
-    ) {
-        return Err(Error::config(format!(
-            "invalid target_session_attrs value: \"{tsa}\""
-        )));
-    }
+        .map_or(Ok(TargetSessionAttrs::Any), |v| {
+            setting("target_session_attrs", v)
+        })?;
     let connect_timeout = match f.get("connect_timeout") {
         None => None,
         Some(t) => {
@@ -362,7 +412,10 @@ fn finish(
                 .trim()
                 .parse()
                 .map_err(|_| Error::config(format!("invalid connect_timeout \"{t}\"")))?;
-            (n > 0).then(|| Duration::from_secs(n.max(2) as u64))
+            u64::try_from(n)
+                .ok()
+                .filter(|n| *n > 0)
+                .map(|n| Duration::from_secs(n.max(2)))
         }
     };
     let user = match f.get("user") {
@@ -376,15 +429,15 @@ fn finish(
     Ok(Spec {
         hosts,
         user,
-        password: f.get("password").cloned(),
+        password: f.get("password").map(|p| Secret::from(p.as_str())),
         passfile: f.get("passfile").map(PathBuf::from),
         maintenance_db,
         target_db,
-        sslmode,
+        requested_sslmode,
         sslrootcert: f.get("sslrootcert").cloned().filter(|v| !v.is_empty()),
         sslcert: f.get("sslcert").cloned().filter(|v| !v.is_empty()),
         sslkey: f.get("sslkey").cloned().filter(|v| !v.is_empty()),
-        sslpassword: f.get("sslpassword").cloned(),
+        sslpassword: f.get("sslpassword").map(|p| Secret::from(p.as_str())),
         sslnegotiation_direct: direct,
         sslsni,
         sslcertmode_disable,
@@ -399,11 +452,60 @@ fn finish(
         connect_timeout,
         options: f.get("options").cloned().filter(|o| !o.trim().is_empty()),
         timezone: env.non_empty("PGTZ")?.map(str::to_string),
-        target_session_attrs: tsa,
+        target_session_attrs,
         source,
         pg_files: env.pg_files(),
-        sslmode_set: f.contains_key("sslmode"),
         token: None,
+    })
+}
+
+fn setting<T: FromStr<Err = Unknown>>(key: &str, value: &str) -> Result<T> {
+    value
+        .parse()
+        .map_err(|Unknown| Error::config(format!("invalid {key} value: \"{value}\"")))
+}
+
+fn split_list(text: &str) -> (&str, Vec<&str>) {
+    let mut parts = text.split(',').map(str::trim);
+    (parts.next().unwrap_or_default(), parts.collect())
+}
+
+fn hosts(host_text: &str, port_text: &str) -> Result<Hosts> {
+    let port = |p: &str| -> Result<u16> {
+        if p.is_empty() {
+            return Ok(5432);
+        }
+        p.parse::<u16>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Error::config(format!("invalid port \"{p}\"")))
+    };
+    let (first_name, rest_names) = split_list(host_text);
+    let (first_port, rest_ports) = split_list(port_text);
+    let first_port = port(first_port)?;
+    let rest_ports = rest_ports
+        .into_iter()
+        .map(port)
+        .collect::<Result<Vec<_>>>()?;
+    if !rest_ports.is_empty() && rest_ports.len() != rest_names.len() {
+        return Err(Error::config(format!(
+            "could not match {} port numbers to {} hosts",
+            rest_ports.len() + 1,
+            rest_names.len() + 1
+        )));
+    }
+    let host = |name: &str, port: u16| {
+        let name = if name.is_empty() { "localhost" } else { name };
+        (name.to_string(), port)
+    };
+    let rest = rest_names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| host(n, rest_ports.get(i).copied().unwrap_or(first_port)))
+        .collect();
+    Ok(Hosts {
+        first: host(first_name, first_port),
+        rest,
     })
 }
 
@@ -443,143 +545,22 @@ fn tls_versions(
 
 impl Spec {
     pub(crate) fn first(&self) -> (&str, u16) {
-        self.hosts
-            .first()
-            .map(|(h, p)| (h.as_str(), *p))
-            .unwrap_or(("localhost", 5432))
+        self.hosts.first()
+    }
+
+    /// The mode the session uses: the one asked for, else `verify-full` with
+    /// `sslrootcert=system`, else `prefer`.
+    pub(crate) fn sslmode(&self) -> SslMode {
+        self.requested_sslmode
+            .unwrap_or(if self.sslrootcert.as_deref() == Some("system") {
+                SslMode::VerifyFull
+            } else {
+                SslMode::Prefer
+            })
     }
 
     pub(crate) fn describe(&self) -> String {
         let (h, p) = self.first();
         format!("{h}:{p}/{}", self.target_db)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn flags() -> Flags {
-        Flags::default()
-    }
-
-    #[test]
-    fn string_and_target() {
-        let env = Env::from_pairs(&[("PGDATABASE", "fromenv")]);
-        let mut fl = flags();
-        fl.connection = Some("postgresql://u:p@h:6000/postgres".into());
-        let s = resolve(&fl, &env, None).unwrap();
-        assert_eq!(s.target_db, "postgres");
-        fl.database = Some("app".into());
-        let s = resolve(&fl, &env, None).unwrap();
-        assert_eq!(
-            (s.target_db.as_str(), s.maintenance_db.as_str()),
-            ("app", "postgres")
-        );
-        assert_eq!(s.hosts, vec![("h".to_string(), 6000)]);
-        assert_eq!(s.password.as_deref(), Some("p"));
-    }
-
-    #[test]
-    fn refusals() {
-        let env = Env::from_pairs(&[("DATABASE_URL", "postgresql://h/db")]);
-        let mut fl = flags();
-        fl.host = Some("x".into());
-        let e = resolve(&fl, &env, None).unwrap_err();
-        assert!(
-            e.text().contains("cannot combine -h with DATABASE_URL"),
-            "{}",
-            e.text()
-        );
-        let mut fl = flags();
-        fl.connection = Some("postgresql://h/db".into());
-        fl.host = Some("x".into());
-        assert!(
-            resolve(&fl, &Env::default(), None)
-                .unwrap_err()
-                .text()
-                .contains("cannot combine --connection with -h")
-        );
-        let env = Env::from_pairs(&[("PGSERVICE", "x")]);
-        assert!(
-            resolve(&flags(), &env, None)
-                .unwrap_err()
-                .text()
-                .contains("PGSERVICE")
-        );
-    }
-
-    #[test]
-    fn errors_redact_the_password() {
-        let mut fl = flags();
-        fl.database = Some("d".into());
-        fl.connection = Some("host=h password=Sekrit1 sslmode=Sekrit1".into());
-        let e = resolve(&fl, &Env::default(), None).unwrap_err();
-        assert!(!e.text().contains("Sekrit1"), "{}", e.text());
-        fl.connection = Some("host=h".into());
-        let env = Env::from_pairs(&[("PGPASSWORD", "Sekrit2"), ("PGSSLMODE", "Sekrit2")]);
-        let e = resolve(&fl, &env, None).unwrap_err();
-        assert!(!e.text().contains("Sekrit2"), "{}", e.text());
-    }
-
-    #[test]
-    fn tls_keys_are_read_or_refused() {
-        let mut fl = flags();
-        fl.database = Some("d".into());
-        let spec = |fl: &Flags, s: &str| {
-            let mut fl = fl.clone();
-            fl.connection = Some(format!("host=h {s}"));
-            resolve(&fl, &Env::default(), None)
-        };
-        let s = spec(&fl, "").unwrap();
-        assert!(s.sslsni && !s.sslcertmode_disable);
-        assert_eq!(s.tls_versions.len(), 2);
-        let s = spec(
-            &fl,
-            "ssl_min_protocol_version=TLSv1.3 sslsni=0 sslcertmode=disable",
-        )
-        .unwrap();
-        assert_eq!(s.tls_versions, [&rustls::version::TLS13]);
-        assert!(!s.sslsni && s.sslcertmode_disable);
-        let s = spec(&fl, "ssl_max_protocol_version=TLSv1.2").unwrap();
-        assert_eq!(s.tls_versions, [&rustls::version::TLS12]);
-        for bad in [
-            "ssl_max_protocol_version=TLSv1.1",
-            "ssl_min_protocol_version=TLSv1.3 ssl_max_protocol_version=TLSv1.2",
-            "ssl_min_protocol_version=SSLv3",
-            "sslsni=2",
-            "sslcertmode=require",
-            "sslcertmode=sometimes",
-        ] {
-            assert_eq!(spec(&fl, bad).unwrap_err().exit_code(), 10, "{bad}");
-        }
-    }
-
-    #[test]
-    fn system_roots_mean_verify_full() {
-        let mut fl = flags();
-        fl.database = Some("d".into());
-        fl.connection = Some("host=h sslrootcert=system".into());
-        let s = resolve(&fl, &Env::default(), None).unwrap();
-        assert_eq!(s.sslmode, "verify-full");
-        for weak in ["disable", "allow", "prefer", "require", "verify-ca"] {
-            fl.connection = Some(format!("host=h sslrootcert=system sslmode={weak}"));
-            let e = resolve(&fl, &Env::default(), None).unwrap_err();
-            assert_eq!(e.exit_code(), 10, "{weak}");
-            assert!(e.text().contains("sslrootcert=system"), "{}", e.text());
-        }
-        let env = Env::from_pairs(&[("PGSSLROOTCERT", "system"), ("PGSSLMODE", "require")]);
-        fl.connection = Some("host=h".into());
-        assert_eq!(resolve(&fl, &env, None).unwrap_err().exit_code(), 10);
-    }
-
-    #[test]
-    fn ports_per_host() {
-        let env = Env::from_pairs(&[("PGHOST", "a,b"), ("PGPORT", "1,2"), ("PGDATABASE", "d")]);
-        let s = resolve(&flags(), &env, None).unwrap();
-        assert_eq!(s.hosts, vec![("a".into(), 1), ("b".into(), 2)]);
-        assert_eq!(s.source, Source::PgHost);
-        let env = Env::from_pairs(&[("PGHOST", "a,b,c"), ("PGPORT", "1,2"), ("PGDATABASE", "d")]);
-        assert_eq!(resolve(&flags(), &env, None).unwrap_err().exit_code(), 10);
     }
 }

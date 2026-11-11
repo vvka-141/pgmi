@@ -7,9 +7,9 @@ mod http;
 use std::sync::Arc;
 
 use crate::config::yaml::ProjectConfig;
-use crate::conn::resolve::Spec;
+use crate::conn::resolve::{Spec, SslMode};
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Secret};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Provider {
@@ -38,7 +38,7 @@ pub(crate) struct Request {
 
 #[derive(Clone)]
 pub(crate) enum Token {
-    Fixed(Provider, String),
+    Fixed(Provider, Secret),
     Aws(Arc<aws::Signer>),
     Google(Arc<google::Dialer>),
 }
@@ -65,7 +65,7 @@ impl Token {
         user: &str,
     ) -> std::result::Result<String, String> {
         match self {
-            Token::Fixed(_, t) => Ok(t.clone()),
+            Token::Fixed(_, t) => Ok(t.expose().to_string()),
             Token::Aws(s) => s.token(host, port, user),
             Token::Google(d) => Ok(d.password()),
         }
@@ -73,7 +73,7 @@ impl Token {
 
     pub(crate) fn secrets(&self) -> Vec<String> {
         match self {
-            Token::Fixed(_, t) => vec![t.clone()],
+            Token::Fixed(_, t) => vec![t.expose().to_string()],
             Token::Aws(s) => s.minted(),
             Token::Google(d) => vec![d.password()],
         }
@@ -131,22 +131,21 @@ pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &En
         }
         Provider::Azure => {}
     }
-    if !spec.sslmode_set {
-        spec.sslmode = match provider {
-            Provider::Aws if spec.sslrootcert.is_none() => "require".into(),
-            _ => "verify-full".into(),
-        };
-        return Ok(());
-    }
-    if matches!(spec.sslmode.as_str(), "disable" | "allow" | "prefer") {
-        return Err(Error::config(format!(
-            "sslmode \"{}\" from {} is not allowed with {} authentication: it can send the token without TLS; use require, verify-ca or verify-full",
-            spec.sslmode,
+    match spec.requested_sslmode {
+        None => {
+            spec.requested_sslmode = Some(match provider {
+                Provider::Aws if spec.sslrootcert.is_none() => SslMode::Require,
+                _ => SslMode::VerifyFull,
+            });
+            Ok(())
+        }
+        Some(mode) if mode.allows_plaintext() => Err(Error::config(format!(
+            "sslmode \"{mode}\" from {} is not allowed with {} authentication: it can send the token without TLS; use require, verify-ca or verify-full",
             spec.source.label(),
             provider.label()
-        )));
+        ))),
+        Some(_) => Ok(()),
     }
-    Ok(())
 }
 
 pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
@@ -154,7 +153,7 @@ pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Resul
     match provider {
         Provider::Azure => azure::token(req, env)
             .await
-            .map(|t| Token::Fixed(Provider::Azure, t)),
+            .map(|t| Token::Fixed(Provider::Azure, Secret::from(t))),
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
         Provider::Google => google::dialer(req, env)
             .await

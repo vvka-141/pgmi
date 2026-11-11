@@ -3,16 +3,18 @@ use std::time::Duration;
 
 use futures_util::future::poll_fn;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_postgres::config::{ChannelBinding, SslMode, SslNegotiation};
+use tokio_postgres::config::{
+    ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation,
+};
 use tokio_postgres::error::DbError;
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
 use super::pgpass;
-use super::resolve::Spec;
+use super::resolve::{ChannelBinding, Spec, SslMode, TargetSessionAttrs};
 use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
-use crate::output::Notice;
+use crate::output::{Notice, Severity};
 
 pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
@@ -39,10 +41,10 @@ enum Peer {
 }
 
 pub(crate) fn notice_of(db: &DbError) -> Notice {
-    let severity = db
-        .parsed_severity()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| db.severity().to_string());
+    let severity = match db.parsed_severity() {
+        Some(s) => Severity::from(s.to_string().as_str()),
+        None => Severity::from(db.severity()),
+    };
     Notice {
         severity,
         message: db.message().to_string(),
@@ -167,11 +169,11 @@ fn refused_token_text(provider: &str, user: &str, db: &str, message: &str, code:
     )
 }
 
-fn sslmode_of(mode: &str) -> SslMode {
+fn sslmode_of(mode: SslMode) -> PgSslMode {
     match mode {
-        "disable" | "allow" => SslMode::Disable,
-        "prefer" => SslMode::Prefer,
-        _ => SslMode::Require,
+        SslMode::Disable | SslMode::Allow => PgSslMode::Disable,
+        SslMode::Prefer => PgSslMode::Prefer,
+        SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull => PgSslMode::Require,
     }
 }
 
@@ -181,7 +183,7 @@ struct Attempt<'a> {
     name: &'a str,
     host: &'a str,
     port: u16,
-    tls_mode: &'a str,
+    tls_mode: SslMode,
     notices: NoticeSink,
     log: LogSink,
 }
@@ -205,7 +207,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         .map(|t| t.password(a.name, a.port, &spec.user))
         .transpose()
         .map_err(Failure::Fatal)?;
-    let password = match token.or_else(|| spec.password.clone()) {
+    let password = match token.or_else(|| spec.password.as_ref().map(|p| p.expose().to_string())) {
         Some(p) => Some(p),
         None => match &passfile {
             Some(path) => {
@@ -228,19 +230,19 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     if !options.trim().is_empty() {
         config.options(options.trim());
     }
-    let mode = if unix { "disable" } else { a.tls_mode };
+    let mode = if unix { SslMode::Disable } else { a.tls_mode };
     config.ssl_mode(sslmode_of(mode));
     if spec.sslnegotiation_direct && !unix {
         config.ssl_negotiation(SslNegotiation::Direct);
     }
-    config.channel_binding(match spec.channel_binding.as_str() {
-        "require" => ChannelBinding::Require,
-        "disable" => ChannelBinding::Disable,
-        _ => ChannelBinding::Prefer,
+    config.channel_binding(match spec.channel_binding {
+        ChannelBinding::Require => PgChannelBinding::Require,
+        ChannelBinding::Disable => PgChannelBinding::Disable,
+        ChannelBinding::Prefer => PgChannelBinding::Prefer,
     });
     let shared = tap::Shared::new(spec.require_auth.as_deref()).map_err(Failure::Config)?;
     let start = match sslmode_of(mode) {
-        SslMode::Disable => Start::Plain,
+        PgSslMode::Disable => Start::Plain,
         _ if spec.sslnegotiation_direct => Start::Direct,
         _ => Start::Negotiated,
     };
@@ -248,7 +250,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "~/.pgpass".into());
-    let tls_config = if matches!(sslmode_of(mode), SslMode::Disable) {
+    let tls_config = if matches!(sslmode_of(mode), PgSslMode::Disable) {
         None
     } else {
         Some(tls::config(spec).map_err(|e| Failure::Config(e.text()))?)
@@ -364,8 +366,8 @@ async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, St
     Ok(out)
 }
 
-async fn matches_attrs(c: &Client, attrs: &str) -> std::result::Result<bool, String> {
-    if attrs == "any" {
+async fn matches_attrs(c: &Client, attrs: TargetSessionAttrs) -> std::result::Result<bool, String> {
+    if attrs == TargetSessionAttrs::Any {
         return Ok(true);
     }
     let rows = c
@@ -380,11 +382,11 @@ async fn matches_attrs(c: &Client, attrs: &str) -> std::result::Result<bool, Str
     let read_only = row.get(0) == Some("on");
     let recovery = row.get(1) == Some("true");
     Ok(match attrs {
-        "read-write" => !read_only,
-        "read-only" => read_only,
-        "primary" => !recovery,
-        "standby" | "prefer-standby" => recovery,
-        _ => false,
+        TargetSessionAttrs::Any => true,
+        TargetSessionAttrs::ReadWrite => !read_only,
+        TargetSessionAttrs::ReadOnly => read_only,
+        TargetSessionAttrs::Primary => !recovery,
+        TargetSessionAttrs::Standby | TargetSessionAttrs::PreferStandby => recovery,
     })
 }
 
@@ -395,7 +397,7 @@ pub(crate) struct Dialer {
 
 impl Dialer {
     pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
-        if spec.sslmode != "disable" {
+        if spec.sslmode() != SslMode::Disable {
             super::tls::require_cpu()?;
         }
         let delays = [100u64, 200, 400];
@@ -424,11 +426,11 @@ impl Dialer {
         spec: &Spec,
         db: &str,
     ) -> std::result::Result<Session, (Error, bool)> {
-        let attrs = spec.target_session_attrs.as_str();
-        let passes: Vec<&str> = if attrs == "prefer-standby" {
-            vec!["standby", "any"]
-        } else {
-            vec![attrs]
+        let passes = match spec.target_session_attrs {
+            TargetSessionAttrs::PreferStandby => {
+                vec![TargetSessionAttrs::Standby, TargetSessionAttrs::Any]
+            }
+            attrs => vec![attrs],
         };
         let mut errors: Vec<String> = Vec::new();
         let mut codes: Vec<String> = Vec::new();
@@ -436,11 +438,11 @@ impl Dialer {
         let hint_tls =
             |s: &str| s.contains("x509") || s.contains("TLS") || s.contains("certificate");
         for want in passes {
-            for (host, port) in &spec.hosts {
+            for (host, port) in spec.hosts.iter() {
                 let resolved = if spec.token.as_ref().and_then(|t| t.google()).is_some() {
-                    Ok(vec![host.clone()])
+                    Ok(vec![host.to_string()])
                 } else {
-                    addresses(host, *port).await
+                    addresses(host, port).await
                 };
                 let addrs = match resolved {
                     Ok(a) => a,
@@ -456,9 +458,9 @@ impl Dialer {
                     } else {
                         format!("{host} ({addr}):{port}")
                     };
-                    let mut modes = vec![spec.sslmode.as_str()];
-                    if spec.sslmode == "allow" {
-                        modes.push("require");
+                    let mut modes = vec![spec.sslmode()];
+                    if spec.sslmode() == SslMode::Allow {
+                        modes.push(SslMode::Require);
                     }
                     let mut outcome = None;
                     for mode in modes {
@@ -467,14 +469,14 @@ impl Dialer {
                             db,
                             name: host,
                             host: &addr,
-                            port: *port,
+                            port,
                             tls_mode: mode,
                             notices: self.notices.clone(),
                             log: self.log.clone(),
                         })
                         .await;
                         match r {
-                            Err(Failure::Refused(t)) if mode == "allow" => {
+                            Err(Failure::Refused(t)) if mode == SslMode::Allow => {
                                 outcome = Some(Err(Failure::Refused(t)));
                             }
                             other => {

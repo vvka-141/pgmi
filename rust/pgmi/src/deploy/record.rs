@@ -80,7 +80,7 @@ struct Target {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Tls {
     pub(crate) enabled: bool,
-    pub(crate) sslmode: String,
+    pub(crate) sslmode: crate::conn::resolve::SslMode,
     pub(crate) version: Option<String>,
 }
 

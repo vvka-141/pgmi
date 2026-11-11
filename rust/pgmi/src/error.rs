@@ -148,6 +148,43 @@ impl std::error::Error for Error {}
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
+/// A password, token or connection string. `Debug` shows `[redacted]`;
+/// there is no `Display`, so the value reaches text only through `expose`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct Secret(String);
+
+impl Secret {
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Secret(s)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Secret(s.to_string())
+    }
+}
+
+impl std::str::FromStr for Secret {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Secret(s.to_string()))
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
 /// Replaces every secret of three or more bytes in `text` with `***`.
 pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();

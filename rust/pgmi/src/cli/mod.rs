@@ -8,7 +8,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::conn::cloud::{self, Provider};
 use crate::conn::resolve::Flags;
-use crate::error::Kind;
+use crate::error::{Kind, Secret};
 pub(crate) use commands::*;
 
 #[derive(Debug, Parser)]
@@ -96,7 +96,7 @@ pub(crate) struct InitArgs {
 pub(crate) struct DeployArgs {
     pub(crate) project: PathBuf,
     #[arg(long)]
-    pub(crate) connection: Option<String>,
+    pub(crate) connection: Option<Secret>,
     #[arg(short = 'h', long)]
     pub(crate) host: Option<String>,
     #[arg(short = 'p', long)]
@@ -259,6 +259,29 @@ mod tests {
         assert!(Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).is_err());
     }
 
+    #[test]
+    fn deploy_args_never_format_the_connection_string() {
+        let cli = Cli::try_parse_from([
+            "pgmi",
+            "deploy",
+            ".",
+            "--connection",
+            "postgresql://deployer:pw-must-not-appear@db.internal/app",
+        ])
+        .unwrap();
+        let Some(Command::Deploy(d)) = cli.command else {
+            panic!()
+        };
+        for text in [format!("{d:?}"), format!("{d:#?}")] {
+            assert!(!text.contains("pw-must-not-appear"), "{text}");
+            assert!(text.contains("[redacted]"), "{text}");
+        }
+        assert_eq!(
+            d.connection.as_ref().map(|c| c.expose()),
+            Some("postgresql://deployer:pw-must-not-appear@db.internal/app")
+        );
+    }
+
     fn request(args: &[&str]) -> crate::deploy::Request {
         let cli = Cli::try_parse_from(["pgmi", "deploy"].iter().chain(args)).unwrap();
         let Some(Command::Deploy(d)) = cli.command else {
@@ -311,8 +334,11 @@ mod tests {
         assert_eq!(r.project, std::path::Path::new("proj"));
         let c = &r.connection;
         assert_eq!(
+            c.connection.as_ref().map(Secret::expose),
+            Some("postgres://x")
+        );
+        assert_eq!(
             [
-                &c.connection,
                 &c.host,
                 &c.port,
                 &c.username,
@@ -324,7 +350,6 @@ mod tests {
             ]
             .map(|v| v.as_deref()),
             [
-                Some("postgres://x"),
                 Some("h"),
                 Some("6000"),
                 Some("u"),

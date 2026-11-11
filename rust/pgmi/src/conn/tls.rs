@@ -18,8 +18,8 @@ use sha2::Digest;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
 
-use super::resolve::Spec;
-use crate::error::{Error, Result};
+use super::resolve::{Spec, SslMode};
+use crate::error::{Error, Result, Secret};
 
 pub(crate) fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls_graviola::default_provider())
@@ -257,12 +257,11 @@ fn existing(p: PathBuf) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-pub(crate) fn effective_mode(spec: &Spec) -> String {
-    let mut mode = spec.sslmode.clone();
-    if mode == "require" && root_path(spec).is_some() {
-        mode = "verify-ca".into();
+pub(crate) fn effective_mode(spec: &Spec) -> SslMode {
+    match spec.sslmode() {
+        SslMode::Require if root_path(spec).is_some() => SslMode::VerifyCa,
+        mode => mode,
     }
-    mode
 }
 
 fn root_path(spec: &Spec) -> Option<String> {
@@ -327,7 +326,7 @@ fn check_key_mode(_: &Path) -> Result<()> {
 pub(crate) fn config(spec: &Spec) -> Result<Tls> {
     let provider = provider();
     let mode = effective_mode(spec);
-    let verify = matches!(mode.as_str(), "verify-ca" | "verify-full");
+    let verify = matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull);
     let chain = if verify {
         let mut roots = RootCertStore::empty();
         match root_path(spec).as_deref() {
@@ -359,7 +358,7 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
     };
     let verifier = Verifier::new(
         chain,
-        if mode == "verify-full" {
+        if mode == SslMode::VerifyFull {
             Names::Check
         } else {
             Names::Ignore
@@ -374,7 +373,7 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
         Some((cert, key)) => builder
             .with_client_auth_cert(
                 read_certs(&cert)?,
-                read_key(&key, spec.sslpassword.as_deref())?,
+                read_key(&key, spec.sslpassword.as_ref().map(Secret::expose))?,
             )
             .map_err(|e| Error::config(format!("client certificate: {e}")))?,
         None => builder.with_no_client_auth(),
@@ -546,7 +545,7 @@ mod tests {
             pairs.push(("HOME", h.as_str()));
         }
         let flags = super::super::resolve::Flags {
-            connection: Some(format!("host=h dbname=d {s}")),
+            connection: Some(format!("host=h dbname=d {s}").into()),
             ..Default::default()
         };
         super::super::resolve::resolve(&flags, &crate::env::Env::from_pairs(&pairs), None).unwrap()

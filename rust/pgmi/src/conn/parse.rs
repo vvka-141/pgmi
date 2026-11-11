@@ -337,6 +337,206 @@ mod tests {
         }
     }
 
+    fn fields(s: &str) -> Vec<(String, String)> {
+        parse(s)
+            .unwrap_or_else(|e| panic!("{s}: {}", e.text()))
+            .into_iter()
+            .collect()
+    }
+
+    fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut v: Vec<_> = p
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn ado_net_forms() {
+        for (input, want) in [
+            (
+                "Host=localhost;Port=6000;Database=postgres;Username=postgres;Password=postgres",
+                &[
+                    ("host", "localhost"),
+                    ("port", "6000"),
+                    ("dbname", "postgres"),
+                    ("user", "postgres"),
+                    ("password", "postgres"),
+                ][..],
+            ),
+            (
+                "Server=localhost;Port=5432;Database=mydb;User Id=user;Pwd=pass",
+                &[
+                    ("host", "localhost"),
+                    ("port", "5432"),
+                    ("dbname", "mydb"),
+                    ("user", "user"),
+                    ("password", "pass"),
+                ],
+            ),
+            (
+                "Host=localhost;Database=mydb;Username=user;SSL Mode=require",
+                &[
+                    ("host", "localhost"),
+                    ("dbname", "mydb"),
+                    ("user", "user"),
+                    ("sslmode", "require"),
+                ],
+            ),
+            (
+                "Host = localhost ; Port = 5432 ; Database = mydb ; Username = user",
+                &[
+                    ("host", "localhost"),
+                    ("port", "5432"),
+                    ("dbname", "mydb"),
+                    ("user", "user"),
+                ],
+            ),
+            (
+                "Host=localhost;Database=mydb;Username=user;sslcert=/path/client.crt;sslkey=/path/client.key;sslrootcert=/path/ca.crt;sslpassword=keypass",
+                &[
+                    ("host", "localhost"),
+                    ("dbname", "mydb"),
+                    ("user", "user"),
+                    ("sslcert", "/path/client.crt"),
+                    ("sslkey", "/path/client.key"),
+                    ("sslrootcert", "/path/ca.crt"),
+                    ("sslpassword", "keypass"),
+                ],
+            ),
+            (
+                "Host=localhost;Database=mydb;SSL Cert=/path/client.crt;SSL Key=/path/client.key;SSL Root Cert=/path/ca.crt;SSL Password=keypass",
+                &[
+                    ("host", "localhost"),
+                    ("dbname", "mydb"),
+                    ("sslcert", "/path/client.crt"),
+                    ("sslkey", "/path/client.key"),
+                    ("sslrootcert", "/path/ca.crt"),
+                    ("sslpassword", "keypass"),
+                ],
+            ),
+            (
+                "Password=it's;Host=db;Database=app",
+                &[("password", "it's"), ("host", "db"), ("dbname", "app")],
+            ),
+        ] {
+            assert_eq!(fields(input), pairs(want), "{input}");
+        }
+    }
+
+    #[test]
+    fn npgsql_ssl_mode_spellings() {
+        for (given, want) in [
+            ("Require", "require"),
+            ("VerifyFull", "verify-full"),
+            ("VerifyCA", "verify-ca"),
+            ("Disable", "disable"),
+            ("verify-full", "verify-full"),
+        ] {
+            let f = parse(&format!("Host=h;Database=d;SSL Mode={given}")).unwrap();
+            assert_eq!(f["sslmode"], want, "{given}");
+        }
+        assert_eq!(
+            parse("Host=h;SSL Mode=Sometimes").unwrap_err().text(),
+            "invalid SSL Mode \"Sometimes\""
+        );
+        for key in ["Pooling", "Trust Server Certificate"] {
+            let e = parse(&format!("Host=h;Database=d;{key}=true")).unwrap_err();
+            assert_eq!(e.exit_code(), 10);
+            assert_eq!(e.text(), format!("invalid connection option \"{key}\""));
+        }
+    }
+
+    #[test]
+    fn keyword_value_form() {
+        assert_eq!(
+            fields("host=db1 port=6000 dbname=app user=me password=secret sslmode=require"),
+            pairs(&[
+                ("host", "db1"),
+                ("port", "6000"),
+                ("dbname", "app"),
+                ("user", "me"),
+                ("password", "secret"),
+                ("sslmode", "require"),
+            ])
+        );
+        assert_eq!(
+            fields(r"host=db1 password='a b\'c=d' dbname=app"),
+            pairs(&[("host", "db1"), ("password", "a b'c=d"), ("dbname", "app")])
+        );
+        assert_eq!(
+            fields("host=db1,db2 port=5432,6000 dbname=app")[1],
+            ("host".to_string(), "db1,db2".to_string())
+        );
+        for bad in ["host=db1 dbname", "host=db1 password='unterminated"] {
+            assert_eq!(parse(bad).unwrap_err().exit_code(), 10, "{bad}");
+        }
+        assert!(parse("host=db hostaddr=10.0.0.1 dbname=app").is_err());
+    }
+
+    #[test]
+    fn keyword_value_refuses_an_unknown_key_by_name() {
+        for (input, key) in [
+            ("host=db bogus=1", "bogus"),
+            ("host=db Password=x", "Password"),
+            ("host=db dbanme=app", "dbanme"),
+        ] {
+            assert_eq!(
+                parse(input).unwrap_err().text(),
+                format!("invalid connection option \"{key}\"")
+            );
+        }
+    }
+
+    #[test]
+    fn keyword_value_passes_libpq_keywords() {
+        let f = parse("host=a,b target_session_attrs=read-write options='-c search_path=app' gssencmode=disable channel_binding=require keepalives_idle=30").unwrap();
+        for (k, v) in [
+            ("target_session_attrs", "read-write"),
+            ("options", "-c search_path=app"),
+            ("gssencmode", "disable"),
+            ("channel_binding", "require"),
+            ("keepalives_idle", "30"),
+            ("host", "a,b"),
+        ] {
+            assert_eq!(f[k], v, "{k}");
+        }
+    }
+
+    #[test]
+    fn keyword_value_accepts_pgx_exec_options() {
+        let f = parse(
+            "host=db default_query_exec_mode=exec statement_cache_capacity=0 description_cache_capacity=0",
+        )
+        .unwrap();
+        for (k, v) in [
+            ("default_query_exec_mode", "exec"),
+            ("statement_cache_capacity", "0"),
+            ("description_cache_capacity", "0"),
+        ] {
+            assert_eq!(f[k], v, "{k}");
+            assert!(KNOWN.contains(&k), "{k}");
+        }
+    }
+
+    #[test]
+    fn a_bad_port_is_refused() {
+        for bad in [
+            "postgresql://localhost:abc/mydb",
+            "Host=localhost;Port=abc;Database=mydb",
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(
+                e.text().starts_with("invalid port in connection string"),
+                "{bad}: {}",
+                e.text()
+            );
+        }
+        assert!(parse("").is_err());
+    }
+
     #[test]
     fn errors_never_echo_the_input() {
         for (input, secret) in [

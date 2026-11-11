@@ -239,6 +239,27 @@ land before or between steps, each with a black-box case.
 9. **Types and secrets.** Enums for connection settings and severity;
    `Secret`; non-empty hosts; port resolver group 5 and
    `FormattingNeverPrintsSecrets`.
+   Done 2026-11-11: `SslMode`, `ChannelBinding` and `TargetSessionAttrs`
+   (`FromStr`, `Display`) live in `conn::resolve`; `Spec` keeps the mode
+   asked for as `requested_sslmode: Option<SslMode>` and `Spec::sslmode()`
+   derives the one used, so `cloud::check` fills the `None` instead of
+   flipping a flag. `output::Severity` keeps any word it does not know as
+   `Other`. `error::Secret` (redacting `Debug`, no `Display`) holds
+   `password`, `sslpassword`, the Azure token, the wizard's password and
+   `--connection` in `Flags`/`DeployArgs`. `Spec::hosts` is `Hosts`, a
+   first host plus the rest, with no `localhost:5432` fallback.
+   `conn/resolve_tests.rs` ports resolver group 5 (without `EnvOverrides`:
+   Rust has no override notes) and `FormattingNeverPrintsSecrets`;
+   `conn::parse` tests port group 6. Not ported, because Rust behaves
+   differently from Go and changing that is not a refactor: ADO.NET quoted
+   values (`Password='p;a=ss'`, `"a""b;c"`) are split at `;`;
+   `Host=h:6000;Port=5999` takes 5999 where Go keeps the host's port;
+   a keyword/value string with a space before `=` or a `;` inside a
+   quoted value is read as ADO.NET; `PGPORT=" 5432 "` is accepted (libpq
+   does too, Go refuses); the token-auth refusal names the server's source
+   (`flags`, `--connection`), not the sslmode's (`--sslmode`,
+   `$PGSSLMODE`); two granular flags beside an environment string name
+   only the first.
 10. **Typed module errors and `conn::retry`.** Port groups 6 and 7.
 11. **One runtime.** `lib::run` owns it; `deploy::run`, `serve::run`,
     `tui::connection::run` take a handle.

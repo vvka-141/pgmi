@@ -7,10 +7,48 @@ use serde_json::{Map, Value, json};
 
 use crate::env::Env;
 
+/// The severity of a server message; `Other` keeps a name pgmi does not
+/// treat specially (`ERROR`, a localized word) as the server sent it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Severity {
+    Debug,
+    Log,
+    Info,
+    Notice,
+    Warning,
+    Other(String),
+}
+
+impl Severity {
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Severity::Debug => "DEBUG",
+            Severity::Log => "LOG",
+            Severity::Info => "INFO",
+            Severity::Notice => "NOTICE",
+            Severity::Warning => "WARNING",
+            Severity::Other(s) => s,
+        }
+    }
+}
+
+impl From<&str> for Severity {
+    fn from(s: &str) -> Self {
+        match s {
+            "DEBUG" => Severity::Debug,
+            "LOG" => Severity::Log,
+            "INFO" => Severity::Info,
+            "NOTICE" => Severity::Notice,
+            "WARNING" => Severity::Warning,
+            other => Severity::Other(other.to_string()),
+        }
+    }
+}
+
 /// A server message: NOTICE, WARNING, DEBUG and the like.
 #[derive(Debug, Clone)]
 pub(crate) struct Notice {
-    pub(crate) severity: String,
+    pub(crate) severity: Severity,
     pub(crate) message: String,
     pub(crate) detail: Option<String>,
     pub(crate) hint: Option<String>,
@@ -69,14 +107,11 @@ impl Reporter {
     }
 
     pub(crate) fn notice(&self, n: &Notice) {
-        match n.severity.as_str() {
-            "LOG" => return,
-            "DEBUG" if !self.verbose => return,
-            _ => {}
-        }
-        let mut text = match n.severity.as_str() {
-            "NOTICE" | "INFO" | "DEBUG" => n.message.clone(),
-            s => format!("{s}:  {}", n.message),
+        let mut text = match &n.severity {
+            Severity::Log => return,
+            Severity::Debug if !self.verbose => return,
+            Severity::Notice | Severity::Info | Severity::Debug => n.message.clone(),
+            s => format!("{}:  {}", s.as_str(), n.message),
         };
         if let Some(d) = &n.detail {
             text.push_str(&format!("\nDETAIL:  {d}"));
@@ -116,15 +151,15 @@ const TAIL: usize = 150;
 
 impl NoticeLog {
     pub(crate) fn push(&mut self, n: &Notice) {
-        if n.severity == "LOG" {
+        if n.severity == Severity::Log {
             return;
         }
         self.total += 1;
-        if n.severity == "WARNING" {
+        if n.severity == Severity::Warning {
             self.warning_total += 1;
         }
         let mut v = Map::new();
-        v.insert("severity".into(), json!(n.severity));
+        v.insert("severity".into(), json!(n.severity.as_str()));
         v.insert("message".into(), json!(n.message));
         if let Some(d) = &n.detail {
             v.insert("detail".into(), json!(d));
@@ -213,7 +248,7 @@ mod tests {
 
     fn notice(sev: &str, detail: Option<&str>, hint: Option<&str>) -> Notice {
         Notice {
-            severity: sev.into(),
+            severity: Severity::from(sev),
             message: "msg".into(),
             detail: detail.map(str::to_string),
             hint: hint.map(str::to_string),
@@ -275,7 +310,7 @@ mod tests {
 
     fn n(sev: &str, i: usize) -> Notice {
         Notice {
-            severity: sev.into(),
+            severity: Severity::from(sev),
             message: format!("m{i}"),
             detail: None,
             hint: None,
@@ -291,6 +326,26 @@ mod tests {
         let (v, dropped) = log.finish();
         assert_eq!(v.as_array().map(Vec::len), Some(HEAD + WARNINGS + TAIL));
         assert_eq!(dropped, Some(1000 - (HEAD + WARNINGS + TAIL) as u64));
+    }
+
+    #[test]
+    fn severities_keep_the_servers_word() {
+        for word in [
+            "DEBUG", "LOG", "INFO", "NOTICE", "WARNING", "ERROR", "AVISO",
+        ] {
+            assert_eq!(Severity::from(word).as_str(), word);
+        }
+        assert_eq!(Severity::from("WARNING"), Severity::Warning);
+        assert_eq!(Severity::from("debug"), Severity::Other("debug".into()));
+        let (r, out) = Captured::reporter(false, false, false);
+        r.notice(&notice("AVISO", None, None));
+        assert_eq!(out.text(), "AVISO:  msg\n");
+        let mut log = NoticeLog::default();
+        log.push(&notice("AVISO", None, None));
+        log.push(&notice("LOG", None, None));
+        log.push(&notice("WARNING", None, None));
+        assert_eq!((log.total, log.warning_total), (2, 1));
+        assert_eq!(log.finish().0[0]["severity"], "AVISO");
     }
 
     #[test]

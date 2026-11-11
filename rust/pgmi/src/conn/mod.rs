@@ -4,5 +4,7 @@ mod keys;
 pub(crate) mod parse;
 pub(crate) mod pgpass;
 pub(crate) mod resolve;
+#[cfg(test)]
+mod resolve_tests;
 pub mod tap;
 pub(crate) mod tls;

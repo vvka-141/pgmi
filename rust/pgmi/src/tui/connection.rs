@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::select::{ACCENT, FAINT, MUTED, Outcome, Select};
 use crate::config::yaml::Connection;
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Result, Secret};
 
 const TITLE: &str = "pgmi - Connection Setup";
 const MAINTENANCE: &str = "postgres";
@@ -97,7 +97,7 @@ pub(crate) struct Settings {
     pub(crate) database: String,
     pub(crate) maintenance: String,
     pub(crate) username: String,
-    pub(crate) password: String,
+    pub(crate) password: Secret,
     pub(crate) sslmode: String,
     pub(crate) sslcert: String,
     pub(crate) sslkey: String,
@@ -157,11 +157,11 @@ impl Settings {
             format!("user={}", quote(&self.username)),
         ];
         for (k, v) in [
-            ("password", &self.password),
-            ("sslmode", &self.sslmode),
-            ("sslcert", &self.sslcert),
-            ("sslkey", &self.sslkey),
-            ("sslrootcert", &self.sslrootcert),
+            ("password", self.password.expose()),
+            ("sslmode", self.sslmode.as_str()),
+            ("sslcert", self.sslcert.as_str()),
+            ("sslkey", self.sslkey.as_str()),
+            ("sslrootcert", self.sslrootcert.as_str()),
         ] {
             if !v.is_empty() {
                 parts.push(format!("{k}={}", quote(v)));
@@ -426,7 +426,7 @@ impl Form {
                     database: self.value(2),
                     maintenance: or(self.value(3), MAINTENANCE),
                     username: or(self.value(4), "postgres"),
-                    password: self.value(5),
+                    password: self.value(5).into(),
                     sslmode: "prefer".into(),
                     ..Settings::default()
                 }
@@ -488,7 +488,7 @@ impl Form {
                     database: get("dbname"),
                     maintenance: MAINTENANCE.into(),
                     username: get("user"),
-                    password: get("password"),
+                    password: get("password").into(),
                     sslmode: get("sslmode"),
                     sslcert: get("sslcert"),
                     sslkey: get("sslkey"),
@@ -843,7 +843,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         ));
     }
     let flags = crate::conn::resolve::Flags {
-        connection: Some(s.keyword_string()),
+        connection: Some(s.keyword_string().into()),
         ..Default::default()
     };
     let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(|e| e.text())?;
@@ -1046,7 +1046,7 @@ mod tests {
             ),
             ("db.example", 6000, "app", "u")
         );
-        assert_eq!(s.password, "s:cret");
+        assert_eq!(s.password.expose(), "s:cret");
         assert_eq!(s.sslmode, "require");
     }
 

@@ -75,7 +75,7 @@ pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
 }
 
 pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
-    if s.password.is_empty() {
+    if s.password.expose().is_empty() {
         return;
     }
     stderr("\n");
@@ -99,7 +99,14 @@ pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
     if s.maintenance != s.database {
         dbs.push(s.maintenance.as_str());
     }
-    match crate::conn::pgpass::save(&path, &s.host, s.port, &dbs, &s.username, &s.password) {
+    match crate::conn::pgpass::save(
+        &path,
+        &s.host,
+        s.port,
+        &dbs,
+        &s.username,
+        s.password.expose(),
+    ) {
         Ok(()) => stderr(&format!("Saved to {}\n", path.display())),
         Err(e) => stderr(&format!(
             "WARNING: failed to save .pgpass: {}\nTip: provide password via $PGPASSWORD or connection string.\n",
