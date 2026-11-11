@@ -210,13 +210,11 @@ impl Run {
             .spec
             .iter()
             .flat_map(|s| {
-                [
-                    s.password.clone(),
-                    s.sslpassword.clone(),
-                    s.token.as_ref().and_then(|t| t.fixed().map(str::to_string)),
-                ]
+                [s.password.clone(), s.sslpassword.clone()]
+                    .into_iter()
+                    .flatten()
+                    .chain(s.token.iter().flat_map(|t| t.secrets()))
             })
-            .flatten()
             .collect()
     }
 
@@ -267,6 +265,8 @@ pub fn run(ctx: Context) -> u8 {
     runtime.shutdown_timeout(Duration::from_millis(100));
     finish(&ctx, &run, result, &reporter)
 }
+
+const CLEANUP: Duration = Duration::from_secs(3);
 
 fn deadline(timeout: Duration) -> TokioInstant {
     let now = TokioInstant::now();
@@ -480,7 +480,7 @@ async fn deploy(
         .await
     {
         Ok(s) => s,
-        Err(e) if e.text().contains("SQLSTATE 3D000") => {
+        Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {
             let maintenance = guard
                 .connecting(dialer.connect(&spec, &spec.maintenance_db))
                 .await?;
@@ -540,13 +540,18 @@ async fn deploy(
         state: st,
     })
     .await;
-    if session.tap.status() != crate::conn::tap::IDLE {
-        let _ = session.client.batch_execute("ROLLBACK").await;
+    let cleanup = async {
+        if session.tap.status() != crate::conn::tap::IDLE {
+            session.client.batch_execute("ROLLBACK").await?;
+        }
+        session
+            .client
+            .batch_execute("SELECT pg_advisory_unlock_all()")
+            .await
+    };
+    if !matches!(tokio::time::timeout(CLEANUP, cleanup).await, Ok(Ok(()))) {
+        session.disconnect();
     }
-    let _ = session
-        .client
-        .batch_execute("SELECT pg_advisory_unlock_all()")
-        .await;
     outcome
 }
 

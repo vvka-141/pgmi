@@ -72,10 +72,11 @@ impl Token {
         }
     }
 
-    pub fn fixed(&self) -> Option<&str> {
+    pub fn secrets(&self) -> Vec<String> {
         match self {
-            Token::Fixed(_, t) => Some(t),
-            _ => None,
+            Token::Fixed(_, t) => vec![t.clone()],
+            Token::Aws(s) => s.minted(),
+            Token::Google(d) => vec![d.password()],
         }
     }
 

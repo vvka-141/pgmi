@@ -31,11 +31,18 @@ pub type LogSink = Arc<dyn Fn(String) + Send + Sync>;
 pub struct Session {
     pub client: Client,
     pub tap: Arc<tap::Shared>,
-    pub host: String,
-    pub port: u16,
     pub tls_version: Option<String>,
     cancel: CancelToken,
     tls: Option<Connect>,
+    peer: Peer,
+    connection: tokio::task::AbortHandle,
+}
+
+#[derive(Clone)]
+enum Peer {
+    Tcp(std::net::SocketAddr),
+    Socket(String),
+    Google(crate::cloud::Token),
 }
 
 pub fn notice_of(db: &DbError) -> Notice {
@@ -51,24 +58,39 @@ pub fn notice_of(db: &DbError) -> Notice {
     }
 }
 
-async fn open(host: &str, port: u16) -> std::io::Result<Stream> {
+async fn open(host: &str, port: u16) -> std::io::Result<(Stream, Peer)> {
     if host.starts_with('/') {
-        #[cfg(unix)]
-        {
-            let path = format!("{host}/.s.PGSQL.{port}");
-            return Ok(Box::new(tokio::net::UnixStream::connect(path).await?));
-        }
-        #[cfg(not(unix))]
-        return Err(std::io::Error::other("Unix sockets are not supported here"));
+        let path = format!("{host}/.s.PGSQL.{port}");
+        return Ok((dial(&Peer::Socket(path.clone())).await?, Peer::Socket(path)));
     }
     let stream = tokio::net::TcpStream::connect((host, port)).await?;
     let _ = stream.set_nodelay(true);
-    Ok(Box::new(stream))
+    let peer = Peer::Tcp(stream.peer_addr()?);
+    Ok((Box::new(stream), peer))
+}
+
+async fn dial(peer: &Peer) -> std::io::Result<Stream> {
+    match peer {
+        Peer::Tcp(addr) => {
+            let stream = tokio::net::TcpStream::connect(addr).await?;
+            let _ = stream.set_nodelay(true);
+            Ok(Box::new(stream))
+        }
+        #[cfg(unix)]
+        Peer::Socket(path) => Ok(Box::new(tokio::net::UnixStream::connect(path).await?)),
+        #[cfg(not(unix))]
+        Peer::Socket(_) => Err(std::io::Error::other("Unix sockets are not supported here")),
+        Peer::Google(token) => match token.google() {
+            Some(g) => Ok(Box::new(g.dial().await?)),
+            None => Err(std::io::Error::other("no Cloud SQL dialer")),
+        },
+    }
 }
 
 enum Failure {
     Transient(String),
     Fatal(String),
+    Server(String, String),
     Config(String),
     Refused(String),
 }
@@ -99,7 +121,7 @@ fn chain(e: &(dyn std::error::Error + 'static)) -> String {
     parts.join(": ")
 }
 
-fn classify_pg(e: &tokio_postgres::Error, host: &str, spec: &Spec, passfile: &str) -> Failure {
+fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure {
     if let Some(db) = e.as_db_error() {
         let code = db.code().code();
         let text = format!("{} (SQLSTATE {code})", db.message());
@@ -109,7 +131,7 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, spec: &Spec, passfile: &st
         if code == "28000" {
             return Failure::Refused(text);
         }
-        return Failure::Fatal(text);
+        return Failure::Server(text, code.to_string());
     }
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(c) = cur {
@@ -128,7 +150,6 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, spec: &Spec, passfile: &st
     }
     let text = chain(e);
     if text.contains("password missing") {
-        let _ = spec;
         return Failure::Fatal(format!(
             "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
         ));
@@ -243,11 +264,14 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     };
     let version = Arc::new(Mutex::new(None));
     let run = async {
-        let opened: std::io::Result<Stream> = match &google {
-            Some(g) => g.dial().await.map(|s| Box::new(s) as Stream),
-            None => open(a.host, a.port).await,
+        let opened = match &spec.token {
+            Some(token) if google.is_some() => {
+                let peer = Peer::Google(token.clone());
+                dial(&peer).await.map(|s| (s, peer))
+            }
+            _ => open(a.host, a.port).await,
         };
-        let socket = opened.map_err(|e| {
+        let (socket, peer) = opened.map_err(|e| {
             if classify_io(&e) {
                 Failure::Transient(e.to_string())
             } else {
@@ -260,10 +284,10 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
             None => {
                 let (client, connection) =
                     config.connect_raw(stream, NoTls).await.map_err(|e| {
-                        refused_token(classify_pg(&e, a.name, spec, &passfile_text), &e, spec)
+                        refused_token(classify_pg(&e, a.name, &passfile_text), &e, spec)
                     })?;
-                drive(connection, notices);
-                Ok((client, None))
+                let task = drive(connection, notices);
+                Ok((client, None, peer, task))
             }
             Some(t) => {
                 let connect = Connect {
@@ -277,14 +301,14 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
                 };
                 let (client, connection) =
                     config.connect_raw(stream, tapped).await.map_err(|e| {
-                        refused_token(classify_pg(&e, a.name, spec, &passfile_text), &e, spec)
+                        refused_token(classify_pg(&e, a.name, &passfile_text), &e, spec)
                     })?;
-                drive(connection, notices);
-                Ok((client, Some(connect)))
+                let task = drive(connection, notices);
+                Ok((client, Some(connect), peer, task))
             }
         }
     };
-    let (client, tls) = match spec.connect_timeout {
+    let (client, tls, peer, connection) = match spec.connect_timeout {
         Some(t) => tokio::time::timeout(t, run)
             .await
             .map_err(|_| Failure::Transient("timeout expired".into()))??,
@@ -295,14 +319,17 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         cancel: client.cancel_token(),
         client,
         tap: shared,
-        host: a.host.to_string(),
-        port: a.port,
         tls: tls.filter(|_| tls_version.is_some()),
         tls_version,
+        peer,
+        connection,
     })
 }
 
-fn drive<S, T>(mut connection: tokio_postgres::Connection<S, T>, notices: NoticeSink)
+fn drive<S, T>(
+    mut connection: tokio_postgres::Connection<S, T>,
+    notices: NoticeSink,
+) -> tokio::task::AbortHandle
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -315,7 +342,8 @@ where
                 Err(_) => break,
             }
         }
-    });
+    })
+    .abort_handle()
 }
 
 async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, String> {
@@ -399,6 +427,7 @@ impl Dialer {
             vec![attrs]
         };
         let mut errors: Vec<String> = Vec::new();
+        let mut codes: Vec<String> = Vec::new();
         let mut all_transient = true;
         let hint_tls =
             |s: &str| s.contains("x509") || s.contains("TLS") || s.contains("certificate");
@@ -451,11 +480,8 @@ impl Dialer {
                         }
                     }
                     match outcome {
-                        Some(Ok(mut s)) => match matches_attrs(&s.client, want).await {
-                            Ok(true) => {
-                                s.host = host.clone();
-                                return Ok(s);
-                            }
+                        Some(Ok(s)) => match matches_attrs(&s.client, want).await {
+                            Ok(true) => return Ok(s),
                             Ok(false) => {
                                 all_transient = false;
                                 errors.push(format!(
@@ -482,6 +508,11 @@ impl Dialer {
                                 format!("{label}: {t}")
                             });
                         }
+                        Some(Err(Failure::Server(t, code))) => {
+                            all_transient = false;
+                            codes.push(code);
+                            errors.push(format!("{label}: {t}"));
+                        }
                         Some(Err(Failure::Fatal(t) | Failure::Refused(t))) => {
                             all_transient = false;
                             errors.push(format!("{label}: {t}"));
@@ -502,19 +533,23 @@ impl Dialer {
         if hint_tls(&joined) {
             message.push_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert");
         }
-        Err((
-            Error::connection(message),
-            all_transient && !errors.is_empty(),
-        ))
+        let mut error = Error::connection(message);
+        if let Some(code) = codes.first().filter(|c| codes.iter().all(|o| o == *c)) {
+            error = error.with_sql(crate::error::SqlDiagnostics {
+                sqlstate: Some(code.clone()),
+                ..Default::default()
+            });
+        }
+        Err((error, all_transient && !errors.is_empty()))
     }
 }
 
 impl Session {
     pub async fn cancel(&self) {
-        let Ok(socket) = open(&self.host, self.port).await else {
-            return;
-        };
         let fut = async {
+            let Ok(socket) = dial(&self.peer).await else {
+                return;
+            };
             match &self.tls {
                 Some(t) => {
                     let _ = self.cancel.cancel_query_raw(socket, t.clone()).await;
@@ -527,7 +562,31 @@ impl Session {
         let _ = tokio::time::timeout(Duration::from_secs(2), fut).await;
     }
 
+    pub fn disconnect(&self) {
+        self.connection.abort();
+    }
+
     pub fn tls_enabled(&self) -> bool {
         self.tls_version.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_cancel_goes_to_the_address_that_answered() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (_, peer) = open("localhost", addr.port()).await.unwrap();
+        let Peer::Tcp(seen) = &peer else {
+            panic!("not TCP")
+        };
+        assert_eq!(*seen, addr);
+        let _ = listener.accept().await.unwrap();
+        let _cancel = dial(&peer).await.unwrap();
+        let (_, from) = listener.accept().await.unwrap();
+        assert_eq!(from.ip(), addr.ip());
     }
 }
