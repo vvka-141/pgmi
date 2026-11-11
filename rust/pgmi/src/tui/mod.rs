@@ -24,7 +24,7 @@ pub(crate) trait Steps {
     type Done;
 
     fn update(&mut self, key: KeyEvent) -> Option<connection::Effect<Self::Done>>;
-    fn tested(&mut self, result: std::result::Result<String, String>);
+    fn tested(&mut self, result: connection::TestResult);
     fn tick(&mut self);
     /// Changes whenever the screen must be cleared before the next draw.
     fn screen(&self) -> (u8, u8, u8);

@@ -5,12 +5,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::select::{ACCENT, FAINT, MUTED, Outcome, Select};
+use super::select::{ACCENT, Choice, FAINT, MUTED, Outcome, Select};
 use crate::config::yaml::Connection;
 use crate::conn::cloud::Provider as Cloud;
 use crate::conn::resolve::SslMode;
 use crate::env::Env;
-use crate::error::{Result, Secret};
+use crate::error::{Error, Result, Secret};
 
 const TITLE: &str = "pgmi - Connection Setup";
 const MAINTENANCE: &str = "postgres";
@@ -25,9 +25,11 @@ enum Method {
     Uri,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct Provider {
     name: &'static str,
     detail: &'static str,
+    host: &'static str,
     methods: &'static [(Method, &'static str, &'static str)],
 }
 
@@ -41,11 +43,13 @@ const PROVIDERS: [Provider; 5] = [
     Provider {
         name: "Local / On-Premises",
         detail: "PostgreSQL on localhost or your own servers",
+        host: "localhost",
         methods: &[PASSWORD],
     },
     Provider {
         name: "Azure Database for PostgreSQL",
         detail: "Microsoft Azure managed PostgreSQL",
+        host: "",
         methods: &[
             (
                 Method::Azure,
@@ -58,6 +62,7 @@ const PROVIDERS: [Provider; 5] = [
     Provider {
         name: "AWS RDS PostgreSQL",
         detail: "Amazon Web Services managed PostgreSQL",
+        host: "",
         methods: &[
             (
                 Method::Aws,
@@ -70,6 +75,7 @@ const PROVIDERS: [Provider; 5] = [
     Provider {
         name: "Google Cloud SQL",
         detail: "Google Cloud managed PostgreSQL",
+        host: "",
         methods: &[
             (
                 Method::Google,
@@ -82,6 +88,7 @@ const PROVIDERS: [Provider; 5] = [
     Provider {
         name: "Other / Connection String",
         detail: "Enter a full PostgreSQL connection string",
+        host: "",
         methods: &[(
             Method::Uri,
             "Connection String",
@@ -318,7 +325,7 @@ enum FormOutcome {
 }
 
 impl Form {
-    fn new(provider: usize, method: Method, initial: Option<&Connection>) -> Self {
+    fn new(provider: &Provider, method: Method, initial: Option<&Connection>) -> Self {
         let (subtitle, inputs, notes): (_, Vec<Input>, &'static [&'static str]) = match method {
             Method::Password => {
                 let pick = |f: fn(&Connection) -> &Option<String>, default: &str| {
@@ -327,7 +334,7 @@ impl Form {
                         .filter(|v| !v.is_empty())
                         .unwrap_or_else(|| default.to_string())
                 };
-                let host_default = if provider == 0 { "localhost" } else { "" };
+                let host_default = provider.host;
                 let mut password =
                     Input::new(Field::Password, "Password:", "", "Enter password", 256)
                         .hint("leave empty to use ~/.pgpass or $PGPASSWORD");
@@ -661,8 +668,8 @@ pub(crate) enum Effect<D = Done> {
 }
 
 pub(crate) struct Wizard {
-    provider: Select,
-    auth: Option<Select>,
+    provider: Select<&'static Provider>,
+    auth: Option<(&'static Provider, Select<Method>)>,
     form: Option<Form>,
     test: Option<(Settings, Test)>,
     initial: Option<Connection>,
@@ -671,15 +678,14 @@ pub(crate) struct Wizard {
 impl Wizard {
     pub(crate) fn new(initial: Option<Connection>) -> Self {
         Self {
-            provider: Select {
-                prompt: "Where is your PostgreSQL server?".into(),
-                choices: PROVIDERS
+            provider: Select::new(
+                "Where is your PostgreSQL server?",
+                PROVIDERS
                     .iter()
-                    .map(|p| (p.name.to_string(), p.detail.to_string()))
+                    .map(|p| Choice::new(p, p.name, p.detail))
                     .collect(),
-                help: "↑/↓ navigate • enter select • esc back • ctrl+c quit",
-                cursor: 0,
-            },
+                "↑/↓ navigate • enter select • esc back • ctrl+c quit",
+            ),
             auth: None,
             form: None,
             test: None,
@@ -704,13 +710,9 @@ impl Wizard {
         (stage, test)
     }
 
-    fn methods(&self) -> &'static [(Method, &'static str, &'static str)] {
-        PROVIDERS[self.provider.cursor].methods
-    }
-
-    fn open_form(&mut self, method: Method) {
+    fn open_form(&mut self, provider: &Provider, method: Method) {
         let initial = self.initial.as_ref();
-        self.form = Some(Form::new(self.provider.cursor, method, initial));
+        self.form = Some(Form::new(provider, method, initial));
     }
 
     pub(crate) fn update(&mut self, key: KeyEvent) -> Option<Effect> {
@@ -770,11 +772,11 @@ impl Wizard {
                 },
             };
         }
-        if let Some(auth) = &mut self.auth {
+        if let Some((provider, auth)) = &mut self.auth {
             return match auth.update(key)? {
-                Outcome::Picked(i) => {
-                    let method = self.methods()[i].0;
-                    self.open_form(method);
+                Outcome::Picked(method) => {
+                    let provider = *provider;
+                    self.open_form(provider, method);
                     None
                 }
                 Outcome::Back => {
@@ -785,23 +787,22 @@ impl Wizard {
             };
         }
         match self.provider.update(key)? {
-            Outcome::Picked(_) => {
-                let methods = self.methods();
-                if methods.len() == 1 {
-                    self.open_form(methods[0].0);
-                } else {
-                    self.auth = Some(Select {
-                        prompt: format!(
-                            "{} - Authentication",
-                            PROVIDERS[self.provider.cursor].name
-                        ),
-                        choices: methods
-                            .iter()
-                            .map(|(_, n, d)| (n.to_string(), d.to_string()))
-                            .collect(),
-                        help: "↑/↓ navigate • enter select • esc back",
-                        cursor: 0,
-                    });
+            Outcome::Picked(provider) => {
+                match provider.methods {
+                    [(only, _, _)] => self.open_form(provider, *only),
+                    methods => {
+                        self.auth = Some((
+                            provider,
+                            Select::new(
+                                format!("{} - Authentication", provider.name),
+                                methods
+                                    .iter()
+                                    .map(|(m, n, d)| Choice::new(*m, *n, *d))
+                                    .collect(),
+                                "↑/↓ navigate • enter select • esc back",
+                            ),
+                        ));
+                    }
                 }
                 None
             }
@@ -810,11 +811,11 @@ impl Wizard {
         }
     }
 
-    pub(crate) fn tested(&mut self, result: std::result::Result<String, String>) {
+    pub(crate) fn tested(&mut self, result: TestResult) {
         if let Some((_, t)) = &mut self.test {
             *t = match result {
                 Ok(info) => Test::Passed(info),
-                Err(e) => Test::Failed(e),
+                Err(e) => Test::Failed(e.to_string()),
             };
         }
     }
@@ -830,7 +831,7 @@ impl Wizard {
             test_lines(s, t)
         } else if let Some(f) = &self.form {
             f.lines()
-        } else if let Some(a) = &self.auth {
+        } else if let Some((_, a)) = &self.auth {
             a.view(TITLE).split_off(2)
         } else {
             self.provider.view(TITLE).split_off(2)
@@ -916,7 +917,41 @@ fn test_lines(s: &Settings, t: &Test) -> Vec<Line<'static>> {
     lines
 }
 
-pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, String> {
+/// Why the wizard's connection test failed.
+#[derive(Debug)]
+pub(crate) enum TestError {
+    Settings(crate::conn::resolve::ResolveError),
+    Connect(Error),
+    Query(tokio_postgres::Error),
+    Timeout,
+}
+
+impl std::fmt::Display for TestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TestError::Settings(e) => e.fmt(f),
+            TestError::Connect(e) => e.fmt(f),
+            TestError::Query(e) => e.fmt(f),
+            TestError::Timeout => f.write_str("timeout: no answer within 10s"),
+        }
+    }
+}
+
+impl std::error::Error for TestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TestError::Settings(e) => Some(e),
+            TestError::Connect(e) => Some(e),
+            TestError::Query(e) => Some(e),
+            TestError::Timeout => None,
+        }
+    }
+}
+
+/// The server version line, or why the test failed.
+pub(crate) type TestResult = std::result::Result<String, TestError>;
+
+pub(crate) async fn test(s: Settings, env: Env) -> TestResult {
     if let Some(label) = s.token_label() {
         return Ok(format!(
             "{label} authentication configured (not tested — token is fetched at deploy time)"
@@ -926,7 +961,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         connection: Some(s.keyword_string().into()),
         ..Default::default()
     };
-    let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(|e| e.to_string())?;
+    let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(TestError::Settings)?;
     let dialer = crate::conn::dial::Dialer {
         notices: std::sync::Arc::new(|_| {}),
         log: std::sync::Arc::new(|_| {}),
@@ -936,20 +971,20 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         let session = dialer
             .connect(&spec, &s.maintenance)
             .await
-            .map_err(|e| e.text())?;
+            .map_err(TestError::Connect)?;
         let row = session
             .client
             .query_one("SELECT version()", &[])
             .await
-            .map_err(|e| e.to_string())?;
-        let version: String = row.try_get(0).map_err(|e| e.to_string())?;
+            .map_err(TestError::Query)?;
+        let version: String = row.try_get(0).map_err(TestError::Query)?;
         Ok(version
             .split_once(',')
             .map_or(version.clone(), |(v, _)| v.to_string()))
     };
     tokio::time::timeout(Duration::from_secs(10), work)
         .await
-        .unwrap_or_else(|_| Err("timeout: no answer within 10s".into()))
+        .unwrap_or(Err(TestError::Timeout))
 }
 
 impl super::Steps for Wizard {
@@ -959,7 +994,7 @@ impl super::Steps for Wizard {
         Wizard::update(self, key)
     }
 
-    fn tested(&mut self, result: std::result::Result<String, String>) {
+    fn tested(&mut self, result: TestResult) {
         Wizard::tested(self, result);
     }
 
@@ -1345,7 +1380,7 @@ mod tests {
             w.update(key(KeyCode::Enter)),
             Some(Effect::Test(_))
         ));
-        w.tested(Err("refused".into()));
+        w.tested(Err(TestError::Connect(Error::connection("refused"))));
         assert_eq!(w.page(), (3, 3));
         assert!(
             text(&test_lines(
@@ -1367,7 +1402,7 @@ mod tests {
             panic!("no test");
         };
         assert_eq!(first.maintenance, "postgres");
-        w.tested(Err("timeout".into()));
+        w.tested(Err(TestError::Timeout));
         assert_eq!(
             w.update(key(KeyCode::Enter)),
             Some(Effect::Test(first.clone()))

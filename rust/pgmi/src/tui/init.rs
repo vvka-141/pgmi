@@ -1,8 +1,8 @@
 use crossterm::event::KeyEvent;
 use ratatui::widgets::Paragraph;
 
-use super::connection::{self, Effect, Settings};
-use super::select::{Outcome, Select};
+use super::connection::{self, Effect, Settings, TestResult};
+use super::select::{Choice, Outcome, Select};
 use crate::env::Env;
 use crate::error::{Error, Kind, Result};
 use crate::templates::Template;
@@ -19,60 +19,77 @@ pub(crate) enum Done {
     Interrupted,
 }
 
-/// Template, then "Set up the connection now?", then the connection wizard
-/// itself; Esc on the connection wizard's first screen comes back here.
-pub(crate) struct Wizard {
-    template: Select,
-    setup: Option<Select>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Now {
+    Later,
+    Wizard,
+}
+
+/// The screens after a template is picked: "Set up the connection now?",
+/// then the connection wizard itself.
+struct Setup {
+    template: Template,
+    now: Select<Now>,
     connection: Option<connection::Wizard>,
+}
+
+/// Template, then [`Setup`]; Esc on the connection wizard's first screen
+/// comes back to the question.
+pub(crate) struct Wizard {
+    template: Select<Template>,
+    setup: Option<Setup>,
 }
 
 impl Wizard {
     pub(crate) fn new(target: &str) -> Self {
         Self {
-            template: Select {
-                prompt: format!("Select a template  →  {target}"),
-                choices: Template::ALL
+            template: Select::new(
+                format!("Select a template  →  {target}"),
+                Template::ALL
                     .iter()
-                    .map(|t| (t.name().to_string(), t.summary().to_string()))
+                    .map(|t| Choice::new(*t, t.name(), t.summary()))
                     .collect(),
-                help: "↑/↓ navigate • enter select • esc back",
-                cursor: 0,
-            },
+                "↑/↓ navigate • enter select • esc back",
+            ),
             setup: None,
-            connection: None,
         }
     }
 
-    fn template(&self) -> Template {
-        Template::ALL[self.template.cursor]
+    fn connection(&self) -> Option<&connection::Wizard> {
+        self.setup.as_ref()?.connection.as_ref()
+    }
+
+    fn connection_mut(&mut self) -> Option<&mut connection::Wizard> {
+        self.setup.as_mut()?.connection.as_mut()
     }
 
     pub(crate) fn update(&mut self, key: KeyEvent) -> Option<Effect<Done>> {
-        if let Some(c) = &mut self.connection {
-            return match c.update(key)? {
-                Effect::Test(s) => Some(Effect::Test(s)),
-                Effect::Done(connection::Done::Finished(s)) => Some(Effect::Done(Done::Finished {
-                    template: self.template(),
-                    connection: Some(s),
-                })),
-                Effect::Done(connection::Done::Cancelled) => {
-                    self.connection = None;
+        if let Some(setup) = &mut self.setup {
+            if let Some(c) = &mut setup.connection {
+                return match c.update(key)? {
+                    Effect::Test(s) => Some(Effect::Test(s)),
+                    Effect::Done(connection::Done::Finished(s)) => {
+                        Some(Effect::Done(Done::Finished {
+                            template: setup.template,
+                            connection: Some(s),
+                        }))
+                    }
+                    Effect::Done(connection::Done::Cancelled) => {
+                        setup.connection = None;
+                        None
+                    }
+                    Effect::Done(connection::Done::Interrupted) => {
+                        Some(Effect::Done(Done::Interrupted))
+                    }
+                };
+            }
+            return match setup.now.update(key)? {
+                Outcome::Picked(Now::Wizard) => {
+                    setup.connection = Some(connection::Wizard::new(None));
                     None
                 }
-                Effect::Done(connection::Done::Interrupted) => {
-                    Some(Effect::Done(Done::Interrupted))
-                }
-            };
-        }
-        if let Some(c) = &mut self.setup {
-            return match c.update(key)? {
-                Outcome::Picked(1) => {
-                    self.connection = Some(connection::Wizard::new(None));
-                    None
-                }
-                Outcome::Picked(_) => Some(Effect::Done(Done::Finished {
-                    template: self.template(),
+                Outcome::Picked(Now::Later) => Some(Effect::Done(Done::Finished {
+                    template: setup.template,
                     connection: None,
                 })),
                 Outcome::Back => {
@@ -83,21 +100,26 @@ impl Wizard {
             };
         }
         match self.template.update(key)? {
-            Outcome::Picked(_) => {
-                self.setup = Some(Select {
-                    prompt: "Set up the connection now?".into(),
-                    choices: vec![
-                        (
-                            "No — configure later".into(),
-                            "pgmi.yaml gets a placeholder".into(),
-                        ),
-                        (
-                            "Yes — run the connection wizard".into(),
-                            "writes connection settings to pgmi.yaml".into(),
-                        ),
-                    ],
-                    help: "↑/↓ toggle • enter select • esc back",
-                    cursor: 0,
+            Outcome::Picked(template) => {
+                self.setup = Some(Setup {
+                    template,
+                    now: Select::new(
+                        "Set up the connection now?",
+                        vec![
+                            Choice::new(
+                                Now::Later,
+                                "No — configure later",
+                                "pgmi.yaml gets a placeholder",
+                            ),
+                            Choice::new(
+                                Now::Wizard,
+                                "Yes — run the connection wizard",
+                                "writes connection settings to pgmi.yaml",
+                            ),
+                        ],
+                        "↑/↓ toggle • enter select • esc back",
+                    ),
+                    connection: None,
                 });
                 None
             }
@@ -113,20 +135,20 @@ impl super::Steps for Wizard {
         Wizard::update(self, key)
     }
 
-    fn tested(&mut self, result: std::result::Result<String, String>) {
-        if let Some(c) = &mut self.connection {
+    fn tested(&mut self, result: TestResult) {
+        if let Some(c) = self.connection_mut() {
             c.tested(result);
         }
     }
 
     fn tick(&mut self) {
-        if let Some(c) = &mut self.connection {
+        if let Some(c) = self.connection_mut() {
             c.tick();
         }
     }
 
     fn screen(&self) -> (u8, u8, u8) {
-        match &self.connection {
+        match self.connection() {
             Some(c) => {
                 let (stage, test) = c.page();
                 (2, stage, test)
@@ -136,10 +158,13 @@ impl super::Steps for Wizard {
     }
 
     fn view(&self) -> Paragraph<'static> {
-        match (&self.connection, &self.setup) {
-            (Some(c), _) => c.view(),
-            (None, Some(s)) => Paragraph::new(s.view(TITLE)),
-            (None, None) => Paragraph::new(self.template.view(TITLE)),
+        match &self.setup {
+            Some(Setup {
+                connection: Some(c),
+                ..
+            }) => c.view(),
+            Some(s) => Paragraph::new(s.now.view(TITLE)),
+            None => Paragraph::new(self.template.view(TITLE)),
         }
     }
 }
@@ -189,7 +214,7 @@ mod tests {
 
     fn texts(w: &Wizard) -> Vec<String> {
         let lines = match &w.setup {
-            Some(c) => c.view(TITLE),
+            Some(c) => c.now.view(TITLE),
             None => w.template.view(TITLE),
         };
         lines
@@ -203,7 +228,7 @@ mod tests {
         assert_eq!(w.update(key(KeyCode::Enter)), None);
         assert_eq!(w.update(key(KeyCode::Down)), None);
         assert_eq!(w.update(key(KeyCode::Enter)), None);
-        assert!(w.connection.is_some());
+        assert!(w.connection().is_some());
         w
     }
 
@@ -238,7 +263,7 @@ mod tests {
     fn esc_on_the_connection_wizard_returns_to_the_setup_question() {
         let mut w = into_connection_wizard();
         assert_eq!(w.update(key(KeyCode::Esc)), None);
-        assert!(w.connection.is_none());
+        assert!(w.connection().is_none());
         assert!(
             texts(&w)
                 .iter()
