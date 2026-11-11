@@ -385,7 +385,6 @@ fn plan_view_generic_id_matches_the_metadata_plan_on_utf8() {
 }
 
 #[test]
-#[ignore = "the Rust binary cannot prepare a session on a LATIN1 database (22P05 on the session SQL's non-LATIN1 characters); Go can"]
 fn plan_view_generic_id_matches_the_metadata_plan_on_latin1() {
     generic_id_matches_the_metadata_plan("LATIN1");
 }

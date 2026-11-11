@@ -1,0 +1,28 @@
+description: when test files are loaded but deploy.sql neither calls the pgmi_test() macro nor names it, one line says none of them run; fixtures count, other files under __test__/ do not, and a deploy.sql that names pgmi_test anywhere gets no line
+project:
+  files:
+    plain/deploy.sql: SELECT 1;
+    plain/__test__/_setup.sql: SELECT 1;
+    plain/__test__/test_a.sql: DO $$ BEGIN RAISE EXCEPTION 'never runs'; END $$;
+    plain/__test__/README.md: not a test
+    plain/sub/__tests__/test_b.sql: SELECT 1;
+    named/deploy.sql: SELECT count(*) FROM pg_temp.pgmi_test_source_view;
+    named/__test__/test_a.sql: SELECT 1;
+    called/deploy.sql: |
+      BEGIN;
+      CALL pgmi_test();
+      COMMIT;
+    called/__test__/test_a.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/plain", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["^3 test file\\(s\\) loaded; deploy\\.sql never calls pgmi_test\\(\\), so none of them run$"]
+  - pgmi: [deploy, "{project}/named", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr_not: ["never calls pgmi_test"]
+  - pgmi: [deploy, "{project}/called", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr_not: ["never calls pgmi_test"]

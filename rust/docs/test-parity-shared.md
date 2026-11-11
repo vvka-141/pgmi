@@ -148,7 +148,7 @@ is written to disk. Without Python they print `skipped` and return, as Go did.
 | basic_run_once TestBasicTemplate_RefusesRunOnceFileWithSeveralSortKeys | basic_template::basic_refuses_run_once_file_with_several_sort_keys |
 | basic_run_once TestBasicTemplate_RefusesSQLFileOutsideItsFolders | basic_template::basic_refuses_sql_file_outside_its_folders |
 | deploy_error_sqlstate TestBasicTemplate_FailingMigrationKeepsSQLSTATEAndLocation (runtime) | basic_template::failing_migration_keeps_sqlstate_and_detail |
-| deploy_error_sqlstate TestBasicTemplate_FailingMigrationKeepsSQLSTATEAndLocation (syntax) | basic_template::failing_migration_syntax_error_resolves_to_its_line, **`#[ignore]`**: the Rust binary does not report the line of a syntax error inside an executed file (Go: `line: 4`). Un-ignore with the fix |
+| deploy_error_sqlstate TestBasicTemplate_FailingMigrationKeepsSQLSTATEAndLocation (syntax) | basic_template::failing_migration_syntax_error_resolves_to_its_line |
 | minimal_template_integration TestSessionPreparationRefusedByTheServerExits13 | basic_template::session_preparation_refused_by_the_server_exits_13 |
 
 ### internal/scaffold: Go scaffolder code (out of scope)
@@ -168,7 +168,7 @@ scaffolder; its Rust counterparts are in `templates.rs` and `commands/init.rs`
 | contract_functions TestEverySessionFunctionIsDeclaredOrExempt | session_sql::every_session_function_is_declared_in_the_contract |
 | contract_functions TestContractTestEventTypeMatchesLiveSession | session_sql::contract_test_event_type_matches_the_live_session |
 | step_type_completeness TestStepTypeCompleteness | session_sql::a_real_test_plan_yields_exactly_the_declared_step_types, pgmi_test_plan_emits_no_undeclared_step_type |
-| plan_view_generic_id TestPlanViewGenericIDMatchesGoFallbackAcrossEncodings | session_sql::plan_view_generic_id_matches_the_metadata_plan_on_utf8 (against `pgmi metadata plan --json`, the Rust fallback id); the LATIN1 half is **`#[ignore]`**: the Rust binary cannot deploy to a LATIN1 database (22P05 on the non-LATIN1 characters of the session SQL), Go can |
+| plan_view_generic_id TestPlanViewGenericIDMatchesGoFallbackAcrossEncodings | session_sql::plan_view_generic_id_matches_the_metadata_plan_on_utf8 and _on_latin1 (against `pgmi metadata plan --json`, the Rust fallback id) |
 | sql_extension_parity TestSQLExtensionParityWithSchema | session_sql::sql_extension_parity_between_the_loader_and_the_session |
 | session_variables TestSessionVariableSystem | session_sql::session_variables_carry_parameters_and_defaults |
 | deployer_plan_order TestPlanOrder_NestedDirectories | session_sql::plan_order_over_nested_directories_persists_only_the_root_teardown |

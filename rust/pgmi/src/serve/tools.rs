@@ -482,9 +482,7 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
         Err(e) => {
             let message = redact(&e.text(), &secrets);
             let mut text = message.clone();
-            if let Some(location) = run.location(e) {
-                text.push_str(&format!("\nLOCATION: {location}"));
-            }
+            text.push_str(&redact(&run.diagnostics(e), &secrets));
             text.push_str(&format!("\nexit code {}", e.exit_code()));
             if let Some(phase) = record.phase {
                 text.push_str(&format!(", phase {phase}"));

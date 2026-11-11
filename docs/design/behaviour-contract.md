@@ -210,7 +210,13 @@ one); any other value is exit 10. Plan order: sort key, then path, byte order; a
 without metadata sorts by its path; a missing `<description>` is an empty
 string. Full reference: `docs/session-api.md`.
 
-Cases: `execution/loader-at-scale`, `params/precedence`, `commands/ai`, `flags/compat`.
+The session speaks the target database's own encoding (`client_encoding` is set
+to `server_encoding`), as Go's driver does by never sending one: on a LATIN1
+database every byte pgmi sends, paths and file text included, is stored as
+sent, so non-LATIN1 characters never fail with 22P05 and `generic_id` is the
+md5 of the path's UTF-8 bytes on every encoding.
+
+Cases: `execution/loader-at-scale`, `params/precedence`, `commands/ai`, `flags/compat`, `deploy/latin1-database`.
 
 ### Parameters
 
@@ -336,7 +342,12 @@ after a no-break space or a vertical tab the text reaches the server
 unexpanded. `NULL` as the pattern means every test. Full reference:
 `docs/TESTING.md`.
 
-Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`.
+When SQL test files are loaded (fixtures count) but `deploy.sql` expands no
+macro and does not contain `pgmi_test` anywhere (any case), stderr says `N test
+file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run` after
+`Executing deploy.sql`; the deploy goes on.
+
+Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`., `notices/unused-tests`
 
 ### Notices and the summary line
 
@@ -365,12 +376,25 @@ Cases: `deploy/json-success`, `deploy/json-failure`, `errors/attribution`, `exec
 
 ### Error attribution
 
-A failure names where it happened: the line of a syntax error in `deploy.sql`,
-the project file whose text was executing, and in `--json` the `sqlstate`,
-`failedFile` and the other diagnostics listed in `docs/CLI.md`. A login without
-the TEMPORARY privilege is told the `GRANT` it needs.
+A failure names where it happened: the project file whose text was executing
+(by its exact text, or a `Failed in <path>.sql` message), else `deploy.sql`,
+and in `--json` the `sqlstate`, `failedFile` and the other diagnostics listed
+in `docs/CLI.md`. stderr follows the error with `DETAIL:`, `HINT:` and `WHERE:`
+lines when the server sent them, then `LOCATION: <file> line L, column C`, the
+line as `LINE L: ...` and a caret under column C. The line and column (counted
+in characters) come from the error position: in `deploy.sql`, on the file's
+own lines whatever the macro expansion or the head/tail split did (a line
+inside a `pgmi_test()` expansion is the macro's line, column 0); inside an
+executed file, for a parse error, a function body included. A runtime error has
+a line, column 0, when raised in a DO block that opens a file (after any
+comment header), the only DO block of the atomic head, or a tail statement (its
+first line, or the DO block's line). `WHERE` names a project file (`SQL
+statement in ./x.sql`) instead of quoting its text, and identical files are all
+named. `phase` is `test` when the file lies under `__test__/` or `__tests__/`.
+A `PASSWORD '...'` literal in these lines is shown as `[redacted]`. A login
+without the TEMPORARY privilege is told the `GRANT` it needs.
 
-Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`.
+Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`, `errors/line-and-column`.
 
 ### Timeout, cancellation, interruption
 

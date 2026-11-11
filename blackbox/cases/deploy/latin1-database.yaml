@@ -1,0 +1,32 @@
+description: a deploy to an existing LATIN1 database succeeds; the session speaks the database's own encoding, so non-LATIN1 file paths and text reach the session byte for byte and pgmi_plan_view's generic_id is the md5 of the path's UTF-8 bytes
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE plan_ids AS
+      SELECT encode(path::bytea, 'hex') AS hex, generic_id FROM pg_temp.pgmi_plan_view;
+      DO $$
+      DECLARE f record;
+      BEGIN
+        FOR f IN SELECT path, content FROM pg_temp.pgmi_plan_view ORDER BY execution_order LOOP
+          EXECUTE f.content;
+          RAISE NOTICE 'ran %', f.path;
+        END LOOP;
+      END $$;
+    migrations/001_plain.sql: "SELECT '─ box drawing ─';\n"
+    migrations/café.sql: "SELECT 1;\n"
+    migrations/миграции.sql: "SELECT 2;\n"
+steps:
+  - sql: CREATE DATABASE "{db}" ENCODING 'LATIN1' TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["^ran \\./migrations/café\\.sql$", "^ran \\./migrations/миграции\\.sql$", "^ok {db}: 3 files loaded"]
+      sql:
+        - query: SELECT current_setting('server_encoding')
+          rows: [[LATIN1]]
+        - query: SELECT hex FROM plan_ids WHERE generic_id = md5(decode(hex, 'hex'))::uuid ORDER BY hex
+          rows:
+            - [2e2f6d6967726174696f6e732f3030315f706c61696e2e73716c]
+            - [2e2f6d6967726174696f6e732f636166c3a92e73716c]
+            - [2e2f6d6967726174696f6e732fd0bcd0b8d0b3d180d0b0d186d0b8d0b82e73716c]

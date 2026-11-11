@@ -1,0 +1,69 @@
+description: a failure is placed on its line - a syntax error inside an executed file by line and column (characters, not bytes), a runtime error in a file's DO block by its line, a tail statement after a pgmi_test() expansion by its line in deploy.sql, a runtime error in deploy.sql's only DO block by its line; WHERE names the file instead of quoting it, and identical files are all named
+project:
+  files:
+    syntax/deploy.sql: &loop |
+      DO $$
+      DECLARE f record;
+      BEGIN
+        FOR f IN SELECT path, content FROM pg_temp.pgmi_plan_view ORDER BY execution_order LOOP
+          EXECUTE f.content;
+        END LOOP;
+      END $$;
+    syntax/m/a.sql: "CREATE TABLE probe (id int);\n\n-- line 3\n  SELECT 'жж', SELEC 1;\n"
+    runtime/deploy.sql: *loop
+    runtime/m/a.sql: |
+      -- header
+      DO $x$
+      BEGIN
+        PERFORM 1/0;
+      END $x$;
+    runtime/m/b.sql: |
+      -- header
+      DO $x$
+      BEGIN
+        PERFORM 1/0;
+      END $x$;
+    tail/deploy.sql: |
+      BEGIN;
+      CALL pgmi_test();
+      COMMIT;
+      SELECT 2;
+        SELEC 3;
+    tail/__test__/test_a.sql: |
+      SELECT 1;
+      SELECT 2;
+    head/deploy.sql: |
+      SELECT 1;
+      DO $$
+      BEGIN
+        PERFORM 1/0;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}/syntax", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stderr:
+        - "^WHERE: PL/pgSQL function inline_code_block line 5 at EXECUTE$"
+        - "^LOCATION: \\./m/a\\.sql line 4, column 22$"
+        - "^LINE 4:   SELECT 'жж', SELEC 1;$"
+        - "^ {29}\\^$"
+      json: {failedFile: ./m/a.sql, script: ./m/a.sql, line: 4, column: 22, sourceLine: "  SELECT 'жж', SELEC 1;", scriptExpanded: false, phase: deploy, sqlstate: "42601"}
+  - pgmi: [deploy, "{project}/runtime", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stderr:
+        - "^SQL statement in \\./m/a\\.sql$"
+        - "^LOCATION: \\./m/a\\.sql line 4$"
+        - "^LINE 4:   PERFORM 1/0;$"
+        - "^The same text is in \\./m/a\\.sql, \\./m/b\\.sql; the error is in whichever of them deploy\\.sql ran\\.$"
+      json: {failedFile: ./m/a.sql, failedFileCandidates: [./m/a.sql, ./m/b.sql], line: 4, column: 0, sqlstate: "22012"}
+  - pgmi: [deploy, "{project}/tail", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stderr: ["^LOCATION: deploy\\.sql line 5, column 3$", "^LINE 5:   SELEC 3;$"]
+      json: {failedFile: deploy.sql, script: deploy.sql, line: 5, column: 3, scriptExpanded: false, testMacros: 1}
+  - pgmi: [deploy, "{project}/head", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      stderr: ["^LOCATION: deploy\\.sql line 4$", "^LINE 4:   PERFORM 1/0;$"]
+      json: {failedFile: deploy.sql, line: 4, column: 0}

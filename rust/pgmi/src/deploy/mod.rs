@@ -1,4 +1,5 @@
 mod approve;
+mod blame;
 mod execute;
 mod overwrite;
 mod record;
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use tokio::runtime::Runtime;
 use tokio::time::Instant as TokioInstant;
+use tokio_postgres::error::ErrorPosition;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::params::{self, Sources};
@@ -42,17 +44,21 @@ pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
                     "\nthe login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE <db> TO <role>",
                 );
             }
+            let (position, internal_position, internal_query) = match db.position() {
+                Some(ErrorPosition::Original(p)) => (usize::try_from(*p).ok(), None, None),
+                Some(ErrorPosition::Internal { position, query }) => {
+                    (None, usize::try_from(*position).ok(), Some(query.clone()))
+                }
+                None => (None, None, None),
+            };
             Error::sql(message).with_sql(SqlDiagnostics {
                 sqlstate: Some(code),
                 detail: db.detail().map(str::to_string),
                 hint: db.hint().map(str::to_string),
                 where_: db.where_().map(str::to_string),
-                internal_query: match db.position() {
-                    Some(tokio_postgres::error::ErrorPosition::Internal { query, .. }) => {
-                        Some(query.clone())
-                    }
-                    _ => None,
-                },
+                internal_query,
+                position,
+                internal_position,
             })
         }
         None => Error::connection(format!("{context}: {}", crate::error::chain(e))),
@@ -118,8 +124,7 @@ pub(crate) struct Execution {
 
 pub(crate) struct Failure {
     unit: usize,
-    test: bool,
-    files: Vec<String>,
+    blame: blame::Blame,
 }
 
 struct Guard {
@@ -222,16 +227,32 @@ impl Run {
             .unwrap_or_default()
     }
 
-    pub(crate) fn location(&self, e: &Error) -> Option<&str> {
-        if e.kind() != Kind::Sql {
-            return None;
+    /// The lines psql would print under the error: DETAIL, HINT, WHERE, and
+    /// where in the project the failure was placed.
+    pub(crate) fn diagnostics(&self, e: &Error) -> String {
+        let mut out = String::new();
+        let Some(d) = e.sql_diagnostics() else {
+            return out;
+        };
+        let blame = self.st.failure().map(|f| &f.blame);
+        for (label, value) in [
+            ("DETAIL", d.detail.as_deref()),
+            ("HINT", d.hint.as_deref()),
+            (
+                "WHERE",
+                blame
+                    .and_then(|b| b.where_.as_deref())
+                    .or(d.where_.as_deref()),
+            ),
+        ] {
+            if let Some(v) = value.filter(|v| !v.is_empty()) {
+                out.push_str(&format!("\n{label}: {v}"));
+            }
         }
-        let f = self.st.failure()?;
-        Some(match f.files.first() {
-            Some(file) => file.as_str(),
-            None if f.test => "test",
-            None => "deploy.sql",
-        })
+        if let Some(b) = blame {
+            b.render(&mut out);
+        }
+        blame::redact_sql_passwords(&out)
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
@@ -495,6 +516,17 @@ async fn deploy(
         }
         Err(e) => return Err(e),
     };
+    guard
+        .running(&session, async {
+            session
+                .client
+                .batch_execute(
+                    "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
+                )
+                .await
+                .map_err(|e| sql_error("match the client encoding to the database", &e))
+        })
+        .await?;
     let version = guard
         .running(&session, async {
             Ok(first_value(&session, "SHOW server_version")
@@ -598,10 +630,8 @@ fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> 
         reporter.summary(ok, &text);
     }
     if let Err(e) = &result {
-        reporter.line(&redact(&format!("pgmi: error: {}", e.text()), &secrets));
-        if let Some(location) = run.location(e) {
-            reporter.line(&format!("LOCATION: {location}"));
-        }
+        let text = format!("pgmi: error: {}{}", e.text(), run.diagnostics(e));
+        reporter.line(&redact(&blame::redact_sql_passwords(&text), &secrets));
     }
     if ctx.request.json {
         let record = run.record(ctx, &result);
@@ -706,12 +736,31 @@ mod tests {
         })
     }
 
-    fn failure(unit: usize, test: bool, files: &[&str]) -> Option<Failure> {
-        Some(Failure {
-            unit,
-            test,
-            files: files.iter().map(|f| f.to_string()).collect(),
-        })
+    fn failure(unit: usize, blame: blame::Blame) -> Option<Failure> {
+        Some(Failure { unit, blame })
+    }
+
+    fn in_file(files: &[&str], line: Option<blame::Line>) -> blame::Blame {
+        blame::Blame {
+            candidates: files.iter().map(|f| f.to_string()).collect(),
+            file: files.first().map(|f| f.to_string()),
+            location: line.map(|l| blame::Location {
+                script: files[0].to_string(),
+                line: Some(l),
+            }),
+            where_: Some(format!("SQL statement in {}", files[0])),
+        }
+    }
+
+    fn in_deploy_sql() -> blame::Blame {
+        blame::Blame {
+            file: Some("deploy.sql".into()),
+            location: Some(blame::Location {
+                script: "deploy.sql".into(),
+                line: None,
+            }),
+            ..blame::Blame::default()
+        }
     }
 
     fn summary_of(p: &Progress, result: &Result<()>) -> Option<(bool, String)> {
@@ -746,7 +795,7 @@ mod tests {
     fn a_failed_summary_says_what_was_committed() {
         let sql = Err(Error::sql("boom"));
         let atomic = Progress {
-            execution: executed(0, failure(1, false, &[])),
+            execution: executed(0, failure(1, blame::Blame::default())),
             ..loaded("app")
         };
         assert_eq!(
@@ -754,7 +803,7 @@ mod tests {
             Some((false, "app: failed after 1.23s — nothing committed".into()))
         );
         let psql = Progress {
-            execution: executed(2, failure(3, false, &[])),
+            execution: executed(2, failure(3, blame::Blame::default())),
             ..loaded("app")
         };
         assert_eq!(
@@ -772,7 +821,7 @@ mod tests {
             "app: failed after 1.23s — created database \"app\", left empty"
         );
         let created_then_sql = Progress {
-            execution: executed(0, failure(1, false, &[])),
+            execution: executed(0, failure(1, blame::Blame::default())),
             ..created
         };
         assert_eq!(
@@ -796,7 +845,7 @@ mod tests {
     fn the_error_line_never_shows_the_password() {
         let mut run = Run::start();
         run.st = Progress {
-            execution: executed(0, failure(1, false, &[])),
+            execution: executed(0, failure(1, blame::Blame::default())),
             ..loaded("app")
         };
         let (reporter, out) = crate::output::Captured::reporter(false, false, false);
@@ -811,8 +860,39 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert!(lines[0].starts_with("FAILED app: failed after "), "{text}");
         assert_eq!(lines[1], "pgmi: error: password *** rejected");
-        assert_eq!(lines[2], "LOCATION: deploy.sql");
-        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines.len(), 2, "{text}");
+    }
+
+    #[test]
+    fn the_error_is_followed_by_its_diagnostics_and_the_line_it_points_at() {
+        let mut run = Run::start();
+        let line = blame::Line {
+            number: 2,
+            column: 8,
+            text: "CREATE ROLE r PASSWORD 'pw'; SELEC 1;".into(),
+        };
+        run.st = Progress {
+            execution: executed(0, failure(1, in_file(&["./a.sql", "./b.sql"], Some(line)))),
+            ..loaded("app")
+        };
+        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        finish(&context(), &run, Err(sql_failure("boom")), &reporter);
+        let text = out.text();
+        let lines: Vec<&str> = text.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            [
+                "pgmi: error: boom",
+                "DETAIL: d",
+                "HINT: h",
+                "WHERE: SQL statement in ./a.sql",
+                "LOCATION: ./a.sql line 2, column 8",
+                "LINE 2: CREATE ROLE r PASSWORD [redacted]; SELEC 1;",
+                "               ^",
+                "The same text is in ./a.sql, ./b.sql; the error is in whichever of them deploy.sql ran.",
+            ],
+            "{text}"
+        );
     }
 
     fn sql_failure(message: &str) -> Error {
@@ -821,7 +901,7 @@ mod tests {
             detail: Some("d".into()),
             hint: Some("h".into()),
             where_: Some("w".into()),
-            internal_query: None,
+            ..crate::error::SqlDiagnostics::default()
         })
     }
 
@@ -937,8 +1017,13 @@ mod tests {
 
     #[test]
     fn a_failure_record_names_the_file_mode_and_phase() {
+        let line = blame::Line {
+            number: 3,
+            column: 7,
+            text: "SELECT x PASSWORD 'pw'".into(),
+        };
         let p = Progress {
-            execution: executed(2, failure(3, false, &["./a.sql", "./b.sql"])),
+            execution: executed(2, failure(3, in_file(&["./a.sql", "./b.sql"], Some(line)))),
             ..loaded("app")
         };
         let r = record_of(p, &Err(sql_failure("division by zero, password s3cret-pw")));
@@ -949,40 +1034,69 @@ mod tests {
         assert_eq!(r["failedFileCandidates"], json!(["./a.sql", "./b.sql"]));
         assert_eq!(r["error"], "division by zero, password ***");
         assert_eq!(
+            [
+                &r["line"],
+                &r["column"],
+                &r["scriptExpanded"],
+                &r["sourceLine"]
+            ],
+            [
+                &json!(3),
+                &json!(7),
+                &json!(false),
+                &json!("SELECT x PASSWORD [redacted]")
+            ]
+        );
+        assert_eq!(
             [&r["sqlstate"], &r["detail"], &r["hint"], &r["where"]],
-            [&json!("22012"), &json!("d"), &json!("h"), &json!("w")]
+            [
+                &json!("22012"),
+                &json!("d"),
+                &json!("h"),
+                &json!("SQL statement in ./a.sql")
+            ]
         );
 
         let p = Progress {
-            execution: executed(0, failure(1, false, &["./only.sql"])),
+            execution: executed(0, failure(1, in_file(&["./only.sql"], None))),
             ..loaded("app")
         };
         let r = record_of(p, &Err(sql_failure("x")));
         assert_eq!(r["executionMode"], "atomic");
         assert_eq!(r["failedFile"], "./only.sql");
-        assert!(r.get("failedFileCandidates").is_none());
+        for key in [
+            "failedFileCandidates",
+            "script",
+            "line",
+            "column",
+            "sourceLine",
+        ] {
+            assert!(r.get(key).is_none(), "{key}");
+        }
 
         let p = Progress {
-            execution: executed(0, failure(1, false, &[])),
+            execution: executed(0, failure(1, in_deploy_sql())),
             ..loaded("app")
         };
         let r = record_of(p, &Err(sql_failure("x")));
         assert_eq!(r["failedFile"], "deploy.sql");
         assert_eq!(r["script"], "deploy.sql");
+        assert_eq!(r["where"], "w");
+        assert!(r.get("line").is_none() && r.get("scriptExpanded").is_none());
 
         let p = Progress {
-            execution: executed(0, failure(1, true, &[])),
+            execution: executed(0, failure(1, in_file(&["./__test__/t.sql"], None))),
             ..loaded("app")
         };
         let r = record_of(p, &Err(sql_failure("x")));
         assert_eq!(r["phase"], "test");
-        assert!(r.get("failedFile").is_none() && r.get("script").is_none());
+        assert_eq!(r["failedFile"], "./__test__/t.sql");
     }
 
     #[test]
     fn a_failure_without_sql_diagnostics_has_no_phase() {
         let p = Progress {
-            execution: executed(0, failure(3, false, &[])),
+            execution: executed(0, failure(3, blame::Blame::default())),
             ..loaded("app")
         };
         let r = record_of(

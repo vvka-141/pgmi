@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use tokio_postgres::types::Type;
 
-use super::script::{self, Unit};
+use super::blame::{Blame, Sent};
+use super::script::{self, LineMap, Unit};
 use super::session::{self, Load};
 use super::{Execution, Failure, Guard, sql_error};
 use crate::VERSION;
@@ -12,7 +13,7 @@ use crate::conn::tap::IDLE;
 use crate::error::{Error, Result};
 use crate::output::Reporter;
 use crate::project::metadata::Meta;
-use crate::project::walk::Project;
+use crate::project::walk::{File, Project};
 
 pub(crate) struct Run<'a> {
     pub(crate) session: &'a Session,
@@ -87,14 +88,12 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             })
             .await?;
     }
-    let mut units: Vec<Unit> = Vec::new();
-    let mut macro_units = Vec::new();
+    let mut units: Vec<(Unit, LineMap)> = Vec::new();
     let mut count = 0;
     for unit in script::split(&project.deploy_sql) {
         let found = script::macros(&unit.text);
         if found.is_empty() {
-            macro_units.push(false);
-            units.push(unit);
+            units.push((unit, LineMap::default()));
             continue;
         }
         let mut generated = Vec::new();
@@ -108,11 +107,14 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             generated.push(sql);
         }
         count += found.len();
-        macro_units.push(true);
-        units.push(Unit {
-            text: script::expand(&unit.text, &found, &generated),
-            line: unit.line,
-        });
+        let (text, lines) = script::expand(&unit.text, &found, &generated);
+        units.push((
+            Unit {
+                text,
+                start: unit.start,
+            },
+            lines,
+        ));
     }
     let execution = execution.insert(Execution {
         test_macros: count,
@@ -121,7 +123,10 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
         failure: None,
     });
     reporter.line("Executing deploy.sql");
-    for (i, unit) in units.iter().enumerate() {
+    if let Some(notice) = unused_tests_notice(project, count) {
+        reporter.line(&notice);
+    }
+    for (i, (unit, lines)) in units.iter().enumerate() {
         let outcome = guard
             .running(session, async {
                 session
@@ -132,10 +137,20 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             })
             .await;
         if let Err(e) = outcome {
+            let files: Vec<&File> = project.sources.iter().chain(&project.tests).collect();
+            let sent = Sent {
+                deploy_sql: &project.deploy_sql,
+                start: unit.start,
+                text: &unit.text,
+                lines,
+                tail: i > 0,
+            };
             execution.failure = Some(Failure {
                 unit: i + 1,
-                test: macro_units[i] && is_test_failure(&e),
-                files: failed_files(&e, project),
+                blame: e
+                    .sql_diagnostics()
+                    .map(|d| Blame::new(d, &e.text(), &sent, &files))
+                    .unwrap_or_default(),
             });
             return Err(e);
         }
@@ -147,8 +162,7 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
         let _ = session.client.batch_execute("ROLLBACK").await;
         execution.failure = Some(Failure {
             unit: units.len(),
-            test: false,
-            files: Vec::new(),
+            blame: Blame::default(),
         });
         return Err(Error::sql(
             "deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT",
@@ -157,122 +171,54 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
     Ok(())
 }
 
-fn executed_text(e: &Error) -> Option<String> {
-    let d = e.sql_diagnostics()?;
-    if let Some(q) = &d.internal_query {
-        return Some(q.clone());
-    }
-    let w = d.where_.as_deref()?;
-    let rest = w.strip_prefix("SQL statement \"")?;
-    let end = rest.rfind("\"\n").or_else(|| rest.rfind('"'))?;
-    Some(rest[..end].to_string())
-}
-
-fn failed_files(e: &Error, project: &Project) -> Vec<String> {
-    let Some(text) = executed_text(e) else {
-        return vec![];
-    };
-    let needle = text.trim();
-    if needle.is_empty() {
-        return vec![];
-    }
-    project
-        .sources
-        .iter()
-        .chain(&project.tests)
-        .filter(|f| crate::project::walk::is_sql(&f.path) && f.content.contains(needle))
-        .map(|f| f.path.clone())
-        .collect()
-}
-
-fn is_test_failure(e: &Error) -> bool {
-    e.sql_diagnostics()
-        .and_then(|d| d.where_.as_deref())
-        .is_some_and(|w| w.contains("pgmi_test"))
+fn unused_tests_notice(project: &Project, macros: usize) -> Option<String> {
+    let n = project.tests.len();
+    (macros == 0 && n > 0 && !project.deploy_sql.to_lowercase().contains("pgmi_test")).then(|| {
+        format!("{n} test file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run")
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::SqlDiagnostics;
-    use crate::project::walk::File;
 
-    fn failed(where_: Option<&str>, internal_query: Option<&str>) -> Error {
-        Error::sql("boom").with_sql(SqlDiagnostics {
-            where_: where_.map(str::to_string),
-            internal_query: internal_query.map(str::to_string),
-            ..SqlDiagnostics::default()
-        })
-    }
-
-    fn file(path: &str, content: &str) -> File {
-        File {
-            path: path.into(),
-            content: content.into(),
+    fn project(deploy_sql: &str, tests: &[&str]) -> Project {
+        Project {
+            deploy_sql: deploy_sql.into(),
+            tests: tests
+                .iter()
+                .map(|p| File {
+                    path: (*p).into(),
+                    content: "SELECT 1;".into(),
+                })
+                .collect(),
+            ..Project::default()
         }
     }
 
     #[test]
-    fn executed_text_prefers_the_internal_query() {
-        let e = failed(
-            Some(
-                "SQL statement \"SELECT 2\"\nPL/pgSQL function inline_code_block line 3 at EXECUTE",
-            ),
-            Some("SELECT 1/0"),
-        );
-        assert_eq!(executed_text(&e).as_deref(), Some("SELECT 1/0"));
-    }
-
-    #[test]
-    fn executed_text_reads_the_statement_out_of_where() {
-        let e = failed(
-            Some(
-                "SQL statement \"SELECT \"q\" FROM t\"\nPL/pgSQL function inline_code_block line 3 at EXECUTE",
-            ),
-            None,
-        );
-        assert_eq!(executed_text(&e).as_deref(), Some("SELECT \"q\" FROM t"));
-        let e = failed(Some("SQL statement \"SELECT 1\""), None);
-        assert_eq!(executed_text(&e).as_deref(), Some("SELECT 1"));
+    fn unused_tests_are_noticed_only_when_nothing_could_run_them() {
         assert_eq!(
-            executed_text(&failed(Some("PL/pgSQL function f() line 1"), None)),
-            None
+            unused_tests_notice(&project("SELECT 1;", &["./__test__/test_a.sql"]), 0).as_deref(),
+            Some("1 test file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run")
         );
-        assert_eq!(executed_text(&failed(None, None)), None);
-        assert_eq!(executed_text(&Error::sql("no diagnostics")), None);
-    }
-
-    #[test]
-    fn failed_files_are_the_sql_files_that_hold_the_statement() {
-        let project = Project {
-            sources: vec![
-                file("./a.sql", "CREATE TABLE a();\nSELECT 1/0;\n"),
-                file("./b.sql", "SELECT 2;"),
-                file("./notes.txt", "SELECT 1/0"),
-            ],
-            tests: vec![file("./__test__/t.sql", "  SELECT 1/0  ")],
-            ..Project::default()
-        };
         assert_eq!(
-            failed_files(&failed(None, Some("  SELECT 1/0\n")), &project),
-            ["./a.sql", "./__test__/t.sql"]
+            unused_tests_notice(
+                &project("BEGIN; CALL pgmi_test(); COMMIT;", &["./__test__/a.sql"]),
+                1
+            ),
+            None
         );
-        assert!(failed_files(&failed(None, Some("SELECT 3")), &project).is_empty());
-        assert!(failed_files(&failed(None, Some("  \n")), &project).is_empty());
-        assert!(failed_files(&Error::sql("x"), &project).is_empty());
-    }
-
-    #[test]
-    fn a_test_failure_is_one_raised_under_pgmi_test() {
-        assert!(is_test_failure(&failed(
-            Some("PL/pgSQL function pg_temp.pgmi_test_callback(text) line 4 at RAISE"),
+        assert_eq!(
+            unused_tests_notice(
+                &project(
+                    "SELECT count(*) FROM pg_temp.PGMI_TEST_SOURCE_VIEW;",
+                    &["./__test__/a.sql"]
+                ),
+                0
+            ),
             None
-        )));
-        assert!(!is_test_failure(&failed(
-            Some("PL/pgSQL function f() line 1"),
-            None
-        )));
-        assert!(!is_test_failure(&failed(None, None)));
-        assert!(!is_test_failure(&Error::sql("x")));
+        );
+        assert_eq!(unused_tests_notice(&project("SELECT 1;", &[]), 0), None);
     }
 }

@@ -327,7 +327,6 @@ fn failing_migration_keeps_sqlstate_and_detail() {
 }
 
 #[test]
-#[ignore = "the Rust binary does not resolve the line of a syntax error inside an executed file yet (Go reports line 4)"]
 fn failing_migration_syntax_error_resolves_to_its_line() {
     failing_migration(
         "syntax error resolves to the line in the file",

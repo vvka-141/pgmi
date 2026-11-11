@@ -57,6 +57,8 @@ pub(crate) struct SqlDiagnostics {
     pub(crate) hint: Option<String>,
     pub(crate) where_: Option<String>,
     pub(crate) internal_query: Option<String>,
+    pub(crate) position: Option<usize>,
+    pub(crate) internal_position: Option<usize>,
 }
 
 #[derive(Debug)]

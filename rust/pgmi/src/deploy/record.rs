@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::blame::redact_sql_passwords;
 use super::{Failure, Progress, Provision};
 use crate::VERSION;
 use crate::error::{Result, redact};
@@ -16,6 +17,8 @@ use crate::project::walk::Ignored;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeployRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
     connection_source: Option<&'static str>,
     contract_version: Option<&'static str>,
     created: Option<bool>,
@@ -41,6 +44,8 @@ pub(crate) struct DeployRecord {
     hint: Option<String>,
     ignored_paths: Vec<Ignored>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notices: Option<Value>,
@@ -55,7 +60,11 @@ pub(crate) struct DeployRecord {
     schema_version: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script_expanded: Option<bool>,
     server_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_line: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sqlstate: Option<String>,
     started_at: String,
@@ -106,6 +115,7 @@ impl DeployRecord {
             None => (None, None),
         };
         let mut record = DeployRecord {
+            column: None,
             connection_source: p.spec.as_ref().map(|s| s.source.label()),
             contract_version: p.contract.then_some("1"),
             created: loaded.map(|_| p.provision == Provision::Created),
@@ -123,6 +133,7 @@ impl DeployRecord {
             finished_at: timestamp(facts.started + facts.elapsed),
             hint: None,
             ignored_paths: loaded.map(|l| l.ignored.clone()).unwrap_or_default(),
+            line: None,
             message: None,
             notices,
             notices_truncated,
@@ -133,7 +144,9 @@ impl DeployRecord {
             recreated: loaded.map(|_| p.provision == Provision::Recreated),
             schema_version: 1,
             script: None,
+            script_expanded: None,
             server_version: p.server.as_ref().and_then(|s| s.version.clone()),
+            source_line: None,
             sqlstate: None,
             started_at: timestamp(facts.started),
             status: if exit_code == 0 { "success" } else { "failed" },
@@ -164,27 +177,35 @@ impl DeployRecord {
                 "psql"
             });
         }
-        self.error = Some(redact(&e.text(), secrets));
+        let clean = |t: &str| redact(&redact_sql_passwords(t), secrets);
+        self.error = Some(clean(&e.text()));
         let Some(d) = e.sql_diagnostics() else {
             return;
         };
         self.sqlstate.clone_from(&d.sqlstate);
-        self.detail.clone_from(&d.detail);
-        self.hint.clone_from(&d.hint);
-        self.where_.clone_from(&d.where_);
-        let Some(f) = failure else {
+        self.detail = d.detail.as_deref().map(clean);
+        self.hint = d.hint.as_deref().map(clean);
+        self.where_ = d.where_.as_deref().map(clean);
+        let Some(b) = failure.map(|f| &f.blame) else {
             return;
         };
-        self.phase = Some(if f.test { "test" } else { "deploy" });
-        let file = match f.files.as_slice() {
-            [] if f.test => return,
-            [] => "deploy.sql".to_string(),
-            [first, ..] => first.clone(),
-        };
-        if f.files.len() > 1 {
-            self.failed_file_candidates = Some(f.files.clone());
+        self.phase = Some(b.phase());
+        if let Some(w) = &b.where_ {
+            self.where_ = Some(clean(w));
         }
-        self.failed_file = Some(file.clone());
-        self.script = Some(file);
+        self.failed_file.clone_from(&b.file);
+        if b.candidates.len() > 1 {
+            self.failed_file_candidates = Some(b.candidates.clone());
+        }
+        let Some(loc) = &b.location else {
+            return;
+        };
+        self.script = Some(loc.script.clone());
+        if let Some(l) = &loc.line {
+            self.line = Some(l.number);
+            self.column = Some(l.column);
+            self.script_expanded = Some(false);
+            self.source_line = Some(clean(&l.text)).filter(|t| !t.is_empty());
+        }
     }
 }

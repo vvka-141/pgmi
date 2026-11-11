@@ -3,7 +3,7 @@ use crate::project::lexer::{self, Kind, Token};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unit {
     pub(crate) text: String,
-    pub(crate) line: usize,
+    pub(crate) start: usize,
 }
 
 fn words<'a>(src: &'a [u8], toks: &[Token]) -> Vec<&'a [u8]> {
@@ -75,14 +75,6 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-fn line_of(src: &str, pos: usize) -> usize {
-    src.as_bytes()[..pos]
-        .iter()
-        .filter(|b| **b == b'\n')
-        .count()
-        + 1
-}
-
 pub(crate) fn split(src: &str) -> Vec<Unit> {
     let bytes = src.as_bytes();
     let stmts = statements(src);
@@ -105,7 +97,7 @@ pub(crate) fn split(src: &str) -> Vec<Unit> {
             if has_code(0, bytes.len()) {
                 units.push(Unit {
                     text: src.to_string(),
-                    line: 1,
+                    start: 0,
                 });
             }
             return units;
@@ -114,7 +106,7 @@ pub(crate) fn split(src: &str) -> Vec<Unit> {
             let end = stmts[i].1;
             units.push(Unit {
                 text: src[..end].to_string(),
-                line: 1,
+                start: 0,
             });
             i + 1
         }
@@ -123,7 +115,7 @@ pub(crate) fn split(src: &str) -> Vec<Unit> {
         if has_code(*s, *e) {
             units.push(Unit {
                 text: src[*s..*e].to_string(),
-                line: line_of(src, *s),
+                start: *s,
             });
         }
     }
@@ -218,16 +210,61 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
     ))
 }
 
-pub(crate) fn expand(src: &str, found: &[Macro], generated: &[String]) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span {
+    line: usize,
+    first: usize,
+    last: usize,
+    shift_after: isize,
+}
+
+/// Maps a line of an expanded unit back to the line of the unit as written;
+/// a line inside a macro's expansion maps to the macro's own line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LineMap(Vec<Span>);
+
+impl LineMap {
+    pub(crate) fn original(&self, expanded: usize) -> (usize, bool) {
+        let mut shift = 0;
+        for span in &self.0 {
+            if expanded < span.first {
+                break;
+            }
+            if expanded <= span.last {
+                return (span.line, true);
+            }
+            shift = span.shift_after;
+        }
+        (expanded.saturating_add_signed(-shift), false)
+    }
+}
+
+fn newlines(s: &str) -> usize {
+    s.bytes().filter(|b| *b == b'\n').count()
+}
+
+pub(crate) fn expand(src: &str, found: &[Macro], generated: &[String]) -> (String, LineMap) {
     let mut out = String::with_capacity(src.len());
+    let mut spans = Vec::new();
+    let mut shift: isize = 0;
     let mut at = 0;
     for (m, g) in found.iter().zip(generated) {
         out.push_str(&src[at..m.start]);
         out.push_str(g);
         at = m.end;
+        let line = newlines(&src[..m.start]) + 1;
+        let span = newlines(g);
+        let first = line.saturating_add_signed(shift);
+        shift += span as isize - newlines(&src[m.start..m.end]) as isize;
+        spans.push(Span {
+            line,
+            first,
+            last: first + span,
+            shift_after: shift,
+        });
     }
     out.push_str(&src[at..]);
-    out
+    (out, LineMap(spans))
 }
 
 #[cfg(test)]
@@ -299,9 +336,27 @@ mod tests {
                 "a CALL pgmi_test() b",
                 &macros("a CALL pgmi_test() b"),
                 &["X".into()]
-            ),
+            )
+            .0,
             "a X b"
         );
+        let src = "BEGIN;\nCALL pgmi_test();\nSELECT 1;\nCALL pgmi_test(\n'x');\nSELEC 2;\n";
+        let (text, lines) = expand(src, &macros(src), &["A\nB\nC".into(), "D".into()]);
+        assert_eq!(text, "BEGIN;\nA\nB\nC;\nSELECT 1;\nD;\nSELEC 2;\n");
+        let mapped: Vec<_> = (1..=7).map(|l| lines.original(l)).collect();
+        assert_eq!(
+            mapped,
+            [
+                (1, false),
+                (2, true),
+                (2, true),
+                (2, true),
+                (3, false),
+                (4, true),
+                (6, false)
+            ]
+        );
+        assert_eq!(LineMap::default().original(9), (9, false));
         assert!(macros("CALL pgmi_test('a','b','c')").is_empty());
         assert_eq!(
             macros("CALL /* c */ pgmi_test -- c\n( '/a/' /* c */ ) ;").len(),

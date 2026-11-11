@@ -50,6 +50,7 @@ deploy/advanced-template-converges
 deploy/basic-template-converges
 deploy/json-failure
 deploy/json-success
+deploy/latin1-database
 dialect/pgmi-test-macro
 dialect/pgmi-test-macro-comments
 dialect/pgmi-test-macro-whitespace
@@ -69,6 +70,7 @@ errors/attribution
 errors/connection-failures
 errors/connection-string-secrets
 errors/head-syntax
+errors/line-and-column
 errors/temporary-privilege
 execution/atomic-head
 execution/loader-at-scale
@@ -103,6 +105,7 @@ formats/pgmi-yaml-edges
 notices/severity
 notices/streaming
 notices/summary-line
+notices/unused-tests
 notices/verbose-elapsed
 params/env-var-reaches-session
 params/invalid-key
