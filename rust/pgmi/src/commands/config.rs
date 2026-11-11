@@ -5,7 +5,7 @@ use crate::cli::ConfigArgs;
 use crate::config::edit;
 use crate::config::yaml::ProjectConfig;
 use crate::env::Env;
-use crate::error::{Error, Kind, Result};
+use crate::error::{Error, Kind, Result, Secret};
 use crate::tui::connection::{self, Done, Settings};
 
 pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -> Result<()> {
@@ -75,7 +75,7 @@ pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
 }
 
 pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
-    if s.password.expose().is_empty() {
+    if s.password.is_none() {
         return;
     }
     stderr("\n");
@@ -102,17 +102,18 @@ fn save_pgpass(s: &Settings, env: &Env) -> Result<PathBuf> {
         .ok_or_else(|| {
             Error::general("cannot determine where the password file goes; set PGPASSFILE")
         })?;
-    let mut dbs = vec![s.database.as_str()];
-    if s.maintenance != s.database {
+    let database = s.database.as_deref().unwrap_or_default();
+    let mut dbs = vec![database];
+    if s.maintenance != database {
         dbs.push(s.maintenance.as_str());
     }
     crate::conn::pgpass::save(
         &path,
-        &s.host,
-        s.port,
+        s.host.as_deref().unwrap_or_default(),
+        s.port.unwrap_or_default(),
         &dbs,
-        &s.username,
-        s.password.expose(),
+        s.username.as_deref().unwrap_or_default(),
+        s.password.as_ref().map(Secret::expose).unwrap_or_default(),
     )?;
     Ok(path)
 }
@@ -124,12 +125,12 @@ mod tests {
 
     fn settings(database: &str, maintenance: &str) -> Settings {
         Settings {
-            host: "127.0.0.1".into(),
-            port: 55601,
-            database: database.into(),
+            host: Some("127.0.0.1".into()),
+            port: Some(55601),
+            database: Some(database.into()),
             maintenance: maintenance.into(),
-            username: "postgres".into(),
-            password: "trial".into(),
+            username: Some("postgres".into()),
+            password: Some("trial".into()),
             ..Settings::default()
         }
     }

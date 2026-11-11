@@ -8,6 +8,8 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::select::{ACCENT, FAINT, MUTED, Outcome, Select};
 use crate::config::yaml::Connection;
+use crate::conn::cloud::Provider as Cloud;
+use crate::conn::resolve::SslMode;
 use crate::env::Env;
 use crate::error::{Result, Secret};
 
@@ -89,81 +91,91 @@ const PROVIDERS: [Provider; 5] = [
     },
 ];
 
+/// What the wizard collected; `None` is a setting the user left out, and
+/// pgmi.yaml then gets no key for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Settings {
-    pub(crate) auth_method: Option<&'static str>,
-    pub(crate) host: String,
-    pub(crate) port: u16,
-    pub(crate) database: String,
+    pub(crate) auth: Option<Cloud>,
+    pub(crate) host: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) database: Option<String>,
     pub(crate) maintenance: String,
-    pub(crate) username: String,
-    pub(crate) password: Secret,
-    pub(crate) sslmode: String,
-    pub(crate) sslcert: String,
-    pub(crate) sslkey: String,
-    pub(crate) sslrootcert: String,
-    pub(crate) aws_region: String,
-    pub(crate) google_instance: String,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<Secret>,
+    pub(crate) sslmode: Option<String>,
+    pub(crate) sslcert: Option<String>,
+    pub(crate) sslkey: Option<String>,
+    pub(crate) sslrootcert: Option<String>,
+    pub(crate) aws_region: Option<String>,
+    pub(crate) google_instance: Option<String>,
 }
 
 impl Settings {
-    pub(crate) fn yaml(&self) -> Vec<(&'static str, String)> {
-        let port = if self.port == 0 {
-            String::new()
-        } else {
-            self.port.to_string()
-        };
+    pub(crate) fn yaml(&self) -> Vec<(&'static str, Option<String>)> {
         vec![
             ("host", self.host.clone()),
-            ("port", port),
+            ("port", self.port.map(|p| p.to_string())),
             ("username", self.username.clone()),
             ("database", self.database.clone()),
-            ("maintenance_database", self.maintenance.clone()),
+            ("maintenance_database", Some(self.maintenance.clone())),
             ("sslmode", self.sslmode.clone()),
             ("sslcert", self.sslcert.clone()),
             ("sslkey", self.sslkey.clone()),
             ("sslrootcert", self.sslrootcert.clone()),
-            (
-                "auth_method",
-                self.auth_method.unwrap_or_default().to_string(),
-            ),
+            ("auth_method", self.auth.map(|a| a.key().to_string())),
             ("aws_region", self.aws_region.clone()),
             ("google_instance", self.google_instance.clone()),
         ]
     }
 
+    fn host(&self) -> &str {
+        self.host.as_deref().unwrap_or_default()
+    }
+
+    fn database(&self) -> &str {
+        self.database.as_deref().unwrap_or_default()
+    }
+
     fn target(&self) -> String {
-        if self.host.is_empty() && !self.google_instance.is_empty() {
-            return format!("{}/{}", self.google_instance, self.database);
+        match (&self.host, &self.google_instance) {
+            (None, Some(instance)) => format!("{instance}/{}", self.database()),
+            _ => format!(
+                "{}:{}/{}",
+                self.host(),
+                self.port.unwrap_or_default(),
+                self.database()
+            ),
         }
-        format!("{}:{}/{}", self.host, self.port, self.database)
     }
 
     fn token_label(&self) -> Option<&'static str> {
-        match self.auth_method {
-            Some("azure") => Some("Azure Entra ID"),
-            Some("aws") => Some("AWS IAM"),
-            Some("google") => Some("Google IAM"),
-            _ => None,
+        match self.auth? {
+            Cloud::Azure => Some("Azure Entra ID"),
+            Cloud::Aws => Some("AWS IAM"),
+            Cloud::Google => Some("Google IAM"),
+            Cloud::Databricks => None,
         }
     }
 
     fn keyword_string(&self) -> String {
         let quote = |v: &str| format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"));
         let mut parts = vec![
-            format!("host={}", quote(&self.host)),
-            format!("port={}", self.port),
+            format!("host={}", quote(self.host())),
+            format!("port={}", self.port.unwrap_or_default()),
             format!("dbname={}", quote(&self.maintenance)),
-            format!("user={}", quote(&self.username)),
+            format!(
+                "user={}",
+                quote(self.username.as_deref().unwrap_or_default())
+            ),
         ];
         for (k, v) in [
-            ("password", self.password.expose()),
-            ("sslmode", self.sslmode.as_str()),
-            ("sslcert", self.sslcert.as_str()),
-            ("sslkey", self.sslkey.as_str()),
-            ("sslrootcert", self.sslrootcert.as_str()),
+            ("password", self.password.as_ref().map(Secret::expose)),
+            ("sslmode", self.sslmode.as_deref()),
+            ("sslcert", self.sslcert.as_deref()),
+            ("sslkey", self.sslkey.as_deref()),
+            ("sslrootcert", self.sslrootcert.as_deref()),
         ] {
-            if !v.is_empty() {
+            if let Some(v) = v {
                 parts.push(format!("{k}={}", quote(v)));
             }
         }
@@ -171,8 +183,22 @@ impl Settings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Host,
+    Port,
+    Database,
+    Maintenance,
+    Username,
+    Password,
+    Region,
+    Instance,
+    Uri,
+}
+
 #[derive(Debug, Clone)]
 struct Input {
+    field: Field,
     label: &'static str,
     value: Vec<char>,
     cursor: usize,
@@ -183,9 +209,16 @@ struct Input {
 }
 
 impl Input {
-    fn new(label: &'static str, value: &str, placeholder: &'static str, limit: usize) -> Self {
+    fn new(
+        field: Field,
+        label: &'static str,
+        value: &str,
+        placeholder: &'static str,
+        limit: usize,
+    ) -> Self {
         let value: Vec<char> = value.chars().collect();
         Self {
+            field,
             label,
             cursor: value.len(),
             value,
@@ -294,14 +327,22 @@ impl Form {
                         .unwrap_or_else(|| default.to_string())
                 };
                 let host_default = if provider == 0 { "localhost" } else { "" };
-                let mut password = Input::new("Password:", "", "Enter password", 256)
-                    .hint("leave empty to use ~/.pgpass or $PGPASSWORD");
+                let mut password =
+                    Input::new(Field::Password, "Password:", "", "Enter password", 256)
+                        .hint("leave empty to use ~/.pgpass or $PGPASSWORD");
                 password.secret = true;
                 (
                     "Connection Details",
                     vec![
-                        Input::new("Host:", &pick(|c| &c.host, host_default), "hostname", 256),
                         Input::new(
+                            Field::Host,
+                            "Host:",
+                            &pick(|c| &c.host, host_default),
+                            "hostname",
+                            256,
+                        ),
+                        Input::new(
+                            Field::Port,
                             "Port:",
                             &initial
                                 .and_then(|c| c.port.as_deref())
@@ -312,16 +353,29 @@ impl Form {
                             "",
                             5,
                         ),
-                        Input::new("Database (required):", &pick(|c| &c.database, ""), "", 64)
-                            .hint("target database — created automatically if it doesn't exist"),
                         Input::new(
+                            Field::Database,
+                            "Database (required):",
+                            &pick(|c| &c.database, ""),
+                            "",
+                            64,
+                        )
+                        .hint("target database — created automatically if it doesn't exist"),
+                        Input::new(
+                            Field::Maintenance,
                             "Maintenance DB:",
                             &pick(|c| &c.maintenance_database, MAINTENANCE),
                             "",
                             64,
                         )
                         .hint("existing database pgmi connects to for server-level operations"),
-                        Input::new("Username:", &pick(|c| &c.username, "postgres"), "", 64),
+                        Input::new(
+                            Field::Username,
+                            "Username:",
+                            &pick(|c| &c.username, "postgres"),
+                            "",
+                            64,
+                        ),
                         password,
                     ],
                     &[],
@@ -330,29 +384,53 @@ impl Form {
             Method::Azure => (
                 "Azure PostgreSQL - Entra ID",
                 vec![
-                    Input::new("Server:", "", "myserver.postgres.database.azure.com", 256),
-                    Input::new("Database:", "", "mydb", 64),
-                    Input::new("Username:", "", "user@myserver", 128),
+                    Input::new(
+                        Field::Host,
+                        "Server:",
+                        "",
+                        "myserver.postgres.database.azure.com",
+                        256,
+                    ),
+                    Input::new(Field::Database, "Database:", "", "mydb", 64),
+                    Input::new(Field::Username, "Username:", "", "user@myserver", 128),
                 ],
                 &["Authentication uses Azure CLI (az login) or environment variables."],
             ),
             Method::Aws => (
                 "AWS RDS - IAM Authentication",
                 vec![
-                    Input::new("Host:", "", "mydb.xxx.us-east-1.rds.amazonaws.com", 256),
-                    Input::new("Port:", "5432", "", 5),
-                    Input::new("Database:", "", "mydb", 64),
-                    Input::new("Username:", "", "iam_user", 64),
-                    Input::new("Region:", "", "us-east-1", 32),
+                    Input::new(
+                        Field::Host,
+                        "Host:",
+                        "",
+                        "mydb.xxx.us-east-1.rds.amazonaws.com",
+                        256,
+                    ),
+                    Input::new(Field::Port, "Port:", "5432", "", 5),
+                    Input::new(Field::Database, "Database:", "", "mydb", 64),
+                    Input::new(Field::Username, "Username:", "", "iam_user", 64),
+                    Input::new(Field::Region, "Region:", "", "us-east-1", 32),
                 ],
                 &["Authentication uses AWS credentials (env vars, config file, or IAM role)."],
             ),
             Method::Google => (
                 "Google Cloud SQL - IAM",
                 vec![
-                    Input::new("Instance:", "", "project:region:instance", 256),
-                    Input::new("Database:", "", "mydb", 64),
-                    Input::new("Username:", "", "iam_user@project.iam", 128),
+                    Input::new(
+                        Field::Instance,
+                        "Instance:",
+                        "",
+                        "project:region:instance",
+                        256,
+                    ),
+                    Input::new(Field::Database, "Database:", "", "mydb", 64),
+                    Input::new(
+                        Field::Username,
+                        "Username:",
+                        "",
+                        "iam_user@project.iam",
+                        128,
+                    ),
                 ],
                 &[
                     "Instance format: project:region:instance",
@@ -362,6 +440,7 @@ impl Form {
             Method::Uri => (
                 "Connection String",
                 vec![Input::new(
+                    Field::Uri,
                     "PostgreSQL URI:",
                     "",
                     "postgresql://user:password@host:5432/database",
@@ -396,104 +475,101 @@ impl Form {
         None
     }
 
-    fn value(&self, i: usize) -> String {
-        self.inputs[i].text()
+    fn index(&self, field: Field) -> usize {
+        self.inputs
+            .iter()
+            .position(|i| i.field == field)
+            .unwrap_or_default()
     }
 
-    fn port(&self, i: usize) -> u16 {
-        self.value(i)
-            .parse::<u16>()
-            .ok()
+    fn filled(&self, field: Field) -> Option<String> {
+        self.inputs
+            .iter()
+            .find(|i| i.field == field)
+            .map(Input::text)
+            .filter(|v| !v.is_empty())
+    }
+
+    fn port(&self) -> u16 {
+        self.filled(Field::Port)
+            .and_then(|p| p.parse::<u16>().ok())
             .filter(|p| *p > 0)
             .unwrap_or(5432)
     }
 
-    fn settings(&self) -> std::result::Result<Settings, (usize, String)> {
-        let required = |i: usize, what: &str| {
-            if self.value(i).is_empty() {
-                Err((i, format!("{what} is required")))
-            } else {
-                Ok(())
-            }
-        };
-        let or = |v: String, d: &str| if v.is_empty() { d.to_string() } else { v };
+    fn required(&self, field: Field, what: &str) -> std::result::Result<String, (Field, String)> {
+        self.filled(field)
+            .ok_or_else(|| (field, format!("{what} is required")))
+    }
+
+    fn settings(&self) -> std::result::Result<Settings, (Field, String)> {
+        let or = |f: Field, d: &str| self.filled(f).unwrap_or_else(|| d.to_string());
         Ok(match self.method {
-            Method::Password => {
-                required(2, "database name")?;
-                Settings {
-                    host: or(self.value(0), "localhost"),
-                    port: self.port(1),
-                    database: self.value(2),
-                    maintenance: or(self.value(3), MAINTENANCE),
-                    username: or(self.value(4), "postgres"),
-                    password: self.value(5).into(),
-                    sslmode: "prefer".into(),
-                    ..Settings::default()
-                }
-            }
-            Method::Azure => {
-                required(0, "server name")?;
-                required(1, "database name")?;
-                Settings {
-                    auth_method: Some("azure"),
-                    host: self.value(0),
-                    port: 5432,
-                    database: self.value(1),
-                    maintenance: MAINTENANCE.into(),
-                    username: self.value(2),
-                    sslmode: "require".into(),
-                    ..Settings::default()
-                }
-            }
-            Method::Aws => {
-                required(0, "host")?;
-                required(2, "database name")?;
-                Settings {
-                    auth_method: Some("aws"),
-                    host: self.value(0),
-                    port: self.port(1),
-                    database: self.value(2),
-                    maintenance: MAINTENANCE.into(),
-                    username: self.value(3),
-                    aws_region: self.value(4),
-                    sslmode: "require".into(),
-                    ..Settings::default()
-                }
-            }
-            Method::Google => {
-                required(0, "instance connection name")?;
-                required(1, "database name")?;
-                Settings {
-                    auth_method: Some("google"),
-                    google_instance: self.value(0),
-                    database: self.value(1),
-                    maintenance: MAINTENANCE.into(),
-                    username: self.value(2),
-                    ..Settings::default()
-                }
-            }
+            Method::Password => Settings {
+                database: Some(self.required(Field::Database, "database name")?),
+                host: Some(or(Field::Host, "localhost")),
+                port: Some(self.port()),
+                maintenance: or(Field::Maintenance, MAINTENANCE),
+                username: Some(or(Field::Username, "postgres")),
+                password: self.filled(Field::Password).map(Secret::from),
+                sslmode: Some(SslMode::Prefer.to_string()),
+                ..Settings::default()
+            },
+            Method::Azure => Settings {
+                auth: Some(Cloud::Azure),
+                host: Some(self.required(Field::Host, "server name")?),
+                database: Some(self.required(Field::Database, "database name")?),
+                port: Some(5432),
+                maintenance: MAINTENANCE.into(),
+                username: self.filled(Field::Username),
+                sslmode: Some(SslMode::Require.to_string()),
+                ..Settings::default()
+            },
+            Method::Aws => Settings {
+                auth: Some(Cloud::Aws),
+                host: Some(self.required(Field::Host, "host")?),
+                database: Some(self.required(Field::Database, "database name")?),
+                port: Some(self.port()),
+                maintenance: MAINTENANCE.into(),
+                username: self.filled(Field::Username),
+                aws_region: self.filled(Field::Region),
+                sslmode: Some(SslMode::Require.to_string()),
+                ..Settings::default()
+            },
+            Method::Google => Settings {
+                auth: Some(Cloud::Google),
+                google_instance: Some(self.required(Field::Instance, "instance connection name")?),
+                database: Some(self.required(Field::Database, "database name")?),
+                maintenance: MAINTENANCE.into(),
+                username: self.filled(Field::Username),
+                ..Settings::default()
+            },
             Method::Uri => {
-                required(0, "connection string")?;
-                let f =
-                    crate::conn::parse::parse(&self.value(0)).map_err(|e| (0, e.to_string()))?;
-                let get = |k: &str| f.get(k).cloned().unwrap_or_default();
-                let port = match f.get("port") {
+                let uri = self.required(Field::Uri, "connection string")?;
+                let mut f =
+                    crate::conn::parse::parse(&uri).map_err(|e| (Field::Uri, e.to_string()))?;
+                let port = f.remove("port");
+                let mut take = |k: &str| f.remove(k).filter(|v| !v.is_empty());
+                let port = match port {
                     None => 5432,
-                    Some(p) => p
-                        .parse::<u16>()
-                        .map_err(|_| (0, "invalid connection string: give one port".to_string()))?,
+                    Some(p) => p.parse::<u16>().map_err(|_| {
+                        (
+                            Field::Uri,
+                            "invalid connection string: give one port".to_string(),
+                        )
+                    })?,
                 };
                 Settings {
-                    host: or(get("host"), "localhost"),
-                    port,
-                    database: get("dbname"),
+                    host: Some(take("host").unwrap_or_else(|| "localhost".into())),
+                    port: Some(port),
+                    database: take("dbname"),
                     maintenance: MAINTENANCE.into(),
-                    username: get("user"),
-                    password: get("password").into(),
-                    sslmode: get("sslmode"),
-                    sslcert: get("sslcert"),
-                    sslkey: get("sslkey"),
-                    sslrootcert: get("sslrootcert"),
+                    username: take("user"),
+                    password: take("password").map(Secret::from),
+                    sslmode: take("sslmode"),
+                    sslcert: take("sslcert"),
+                    sslkey: take("sslkey"),
+                    sslrootcert: take("sslrootcert"),
                     ..Settings::default()
                 }
             }
@@ -677,7 +753,7 @@ impl Wizard {
                 FormOutcome::Submit => match form.settings() {
                     Err((field, message)) => {
                         form.error = message;
-                        form.focus = field;
+                        form.focus = form.index(field);
                         None
                     }
                     Ok(mut s) => {
@@ -771,21 +847,19 @@ impl Wizard {
 }
 
 fn keep_tls(s: &mut Settings, initial: &Connection) {
-    let token = matches!(s.auth_method, Some("azure" | "aws"));
+    let token = matches!(s.auth, Some(Cloud::Azure | Cloud::Aws));
     if let Some(mode) = initial.sslmode.as_deref().filter(|m| !m.is_empty())
-        && (!token || matches!(mode, "require" | "verify-ca" | "verify-full"))
+        && (!token || mode.parse::<SslMode>().is_ok_and(|m| !m.allows_plaintext()))
     {
-        s.sslmode = mode.to_string();
+        s.sslmode = Some(mode.to_string());
     }
     for (slot, kept) in [
         (&mut s.sslcert, &initial.sslcert),
         (&mut s.sslkey, &initial.sslkey),
         (&mut s.sslrootcert, &initial.sslrootcert),
     ] {
-        if slot.is_empty()
-            && let Some(k) = kept
-        {
-            slot.clone_from(k);
+        if slot.is_none() {
+            *slot = kept.clone().filter(|k| !k.is_empty());
         }
     }
 }
@@ -806,13 +880,17 @@ fn test_lines(s: &Settings, t: &Test) -> Vec<Line<'static>> {
         Test::Passed(info) => {
             if s.token_label().is_none() {
                 lines.push(Line::styled(
-                    format!("✓ Connected to {}:{}/{}", s.host, s.port, s.maintenance),
+                    format!(
+                        "✓ Connected to {}:{}/{}",
+                        s.host(),
+                        s.port.unwrap_or_default(),
+                        s.maintenance
+                    ),
                     success,
                 ));
-                if !s.database.is_empty() && s.database != s.maintenance {
+                if let Some(db) = s.database.as_ref().filter(|d| **d != s.maintenance) {
                     lines.push(detail(&format!(
-                        "{} is created on the first deploy if it does not exist",
-                        s.database
+                        "{db} is created on the first deploy if it does not exist"
                     )));
                 }
             } else {
@@ -946,13 +1024,13 @@ mod tests {
         w.update(key(KeyCode::Tab));
         typed(&mut w, "pw");
         let want = Settings {
-            host: "127.0.0.1".into(),
-            port: 6543,
-            database: "app".into(),
+            host: Some("127.0.0.1".into()),
+            port: Some(6543),
+            database: Some("app".into()),
             maintenance: "postgres".into(),
-            username: "postgres".into(),
-            password: "pw".into(),
-            sslmode: "prefer".into(),
+            username: Some("postgres".into()),
+            password: Some("pw".into()),
+            sslmode: Some("prefer".into()),
             ..Settings::default()
         };
         assert_eq!(
@@ -1018,11 +1096,13 @@ mod tests {
         let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
             panic!("no test");
         };
-        assert_eq!(s.auth_method, Some("google"));
+        assert_eq!(s.auth, Some(Cloud::Google));
         assert_eq!(s.target(), "p:r:i/db");
         let yaml = s.yaml();
-        assert!(yaml.contains(&("port", String::new())));
-        assert!(yaml.contains(&("google_instance", "p:r:i".into())));
+        assert!(yaml.contains(&("port", None)));
+        assert!(yaml.contains(&("host", None)));
+        assert!(yaml.contains(&("auth_method", Some("google".into()))));
+        assert!(yaml.contains(&("google_instance", Some("p:r:i".into()))));
     }
 
     #[test]
@@ -1039,15 +1119,16 @@ mod tests {
         };
         assert_eq!(
             (
-                s.host.as_str(),
+                s.host.as_deref(),
                 s.port,
-                s.database.as_str(),
-                s.username.as_str()
+                s.database.as_deref(),
+                s.username.as_deref()
             ),
-            ("db.example", 6000, "app", "u")
+            (Some("db.example"), Some(6000), Some("app"), Some("u"))
         );
-        assert_eq!(s.password.expose(), "s:cret");
-        assert_eq!(s.sslmode, "require");
+        assert_eq!(s.password.as_ref().map(Secret::expose), Some("s:cret"));
+        assert_eq!(s.sslmode.as_deref(), Some("require"));
+        assert_eq!(s.sslrootcert, None);
     }
 
     #[test]
@@ -1068,14 +1149,14 @@ mod tests {
         let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
             panic!("no test");
         };
-        assert_eq!((s.host.as_str(), s.port), ("db", 6000));
-        assert_eq!(s.sslmode, "verify-full");
-        assert_eq!(s.sslrootcert, "/ca.pem");
+        assert_eq!((s.host.as_deref(), s.port), (Some("db"), Some(6000)));
+        assert_eq!(s.sslmode.as_deref(), Some("verify-full"));
+        assert_eq!(s.sslrootcert.as_deref(), Some("/ca.pem"));
     }
 
     #[test]
     fn input_editing() {
-        let mut i = Input::new("x", "abc", "", 4);
+        let mut i = Input::new(Field::Host, "x", "abc", "", 4);
         i.edit(key(KeyCode::Left));
         i.edit(key(KeyCode::Char('X')));
         i.edit(key(KeyCode::Char('Y')));
@@ -1148,12 +1229,12 @@ mod tests {
 
     fn defaults(db: &str) -> Settings {
         Settings {
-            host: "localhost".into(),
-            port: 5432,
-            database: db.into(),
+            host: Some("localhost".into()),
+            port: Some(5432),
+            database: Some(db.into()),
             maintenance: "postgres".into(),
-            username: "postgres".into(),
-            sslmode: "prefer".into(),
+            username: Some("postgres".into()),
+            sslmode: Some("prefer".into()),
             ..Settings::default()
         }
     }
@@ -1338,8 +1419,8 @@ mod tests {
             panic!("no test");
         };
         assert_eq!(
-            (s.auth_method, s.sslmode.as_str()),
-            (Some("azure"), "require")
+            (s.auth, s.sslmode.as_deref(), s.port),
+            (Some(Cloud::Azure), Some("require"), Some(5432))
         );
         w.tested(Ok("configured".into()));
         assert!(matches!(
@@ -1373,12 +1454,17 @@ mod tests {
         };
         assert_eq!(
             (
-                s.auth_method,
-                s.aws_region.as_str(),
+                s.auth,
+                s.aws_region.as_deref(),
                 s.port,
-                s.database.as_str()
+                s.database.as_deref()
             ),
-            (Some("aws"), "us-east-1", 5432, "mydb")
+            (
+                Some(Cloud::Aws),
+                Some("us-east-1"),
+                Some(5432),
+                Some("mydb")
+            )
         );
     }
 
@@ -1457,7 +1543,7 @@ mod tests {
         }) else {
             panic!("no test");
         };
-        assert_eq!(s.port, 5432);
+        assert_eq!(s.port, Some(5432));
     }
 
     #[test]
@@ -1550,10 +1636,10 @@ mod tests {
             sslrootcert: Some("/ca.pem".into()),
             ..Connection::default()
         };
-        let with = |auth: Option<&'static str>, mode: &str, kept: Option<&str>| {
+        let with = |auth: Option<Cloud>, mode: &str, kept: Option<&str>| {
             let mut s = Settings {
-                auth_method: auth,
-                sslmode: mode.into(),
+                auth,
+                sslmode: Some(mode.into()),
                 ..Settings::default()
             };
             if let Some(k) = kept {
@@ -1564,29 +1650,76 @@ mod tests {
         let s = with(None, "prefer", Some("verify-full"));
         assert_eq!(
             (
-                s.sslmode.as_str(),
-                s.sslrootcert.as_str(),
-                s.sslcert.as_str(),
-                s.sslkey.as_str()
+                s.sslmode.as_deref(),
+                s.sslrootcert.as_deref(),
+                s.sslcert.as_deref(),
+                s.sslkey.as_deref()
             ),
-            ("verify-full", "/ca.pem", "/client.crt", "/client.key")
+            (
+                Some("verify-full"),
+                Some("/ca.pem"),
+                Some("/client.crt"),
+                Some("/client.key")
+            )
         );
         assert_eq!(
-            with(Some("azure"), "require", Some("verify-full")).sslmode,
-            "verify-full"
+            with(Some(Cloud::Azure), "require", Some("verify-full"))
+                .sslmode
+                .as_deref(),
+            Some("verify-full")
         );
         assert_eq!(
-            with(Some("azure"), "require", Some("prefer")).sslmode,
-            "require"
+            with(Some(Cloud::Azure), "require", Some("prefer"))
+                .sslmode
+                .as_deref(),
+            Some("require")
         );
         assert_eq!(
-            with(Some("aws"), "require", Some("disable")).sslmode,
-            "require"
+            with(Some(Cloud::Aws), "require", Some("disable"))
+                .sslmode
+                .as_deref(),
+            Some("require")
         );
         let mut w = Wizard::new(None);
         let Some(Effect::Test(s)) = local_with_database(&mut w, "d") else {
             panic!("no test");
         };
-        assert_eq!(s.sslmode, "prefer");
+        assert_eq!(s.sslmode.as_deref(), Some("prefer"));
+    }
+
+    #[test]
+    fn fields_are_read_by_name_whatever_their_order() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 2);
+        w.update(key(KeyCode::Enter));
+        let form = w.form.as_mut().unwrap();
+        form.inputs.reverse();
+        for (field, value) in [
+            (Field::Host, "h"),
+            (Field::Port, "6000"),
+            (Field::Database, "d"),
+            (Field::Username, "u"),
+            (Field::Region, "r"),
+        ] {
+            let i = form.index(field);
+            form.inputs[i].value = value.chars().collect();
+        }
+        let s = form.settings().unwrap();
+        assert_eq!(
+            (
+                s.host.as_deref(),
+                s.port,
+                s.database.as_deref(),
+                s.username.as_deref(),
+                s.aws_region.as_deref()
+            ),
+            (Some("h"), Some(6000), Some("d"), Some("u"), Some("r"))
+        );
+        let database = form.index(Field::Database);
+        form.inputs[database].value.clear();
+        assert_eq!(
+            form.settings(),
+            Err((Field::Database, "database name is required".into()))
+        );
     }
 }

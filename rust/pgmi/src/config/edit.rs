@@ -23,9 +23,9 @@ pub(crate) const KEYS: [&str; 14] = [
     "google_instance",
 ];
 
-pub(crate) fn fresh(values: &[(&str, String)]) -> String {
+pub(crate) fn fresh(values: &[(&str, Option<String>)]) -> String {
     let mut out = String::from("connection:\n");
-    for (k, v) in values.iter().filter(|(_, v)| !v.is_empty()) {
+    for (k, v) in values.iter().filter_map(|(k, v)| Some((k, v.as_ref()?))) {
         out.push_str(&format!("  {k}: {}\n", scalar(v)));
     }
     out
@@ -47,7 +47,7 @@ fn scalar(v: &str) -> String {
     }
 }
 
-pub(crate) fn set_connection(text: &str, values: &[(&str, String)]) -> String {
+pub(crate) fn set_connection(text: &str, values: &[(&str, Option<String>)]) -> String {
     if text.trim().is_empty() {
         return fresh(values);
     }
@@ -64,8 +64,11 @@ pub(crate) fn set_connection(text: &str, values: &[(&str, String)]) -> String {
     };
     let mut added = Vec::new();
     for key in KEYS {
-        match values.iter().find(|(k, v)| *k == key && !v.is_empty()) {
-            Some((_, v)) => {
+        match values
+            .iter()
+            .find_map(|(k, v)| v.as_ref().filter(|_| *k == key))
+        {
+            Some(v) => {
                 if !section.contains_key(key) {
                     added.push(key);
                 }
@@ -142,14 +145,14 @@ mod tests {
     use super::*;
     use crate::config::yaml::ProjectConfig;
 
-    fn local() -> Vec<(&'static str, String)> {
+    fn local() -> Vec<(&'static str, Option<String>)> {
         vec![
-            ("host", "127.0.0.1".into()),
-            ("port", "55611".into()),
-            ("username", "postgres".into()),
-            ("database", "app".into()),
-            ("maintenance_database", "postgres".into()),
-            ("sslmode", "prefer".into()),
+            ("host", Some("127.0.0.1".into())),
+            ("port", Some("55611".into())),
+            ("username", Some("postgres".into())),
+            ("database", Some("app".into())),
+            ("maintenance_database", Some("postgres".into())),
+            ("sslmode", Some("prefer".into())),
         ]
     }
 
@@ -195,8 +198,8 @@ mod tests {
         let out = set_connection(
             "connection:\n  host: old\n  aws_region: eu-west-1\n  database: x\n",
             &[
-                ("google_instance", "p:r:i".into()),
-                ("database", "d".into()),
+                ("google_instance", Some("p:r:i".into())),
+                ("database", Some("d".into())),
             ],
         );
         let cfg = ProjectConfig::parse(&out).unwrap();
@@ -209,10 +212,10 @@ mod tests {
     #[test]
     fn odd_values_round_trip() {
         let values = vec![
-            ("host", "my host:1".into()),
-            ("database", "it's".into()),
-            ("username", "true".into()),
-            ("sslmode", "require".into()),
+            ("host", Some("my host:1".into())),
+            ("database", Some("it's".into())),
+            ("username", Some("true".into())),
+            ("sslmode", Some("require".into())),
         ];
         for text in ["", "params:\n  a: b\n", "connection: ~\ntimeout: 1m\n"] {
             let out = set_connection(text, &values);

@@ -40,14 +40,14 @@ pub(crate) struct Connection {
 }
 
 fn auth_method(text: &str) -> Result<Provider> {
-    match text {
-        "azure" => Ok(Provider::Azure),
-        "aws" => Ok(Provider::Aws),
-        "google" => Ok(Provider::Google),
-        _ => Err(Error::config(format!(
-            "failed to load pgmi.yaml: invalid auth_method {text:?}: expected azure, aws or google"
-        ))),
-    }
+    [Provider::Azure, Provider::Aws, Provider::Google]
+        .into_iter()
+        .find(|p| p.key() == text)
+        .ok_or_else(|| {
+            Error::config(format!(
+                "failed to load pgmi.yaml: invalid auth_method {text:?}: expected azure, aws or google"
+            ))
+        })
 }
 
 impl ProjectConfig {

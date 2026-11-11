@@ -21,6 +21,16 @@ pub(crate) enum Provider {
 }
 
 impl Provider {
+    /// The name `pgmi.yaml`'s `auth_method` uses.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Provider::Azure => "azure",
+            Provider::Aws => "aws",
+            Provider::Google => "google",
+            Provider::Databricks => "databricks",
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Provider::Azure => "Azure Entra ID",

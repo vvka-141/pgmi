@@ -88,7 +88,7 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
                     target.join("pgmi.yaml").display()
                 );
                 crate::commands::config::offer_pgpass(s, env);
-                db = Some(s.database.as_str()).filter(|d| !d.is_empty());
+                db = s.database.as_deref();
             }
         }
     }
