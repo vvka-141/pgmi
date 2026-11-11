@@ -1,0 +1,23 @@
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). With DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET (a job's service principal, OAuth M2M) pgmi gets a workspace token from /oidc/v1/token (client credentials in the Authorization header, scope all-apis) and asks for the Lakebase credential with it; a wrong secret is exit 11 naming OAuth M2M, never the secret
+impl: rust
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_CLIENT_ID: "{databricks_client_id}", DATABRICKS_CLIENT_SECRET: "{databricks_client_secret}", SSL_CERT_FILE: "{ca}", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        "{fake_https_log}":
+          - 'POST /oidc/v1/token .*"[Aa]uthorization": "Basic .* grant_type=client_credentials&scope=all-apis$'
+          - 'POST /api/2\.0/postgres/credentials .*"[Aa]uthorization": "Bearer fake-m2m-access-token".*endpoints/{db}"\}$'
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_CLIENT_ID: "{databricks_client_id}", DATABRICKS_CLIENT_SECRET: not-the-secret-4711, SSL_CERT_FILE: "{ca}", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ["OAuth M2M \\(client fake-m2m-client\\).*401.*Client authentication failed"]
+      stderr_not: ["not-the-secret-4711"]

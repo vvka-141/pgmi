@@ -95,6 +95,7 @@ def test_stdin_text_and_hex_repeat_without_newline():
         ),
         ({**MINIMAL, "steps": [{"sql": "SELECT 1", "expect": {"rust": {"exit": 1}}}]}, "steps[0].expect.rust.exit"),
         ({**MINIMAL, "steps": [{"sql": "SELECT 1", "database": "postgres"}]}, "steps[0].database"),
+        ({**MINIMAL, "impl": "python"}, "impl"),
         (
             {**MINIMAL, "steps": [{"pgmi": ["x"], "database": "maintenance", "expect": {"exit": 0}}]},
             "steps[0].database",
@@ -127,6 +128,13 @@ def test_rust_override_is_ignored_for_go():
 def test_rust_override_replaces_only_the_keys_it_sets():
     expect = parse_case("cases/x.yaml", RUST_OVERRIDE, "rust").steps[0].expect
     assert (expect.exit, expect.stderr, expect.stdout) == (10, ("key",), ("done",))
+
+
+def test_a_case_runs_on_every_implementation_unless_it_names_one():
+    assert parse_case("cases/x.yaml", MINIMAL).runs_on("go")
+    rust_only = parse_case("cases/x.yaml", {**MINIMAL, "impl": "rust"})
+    assert rust_only.runs_on("rust")
+    assert not rust_only.runs_on("go")
 
 
 @pytest.mark.parametrize(

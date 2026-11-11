@@ -4,8 +4,8 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 
-from pgmi_blackbox.certs import AZURE_USER, CERT_USER, MD5_USER, make_certs
-from pgmi_blackbox.fakes import AZURE_TOKEN, start_fakes
+from pgmi_blackbox.certs import AZURE_USER, CERT_USER, LAKEBASE_USER, MD5_USER, make_certs
+from pgmi_blackbox.fakes import AZURE_TOKEN, LAKEBASE_TOKEN, start_fakes
 from pgmi_blackbox.server import IMAGE, Server, wait_ready
 
 KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
@@ -65,6 +65,7 @@ def start(kind: str, certs: Path, stack: ExitStack) -> tuple[Server, dict[str, s
         c.execute(f"CREATE ROLE {MD5_USER} LOGIN SUPERUSER PASSWORD 'postgres'")
         c.execute("SET password_encryption = 'scram-sha-256'")
         c.execute(f"CREATE ROLE {AZURE_USER} LOGIN SUPERUSER PASSWORD '{AZURE_TOKEN}'")
+        c.execute(f"CREATE ROLE {LAKEBASE_USER} LOGIN SUPERUSER PASSWORD '{LAKEBASE_TOKEN}'")
     return server, {f"{{{kind}_port}}": str(port)}
 
 

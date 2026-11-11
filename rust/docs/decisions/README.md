@@ -33,6 +33,7 @@ them.
 | [0020](0020-metadata-xml.md) | roxmltree for `<pgmi-meta>`, uuid for ids; scaffold stops at `.git` |
 | [0021](0021-pure-rust.md) | Pure Rust (PGMI-855): features that keep C out of every cloud crate, a CI gate banning C-compiling crates and checking every target with no C compiler; graviola and the platform linkers accepted by the owner (2026-11-11) |
 | [0022](0022-library-layout-and-seams.md) | One package with a lib target and a thin bin; `pub(crate)` by default; seams only where a test double exists (`Vfs`, `Approver`, Reporter sink, serve over any transport); `deploy::Request`, `DeployRecord`, typed settings and `Secret`; an ordered refactor plan that keeps the black-box suite green after each step |
+| [0023](0023-databricks-lakebase.md) | Databricks Lakebase sign-in hand-written (PGMI-849): `POST /api/2.0/postgres/credentials`, PAT, OAuth M2M, the Databricks CLI and Azure, a credential refreshed five minutes before it expires; `impl: rust` black-box cases against a fake workspace |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage
@@ -68,6 +69,7 @@ Every `###` section of the behaviour contract and the records that serve it.
 | File formats | 0016, 0013 |
 | Terminal behaviour | 0012, 0016 |
 | Cloud sign-in | 0007, 0008, 0009, 0006 |
+| Databricks Lakebase sign-in | 0023, 0007, 0006 |
 | Google sign-in failure is exit 11 | 0009, 0002 |
 | Every address's error is reported | 0004 |
 | POSIX character classes in .pgmiignore | 0014 |

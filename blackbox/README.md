@@ -24,6 +24,7 @@ One YAML file under `cases/<area>/`. The file name is the test name.
 
 ```yaml
 description: a failing statement is exit 13 and the head commits nothing
+impl: rust               # optional: run only for this implementation (see below)
 servers: [tls]           # optional: extra servers the runner starts (see below)
 home:                    # optional: files written into the case's empty HOME
   .pgpass: "{host}:{port}:*:{user}:{password}\n"     # mode 0600
@@ -78,6 +79,12 @@ replace the base keys of the same name; keys it does not set stay. Use it only
 where the owner decided the Rust binary differs, and name that section of
 `docs/design/behaviour-contract.md` in the case's description.
 
+`impl: rust` (or `go`) runs a whole case for that implementation only; under
+the other one it is skipped. It is for new scope the other binary does not
+have, such as Rust's `--databricks`, never for a difference in behaviour
+(that is `expect.rust`). Say "Rust only" and name the contract section in the
+description.
+
 Placeholders, replaced in arguments, `env` values, `stdin`, `cwd`, file contents,
 SQL, expected rows, `files` paths, `stdout`/`stderr`/`raw`/`files` regexes (escaped) and `json` strings: `{project}`, `{db}`, `{conn}`
 (URI of the maintenance database), `{host}`, `{port}`, `{user}`, `{password}`, `{home}`, `{workdir}`,
@@ -94,7 +101,7 @@ Databases a case creates there are dropped afterwards.
 | `tls_only` | refuses connections without TLS | `{tls_only_port}` (and the certificate placeholders) |
 | `replica` | a primary and a hot standby streaming from it | `{primary_port}`, `{standby_port}` |
 | `socket` | its Unix socket directory is shared with the host | `{socket_dir}` |
-| `fakes` | in-process: an HTTP and an HTTPS server answering token requests, and a PostgreSQL front that records the password it is sent (then refuses it) | `{fake_http}`, `{fake_https}`, `{fake_http_log}`, `{fake_https_log}`, `{recorder_port}`, `{recorder_log}`, `{azure_token}`; the `tls` server has `{azure_user}` with that token as password |
+| `fakes` | in-process: an HTTP and an HTTPS server answering token requests (Azure, AWS, Cloud SQL, and a Databricks workspace: `/oidc/v1/token` and `/api/2.0/postgres/credentials`), and a PostgreSQL front that records the password it is sent (then refuses it) | `{fake_http}`, `{fake_https}`, `{fake_http_log}`, `{fake_https_log}`, `{recorder_port}`, `{recorder_log}`, `{azure_token}`, `{lakebase_token}`, `{databricks_pat}`, `{databricks_client_id}`, `{databricks_client_secret}`, `{databricks_cli_token}`; the `tls` server has `{azure_user}` with the Azure token and `{lakebase_user}` with the Lakebase credential as password. The workspace refuses an unknown bearer (401), answers 403 and 503 for `{databricks_pat}-403` and `-503`, 404 for an endpoint ending in `/endpoints/missing`, and a 60-second credential for one ending in `-short` |
 
 The certificates come from `openssl`; Docker and `openssl` must be on `PATH`.
 

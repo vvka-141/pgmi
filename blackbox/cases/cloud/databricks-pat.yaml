@@ -1,0 +1,27 @@
+description: Rust only (new scope, Go has no native Lakebase sign-in; contract "Databricks Lakebase sign-in"). --databricks with DATABRICKS_TOKEN asks the workspace for a Lakebase credential for --databricks-endpoint (or PGMI_DATABRICKS_ENDPOINT) and deploys with it as the password; a credential with an hour left is minted once for every connection of the deploy, and neither token reaches stderr, stdout or --json
+impl: rust
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --verbose, --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 0
+      stderr_not: ["{lakebase_token}", "{databricks_pat}"]
+      files:
+        "{fake_https_log}":
+          - 'POST /api/2\.0/postgres/credentials .*"[Aa]uthorization": "Bearer {databricks_pat}".* \{"endpoint":"projects/p/branches/b/endpoints/{db}"\}$'
+          - '\A(?![\s\S]*endpoints/{db}"[\s\S]*endpoints/{db}")'
+  - pgmi: [deploy, "{project}", --databricks, --json, --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname={db} sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}", PATH: "/nonexistent", PGMI_DATABRICKS_ENDPOINT: "projects/p/branches/b/endpoints/{db}-env"}
+    timeout: 60
+    expect:
+      exit: 13
+      json: {status: failed}
+      stdout_not: ["{lakebase_token}", "{databricks_pat}"]
+      stderr_not: ["{lakebase_token}", "{databricks_pat}"]
+      files:
+        "{fake_https_log}": ['\{"endpoint":"projects/p/branches/b/endpoints/{db}-env"\}$']

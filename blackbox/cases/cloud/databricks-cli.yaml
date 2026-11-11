@@ -1,0 +1,37 @@
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). With no token and no client secret, pgmi asks the Databricks CLI (a stub databricks on PATH) for a workspace token, by profile when ~/.databrickscfg supplies the host (databricks auth token --profile DEFAULT) and by host when DATABRICKS_HOST does; a CLI that is not logged in is exit 11 with its message
+impl: rust
+servers: [tls, fakes]
+home:
+  .databrickscfg: "[DEFAULT]\nhost = {fake_https}\n"
+  bin/databricks:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/databricks-calls.log"
+      if [ -n "$FAIL_LOGIN" ]; then echo "Error: cache: databricks OAuth is not configured for this host" >&2; exit 1; fi
+      printf '{"access_token": "{databricks_cli_token}", "token_type": "Bearer", "expiry": "2099-01-01T00:00:00Z"}\n'
+project:
+  files:
+    deploy.sql: CREATE TABLE IF NOT EXISTS who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/databricks-calls.log: ["^auth token --profile DEFAULT$"]
+        "{fake_https_log}": ['"[Aa]uthorization": "Bearer {databricks_cli_token}".*endpoints/{db}"\}$']
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname={db} sslmode=require"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", SSL_CERT_FILE: "{ca}", DATABRICKS_HOST: "{fake_https}"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/databricks-calls.log: ["^auth token --host {fake_https}$"]
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname={db} sslmode=require"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", SSL_CERT_FILE: "{ca}", FAIL_LOGIN: "1"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ["databricks-cli: databricks auth token failed: Error: cache: databricks OAuth is not configured"]

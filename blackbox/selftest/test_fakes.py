@@ -8,7 +8,17 @@ import urllib.request
 import pytest
 
 from pgmi_blackbox.certs import make_certs, openssl
-from pgmi_blackbox.fakes import AWS_ROLE, CLOUD_SQL_PORT, GOOGLE_TOKEN, _aws_answer, start_fakes
+from pgmi_blackbox.fakes import (
+    AWS_ROLE,
+    CLOUD_SQL_PORT,
+    DATABRICKS_M2M_TOKEN,
+    DATABRICKS_PAT,
+    GOOGLE_TOKEN,
+    LAKEBASE_TOKEN,
+    _aws_answer,
+    _databricks_answer,
+    start_fakes,
+)
 
 
 def test_aws_answers():
@@ -18,6 +28,22 @@ def test_aws_answers():
     assert json.loads(imds[1])["AccessKeyId"] == "ASIAFAKEIMDS"
     assert "ASIAFAKEROLE" in _aws_answer("POST", "/sts", "Action=AssumeRole&Version=2011-06-15")[1]
     assert _aws_answer("GET", "/sts", "") is None
+
+
+def test_databricks_answers():
+    ep = json.dumps({"endpoint": "projects/p/branches/b/endpoints/e"})
+    code, doc = _databricks_answer("POST", "/api/2.0/postgres/credentials", f"Bearer {DATABRICKS_PAT}", ep)
+    assert code == 200 and doc["token"] == LAKEBASE_TOKEN and doc["expire_time"].endswith("Z")
+    assert _databricks_answer("POST", "/api/2.0/postgres/credentials", "Bearer nope", ep)[0] == 401
+    assert _databricks_answer("POST", "/api/2.0/postgres/credentials", f"Bearer {DATABRICKS_PAT}-403", ep)[0] == 403
+    assert _databricks_answer("POST", "/api/2.0/postgres/credentials", f"Bearer {DATABRICKS_PAT}-503", ep)[0] == 503
+    missing = json.dumps({"endpoint": "projects/p/branches/b/endpoints/missing"})
+    assert _databricks_answer("POST", "/api/2.0/postgres/credentials", f"Bearer {DATABRICKS_PAT}", missing)[0] == 404
+    form = "grant_type=client_credentials&scope=all-apis"
+    basic = "Basic ZmFrZS1tMm0tY2xpZW50OmZha2UtbTJtLXNlY3JldA=="
+    assert _databricks_answer("POST", "/oidc/v1/token", basic, form)[1]["access_token"] == DATABRICKS_M2M_TOKEN
+    assert _databricks_answer("POST", "/oidc/v1/token", "Basic eDp5", form)[0] == 401
+    assert _databricks_answer("GET", "/oidc/v1/token", basic, form) is None
 
 
 @pytest.fixture(scope="module")

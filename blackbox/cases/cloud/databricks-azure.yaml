@@ -1,0 +1,25 @@
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). DATABRICKS_AUTH_TYPE=azure-cli signs in to Azure Databricks through pgmi's Azure sign-in (a stub az on PATH) for the Azure Databricks resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d, not the PostgreSQL one, and uses that token for the credential request; an unknown auth type is refused before connecting
+impl: rust
+servers: [tls, fakes]
+home:
+  bin/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/az-calls.log"
+      printf '{"accessToken": "{azure_token}", "expiresOn": "2099-01-01 00:00:00.000000", "expires_on": 4070908800, "subscription": "s", "tenant": "t", "tokenType": "Bearer"}\n'
+project:
+  files:
+    deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", SSL_CERT_FILE: "{ca}", DATABRICKS_HOST: "{fake_https}", DATABRICKS_AUTH_TYPE: azure-cli, AZURE_TOKEN_CREDENTIALS: dev}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["get-access-token.*2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"]
+        "{fake_https_log}": ['"[Aa]uthorization": "Bearer {azure_token}".*endpoints/{db}"\}$']
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", DATABRICKS_HOST: "{fake_https}", DATABRICKS_AUTH_TYPE: basic}
+    expect: {exit: 10, stderr: ['unsupported DATABRICKS_AUTH_TYPE "basic"']}

@@ -1,0 +1,15 @@
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). A Lakebase credential with less than five minutes left is replaced before the next connection, so a deploy that connects again (here the target, then the maintenance database to create it, then the target) asks for a new credential each time instead of presenting an expiring one
+impl: rust
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: CREATE TABLE who AS SELECT current_user AS name;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}-short", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        "{fake_https_log}":
+          - 'endpoints/{db}-short"[\s\S]*endpoints/{db}-short"[\s\S]*endpoints/{db}-short"'

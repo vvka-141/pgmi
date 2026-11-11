@@ -1,0 +1,56 @@
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). What Lakebase sign-in refuses before connecting (exit 10) and how a refusing workspace maps to exit 11 - 401, 403, 404, a 503 retried three times, no credential source at all, and a credential the database refuses for the user, with the hint naming Databricks, the database role and --username; no token is ever printed
+impl: rust
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}"}
+    expect: {exit: 10, stderr: ["requires --databricks-endpoint .* or \\$PGMI_DATABRICKS_ENDPOINT"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}"}
+    expect: {exit: 10, stderr: ['invalid Databricks endpoint "projects/p/endpoints/e"']}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_http}", DATABRICKS_TOKEN: "{databricks_pat}"}
+    expect: {exit: 10, stderr: ["the workspace URL must use https"], stderr_not: ["{databricks_pat}"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    expect: {exit: 10, stderr: ["DATABRICKS_HOST"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=disable"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}"}
+    expect: {exit: 10, stderr: ['sslmode "disable" .* not allowed with Databricks Lakebase authentication']}
+  - pgmi: [deploy, "{project}", --databricks-endpoint, "projects/p/branches/b/endpoints/e"]
+    expect: {exit: 2, stderr: ["required arguments were not provided", "^  --databricks\\["]}
+  - pgmi: [deploy, "{project}", --databricks, --azure, --databricks-endpoint, "projects/p/branches/b/endpoints/e"]
+    expect: {exit: 10, stderr: ["choose one of --azure, --aws, --google, or --databricks"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: unknown-pat-0815, SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect: {exit: 11, stderr: ["did not accept the sign-in \\(401 Unauthorized\\): Invalid access token"], stderr_not: ["unknown-pat-0815"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}-403", SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect: {exit: 11, stderr: ["may not get a credential for projects/p/branches/b/endpoints/e \\(403 Forbidden\\): User does not have permission"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/missing", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect: {exit: 11, stderr: ["has no Lakebase endpoint projects/p/branches/b/endpoints/missing \\(404 Not Found\\)"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}-503", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}-503", SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ["\\(503 Service Unavailable\\): The service is temporarily unavailable, after 3 attempts"]
+      files:
+        "{fake_https_log}": ['(endpoints/{db}-503"[\s\S]*){3}']
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", SSL_CERT_FILE: "{ca}", PATH: "/nonexistent"}
+    timeout: 60
+    expect: {exit: 11, stderr: ["no credential worked; set DATABRICKS_TOKEN", "databricks-cli: databricks CLI not found on PATH"]}
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ['the Databricks Lakebase token was refused for user "{azure_user}".*has a database role and that --username matches it']
+      stderr_not: ["{lakebase_token}", "{databricks_pat}"]

@@ -141,6 +141,15 @@ pub(crate) struct DeployArgs {
     pub(crate) google: bool,
     #[arg(long)]
     pub(crate) google_instance: Option<String>,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Sign in to Databricks Lakebase: a database credential from the workspace in DATABRICKS_HOST or ~/.databrickscfg, refreshed before it expires")]
+    pub(crate) databricks: bool,
+    #[arg(
+        long,
+        requires = "databricks",
+        value_name = "NAME",
+        help = "Lakebase endpoint, projects/<project>/branches/<branch>/endpoints/<endpoint> (default $PGMI_DATABRICKS_ENDPOINT)"
+    )]
+    pub(crate) databricks_endpoint: Option<String>,
 }
 
 impl From<DeployArgs> for crate::deploy::Request {
@@ -149,6 +158,7 @@ impl From<DeployArgs> for crate::deploy::Request {
             (a.azure, Provider::Azure),
             (a.aws, Provider::Aws),
             (a.google, Provider::Google),
+            (a.databricks, Provider::Databricks),
         ]
         .into_iter()
         .filter_map(|(asked, p)| asked.then_some(p))
@@ -173,6 +183,7 @@ impl From<DeployArgs> for crate::deploy::Request {
                 client_id: a.azure_client_id,
                 aws_region: a.aws_region,
                 google_instance: a.google_instance,
+                databricks_endpoint: a.databricks_endpoint,
             },
             params: a.params,
             params_files: a.params_files,
@@ -374,8 +385,34 @@ mod tests {
 
     #[test]
     fn every_cloud_flag_is_kept_so_select_can_refuse_two() {
-        let r = request(&[".", "--azure", "--aws", "--google"]);
-        assert_eq!(r.cloud, [Provider::Azure, Provider::Aws, Provider::Google]);
+        let r = request(&[".", "--azure", "--aws", "--google", "--databricks"]);
+        assert_eq!(
+            r.cloud,
+            [
+                Provider::Azure,
+                Provider::Aws,
+                Provider::Google,
+                Provider::Databricks
+            ]
+        );
         assert!(request(&["."]).cloud.is_empty());
+    }
+
+    #[test]
+    fn the_databricks_endpoint_needs_databricks() {
+        let r = request(&[
+            ".",
+            "--databricks",
+            "--databricks-endpoint",
+            "projects/p/branches/b/endpoints/e",
+        ]);
+        assert_eq!(r.cloud, [Provider::Databricks]);
+        assert_eq!(
+            r.cloud_request.databricks_endpoint.as_deref(),
+            Some("projects/p/branches/b/endpoints/e")
+        );
+        let e =
+            Cli::try_parse_from(["pgmi", "deploy", ".", "--databricks-endpoint", "x"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 }

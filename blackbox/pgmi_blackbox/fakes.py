@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import random
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,6 +19,15 @@ AZURE_TOKEN = "fake-azure-access-token-0123456789"
 GOOGLE_TOKEN = "fake-google-access-token-0123456789"
 AWS_ROLE = "fake-role"
 AWS_EXPIRES = "2099-01-01T00:00:00Z"
+LAKEBASE_TOKEN = "fake-lakebase-credential-0123456789"
+DATABRICKS_PAT = "fake-databricks-pat"
+DATABRICKS_M2M = ("fake-m2m-client", "fake-m2m-secret")
+DATABRICKS_M2M_TOKEN = "fake-m2m-access-token"
+DATABRICKS_CLI_TOKEN = "fake-cli-access-token"
+_DATABRICKS_REFUSALS = {
+    f"{DATABRICKS_PAT}-403": (403, "PERMISSION_DENIED", "User does not have permission on the project"),
+    f"{DATABRICKS_PAT}-503": (503, "TEMPORARILY_UNAVAILABLE", "The service is temporarily unavailable"),
+}
 
 
 def _aws_credentials(key: str) -> dict:
@@ -51,6 +62,33 @@ def _aws_answer(command: str, path: str, body: str) -> tuple[str, str] | None:
             "<ResponseMetadata><RequestId>fake</RequestId></ResponseMetadata></AssumeRoleResponse>"
         )
     return None
+def _databricks_answer(command: str, path: str, auth: str, body: str) -> tuple[int, dict] | None:
+    if command != "POST":
+        return None
+    if path == "/oidc/v1/token":
+        basic = "Basic " + base64.b64encode(":".join(DATABRICKS_M2M).encode()).decode()
+        if auth != basic or "grant_type=client_credentials" not in body or "scope=all-apis" not in body:
+            return 401, {"error": "invalid_client", "error_description": "Client authentication failed"}
+        return 200, {"access_token": DATABRICKS_M2M_TOKEN, "token_type": "Bearer", "expires_in": 3600}
+    if path != "/api/2.0/postgres/credentials":
+        return None
+    bearer = auth.removeprefix("Bearer ")
+    if bearer in _DATABRICKS_REFUSALS:
+        code, error, message = _DATABRICKS_REFUSALS[bearer]
+        return code, {"error_code": error, "message": message}
+    if bearer not in (DATABRICKS_PAT, DATABRICKS_M2M_TOKEN, DATABRICKS_CLI_TOKEN, AZURE_TOKEN):
+        return 401, {"error_code": "UNAUTHENTICATED", "message": "Invalid access token."}
+    try:
+        endpoint = json.loads(body)["endpoint"]
+    except (ValueError, KeyError, TypeError):
+        return 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "endpoint is required"}
+    if endpoint.endswith("/endpoints/missing"):
+        return 404, {"error_code": "NOT_FOUND", "message": f"Endpoint {endpoint} does not exist"}
+    lifetime = 60 if endpoint.endswith("-short") else 3600
+    expires = datetime.now(UTC) + timedelta(seconds=lifetime)
+    return 200, {"token": LAKEBASE_TOKEN, "expire_time": expires.isoformat(timespec="microseconds").replace("+00:00", "Z")}
+
+
 GOOGLE_PROJECT, GOOGLE_REGION, GOOGLE_NAME = "fake-project", "fake-region", "fake-instance"
 CLOUD_SQL_PORT = 3307
 
@@ -123,6 +161,10 @@ class _Http(BaseHTTPRequestHandler):
             log.write(f"{self.command} {self.path} {json.dumps(dict(self.headers))} {body}\n")
         host = f"https://{self.headers.get('Host')}"
         code = 200
+        databricks = _databricks_answer(self.command, self.path, self.headers.get("Authorization") or "", body)
+        if databricks:
+            self._send(databricks[0], "application/json", json.dumps(databricks[1]).encode())
+            return
         aws = _aws_answer(self.command, self.path, body)
         if aws:
             ttl = {"X-aws-ec2-metadata-token-ttl-seconds": "21600"} if self.command == "PUT" else {}
@@ -290,6 +332,11 @@ def start_fakes(root: Path, certs: Path) -> dict[str, str]:
         "{fake_https_log}": str(https_log),
         "{recorder_log}": str(pg_log),
         "{azure_token}": AZURE_TOKEN,
+        "{lakebase_token}": LAKEBASE_TOKEN,
+        "{databricks_pat}": DATABRICKS_PAT,
+        "{databricks_client_id}": DATABRICKS_M2M[0],
+        "{databricks_client_secret}": DATABRICKS_M2M[1],
+        "{databricks_cli_token}": DATABRICKS_CLI_TOKEN,
         "{fake_https_thumbprint}": hashlib.sha1(
             ssl.PEM_cert_to_DER_cert((certs / "server.crt").read_text())
         ).hexdigest().upper(),

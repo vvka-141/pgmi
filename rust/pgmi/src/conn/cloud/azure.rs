@@ -16,8 +16,21 @@ use super::Request;
 use crate::env::Env;
 use crate::error::{Error, Result};
 
-const SCOPE: &str = "https://ossrdbms-aad.database.windows.net/.default";
-const RESOURCE: &str = "https://ossrdbms-aad.database.windows.net";
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Audience {
+    scope: &'static str,
+    resource: &'static str,
+}
+
+pub(crate) const POSTGRES: Audience = Audience {
+    scope: "https://ossrdbms-aad.database.windows.net/.default",
+    resource: "https://ossrdbms-aad.database.windows.net",
+};
+
+pub(crate) const DATABRICKS: Audience = Audience {
+    scope: "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default",
+    resource: "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d",
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -115,7 +128,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
     Ok((picked, true))
 }
 
-pub(crate) async fn token(req: &Request, env: &Env) -> Result<String> {
+pub(crate) async fn token(req: &Request, env: &Env, audience: Audience) -> Result<String> {
     let ids = ids(req, env)?;
     let (kinds, chain) = plan(&ids, env)?;
     let probing = chain
@@ -123,7 +136,7 @@ pub(crate) async fn token(req: &Request, env: &Env) -> Result<String> {
         && env.non_empty("MSI_ENDPOINT")?.is_none();
     let mut failures = Vec::new();
     for kind in kinds {
-        let attempt = get(kind, &ids, env);
+        let attempt = get(kind, &ids, env, audience);
         let result = if kind == Kind::Managed && probing {
             match tokio::time::timeout(Duration::from_secs(2), attempt).await {
                 Ok(r) => r,
@@ -148,10 +161,15 @@ pub(crate) async fn token(req: &Request, env: &Env) -> Result<String> {
     )))
 }
 
-async fn get(kind: Kind, ids: &Ids, env: &Env) -> std::result::Result<String, String> {
+async fn get(
+    kind: Kind,
+    ids: &Ids,
+    env: &Env,
+    audience: Audience,
+) -> std::result::Result<String, String> {
     let text = |e: azure_core::Error| e.to_string();
     let credential: Arc<dyn TokenCredential> = match kind {
-        Kind::PowerShell => return powershell(ids.tenant.as_deref()).await,
+        Kind::PowerShell => return powershell(ids.tenant.as_deref(), audience).await,
         Kind::Secret => {
             let secret = env
                 .non_empty("AZURE_CLIENT_SECRET")
@@ -186,7 +204,13 @@ async fn get(kind: Kind, ids: &Ids, env: &Env) -> std::result::Result<String, St
         }
         Kind::Managed => {
             if let Some(source) = super::azure_msi::source(env) {
-                return super::azure_msi::token(source, ids.client.as_deref(), RESOURCE, env).await;
+                return super::azure_msi::token(
+                    source,
+                    ids.client.as_deref(),
+                    audience.resource,
+                    env,
+                )
+                .await;
             }
             ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
                 user_assigned_id: ids.client.clone().map(UserAssignedId::ClientId),
@@ -208,13 +232,13 @@ async fn get(kind: Kind, ids: &Ids, env: &Env) -> std::result::Result<String, St
         }
     };
     credential
-        .get_token(&[SCOPE], None)
+        .get_token(&[audience.scope], None)
         .await
         .map(|t| t.token.secret().to_string())
         .map_err(|e| e.to_string().replace('\n', " "))
 }
 
-fn powershell_script(tenant: Option<&str>) -> String {
+fn powershell_script(tenant: Option<&str>, resource: &str) -> String {
     let tenant = tenant
         .map(|t| format!("$params['TenantId'] = '{}'\n", t.replace('\'', "''")))
         .unwrap_or_default();
@@ -222,7 +246,7 @@ fn powershell_script(tenant: Option<&str>) -> String {
         "$ErrorActionPreference = 'Stop'\n\
 $m = Import-Module Az.Accounts -MinimumVersion 2.2.0 -PassThru -ErrorAction SilentlyContinue\n\
 if (! $m) {{ Write-Output 'VersionCheckFailed'; exit }}\n\
-$params = @{{ ResourceUrl = '{RESOURCE}'; WarningAction = 'Ignore' }}\n\
+$params = @{{ ResourceUrl = '{resource}'; WarningAction = 'Ignore' }}\n\
 {tenant}$token = Get-AzAccessToken @params\n\
 $value = $token.Token\n\
 if ($value -is [System.Security.SecureString]) {{ $value = $value | ConvertFrom-SecureString -AsPlainText }}\n\
@@ -233,8 +257,11 @@ Write-Output (ConvertTo-Json $result -Compress)\n"
     )
 }
 
-async fn powershell(tenant: Option<&str>) -> std::result::Result<String, String> {
-    let script = powershell_script(tenant);
+async fn powershell(
+    tenant: Option<&str>,
+    audience: Audience,
+) -> std::result::Result<String, String> {
+    let script = powershell_script(tenant, audience.resource);
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = STANDARD.encode(utf16);
     let child = tokio::process::Command::new("pwsh")

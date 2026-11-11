@@ -4,6 +4,7 @@ from pathlib import Path
 CERT_USER = "certuser"
 MD5_USER = "md5user"
 AZURE_USER = "azureuser"
+LAKEBASE_USER = "lakebaseuser"
 KEY_PASSWORD = "key-passphrase"
 
 
@@ -116,6 +117,7 @@ def make_certs(d: Path) -> dict[str, str]:
         "{cert_user}": CERT_USER,
         "{md5_user}": MD5_USER,
         "{azure_user}": AZURE_USER,
+        "{lakebase_user}": LAKEBASE_USER,
         "{client_key_encrypted}": str(d / "client_enc.key"),
         "{client_key_pbe_sha1_3des}": str(d / "client_pbe3des.key"),
         "{client_key_pbes2}": str(d / "client_pbes2.key"),

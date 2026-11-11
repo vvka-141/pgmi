@@ -13,6 +13,12 @@ cloud/azure-ml
 cloud/azure-powershell
 cloud/azure-service-fabric
 cloud/azure-token-credentials-invalid
+cloud/databricks-azure
+cloud/databricks-cli
+cloud/databricks-errors
+cloud/databricks-m2m
+cloud/databricks-pat
+cloud/databricks-refresh
 cloud/dotenv-feeds-sdk
 cloud/token-auth-requires-tls
 commands/ai

@@ -94,6 +94,10 @@ class Case:
     steps: tuple[Step, ...]
     servers: tuple[str, ...] = ()
     home: dict[str, HomeFile] | None = None
+    only: str | None = None
+
+    def runs_on(self, impl: str) -> bool:
+        return self.only is None or self.only == impl
 
 
 def implementation(environ: Mapping[str, str]) -> str:
@@ -168,7 +172,7 @@ def load_cases(root: Path, directory: Path, impl: str = "go") -> list[Case]:
 
 def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
     r = _Reader(path, impl)
-    doc = r.mapping(doc, "", {"description", "project", "servers", "home", "steps"}, {"description", "steps"})
+    doc = r.mapping(doc, "", {"description", "project", "servers", "home", "steps", "impl"}, {"description", "steps"})
     description = r.string(doc["description"], "description")
     project = _project(r, doc.get("project", {}))
     steps = doc["steps"]
@@ -178,6 +182,9 @@ def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
     for i, kind in enumerate(servers):
         if kind not in SERVER_KINDS:
             raise r.fail(f"servers[{i}]", f"must be one of {', '.join(SERVER_KINDS)}")
+    only = doc.get("impl")
+    if only is not None and only not in IMPLEMENTATIONS:
+        raise r.fail("impl", f"must be one of {', '.join(IMPLEMENTATIONS)}")
     return Case(
         path,
         description,
@@ -185,6 +192,7 @@ def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
         tuple(_step(r, s, f"steps[{i}]") for i, s in enumerate(steps)),
         servers,
         _home(r, doc.get("home", {})),
+        only,
     )
 
 

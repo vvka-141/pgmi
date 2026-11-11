@@ -202,7 +202,11 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | AWS console sign-in (`login_session`) | ✗ needs the sign-in service and its DPoP-bound cache; aws-config's `credentials-login` is enabled in Rust |
 | Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the dialer: no case, since Go's connector offers no Admin API endpoint override. The `fakes` server carries a Cloud SQL Admin API (`connectSettings`, `generateEphemeralCert`, an `authorized_user` token endpoint) and a TLS 1.3 instance port on `127.0.0.x:3307` that requires the ephemeral client certificate; the Rust integration test `rust/pgmi/tests/google_cloud_sql.rs` drives the Rust binary through it (`CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN`) |
 | `.env` AWS keys and region reach the token | ✓ `cloud/dotenv-feeds-sdk` |
-| Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it; native sign-in is PGMI-849 |
+| Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it |
+| Lakebase native sign-in (`--databricks`, Rust only, `impl: rust`): credential request shape, PAT, endpoint from flag or `PGMI_DATABRICKS_ENDPOINT`, one credential per deploy, no token in output or `--json` | ✓ `cloud/databricks-pat` (fake workspace API on `{fake_https}`, trusted through `SSL_CERT_FILE`) |
+| Lakebase credential replaced before it expires | ✓ `cloud/databricks-refresh` (the fake answers a 60 s credential for an endpoint ending in `-short`) |
+| Lakebase sign-in by OAuth M2M, the Databricks CLI (profile and host), Azure (`DATABRICKS_AUTH_TYPE=azure-cli`) | ✓ `cloud/databricks-m2m`, `cloud/databricks-cli` (stub `databricks`), `cloud/databricks-azure` (stub `az`); Azure picked by an `*.azuredatabricks.net` host has no case (the fake runs on `localhost`), Rust unit tests cover the choice |
+| Lakebase refusals: endpoint, host, auth type, sslmode (10); 401, 403, 404, 503 retried, no credential source, a credential refused by the database (11) | ✓ `cloud/databricks-errors`, `cloud/databricks-azure` |
 
 ## Contract notes
 

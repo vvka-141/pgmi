@@ -197,12 +197,14 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         .passfile
         .clone()
         .or_else(|| spec.pg_files.as_ref().map(|f| f.pgpass.clone()));
-    let token = spec
-        .token
-        .as_ref()
-        .map(|t| t.password(a.name, a.port, &spec.user))
-        .transpose()
-        .map_err(Failure::Fatal)?;
+    let token = match &spec.token {
+        Some(t) => Some(
+            t.password(a.name, a.port, &spec.user)
+                .await
+                .map_err(Failure::Fatal)?,
+        ),
+        None => None,
+    };
     let password = match token.or_else(|| spec.password.as_ref().map(|p| p.expose().to_string())) {
         Some(p) => Some(p),
         None => match &passfile {

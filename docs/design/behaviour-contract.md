@@ -478,8 +478,11 @@ naming the user and pointing at `--username`.
 connector with IAM authentication, signed in with Application Default
 Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else gcloud's
 `application_default_credentials.json` under `%APPDATA%\gcloud` on Windows
-and `~/.config/gcloud` elsewhere, else the metadata server. Lakebase: a token passed as the password,
-no separate path. Real-cloud verification: Azure only (owner decision
+and `~/.config/gcloud` elsewhere, else the metadata server. Lakebase in Go: a
+token passed as the password, no separate path; the Rust binary adds
+`--databricks` (see "Databricks Lakebase sign-in"). Only one of `--azure`,
+`--aws`, `--google` and `--databricks` may be given (exit 10; the message
+lists `--databricks` only when it was one of them). Real-cloud verification: Azure only (owner decision
 2026-11-10); AWS and Google are checked against local fakes. Observed on a
 real Flexible Server (PGMI-845, 2026-11-11, Go): the Azure CLI, a service
 principal with a secret, system- and user-assigned managed identity, and
@@ -789,6 +792,41 @@ handles and refuses a leftover one, and the unit test
 
 Cases: `connection/keepalives`, `connection/tcp-user-timeout`, `connection/load-balance-hosts`, `connection/hostaddr`, `connection/gssapi-keys`, `connection/sslcompression`, `connection/client-encoding`, `connection/pgx-options`.
 
+### Databricks Lakebase sign-in (owner, 2026-11-10)
+
+New in the Rust binary; Go has none, so these cases carry `impl: rust` and
+are skipped for Go (PGMI-849, record 0023). `--databricks` asks the
+Databricks workspace for a Lakebase database credential
+(`POST /api/2.0/postgres/credentials` with the endpoint; the answer's `token`
+is the password, `expire_time` its end) for the endpoint in
+`--databricks-endpoint`, else `PGMI_DATABRICKS_ENDPOINT`
+(`projects/<project>/branches/<branch>/endpoints/<endpoint>`). Missing or
+malformed: exit 10. `--databricks-endpoint` without `--databricks` is a usage
+error (exit 2).
+
+The workspace comes from `DATABRICKS_HOST`, else a `~/.databrickscfg`
+profile (`DATABRICKS_CONFIG_PROFILE`, else the file's `default_profile`,
+else `DEFAULT`; `DATABRICKS_CONFIG_FILE` moves the file; the file is read
+only when a profile is named or the environment sets no host, token or
+client). It must be `https` (exit 10). Sign-in, first match: a personal
+access token (`DATABRICKS_TOKEN`); OAuth M2M (`DATABRICKS_CLIENT_ID` and
+`DATABRICKS_CLIENT_SECRET`, `POST /oidc/v1/token`, scope `all-apis`); else
+the Databricks CLI (`databricks auth token --profile <p>` when a profile was
+read, else `--host <host>`), then, for an Azure Databricks host, pgmi's Azure
+sign-in for the Azure Databricks resource. `DATABRICKS_AUTH_TYPE` (`pat`,
+`oauth-m2m`, `databricks-cli`, `azure-cli`, `azure-msi`,
+`azure-client-secret`) forces one; another value is exit 10.
+
+The credential is reused for every connection of the deploy until less than
+five minutes of it are left, then replaced before the next connection.
+Workspace answers: 401, 403 and 404 are exit 11 naming the cause; 429 and
+5xx are tried three times, then exit 11. A credential the database refuses
+is exit 11 naming Databricks Lakebase, the user and `--username`. Without an
+sslmode the default is `verify-full`; a plaintext one is exit 10. No token
+reaches stderr, stdout or `--json`.
+
+Cases: `cloud/databricks-pat`, `cloud/databricks-refresh`, `cloud/databricks-m2m`, `cloud/databricks-cli`, `cloud/databricks-azure`, `cloud/databricks-errors`.
+
 ## Behaviour changes in 0.20
 
 ### Changed exit codes and newly refused input
@@ -817,6 +855,7 @@ release notes take their "Behaviour changes" section from this table.
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
 | Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
+| Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
 | Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |

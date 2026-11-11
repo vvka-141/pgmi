@@ -1,6 +1,7 @@
 mod aws;
 mod azure;
 mod azure_msi;
+mod databricks;
 mod google;
 mod http;
 
@@ -16,6 +17,7 @@ pub(crate) enum Provider {
     Azure,
     Aws,
     Google,
+    Databricks,
 }
 
 impl Provider {
@@ -24,6 +26,7 @@ impl Provider {
             Provider::Azure => "Azure Entra ID",
             Provider::Aws => "AWS IAM",
             Provider::Google => "Google Cloud SQL IAM",
+            Provider::Databricks => "Databricks Lakebase",
         }
     }
 }
@@ -34,6 +37,7 @@ pub(crate) struct Request {
     pub(crate) client_id: Option<String>,
     pub(crate) aws_region: Option<String>,
     pub(crate) google_instance: Option<String>,
+    pub(crate) databricks_endpoint: Option<String>,
 }
 
 #[derive(Clone)]
@@ -41,6 +45,7 @@ pub(crate) enum Token {
     Fixed(Provider, Secret),
     Aws(Arc<aws::Signer>),
     Google(Arc<google::Dialer>),
+    Databricks(Arc<databricks::Lakebase>),
 }
 
 impl std::fmt::Debug for Token {
@@ -55,10 +60,11 @@ impl Token {
             Token::Fixed(p, _) => *p,
             Token::Aws(_) => Provider::Aws,
             Token::Google(_) => Provider::Google,
+            Token::Databricks(_) => Provider::Databricks,
         }
     }
 
-    pub(crate) fn password(
+    pub(crate) async fn password(
         &self,
         host: &str,
         port: u16,
@@ -68,6 +74,7 @@ impl Token {
             Token::Fixed(_, t) => Ok(t.expose().to_string()),
             Token::Aws(s) => s.token(host, port, user),
             Token::Google(d) => Ok(d.password()),
+            Token::Databricks(l) => l.password().await,
         }
     }
 
@@ -76,6 +83,7 @@ impl Token {
             Token::Fixed(_, t) => vec![t.expose().to_string()],
             Token::Aws(s) => s.minted(),
             Token::Google(d) => vec![d.password()],
+            Token::Databricks(l) => l.minted(),
         }
     }
 
@@ -93,9 +101,14 @@ pub(crate) fn select(
     yaml: Option<&ProjectConfig>,
 ) -> Result<Option<(Provider, Request)>> {
     if asked.len() > 1 {
-        return Err(Error::config(
-            "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google",
-        ));
+        let choices = if asked.contains(&Provider::Databricks) {
+            "--azure, --aws, --google, or --databricks"
+        } else {
+            "--azure, --aws, or --google"
+        };
+        return Err(Error::config(format!(
+            "cannot use multiple cloud authentication methods; choose one of {choices}"
+        )));
     }
     let y = yaml.map(|y| y.connection.clone()).unwrap_or_default();
     let provider = match (asked.first(), y.auth_method.as_deref()) {
@@ -112,6 +125,7 @@ pub(crate) fn select(
             client_id: req.client_id.clone().or(y.azure_client_id),
             aws_region: req.aws_region.clone().or(y.aws_region),
             google_instance: req.google_instance.clone().or(y.google_instance),
+            databricks_endpoint: req.databricks_endpoint.clone(),
         },
     )))
 }
@@ -128,6 +142,9 @@ pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &En
         }
         Provider::Aws => {
             aws::region(req, env)?;
+        }
+        Provider::Databricks => {
+            databricks::settings(req, env)?;
         }
         Provider::Azure => {}
     }
@@ -151,13 +168,16 @@ pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &En
 pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
-        Provider::Azure => azure::token(req, env)
+        Provider::Azure => azure::token(req, env, azure::POSTGRES)
             .await
             .map(|t| Token::Fixed(Provider::Azure, Secret::from(t))),
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
         Provider::Google => google::dialer(req, env)
             .await
             .map(|d| Token::Google(Arc::new(d))),
+        Provider::Databricks => databricks::lakebase(req, env)
+            .await
+            .map(|l| Token::Databricks(Arc::new(l))),
     }
 }
 
@@ -176,6 +196,19 @@ mod tests {
         assert_eq!(
             e.text(),
             "cannot use multiple cloud authentication methods; choose one of --azure, --aws, or --google"
+        );
+        let e = select(
+            &[Provider::Databricks, Provider::Google],
+            &Request::default(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(
+            e.text()
+                .ends_with("choose one of --azure, --aws, --google, or --databricks"),
+            "{}",
+            e.text()
         );
     }
 

@@ -78,6 +78,10 @@ impl Env {
         self.pg_files_for(cfg!(windows))
     }
 
+    pub(crate) fn home(&self) -> Option<PathBuf> {
+        self.home_for(cfg!(windows))
+    }
+
     fn home_for(&self, windows: bool) -> Option<PathBuf> {
         let mut names = vec!["HOME"];
         if windows {
