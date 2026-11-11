@@ -9,7 +9,7 @@ repository.workspace = true
 include = ["Cargo.toml", "src/**", "build.rs"]
 
 [dependencies]
-aws-config = { version = "1.13.1", default-features = false, features = ["rt-tokio", "credentials-process", "sso"] }
+aws-config = { version = "1.13.1", default-features = false, features = ["rt-tokio", "credentials-process", "sso", "credentials-login"] }
 aws-credential-types = "1.3.1"
 aws-sigv4 = { version = "1.6.5", default-features = false, features = ["sign-http"] }
 aws-smithy-runtime-api = { version = "1", default-features = false, features = ["client", "http-1x"] }

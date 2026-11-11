@@ -441,7 +441,7 @@ connector with IAM authentication. Lakebase: a token passed as the password,
 no separate path. Real-cloud verification: Azure only (owner decision
 2026-11-10, PGMI-845, pending); AWS and Google are checked against local fakes.
 
-Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
+Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust dialer is checked against the runner's fake Admin API by

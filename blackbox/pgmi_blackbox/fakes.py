@@ -15,6 +15,42 @@ from pgmi_blackbox.certs import make_certs, openssl
 
 AZURE_TOKEN = "fake-azure-access-token-0123456789"
 GOOGLE_TOKEN = "fake-google-access-token-0123456789"
+AWS_ROLE = "fake-role"
+AWS_EXPIRES = "2099-01-01T00:00:00Z"
+
+
+def _aws_credentials(key: str) -> dict:
+    return {
+        "Code": "Success",
+        "LastUpdated": "2026-01-01T00:00:00Z",
+        "Type": "AWS-HMAC",
+        "AccessKeyId": key,
+        "SecretAccessKey": f"{key}-secret",
+        "Token": f"{key}-session-token",
+        "Expiration": AWS_EXPIRES,
+    }
+
+
+def _aws_answer(command: str, path: str, body: str) -> tuple[str, str] | None:
+    if path.startswith("/latest/api/token") and command == "PUT":
+        return "text/plain", "fake-imds-session-token"
+    if path.startswith("/latest/meta-data/iam/security-credentials"):
+        if path.endswith("/"):
+            return "text/plain", AWS_ROLE
+        if path.endswith(f"/{AWS_ROLE}"):
+            return "application/json", json.dumps(_aws_credentials("ASIAFAKEIMDS"))
+    if path.startswith("/ecs-credentials"):
+        return "application/json", json.dumps(_aws_credentials("ASIAFAKEECS"))
+    if path.startswith("/sts") and "Action=AssumeRole" in body:
+        return "text/xml", (
+            '<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult>'
+            "<Credentials><AccessKeyId>ASIAFAKEROLE</AccessKeyId><SecretAccessKey>fake-role-secret</SecretAccessKey>"
+            f"<SessionToken>fake-role-session-token</SessionToken><Expiration>{AWS_EXPIRES}</Expiration></Credentials>"
+            "<AssumedRoleUser><AssumedRoleId>AROAFAKE:pgmi</AssumedRoleId>"
+            "<Arn>arn:aws:sts::123456789012:assumed-role/fake/pgmi</Arn></AssumedRoleUser></AssumeRoleResult>"
+            "<ResponseMetadata><RequestId>fake</RequestId></ResponseMetadata></AssumeRoleResponse>"
+        )
+    return None
 GOOGLE_PROJECT, GOOGLE_REGION, GOOGLE_NAME = "fake-project", "fake-region", "fake-instance"
 CLOUD_SQL_PORT = 3307
 
@@ -87,6 +123,14 @@ class _Http(BaseHTTPRequestHandler):
             log.write(f"{self.command} {self.path} {json.dumps(dict(self.headers))} {body}\n")
         host = f"https://{self.headers.get('Host')}"
         code = 200
+        aws = _aws_answer(self.command, self.path, body)
+        if aws:
+            ttl = {"X-aws-ec2-metadata-token-ttl-seconds": "21600"} if self.command == "PUT" else {}
+            self._send(200, aws[0], aws[1].encode(), ttl)
+            return
+        if self.path.startswith("/latest/") or self.path.startswith("/sts"):
+            self._send(404, "text/plain", b"not found in the fake AWS endpoints")
+            return
         if self.path.startswith("/google/token"):
             doc = {"access_token": GOOGLE_TOKEN, "expires_in": 3600, "token_type": "Bearer"}
         elif self.path.startswith("/sql/v1beta4/"):
@@ -111,15 +155,20 @@ class _Http(BaseHTTPRequestHandler):
             doc = {"token_type": "Bearer", "expires_in": 3600, "ext_expires_in": 3600, "access_token": AZURE_TOKEN}
         else:
             doc = {"access_token": AZURE_TOKEN, "expires_on": "4102444800", "resource": "x", "token_type": "Bearer"}
-        payload = json.dumps(doc).encode()
+        self._send(code, "application/json", json.dumps(doc).encode())
+
+    def _send(self, code: int, content_type: str, payload: bytes, headers: dict | None = None) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
 
     do_GET = _answer
     do_POST = _answer
+    do_PUT = _answer
 
     def log_message(self, *args) -> None:
         pass

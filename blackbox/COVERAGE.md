@@ -195,6 +195,8 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Azure service principal (`AZURE_CLIENT_SECRET`) | ✗ instance discovery always calls `login.microsoftonline.com`; the manual Azure acceptance check in the release checklist covers it |
 | token sign-in refuses `prefer`/`disable` (10) | ✓ `cloud/token-auth-requires-tls` |
 | AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |
+| AWS profile `credential_source` (`Ec2InstanceMetadata`, `EcsContainer`) with `role_arn` | ✓ `cloud/aws-credential-source` (fake IMDS, container endpoint and STS through `AWS_ENDPOINT_URL_STS`); `Environment` has no case, since environment keys win before the profile in both SDKs |
+| AWS console sign-in (`login_session`) | ✗ needs the sign-in service and its DPoP-bound cache; aws-config's `credentials-login` is enabled in Rust |
 | Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the dialer: no case, since Go's connector offers no Admin API endpoint override. The `fakes` server carries a Cloud SQL Admin API (`connectSettings`, `generateEphemeralCert`, an `authorized_user` token endpoint) and a TLS 1.3 instance port on `127.0.0.x:3307` that requires the ephemeral client certificate; the Rust integration test `rust/pgmi/tests/google_cloud_sql.rs` drives the Rust binary through it (`CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN`) |
 | `.env` AWS keys and region reach the token | ✓ `cloud/dotenv-feeds-sdk` |
 | Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it; native sign-in is PGMI-849 |

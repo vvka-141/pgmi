@@ -8,7 +8,16 @@ import urllib.request
 import pytest
 
 from pgmi_blackbox.certs import make_certs, openssl
-from pgmi_blackbox.fakes import CLOUD_SQL_PORT, GOOGLE_TOKEN, start_fakes
+from pgmi_blackbox.fakes import AWS_ROLE, CLOUD_SQL_PORT, GOOGLE_TOKEN, _aws_answer, start_fakes
+
+
+def test_aws_answers():
+    assert _aws_answer("PUT", "/latest/api/token", "") == ("text/plain", "fake-imds-session-token")
+    assert _aws_answer("GET", "/latest/meta-data/iam/security-credentials/", "") == ("text/plain", AWS_ROLE)
+    imds = _aws_answer("GET", f"/latest/meta-data/iam/security-credentials/{AWS_ROLE}", "")
+    assert json.loads(imds[1])["AccessKeyId"] == "ASIAFAKEIMDS"
+    assert "ASIAFAKEROLE" in _aws_answer("POST", "/sts", "Action=AssumeRole&Version=2011-06-15")[1]
+    assert _aws_answer("GET", "/sts", "") is None
 
 
 @pytest.fixture(scope="module")

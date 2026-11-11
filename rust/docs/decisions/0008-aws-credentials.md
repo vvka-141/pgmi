@@ -73,7 +73,17 @@ Option 2.
   reqwest `HttpClient`, the token signed with aws-sigv4 once per dial attempt
   (`host:port?Action=connect&DBUser=...`, no slash before `?`, as the case
   pins). `cloud/aws-iam-token` and `cloud/dotenv-feeds-sdk` pass.
-- Not yet: the `credential_source` provider and `credentials-login`.
+- `credential_source`: no provider of pgmi's own is needed. aws-config
+  1.13.2's profile provider registers `Environment`, `Ec2InstanceMetadata`
+  and `EcsContainer` itself (`profile/credentials.rs`, `build`); the
+  Consequences line above was written from an older aws-config.
+  `cloud/aws-credential-source` pins the IMDS and container cases on both
+  binaries against fakes (IMDS v2 with its TTL header, the container
+  endpoint, STS `AssumeRole` through `AWS_ENDPOINT_URL_STS`).
+- `credentials-login` is enabled: it adds aws-sdk-signin, p256,
+  elliptic-curve, sec1 and base64-simd, all pure Rust (`cargo tree -i cc`
+  empty, `rust/check-no-c.sh` passes). No case: the console session needs
+  the sign-in service and its DPoP-bound token cache.
 
 
 ## Serves

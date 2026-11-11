@@ -128,3 +128,4 @@ terminal/init-wizard-connection
 cloud/azure-cloud-shell
 cloud/azure-ml
 cloud/azure-service-fabric
+cloud/aws-credential-source
