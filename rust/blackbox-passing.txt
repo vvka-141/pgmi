@@ -47,6 +47,7 @@ deploy/json-failure
 deploy/json-success
 dialect/pgmiignore
 dialect/pgmiignore-hides-deploy
+dialect/pgmiignore-latin1
 dialect/pgmi-test-macro
 dialect/pgmi-test-macro-comments
 dialect/pgmi-test-macro-whitespace

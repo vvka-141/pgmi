@@ -103,7 +103,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
 | `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
 | project walk: symbolic links, NUL bytes, invalid UTF-8, `__name__` directories | ✓ `dialect/project-walk`, `commands/metadata-refusals` |
-| `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class` |
+| `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10; bytes that are not UTF-8 read leniently) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class`, `dialect/pgmiignore-latin1` |
 
 ## Connection layer
 

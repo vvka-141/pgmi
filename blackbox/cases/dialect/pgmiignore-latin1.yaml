@@ -1,0 +1,14 @@
+description: a .pgmiignore holding bytes that are not UTF-8 (a Latin-1 comment) still applies its rules
+project:
+  files:
+    .pgmiignore: {hex: "2320636166e90a736b69702e73716c0a"}
+    a.sql: SELECT 1;
+    skip.sql: SELECT 1;
+    deploy.sql: CREATE TABLE loaded AS SELECT path FROM pg_temp.pgmi_source_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM loaded ORDER BY path COLLATE "C"
+          rows: [[./a.sql]]

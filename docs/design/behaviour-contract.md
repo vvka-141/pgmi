@@ -514,6 +514,20 @@ every later refusal of the resolved connection.
 Cases: `errors/connection-string-secrets` (the forms Go hides too); Rust unit
 tests `errors_never_echo_the_input`, `errors_redact_the_password`.
 
+### An unreadable .pgmiignore or a file name that is not UTF-8 is exit 10
+
+A `.pgmiignore` that exists but cannot be read (a directory, no permission) is
+exit 1 in Go; the Rust binary refuses it with exit 10 naming the file. Bytes
+that are not UTF-8 inside it are read leniently by both. A file whose name is
+not UTF-8 is loaded by Go and fails the deploy with exit 13 (SQLSTATE 22021)
+after the target database was created; the Rust binary refuses it before
+connecting with exit 10 naming the path (invalid bytes shown as U+FFFD),
+unless the name starts with `.` or `.pgmiignore` hides it.
+
+Cases: `dialect/pgmiignore-latin1` (lenient reading); Rust unit tests
+`pgmiignore_is_read_lossily_and_read_errors_refuse`,
+`non_utf8_file_name_is_refused_unless_hidden`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable

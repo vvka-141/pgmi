@@ -60,9 +60,14 @@ pub fn max_size(env: &crate::env::Env) -> Result<u64> {
 }
 
 fn rules(root: &Path) -> Result<Rules> {
-    match std::fs::read_to_string(root.join(".pgmiignore")) {
-        Ok(text) => Rules::parse(&text).map_err(Error::config),
-        Err(_) => Ok(Rules::default()),
+    let path = root.join(".pgmiignore");
+    match std::fs::read(&path) {
+        Ok(bytes) => Rules::parse(&String::from_utf8_lossy(&bytes)).map_err(Error::config),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Rules::default()),
+        Err(e) => Err(Error::config(format!(
+            "could not read {}: {e}",
+            path.display()
+        ))),
     }
 }
 
@@ -137,18 +142,39 @@ fn walk(
     max_size: u64,
     out: &mut Project,
 ) -> Result<()> {
-    let mut entries: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+    let mut entries: Vec<(std::result::Result<String, String>, PathBuf)> = std::fs::read_dir(dir)
         .map_err(|e| Error::general(format!("read directory {}", dir.display())).with_source(e))?
         .filter_map(|e| e.ok())
-        .filter_map(|e| e.file_name().into_string().ok().map(|n| (n, e.path())))
+        .map(|e| {
+            let name = e
+                .file_name()
+                .into_string()
+                .map_err(|n| n.to_string_lossy().into_owned());
+            (name, e.path())
+        })
         .collect();
     entries.sort();
     for (name, path) in entries {
-        let child = if rel.is_empty() {
-            name.clone()
-        } else {
-            format!("{rel}/{name}")
+        let join = |name: &str| {
+            if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{rel}/{name}")
+            }
         };
+        let name = match name {
+            Ok(n) => n,
+            Err(lossy) => {
+                let child = join(&lossy);
+                if lossy.starts_with('.') || rules.ignored(&child, path.is_dir()) {
+                    continue;
+                }
+                return Err(Error::config(format!(
+                    "the name of ./{child} is not valid UTF-8; rename it, or hide it in .pgmiignore"
+                )));
+            }
+        };
+        let child = join(&name);
         let Ok(link) = std::fs::symlink_metadata(&path) else {
             continue;
         };
@@ -218,6 +244,57 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn project(tag: &str, files: &[(&std::ffi::OsStr, &[u8])]) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("pgmi-walk-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("deploy.sql"), "SELECT 1;").unwrap();
+        for (name, body) in files {
+            std::fs::write(d.join(name), body).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn pgmiignore_is_read_lossily_and_read_errors_refuse() {
+        let os = std::ffi::OsStr::new;
+        let d = project(
+            "lossy",
+            &[
+                (os(".pgmiignore"), b"# caf\xe9\nskip.sql\n"),
+                (os("a.sql"), b"SELECT 1;"),
+                (os("skip.sql"), b"SELECT 1;"),
+            ],
+        );
+        let p = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap();
+        let paths: Vec<_> = p.sources.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["./a.sql"]);
+        let d = project("dir", &[]);
+        std::fs::create_dir(d.join(".pgmiignore")).unwrap();
+        let e = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(e.text().contains(".pgmiignore"), "{}", e.text());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_file_name_is_refused_unless_hidden() {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = std::ffi::OsStr::from_bytes(b"caf\xe9.sql");
+        let d = project("bad", &[(bad, b"SELECT 1;")]);
+        let e = load(&d, DEFAULT_MAX_FILE_SIZE).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(e.text().contains("./caf\u{fffd}.sql"), "{}", e.text());
+        let d = project(
+            "hidden",
+            &[
+                (bad, b"SELECT 1;"),
+                (std::ffi::OsStr::new(".pgmiignore"), b"caf*.sql\n"),
+            ],
+        );
+        assert!(load(&d, DEFAULT_MAX_FILE_SIZE).unwrap().sources.is_empty());
+    }
 
     #[test]
     fn sql_extensions() {
