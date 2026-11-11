@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::poll_fn;
+use rand::seq::SliceRandom;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_postgres::config::{
     ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation,
@@ -10,8 +11,9 @@ use tokio_postgres::error::DbError;
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
 use super::pgpass;
-use super::resolve::{ChannelBinding, Spec, SslMode, TargetSessionAttrs};
+use super::resolve::{ChannelBinding, LoadBalanceHosts, Spec, SslMode, TargetSessionAttrs};
 use super::retry::{self, Cause};
+use super::socket::Tcp;
 use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
@@ -31,6 +33,7 @@ pub(crate) struct Session {
     cancel: CancelToken,
     tls: Option<Connect>,
     peer: Peer,
+    tcp: Tcp,
     connection: tokio::task::AbortHandle,
 }
 
@@ -54,22 +57,23 @@ pub(crate) fn notice_of(db: &DbError) -> Notice {
     }
 }
 
-async fn open(host: &str, port: u16) -> std::io::Result<(Stream, Peer)> {
+async fn open(host: &str, port: u16, tcp: &Tcp) -> std::io::Result<(Stream, Peer)> {
     if host.starts_with('/') {
         let path = format!("{host}/.s.PGSQL.{port}");
-        return Ok((dial(&Peer::Socket(path.clone())).await?, Peer::Socket(path)));
+        let peer = Peer::Socket(path);
+        return Ok((dial(&peer, tcp).await?, peer));
     }
     let stream = tokio::net::TcpStream::connect((host, port)).await?;
-    let _ = stream.set_nodelay(true);
+    tcp.apply(&stream)?;
     let peer = Peer::Tcp(stream.peer_addr()?);
     Ok((Box::new(stream), peer))
 }
 
-async fn dial(peer: &Peer) -> std::io::Result<Stream> {
+async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
     match peer {
         Peer::Tcp(addr) => {
             let stream = tokio::net::TcpStream::connect(addr).await?;
-            let _ = stream.set_nodelay(true);
+            tcp.apply(&stream)?;
             Ok(Box::new(stream))
         }
         #[cfg(unix)]
@@ -77,7 +81,7 @@ async fn dial(peer: &Peer) -> std::io::Result<Stream> {
         #[cfg(not(unix))]
         Peer::Socket(_) => Err(std::io::Error::other("Unix sockets are not supported here")),
         Peer::Google(token) => match token.google() {
-            Some(g) => Ok(Box::new(g.dial().await?)),
+            Some(g) => Ok(Box::new(g.dial(tcp).await?)),
             None => Err(std::io::Error::other("no Cloud SQL dialer")),
         },
     }
@@ -219,6 +223,9 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     if let Some(tz) = &spec.timezone {
         options.push_str(&format!(" -c TimeZone={tz}"));
     }
+    if let Some(t) = spec.tcp.user_timeout {
+        options.push_str(&format!(" -c tcp_user_timeout={}", t.as_millis()));
+    }
     if !options.trim().is_empty() {
         config.options(options.trim());
     }
@@ -252,9 +259,9 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         let opened = match &spec.token {
             Some(token) if google.is_some() => {
                 let peer = Peer::Google(token.clone());
-                dial(&peer).await.map(|s| (s, peer))
+                dial(&peer, &spec.tcp).await.map(|s| (s, peer))
             }
-            _ => open(a.host, a.port).await,
+            _ => open(a.host, a.port, &spec.tcp).await,
         };
         let (socket, peer) = opened.map_err(|e| {
             if classify_io(&e) {
@@ -317,6 +324,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         tls: tls.filter(|_| tls_version.is_some()),
         tls_version,
         peer,
+        tcp: spec.tcp,
         connection,
     })
 }
@@ -427,13 +435,18 @@ impl Dialer {
         let mut codes: Vec<String> = Vec::new();
         let mut all_transient = true;
         for want in passes {
-            for (host, port) in spec.hosts.iter() {
+            let mut endpoints: Vec<_> = spec.hosts.endpoints().collect();
+            balance(&mut endpoints, spec.load_balance_hosts);
+            for endpoint in endpoints {
+                let (host, port) = (endpoint.name.as_str(), endpoint.port);
                 let resolved = if spec.token.as_ref().and_then(|t| t.google()).is_some() {
                     Ok(vec![host.to_string()])
+                } else if let Some(addr) = endpoint.addr {
+                    Ok(vec![addr.to_string()])
                 } else {
                     addresses(host, port).await
                 };
-                let addrs = match resolved {
+                let mut addrs = match resolved {
                     Ok(a) => a,
                     Err(e) => {
                         all_transient = false;
@@ -441,8 +454,9 @@ impl Dialer {
                         continue;
                     }
                 };
+                balance(&mut addrs, spec.load_balance_hosts);
                 for addr in addrs {
-                    let label = if addr == *host {
+                    let label = if addr == host {
                         format!("{host}:{port}")
                     } else {
                         format!("{host} ({addr}):{port}")
@@ -522,6 +536,12 @@ impl Dialer {
     }
 }
 
+fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
+    if mode == LoadBalanceHosts::Random {
+        items.shuffle(&mut rand::rng());
+    }
+}
+
 fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u16)) -> Error {
     let joined = errors.join("; ");
     let mut message = format!("connect to \"{db}\": {joined}");
@@ -550,7 +570,7 @@ fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u1
 impl Session {
     pub(crate) async fn cancel(&self) {
         let fut = async {
-            let Ok(socket) = dial(&self.peer).await else {
+            let Ok(socket) = dial(&self.peer, &self.tcp).await else {
                 return;
             };
             match &self.tls {
@@ -580,6 +600,25 @@ mod tests {
 
     fn sqlstate(e: &Error) -> Option<&str> {
         e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref())
+    }
+
+    #[test]
+    fn random_load_balancing_shuffles_and_disable_keeps_the_order() {
+        let given: Vec<u8> = (0..8).collect();
+        let mut kept = given.clone();
+        balance(&mut kept, LoadBalanceHosts::Disable);
+        assert_eq!(kept, given);
+        let orders: std::collections::BTreeSet<Vec<u8>> = (0..20)
+            .map(|_| {
+                let mut v = given.clone();
+                balance(&mut v, LoadBalanceHosts::Random);
+                let mut sorted = v.clone();
+                sorted.sort_unstable();
+                assert_eq!(sorted, given);
+                v
+            })
+            .collect();
+        assert!(orders.len() > 1, "20 shuffles of 8 hosts gave one order");
     }
 
     #[test]
@@ -658,13 +697,15 @@ mod tests {
     async fn the_cancel_goes_to_the_address_that_answered() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let (_, peer) = open("localhost", addr.port()).await.unwrap();
+        let (_, peer) = open("localhost", addr.port(), &Tcp::default())
+            .await
+            .unwrap();
         let Peer::Tcp(seen) = &peer else {
             panic!("not TCP")
         };
         assert_eq!(*seen, addr);
         let _ = listener.accept().await.unwrap();
-        let _cancel = dial(&peer).await.unwrap();
+        let _cancel = dial(&peer, &Tcp::default()).await.unwrap();
         let (_, from) = listener.accept().await.unwrap();
         assert_eq!(from.ip(), addr.ip());
     }

@@ -1,0 +1,30 @@
+description: keepalives, keepalives_idle, keepalives_interval and keepalives_count are sent to the server as settings and refused there by Go (exit 11); the Rust binary sets them on its socket and connects, and refuses a bad value before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?keepalives=0", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "keepalives"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?keepalives_idle=30", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "keepalives_idle"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?keepalives_interval=5", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "keepalives_interval"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?keepalives_count=3", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "keepalives_count"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?keepalives_idle=abc", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "keepalives_idle"']
+      rust: {exit: 10, stderr: ['invalid keepalives_idle value: "abc"']}

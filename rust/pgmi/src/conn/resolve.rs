@@ -1,9 +1,11 @@
 use std::fmt;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
 use super::parse::{self, Fields, ParseError};
+use super::socket::{Keepalive, Tcp};
 use crate::config::yaml::Connection as YamlConnection;
 use crate::env::Env;
 use crate::error::{Error, Kind, Secret};
@@ -117,6 +119,11 @@ keywords!(TargetSessionAttrs {
     PreferStandby = "prefer-standby",
 });
 
+keywords!(LoadBalanceHosts {
+    Disable = "disable",
+    Random = "random",
+});
+
 impl SslMode {
     /// Whether the mode may fall back to, or start with, a plaintext session.
     pub(crate) fn allows_plaintext(self) -> bool {
@@ -152,6 +159,9 @@ pub(crate) enum ResolveError {
     TlsTooOld,
     ProtocolUnsupported(String),
     ConnectTimeout(String),
+    HostaddrCount { addrs: usize, hosts: usize },
+    NotSupported { setting: String, why: &'static str },
+    Unhandled(String),
 }
 
 impl fmt::Display for ResolveError {
@@ -204,6 +214,16 @@ impl fmt::Display for ResolveError {
                 "min_protocol_version={v}: protocol {v} is not supported yet; pgmi speaks protocol 3.0, so remove min_protocol_version or set it to 3.0"
             ),
             ResolveError::ConnectTimeout(t) => write!(f, "invalid connect_timeout \"{t}\""),
+            ResolveError::HostaddrCount { addrs, hosts } => {
+                write!(f, "could not match {hosts} host names to {addrs} hostaddr values")
+            }
+            ResolveError::NotSupported { setting, why } => {
+                write!(f, "{setting} is not supported: {why}")
+            }
+            ResolveError::Unhandled(k) => write!(
+                f,
+                "connection option \"{k}\" is accepted but not handled; this is a pgmi bug, please report it"
+            ),
         }
     }
 }
@@ -243,27 +263,38 @@ impl ResolveError {
                 value: hide(value),
             },
             ResolveError::ConnectTimeout(t) => ResolveError::ConnectTimeout(hide(t)),
+            ResolveError::NotSupported { setting, why } => ResolveError::NotSupported {
+                setting: hide(setting),
+                why,
+            },
             other => other,
         }
     }
 }
 
+/// One server to try: the name used for TLS, `.pgpass` and messages, and,
+/// from `hostaddr`, the address to connect to instead of looking the name up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Endpoint {
+    pub(crate) name: String,
+    pub(crate) port: u16,
+    pub(crate) addr: Option<IpAddr>,
+}
+
 /// The servers to try, in order; never empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hosts {
-    first: (String, u16),
-    rest: Vec<(String, u16)>,
+    first: Endpoint,
+    rest: Vec<Endpoint>,
 }
 
 impl Hosts {
     pub(crate) fn first(&self) -> (&str, u16) {
-        (self.first.0.as_str(), self.first.1)
+        (self.first.name.as_str(), self.first.port)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, u16)> {
-        std::iter::once(&self.first)
-            .chain(&self.rest)
-            .map(|(h, p)| (h.as_str(), *p))
+    pub(crate) fn endpoints(&self) -> impl Iterator<Item = &Endpoint> {
+        std::iter::once(&self.first).chain(&self.rest)
     }
 }
 
@@ -292,6 +323,8 @@ pub(crate) struct Spec {
     pub(crate) options: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) target_session_attrs: TargetSessionAttrs,
+    pub(crate) load_balance_hosts: LoadBalanceHosts,
+    pub(crate) tcp: Tcp,
     pub(crate) source: Source,
     pub(crate) pg_files: Option<crate::env::PgFiles>,
     pub(crate) token: Option<crate::conn::cloud::Token>,
@@ -448,15 +481,19 @@ fn finish(
     .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
     .unwrap_or_else(|| "postgres".into());
 
+    let hostaddr = f.remove("hostaddr").filter(|a| !a.trim().is_empty());
+    let host_text = f.remove("host").or_else(|| hostaddr.clone());
     let hosts = hosts(
-        f.get("host").map_or("localhost", String::as_str),
-        f.get("port").map_or("5432", String::as_str),
+        host_text.as_deref().unwrap_or("localhost"),
+        f.remove("port").as_deref().unwrap_or("5432"),
+        hostaddr.as_deref(),
     )?;
 
-    let system_roots = f.get("sslrootcert").map(String::as_str) == Some("system");
+    let sslrootcert = f.remove("sslrootcert").filter(|v| !v.is_empty());
+    let system_roots = sslrootcert.as_deref() == Some("system");
     let requested_sslmode = f
-        .get("sslmode")
-        .map(|m| setting::<SslMode>("sslmode", m))
+        .remove("sslmode")
+        .map(|m| setting::<SslMode>("sslmode", &m))
         .transpose()?;
     if system_roots && let Some(mode) = requested_sslmode.filter(|m| *m != SslMode::VerifyFull) {
         return Err(ResolveError::WeakForSystemRoots(mode));
@@ -466,11 +503,7 @@ fn finish(
     } else {
         SslMode::Prefer
     });
-    let direct = match f
-        .get("sslnegotiation")
-        .map(String::as_str)
-        .unwrap_or("postgres")
-    {
+    let direct = match f.remove("sslnegotiation").as_deref().unwrap_or("postgres") {
         "postgres" => false,
         "direct" => true,
         o => return Err(value("sslnegotiation", o)),
@@ -478,44 +511,50 @@ fn finish(
     if direct && sslmode.allows_plaintext() {
         return Err(ResolveError::WeakForDirect(sslmode));
     }
-    let sslsni = match f.get("sslsni").map(String::as_str).unwrap_or("") {
+    let sslsni = match f.remove("sslsni").as_deref().unwrap_or("") {
         "" | "1" => true,
         "0" => false,
         o => return Err(value("sslsni", o)),
     };
-    let sslcertmode_disable = match f.get("sslcertmode").map(String::as_str).unwrap_or("") {
+    let sslcertmode_disable = match f.remove("sslcertmode").as_deref().unwrap_or("") {
         "" | "allow" => false,
         "disable" => true,
         "require" => return Err(ResolveError::CertModeRequire),
         o => return Err(value("sslcertmode", o)),
     };
     let tls_versions = tls_versions(
-        f.get("ssl_min_protocol_version"),
-        f.get("ssl_max_protocol_version"),
+        f.remove("ssl_min_protocol_version").as_ref(),
+        f.remove("ssl_max_protocol_version").as_ref(),
     )?;
-    for key in ["min_protocol_version", "max_protocol_version"] {
-        match f.get(key).map(String::as_str) {
+    let min_protocol = f.remove("min_protocol_version");
+    for (key, given) in [
+        ("min_protocol_version", &min_protocol),
+        ("max_protocol_version", &f.remove("max_protocol_version")),
+    ] {
+        match given.as_deref() {
             None | Some("3.0" | "3.2" | "latest") => {}
             Some(o) => return Err(value(key, o)),
         }
     }
-    if let Some(v) = f
-        .get("min_protocol_version")
-        .filter(|v| v.as_str() != "3.0")
-    {
-        return Err(ResolveError::ProtocolUnsupported(v.clone()));
+    if let Some(v) = min_protocol.filter(|v| v.as_str() != "3.0") {
+        return Err(ResolveError::ProtocolUnsupported(v));
     }
     let channel_binding = f
-        .get("channel_binding")
+        .remove("channel_binding")
         .map_or(Ok(ChannelBinding::Prefer), |v| {
-            setting("channel_binding", v)
+            setting("channel_binding", &v)
         })?;
     let target_session_attrs = f
-        .get("target_session_attrs")
+        .remove("target_session_attrs")
         .map_or(Ok(TargetSessionAttrs::Any), |v| {
-            setting("target_session_attrs", v)
+            setting("target_session_attrs", &v)
         })?;
-    let connect_timeout = match f.get("connect_timeout") {
+    let load_balance_hosts = f
+        .remove("load_balance_hosts")
+        .map_or(Ok(LoadBalanceHosts::Disable), |v| {
+            setting("load_balance_hosts", &v)
+        })?;
+    let connect_timeout = match f.remove("connect_timeout") {
         None => None,
         Some(t) => {
             let n: i64 = t
@@ -528,45 +567,162 @@ fn finish(
                 .map(|n| Duration::from_secs(n.max(2)))
         }
     };
-    let user = match f.get("user") {
-        Some(u) => u.clone(),
+    let tcp = tcp(&mut f)?;
+    without_gssapi(&mut f)?;
+    session_neutral(&mut f)?;
+    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
+        f.remove(k);
+    }
+    let user = match f.remove("user") {
+        Some(u) => u,
         None => env
             .non_empty("USER")?
             .or(env.non_empty("USERNAME")?)
             .unwrap_or("postgres")
             .to_string(),
     };
-    Ok(Spec {
+    let application_name = f.remove("application_name");
+    let fallback_application_name = f.remove("fallback_application_name");
+    let spec = Spec {
         hosts,
         user,
-        password: f.get("password").map(|p| Secret::from(p.as_str())),
-        passfile: f.get("passfile").map(PathBuf::from),
+        password: f.remove("password").map(Secret::from),
+        passfile: f.remove("passfile").map(PathBuf::from),
         maintenance_db,
         target_db,
         requested_sslmode,
-        sslrootcert: f.get("sslrootcert").cloned().filter(|v| !v.is_empty()),
-        sslcert: f.get("sslcert").cloned().filter(|v| !v.is_empty()),
-        sslkey: f.get("sslkey").cloned().filter(|v| !v.is_empty()),
-        sslpassword: f.get("sslpassword").map(|p| Secret::from(p.as_str())),
+        sslrootcert,
+        sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),
+        sslkey: f.remove("sslkey").filter(|v| !v.is_empty()),
+        sslpassword: f.remove("sslpassword").map(Secret::from),
         sslnegotiation_direct: direct,
         sslsni,
         sslcertmode_disable,
         tls_versions,
         channel_binding,
-        require_auth: f.get("require_auth").cloned().filter(|r| !r.is_empty()),
-        application_name: f
-            .get("application_name")
-            .cloned()
-            .or_else(|| f.get("fallback_application_name").cloned())
+        require_auth: f.remove("require_auth").filter(|r| !r.is_empty()),
+        application_name: application_name
+            .or(fallback_application_name)
             .unwrap_or_else(|| "pgmi".into()),
         connect_timeout,
-        options: f.get("options").cloned().filter(|o| !o.trim().is_empty()),
+        options: f.remove("options").filter(|o| !o.trim().is_empty()),
         timezone: env.non_empty("PGTZ")?.map(str::to_string),
         target_session_attrs,
+        load_balance_hosts,
+        tcp,
         source,
         pg_files: env.pg_files(),
         token: None,
+    };
+    match f.into_keys().next() {
+        Some(k) => Err(ResolveError::Unhandled(k)),
+        None => Ok(spec),
+    }
+}
+
+fn whole(f: &mut Fields, key: &'static str) -> Result<Option<u32>> {
+    let Some(v) = f.remove(key).filter(|v| !v.trim().is_empty()) else {
+        return Ok(None);
+    };
+    v.trim()
+        .parse::<i32>()
+        .ok()
+        .and_then(|n| u32::try_from(n).ok())
+        .map(Some)
+        .ok_or_else(|| value(key, &v))
+}
+
+fn tcp(f: &mut Fields) -> Result<Tcp> {
+    let on = whole(f, "keepalives")?;
+    let idle = whole(f, "keepalives_idle")?;
+    let interval = whole(f, "keepalives_interval")?;
+    let count = whole(f, "keepalives_count")?;
+    let user_timeout = whole(f, "tcp_user_timeout")?;
+    let strict = [on, idle, interval, count, user_timeout]
+        .iter()
+        .any(Option::is_some);
+    let given = |v: Option<u32>| v.filter(|n| *n > 0);
+    let d = Keepalive::default();
+    let secs = |v, d| given(v).map_or(d, |n| Duration::from_secs(n.into()));
+    Ok(Tcp {
+        keepalive: (on != Some(0)).then(|| Keepalive {
+            idle: secs(idle, d.idle),
+            interval: secs(interval, d.interval),
+            count: given(count).unwrap_or(d.count),
+        }),
+        user_timeout: given(user_timeout).map(|n| Duration::from_millis(n.into())),
+        strict,
     })
+}
+
+const NO_GSSAPI: &str = "pgmi has no GSSAPI (Kerberos) support; remove it";
+
+fn without_gssapi(f: &mut Fields) -> Result<()> {
+    let refuse = |setting: String| ResolveError::NotSupported {
+        setting,
+        why: NO_GSSAPI,
+    };
+    match f.remove("gssencmode").as_deref() {
+        None | Some("disable" | "prefer") => {}
+        Some("require") => {
+            return Err(ResolveError::NotSupported {
+                setting: "gssencmode=require".into(),
+                why: "pgmi has no GSSAPI encryption; use gssencmode=disable or prefer, and sslmode for an encrypted connection",
+            });
+        }
+        Some(o) => return Err(value("gssencmode", o)),
+    }
+    match f.remove("gssdelegation").as_deref() {
+        None | Some("" | "0") => {}
+        Some("1") => return Err(refuse("gssdelegation=1".into())),
+        Some(o) => return Err(value("gssdelegation", o)),
+    }
+    if let Some(lib) = f.remove("gsslib").filter(|v| !v.is_empty()) {
+        return Err(refuse(format!("gsslib={lib}")));
+    }
+    f.remove("krbsrvname");
+    Ok(())
+}
+
+fn session_neutral(f: &mut Fields) -> Result<()> {
+    match f.remove("sslcompression").as_deref() {
+        None | Some("" | "0") => {}
+        Some("1") => {
+            return Err(ResolveError::NotSupported {
+                setting: "sslcompression=1".into(),
+                why: "pgmi's TLS never compresses, which is the safe choice; remove it or set 0",
+            });
+        }
+        Some(o) => return Err(value("sslcompression", o)),
+    }
+    if let Some(enc) = f.remove("client_encoding") {
+        let name = enc
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if !matches!(name.as_str(), "utf8" | "unicode") {
+            return Err(ResolveError::NotSupported {
+                setting: format!("client_encoding={enc}"),
+                why: "pgmi always sends and reads UTF-8; remove it or set UTF8",
+            });
+        }
+    }
+    match f.remove("default_query_exec_mode").as_deref() {
+        None
+        | Some(
+            "cache_statement" | "cache_describe" | "describe_exec" | "exec" | "simple_protocol",
+        ) => {}
+        Some(o) => return Err(value("default_query_exec_mode", o)),
+    }
+    for key in ["statement_cache_capacity", "description_cache_capacity"] {
+        if let Some(v) = f.remove(key)
+            && v.parse::<i32>().is_err()
+        {
+            return Err(value(key, &v));
+        }
+    }
+    Ok(())
 }
 
 fn value(key: &'static str, value: &str) -> ResolveError {
@@ -585,7 +741,7 @@ fn split_list(text: &str) -> (&str, Vec<&str>) {
     (parts.next().unwrap_or_default(), parts.collect())
 }
 
-fn hosts(host_text: &str, port_text: &str) -> Result<Hosts> {
+fn hosts(host_text: &str, port_text: &str, addr_text: Option<&str>) -> Result<Hosts> {
     let port = |p: &str| -> Result<u16> {
         if p.is_empty() {
             return Ok(5432);
@@ -608,19 +764,37 @@ fn hosts(host_text: &str, port_text: &str) -> Result<Hosts> {
             hosts: rest_names.len() + 1,
         });
     }
-    let host = |name: &str, port: u16| {
-        let name = if name.is_empty() { "localhost" } else { name };
-        (name.to_string(), port)
+    let mut addrs = match addr_text {
+        None => Vec::new(),
+        Some(text) => text
+            .split(',')
+            .map(str::trim)
+            .map(|a| {
+                (!a.is_empty())
+                    .then(|| a.parse::<IpAddr>().map_err(|_| value("hostaddr", a)))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?,
+    }
+    .into_iter();
+    if addr_text.is_some() && addrs.len() != rest_names.len() + 1 {
+        return Err(ResolveError::HostaddrCount {
+            addrs: addrs.len(),
+            hosts: rest_names.len() + 1,
+        });
+    }
+    let mut host = |name: &str, port: u16| Endpoint {
+        name: if name.is_empty() { "localhost" } else { name }.to_string(),
+        port,
+        addr: addrs.next().flatten(),
     };
+    let first = host(first_name, first_port);
     let rest = rest_names
         .iter()
         .enumerate()
         .map(|(i, n)| host(n, rest_ports.get(i).copied().unwrap_or(first_port)))
         .collect();
-    Ok(Hosts {
-        first: host(first_name, first_port),
-        rest,
-    })
+    Ok(Hosts { first, rest })
 }
 
 fn tls_versions(

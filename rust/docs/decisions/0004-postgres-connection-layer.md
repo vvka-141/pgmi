@@ -36,10 +36,18 @@ above the wire protocol:
   from the environment snapshot (record 0016), never from `std::env`.
 - **Unknown keys** are refused before connecting, exit 10,
   `invalid connection option "<key>"` (decided change). `PGSERVICE` and
-  `service=` are refused, `hostaddr` is refused as today, `PGHOSTADDR` and
-  `PGSSLCRL` are ignored. The three pgx keys are accepted:
+  `service=` are refused, `PGHOSTADDR` and `PGSSLCRL` are ignored. The
+  three pgx keys are accepted and their values checked as pgx does:
   pgmi only uses the simple protocol and unnamed statements
   (`batch_execute`, `query_typed`), so PGlite works without them.
+  Every accepted key is consumed or refused (PGMI-860): `resolve::finish`
+  removes each key it handles and refuses a leftover one, and the unit test
+  `every_accepted_key_is_consumed_or_refused` walks `parse::KNOWN`.
+  `hostaddr` connects without a lookup, `load_balance_hosts=random`
+  shuffles hosts and addresses, and the keepalive keys and
+  `tcp_user_timeout` are set on the socket (`conn::socket`, socket2)
+  before the startup message; the contract's "Every accepted connection key
+  is honoured or refused" lists each key.
 - **Ports**: `PGPORT` and `port=` may list one port per host, or one for all
   (decided change); any other count is exit 10.
 - **Passwords**: string, then `PGPASSWORD`, then `.pgpass`/`PGPASSFILE`

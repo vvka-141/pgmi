@@ -141,6 +141,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 28 | `options=` applied; unknown key sent to the server and refused (exit 11) | ✓ `connection/keywords` |
 | 28a | `max_protocol_version=3.2` deploy and cancel; `sslsni`, `sslcertmode`, `client_encoding` accepted | ✓ `connection/protocol-version` |
 | 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
+| 29a | libpq keys Go sends to the server (keepalives, `tcp_user_timeout`, `load_balance_hosts`, `hostaddr`, GSSAPI keys, `sslcompression`, `client_encoding`) and the pgx options' values | ✓ `connection/keepalives`, `connection/tcp-user-timeout`, `connection/load-balance-hosts`, `connection/hostaddr`, `connection/gssapi-keys`, `connection/sslcompression`, `connection/client-encoding`, `connection/pgx-options` |
 | 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root` |
 | 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
 | 32 | `sslrootcert=system`, with `SSL_CERT_FILE`; it makes `verify-full` the default | ✓ `tls/system-roots` |

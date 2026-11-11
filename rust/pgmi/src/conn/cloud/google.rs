@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use super::Request;
 use super::http::client;
+use crate::conn::socket::Tcp;
 use crate::conn::tls::Names;
 use crate::env::Env;
 use crate::error::{Error, Result};
@@ -33,9 +34,10 @@ impl Dialer {
 
     pub(crate) async fn dial(
         &self,
+        options: &Tcp,
     ) -> std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
         let tcp = tokio::net::TcpStream::connect((self.address.as_str(), PORT)).await?;
-        let _ = tcp.set_nodelay(true);
+        options.apply(&tcp)?;
         tokio_rustls::TlsConnector::from(self.config.clone())
             .connect(self.server_name.clone(), tcp)
             .await

@@ -1,0 +1,18 @@
+description: tcp_user_timeout reaches the server as its tcp_user_timeout setting in both binaries (the Rust binary also sets it on its own socket on Linux, the one system with the option); a bad value is refused by the server in Go (exit 11) and before connecting by the Rust binary (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (v text);
+      INSERT INTO seen VALUES (current_setting('tcp_user_timeout'));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?tcp_user_timeout=2500", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT v FROM seen
+          rows: [['2500']]
+  - pgmi: [deploy, "{project}", --connection, "{conn}?tcp_user_timeout=abc", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['invalid value for parameter "tcp_user_timeout"']
+      rust: {exit: 10, stderr: ['invalid tcp_user_timeout value: "abc"']}

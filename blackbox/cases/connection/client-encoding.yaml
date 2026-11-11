@@ -1,0 +1,25 @@
+description: client_encoding=UTF8 works in both binaries; Go sends client_encoding=LATIN1 to the server and connects, so a non-ASCII literal is stored garbled; the Rust binary always speaks UTF-8 and refuses another client_encoding before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (v text);
+      INSERT INTO seen VALUES ('é');
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?client_encoding=UTF8", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT v FROM seen
+          rows: [[é]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}?client_encoding=LATIN1", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FILTER (WHERE v <> 'é') FROM seen
+          rows: [[1]]
+      rust:
+        exit: 10
+        stderr: ['client_encoding=LATIN1 is not supported: pgmi always sends and reads UTF-8']
+        sql:
+          - query: SELECT count(*) FILTER (WHERE v <> 'é') FROM seen
+            rows: [[0]]

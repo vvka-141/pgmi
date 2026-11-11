@@ -1,0 +1,15 @@
+description: sslcompression is sent to the server as a setting and refused there by Go (exit 11); the Rust binary honours sslcompression=0 (its TLS never compresses) and refuses sslcompression=1 before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslcompression=0", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "sslcompression"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslcompression=1", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "sslcompression"']
+      rust: {exit: 10, stderr: ["sslcompression=1 is not supported: pgmi's TLS never compresses"]}

@@ -1,0 +1,11 @@
+description: the pgx options default_query_exec_mode, statement_cache_capacity and description_cache_capacity take their documented values; a bad value is refused before connecting (exit 10) by both binaries
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?default_query_exec_mode=simple_protocol&statement_cache_capacity=0&description_cache_capacity=0", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?default_query_exec_mode=bogus", -d, "{db}"]
+    expect: {exit: 10, stderr: ['invalid default_query_exec_mode']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?statement_cache_capacity=x", -d, "{db}"]
+    expect: {exit: 10, stderr: ['statement_cache_capacity']}

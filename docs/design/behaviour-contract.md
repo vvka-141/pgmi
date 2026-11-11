@@ -721,6 +721,50 @@ Cases: `cloud/azure-token-credentials-invalid` (the exit code). The fresh
 block: `terminal/config-replace-unparseable` checks what both binaries keep;
 the replacement itself is recorded in `rust/docs/decisions/0013-yaml.md`.
 
+### Every accepted connection key is honoured or refused (owner, 2026-11-11)
+
+No connection setting is accepted and then ignored (PGMI-860; libpq keys,
+question Q3 in `rust/docs/decisions/go-review.md`). Go sends most of the keys
+below to the server as settings, which refuses them (exit 11). The Rust
+binary handles each one as libpq does, or refuses it before connecting with
+exit 10 when it needs something pgmi has not:
+
+- `keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_count`:
+  set on the socket before the startup message. Keepalive is on by default
+  with Go's timings (first probe after 15 s idle, then every 15 s, 9 probes);
+  `keepalives=0` turns it off, and 0 for the others keeps the default. On
+  Windows the count needs Windows 10 1703 or later. A value that is not a
+  whole number is exit 10.
+- `tcp_user_timeout` (milliseconds): sent to the server as its setting, as Go
+  does, and also set on pgmi's own socket on Linux, the only release target
+  with the option. A bad value is exit 10 (Go: 11, from the server).
+- `load_balance_hosts`: `disable` (default) or `random`, which tries the hosts,
+  and each host's addresses, in random order.
+- `hostaddr`: a numeric address per host (empty entries look the host up);
+  pgmi connects to it without a lookup and keeps the host name for TLS,
+  `.pgpass` and messages. Go refuses it (keyword form, exit 10) or sends it to
+  the server (URI, exit 11). `PGHOSTADDR` stays ignored, as in Go.
+- GSSAPI: neither binary has it. `gssencmode=disable` and `prefer` (what libpq
+  without GSSAPI does) and `gssdelegation=0` are honoured; `krbsrvname` is
+  accepted, as Go does, and only names the service of a GSSAPI sign-in, which
+  a server cannot get from either binary; `gssencmode=require`,
+  `gssdelegation=1` and any `gsslib` are exit 10.
+- `sslcompression=0` is honoured (pgmi's TLS never compresses);
+  `sslcompression=1` is exit 10.
+- `client_encoding`: pgmi always speaks UTF-8, so `UTF8` (any spelling, or
+  `UNICODE`) is honoured and any other value is exit 10. Go sends it to the
+  server and connects, so non-ASCII text is stored garbled.
+- `default_query_exec_mode`, `statement_cache_capacity`,
+  `description_cache_capacity`: checked as pgx does (exit 10 for a bad value,
+  in both binaries); pgmi never names prepared statements, so every mode
+  works with single-session servers.
+
+The rule is enforced in code: `resolve::finish` removes every key it
+handles and refuses a leftover one, and the unit test
+`every_accepted_key_is_consumed_or_refused` walks the parser's accepted list.
+
+Cases: `connection/keepalives`, `connection/tcp-user-timeout`, `connection/load-balance-hosts`, `connection/hostaddr`, `connection/gssapi-keys`, `connection/sslcompression`, `connection/client-encoding`, `connection/pgx-options`.
+
 ## Behaviour changes in 0.20
 
 ### Changed exit codes and newly refused input
@@ -753,6 +797,11 @@ release notes take their "Behaviour changes" section from this table.
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
 | Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
 | `PGPORT` listing several ports | refused, exit 10 | accepted, one per `PGHOST` entry | owner 2026-11-10 |
+| `keepalives*`, `load_balance_hosts`, `gssencmode=disable`/`prefer`, `gssdelegation=0`, `sslcompression=0` | exit 11 (the server refuses the setting) | honoured | owner 2026-11-11 |
+| `hostaddr` | exit 10 (keyword form) or 11 (URI) | honoured, no lookup | owner 2026-11-11 |
+| `gssencmode=require`, `gssdelegation=1`, `gsslib`, `sslcompression=1` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
+| A bad `tcp_user_timeout`, `keepalives*` or `load_balance_hosts` value | exit 11 | exit 10 | owner 2026-11-11 |
+| `client_encoding` other than UTF8 | connects, non-ASCII stored garbled | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | Server asks for a password and none was found | exit 11, the server's `password authentication failed` | exit 11, `no password supplied` naming where it looked | owner 2026-11-10 |
 | Encrypted legacy client keys, `require_auth` | work | work (kept) | owner 2026-11-10 |
 | Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |

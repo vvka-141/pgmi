@@ -19,7 +19,10 @@ fn conn(s: &str) -> Flags {
 }
 
 fn hosts(s: &Spec) -> Vec<(String, u16)> {
-    s.hosts.iter().map(|(h, p)| (h.to_string(), p)).collect()
+    s.hosts
+        .endpoints()
+        .map(|e| (e.name.clone(), e.port))
+        .collect()
 }
 
 #[track_caller]
@@ -1019,4 +1022,240 @@ fn formatting_never_prints_secrets() {
         text.contains("db.internal") && text.contains("deployer"),
         "{text}"
     );
+}
+
+fn keyword(s: &str) -> Result<Spec, ResolveError> {
+    resolve(
+        &conn(&format!("host=h dbname=d {s}")),
+        &Env::default(),
+        None,
+    )
+}
+
+#[track_caller]
+fn not_supported(s: &str) -> String {
+    let e = refused(keyword(s));
+    assert!(matches!(e, ResolveError::NotSupported { .. }), "{s}: {e:?}");
+    e.to_string()
+}
+
+#[track_caller]
+fn invalid(s: &str, key: &str) {
+    let e = refused(keyword(s));
+    assert!(
+        matches!(e, ResolveError::Value { key: k, .. } if k == key),
+        "{s}: {e:?}"
+    );
+}
+
+#[test]
+fn every_accepted_key_is_consumed_or_refused() {
+    const SAMPLES: &[(&str, &str)] = &[
+        ("host", "db1"),
+        ("hostaddr", "10.0.0.1"),
+        ("port", "6000"),
+        ("dbname", "app"),
+        ("user", "me"),
+        ("password", "pw"),
+        ("passfile", "/p"),
+        ("channel_binding", "disable"),
+        ("connect_timeout", "5"),
+        ("client_encoding", "UTF8"),
+        ("options", "-cwork_mem=5MB"),
+        ("application_name", "a"),
+        ("fallback_application_name", "f"),
+        ("keepalives", "1"),
+        ("keepalives_idle", "30"),
+        ("keepalives_interval", "5"),
+        ("keepalives_count", "3"),
+        ("tcp_user_timeout", "1000"),
+        ("sslmode", "require"),
+        ("sslnegotiation", "postgres"),
+        ("sslcompression", "0"),
+        ("sslcert", "/c"),
+        ("sslkey", "/k"),
+        ("sslpassword", "kp"),
+        ("sslcertmode", "disable"),
+        ("sslrootcert", "/r"),
+        ("sslcrl", ""),
+        ("sslcrldir", ""),
+        ("sslsni", "0"),
+        ("requirepeer", ""),
+        ("ssl_min_protocol_version", "TLSv1.3"),
+        ("ssl_max_protocol_version", "TLSv1.3"),
+        ("gssencmode", "disable"),
+        ("krbsrvname", "postgres"),
+        ("gsslib", ""),
+        ("gssdelegation", "0"),
+        ("target_session_attrs", "read-write"),
+        ("load_balance_hosts", "random"),
+        ("require_auth", "scram-sha-256"),
+        ("min_protocol_version", "3.0"),
+        ("max_protocol_version", "3.2"),
+        ("default_query_exec_mode", "exec"),
+        ("statement_cache_capacity", "0"),
+        ("description_cache_capacity", "0"),
+    ];
+    let mut sampled: Vec<&str> = SAMPLES.iter().map(|(k, _)| *k).collect();
+    let mut known = super::parse::KNOWN.to_vec();
+    sampled.sort_unstable();
+    known.sort_unstable();
+    assert_eq!(
+        sampled, known,
+        "every key parse::KNOWN accepts needs a sample here and a consumer or refusal in resolve::finish"
+    );
+    for (key, v) in SAMPLES {
+        let r = keyword(&format!("{key}='{v}'"));
+        assert!(
+            !matches!(r, Err(ResolveError::Unhandled(_))),
+            "{key} is accepted and ignored: {:?}",
+            r.err()
+        );
+    }
+}
+
+#[test]
+fn an_unhandled_key_is_refused_before_connecting_as_a_bug() {
+    let e = Error::from(ResolveError::Unhandled("newkey".into()));
+    assert_eq!(e.exit_code(), 10);
+    assert_eq!(
+        e.text(),
+        "connection option \"newkey\" is accepted but not handled; this is a pgmi bug, please report it"
+    );
+}
+
+#[test]
+fn keepalives_and_tcp_user_timeout_are_read_and_bad_values_refused() {
+    use super::socket::{Keepalive, Tcp};
+    assert_eq!(keyword("").unwrap().tcp, Tcp::default());
+    assert_eq!(
+        keyword(
+            "keepalives_idle=30 keepalives_interval=5 keepalives_count=3 tcp_user_timeout=2500"
+        )
+        .unwrap()
+        .tcp,
+        Tcp {
+            keepalive: Some(Keepalive {
+                idle: Duration::from_secs(30),
+                interval: Duration::from_secs(5),
+                count: 3,
+            }),
+            user_timeout: Some(Duration::from_millis(2500)),
+            strict: true,
+        }
+    );
+    let off = keyword("keepalives=0 keepalives_idle=30").unwrap().tcp;
+    assert_eq!((off.keepalive, off.strict), (None, true));
+    let zeros = keyword("keepalives=1 keepalives_idle=0 tcp_user_timeout=0")
+        .unwrap()
+        .tcp;
+    assert_eq!(
+        (zeros.keepalive, zeros.user_timeout, zeros.strict),
+        (Some(Keepalive::default()), None, true)
+    );
+    for key in [
+        "keepalives",
+        "keepalives_idle",
+        "keepalives_interval",
+        "keepalives_count",
+        "tcp_user_timeout",
+    ] {
+        for bad in ["abc", "-1", "1.5", "4294967296"] {
+            invalid(&format!("{key}={bad}"), key);
+        }
+    }
+}
+
+#[test]
+fn load_balance_hosts_is_disable_or_random() {
+    assert_eq!(
+        keyword("").unwrap().load_balance_hosts,
+        LoadBalanceHosts::Disable
+    );
+    assert_eq!(
+        keyword("load_balance_hosts=random")
+            .unwrap()
+            .load_balance_hosts,
+        LoadBalanceHosts::Random
+    );
+    invalid("load_balance_hosts=sometimes", "load_balance_hosts");
+}
+
+#[test]
+fn hostaddr_skips_the_lookup_and_keeps_the_host_name() {
+    let s = keyword("host=a,b port=1,2 hostaddr=10.0.0.1,").unwrap();
+    let got: Vec<_> = s
+        .hosts
+        .endpoints()
+        .map(|e| (e.name.as_str(), e.port, e.addr))
+        .collect();
+    assert_eq!(
+        got,
+        [("a", 1, Some("10.0.0.1".parse().unwrap())), ("b", 2, None)]
+    );
+    let only = resolve(&conn("hostaddr=::1 dbname=d"), &Env::default(), None).unwrap();
+    assert_eq!(hosts(&only), [("::1".to_string(), 5432)]);
+    assert_eq!(
+        refused(keyword("hostaddr=10.0.0.1,10.0.0.2")).to_string(),
+        "could not match 1 host names to 2 hostaddr values"
+    );
+    invalid("hostaddr=db.example", "hostaddr");
+}
+
+#[test]
+fn gssapi_keys_are_honoured_without_gssapi_and_refused_when_they_need_it() {
+    for ok in [
+        "gssencmode=disable",
+        "gssencmode=prefer",
+        "gssdelegation=0",
+        "gsslib=''",
+        "krbsrvname=postgres",
+    ] {
+        assert!(keyword(ok).is_ok(), "{ok}");
+    }
+    assert_eq!(
+        not_supported("gssencmode=require"),
+        "gssencmode=require is not supported: pgmi has no GSSAPI encryption; use gssencmode=disable or prefer, and sslmode for an encrypted connection"
+    );
+    assert_eq!(
+        not_supported("gssdelegation=1"),
+        "gssdelegation=1 is not supported: pgmi has no GSSAPI (Kerberos) support; remove it"
+    );
+    assert_eq!(
+        not_supported("gsslib=gssapi"),
+        "gsslib=gssapi is not supported: pgmi has no GSSAPI (Kerberos) support; remove it"
+    );
+    invalid("gssencmode=maybe", "gssencmode");
+    invalid("gssdelegation=yes", "gssdelegation");
+    assert_eq!(
+        Error::from(refused(keyword("gssencmode=require"))).exit_code(),
+        10
+    );
+}
+
+#[test]
+fn sslcompression_client_encoding_and_pgx_keys_are_checked() {
+    for ok in [
+        "sslcompression=0",
+        "client_encoding=UTF8",
+        "client_encoding=utf-8",
+        "client_encoding=unicode",
+        "default_query_exec_mode=simple_protocol",
+        "statement_cache_capacity=-1",
+    ] {
+        assert!(keyword(ok).is_ok(), "{ok}");
+    }
+    assert_eq!(
+        not_supported("sslcompression=1"),
+        "sslcompression=1 is not supported: pgmi's TLS never compresses, which is the safe choice; remove it or set 0"
+    );
+    assert_eq!(
+        not_supported("client_encoding=LATIN1"),
+        "client_encoding=LATIN1 is not supported: pgmi always sends and reads UTF-8; remove it or set UTF8"
+    );
+    not_supported("client_encoding=auto");
+    invalid("sslcompression=yes", "sslcompression");
+    invalid("default_query_exec_mode=bogus", "default_query_exec_mode");
+    invalid("statement_cache_capacity=x", "statement_cache_capacity");
+    invalid("description_cache_capacity=x", "description_cache_capacity");
 }

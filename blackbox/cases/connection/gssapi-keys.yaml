@@ -1,0 +1,37 @@
+description: neither binary has GSSAPI; krbsrvname is accepted by both (it only names the Kerberos service of a GSSAPI sign-in); Go sends gssencmode, gssdelegation and gsslib to the server, which refuses them (exit 11); the Rust binary honours the values that need no GSSAPI (gssencmode disable or prefer, gssdelegation=0) and refuses gssencmode=require, gssdelegation=1 and gsslib before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?krbsrvname=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gssencmode=disable", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gssencmode"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gssencmode=prefer", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gssencmode"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gssencmode=require", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gssencmode"']
+      rust: {exit: 10, stderr: ['gssencmode=require is not supported: pgmi has no GSSAPI encryption']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gssdelegation=0", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gssdelegation"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gssdelegation=1", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gssdelegation"']
+      rust: {exit: 10, stderr: ['gssdelegation=1 is not supported: pgmi has no GSSAPI']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?gsslib=gssapi", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "gsslib"']
+      rust: {exit: 10, stderr: ['gsslib=gssapi is not supported: pgmi has no GSSAPI']}

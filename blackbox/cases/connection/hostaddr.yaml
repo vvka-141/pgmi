@@ -1,0 +1,19 @@
+description: Go fails on hostaddr (a URI sends it to the server, exit 11; the keyword form is refused, exit 10); the Rust binary connects to hostaddr without looking up host, as libpq does, and refuses an address that is not numeric before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@no-such-host.invalid:{port}/postgres?hostaddr={host}", -d, "{db}"]
+    expect:
+      exit: 11
+      rust: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "host=no-such-host.invalid hostaddr={host} port={port} user={user} password={password} dbname=postgres", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ['hostaddr is not supported']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "host={host} hostaddr=db.example port={port} user={user} password={password} dbname=postgres", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ['hostaddr is not supported']
+      rust: {exit: 10, stderr: ['invalid hostaddr value: "db.example"']}

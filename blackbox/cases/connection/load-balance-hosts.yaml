@@ -1,0 +1,20 @@
+description: load_balance_hosts is sent to the server as a setting and refused there by Go (exit 11); the Rust binary takes disable or random (hosts and their addresses tried in random order, as libpq does) and refuses another value before connecting (exit 10) (contract "Every accepted connection key is honoured or refused")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:1,{host}:{port}/postgres?load_balance_hosts=random", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "load_balance_hosts"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?load_balance_hosts=disable", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "load_balance_hosts"']
+      rust: {exit: 0, stderr: []}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?load_balance_hosts=sometimes", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ['unrecognized configuration parameter "load_balance_hosts"']
+      rust: {exit: 10, stderr: ['invalid load_balance_hosts value: "sometimes"']}

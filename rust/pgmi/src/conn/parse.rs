@@ -8,6 +8,7 @@ pub(crate) type Fields = BTreeMap<String, String>;
 
 pub(crate) const KNOWN: &[&str] = &[
     "host",
+    "hostaddr",
     "port",
     "dbname",
     "user",
@@ -60,7 +61,6 @@ const HIDDEN: &str = "not shown, it may hold a password";
 pub(crate) enum ParseError {
     UnknownForm,
     ServiceFile,
-    Hostaddr,
     Unsupported(&'static str),
     UnknownKey(String),
     InvalidPort,
@@ -83,9 +83,6 @@ impl fmt::Display for ParseError {
             ParseError::ServiceFile => f.write_str(
                 "the connection string names service=, but pgmi reads no service files; spell out host, port and dbname",
             ),
-            ParseError::Hostaddr => {
-                f.write_str("hostaddr is not supported; put the address in host")
-            }
             ParseError::Unsupported(k) => {
                 write!(f, "{k} is not supported; remove it from the connection string")
             }
@@ -145,9 +142,6 @@ pub(crate) fn parse(s: &str) -> Result<Fields> {
 fn check(f: &Fields) -> Result<()> {
     if f.contains_key("service") {
         return Err(ParseError::ServiceFile);
-    }
-    if f.contains_key("hostaddr") {
-        return Err(ParseError::Hostaddr);
     }
     for k in ["requirepeer", "sslcrl", "sslcrldir"] {
         if f.get(k).is_some_and(|v| !v.is_empty()) {
@@ -524,8 +518,8 @@ mod tests {
             Err(ParseError::UnterminatedQuote)
         );
         assert_eq!(
-            parse("host=db hostaddr=10.0.0.1 dbname=app"),
-            Err(ParseError::Hostaddr)
+            fields("host=db hostaddr=10.0.0.1 dbname=app"),
+            pairs(&[("host", "db"), ("hostaddr", "10.0.0.1"), ("dbname", "app")])
         );
     }
 

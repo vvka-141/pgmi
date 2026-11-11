@@ -39,6 +39,7 @@ rand = "0.10"
 x509-cert = { version = "0.3.0", default-features = false }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 roxmltree = "0.21.2"
+socket2 = { version = "0.6.5", features = ["all"] }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12"] }
 rustls-graviola = "0.4.0"
 rustls-native-certs = "0.8.5"
