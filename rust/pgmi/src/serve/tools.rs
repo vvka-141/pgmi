@@ -8,7 +8,7 @@ use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::wire::{self, Members};
+use super::wire::{JsonKind, Members};
 use crate::commands::{init, metadata};
 use crate::conn::resolve::Flags;
 use crate::deploy::{ConfirmedName, Context, Request, Run, Stdin, redact_sql_passwords};
@@ -66,6 +66,12 @@ impl Toolbox for Tools {
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
     Deploy,
+    Blocking(Blocking),
+}
+
+/// The tools that answer from files on a blocking thread.
+#[derive(Clone, Copy)]
+pub(crate) enum Blocking {
     Init,
     MetadataPlan,
     MetadataValidate,
@@ -89,16 +95,18 @@ const DEPLOY_ARGS: [&str; 10] = [
 
 impl Tool {
     pub(crate) fn named(name: &str) -> Option<Tool> {
-        Some(match name {
-            "deploy" => Tool::Deploy,
-            "init" => Tool::Init,
-            "metadata_plan" => Tool::MetadataPlan,
-            "metadata_validate" => Tool::MetadataValidate,
-            "templates_list" => Tool::TemplatesList,
-            "ai_overview" => Tool::AiOverview,
-            "ai_contract" => Tool::AiContract,
+        if name == "deploy" {
+            return Some(Tool::Deploy);
+        }
+        Some(Tool::Blocking(match name {
+            "init" => Blocking::Init,
+            "metadata_plan" => Blocking::MetadataPlan,
+            "metadata_validate" => Blocking::MetadataValidate,
+            "templates_list" => Blocking::TemplatesList,
+            "ai_overview" => Blocking::AiOverview,
+            "ai_contract" => Blocking::AiContract,
             _ => return None,
-        })
+        }))
     }
 
     pub(crate) async fn call(
@@ -108,27 +116,35 @@ impl Tool {
         verbose: bool,
         token: CancellationToken,
     ) -> Outcome {
-        if let Tool::Deploy = self {
-            return match deploy_context(arguments.as_deref(), &env, verbose) {
-                Ok(ctx) => run_deploy(ctx, token).await,
-                Err(e) => Outcome::failed(&e),
-            };
-        }
-        match tokio::task::spawn_blocking(move || self.answer(arguments.as_deref(), &env)).await {
-            Ok(o) => o,
-            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        let blocking = match self {
+            Tool::Deploy => {
+                return match deploy_context(arguments.as_deref(), &env, verbose) {
+                    Ok(ctx) => run_deploy(ctx, token).await,
+                    Err(e) => Outcome::failed(&e),
+                };
+            }
+            Tool::Blocking(b) => b,
+        };
+        match tokio::task::spawn_blocking(move || {
+            crate::error::catching(|| blocking.answer(arguments.as_deref(), &env))
+        })
+        .await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(p)) => Outcome::panicked(&p),
             Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
         }
     }
+}
 
+impl Blocking {
     fn answer(self, arguments: Option<&RawValue>, env: &Env) -> Outcome {
         match self {
-            Tool::Deploy => Outcome::failed(&Error::internal("deploy runs on the runtime")),
-            Tool::Init => match init(arguments) {
+            Blocking::Init => match init(arguments) {
                 Ok(v) => Outcome::json(&v),
                 Err(e) => Outcome::failed(&e),
             },
-            Tool::MetadataPlan => {
+            Blocking::MetadataPlan => {
                 match path_argument(arguments, &["path"], "cli.mcpPathArgs")
                     .and_then(|(p, _)| metadata::plan_report(std::path::Path::new(&p), env))
                 {
@@ -136,7 +152,7 @@ impl Tool {
                     Err(e) => Outcome::failed(&e),
                 }
             }
-            Tool::MetadataValidate => {
+            Blocking::MetadataValidate => {
                 match path_argument(arguments, &["path"], "cli.mcpPathArgs")
                     .and_then(|(p, _)| metadata::validate_report(std::path::Path::new(&p), env))
                 {
@@ -147,7 +163,7 @@ impl Tool {
                     Err(e) => Outcome::failed(&e),
                 }
             }
-            Tool::TemplatesList => {
+            Blocking::TemplatesList => {
                 let mut list = Template::ALL;
                 list.sort_by_key(|t| t.name());
                 let templates: Vec<Value> = list
@@ -158,7 +174,7 @@ impl Tool {
                     .collect();
                 Outcome::json(&json!({ "templates": templates }))
             }
-            Tool::AiOverview => {
+            Blocking::AiOverview => {
                 let text = pgmi_shared::file("ai/overview.md")
                     .map(|b| String::from_utf8_lossy(b).into_owned())
                     .unwrap_or_default();
@@ -168,7 +184,7 @@ impl Tool {
                     is_error: false,
                 }
             }
-            Tool::AiContract => Outcome {
+            Blocking::AiContract => Outcome {
                 text: crate::commands::ai::CONTRACT.trim_end().to_string(),
                 structured: None,
                 is_error: false,
@@ -235,9 +251,9 @@ impl Outcome {
         Self::failure(&e.text(), e.exit_code(), None)
     }
 
-    pub(crate) fn panicked() -> Self {
-        let (e, stack) = crate::error::panic_error();
-        Self::failure(&e.text(), e.exit_code(), Some(&stack))
+    pub(crate) fn panicked(p: &crate::error::Panic) -> Self {
+        let e = p.error();
+        Self::failure(&e.text(), e.exit_code(), Some(p.stack()))
     }
 
     fn failure(message: &str, exit_code: u8, stack: Option<&str>) -> Self {
@@ -253,7 +269,7 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn render(&self, stateless: bool) -> String {
+    pub(crate) fn render(&self, era: super::Era) -> String {
         let result = ToolResult {
             content: [Text {
                 kind: "text",
@@ -262,7 +278,7 @@ impl Outcome {
             structured: self.structured.as_deref(),
             is_error: self.is_error,
         };
-        if !stateless {
+        if era == super::Era::Session {
             return serde_json::to_string(&result).unwrap_or_default();
         }
         let mut v = serde_json::to_value(&result).unwrap_or_default();
@@ -281,9 +297,9 @@ fn members(arguments: Option<&RawValue>, value_type: &str) -> Result<Vec<(String
     let Some(raw) = arguments else {
         return Ok(Vec::new());
     };
-    match wire::kind(raw) {
-        "null" => Ok(Vec::new()),
-        "object" => {
+    match JsonKind::of(raw) {
+        JsonKind::Null => Ok(Vec::new()),
+        JsonKind::Object => {
             let m: Members = serde_json::from_str(raw.get())
                 .map_err(|e| Error::general(format!("json: {e}")))?;
             Ok(m.0
@@ -310,17 +326,6 @@ fn check_known(members: &[(String, Value)], accepted: &[&str]) -> Result<(), Err
     }
 }
 
-fn value_kind(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
 struct Args {
     members: Vec<(String, Value)>,
     struct_name: String,
@@ -338,7 +343,7 @@ impl Args {
     fn type_error(&self, got: &Value, field: &str, ty: &str) -> Error {
         Error::general(format!(
             "json: cannot unmarshal {} into Go struct field {}.{field} of type {ty}",
-            value_kind(got),
+            JsonKind::of_value(got),
             self.struct_name
         ))
     }
@@ -604,12 +609,13 @@ mod tests {
 
     #[test]
     fn results_keep_go_field_order() {
-        let failed = Outcome::failed(&Error::config("path is required")).render(false);
+        let failed =
+            Outcome::failed(&Error::config("path is required")).render(super::super::Era::Session);
         assert_eq!(
             failed,
             "{\"content\":[{\"type\":\"text\",\"text\":\"path is required\\nexit code 10\"}],\"structuredContent\":{\"message\":\"path is required\",\"exitCode\":10},\"isError\":true}"
         );
-        let stateless = Outcome::failed(&Error::config("x")).render(true);
+        let stateless = Outcome::failed(&Error::config("x")).render(super::super::Era::Stateless);
         assert!(stateless.starts_with("{\"_meta\":{\"io.modelcontextprotocol/serverInfo\":"));
         assert!(stateless.contains("\"resultType\":\"complete\""));
     }

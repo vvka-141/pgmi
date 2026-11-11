@@ -103,7 +103,7 @@ pub fn decode(line: &[u8]) -> Decoded {
         Ok(r) => r,
         Err(e) => return Decoded::Reply(error(None, PARSE_ERROR, &format!("parse error: {e}"))),
     };
-    if kind(raw) == "null" {
+    if JsonKind::of(raw) == JsonKind::Null {
         return Decoded::Reply(error(
             None,
             INVALID_REQUEST,
@@ -132,7 +132,7 @@ pub fn decode(line: &[u8]) -> Decoded {
     };
     let id = fields.raw("id");
     if let Some(id) = id
-        && !matches!(kind(id), "string" | "number")
+        && !matches!(JsonKind::of(id), JsonKind::String | JsonKind::Number)
     {
         return Decoded::Reply(error(
             None,
@@ -204,34 +204,115 @@ impl<'a> Fields<'a> {
     }
 }
 
-pub(crate) fn kind(raw: &RawValue) -> &'static str {
-    match raw.get().bytes().find(|b| !is_space(*b)) {
-        Some(b'{') => "object",
-        Some(b'[') => "array",
-        Some(b'"') => "string",
-        Some(b't' | b'f') => "bool",
-        Some(b'n') => "null",
-        _ => "number",
+/// The JSON type of a value, named as Go's `encoding/json` names it in its
+/// errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JsonKind {
+    Object,
+    Array,
+    String,
+    Bool,
+    Null,
+    Number,
+}
+
+impl JsonKind {
+    pub(crate) fn of(raw: &RawValue) -> Self {
+        match raw.get().bytes().find(|b| !is_space(*b)) {
+            Some(b'{') => JsonKind::Object,
+            Some(b'[') => JsonKind::Array,
+            Some(b'"') => JsonKind::String,
+            Some(b't' | b'f') => JsonKind::Bool,
+            Some(b'n') => JsonKind::Null,
+            _ => JsonKind::Number,
+        }
+    }
+
+    pub(crate) fn of_value(v: &serde_json::Value) -> Self {
+        match v {
+            serde_json::Value::Null => JsonKind::Null,
+            serde_json::Value::Bool(_) => JsonKind::Bool,
+            serde_json::Value::Number(_) => JsonKind::Number,
+            serde_json::Value::String(_) => JsonKind::String,
+            serde_json::Value::Array(_) => JsonKind::Array,
+            serde_json::Value::Object(_) => JsonKind::Object,
+        }
+    }
+}
+
+impl std::fmt::Display for JsonKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            JsonKind::Object => "object",
+            JsonKind::Array => "array",
+            JsonKind::String => "string",
+            JsonKind::Bool => "bool",
+            JsonKind::Null => "null",
+            JsonKind::Number => "number",
+        })
+    }
+}
+
+/// Why a value does not fit the Go struct it is read into, worded as Go's
+/// `encoding/json`.
+#[derive(Debug)]
+pub(crate) enum StructError {
+    NotAnObject {
+        got: JsonKind,
+        value_type: &'static str,
+    },
+    Syntax(serde_json::Error),
+    Field {
+        got: JsonKind,
+        struct_name: &'static str,
+        field: &'static str,
+    },
+}
+
+impl std::fmt::Display for StructError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StructError::NotAnObject { got, value_type } => {
+                write!(
+                    f,
+                    "json: cannot unmarshal {got} into Go value of type {value_type}"
+                )
+            }
+            StructError::Syntax(e) => write!(f, "json: {e}"),
+            StructError::Field {
+                got,
+                struct_name,
+                field,
+            } => write!(
+                f,
+                "json: cannot unmarshal {got} into Go struct field {struct_name}.{field} of type string"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StructError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StructError::Syntax(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
 pub(crate) fn go_struct<'a>(
     raw: &'a RawValue,
-    value_type: &str,
-    struct_name: &str,
+    value_type: &'static str,
+    struct_name: &'static str,
     spec: &[(&'static str, Field)],
-) -> Result<Fields<'a>, String> {
+) -> Result<Fields<'a>, StructError> {
     let mut fields = Fields { values: Vec::new() };
-    match kind(raw) {
-        "null" => return Ok(fields),
-        "object" => {}
-        k => {
-            return Err(format!(
-                "json: cannot unmarshal {k} into Go value of type {value_type}"
-            ));
-        }
+    match JsonKind::of(raw) {
+        JsonKind::Null => return Ok(fields),
+        JsonKind::Object => {}
+        got => return Err(StructError::NotAnObject { got, value_type }),
     }
-    let members: Members<'a> = serde_json::from_str(raw.get()).map_err(|e| format!("json: {e}"))?;
+    let members: Members<'a> = serde_json::from_str(raw.get()).map_err(StructError::Syntax)?;
     let mut first_error = None;
     for (key, value) in members.0 {
         let found = spec
@@ -239,19 +320,23 @@ pub(crate) fn go_struct<'a>(
             .find(|(n, _)| *n == key)
             .or_else(|| spec.iter().find(|(n, _)| n.eq_ignore_ascii_case(&key)));
         let Some((name, want)) = found else { continue };
-        let got = kind(value);
-        if got == "null" && *want != Field::Raw {
+        let got = JsonKind::of(value);
+        if got == JsonKind::Null && *want != Field::Raw {
             continue;
         }
         let ok = match want {
             Field::Raw => true,
-            Field::String => got == "string" && serde_json::from_str::<String>(value.get()).is_ok(),
+            Field::String => {
+                got == JsonKind::String && serde_json::from_str::<String>(value.get()).is_ok()
+            }
         };
         if !ok {
             if first_error.is_none() {
-                first_error = Some(format!(
-                    "json: cannot unmarshal {got} into Go struct field {struct_name}.{name} of type string"
-                ));
+                first_error = Some(StructError::Field {
+                    got,
+                    struct_name,
+                    field: name,
+                });
             }
             continue;
         }
@@ -329,10 +414,66 @@ enum Want {
     End,
 }
 
-const EOF: &str = "unexpected end of JSON input";
+/// Where an unexpected byte was met, in the words Go's `encoding/json` uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Place {
+    AfterTopLevelValue,
+    AfterObjectKey,
+    AfterObjectPair,
+    AfterArrayElement,
+    ObjectKey,
+    Value,
+    HexEscape,
+    StringEscape,
+    StringLiteral,
+    Number,
+    AfterDecimalPoint,
+    Exponent,
+    Literal { word: &'static str, expecting: u8 },
+}
 
-pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
-    let bad = |c: u8, context: &str| Err(format!("invalid character {} {context}", quote_char(c)));
+/// A line that is not JSON, worded as Go's `encoding/json` words it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyntaxError {
+    UnexpectedEnd,
+    InvalidCharacter { found: u8, place: Place },
+}
+
+impl std::fmt::Display for SyntaxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (found, place) = match self {
+            SyntaxError::UnexpectedEnd => return f.write_str("unexpected end of JSON input"),
+            SyntaxError::InvalidCharacter { found, place } => (*found, *place),
+        };
+        write!(f, "invalid character {} ", quote_char(found))?;
+        match place {
+            Place::AfterTopLevelValue => f.write_str("after top-level value"),
+            Place::AfterObjectKey => f.write_str("after object key"),
+            Place::AfterObjectPair => f.write_str("after object key:value pair"),
+            Place::AfterArrayElement => f.write_str("after array element"),
+            Place::ObjectKey => f.write_str("looking for beginning of object key string"),
+            Place::Value => f.write_str("looking for beginning of value"),
+            Place::HexEscape => f.write_str("in \\u hexadecimal character escape"),
+            Place::StringEscape => f.write_str("in string escape code"),
+            Place::StringLiteral => f.write_str("in string literal"),
+            Place::Number => f.write_str("in numeric literal"),
+            Place::AfterDecimalPoint => f.write_str("after decimal point in numeric literal"),
+            Place::Exponent => f.write_str("in exponent of numeric literal"),
+            Place::Literal { word, expecting } => {
+                write!(f, "in literal {word} (expecting {})", quote_char(expecting))
+            }
+        }
+    }
+}
+
+impl std::error::Error for SyntaxError {}
+
+fn invalid(found: u8, place: Place) -> SyntaxError {
+    SyntaxError::InvalidCharacter { found, place }
+}
+
+pub(crate) fn validate(b: &[u8]) -> Result<(), SyntaxError> {
+    let bad = |c: u8, place: Place| Err(invalid(c, place));
     let mut stack: Vec<bool> = Vec::new();
     let mut want = Want::Value;
     let mut i = 0;
@@ -344,16 +485,16 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
             return if want == Want::End {
                 Ok(())
             } else {
-                Err(EOF.into())
+                Err(SyntaxError::UnexpectedEnd)
             };
         }
         let c = b[i];
         let mut closed = false;
         match want {
-            Want::End => return bad(c, "after top-level value"),
+            Want::End => return bad(c, Place::AfterTopLevelValue),
             Want::Colon => {
                 if c != b':' {
-                    return bad(c, "after object key");
+                    return bad(c, Place::AfterObjectKey);
                 }
                 i += 1;
                 want = Want::Value;
@@ -366,7 +507,7 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
                     continue;
                 }
                 b'}' => closed = true,
-                _ => return bad(c, "after object key:value pair"),
+                _ => return bad(c, Place::AfterObjectPair),
             },
             Want::ArrayNext => match c {
                 b',' => {
@@ -375,7 +516,7 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
                     continue;
                 }
                 b']' => closed = true,
-                _ => return bad(c, "after array element"),
+                _ => return bad(c, Place::AfterArrayElement),
             },
             Want::KeyOrObjectEnd | Want::Key => {
                 if c == b'}' && want == Want::KeyOrObjectEnd {
@@ -385,7 +526,7 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
                     want = Want::Colon;
                     continue;
                 } else {
-                    return bad(c, "looking for beginning of object key string");
+                    return bad(c, Place::ObjectKey);
                 }
             }
             Want::Value | Want::ValueOrArrayEnd => {
@@ -407,10 +548,10 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
                         }
                         b'"' => i = string(b, i)?,
                         b'-' | b'0'..=b'9' => i = number(b, i)?,
-                        b't' => i = literal(b, i, b"true")?,
-                        b'f' => i = literal(b, i, b"false")?,
-                        b'n' => i = literal(b, i, b"null")?,
-                        _ => return bad(c, "looking for beginning of value"),
+                        b't' => i = literal(b, i, "true")?,
+                        b'f' => i = literal(b, i, "false")?,
+                        b'n' => i = literal(b, i, "null")?,
+                        _ => return bad(c, Place::Value),
                     }
                 }
             }
@@ -427,11 +568,11 @@ pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
     }
 }
 
-fn at(b: &[u8], i: usize) -> Result<u8, String> {
-    b.get(i).copied().ok_or_else(|| EOF.to_string())
+fn at(b: &[u8], i: usize) -> Result<u8, SyntaxError> {
+    b.get(i).copied().ok_or(SyntaxError::UnexpectedEnd)
 }
 
-fn string(b: &[u8], start: usize) -> Result<usize, String> {
+fn string(b: &[u8], start: usize) -> Result<usize, SyntaxError> {
     let mut i = start + 1;
     loop {
         let c = at(b, i)?;
@@ -447,27 +588,18 @@ fn string(b: &[u8], start: usize) -> Result<usize, String> {
                         for _ in 0..4 {
                             let h = at(b, i)?;
                             if !h.is_ascii_hexdigit() {
-                                return Err(format!(
-                                    "invalid character {} in \\u hexadecimal character escape",
-                                    quote_char(h)
-                                ));
+                                return Err(invalid(h, Place::HexEscape));
                             }
                             i += 1;
                         }
                     }
                     _ => {
-                        return Err(format!(
-                            "invalid character {} in string escape code",
-                            quote_char(e)
-                        ));
+                        return Err(invalid(e, Place::StringEscape));
                     }
                 }
             }
             0..0x20 => {
-                return Err(format!(
-                    "invalid character {} in string literal",
-                    quote_char(c)
-                ));
+                return Err(invalid(c, Place::StringLiteral));
             }
             _ => {}
         }
@@ -481,16 +613,13 @@ fn digits(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-fn number(b: &[u8], start: usize) -> Result<usize, String> {
+fn number(b: &[u8], start: usize) -> Result<usize, SyntaxError> {
     let mut i = start;
     if b[i] == b'-' {
         i += 1;
         let c = at(b, i)?;
         if !c.is_ascii_digit() {
-            return Err(format!(
-                "invalid character {} in numeric literal",
-                quote_char(c)
-            ));
+            return Err(invalid(c, Place::Number));
         }
     }
     i = if b[i] == b'0' { i + 1 } else { digits(b, i) };
@@ -498,10 +627,7 @@ fn number(b: &[u8], start: usize) -> Result<usize, String> {
         i += 1;
         let c = at(b, i)?;
         if !c.is_ascii_digit() {
-            return Err(format!(
-                "invalid character {} after decimal point in numeric literal",
-                quote_char(c)
-            ));
+            return Err(invalid(c, Place::AfterDecimalPoint));
         }
         i = digits(b, i);
     }
@@ -512,25 +638,23 @@ fn number(b: &[u8], start: usize) -> Result<usize, String> {
         }
         let c = at(b, i)?;
         if !c.is_ascii_digit() {
-            return Err(format!(
-                "invalid character {} in exponent of numeric literal",
-                quote_char(c)
-            ));
+            return Err(invalid(c, Place::Exponent));
         }
         i = digits(b, i);
     }
     Ok(i)
 }
 
-fn literal(b: &[u8], start: usize, word: &[u8]) -> Result<usize, String> {
-    for (k, want) in word.iter().enumerate().skip(1) {
+fn literal(b: &[u8], start: usize, word: &'static str) -> Result<usize, SyntaxError> {
+    for (k, want) in word.bytes().enumerate().skip(1) {
         let c = at(b, start + k)?;
-        if c != *want {
-            return Err(format!(
-                "invalid character {} in literal {} (expecting {})",
-                quote_char(c),
-                String::from_utf8_lossy(word),
-                quote_char(*want)
+        if c != want {
+            return Err(invalid(
+                c,
+                Place::Literal {
+                    word,
+                    expecting: want,
+                },
             ));
         }
     }
@@ -592,7 +716,11 @@ mod tests {
             (b"\"a\tb\"", "invalid character '\\t' in string literal"),
             (b"01", "invalid character '1' after top-level value"),
         ] {
-            assert_eq!(validate(input), Err(message.to_string()), "{input:?}");
+            assert_eq!(
+                validate(input).map_err(|e| e.to_string()),
+                Err(message.to_string()),
+                "{input:?}"
+            );
         }
         for ok in [
             &b"0"[..],

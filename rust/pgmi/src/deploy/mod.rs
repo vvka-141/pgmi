@@ -514,14 +514,14 @@ pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let mut run = Run::start();
     let interrupted = Arc::new(AtomicBool::new(false));
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let caught = crate::error::catching(|| {
         runtime.block_on(async {
             let token = CancellationToken::new();
             spawn_signals(token.clone(), interrupted.clone(), reporter.clone());
             run.deploy(ctx, &reporter, token, interrupted.clone()).await
         })
-    }));
-    let mut result = caught.unwrap_or_else(|_| Err(crate::error::panic_error().0));
+    });
+    let mut result = caught.unwrap_or_else(|p| Err(p.error()));
     if interrupted.load(Ordering::SeqCst) {
         result = Err(match result {
             Err(e) if e.sql_diagnostics().is_some() => {

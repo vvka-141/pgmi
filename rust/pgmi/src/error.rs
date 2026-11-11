@@ -220,31 +220,75 @@ pub(crate) fn chain(e: &(dyn std::error::Error + 'static)) -> String {
     parts.join(": ")
 }
 
-static LAST_PANIC: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+thread_local! {
+    static PANICKED: std::cell::RefCell<Option<Panic>> = const { std::cell::RefCell::new(None) };
+}
 
-/// Prints a panic as `pgmi: internal error: ...` and keeps it for the
-/// `--json` record and the MCP answer.
+/// A panic caught by [`catching`]: what the hook printed and the stack at
+/// the panic, for the `--json` record and the MCP answer.
+#[derive(Debug, Default)]
+pub(crate) struct Panic {
+    message: String,
+    stack: String,
+}
+
+impl Panic {
+    pub(crate) fn error(&self) -> Error {
+        let message = if self.message.is_empty() {
+            "panic"
+        } else {
+            &self.message
+        };
+        Error::internal(format!("internal error (panic): {message}"))
+    }
+
+    pub(crate) fn stack(&self) -> &str {
+        &self.stack
+    }
+}
+
+/// Prints a panic as `pgmi: internal error: ...` and leaves it on the
+/// panicking thread for the [`catching`] that unwinds there.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         use std::io::Write;
         let stack = std::backtrace::Backtrace::force_capture().to_string();
         let _ = writeln!(std::io::stderr(), "pgmi: internal error: {info}");
-        if let Ok(mut last) = LAST_PANIC.lock() {
-            *last = Some((info.to_string(), stack));
-        }
+        let _ = PANICKED.try_with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                *p = Some(Panic {
+                    message: info.to_string(),
+                    stack,
+                });
+            }
+        });
     }));
 }
 
-pub(crate) fn panic_error() -> (Error, String) {
-    let (message, stack) = LAST_PANIC
-        .lock()
-        .ok()
-        .and_then(|mut l| l.take())
-        .unwrap_or_else(|| ("panic".into(), String::new()));
-    (
-        Error::internal(format!("internal error (panic): {message}")),
-        stack,
-    )
+/// Runs `f`, turning a panic in it into the [`Panic`] the hook saw on this
+/// thread.
+pub(crate) fn catching<T>(f: impl FnOnce() -> T) -> std::result::Result<T, Panic> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
+        PANICKED
+            .try_with(|p| p.try_borrow_mut().ok().and_then(|mut p| p.take()))
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    })
+}
+
+/// [`catching`] for a future: each poll runs inside it, on the thread that
+/// polls, so the panic and its message never cross threads.
+pub(crate) async fn catching_async<F: std::future::Future>(
+    fut: F,
+) -> std::result::Result<F::Output, Panic> {
+    let mut fut = std::pin::pin!(fut);
+    std::future::poll_fn(|cx| match catching(|| fut.as_mut().poll(cx)) {
+        Ok(std::task::Poll::Ready(v)) => std::task::Poll::Ready(Ok(v)),
+        Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+        Err(p) => std::task::Poll::Ready(Err(p)),
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -289,5 +333,46 @@ mod tests {
         );
         let e = std::io::Error::other(Outer(std::io::Error::other("refused")));
         assert_eq!(chain(&e), "dial: refused");
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn a_caught_panic_carries_the_hook_message_of_its_own_thread() {
+        install_panic_hook();
+        let threads: Vec<_> = ["one", "two"]
+            .into_iter()
+            .map(|word| {
+                std::thread::spawn(move || {
+                    catching(|| panic!("{word}")).unwrap_err().error().text()
+                })
+            })
+            .collect();
+        let texts: Vec<String> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(
+            texts[0].starts_with("internal error (panic): panicked at "),
+            "{}",
+            texts[0]
+        );
+        assert!(texts[0].ends_with(":\none"), "{}", texts[0]);
+        assert!(texts[1].ends_with(":\ntwo"), "{}", texts[1]);
+        assert_eq!(catching(|| 7).unwrap(), 7);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::panic)]
+    async fn a_panicking_future_is_caught_where_it_is_polled() {
+        install_panic_hook();
+        let p = catching_async(async {
+            tokio::task::yield_now().await;
+            panic!("late");
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            p.error().text().ends_with(":\nlate"),
+            "{}",
+            p.error().text()
+        );
+        assert!(!p.stack().is_empty());
     }
 }

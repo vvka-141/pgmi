@@ -169,8 +169,13 @@ async fn stop_signal() {
     }
 }
 
-struct Era {
-    stateless: bool,
+/// The protocol generation a request speaks: the session-based one
+/// (`initialize` first) or the stateless one that names its version in
+/// `_meta`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Era {
+    Session,
+    Stateless,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -242,8 +247,10 @@ impl<T: Toolbox> Server<T> {
             .and_then(|p| serde_json::from_str(p.get()).ok());
         let meta = params.as_ref().and_then(|p| p.get("_meta"));
         let version = meta.and_then(|m| m.get(META_VERSION));
-        let era = Era {
-            stateless: version.is_some() || r.method == "server/discover",
+        let era = if version.is_some() || r.method == "server/discover" {
+            Era::Stateless
+        } else {
+            Era::Session
         };
         if let Some(v) = version {
             let requested = v.as_str().unwrap_or_default();
@@ -272,10 +279,10 @@ impl<T: Toolbox> Server<T> {
                 &format!("method not found: {}", r.method),
             )
         };
-        match (r.method.as_str(), era.stateless) {
-            ("initialize", false) => self.send(initialize(&id, r.params.as_deref())),
-            ("ping", false) => self.send(wire::result(&id, "{}")),
-            ("tools/list", _) => self.send(tools_list(&id, self.tools.list(), &era)),
+        match (r.method.as_str(), era) {
+            ("initialize", Era::Session) => self.send(initialize(&id, r.params.as_deref())),
+            ("ping", Era::Session) => self.send(wire::result(&id, "{}")),
+            ("tools/list", _) => self.send(tools_list(&id, self.tools.list(), era)),
             ("server/discover", _) => self.send(wire::result(
                 &id,
                 &stateless(json!({
@@ -285,7 +292,7 @@ impl<T: Toolbox> Server<T> {
                     "ttlMs": 3_600_000,
                 })),
             )),
-            ("tools/call", _) => self.call(id, r.params.as_deref(), &era, tasks),
+            ("tools/call", _) => self.call(id, r.params.as_deref(), era, tasks),
             _ => self.send(not_found()),
         }
     }
@@ -294,7 +301,7 @@ impl<T: Toolbox> Server<T> {
         self: &Arc<Self>,
         id: String,
         params: Option<&RawValue>,
-        era: &Era,
+        era: Era,
         tasks: &mut JoinSet<()>,
     ) {
         let invalid = |m: &str| {
@@ -314,7 +321,7 @@ impl<T: Toolbox> Server<T> {
             &[("name", Field::String), ("arguments", Field::Raw)],
         ) {
             Ok(f) => f,
-            Err(e) => return self.send(invalid(&e)),
+            Err(e) => return self.send(invalid(&e.to_string())),
         };
         let name = fields.string("name").unwrap_or_default();
         let Some(tool) = self.tools.tool(&name) else {
@@ -326,7 +333,6 @@ impl<T: Toolbox> Server<T> {
         };
         let arguments = fields.raw("arguments").map(RawValue::to_owned);
         let Some(key) = CallId::of(&id) else { return };
-        let stateless = era.stateless;
         let token = self.root.child_token();
         let Ok(mut calls) = self.calls.lock() else {
             return;
@@ -351,21 +357,18 @@ impl<T: Toolbox> Server<T> {
         tasks.spawn(async move {
             let tools = server.tools.clone();
             let task_token = token.clone();
-            let call = tokio::spawn(async move { tools.call(tool, arguments, task_token).await });
-            let outcome = match call.await {
-                Ok(o) => o,
-                Err(e) if e.is_panic() => Outcome::panicked(),
-                Err(_) => {
-                    Outcome::failed(&crate::error::Error::internal("the tool call was aborted"))
-                }
-            };
+            let outcome =
+                match crate::error::catching_async(tools.call(tool, arguments, task_token)).await {
+                    Ok(o) => o,
+                    Err(p) => Outcome::panicked(&p),
+                };
             if let Ok(mut calls) = server.calls.lock() {
                 calls.remove(&key);
             }
             if token.is_cancelled() {
                 return;
             }
-            let answer = wire::result(&id, &outcome.render(stateless));
+            let answer = wire::result(&id, &outcome.render(era));
             tokio::select! {
                 _ = server.out.send(answer) => {}
                 () = server.root.cancelled() => {}
@@ -419,8 +422,8 @@ fn server_info() -> Value {
 
 const TOOLS: &str = include_str!("tools.json");
 
-fn tools_list(id: &str, list: &str, era: &Era) -> String {
-    if !era.stateless {
+fn tools_list(id: &str, list: &str, era: Era) -> String {
+    if era == Era::Session {
         return wire::result(id, &format!("{{\"tools\":{}}}", list.trim_end()));
     }
     let tools: Value = serde_json::from_str(list).unwrap_or_default();
