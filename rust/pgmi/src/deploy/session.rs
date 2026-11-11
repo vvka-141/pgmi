@@ -4,7 +4,7 @@ use serde_json::json;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
-use super::sql_error;
+use super::{Needs, sql_error, sql_error_needing};
 use crate::error::{Error, Result};
 use crate::project::checksum;
 use crate::project::metadata::Meta;
@@ -39,7 +39,7 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
-        .map_err(|e| sql_error("create the session tables", &e))?;
+        .map_err(|e| sql_error_needing("create the session tables", &e, Some(Needs::Temporary)))?;
     load_json(
         client,
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",

@@ -133,6 +133,7 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
 
 enum Failure {
     Transient(String),
+    ConnectionRefused,
     Fatal(String),
     Server(String, String),
     Config(String),
@@ -141,6 +142,10 @@ enum Failure {
 
 fn classify_io(e: &std::io::Error) -> bool {
     retry::transient(Cause::Io(e.kind()))
+}
+
+fn refuses_auth(e: &tap::Error) -> bool {
+    matches!(e, tap::Error::AuthRequirement { .. })
 }
 
 fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure {
@@ -160,13 +165,20 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure
         if let Some(io) = c.downcast_ref::<std::io::Error>() {
             if io
                 .get_ref()
-                .is_some_and(|i| i.to_string().contains("authentication method requirement"))
+                .and_then(|i| i.downcast_ref::<tap::Error>())
+                .is_some_and(refuses_auth)
             {
                 return Failure::Fatal(io.to_string());
+            }
+            if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                return Failure::ConnectionRefused;
             }
             if classify_io(io) {
                 return Failure::Transient(io.to_string());
             }
+        }
+        if c.downcast_ref::<tap::Error>().is_some_and(refuses_auth) {
+            return Failure::Fatal(crate::error::chain(e));
         }
         cur = c.source();
     }
@@ -175,9 +187,6 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure
         return Failure::Fatal(format!(
             "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
         ));
-    }
-    if text.contains("authentication method requirement") {
-        return Failure::Fatal(text);
     }
     Failure::Fatal(tls::describe_failure(&text, host))
 }
@@ -285,7 +294,8 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         ChannelBinding::Disable => PgChannelBinding::Disable,
         ChannelBinding::Prefer => PgChannelBinding::Prefer,
     });
-    let shared = tap::Shared::new(spec.require_auth.as_deref()).map_err(Failure::Config)?;
+    let shared = tap::Shared::new(spec.require_auth.as_deref())
+        .map_err(|e| Failure::Config(e.to_string()))?;
     let start = match sslmode_of(mode) {
         PgSslMode::Disable => Start::Plain,
         _ if spec.sslnegotiation_direct => Start::Direct,
@@ -310,7 +320,9 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
             _ => open(a.host, a.port, &spec.tcp).await,
         };
         let (socket, peer) = opened.map_err(|e| {
-            if classify_io(&e) {
+            if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                Failure::ConnectionRefused
+            } else if classify_io(&e) {
                 Failure::Transient(e.to_string())
             } else {
                 Failure::Fatal(e.to_string())
@@ -559,17 +571,11 @@ impl Dialer {
                         Some(Err(Failure::Config(t))) => {
                             return Err((Error::config(t), false));
                         }
+                        Some(Err(Failure::ConnectionRefused)) => {
+                            errors.push(format!("connection refused to {host}:{port}"));
+                        }
                         Some(Err(Failure::Transient(t))) => {
-                            let t = if t.contains("refused") || t.contains("Connection refused") {
-                                format!("connection refused to {host}:{port}")
-                            } else {
-                                t
-                            };
-                            errors.push(if t.contains(&format!("{host}:{port}")) {
-                                t
-                            } else {
-                                format!("{label}: {t}")
-                            });
+                            errors.push(format!("{label}: {t}"));
                         }
                         Some(Err(Failure::Server(t, code))) => {
                             all_transient = false;

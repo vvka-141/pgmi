@@ -34,12 +34,20 @@ pub(crate) use record::DeployRecord;
 use record::Tls;
 pub(crate) use request::Request;
 
-fn privilege_hint(context: &str, code: &str) -> Option<&'static str> {
-    match (code, context) {
-        ("42501", "create the session tables") => Some(
+/// The privilege a step needs, named in the error when the server answers
+/// 42501.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Needs {
+    Temporary,
+    CreateDb,
+}
+
+fn privilege_hint(code: &str, needs: Option<Needs>) -> Option<&'static str> {
+    match (code, needs?) {
+        ("42501", Needs::Temporary) => Some(
             "the login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE <db> TO <role>",
         ),
-        ("42501", "create the target database") => Some(
+        ("42501", Needs::CreateDb) => Some(
             "the database does not exist and this role cannot create it: check the -d name, or grant the role CREATEDB",
         ),
         _ => None,
@@ -57,11 +65,19 @@ fn created_elsewhere(e: Error) -> Error {
 }
 
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
+    sql_error_needing(context, e, None)
+}
+
+pub(crate) fn sql_error_needing(
+    context: &str,
+    e: &tokio_postgres::Error,
+    needs: Option<Needs>,
+) -> Error {
     match e.as_db_error() {
         Some(db) => {
             let code = db.code().code().to_string();
             let mut message = format!("ERROR: {} (SQLSTATE {code})", db.message());
-            if let Some(hint) = privilege_hint(context, &code) {
+            if let Some(hint) = privilege_hint(&code, needs) {
                 message.push('\n');
                 message.push_str(hint);
             }
@@ -556,7 +572,13 @@ async fn deploy(
                         .client
                         .batch_execute(&format!("CREATE DATABASE {}", quote_ident(&spec.target_db)))
                         .await
-                        .map_err(|e| created_elsewhere(sql_error("create the target database", &e)))
+                        .map_err(|e| {
+                            created_elsewhere(sql_error_needing(
+                                "create the target database",
+                                &e,
+                                Some(Needs::CreateDb),
+                            ))
+                        })
                 })
                 .await?;
             st.provision = Provision::Created;
@@ -621,7 +643,7 @@ async fn deploy(
     })
     .await;
     let cleanup = async {
-        if session.tap.status() != crate::conn::tap::IDLE {
+        if session.tap.status() != crate::conn::tap::TxStatus::Idle {
             session.client.batch_execute("ROLLBACK").await?;
         }
         session
@@ -1392,14 +1414,14 @@ mod tests {
         let e = failed("42501");
         assert_eq!(e.kind(), Kind::Sql);
         assert_eq!(e.text(), "ERROR: x");
-        let hint = privilege_hint("create the target database", "42501").unwrap();
+        let hint = privilege_hint("42501", Some(Needs::CreateDb)).unwrap();
         assert!(hint.contains("-d") && hint.contains("CREATEDB"));
         assert!(
-            privilege_hint("create the session tables", "42501")
+            privilege_hint("42501", Some(Needs::Temporary))
                 .unwrap()
                 .contains("TEMPORARY")
         );
-        assert_eq!(privilege_hint("create the target database", "42P04"), None);
-        assert_eq!(privilege_hint("execute deploy.sql", "42501"), None);
+        assert_eq!(privilege_hint("42P04", Some(Needs::CreateDb)), None);
+        assert_eq!(privilege_hint("42501", None), None);
     }
 }

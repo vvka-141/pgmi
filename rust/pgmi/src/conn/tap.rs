@@ -2,9 +2,11 @@
 //! transaction status and the auth policy. Public for the `tap_reader` fuzz
 //! target only; not a stable API.
 
+use std::fmt;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll, ready};
@@ -12,7 +14,53 @@ use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
 
-pub(crate) const IDLE: u8 = b'I';
+/// Why the tap refused a connection: a `require_auth` value it cannot
+/// read, a method the policy does not allow, or a malformed frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    MixedPolicy(String),
+    UnknownMethod(String),
+    AuthRequirement { policy: String, what: &'static str },
+    Length,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::MixedPolicy(text) => write!(
+                f,
+                "invalid require_auth value \"{text}\": negative and positive methods cannot be mixed"
+            ),
+            Error::UnknownMethod(name) => write!(f, "invalid require_auth method: \"{name}\""),
+            Error::AuthRequirement { policy, what } => write!(
+                f,
+                "authentication method requirement \"{policy}\" failed: {what}"
+            ),
+            Error::Length => f.write_str("invalid message length from server"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// The transaction status of the last ReadyForQuery. A byte other than `I`
+/// or `E` counts as a block in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxStatus {
+    Idle,
+    InBlock,
+    Failed,
+}
+
+impl From<u8> for TxStatus {
+    fn from(byte: u8) -> Self {
+        match byte {
+            b'I' => TxStatus::Idle,
+            b'E' => TxStatus::Failed,
+            _ => TxStatus::InBlock,
+        }
+    }
+}
 
 pub struct Shared {
     status: AtomicU8,
@@ -20,41 +68,61 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new(require_auth: Option<&str>) -> Result<Arc<Self>, String> {
+    pub fn new(require_auth: Option<&str>) -> Result<Arc<Self>, Error> {
         let policy = require_auth.map(Policy::parse).transpose()?;
         Ok(Arc::new(Shared {
-            status: AtomicU8::new(IDLE),
+            status: AtomicU8::new(b'I'),
             policy,
         }))
     }
 
-    pub fn status(&self) -> u8 {
-        self.status.load(Ordering::Acquire)
+    pub fn status(&self) -> TxStatus {
+        self.status.load(Ordering::Acquire).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthMethod {
+    Password,
+    Md5,
+    Gss,
+    Sspi,
+    ScramSha256,
+    None,
+}
+
+impl FromStr for AuthMethod {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self, Error> {
+        Ok(match name {
+            "password" => AuthMethod::Password,
+            "md5" => AuthMethod::Md5,
+            "gss" => AuthMethod::Gss,
+            "sspi" => AuthMethod::Sspi,
+            "scram-sha-256" => AuthMethod::ScramSha256,
+            "none" => AuthMethod::None,
+            _ => return Err(Error::UnknownMethod(name.to_string())),
+        })
     }
 }
 
 struct Policy {
     text: String,
     negated: bool,
-    methods: Vec<String>,
+    methods: Vec<AuthMethod>,
 }
 
 impl Policy {
-    fn parse(text: &str) -> Result<Self, String> {
+    fn parse(text: &str) -> Result<Self, Error> {
         let items: Vec<&str> = text.split(',').map(str::trim).collect();
         let negated = items.first().is_some_and(|i| i.starts_with('!'));
         let mut methods = vec![];
         for item in items {
-            let name = item.strip_prefix('!').unwrap_or(item);
             if item.starts_with('!') != negated {
-                return Err(format!(
-                    "invalid require_auth value \"{text}\": negative and positive methods cannot be mixed"
-                ));
+                return Err(Error::MixedPolicy(text.to_string()));
             }
-            if !["password", "md5", "gss", "sspi", "scram-sha-256", "none"].contains(&name) {
-                return Err(format!("invalid require_auth method: \"{name}\""));
-            }
-            methods.push(name.to_string());
+            methods.push(item.strip_prefix('!').unwrap_or(item).parse()?);
         }
         Ok(Policy {
             text: text.to_string(),
@@ -63,28 +131,34 @@ impl Policy {
         })
     }
 
-    fn allows(&self, method: &str) -> bool {
-        self.methods.iter().any(|m| m == method) != self.negated
+    fn allows(&self, method: AuthMethod) -> bool {
+        self.methods.contains(&method) != self.negated
     }
 
-    fn check(&self, code: u32, asked_before: bool) -> Result<(), String> {
+    fn check(&self, code: u32, asked_before: bool) -> Result<(), Error> {
         let (method, what) = match code {
             0 if asked_before => return Ok(()),
-            0 => ("none", "server did not complete authentication"),
-            3 => ("password", "server requested a cleartext password"),
-            5 => ("md5", "server requested a hashed password"),
-            7 | 8 => ("gss", "server requested GSSAPI authentication"),
-            9 => ("sspi", "server requested SSPI authentication"),
-            10..=12 => ("scram-sha-256", "server requested SASL authentication"),
+            0 => (AuthMethod::None, "server did not complete authentication"),
+            3 => (
+                AuthMethod::Password,
+                "server requested a cleartext password",
+            ),
+            5 => (AuthMethod::Md5, "server requested a hashed password"),
+            7 | 8 => (AuthMethod::Gss, "server requested GSSAPI authentication"),
+            9 => (AuthMethod::Sspi, "server requested SSPI authentication"),
+            10..=12 => (
+                AuthMethod::ScramSha256,
+                "server requested SASL authentication",
+            ),
             _ => return Ok(()),
         };
         if self.allows(method) {
             Ok(())
         } else {
-            Err(format!(
-                "authentication method requirement \"{}\" failed: {what}",
-                self.text
-            ))
+            Err(Error::AuthRequirement {
+                policy: self.text.clone(),
+                what,
+            })
         }
     }
 }
@@ -101,7 +175,7 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn feed(&mut self, mut bytes: &[u8], shared: &Shared) -> Result<(), String> {
+    pub fn feed(&mut self, mut bytes: &[u8], shared: &Shared) -> Result<(), Error> {
         while !bytes.is_empty() {
             if self.header_len < 5 {
                 let take = (5 - self.header_len).min(bytes.len());
@@ -113,9 +187,7 @@ impl Parser {
                     self.tag = self.header[0];
                     let [_, a, b, c, d] = self.header;
                     let len = u32::from_be_bytes([a, b, c, d]) as usize;
-                    self.remaining = len
-                        .checked_sub(4)
-                        .ok_or("invalid message length from server")?;
+                    self.remaining = len.checked_sub(4).ok_or(Error::Length)?;
                     self.body_len = 0;
                     if self.remaining == 0 {
                         self.header_len = 0;
@@ -307,7 +379,7 @@ mod tests {
             for part in bytes.chunks(chunk) {
                 p.feed(part, &shared).unwrap();
             }
-            assert_eq!(shared.status(), b'E', "chunk size {chunk}");
+            assert_eq!(shared.status(), TxStatus::Failed, "chunk size {chunk}");
         }
     }
 
@@ -316,8 +388,13 @@ mod tests {
         let shared = Shared::new(Some("scram-sha-256")).unwrap();
         let mut p = Parser::default();
         let md5 = [b'R', 0, 0, 0, 12, 0, 0, 0, 5, 1, 2, 3, 4];
-        let err = p.feed(&md5[..9], &shared).unwrap_err();
-        assert!(err.contains("hashed password"), "{err}");
+        assert_eq!(
+            p.feed(&md5[..9], &shared),
+            Err(Error::AuthRequirement {
+                policy: "scram-sha-256".into(),
+                what: "server requested a hashed password"
+            })
+        );
     }
 
     #[test]
@@ -325,7 +402,18 @@ mod tests {
         let shared = Shared::new(Some("!password")).unwrap();
         assert_eq!(
             Parser::default().feed(&[b'R', 0, 0, 0, 8, 0, 0, 0, 3], &shared),
-            Err("authentication method requirement \"!password\" failed: server requested a cleartext password".into())
+            Err(Error::AuthRequirement {
+                policy: "!password".into(),
+                what: "server requested a cleartext password"
+            })
+        );
+        assert_eq!(
+            Error::AuthRequirement {
+                policy: "!password".into(),
+                what: "server requested a cleartext password"
+            }
+            .to_string(),
+            "authentication method requirement \"!password\" failed: server requested a cleartext password"
         );
         assert!(
             Parser::default()
@@ -339,7 +427,11 @@ mod tests {
         let shared = Shared::new(None).unwrap();
         assert_eq!(
             Parser::default().feed(&[b'Z', 0, 0, 0, 3], &shared),
-            Err("invalid message length from server".into())
+            Err(Error::Length)
+        );
+        assert_eq!(
+            Error::Length.to_string(),
+            "invalid message length from server"
         );
     }
 
@@ -357,7 +449,7 @@ mod tests {
             cuts in prop::collection::vec(1usize..17, 1..64),
         ) {
             let mut bytes = vec![];
-            let mut expected = IDLE;
+            let mut expected = b'I';
             for (tag, body) in &msgs {
                 let body = if *tag == b'Z' {
                     let s = *body.first().unwrap_or(&b'T');
@@ -378,7 +470,7 @@ mod tests {
                 rest = &rest[n..];
                 i += 1;
             }
-            prop_assert_eq!(shared.status(), expected);
+            prop_assert_eq!(shared.status(), TxStatus::from(expected));
         }
 
         #[test]

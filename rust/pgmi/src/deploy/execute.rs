@@ -9,7 +9,7 @@ use super::session::{self, Load};
 use super::{Execution, Failure, Guard, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
-use crate::conn::tap::IDLE;
+use crate::conn::tap::TxStatus;
 use crate::error::{Error, Result};
 use crate::output::Reporter;
 use crate::project::metadata::Meta;
@@ -157,7 +157,7 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             });
             return Err(e);
         }
-        if session.tap.status() == IDLE || (i == 0 && script::head_commits(&unit.text)) {
+        if session.tap.status() == TxStatus::Idle || (i == 0 && script::head_commits(&unit.text)) {
             execution.committed = i + 1;
         }
     }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
-use super::{Provision, quote_ident, sql_error};
+use super::{Needs, Provision, quote_ident, sql_error, sql_error_needing};
 use crate::conn::dial::Session;
 use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
@@ -335,7 +335,9 @@ pub(crate) async fn recreate(
         }
         c.batch_execute(&create_sql(db, snapshot))
             .await
-            .map_err(|e| sql_error("create the target database", &e))?;
+            .map_err(|e| {
+                sql_error_needing("create the target database", &e, Some(Needs::CreateDb))
+            })?;
         *provision = if snapshot.is_some() {
             Provision::Recreated
         } else {
