@@ -89,8 +89,9 @@ mod tests {
 
     #[test]
     fn longer_than_go_can_hold_is_refused() {
-        assert!(parse("4000000000000000h").is_err());
-        assert!(parse("2562048h").is_err());
+        for s in ["4000000000000000h", "2562048h"] {
+            assert_eq!(parse(s), Err(format!("invalid duration {s:?}")));
+        }
         assert!(parse("2562047h").is_ok());
     }
 
@@ -101,10 +102,13 @@ mod tests {
         assert_eq!(parse("1.5h").unwrap(), Duration::from_secs(5400));
         assert_eq!(parse("300ms").unwrap(), Duration::from_millis(300));
         assert_eq!(parse("0").unwrap(), Duration::ZERO);
-        assert!(parse("banana").is_err());
-        assert!(parse("10").is_err());
-        assert!(parse("").is_err());
-        assert!(parse("-5s").is_err());
+        for s in ["banana", "10", "", "1.5.5s", "5x"] {
+            assert_eq!(parse(s), Err(format!("invalid duration {s:?}")));
+        }
+        assert_eq!(
+            parse("-5s"),
+            Err("invalid duration \"-5s\": must not be negative".into())
+        );
         assert_eq!(render(Duration::from_secs(2)), "2s");
         assert_eq!(render(Duration::from_secs(180)), "3m0s");
         assert_eq!(render(Duration::from_secs(5400)), "1h30m0s");

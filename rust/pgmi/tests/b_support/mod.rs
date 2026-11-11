@@ -87,7 +87,14 @@ pub fn ok(r: Result<Outcome, Failure>, what: &str) -> Outcome {
 pub fn refused(r: Result<Outcome, Failure>, what: &str) -> Failure {
     match r {
         Ok(o) => panic!("{what}: deploy succeeded\n{}", o.stderr),
-        Err(f) => f,
+        Err(f) => {
+            assert_eq!(
+                f.code, 13,
+                "{what}: want the deploy refused by its SQL (exit 13)\n{}",
+                f.text
+            );
+            f
+        }
     }
 }
 

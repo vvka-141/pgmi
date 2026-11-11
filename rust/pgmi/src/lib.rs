@@ -1,5 +1,6 @@
 //! pgmi as a library: the binary, `tests/` and the fuzz targets link this
-//! crate. The `pub` items exist for those three and are not a stable API.
+//! crate. The `pub` items exist for those three and are not a stable API;
+//! `invariants` is built for tests and with the `fuzzing` feature only.
 
 #![forbid(unsafe_code)]
 
@@ -13,10 +14,14 @@ mod deploy;
 mod duration;
 mod env;
 mod error;
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod invariants;
 mod output;
 mod project;
 pub mod serve;
 mod templates;
+#[cfg(test)]
+mod testdir;
 mod tui;
 mod vfs;
 

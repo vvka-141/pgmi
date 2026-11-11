@@ -854,9 +854,16 @@ mod tests {
                 .expires
                 .is_none()
         );
-        assert!(parse_credential(r#"{"expire_time":"2026-11-11T10:00:00Z"}"#).is_err());
-        assert!(parse_credential(r#"{"token":"t","expire_time":"soon"}"#).is_err());
-        assert!(parse_credential("<html>").is_err());
+        let err = |body: &str| parse_credential(body).err().unwrap();
+        assert_eq!(
+            err(r#"{"expire_time":"2026-11-11T10:00:00Z"}"#),
+            "the answer has no token"
+        );
+        assert!(
+            err(r#"{"token":"t","expire_time":"soon"}"#)
+                .starts_with("invalid expire_time \"soon\": ")
+        );
+        assert_eq!(err("<html>"), "the answer is not JSON");
     }
 
     #[test]

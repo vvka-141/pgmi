@@ -356,7 +356,15 @@ mod tests {
             assert_eq!(m.id, "1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d");
             assert!(m.idempotent);
         }
-        assert!(parse("./f.sql", "/* <pgmi-meta id=\" 1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d\" idempotent=\"true\"/> */").is_err());
+        let e = parse(
+            "./f.sql",
+            "/* <pgmi-meta id=\" 1b5e3a4c-2d6f-4a8b-9c0d-1e2f3a4b5c6d\" idempotent=\"true\"/> */",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, MetaError::NotUuid { path, .. } if path == "./f.sql"),
+            "{e}"
+        );
         let e = parse(
             "./bad.sql",
             "/* <pgmi-meta id=\"not-a-uuid\" idempotent=\"true\"></pgmi-meta> */",

@@ -526,18 +526,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn os_fs_refuses_a_named_pipe_instead_of_waiting_for_a_writer() {
-        let dir = std::env::temp_dir().join(format!("pgmi-fifo-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testdir::TempDir::new("fifo");
         let made = std::process::Command::new("mkfifo")
             .arg(dir.join("pipe.sql"))
             .status()
             .unwrap();
         assert!(made.success());
-        let fs = OsFs::new(&dir);
+        let fs = OsFs::new(dir.path());
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || tx.send(fs.read("pipe.sql")));
         let read = rx.recv_timeout(std::time::Duration::from_secs(5));
-        std::fs::remove_dir_all(&dir).unwrap();
         let e = read
             .expect("reading a named pipe must not wait")
             .unwrap_err();

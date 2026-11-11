@@ -267,7 +267,9 @@ mod tests {
         assert_eq!(d.host.as_deref(), Some("db"));
         assert!(!d.force && d.json);
         assert_eq!(d.timeout, Some(Duration::from_secs(5400)));
-        assert!(Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).is_err());
+        let e = Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(e.to_string().contains("invalid duration \"banana\""), "{e}");
     }
 
     #[test]

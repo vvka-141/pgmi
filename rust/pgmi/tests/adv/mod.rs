@@ -72,7 +72,11 @@ pub fn error_text(out: &Outcome) -> String {
 }
 
 pub fn refused(out: &Outcome) -> String {
-    assert_ne!(out.code, 0, "deploy succeeded; it must be refused");
+    assert_eq!(
+        out.code, 13,
+        "want the deploy refused by its SQL (exit 13):\n{}",
+        out.stderr
+    );
     error_text(out)
 }
 

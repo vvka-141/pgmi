@@ -99,8 +99,9 @@ cc and ld removed.
 - Records 0006, 0007, 0008, 0009 and 0018 follow this record.
 - A new dependency that brings C fails CI on the first push.
 - The fuzz targets in `rust/pgmi/fuzz` link libFuzzer, which is C++. They
-  sit outside the workspace, are built only in the CI job `fuzz` (PGMI-861),
-  and never reach a release binary; the gates above check the workspace.
+  sit outside the workspace, run in the CI job `fuzz` (PGMI-861) and are
+  linted in the job `Rust` (PGMI-870), and never reach a release binary; the
+  gates above check the workspace.
 - The rsa crate (record 0009) only generates the Cloud SQL key; signing
   with it during the TLS handshake is the provider's job. The rsa crate's
   timing advisory (RUSTSEC-2023-0071) concerns its own private-key

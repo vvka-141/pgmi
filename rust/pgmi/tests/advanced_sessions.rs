@@ -137,11 +137,13 @@ fn background_jobs() {
     );
 
     let pooled = db.client();
+    let err = pooled
+        .batch("CALL api.job_run('probe', 'api.job_probe_fail_batch(int)')")
+        .expect_err("the failing batch must fail the run");
     assert!(
-        pooled
-            .batch("CALL api.job_run('probe', 'api.job_probe_fail_batch(int)')")
-            .is_err(),
-        "the failing batch must fail the run"
+        describe(&err).contains("probe failure"),
+        "the failing batch must fail the run, got {}",
+        describe(&err)
     );
     pooled.exec("CALL api.job_run('probe', 'api.job_probe_ok_batch(int)')");
     let held = count(

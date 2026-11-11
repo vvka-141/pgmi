@@ -563,7 +563,12 @@ mod tests {
         assert!(r.overwrite && !r.force && !r.json && r.compat.is_none() && r.cloud.is_empty());
         assert!(!ctx.stdin);
         ctx.approver.before_connecting("-d").unwrap();
-        assert!(ctx.approver.before_connecting("d").is_err());
+        let e = ctx.approver.before_connecting("d").unwrap_err();
+        assert_eq!(e.exit_code(), 12);
+        assert_eq!(
+            e.text(),
+            "confirmDatabaseName \"-d\" does not match database \"d\"; nothing was deployed and no database was dropped"
+        );
     }
 
     #[test]
@@ -600,5 +605,154 @@ mod tests {
         for key in schema[1]["required"].as_array().unwrap() {
             assert!(!failure[key.as_str().unwrap()].is_null(), "{key}");
         }
+    }
+
+    fn conforms(schema: &Value, v: &Value) -> Result<(), String> {
+        if let Some(any) = schema.get("anyOf").and_then(Value::as_array) {
+            let errors: Vec<String> = any.iter().filter_map(|s| conforms(s, v).err()).collect();
+            return if errors.len() < any.len() {
+                Ok(())
+            } else {
+                Err(format!("no variant admits {v}: {}", errors.join("; ")))
+            };
+        }
+        if let Some(t) = schema.get("type").and_then(Value::as_str) {
+            let ok = match t {
+                "object" => v.is_object(),
+                "array" => v.is_array(),
+                "string" => v.is_string(),
+                "integer" => v.is_i64() || v.is_u64(),
+                "number" => v.is_number(),
+                "boolean" => v.is_boolean(),
+                _ => false,
+            };
+            if !ok {
+                return Err(format!("{v} is not of type {t}"));
+            }
+        }
+        for key in schema
+            .get("required")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let key = key.as_str().unwrap_or_default();
+            if v.get(key).is_none() {
+                return Err(format!("{key} is required"));
+            }
+        }
+        let props = schema.get("properties").and_then(Value::as_object);
+        for (k, val) in v.as_object().into_iter().flatten() {
+            match (
+                props.and_then(|p| p.get(k)),
+                schema.get("additionalProperties"),
+            ) {
+                (Some(s), _) => conforms(s, val).map_err(|e| format!("{k}: {e}"))?,
+                (None, Some(Value::Bool(false))) => return Err(format!("{k} is not declared")),
+                (None, Some(extra @ Value::Object(_))) => {
+                    conforms(extra, val).map_err(|e| format!("{k}: {e}"))?
+                }
+                (None, _) => {}
+            }
+        }
+        if let (Some(items), Some(arr)) = (schema.get("items"), v.as_array()) {
+            for (i, x) in arr.iter().enumerate() {
+                conforms(items, x).map_err(|e| format!("[{i}]: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn output_schema(tool: &str) -> Value {
+        let tools: Vec<Value> = serde_json::from_str(super::super::TOOLS).unwrap();
+        tools.into_iter().find(|t| t["name"] == tool).unwrap()["outputSchema"].clone()
+    }
+
+    const SCHEMA_TOOLS: [&str; 5] = [
+        "templates_list",
+        "metadata_plan",
+        "metadata_validate",
+        "init",
+        "deploy",
+    ];
+
+    async fn call(tool: &str, args: Value) -> (bool, Value) {
+        let o = Tool::named(tool)
+            .unwrap()
+            .call(
+                Some(raw(&args.to_string())),
+                Env::default(),
+                false,
+                CancellationToken::new(),
+            )
+            .await;
+        let structured = o.structured.unwrap_or_else(|| {
+            panic!("{tool} declares an outputSchema and sent no structuredContent")
+        });
+        (o.is_error, serde_json::from_str(structured.get()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn results_conform_to_the_declared_output_schema() {
+        let dir = crate::testdir::TempDir::new("serve-schema");
+        let project = dir.join("proj").display().to_string();
+        let missing = dir.join("proj").join("nope").display().to_string();
+        for (tool, args) in [
+            ("init", json!({"path": project})),
+            ("templates_list", json!({})),
+            ("metadata_plan", json!({"path": project})),
+            ("metadata_validate", json!({"path": project})),
+        ] {
+            let (is_error, v) = call(tool, args).await;
+            assert!(!is_error, "{tool}: {v}");
+            conforms(&output_schema(tool), &v).unwrap_or_else(|e| panic!("{tool}: {e}\n{v}"));
+        }
+        for (tool, args) in [
+            ("metadata_plan", json!({"path": missing})),
+            ("metadata_validate", json!({"path": missing})),
+            (
+                "init",
+                json!({"path": project, "template": "no-such-template"}),
+            ),
+            ("deploy", json!({"path": missing})),
+            (
+                "deploy",
+                json!({"path": project, "overwrite": true, "database": "d"}),
+            ),
+        ] {
+            let (is_error, v) = call(tool, args).await;
+            assert!(is_error, "{tool}: {v}");
+            conforms(&output_schema(tool), &v).unwrap_or_else(|e| panic!("{tool}: {e}\n{v}"));
+        }
+    }
+
+    #[test]
+    fn every_declared_schema_admits_the_error_shape() {
+        let minimal = json!({"message": "boom", "exitCode": 1});
+        let full = json!({"message": "execution failed", "exitCode": 13, "sqlstate": "22012",
+            "detail": "d", "hint": "h", "where": "w", "failedFile": "./migrations/001.sql",
+            "script": "deploy.sql", "line": 12, "column": 3, "sourceLine": "SELECT 1/0;",
+            "scriptExpanded": true, "notices": ["NOTICE:  applying"], "noticesTruncated": 2});
+        for tool in SCHEMA_TOOLS {
+            for shape in [&minimal, &full] {
+                conforms(&output_schema(tool), shape).unwrap_or_else(|e| panic!("{tool}: {e}"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_conformance_check_rejects_mismatches() {
+        let schema = output_schema("init");
+        let wrong = json!({"created": "yes", "path": "/tmp/x", "template": "basic"});
+        assert!(
+            conforms(&schema, &wrong)
+                .is_err_and(|e| e.contains("created: \"yes\" is not of type boolean"))
+        );
+        let partial = json!({"path": "/tmp/x"});
+        assert!(
+            conforms(&schema, &partial).is_err_and(
+                |e| e.contains("created is required") && e.contains("message is required")
+            )
+        );
     }
 }

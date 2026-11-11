@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
-pgmi = { path = ".." }
+pgmi = { path = "..", features = ["fuzzing"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 
 [[bin]]
@@ -22,6 +22,41 @@ bench = false
 [[bin]]
 name = "mcp_decoder"
 path = "fuzz_targets/mcp_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "conn_parse"
+path = "fuzz_targets/conn_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_script"
+path = "fuzz_targets/sql_script.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata_parse"
+path = "fuzz_targets/metadata_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dotenv_parse"
+path = "fuzz_targets/dotenv_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pgpass_find"
+path = "fuzz_targets/pgpass_find.rs"
 test = false
 doc = false
 bench = false

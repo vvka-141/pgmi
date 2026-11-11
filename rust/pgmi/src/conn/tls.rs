@@ -542,7 +542,7 @@ mod tests {
         let h;
         if let Some(home) = home {
             h = home.display().to_string();
-            pairs.push(("HOME", h.as_str()));
+            pairs.extend([("HOME", h.as_str()), ("APPDATA", h.as_str())]);
         }
         let flags = super::super::resolve::Flags {
             connection: Some(format!("host=h dbname=d {s}").into()),
@@ -579,11 +579,10 @@ mod tests {
 
     #[test]
     fn verification_without_a_root_uses_the_system_store() {
-        let home = std::env::temp_dir().join(format!("pgmi-noroot-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
+        let home = crate::testdir::TempDir::new("noroot");
         let system = !rustls_native_certs::load_native_certs().certs.is_empty();
         for mode in ["verify-ca", "verify-full"] {
-            let r = config(&spec(&format!("sslmode={mode}"), Some(&home)));
+            let r = config(&spec(&format!("sslmode={mode}"), Some(home.path())));
             match r {
                 Ok(_) => assert!(system, "{mode}"),
                 Err(e) => {
@@ -592,41 +591,56 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    fn pg_dir(home: &crate::testdir::TempDir) -> PathBuf {
+        let dir = spec("", Some(home.path())).pg_files.unwrap().dir;
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
     fn client_certificate_comes_in_pairs() {
-        let Err(e) = config(&spec("sslmode=require sslcert=/nowhere/c.crt", None)) else {
-            panic!("half a pair was accepted")
+        const PAIR: &str = "both \"sslcert\" and \"sslkey\" are required: give the client certificate and its private key together";
+        for half in ["sslcert=/nowhere/c.crt", "sslkey=/nowhere/c.key"] {
+            let Err(e) = config(&spec(&format!("sslmode=require {half}"), None)) else {
+                panic!("{half}: half a pair was accepted")
+            };
+            assert_eq!(e.text(), PAIR, "{half}");
+            assert_eq!(e.exit_code(), 10, "{half}");
+        }
+        let given = spec(
+            "sslmode=require sslcertmode=disable sslcert=/nowhere/c.crt",
+            None,
+        );
+        assert!(matches!(client_pair(&given), Ok(None)));
+        assert!(config(&given).is_ok());
+
+        let home = crate::testdir::TempDir::new("tls");
+        let dir = pg_dir(&home);
+        let (crt, key) = (dir.join("postgresql.crt"), dir.join("postgresql.key"));
+        std::fs::write(&crt, "junk").unwrap();
+        let one_default = spec("sslmode=require", Some(home.path()));
+        assert!(matches!(client_pair(&one_default), Ok(None)));
+        assert!(config(&one_default).is_ok());
+        std::fs::write(&key, "junk").unwrap();
+        let both = spec("sslmode=require", Some(home.path()));
+        assert_eq!(client_pair(&both).unwrap(), Some((crt.clone(), key)));
+        let Err(e) = config(&both) else {
+            panic!("a junk default certificate was accepted")
         };
-        assert!(
-            e.text().contains("both \"sslcert\" and \"sslkey\""),
-            "{}",
-            e.text()
+        assert_eq!(
+            e.text(),
+            format!("no certificate found in \"{}\"", crt.display())
         );
-        assert!(config(&spec("sslmode=require sslkey=/nowhere/c.key", None)).is_err());
-        assert!(
-            config(&spec(
-                "sslmode=require sslcertmode=disable sslcert=/nowhere/c.crt",
-                None
-            ))
-            .is_ok()
-        );
-        let home = std::env::temp_dir().join(format!("pgmi-tls-{}", std::process::id()));
-        std::fs::create_dir_all(home.join(".postgresql")).unwrap();
-        std::fs::write(home.join(".postgresql/postgresql.crt"), "junk").unwrap();
-        assert!(config(&spec("sslmode=require", Some(&home))).is_ok());
-        std::fs::write(home.join(".postgresql/postgresql.key"), "junk").unwrap();
-        assert!(config(&spec("sslmode=require", Some(&home))).is_err());
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_key_others_can_read_is_refused() {
         use std::os::unix::fs::PermissionsExt;
-        let key = std::env::temp_dir().join(format!("pgmi-key-{}", std::process::id()));
+        let dir = crate::testdir::TempDir::new("key");
+        let key = dir.join("key");
         std::fs::write(&key, "junk").unwrap();
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
         let e = read_key(&key, None).unwrap_err();
@@ -638,7 +652,6 @@ mod tests {
                 .text()
                 .contains("group or world")
         );
-        let _ = std::fs::remove_file(&key);
     }
 
     #[test]

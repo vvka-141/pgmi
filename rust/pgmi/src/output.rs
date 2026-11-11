@@ -328,6 +328,77 @@ mod tests {
         assert_eq!(dropped, Some(1000 - (HEAD + WARNINGS + TAIL) as u64));
     }
 
+    fn kept(log: &NoticeLog) -> Vec<String> {
+        log.finish()
+            .0
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                format!(
+                    "{} {}",
+                    n["severity"].as_str().unwrap(),
+                    n["message"].as_str().unwrap()
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn notice_log_keeps_the_head_the_middle_warnings_and_the_tail_in_order() {
+        let mut log = NoticeLog::default();
+        let total = HEAD + 10 + TAIL;
+        for i in 0..total {
+            let warning = i == HEAD + 3 || i == HEAD + 4;
+            log.push(&n(if warning { "WARNING" } else { "NOTICE" }, i));
+        }
+        let mut want: Vec<String> = (0..HEAD).map(|i| format!("NOTICE m{i}")).collect();
+        want.push(format!("WARNING m{}", HEAD + 3));
+        want.push(format!("WARNING m{}", HEAD + 4));
+        want.extend((HEAD + 10..total).map(|i| format!("NOTICE m{i}")));
+        assert_eq!(kept(&log), want);
+        assert_eq!(log.finish().1, Some(8));
+    }
+
+    #[test]
+    fn notice_log_marks_no_truncation_within_its_bounds() {
+        let mut log = NoticeLog::default();
+        log.push(&n("NOTICE", 0));
+        log.push(&n("LOG", 1));
+        assert_eq!(kept(&log), ["NOTICE m0"]);
+        assert_eq!(log.finish().1, None);
+    }
+
+    #[test]
+    fn notice_log_caps_the_middle_warnings() {
+        let mut log = NoticeLog::default();
+        let total = 20_000;
+        for i in 0..total {
+            log.push(&n("WARNING", i));
+        }
+        let kept = kept(&log);
+        assert_eq!(kept.len(), HEAD + WARNINGS + TAIL);
+        assert_eq!(kept.first().map(String::as_str), Some("WARNING m0"));
+        assert_eq!(kept.last(), Some(&format!("WARNING m{}", total - 1)));
+        let (v, dropped) = log.finish();
+        assert_eq!(dropped, Some((total - kept.len()) as u64));
+        assert!(v.to_string().len() < 32 << 10);
+    }
+
+    #[test]
+    fn notice_log_keeps_detail_and_hint() {
+        let mut log = NoticeLog::default();
+        log.push(&notice("WARNING", Some("d"), Some("y")));
+        log.push(&notice("NOTICE", None, None));
+        assert_eq!(
+            log.finish().0,
+            json!([
+                {"severity": "WARNING", "message": "msg", "detail": "d", "hint": "y"},
+                {"severity": "NOTICE", "message": "msg"}
+            ])
+        );
+    }
+
     #[test]
     fn severities_keep_the_servers_word() {
         for word in [

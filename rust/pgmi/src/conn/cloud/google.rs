@@ -238,7 +238,12 @@ mod tests {
             instance_parts("example.com:proj:us-central1:db").unwrap(),
             ("example.com:proj".into(), "us-central1".into(), "db".into())
         );
-        assert!(instance_parts("proj:db").is_err());
+        let e = instance_parts("proj:db").unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            "invalid --google-instance \"proj:db\": want project:region:instance"
+        );
     }
 
     #[test]

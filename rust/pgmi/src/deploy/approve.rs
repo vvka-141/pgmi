@@ -65,9 +65,16 @@ fn banner(db: &str) -> String {
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("")
         .replace("${dbname}", db);
-    let bar = "═".repeat(71);
-    let blank = format!("║{}║", " ".repeat(71));
-    format!("╔{bar}╗\n{blank}\n{}\n{blank}\n╚{bar}╝", art.trim_end())
+    let lines: Vec<&str> = art.trim_end_matches('\n').lines().collect();
+    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let rule = "═".repeat(width + 4);
+    let mut out = format!("╔{rule}╗\n");
+    for l in std::iter::once("").chain(lines).chain(std::iter::once("")) {
+        let pad = " ".repeat(width - l.chars().count());
+        out.push_str(&format!("║  {l}{pad}  ║\n"));
+    }
+    out.push_str(&format!("╚{rule}╝"));
+    out
 }
 
 #[async_trait(?Send)]
@@ -122,7 +129,7 @@ impl Approver for Terminal {
                 "approval denied: No input available. Cancelled.",
             ));
         };
-        let typed = line.trim_end_matches(['\r', '\n']);
+        let typed = line.trim();
         if typed != db {
             return Err(Error::new(
                 Kind::Denied,
@@ -283,11 +290,55 @@ mod tests {
         assert!(!out.text().contains("Confirmed."));
     }
 
+    #[tokio::test]
+    async fn surrounding_whitespace_is_ignored_and_an_empty_line_is_a_denial() {
+        let (r, _) = ask(&terminal(false, true, Some("  app  \n"))).await;
+        r.unwrap();
+        let (r, out) = ask(&terminal(false, true, Some("\n"))).await;
+        let e = r.unwrap_err();
+        assert_eq!(e.exit_code(), 12);
+        assert_eq!(
+            e.text(),
+            "approval denied: \"\" does not match \"app\". Cancelled."
+        );
+        assert!(!out.contains("Confirmed."));
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_is_a_denial() {
+        let t = Terminal {
+            answer: Arc::new(|| Err(std::io::ErrorKind::UnexpectedEof.into())),
+            ..terminal(false, true, None)
+        };
+        let (r, out) = ask(&t).await;
+        let e = r.unwrap_err();
+        assert_eq!(e.exit_code(), 12);
+        assert!(e.text().starts_with("approval denied: "), "{}", e.text());
+        assert!(!out.contains("Confirmed."));
+    }
+
     #[test]
-    fn the_banner_names_the_database_inside_a_frame() {
-        let b = banner("app");
-        assert!(b.starts_with('╔') && b.ends_with('╝'), "{b}");
-        assert!(!b.contains("${dbname}"));
+    fn the_banner_frames_every_line_and_names_the_database() {
+        for db in [
+            "x",
+            "a_much_longer_database_name_than_the_frame_was_drawn_for",
+        ] {
+            let b = banner(db);
+            assert!(b.contains(&format!("'{db}'")), "{b}");
+            assert!(!b.contains("${dbname}"));
+            let lines: Vec<&str> = b.lines().collect();
+            let width = lines[0].chars().count();
+            let last = lines.len() - 1;
+            for (i, l) in lines.iter().enumerate() {
+                let (first, end) = (l.chars().next(), l.chars().last());
+                let framed = match i {
+                    0 => (first, end) == (Some('╔'), Some('╗')),
+                    i if i == last => (first, end) == (Some('╚'), Some('╝')),
+                    _ => (first, end) == (Some('║'), Some('║')),
+                };
+                assert!(framed && l.chars().count() == width, "{db}: line {i}:\n{b}");
+            }
+        }
     }
 
     #[tokio::test]

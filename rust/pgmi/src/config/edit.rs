@@ -225,8 +225,7 @@ mod tests {
 
     #[test]
     fn atomic_write_keeps_mode() {
-        let dir = std::env::temp_dir().join(format!("pgmi-edit-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testdir::TempDir::new("edit");
         let path = dir.join("pgmi.yaml");
         write_atomic(&path, "a: 1\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a: 1\n");
@@ -244,6 +243,5 @@ mod tests {
                 0o644
             );
         }
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -14,7 +14,10 @@ fuzz_target!(|data: &[u8]| {
         all.extend(lines.feed(part));
     }
     all.extend(lines.finish());
-    let expected = rest.split(|b| *b == b'\n').filter(|s| !s.is_empty()).count();
+    let expected = rest
+        .split(|b| *b == b'\n')
+        .filter(|s| !s.is_empty())
+        .count();
     assert_eq!(all.iter().filter(|l| !l.is_empty()).count(), expected);
     for line in all {
         assert!(!line.contains(&b'\n'));
@@ -25,7 +28,10 @@ fuzz_target!(|data: &[u8]| {
             }
             wire::Decoded::Request(r) | wire::Decoded::Notification(r) => {
                 if let Some(id) = r.id {
-                    assert!(serde_json::from_str::<serde_json::Value>(&id).is_ok(), "{id}");
+                    assert!(
+                        serde_json::from_str::<serde_json::Value>(&id).is_ok(),
+                        "{id}"
+                    );
                 }
                 if let Some(p) = r.params {
                     assert!(serde_json::from_str::<&serde_json::value::RawValue>(p.get()).is_ok());

@@ -346,6 +346,9 @@ mod tests {
         assert!(r.ignored("docs/drop.sql", false));
         assert!(!r.ignored("docs/keep.sql", false));
         assert!(r.ignored("#hash.sql", false));
-        assert!(Rules::parse("a[b\n").is_err());
+        assert_eq!(
+            Rules::parse("ok\na[b\n").err(),
+            Some(".pgmiignore line 2: invalid pattern \"a[b\"".to_string())
+        );
     }
 }

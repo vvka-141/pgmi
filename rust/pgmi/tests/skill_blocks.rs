@@ -97,24 +97,29 @@ fn parse_runnable_blocks_reads_targets_tails_and_requirements() {
     assert!(blocks[1].tail);
     assert_eq!(blocks[1].requires, ["btree_gist", "hstore"]);
 
-    for (name, bad) in [
-        ("no target", "```sql runnable\nSELECT 1;\n```\n"),
+    const ONE: &str = "skill.md: a runnable block needs exactly one of target=<path> or kind=tail";
+    for (name, bad, want) in [
+        ("no target", "```sql runnable\nSELECT 1;\n```\n", ONE),
         (
             "target and tail",
             "```sql runnable target=a.sql kind=tail\nSELECT 1;\n```\n",
+            ONE,
         ),
         (
             "escapes project",
             "```sql runnable target=../a.sql\nSELECT 1;\n```\n",
+            "skill.md: target \"../a.sql\" must stay inside the project",
         ),
         (
             "unknown key",
             "```sql runnable target=a.sql flavour=x\nSELECT 1;\n```\n",
+            "skill.md: unknown runnable attribute \"flavour=x\"",
         ),
     ] {
-        assert!(
-            parse_runnable_blocks("skill.md", bad).is_err(),
-            "{name}: want an error"
+        assert_eq!(
+            parse_runnable_blocks("skill.md", bad).err().as_deref(),
+            Some(want),
+            "{name}"
         );
     }
 }

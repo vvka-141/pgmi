@@ -71,6 +71,9 @@ Dependencies point down only: `cli` -> `commands`/`deploy`/`serve` ->
 `pub(crate)` is the default. `pub` only for what `tests/` and `fuzz/` link
 (`serve::wire`, `conn::tap`, `conn::parse`, `serve::serve`,
 `deploy::run`), each with a doc comment saying it is not a stable API.
+Parsers the fuzz targets reach through `pub(crate)` items are checked by
+`invariants`, which exists only in tests and with the `fuzzing` feature the
+fuzz crate turns on (PGMI-864, PGMI-870).
 The lib target is not published as a library API (0001 still holds).
 
 ### Abstractions and reasons
@@ -287,7 +290,9 @@ land before or between steps, each with a black-box case.
 
 Separate tickets, in parallel after steps 3 and 7: port the remaining Go
 unit groups (2, 3, 4, 10, 12, wizards); a fuzz/property target for
-`conn::parse`; port the content linters and the template deployment tests
+`conn::parse` (done 2026-11-11 with the lexer, splitter, metadata, `.env` and
+`.pgpass` targets, PGMI-864 and PGMI-870: proptests in `invariants.rs`, one
+cargo-fuzz target per parser, the CI job `fuzz` blocking); port the content linters and the template deployment tests
 of `internal/scaffold` and `internal/services` to `rust/pgmi/tests/` before
 switch day. That port landed 2026-11-11 (PGMI-862): linters in
 `src/content_tests/`, deployments in `tests/`, mapped in

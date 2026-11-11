@@ -50,7 +50,7 @@ fn group_or_world(_: &std::fs::Metadata) -> bool {
     false
 }
 
-fn find(text: &str, host: &str, port: &str, db: &str, user: &str) -> Option<String> {
+pub(crate) fn find(text: &str, host: &str, port: &str, db: &str, user: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if line.starts_with('#') || line.trim().is_empty() {
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn save_puts_entries_first_and_escapes() {
-        let dir = std::env::temp_dir().join(format!("pgmi-pgpass-{}", std::process::id()));
+        let dir = crate::testdir::TempDir::new("pgpass");
         let path = dir.join("sub").join(".pgpass");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "*:*:*:u:old\nh\\:x:5432:db:u:stale\n").unwrap();
@@ -163,7 +163,109 @@ mod tests {
                 0o600
             );
         }
-        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn escape_doubles_backslashes_and_escapes_colons() {
+        for (input, want) in [
+            ("simple", "simple"),
+            ("pass:word", "pass\\:word"),
+            ("back\\slash", "back\\\\slash"),
+            ("both\\:chars", "both\\\\\\:chars"),
+            ("", ""),
+            ("\\:\\", "\\\\\\:\\\\"),
+            ("multi:colon:password", "multi\\:colon\\:password"),
+        ] {
+            assert_eq!(escape(input), want, "{input}");
+        }
+    }
+
+    fn saved(existing: Option<&str>, saves: &[(&str, u16, &[&str], &str, &str)]) -> String {
+        let dir = crate::testdir::TempDir::new("pgpass-save");
+        let path = dir.join("pgpass.conf");
+        if let Some(text) = existing {
+            std::fs::write(&path, text).unwrap();
+        }
+        for (host, port, dbs, user, password) in saves {
+            save(&path, host, *port, dbs, user, password).unwrap();
+        }
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    #[test]
+    fn save_writes_a_new_file() {
+        assert_eq!(
+            saved(None, &[("localhost", 5432, &["testdb"], "user", "secret")]),
+            "localhost:5432:testdb:user:secret\n"
+        );
+    }
+
+    #[test]
+    fn save_replaces_its_own_line_and_keeps_the_others_after_it() {
+        assert_eq!(
+            saved(
+                Some(
+                    "otherhost:5432:otherdb:otheruser:oldpass\nlocalhost:5432:testdb:user:oldpass\n"
+                ),
+                &[("localhost", 5432, &["testdb"], "user", "newpass")]
+            ),
+            "localhost:5432:testdb:user:newpass\notherhost:5432:otherdb:otheruser:oldpass\n"
+        );
+        assert_eq!(
+            saved(
+                Some("otherhost:5432:otherdb:otheruser:pass\n"),
+                &[("newhost", 5433, &["newdb"], "newuser", "newpass")]
+            ),
+            "newhost:5433:newdb:newuser:newpass\notherhost:5432:otherdb:otheruser:pass\n"
+        );
+    }
+
+    #[test]
+    fn save_outranks_a_matching_wildcard_and_keeps_it() {
+        let text = saved(
+            Some("# my passwords\n*:*:*:user:stalepass\nother:5432:db:u:p\n"),
+            &[("localhost", 5432, &["testdb"], "user", "freshpass")],
+        );
+        assert_eq!(
+            text,
+            "localhost:5432:testdb:user:freshpass\n# my passwords\n*:*:*:user:stalepass\nother:5432:db:u:p\n"
+        );
+        assert_eq!(
+            find(&text, "localhost", "5432", "testdb", "user").as_deref(),
+            Some("freshpass")
+        );
+    }
+
+    #[test]
+    fn save_never_accumulates_lines() {
+        assert_eq!(
+            saved(
+                None,
+                &[
+                    ("h", 1, &["d"], "u", "p1"),
+                    ("h", 1, &["d"], "u", "p2"),
+                    ("h", 1, &["d"], "u", "p3"),
+                ]
+            ),
+            "h:1:d:u:p3\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_leaves_the_file_owner_only_and_no_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testdir::TempDir::new("pgpass-mode");
+        let path = dir.join("pgpass.conf");
+        let tmp = dir.join("pgpass.conf.pgmi-tmp");
+        std::fs::write(&tmp, "stale").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save(&path, "h", 5432, &["d"], "u", "p").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!tmp.exists());
     }
 
     #[test]

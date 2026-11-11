@@ -3,7 +3,12 @@
 use libfuzzer_sys::fuzz_target;
 use pgmi::conn::tap;
 
-const POLICIES: [Option<&str>; 4] = [None, Some("scram-sha-256"), Some("!md5"), Some("password,md5")];
+const POLICIES: [Option<&str>; 4] = [
+    None,
+    Some("scram-sha-256"),
+    Some("!md5"),
+    Some("password,md5"),
+];
 
 fuzz_target!(|data: &[u8]| {
     let Some((&head, rest)) = data.split_first() else {

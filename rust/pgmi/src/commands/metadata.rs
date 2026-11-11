@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn root_search_stops_at_git() {
-        let base = std::env::temp_dir().join(format!("pgmi-root-{}", std::process::id()));
+        let base = crate::testdir::TempDir::new("root");
         let lib = base.join("repo/lib");
         std::fs::create_dir_all(&lib).unwrap();
         std::fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -441,15 +441,12 @@ mod tests {
         assert_eq!(project_root(&lib), lib);
         std::fs::write(base.join("repo/deploy.sql"), "SELECT 1;").unwrap();
         assert_eq!(project_root(&lib), base.join("repo"));
-        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn write_never_follows_a_planted_temp_link() {
-        let base = std::env::temp_dir().join(format!("pgmi-plant-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let base = crate::testdir::TempDir::new("plant");
         let victim = base.join("victim");
         std::fs::write(&victim, "keep").unwrap();
         for name in [".a.sql.pgmi-tmp", "a.sql.pgmi-tmp"] {
@@ -458,7 +455,6 @@ mod tests {
         write_atomic(&base.join("a.sql"), "new").unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
         assert_eq!(std::fs::read_to_string(base.join("a.sql")).unwrap(), "new");
-        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

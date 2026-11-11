@@ -62,6 +62,7 @@ libc = { version = "0.2.191", default-features = false }
 
 [features]
 testhooks = []
+fuzzing = []
 
 [dev-dependencies]
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }

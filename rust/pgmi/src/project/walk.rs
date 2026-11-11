@@ -533,7 +533,7 @@ mod tests {
                     "failed to read ./{rel}: refusing to read {rel}: not a regular file (a named pipe, socket or device); exclude it in .pgmiignore or remove it"
                 )
             );
-            assert!(scan(&fs, MAX).is_err());
+            assert_eq!(scan(&fs, MAX).unwrap_err().text(), refused(&fs));
         }
         assert!(
             load(
@@ -629,27 +629,24 @@ mod tests {
     #[test]
     fn non_utf8_file_name_is_refused_unless_hidden() {
         use std::os::unix::ffi::OsStrExt;
-        let os_project = |tag: &str, files: &[(&std::ffi::OsStr, &[u8])]| {
-            let d = std::env::temp_dir().join(format!("pgmi-walk-{tag}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&d);
-            std::fs::create_dir_all(&d).unwrap();
+        let os_project = |files: &[(&std::ffi::OsStr, &[u8])]| {
+            let d = crate::testdir::TempDir::new("walk");
             std::fs::write(d.join("deploy.sql"), "SELECT 1;").unwrap();
             for (name, body) in files {
                 std::fs::write(d.join(name), body).unwrap();
             }
-            OsFs::new(d)
+            let fs = OsFs::new(d.path());
+            (d, fs)
         };
         let bad = std::ffi::OsStr::from_bytes(b"caf\xe9.sql");
-        let e = load(&os_project("bad", &[(bad, b"SELECT 1;")]), MAX).unwrap_err();
+        let (_d, fs) = os_project(&[(bad, b"SELECT 1;")]);
+        let e = load(&fs, MAX).unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert!(e.text().contains("./caf\u{fffd}.sql"), "{}", e.text());
-        let fs = os_project(
-            "hidden",
-            &[
-                (bad, b"SELECT 1;"),
-                (std::ffi::OsStr::new(".pgmiignore"), b"caf*.sql\n"),
-            ],
-        );
+        let (_d, fs) = os_project(&[
+            (bad, b"SELECT 1;"),
+            (std::ffi::OsStr::new(".pgmiignore"), b"caf*.sql\n"),
+        ]);
         assert!(load(&fs, MAX).unwrap().sources.is_empty());
     }
 

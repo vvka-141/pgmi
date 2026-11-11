@@ -323,10 +323,9 @@ mod tests {
     #[test]
     fn negated_policy() {
         let shared = Shared::new(Some("!password")).unwrap();
-        assert!(
-            Parser::default()
-                .feed(&[b'R', 0, 0, 0, 8, 0, 0, 0, 3], &shared)
-                .is_err()
+        assert_eq!(
+            Parser::default().feed(&[b'R', 0, 0, 0, 8, 0, 0, 0, 3], &shared),
+            Err("authentication method requirement \"!password\" failed: server requested a cleartext password".into())
         );
         assert!(
             Parser::default()
@@ -338,10 +337,9 @@ mod tests {
     #[test]
     fn short_length_is_an_error() {
         let shared = Shared::new(None).unwrap();
-        assert!(
-            Parser::default()
-                .feed(&[b'Z', 0, 0, 0, 3], &shared)
-                .is_err()
+        assert_eq!(
+            Parser::default().feed(&[b'Z', 0, 0, 0, 3], &shared),
+            Err("invalid message length from server".into())
         );
     }
 

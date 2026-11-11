@@ -265,11 +265,10 @@ fn tail_refuses_invalid_index() {
     ok(deploy(&pg, &p, &db, true, DEV), "first deploy");
     let c = db.client();
     c.exec("CREATE TABLE core.tail_probe (n int); INSERT INTO core.tail_probe VALUES (1), (1)");
-    assert!(
-        c.batch("CREATE UNIQUE INDEX CONCURRENTLY tail_probe_n ON core.tail_probe (n)")
-            .is_err(),
-        "a unique index over duplicate rows was built"
-    );
+    let e = c
+        .batch("CREATE UNIQUE INDEX CONCURRENTLY tail_probe_n ON core.tail_probe (n)")
+        .expect_err("a unique index over duplicate rows was built");
+    assert_eq!(common::sqlstate(&e).as_deref(), Some("23505"), "{e}");
     let f = refused(
         deploy(&pg, &p, &db, false, DEV),
         "deploy with an invalid index in the database",

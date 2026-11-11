@@ -83,34 +83,98 @@ pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
         stderr("Tip: provide password via $PGPASSWORD, .pgpass, or connection string.\n");
         return;
     }
+    match save_pgpass(s, env) {
+        Ok(path) => stderr(&format!("Saved to {}\n", path.display())),
+        Err(e) => stderr(&format!(
+            "WARNING: failed to save .pgpass: {}\nTip: provide password via $PGPASSWORD or connection string.\n",
+            e.text()
+        )),
+    }
+}
+
+fn save_pgpass(s: &Settings, env: &Env) -> Result<PathBuf> {
     let path = env
         .non_empty("PGPASSFILE")
         .ok()
         .flatten()
         .map(PathBuf::from)
-        .or_else(|| env.pg_files().map(|f| f.pgpass));
-    let Some(path) = path else {
-        stderr(
-            "WARNING: failed to save .pgpass: cannot determine where the password file goes; set PGPASSFILE\nTip: provide password via $PGPASSWORD or connection string.\n",
-        );
-        return;
-    };
+        .or_else(|| env.pg_files().map(|f| f.pgpass))
+        .ok_or_else(|| {
+            Error::general("cannot determine where the password file goes; set PGPASSFILE")
+        })?;
     let mut dbs = vec![s.database.as_str()];
     if s.maintenance != s.database {
         dbs.push(s.maintenance.as_str());
     }
-    match crate::conn::pgpass::save(
+    crate::conn::pgpass::save(
         &path,
         &s.host,
         s.port,
         &dbs,
         &s.username,
         s.password.expose(),
-    ) {
-        Ok(()) => stderr(&format!("Saved to {}\n", path.display())),
-        Err(e) => stderr(&format!(
-            "WARNING: failed to save .pgpass: {}\nTip: provide password via $PGPASSWORD or connection string.\n",
-            e.text()
-        )),
+    )?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testdir::TempDir;
+
+    fn settings(database: &str, maintenance: &str) -> Settings {
+        Settings {
+            host: "127.0.0.1".into(),
+            port: 55601,
+            database: database.into(),
+            maintenance: maintenance.into(),
+            username: "postgres".into(),
+            password: "trial".into(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn pgpass_gets_the_target_and_the_maintenance_database_once() {
+        let dir = TempDir::new("pgpass-offer");
+        let file = dir.join("pgpass.conf");
+        let env = Env::from_pairs(&[("PGPASSFILE", file.to_str().unwrap())]);
+        for _ in 0..2 {
+            assert_eq!(
+                save_pgpass(&settings("appdb", "postgres"), &env).unwrap(),
+                file
+            );
+            assert_eq!(
+                std::fs::read_to_string(&file).unwrap(),
+                "127.0.0.1:55601:appdb:postgres:trial\n127.0.0.1:55601:postgres:postgres:trial\n"
+            );
+        }
+        save_pgpass(&settings("postgres", "postgres"), &env).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "127.0.0.1:55601:postgres:postgres:trial\n127.0.0.1:55601:appdb:postgres:trial\n"
+        );
+    }
+
+    #[test]
+    fn pgpass_location_follows_pgpassfile_then_the_platform() {
+        let dir = TempDir::new("pgpass-where");
+        let home = dir.path().to_str().unwrap();
+        let env = Env::from_pairs(&[("HOME", home), ("APPDATA", home)]);
+        let saved = save_pgpass(&settings("d", "d"), &env).unwrap();
+        assert_eq!(saved, env.pg_files().unwrap().pgpass);
+        assert!(saved.is_file());
+        let custom = dir.join("sub").join("custom");
+        let env = Env::from_pairs(&[
+            ("HOME", home),
+            ("APPDATA", home),
+            ("PGPASSFILE", custom.to_str().unwrap()),
+        ]);
+        assert_eq!(save_pgpass(&settings("d", "d"), &env).unwrap(), custom);
+        let e = save_pgpass(&settings("d", "d"), &Env::from_pairs(&[])).unwrap_err();
+        assert_eq!(
+            e.text(),
+            "cannot determine where the password file goes; set PGPASSFILE"
+        );
     }
 }

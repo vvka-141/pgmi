@@ -320,20 +320,44 @@ mod tests {
 
     #[test]
     fn arc_key_file_must_be_a_small_key_in_the_agent_folder() {
-        let dir = std::env::temp_dir().join(format!("pgmi-arc-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testdir::TempDir::new("arc");
         let key = dir.join("abc.key");
         std::fs::write(&key, "secret-key\n").unwrap();
         let header = format!("Basic realm={}", key.display());
-        assert_eq!(arc_key(&header, &dir).unwrap(), "secret-key");
-        assert!(arc_key(&header, Path::new("/elsewhere")).is_err());
+        assert_eq!(arc_key(&header, dir.path()).unwrap(), "secret-key");
+        let elsewhere = Path::new("/elsewhere");
+        assert_eq!(
+            arc_key(&header, elsewhere).unwrap_err(),
+            format!(
+                "the Azure Arc key file {} is not in {}",
+                key.display(),
+                elsewhere.display()
+            )
+        );
         let other = dir.join("abc.txt");
         std::fs::write(&other, "x").unwrap();
-        assert!(arc_key(&format!("Basic realm={}", other.display()), &dir).is_err());
+        assert_eq!(
+            arc_key(&format!("Basic realm={}", other.display()), dir.path()).unwrap_err(),
+            format!(
+                "the Azure Arc key file {} has no .key extension",
+                other.display()
+            )
+        );
         std::fs::write(&key, vec![b'k'; 5000]).unwrap();
-        assert!(arc_key(&header, &dir).is_err());
-        assert!(arc_key("Basic", &dir).is_err());
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            arc_key(&header, dir.path()).unwrap_err(),
+            format!(
+                "the Azure Arc key file {} is larger than 4096 bytes",
+                key.display()
+            )
+        );
+        assert_eq!(
+            arc_key("Basic", dir.path()).unwrap_err(),
+            "the Azure Arc endpoint sent no key file in WWW-Authenticate"
+        );
+        let missing = dir.join("gone.key");
+        let e = arc_key(&format!("Basic realm={}", missing.display()), dir.path()).unwrap_err();
+        assert!(e.starts_with(&format!("{}: ", missing.display())), "{e}");
     }
 
     #[test]
