@@ -146,7 +146,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 32 | `sslrootcert=system`, with `SSL_CERT_FILE`; it makes `verify-full` the default | ✓ `tls/system-roots` |
 | 33 | server without TLS: prefer plaintext, require refused; TLS-only server: allow refused | ✓ `tls/tls-only-and-plain-servers` |
 | 34 | `sslnegotiation=direct` | ✓ `tls/channel-binding-and-direct`; failure against PostgreSQL 16 ✗ (one server version per run) |
-| 35 | client certificate by flags, by `PGSSL*`, by `~/.postgresql/postgresql.crt`; encrypted key with `sslpassword`/`PGSSLPASSWORD`; wrong password = 10 | ✓ `tls/client-certificate`, `tls/default-files-good-root`, `tls/encrypted-client-key` |
+| 35 | client certificate by flags, by `PGSSL*`, by `~/.postgresql/postgresql.crt`; encrypted key with `sslpassword`/`PGSSLPASSWORD`; wrong password = 10; half a pair = 10; `disable` reads neither | ✓ `tls/client-certificate`, `tls/client-certificate-pairs`, `tls/default-files-good-root`, `tls/encrypted-client-key` |
 | 36 | channel binding with an RSA certificate; refused without TLS | ✓ `tls/channel-binding-and-direct`; ECDSA and Ed25519 certificates ✗ (one server certificate per run) |
 | 37 | `require_auth` refuses another method | ✓ `tls/require-auth-and-version` |
 | 38 | `--json` TLS version | ✓ `tls/require-auth-and-version` |

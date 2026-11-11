@@ -80,6 +80,13 @@ fn check(f: &Fields) -> Result<()> {
             "hostaddr is not supported; put the address in host",
         ));
     }
+    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
+        if f.get(k).is_some_and(|v| !v.is_empty()) {
+            return Err(Error::config(format!(
+                "{k} is not supported; remove it from the connection string"
+            )));
+        }
+    }
     for k in f.keys() {
         if !KNOWN.contains(&k.as_str()) {
             return Err(Error::config(format!("invalid connection option \"{k}\"")));
@@ -323,6 +330,11 @@ mod tests {
         let e = parse("postgresql://h/db?bogus=1").unwrap_err();
         assert_eq!(e.text(), "invalid connection option \"bogus\"");
         assert!(parse("postgresql://h/db?statement_cache_capacity=0").is_ok());
+        for k in ["requirepeer", "sslcrl", "sslcrldir"] {
+            let e = parse(&format!("host=h {k}=x")).unwrap_err();
+            assert!(e.text().starts_with(k), "{}", e.text());
+            assert!(parse(&format!("host=h {k}=")).is_ok());
+        }
     }
 
     #[test]

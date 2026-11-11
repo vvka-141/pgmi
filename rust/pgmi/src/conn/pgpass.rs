@@ -1,12 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct Lookup {
     pub password: Option<String>,
     pub warning: Option<String>,
-}
-
-pub fn default_path(home: Option<&Path>) -> Option<PathBuf> {
-    home.map(|h| h.join(".pgpass"))
 }
 
 pub fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Lookup {

@@ -124,6 +124,7 @@ terminal/pager-command
 terminal/prompt-cancel
 tls/channel-binding-and-direct
 tls/client-certificate
+tls/client-certificate-pairs
 tls/default-files
 tls/default-files-good-root
 tls/encrypted-client-key

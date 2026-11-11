@@ -1,0 +1,17 @@
+description: a client certificate without its key (or a key without its certificate) is refused before connecting (exit 10), and sslmode=disable never reads the default client files
+servers: [tls]
+home:
+  .postgresql/postgresql.crt: "not a certificate\n"
+  .postgresql/postgresql.key: "not a key\n"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=require&sslcert={client_cert}", -d, "{db}"]
+    env: {HOME: "{workdir}"}
+    expect: {exit: 10, stderr: ["sslcert", "sslkey"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=require&sslkey={client_key}", -d, "{db}"]
+    env: {HOME: "{workdir}"}
+    expect: {exit: 10, stderr: ["sslcert", "sslkey"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=disable", -d, "{db}"]
+    expect: {exit: 0}

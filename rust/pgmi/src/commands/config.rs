@@ -88,9 +88,7 @@ pub fn offer_pgpass(s: &Settings, env: &Env) {
         .ok()
         .flatten()
         .map(PathBuf::from)
-        .or_else(|| {
-            crate::conn::pgpass::default_path(env.non_empty("HOME").ok().flatten().map(Path::new))
-        });
+        .or_else(|| env.pg_files().map(|f| f.pgpass));
     let Some(path) = path else {
         stderr(
             "WARNING: failed to save .pgpass: cannot determine where the password file goes; set PGPASSFILE\nTip: provide password via $PGPASSWORD or connection string.\n",

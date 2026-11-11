@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
@@ -69,12 +70,45 @@ impl Env {
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub fn home(&self) -> Option<std::path::PathBuf> {
-        self.non_empty("HOME")
-            .ok()
-            .flatten()
-            .map(std::path::PathBuf::from)
+    pub fn home(&self) -> Option<PathBuf> {
+        self.home_for(cfg!(windows))
     }
+
+    pub fn pg_files(&self) -> Option<PgFiles> {
+        self.pg_files_for(cfg!(windows))
+    }
+
+    fn home_for(&self, windows: bool) -> Option<PathBuf> {
+        let mut names = vec!["HOME"];
+        if windows {
+            names.push("USERPROFILE");
+        }
+        names
+            .into_iter()
+            .find_map(|n| self.non_empty(n).ok().flatten())
+            .map(PathBuf::from)
+    }
+
+    fn pg_files_for(&self, windows: bool) -> Option<PgFiles> {
+        if windows {
+            let dir = PathBuf::from(self.non_empty("APPDATA").ok().flatten()?).join("postgresql");
+            return Some(PgFiles {
+                pgpass: dir.join("pgpass.conf"),
+                dir,
+            });
+        }
+        let home = self.home_for(false)?;
+        Some(PgFiles {
+            dir: home.join(".postgresql"),
+            pgpass: home.join(".pgpass"),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgFiles {
+    pub dir: PathBuf,
+    pub pgpass: PathBuf,
 }
 
 #[cfg(windows)]
@@ -98,5 +132,26 @@ mod tests {
         assert_eq!(env.non_empty("PGHOST").unwrap(), None);
         assert!(env.contains("PGHOST"));
         assert_eq!(env.with_prefix("PGMI_PARAM_").count(), 1);
+    }
+
+    #[test]
+    fn postgres_files_follow_the_platform() {
+        let env = Env::from_pairs(&[
+            ("HOME", "/h"),
+            ("APPDATA", "C:/Users/u/AppData/Roaming"),
+            ("USERPROFILE", "C:/Users/u"),
+        ]);
+        let unix = env.pg_files_for(false).unwrap();
+        assert_eq!(unix.dir, PathBuf::from("/h/.postgresql"));
+        assert_eq!(unix.pgpass, PathBuf::from("/h/.pgpass"));
+        let win = env.pg_files_for(true).unwrap();
+        let roaming = PathBuf::from("C:/Users/u/AppData/Roaming/postgresql");
+        assert_eq!(win.pgpass, roaming.join("pgpass.conf"));
+        assert_eq!(win.dir, roaming);
+        let no_appdata = Env::from_pairs(&[("HOME", "/h")]);
+        assert_eq!(no_appdata.pg_files_for(true), None);
+        let profile = Env::from_pairs(&[("USERPROFILE", "C:/Users/u")]);
+        assert_eq!(profile.home_for(true), Some(PathBuf::from("C:/Users/u")));
+        assert_eq!(profile.home_for(false), None);
     }
 }

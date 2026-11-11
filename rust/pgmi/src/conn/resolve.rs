@@ -62,6 +62,9 @@ pub struct Spec {
     pub sslkey: Option<String>,
     pub sslpassword: Option<String>,
     pub sslnegotiation_direct: bool,
+    pub sslsni: bool,
+    pub sslcertmode_disable: bool,
+    pub tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
     pub channel_binding: String,
     pub require_auth: Option<String>,
     pub application_name: String,
@@ -70,7 +73,7 @@ pub struct Spec {
     pub timezone: Option<String>,
     pub target_session_attrs: String,
     pub source: Source,
-    pub home: Option<PathBuf>,
+    pub pg_files: Option<crate::env::PgFiles>,
     pub sslmode_set: bool,
     pub token: Option<crate::cloud::Token>,
 }
@@ -310,6 +313,27 @@ fn finish(
             "weak sslmode \"{sslmode}\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"
         )));
     }
+    let sslsni = match f.get("sslsni").map(String::as_str).unwrap_or("") {
+        "" | "1" => true,
+        "0" => false,
+        o => return Err(Error::config(format!("invalid sslsni value: \"{o}\""))),
+    };
+    let sslcertmode_disable = match f.get("sslcertmode").map(String::as_str).unwrap_or("") {
+        "" | "allow" => false,
+        "disable" => true,
+        "require" => {
+            return Err(Error::config(
+                "sslcertmode=require is not supported; use allow or disable",
+            ));
+        }
+        o => {
+            return Err(Error::config(format!("invalid sslcertmode value: \"{o}\"")));
+        }
+    };
+    let tls_versions = tls_versions(
+        f.get("ssl_min_protocol_version"),
+        f.get("ssl_max_protocol_version"),
+    )?;
     let channel_binding = f
         .get("channel_binding")
         .cloned()
@@ -357,11 +381,14 @@ fn finish(
         maintenance_db,
         target_db,
         sslmode,
-        sslrootcert: f.get("sslrootcert").cloned(),
-        sslcert: f.get("sslcert").cloned(),
-        sslkey: f.get("sslkey").cloned(),
+        sslrootcert: f.get("sslrootcert").cloned().filter(|v| !v.is_empty()),
+        sslcert: f.get("sslcert").cloned().filter(|v| !v.is_empty()),
+        sslkey: f.get("sslkey").cloned().filter(|v| !v.is_empty()),
         sslpassword: f.get("sslpassword").cloned(),
         sslnegotiation_direct: direct,
+        sslsni,
+        sslcertmode_disable,
+        tls_versions,
         channel_binding,
         require_auth: f.get("require_auth").cloned().filter(|r| !r.is_empty()),
         application_name: f
@@ -374,10 +401,44 @@ fn finish(
         timezone: env.non_empty("PGTZ")?.map(str::to_string),
         target_session_attrs: tsa,
         source,
-        home: env.home(),
+        pg_files: env.pg_files(),
         sslmode_set: f.contains_key("sslmode"),
         token: None,
     })
+}
+
+fn tls_versions(
+    min: Option<&String>,
+    max: Option<&String>,
+) -> Result<Vec<&'static rustls::SupportedProtocolVersion>> {
+    let rank = |key: &str, value: Option<&String>, default: u8| -> Result<u8> {
+        match value.map(String::as_str).filter(|v| !v.is_empty()) {
+            None => Ok(default),
+            Some("TLSv1") => Ok(0),
+            Some("TLSv1.1") => Ok(1),
+            Some("TLSv1.2") => Ok(2),
+            Some("TLSv1.3") => Ok(3),
+            Some(o) => Err(Error::config(format!("invalid {key} value: \"{o}\""))),
+        }
+    };
+    let low = rank("ssl_min_protocol_version", min, 2)?;
+    let high = rank("ssl_max_protocol_version", max, 3)?;
+    if low > high {
+        return Err(Error::config(
+            "invalid SSL protocol version range: ssl_min_protocol_version is above ssl_max_protocol_version",
+        ));
+    }
+    let versions: Vec<_> = [(2, &rustls::version::TLS12), (3, &rustls::version::TLS13)]
+        .into_iter()
+        .filter(|(r, _)| low <= *r && *r <= high)
+        .map(|(_, v)| v)
+        .collect();
+    if versions.is_empty() {
+        return Err(Error::config(
+            "ssl_max_protocol_version is below TLSv1.2; pgmi speaks TLSv1.2 and TLSv1.3",
+        ));
+    }
+    Ok(versions)
 }
 
 impl Spec {
@@ -459,6 +520,39 @@ mod tests {
         let env = Env::from_pairs(&[("PGPASSWORD", "Sekrit2"), ("PGSSLMODE", "Sekrit2")]);
         let e = resolve(&fl, &env, None).unwrap_err();
         assert!(!e.text().contains("Sekrit2"), "{}", e.text());
+    }
+
+    #[test]
+    fn tls_keys_are_read_or_refused() {
+        let mut fl = flags();
+        fl.database = Some("d".into());
+        let spec = |fl: &Flags, s: &str| {
+            let mut fl = fl.clone();
+            fl.connection = Some(format!("host=h {s}"));
+            resolve(&fl, &Env::default(), None)
+        };
+        let s = spec(&fl, "").unwrap();
+        assert!(s.sslsni && !s.sslcertmode_disable);
+        assert_eq!(s.tls_versions.len(), 2);
+        let s = spec(
+            &fl,
+            "ssl_min_protocol_version=TLSv1.3 sslsni=0 sslcertmode=disable",
+        )
+        .unwrap();
+        assert_eq!(s.tls_versions, [&rustls::version::TLS13]);
+        assert!(!s.sslsni && s.sslcertmode_disable);
+        let s = spec(&fl, "ssl_max_protocol_version=TLSv1.2").unwrap();
+        assert_eq!(s.tls_versions, [&rustls::version::TLS12]);
+        for bad in [
+            "ssl_max_protocol_version=TLSv1.1",
+            "ssl_min_protocol_version=TLSv1.3 ssl_max_protocol_version=TLSv1.2",
+            "ssl_min_protocol_version=SSLv3",
+            "sslsni=2",
+            "sslcertmode=require",
+            "sslcertmode=sometimes",
+        ] {
+            assert_eq!(spec(&fl, bad).unwrap_err().exit_code(), 10, "{bad}");
+        }
     }
 
     #[test]

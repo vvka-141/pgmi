@@ -30,13 +30,41 @@ pub fn install() {
 }
 
 #[derive(Debug)]
-struct PgVerifier {
+pub enum Names {
+    Ignore,
+    Check,
+    CommonName(String),
+}
+
+#[derive(Debug)]
+pub struct Verifier {
     chain: Option<Arc<WebPkiServerVerifier>>,
-    check_name: bool,
+    names: Names,
     provider: Arc<CryptoProvider>,
 }
 
-impl ServerCertVerifier for PgVerifier {
+impl Verifier {
+    pub fn new(chain: Option<Arc<WebPkiServerVerifier>>, names: Names) -> Arc<Self> {
+        Arc::new(Verifier {
+            chain,
+            names,
+            provider: provider(),
+        })
+    }
+}
+
+fn common_name(der: &[u8]) -> Option<String> {
+    use x509_cert::der::Decode;
+    use x509_cert::ext::pkix::name::DirectoryString;
+    let cert = x509_cert::Certificate::from_der(der).ok()?;
+    match cert.tbs_certificate().subject().common_name().ok()?? {
+        DirectoryString::PrintableString(s) => Some(s.to_string()),
+        DirectoryString::Utf8String(s) => Some(s),
+        _ => None,
+    }
+}
+
+impl ServerCertVerifier for Verifier {
     fn verify_server_cert(
         &self,
         ee: &CertificateDer<'_>,
@@ -48,11 +76,25 @@ impl ServerCertVerifier for PgVerifier {
         let Some(chain) = &self.chain else {
             return Ok(ServerCertVerified::assertion());
         };
-        match chain.verify_server_cert(ee, im, name, ocsp, now) {
+        let result = chain.verify_server_cert(ee, im, name, ocsp, now);
+        let wrong_name = matches!(
+            result,
             Err(rustls::Error::InvalidCertificate(
                 CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
-            )) if !self.check_name => Ok(ServerCertVerified::assertion()),
-            other => other,
+            ))
+        );
+        match &self.names {
+            Names::Ignore if wrong_name => Ok(ServerCertVerified::assertion()),
+            Names::CommonName(want) if wrong_name => {
+                if common_name(ee.as_ref()).as_deref() == Some(want.as_str()) {
+                    Ok(ServerCertVerified::assertion())
+                } else {
+                    Err(rustls::Error::InvalidCertificate(
+                        CertificateError::NotValidForName,
+                    ))
+                }
+            }
+            _ => result,
         }
     }
 
@@ -114,6 +156,7 @@ fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
 }
 
 fn read_key(path: &Path, password: Option<&str>) -> Result<PrivateKeyDer<'static>> {
+    check_key_mode(path)?;
     let text = std::fs::read(path).map_err(|e| {
         Error::config(format!(
             "could not read private key file \"{}\"",
@@ -161,11 +204,61 @@ pub fn effective_mode(spec: &Spec) -> String {
 
 fn root_path(spec: &Spec) -> Option<String> {
     spec.sslrootcert.clone().or_else(|| {
-        spec.home
+        spec.pg_files
             .as_ref()
-            .and_then(|h| existing(h.join(".postgresql/root.crt")))
+            .and_then(|f| existing(f.dir.join("root.crt")))
             .map(|p| p.display().to_string())
     })
+}
+
+fn client_pair(spec: &Spec) -> Result<Option<(PathBuf, PathBuf)>> {
+    if spec.sslcertmode_disable {
+        return Ok(None);
+    }
+    let defaults = spec
+        .pg_files
+        .as_ref()
+        .map(|f| (f.dir.join("postgresql.crt"), f.dir.join("postgresql.key")))
+        .filter(|(c, k)| c.is_file() && k.is_file());
+    let cert = spec
+        .sslcert
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| defaults.as_ref().map(|d| d.0.clone()));
+    let key = spec
+        .sslkey
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| defaults.map(|d| d.1));
+    match (cert, key) {
+        (Some(cert), Some(key)) => Ok(Some((cert, key))),
+        (None, None) => Ok(None),
+        _ => Err(Error::config(
+            "both \"sslcert\" and \"sslkey\" are required: give the client certificate and its private key together",
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn check_key_mode(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    let mode = meta.permissions().mode();
+    let allowed = if meta.uid() == 0 { 0o037 } else { 0o077 };
+    if mode & allowed != 0 {
+        return Err(Error::config(format!(
+            "private key file \"{}\" has group or world access; file must have permissions u=rw (0600) or less if owned by the current user, or permissions u=rw,g=r (0640) or less if owned by root",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_key_mode(_: &Path) -> Result<()> {
+    Ok(())
 }
 
 pub fn config(spec: &Spec) -> Result<Tls> {
@@ -201,36 +294,29 @@ pub fn config(spec: &Spec) -> Result<Tls> {
     } else {
         None
     };
-    let verifier = Arc::new(PgVerifier {
+    let verifier = Verifier::new(
         chain,
-        check_name: mode == "verify-full",
-        provider: provider.clone(),
-    });
+        if mode == "verify-full" {
+            Names::Check
+        } else {
+            Names::Ignore
+        },
+    );
     let builder = ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
+        .with_protocol_versions(&spec.tls_versions)
         .map_err(|e| Error::config(format!("TLS setup: {e}")))?
         .dangerous()
         .with_custom_certificate_verifier(verifier);
-    let pg = spec.home.as_ref().map(|h| h.join(".postgresql"));
-    let cert = spec
-        .sslcert
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| pg.as_ref().and_then(|d| existing(d.join("postgresql.crt"))));
-    let key = spec
-        .sslkey
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| pg.as_ref().and_then(|d| existing(d.join("postgresql.key"))));
-    let mut config = match (cert, key) {
-        (Some(cert), Some(key)) if cert.is_file() || spec.sslcert.is_some() => builder
+    let mut config = match client_pair(spec)? {
+        Some((cert, key)) => builder
             .with_client_auth_cert(
                 read_certs(&cert)?,
                 read_key(&key, spec.sslpassword.as_deref())?,
             )
             .map_err(|e| Error::config(format!("client certificate: {e}")))?,
-        _ => builder.with_no_client_auth(),
+        None => builder.with_no_client_auth(),
     };
+    config.enable_sni = spec.sslsni;
     if spec.sslnegotiation_direct {
         config.alpn_protocols = vec![b"postgresql".to_vec()];
     }
@@ -388,6 +474,78 @@ pub fn describe_failure(text: &str, host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec(s: &str, home: Option<&Path>) -> Spec {
+        let mut pairs = vec![];
+        let h;
+        if let Some(home) = home {
+            h = home.display().to_string();
+            pairs.push(("HOME", h.as_str()));
+        }
+        let flags = super::super::resolve::Flags {
+            connection: Some(format!("host=h dbname=d {s}")),
+            ..Default::default()
+        };
+        super::super::resolve::resolve(&flags, &crate::env::Env::from_pairs(&pairs), None).unwrap()
+    }
+
+    #[test]
+    fn versions_and_sni_reach_the_config() {
+        let t = config(&spec("sslmode=require", None)).unwrap();
+        assert!(t.config.enable_sni);
+        let t = config(&spec(
+            "sslmode=require ssl_max_protocol_version=TLSv1.2 sslsni=0",
+            None,
+        ))
+        .unwrap();
+        assert!(!t.config.enable_sni);
+    }
+
+    #[test]
+    fn client_certificate_comes_in_pairs() {
+        let Err(e) = config(&spec("sslmode=require sslcert=/nowhere/c.crt", None)) else {
+            panic!("half a pair was accepted")
+        };
+        assert!(
+            e.text().contains("both \"sslcert\" and \"sslkey\""),
+            "{}",
+            e.text()
+        );
+        assert!(config(&spec("sslmode=require sslkey=/nowhere/c.key", None)).is_err());
+        assert!(
+            config(&spec(
+                "sslmode=require sslcertmode=disable sslcert=/nowhere/c.crt",
+                None
+            ))
+            .is_ok()
+        );
+        let home = std::env::temp_dir().join(format!("pgmi-tls-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".postgresql")).unwrap();
+        std::fs::write(home.join(".postgresql/postgresql.crt"), "junk").unwrap();
+        assert!(config(&spec("sslmode=require", Some(&home))).is_ok());
+        std::fs::write(home.join(".postgresql/postgresql.key"), "junk").unwrap();
+        assert!(config(&spec("sslmode=require", Some(&home))).is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_others_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let key = std::env::temp_dir().join(format!("pgmi-key-{}", std::process::id()));
+        std::fs::write(&key, "junk").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let e = read_key(&key, None).unwrap_err();
+        assert!(e.text().contains("group or world access"), "{}", e.text());
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            !read_key(&key, None)
+                .unwrap_err()
+                .text()
+                .contains("group or world")
+        );
+        let _ = std::fs::remove_file(&key);
+    }
 
     #[test]
     fn der_walk() {

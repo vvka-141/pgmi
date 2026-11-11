@@ -528,6 +528,42 @@ Cases: `dialect/pgmiignore-latin1` (lenient reading); Rust unit tests
 `pgmiignore_is_read_lossily_and_read_errors_refuse`,
 `non_utf8_file_name_is_refused_unless_hidden`.
 
+### TLS keys the driver ignored are honoured or refused
+
+Go sends `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslcrl`,
+`sslcrldir` and `requirepeer` to the server as settings, which refuses them
+(exit 11). The Rust binary honours `ssl_min_protocol_version` and
+`ssl_max_protocol_version` (TLSv1.2 and TLSv1.3; a range with neither, or an
+unknown value, is exit 10), `sslsni=0` (no SNI) and `sslcertmode=disable` (no
+client certificate is read or sent), and refuses with exit 10 before
+connecting `sslcrl`, `sslcrldir`, `requirepeer` and `sslcertmode=require`,
+which it cannot check. This extends "Unknown connection-string keys are
+refused before connecting".
+
+Cases: none (Go fails these on the server); Rust unit tests
+`tls_keys_are_read_or_refused`, `refusals` (parse), `versions_and_sni_reach_the_config`.
+
+### Client certificate files
+
+Both binaries refuse an `sslcert` without an `sslkey`, or the reverse, with
+exit 10 under a TLS sslmode, use `~/.postgresql/postgresql.crt` and `.key` only
+when both exist, and read neither under `sslmode=disable`. The Rust binary
+also refuses, with exit 10, a private key file that group or others can read
+(0600 or less, 0640 when owned by root), as libpq does; Go does not check.
+
+Cases: `tls/client-certificate-pairs`; the permission check: Rust unit test
+`a_key_others_can_read_is_refused`.
+
+### Windows file locations
+
+On Windows the Rust binary reads `%APPDATA%\postgresql\pgpass.conf`,
+`root.crt`, `postgresql.crt` and `postgresql.key`, as libpq does (Go: pgx does
+the same), and `pgmi config` saves the password there; the home directory is
+`HOME`, else `USERPROFILE`.
+
+Cases: none (the suite runs on Linux); Rust unit test
+`postgres_files_follow_the_platform`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable

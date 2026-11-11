@@ -4,17 +4,14 @@ use std::time::Duration;
 use rsa::PrivateKey;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rustls::client::WebPkiServerVerifier;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
-};
+use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use serde::Deserialize;
-use x509_cert::der::Decode;
 
 use super::Request;
 use super::http::client;
+use crate::conn::tls::Names;
 use crate::env::Env;
 use crate::error::{Error, Result};
 
@@ -185,11 +182,14 @@ pub async fn dialer(req: &Request, env: &Env) -> Result<Dialer> {
     let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
         .build()
         .map_err(|e| failed(format!("server CA: {e}")))?;
-    let verifier = Arc::new(Verifier {
-        chain,
-        common_name: (!cas).then(|| format!("{project}:{name}")),
-        provider: provider.clone(),
-    });
+    let verifier = crate::conn::tls::Verifier::new(
+        Some(chain),
+        if cas {
+            Names::Check
+        } else {
+            Names::CommonName(format!("{project}:{name}"))
+        },
+    );
     let config = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| failed(format!("TLS: {e}")))?
@@ -213,87 +213,6 @@ pub async fn dialer(req: &Request, env: &Env) -> Result<Dialer> {
         server_name,
         login_token: login,
     })
-}
-
-#[derive(Debug)]
-struct Verifier {
-    chain: Arc<WebPkiServerVerifier>,
-    common_name: Option<String>,
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-fn common_name(der: &[u8]) -> Option<String> {
-    use x509_cert::ext::pkix::name::DirectoryString;
-    let cert = x509_cert::Certificate::from_der(der).ok()?;
-    match cert.tbs_certificate().subject().common_name().ok()?? {
-        DirectoryString::PrintableString(s) => Some(s.to_string()),
-        DirectoryString::Utf8String(s) => Some(s),
-        _ => None,
-    }
-}
-
-impl ServerCertVerifier for Verifier {
-    fn verify_server_cert(
-        &self,
-        ee: &CertificateDer<'_>,
-        im: &[CertificateDer<'_>],
-        name: &ServerName<'_>,
-        ocsp: &[u8],
-        now: UnixTime,
-    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        let Some(want) = &self.common_name else {
-            return self.chain.verify_server_cert(ee, im, name, ocsp, now);
-        };
-        match self.chain.verify_server_cert(ee, im, name, ocsp, now) {
-            Ok(v) => Ok(v),
-            Err(rustls::Error::InvalidCertificate(
-                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
-            )) => {
-                if common_name(ee.as_ref()).as_deref() == Some(want.as_str()) {
-                    Ok(ServerCertVerified::assertion())
-                } else {
-                    Err(rustls::Error::InvalidCertificate(
-                        CertificateError::NotValidForName,
-                    ))
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            m,
-            c,
-            d,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            m,
-            c,
-            d,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
 
 #[cfg(test)]

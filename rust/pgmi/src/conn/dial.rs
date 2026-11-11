@@ -207,7 +207,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
     let passfile = spec
         .passfile
         .clone()
-        .or_else(|| pgpass::default_path(spec.home.as_deref()));
+        .or_else(|| spec.pg_files.as_ref().map(|f| f.pgpass.clone()));
     let token = spec
         .token
         .as_ref()
@@ -257,7 +257,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "~/.pgpass".into());
-    let tls_config = if unix {
+    let tls_config = if matches!(sslmode_of(mode), SslMode::Disable) {
         None
     } else {
         Some(tls::config(spec).map_err(|e| Failure::Config(e.text()))?)
