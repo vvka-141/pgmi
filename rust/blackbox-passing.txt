@@ -167,6 +167,8 @@ params/verbose-counts
 serve/cancel
 serve/concurrent-deploys
 serve/deploy-guards
+serve/deploy-param-key
+serve/deploy-password-masked
 serve/deploys-in-sequence
 serve/deploy-timeout
 serve/deploy-tool

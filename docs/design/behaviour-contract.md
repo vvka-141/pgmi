@@ -199,9 +199,11 @@ a value that is not a duration exit code 10. Cloud sign-in reaches serve only
 through `pgmi.yaml` and the environment; the tool has no cloud arguments.
 The deploy tool's text lists each kept `WARNING` as `WARNING: message`, one
 per line, after the summary line on success and after the exit code on
-failure.
+failure. A `params` key that is not an identifier (one holding `=` too) is
+exit code 10 before connecting. A SQL `PASSWORD '...'` literal in a failed
+deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 
-Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`.
+Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 

@@ -32,6 +32,7 @@ use crate::output::{Notice, NoticeLog, Reporter, seconds};
 use crate::project::{metadata, walk};
 
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
+pub(crate) use blame::redact_sql_passwords;
 pub(crate) use record::DeployRecord;
 use record::Tls;
 pub(crate) use request::Request;

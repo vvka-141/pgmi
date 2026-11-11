@@ -25,12 +25,17 @@ fn valid_key(key: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
-    if let Some(k) = keys.iter().find(|k| !valid_key(k)) {
-        return Err(Error::config(format!(
-            "invalid parameter key '{k}': must start with a letter or underscore and contain only letters, digits and underscores, 1-63 characters (PostgreSQL identifier limit)"
-        )));
+pub(crate) fn check_key(k: &str) -> Result<()> {
+    if valid_key(k) {
+        return Ok(());
     }
+    Err(Error::config(format!(
+        "invalid parameter key '{k}': must start with a letter or underscore and contain only letters, digits and underscores, 1-63 characters (PostgreSQL identifier limit)"
+    )))
+}
+
+fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
+    keys.iter().try_for_each(|k| check_key(k))?;
     if let Some((k, at)) = out.iter().find_map(|(k, v)| v.find('\0').map(|at| (k, at))) {
         return Err(Error::config(format!(
             "invalid parameter value for '{k}': contains NUL byte at offset {at}"

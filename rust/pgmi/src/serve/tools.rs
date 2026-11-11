@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use super::wire::{self, Members};
 use crate::commands::{init, metadata};
 use crate::conn::resolve::Flags;
-use crate::deploy::{ConfirmedName, Context, Request, Run};
+use crate::deploy::{ConfirmedName, Context, Request, Run, redact_sql_passwords};
 use crate::env::Env;
 use crate::error::Error;
 use crate::error::redact;
@@ -399,13 +399,13 @@ fn deploy_context(
     let confirm = a.string("confirmDatabaseName")?;
     let overwrite = a.bool("overwrite")?;
     let verbose = a.bool("verbose")? || verbose;
-    let mut params = Vec::new();
+    let mut pairs = Vec::new();
     match a.get("params") {
         None => {}
         Some(Value::Object(m)) => {
             for (k, v) in m {
                 match v {
-                    Value::String(s) => params.push(format!("{k}={s}")),
+                    Value::String(s) => pairs.push((k, s)),
                     Value::Null => {}
                     other => return Err(a.type_error(other, &format!("params.{k}"), "string")),
                 }
@@ -413,6 +413,10 @@ fn deploy_context(
         }
         Some(v) => return Err(a.type_error(v, "params", "map[string]string")),
     }
+    let params = pairs
+        .into_iter()
+        .map(|(k, v)| crate::config::params::check_key(k).map(|()| format!("{k}={v}")))
+        .collect::<Result<Vec<_>, Error>>()?;
     let params_files = match a.get("paramsFile") {
         None => Vec::new(),
         Some(Value::String(s)) => vec![s.clone()],
@@ -491,11 +495,13 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
                 is_error: false,
             }
         }
-        Err(e) if !run.reached_deployer() => {
-            Outcome::failure(&redact(&e.text(), &secrets), e.exit_code(), None)
-        }
+        Err(e) if !run.reached_deployer() => Outcome::failure(
+            &redact(&redact_sql_passwords(&e.text()), &secrets),
+            e.exit_code(),
+            None,
+        ),
         Err(e) => {
-            let message = redact(&e.text(), &secrets);
+            let message = redact(&redact_sql_passwords(&e.text()), &secrets);
             let mut text = message.clone();
             text.push_str(&redact(&run.diagnostics(e), &secrets));
             let _ = write!(text, "\nexit code {}", e.exit_code());
@@ -558,6 +564,12 @@ mod tests {
             err("{\"path\":\"/nonexistent-pgmi\"}").text(),
             "project path \"/nonexistent-pgmi\" does not exist"
         );
+        let e = err("{\"path\":\"/\",\"params\":{\"env=prod\":\"x\"}}");
+        assert_eq!(
+            e.text(),
+            "invalid parameter key 'env=prod': must start with a letter or underscore and contain only letters, digits and underscores, 1-63 characters (PostgreSQL identifier limit)"
+        );
+        assert_eq!(e.exit_code(), 10);
         let e = err("{\"path\":\"/\",\"timeout\":\"soon\"}");
         assert!(e.text().starts_with("invalid timeout"), "{}", e.text());
         assert_eq!(e.exit_code(), 10);
