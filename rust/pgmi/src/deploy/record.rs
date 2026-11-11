@@ -183,16 +183,15 @@ impl DeployRecord {
             return;
         };
         self.sqlstate.clone_from(&d.sqlstate);
-        let hide = |t: &str| redact(&clean(t), secrets);
-        self.detail = d.detail.as_deref().map(hide);
-        self.hint = d.hint.as_deref().map(hide);
-        self.where_ = d.where_.as_deref().map(hide);
+        self.detail = d.detail.as_deref().map(clean);
+        self.hint = d.hint.as_deref().map(clean);
+        self.where_ = d.where_.as_deref().map(clean);
         let Some(b) = failure.map(|f| &f.blame) else {
             return;
         };
         self.phase = Some(b.phase());
         if let Some(w) = &b.where_ {
-            self.where_ = Some(hide(w));
+            self.where_ = Some(clean(w));
         }
         self.failed_file.clone_from(&b.file);
         if b.candidates.len() > 1 {
@@ -206,7 +205,7 @@ impl DeployRecord {
             self.line = Some(l.number);
             self.column = Some(l.column);
             self.script_expanded = Some(false);
-            self.source_line = Some(hide(&l.text)).filter(|t| !t.is_empty());
+            self.source_line = Some(clean(&l.text)).filter(|t| !t.is_empty());
         }
     }
 }
