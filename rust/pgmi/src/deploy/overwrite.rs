@@ -256,7 +256,7 @@ fn create_sql(db: &str, snapshot: Option<&Snapshot>) -> String {
             sql.push_str(l);
         }
         sql.push_str(&format!(" OWNER {}", quote_ident(&s.owner)));
-        if s.connlimit != -1 {
+        if s.connlimit >= 0 {
             sql.push_str(&format!(" CONNECTION LIMIT {}", s.connlimit));
         }
     }
@@ -391,6 +391,23 @@ mod tests {
             "CREATE DATABASE \"d\" TEMPLATE template0 ENCODING E'UTF8' LC_COLLATE E'C' LC_CTYPE E'C' LOCALE_PROVIDER icu ICU_LOCALE E'de-DE' ICU_RULES E'&a < b' OWNER \"o\"\"w\" CONNECTION LIMIT 3"
         );
         assert_eq!(create_sql("d", None), "CREATE DATABASE \"d\"");
+    }
+
+    #[test]
+    fn an_invalid_database_comes_back_without_a_connection_limit() {
+        let s = Snapshot {
+            locale: None,
+            owner: "o".into(),
+            connlimit: -2,
+            settings: vec![],
+            comment: None,
+            role_settings: vec![],
+            acl: None,
+        };
+        assert_eq!(
+            create_sql("d", Some(&s)),
+            "CREATE DATABASE \"d\" OWNER \"o\""
+        );
     }
 
     #[test]

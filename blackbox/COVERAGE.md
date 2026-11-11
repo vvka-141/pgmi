@@ -66,6 +66,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--force` (alone; with `--overwrite`, no countdown without a terminal) | ✓ `flags/overwrite-force` |
 | `--overwrite` without `--force`, no terminal | ✓ `exit-codes/12-overwrite-denied` |
 | `--overwrite` restores owner, connection limit, settings, role settings, comment, privileges; refuses (10) what it cannot restore | ✓ `flags/overwrite-restores` |
+| `--overwrite` of an invalid database (connection limit -2) recreates it without a limit | ✓ `flags/overwrite-invalid-database` |
 | `--json` | ✓ `deploy/json-success`, `deploy/json-failure` |
 | `--param` (never split on commas) | ✓ `params/precedence`, `commands/usage-errors` |
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |

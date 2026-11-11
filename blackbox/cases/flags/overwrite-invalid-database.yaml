@@ -1,0 +1,20 @@
+description: --overwrite recreates a database PostgreSQL marked invalid (connection limit -2, left by an interrupted DROP DATABASE) with no connection limit, and the deploy succeeds
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - sql: UPDATE pg_database SET datconnlimit = -2 WHERE datname = current_database()
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    timeout: 60
+    expect:
+      exit: 0
+      stderr: ["Recreated database \"{db}\""]
+      sql:
+        - query: SELECT datconnlimit FROM pg_database WHERE datname = current_database()
+          rows: [[-1]]
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
