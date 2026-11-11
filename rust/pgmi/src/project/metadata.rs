@@ -302,22 +302,35 @@ pub(crate) fn duplicate_line(id: &str, paths: &[String]) -> String {
 
 pub(crate) fn collect(files: &[File]) -> Result<Vec<Meta>> {
     let scan = scan(files);
-    if !scan.errors.is_empty() {
-        let errors: Vec<String> = scan.errors.iter().map(ToString::to_string).collect();
-        return Err(Error::config(errors.join("\n")));
+    scan.readable()?;
+    scan.unique()
+}
+
+impl Scan {
+    /// Fails on blocks that could not be read.
+    pub(crate) fn readable(&self) -> Result<()> {
+        if self.errors.is_empty() {
+            return Ok(());
+        }
+        let errors: Vec<String> = self.errors.iter().map(ToString::to_string).collect();
+        Err(Error::config(errors.join("\n")))
     }
-    if !scan.duplicates.is_empty() {
-        let lines: Vec<String> = scan
+
+    /// The blocks, or an error naming every id two files share.
+    pub(crate) fn unique(self) -> Result<Vec<Meta>> {
+        if self.duplicates.is_empty() {
+            return Ok(self.metas);
+        }
+        let lines: Vec<String> = self
             .duplicates
             .iter()
             .map(|(id, p)| format!("  {}", duplicate_line(id, p)))
             .collect();
-        return Err(Error::config(format!(
+        Err(Error::config(format!(
             "duplicate <pgmi-meta id> across files; each script must have a unique id:\n{}",
             lines.join("\n")
-        )));
+        )))
     }
-    Ok(scan.metas)
 }
 
 #[cfg(test)]

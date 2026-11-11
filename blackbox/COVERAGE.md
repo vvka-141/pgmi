@@ -36,6 +36,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `metadata plan` (+`--json`) | ✓ `commands/metadata`, `commands/metadata-invalid` |
 | `metadata validate` (+`--json`), bad id = 10, duplicate id = 10 | ✓ `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate` |
 | `metadata scaffold` (preview, `--write`, `--sort-key`, `--idempotent=false`) | ✓ `commands/metadata`, `commands/metadata-scaffold-run-once` |
+| `metadata scaffold` key derivation (no key in a directory without keys, first key of each sibling, hint names the directory); `validate` skips `__test__/`; `plan` duplicate ids unprefixed | ✓ `commands/metadata-scaffold-and-checks` |
 | `templates list`, `templates describe <t>`, unknown = 2 | ✓ `commands/templates` |
 | basic template on a host whose provider owns PUBLIC-executable functions in `public` (Lakebase) deploys | ✓ `deploy/basic-template-provider-functions` |
 | advanced template: first-deploy check of the login's attributes and Azure's extension list | ✓ `deploy/advanced-template-preflight` |

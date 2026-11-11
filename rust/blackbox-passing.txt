@@ -35,6 +35,7 @@ commands/metadata-duplicate
 commands/metadata-forms
 commands/metadata-invalid
 commands/metadata-refusals
+commands/metadata-scaffold-and-checks
 commands/metadata-scaffold-run-once
 commands/templates
 commands/usage-errors

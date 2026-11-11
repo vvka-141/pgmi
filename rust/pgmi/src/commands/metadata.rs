@@ -83,10 +83,13 @@ fn rows(sources: &[File], metas: &[Meta]) -> Vec<Row> {
 
 pub(crate) fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
     let max_size = walk::max_size(env)?;
-    let (project, metas) = crate::vfs::OsFs::project(path)
+    let scan_failed = |e: Error| Error::new(e.kind(), "failed to scan directory").with_source(e);
+    let project = crate::vfs::OsFs::project(path)
         .and_then(|fs| walk::scan(&fs, max_size))
-        .and_then(|p| metadata::collect(&p.sources).map(|m| (p, m)))
-        .map_err(|e| Error::new(e.kind(), "failed to scan directory").with_source(e))?;
+        .map_err(scan_failed)?;
+    let scan = metadata::scan(&project.sources);
+    scan.readable().map_err(scan_failed)?;
+    let metas = scan.unique()?;
     Ok(Plan {
         total_files: project.sources.len(),
         plan: rows(&project.sources, &metas),
@@ -160,16 +163,17 @@ pub(crate) enum Validated {
 pub(crate) fn validate_report(path: &Path, env: &Env) -> Result<Validated> {
     let max_size = walk::max_size(env)?;
     let project = walk::scan(&crate::vfs::OsFs::project(path)?, max_size)?;
-    let files = project.sources.iter().chain(&project.tests);
     let total = project.sources.len() + project.test_dir_files.len();
-    let scan = metadata::scan(files.clone());
+    let scan = metadata::scan(project.sources.iter());
     if !scan.errors.is_empty() {
         return Ok(Validated::Unreadable(
             scan.errors.iter().map(ToString::to_string).collect(),
         ));
     }
     let by_path: BTreeSet<&str> = scan.metas.iter().map(|m| m.path.as_str()).collect();
-    let warnings: Vec<String> = files
+    let warnings: Vec<String> = project
+        .sources
+        .iter()
         .filter(|f| is_sql(&f.path) && !by_path.contains(f.path.as_str()))
         .filter(|f| metadata::outside_comment(&f.content, None))
         .map(|f| format!("{}: <pgmi-meta> outside a /* */ block comment is not read; a -- line comment or a string is ignored, so this file has no metadata", f.path))
@@ -262,12 +266,72 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub(crate) fn block(id: &str, idempotent: bool, description: &str, key: &str) -> String {
+/// A `<pgmi-meta>` block; without a key the file keeps its path order.
+pub(crate) fn block(id: &str, idempotent: bool, description: &str, key: Option<&str>) -> String {
+    let keys = key.map_or_else(String::new, |k| {
+        format!(
+            "  <sortKeys>\n    <key>{}</key>\n  </sortKeys>\n",
+            xml_escape(k)
+        )
+    });
     format!(
-        "/*\n<pgmi-meta\n    id=\"{id}\"\n    idempotent=\"{idempotent}\">\n  <description>\n    {}\n  </description>\n  <sortKeys>\n    <key>{}</key>\n  </sortKeys>\n</pgmi-meta>\n*/\n\n",
-        xml_escape(description),
-        xml_escape(key)
+        "/*\n<pgmi-meta\n    id=\"{id}\"\n    idempotent=\"{idempotent}\">\n  <description>\n    {}\n  </description>\n{keys}</pgmi-meta>\n*/\n\n",
+        xml_escape(description)
     )
+}
+
+/// Each file's sort key: `--sort-key` plus the file name, else the prefix of
+/// the first key every sibling with metadata uses. A directory whose metadata
+/// has no sort keys (the basic template) runs in path order, so its new files
+/// get none either.
+fn sort_keys(metas: &[Meta], todo: &[&File], given: Option<&str>) -> Result<Vec<Option<String>>> {
+    let mut keys = Vec::new();
+    let (mut none, mut mixed) = (Vec::new(), Vec::new());
+    for f in todo {
+        let name = f.path.rsplit('/').next().unwrap_or(&f.path);
+        let dir = directory(&f.path);
+        let siblings: Vec<&Meta> = metas.iter().filter(|m| directory(&m.path) == dir).collect();
+        let prefixes: BTreeSet<&str> = siblings
+            .iter()
+            .filter_map(|m| m.sort_keys.first())
+            .map(|k| prefix_of(k))
+            .collect();
+        keys.push(match (given, prefixes.len()) {
+            (Some(p), _) => Some(format!("{}/{name}", p.trim_end_matches('/'))),
+            (None, 1) => prefixes.first().map(|p| format!("{p}{name}")),
+            (None, 0) if !siblings.is_empty() => None,
+            (None, 0) => {
+                none.push(f.path.as_str());
+                continue;
+            }
+            (None, _) => {
+                mixed.push(f.path.as_str());
+                continue;
+            }
+        });
+    }
+    let Some(example) = none.iter().chain(&mixed).next() else {
+        return Ok(keys);
+    };
+    let mut parts = Vec::new();
+    if !none.is_empty() {
+        parts.push(format!(
+            "no file in the same directory has metadata: {}",
+            none.join(", ")
+        ));
+    }
+    if !mixed.is_empty() {
+        parts.push(format!(
+            "the files in the same directory use different sort-key prefixes: {}",
+            mixed.join(", ")
+        ));
+    }
+    let dir = format!("{}/", directory(example));
+    Err(Error::usage(format!(
+        "no sort-key prefix to derive; {}\npass --sort-key with the layer, e.g. --sort-key 005/core/ (advanced), or --sort-key ./{} to keep path order",
+        parts.join("; "),
+        dir.trim_start_matches("./")
+    )))
 }
 
 fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
@@ -280,7 +344,10 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     stderr("Scanning SQL files...\n");
     let max_size = walk::max_size(env)?;
     let project = walk::scan(&crate::vfs::OsFs::project(&root)?, max_size)?;
-    let metas = metadata::collect(&project.sources)?;
+    let scan = metadata::scan(&project.sources);
+    scan.readable()
+        .map_err(|e| Error::new(e.kind(), "failed to scan directory").with_source(e))?;
+    let metas = scan.metas;
     let under = named
         .strip_prefix(&root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -302,59 +369,7 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
         stderr("All SQL files already have metadata.\n");
         return Ok(());
     }
-    let given = a.sort_key.as_ref().map(|p| {
-        if p.ends_with('/') {
-            p.clone()
-        } else {
-            format!("{p}/")
-        }
-    });
-    let mut keys = Vec::new();
-    let (mut none, mut mixed) = (Vec::new(), Vec::new());
-    for f in &todo {
-        let name = f.path.rsplit('/').next().unwrap_or(&f.path);
-        let prefix = if let Some(p) = &given {
-            p.clone()
-        } else {
-            let dir = directory(&f.path);
-            let found: BTreeSet<&str> = metas
-                .iter()
-                .filter(|m| directory(&m.path) == dir)
-                .flat_map(|m| m.sort_keys.iter().map(|k| prefix_of(k)))
-                .collect();
-            match found.len() {
-                0 => {
-                    none.push(f.path.as_str());
-                    continue;
-                }
-                1 => found.into_iter().next().unwrap_or_default().to_string(),
-                _ => {
-                    mixed.push(f.path.as_str());
-                    continue;
-                }
-            }
-        };
-        keys.push(format!("{prefix}{name}"));
-    }
-    if !none.is_empty() || !mixed.is_empty() {
-        let mut parts = Vec::new();
-        if !none.is_empty() {
-            parts.push(format!(
-                "no file in the same directory has metadata: {}",
-                none.join(", ")
-            ));
-        }
-        if !mixed.is_empty() {
-            parts.push(format!(
-                "the files in the same directory use different sort-key prefixes: {}",
-                mixed.join(", ")
-            ));
-        }
-        return Err(Error::usage(format!(
-            "no sort-key prefix to derive; {}\npass --sort-key with the layer, e.g. --sort-key 005/core/ (advanced), or --sort-key ./ to keep path order",
-            parts.join("; ")
-        )));
-    }
+    let keys = sort_keys(&metas, &todo, a.sort_key.as_deref())?;
     stderr(&format!(
         "Found {} file(s) without metadata:\n\n",
         todo.len()
@@ -362,13 +377,19 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     for (f, key) in todo.iter().zip(&keys) {
         let id = uuid::Uuid::new_v4().hyphenated().to_string();
         stdout(&format!(
-            "  {}\n    ID: {id}\n    Sort key: {key}\n    Idempotent: {}\n",
-            f.path, a.idempotent
+            "  {}\n    ID: {id}\n    Sort key: {}\n    Idempotent: {}\n",
+            f.path,
+            key.as_deref().unwrap_or("(none, path order)"),
+            a.idempotent
         ))?;
         if a.write {
             let file = root.join(f.path.trim_start_matches("./"));
             let name = f.path.rsplit('/').next().unwrap_or(&f.path);
-            let text = format!("{}{}", block(&id, a.idempotent, name, key), f.content);
+            let text = format!(
+                "{}{}",
+                block(&id, a.idempotent, name, key.as_deref()),
+                f.content
+            );
             write_atomic(&file, &text)?;
             stderr(&format!("    Written to {}\n", file.display()));
         }
@@ -427,13 +448,74 @@ mod tests {
                 "0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01",
                 false,
                 "a&b.sql",
-                "010/a&b.sql"
+                Some("010/a&b.sql")
             )
         );
         let m = metadata::parse("./a.sql", &text).unwrap().unwrap();
         assert_eq!(m.sort_keys, ["010/a&b.sql"]);
         assert!(!m.idempotent);
         assert_eq!(m.description.as_deref().map(str::trim), Some("a&b.sql"));
+        let text = format!(
+            "{}SELECT 1;",
+            block("0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01", true, "a.sql", None)
+        );
+        let m = metadata::parse("./a.sql", &text).unwrap().unwrap();
+        assert!(m.sort_keys.is_empty());
+    }
+
+    fn meta(path: &str, keys: &[&str]) -> Meta {
+        let keys = keys.iter().fold(String::new(), |mut out, k| {
+            let _ = write!(out, "<key>{k}</key>");
+            out
+        });
+        metadata::parse(
+            path,
+            &format!("/* <pgmi-meta id=\"0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01\" idempotent=\"true\"><sortKeys>{keys}</sortKeys></pgmi-meta> */"),
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn scaffold_keys_follow_go() {
+        let file = |p: &str| File {
+            path: p.into(),
+            content: String::new(),
+        };
+        let (a, b) = (file("./core/b.sql"), file("./physical/x.sql"));
+        let metas = [
+            meta("./core/a.sql", &["005/core/a.sql", "900/x/a.sql"]),
+            meta("./physical/001.sql", &[]),
+        ];
+        assert_eq!(
+            sort_keys(&metas, &[&a, &b], None).unwrap(),
+            [Some("005/core/b.sql".to_string()), None],
+            "the first key decides the prefix; a sibling without keys means path order"
+        );
+        assert_eq!(
+            sort_keys(&metas, &[&a], Some("010/api/")).unwrap(),
+            [Some("010/api/b.sql".to_string())]
+        );
+        let lone = file("./api/c.sql");
+        let e = sort_keys(&metas, &[&lone], None).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(
+            e.text()
+                .ends_with("or --sort-key ./api/ to keep path order"),
+            "{}",
+            e.text()
+        );
+        let mixed = [
+            meta("./api/a.sql", &["010/api/a.sql"]),
+            meta("./api/b.sql", &["020/x/b.sql"]),
+        ];
+        let e = sort_keys(&mixed, &[&lone], None).unwrap_err();
+        assert!(
+            e.text()
+                .contains("use different sort-key prefixes: ./api/c.sql"),
+            "{}",
+            e.text()
+        );
     }
 
     #[test]

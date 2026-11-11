@@ -110,7 +110,7 @@ elements in one comment are refused"), a block over
 10240 bytes. A file without a block gets the id `md5("./<path>")` read as a
 uuid, the same in `metadata plan` and `pgmi_plan_view.generic_id`.
 
-Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`.
+Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`, `commands/metadata-scaffold-and-checks`.
 
 ### templates, version, ai, completion, help
 

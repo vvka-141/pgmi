@@ -1,0 +1,36 @@
+description: metadata scaffold gives no sort key where the directory's metadata has none (the basic template), takes each sibling's first key, and names the directory in its hint; validate reads no blocks in __test__ files; plan reports duplicate ids without the scan prefix
+project:
+  init: basic
+  files:
+    physical/009_extra.sql: SELECT 1;
+    layered/a.sql: |
+      /* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>005/core/a.sql</key><key>900/late/a.sql</key></sortKeys></pgmi-meta> */
+      SELECT 1;
+    layered/b.sql: SELECT 2;
+    bare/c.sql: SELECT 3;
+    layered/__test__/test_bad_meta.sql: |
+      /* <pgmi-meta id="nope" idempotent="true"></pgmi-meta> */
+      SELECT 1;
+    dup/deploy.sql: SELECT 1;
+    dup/a.sql: /* <pgmi-meta id="1d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"></pgmi-meta> */
+    dup/b.sql: /* <pgmi-meta id="1d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"></pgmi-meta> */
+steps:
+  - pgmi: [metadata, scaffold, "{project}/physical"]
+    expect:
+      exit: 0
+      stdout: ['\./physical/009_extra\.sql', 'Sort key: \(none, path order\)']
+  - pgmi: [metadata, scaffold, "{project}/layered"]
+    expect:
+      exit: 0
+      stdout: ['Sort key: 005/core/b\.sql']
+  - pgmi: [metadata, scaffold, "{project}/bare"]
+    expect:
+      exit: 2
+      stderr: ['no file in the same directory has metadata: \./bare/c\.sql', 'or --sort-key \./bare/ to keep path order']
+  - pgmi: [metadata, validate, "{project}/layered"]
+    expect:
+      exit: 0
+  - pgmi: [metadata, plan, "{project}/dup"]
+    expect:
+      exit: 10
+      stderr: ['^pgmi: error: duplicate <pgmi-meta id> across files']
