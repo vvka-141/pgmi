@@ -22,6 +22,26 @@ use super::http::{client, encode};
 use crate::env::Env;
 use crate::error::{Error, Result};
 
+/// The RDS auth token could not be signed.
+#[derive(Debug)]
+pub(crate) struct SignError(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for SignError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed to build RDS auth token: {}", self.0)
+    }
+}
+
+impl std::error::Error for SignError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+fn signing(e: impl std::error::Error + Send + Sync + 'static) -> SignError {
+    SignError(Box::new(e))
+}
+
 pub(crate) struct Signer {
     credentials: Credentials,
     region: String,
@@ -72,7 +92,7 @@ impl Signer {
         host: &str,
         port: u16,
         user: &str,
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<String, SignError> {
         let token = self.token_at(host, port, user, SystemTime::now())?;
         if let Ok(mut m) = self.minted.lock() {
             m.push(token.clone());
@@ -90,7 +110,7 @@ impl Signer {
         port: u16,
         user: &str,
         time: SystemTime,
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<String, SignError> {
         let query = format!("Action=connect&DBUser={}", encode(user));
         let url = format!("https://{host}:{port}/?{query}");
         let mut settings = SigningSettings::default();
@@ -104,12 +124,12 @@ impl Signer {
             .time(time)
             .settings(settings)
             .build()
-            .map_err(|e| format!("failed to build RDS auth token: {e}"))?;
+            .map_err(signing)?;
         let signable =
             SignableRequest::new("GET", &url, std::iter::empty(), SignableBody::Bytes(&[]))
-                .map_err(|e| format!("failed to build RDS auth token: {e}"))?;
+                .map_err(signing)?;
         let (instructions, _) = sign(signable, &params.into())
-            .map_err(|e| format!("failed to build RDS auth token: {e}"))?
+            .map_err(signing)?
             .into_parts();
         let mut token = format!("{host}:{port}?{query}");
         for (name, value) in instructions.params() {

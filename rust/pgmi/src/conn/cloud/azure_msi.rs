@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +9,118 @@ use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha1::Digest;
 
 use super::http::{client, encode};
+use super::renew::Fetched;
 use crate::env::Env;
+use crate::error::{Error, Secret};
+
+/// Why a managed identity endpoint gave no token.
+#[derive(Debug)]
+pub(crate) enum MsiError {
+    UserAssigned(Source),
+    Client(Error),
+    Tls(rustls::Error),
+    Http(reqwest::Error),
+    ArcChallenge(reqwest::StatusCode),
+    ArcKey(ArcKeyError),
+    Status(Source, reqwest::StatusCode),
+    NoToken(Source),
+}
+
+impl std::fmt::Display for MsiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MsiError::UserAssigned(s) => write!(
+                f,
+                "{} doesn't support user-assigned managed identities",
+                s.name()
+            ),
+            MsiError::Client(e) => e.fmt(f),
+            MsiError::Tls(e) => e.fmt(f),
+            MsiError::Http(e) => e.fmt(f),
+            MsiError::ArcChallenge(status) => write!(
+                f,
+                "expected a 401 response from the Azure Arc endpoint, got {status}"
+            ),
+            MsiError::ArcKey(e) => e.fmt(f),
+            MsiError::Status(s, status) => {
+                write!(
+                    f,
+                    "{} managed identity endpoint answered {status}",
+                    s.name()
+                )
+            }
+            MsiError::NoToken(s) => write!(
+                f,
+                "{} managed identity endpoint returned no access_token",
+                s.name()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MsiError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MsiError::Client(e) => Some(e),
+            MsiError::Tls(e) => Some(e),
+            MsiError::Http(e) => Some(e),
+            MsiError::ArcKey(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Why the Azure Arc key file named in the challenge cannot be used.
+#[derive(Debug)]
+pub(crate) enum ArcKeyError {
+    NotNamed,
+    Elsewhere {
+        path: PathBuf,
+        dir: PathBuf,
+    },
+    NotAKey(PathBuf),
+    TooLarge(PathBuf),
+    Read {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for ArcKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArcKeyError::NotNamed => {
+                f.write_str("the Azure Arc endpoint sent no key file in WWW-Authenticate")
+            }
+            ArcKeyError::Elsewhere { path, dir } => write!(
+                f,
+                "the Azure Arc key file {} is not in {}",
+                path.display(),
+                dir.display()
+            ),
+            ArcKeyError::NotAKey(path) => write!(
+                f,
+                "the Azure Arc key file {} has no .key extension",
+                path.display()
+            ),
+            ArcKeyError::TooLarge(path) => write!(
+                f,
+                "the Azure Arc key file {} is larger than 4096 bytes",
+                path.display()
+            ),
+            ArcKeyError::Read { path, error } => write!(f, "{}: {error}", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for ArcKeyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ArcKeyError::Read { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Source {
@@ -70,15 +181,12 @@ pub(crate) async fn token(
     client_id: Option<&str>,
     resource: &str,
     env: &Env,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Fetched, MsiError> {
     if let (Some(_), Source::Arc | Source::CloudShell | Source::ServiceFabric) = (client_id, source)
     {
-        return Err(format!(
-            "{} doesn't support user-assigned managed identities",
-            source.name()
-        ));
+        return Err(MsiError::UserAssigned(source));
     }
-    let http = client().map_err(|e| e.text())?;
+    let http = client().map_err(MsiError::Client)?;
     let request = match source {
         Source::CloudShell => {
             let body = format!("resource={}", encode(resource));
@@ -122,12 +230,9 @@ pub(crate) async fn token(
                 .header("Metadata", "true")
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(MsiError::Http)?;
             if challenge.status() != reqwest::StatusCode::UNAUTHORIZED {
-                return Err(format!(
-                    "expected a 401 response from the Azure Arc endpoint, got {}",
-                    challenge.status()
-                ));
+                return Err(MsiError::ArcChallenge(challenge.status()));
             }
             let header = challenge
                 .headers()
@@ -135,30 +240,35 @@ pub(crate) async fn token(
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or_default()
                 .to_string();
-            let key = arc_key(&header, &arc_dir(env))?;
+            let key = arc_key(&header, &arc_dir(env)).map_err(MsiError::ArcKey)?;
             http.get(url)
                 .header("Metadata", "true")
                 .header("Authorization", format!("Basic {key}"))
         }
     };
-    let answer = request.send().await.map_err(|e| e.to_string())?;
+    let answer = request.send().await.map_err(MsiError::Http)?;
     let status = answer.status();
-    let text = answer.text().await.map_err(|e| e.to_string())?;
+    let text = answer.text().await.map_err(MsiError::Http)?;
     if !status.is_success() {
-        return Err(format!(
-            "{} managed identity endpoint answered {status}",
-            source.name()
-        ));
+        return Err(MsiError::Status(source, status));
     }
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| v.get("access_token")?.as_str().map(str::to_string))
-        .ok_or_else(|| {
-            format!(
-                "{} managed identity endpoint returned no access_token",
-                source.name()
-            )
-        })
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok();
+    let token = value
+        .as_ref()
+        .and_then(|v| v.get("access_token")?.as_str())
+        .ok_or(MsiError::NoToken(source))?;
+    Ok(Fetched {
+        token: Secret::from(token),
+        expires: value.as_ref().and_then(expires_on),
+    })
+}
+
+fn expires_on(answer: &serde_json::Value) -> Option<jiff::Timestamp> {
+    let v = answer.get("expires_on")?;
+    let seconds = v
+        .as_i64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))?;
+    jiff::Timestamp::from_second(seconds).ok()
 }
 
 fn arc_dir(env: &Env) -> std::path::PathBuf {
@@ -169,43 +279,40 @@ fn arc_dir(env: &Env) -> std::path::PathBuf {
     }
 }
 
-fn arc_key(header: &str, dir: &Path) -> std::result::Result<String, String> {
+fn arc_key(header: &str, dir: &Path) -> std::result::Result<String, ArcKeyError> {
     let path = header
         .split_once('=')
         .map(|(_, p)| p.trim().trim_matches('"'))
         .filter(|p| !p.is_empty())
-        .ok_or("the Azure Arc endpoint sent no key file in WWW-Authenticate")?;
+        .ok_or(ArcKeyError::NotNamed)?;
     let path = Path::new(path);
     if path.parent() != Some(dir) {
-        return Err(format!(
-            "the Azure Arc key file {} is not in {}",
-            path.display(),
-            dir.display()
-        ));
+        return Err(ArcKeyError::Elsewhere {
+            path: path.to_path_buf(),
+            dir: dir.to_path_buf(),
+        });
     }
     if path.extension().and_then(|e| e.to_str()) != Some("key") {
-        return Err(format!(
-            "the Azure Arc key file {} has no .key extension",
-            path.display()
-        ));
+        return Err(ArcKeyError::NotAKey(path.to_path_buf()));
     }
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let unreadable = |error| ArcKeyError::Read {
+        path: path.to_path_buf(),
+        error,
+    };
+    let meta = std::fs::metadata(path).map_err(unreadable)?;
     if meta.len() > 4096 {
-        return Err(format!(
-            "the Azure Arc key file {} is larger than 4096 bytes",
-            path.display()
-        ));
+        return Err(ArcKeyError::TooLarge(path.to_path_buf()));
     }
     std::fs::read_to_string(path)
         .map(|k| k.trim().to_string())
-        .map_err(|e| format!("{}: {e}", path.display()))
+        .map_err(unreadable)
 }
 
-fn pinned(thumbprint: &str) -> std::result::Result<reqwest::Client, String> {
+fn pinned(thumbprint: &str) -> std::result::Result<reqwest::Client, MsiError> {
     let provider = crate::conn::tls::provider();
     let config = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
+        .map_err(MsiError::Tls)?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(Thumbprint {
             want: thumbprint.to_ascii_uppercase(),
@@ -217,7 +324,7 @@ fn pinned(thumbprint: &str) -> std::result::Result<reqwest::Client, String> {
         .timeout(Duration::from_secs(60))
         .tls_backend_preconfigured(config)
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(MsiError::Http)
 }
 
 #[derive(Debug)]
@@ -329,7 +436,7 @@ mod tests {
         assert_eq!(arc_key(&header, dir.path()).unwrap(), "secret-key");
         let elsewhere = Path::new("/elsewhere");
         assert_eq!(
-            arc_key(&header, elsewhere).unwrap_err(),
+            arc_key(&header, elsewhere).unwrap_err().to_string(),
             format!(
                 "the Azure Arc key file {} is not in {}",
                 key.display(),
@@ -339,7 +446,9 @@ mod tests {
         let other = dir.join("abc.txt");
         std::fs::write(&other, "x").unwrap();
         assert_eq!(
-            arc_key(&format!("Basic realm={}", other.display()), dir.path()).unwrap_err(),
+            arc_key(&format!("Basic realm={}", other.display()), dir.path())
+                .unwrap_err()
+                .to_string(),
             format!(
                 "the Azure Arc key file {} has no .key extension",
                 other.display()
@@ -347,18 +456,20 @@ mod tests {
         );
         std::fs::write(&key, vec![b'k'; 5000]).unwrap();
         assert_eq!(
-            arc_key(&header, dir.path()).unwrap_err(),
+            arc_key(&header, dir.path()).unwrap_err().to_string(),
             format!(
                 "the Azure Arc key file {} is larger than 4096 bytes",
                 key.display()
             )
         );
         assert_eq!(
-            arc_key("Basic", dir.path()).unwrap_err(),
+            arc_key("Basic", dir.path()).unwrap_err().to_string(),
             "the Azure Arc endpoint sent no key file in WWW-Authenticate"
         );
         let missing = dir.join("gone.key");
-        let e = arc_key(&format!("Basic realm={}", missing.display()), dir.path()).unwrap_err();
+        let e = arc_key(&format!("Basic realm={}", missing.display()), dir.path())
+            .unwrap_err()
+            .to_string();
         assert!(e.starts_with(&format!("{}: ", missing.display())), "{e}");
     }
 

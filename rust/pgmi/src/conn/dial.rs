@@ -375,7 +375,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
         Some(t) => Some(
             t.password(a.name, a.port, &spec.user)
                 .await
-                .map_err(DialFailure::Fatal)?,
+                .map_err(|e| DialFailure::Fatal(e.to_string()))?,
         ),
         None => None,
     };

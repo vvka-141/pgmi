@@ -4,13 +4,14 @@ mod azure_msi;
 mod databricks;
 mod google;
 mod http;
+mod renew;
 
 use std::sync::Arc;
 
 use crate::config::yaml::ProjectConfig;
 use crate::conn::resolve::{Spec, SslMode};
 use crate::env::Env;
-use crate::error::{Error, Result, Secret};
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Provider {
@@ -52,7 +53,9 @@ pub(crate) struct Options {
 
 #[derive(Clone)]
 pub(crate) enum Token {
-    Fixed(Provider, Secret),
+    #[cfg(test)]
+    Fixed(Provider, crate::error::Secret),
+    Azure(Arc<renew::Renewing<azure::Signin>>),
     Aws(Arc<aws::Signer>),
     Google(Arc<google::Dialer>),
     Databricks(Arc<databricks::Lakebase>),
@@ -64,10 +67,37 @@ impl std::fmt::Debug for Token {
     }
 }
 
+/// Why a sign-in token for one connection could not be had.
+#[derive(Debug)]
+pub(crate) enum TokenError {
+    Aws(aws::SignError),
+    SignIn(Error),
+}
+
+impl std::fmt::Display for TokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenError::Aws(e) => e.fmt(f),
+            TokenError::SignIn(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TokenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TokenError::Aws(e) => Some(e),
+            TokenError::SignIn(e) => Some(e),
+        }
+    }
+}
+
 impl Token {
     pub(crate) fn provider(&self) -> Provider {
         match self {
+            #[cfg(test)]
             Token::Fixed(p, _) => *p,
+            Token::Azure(_) => Provider::Azure,
             Token::Aws(_) => Provider::Aws,
             Token::Google(_) => Provider::Google,
             Token::Databricks(_) => Provider::Databricks,
@@ -79,18 +109,22 @@ impl Token {
         host: &str,
         port: u16,
         user: &str,
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<String, TokenError> {
         match self {
+            #[cfg(test)]
             Token::Fixed(_, t) => Ok(t.expose().to_string()),
-            Token::Aws(s) => s.token(host, port, user),
+            Token::Azure(a) => a.password().await.map_err(TokenError::SignIn),
+            Token::Aws(s) => s.token(host, port, user).map_err(TokenError::Aws),
             Token::Google(d) => Ok(d.password()),
-            Token::Databricks(l) => l.password().await,
+            Token::Databricks(l) => l.password().await.map_err(TokenError::SignIn),
         }
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
         match self {
+            #[cfg(test)]
             Token::Fixed(_, t) => vec![t.expose().to_string()],
+            Token::Azure(a) => a.minted(),
             Token::Aws(s) => s.minted(),
             Token::Google(d) => vec![d.password()],
             Token::Databricks(l) => l.minted(),
@@ -198,9 +232,13 @@ pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &En
 pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
-        Provider::Azure => azure::token(req, env, azure::POSTGRES)
-            .await
-            .map(|t| Token::Fixed(Provider::Azure, Secret::from(t))),
+        Provider::Azure => renew::Renewing::start(azure::Signin {
+            request: req.clone(),
+            env: env.clone(),
+            audience: azure::POSTGRES,
+        })
+        .await
+        .map(|a| Token::Azure(Arc::new(a))),
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
         Provider::Google => google::dialer(req, env)
             .await

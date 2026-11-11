@@ -1,19 +1,18 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Mutex;
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use reqwest::StatusCode;
 
 use super::Options;
 use super::azure;
 use super::http::{client, encode};
+use super::renew::{Fetched, Mint, Renewing};
 use crate::env::Env;
 use crate::error::{Error, Result, Secret};
 
-const REFRESH_MARGIN: SignedDuration = SignedDuration::from_mins(5);
 const ATTEMPTS: u32 = 3;
 const AZURE_HOSTS: [&str; 3] = [
     ".azuredatabricks.net",
@@ -316,65 +315,33 @@ fn parse_ini(text: &str) -> HashMap<String, HashMap<String, String>> {
     sections
 }
 
-struct Credential {
-    token: Secret,
-    expires: Option<Timestamp>,
-}
+/// A Lakebase database credential, renewed before it expires.
+pub(crate) type Lakebase = Renewing<Signin>;
 
-fn fresh(expires: Option<Timestamp>, now: Timestamp) -> bool {
-    expires.is_some_and(|e| e.duration_since(now) > REFRESH_MARGIN)
-}
-
-pub(crate) struct Lakebase {
+/// The workspace sign-in that mints Lakebase credentials.
+pub(crate) struct Signin {
     settings: Settings,
     request: Options,
     env: Env,
-    current: Mutex<Option<Credential>>,
-    minted: Mutex<Vec<String>>,
 }
 
 pub(crate) async fn lakebase(req: &Options, env: &Env) -> Result<Lakebase> {
-    let source = Lakebase {
+    Renewing::start(Signin {
         settings: settings(req, env)?,
         request: req.clone(),
         env: env.clone(),
-        current: Mutex::new(None),
-        minted: Mutex::default(),
-    };
-    source.mint().await?;
-    Ok(source)
+    })
+    .await
 }
 
-impl Lakebase {
-    pub(crate) async fn password(&self) -> std::result::Result<String, String> {
-        let cached = self.current.lock().ok().and_then(|c| {
-            c.as_ref()
-                .filter(|c| fresh(c.expires, Timestamp::now()))
-                .map(|c| c.token.expose().to_string())
-        });
-        match cached {
-            Some(t) => Ok(t),
-            None => self.mint().await.map_err(|e| e.text()),
-        }
-    }
-
-    pub(crate) fn minted(&self) -> Vec<String> {
-        self.minted.lock().map(|m| m.clone()).unwrap_or_default()
-    }
-
-    async fn mint(&self) -> Result<String> {
+impl Mint for Signin {
+    async fn mint(&self) -> Result<Fetched> {
         let bearer = self.bearer().await?;
-        let credential = credential(&self.settings, &bearer).await?;
-        let token = credential.token.expose().to_string();
-        if let Ok(mut m) = self.minted.lock() {
-            m.push(token.clone());
-        }
-        if let Ok(mut c) = self.current.lock() {
-            *c = Some(credential);
-        }
-        Ok(token)
+        credential(&self.settings, &bearer).await
     }
+}
 
+impl Signin {
     async fn bearer(&self) -> Result<Secret> {
         let s = &self.settings;
         let mut failures = Vec::new();
@@ -384,10 +351,10 @@ impl Lakebase {
                 Route::M2m { client_id, secret } => {
                     return m2m(&s.host, client_id, secret).await;
                 }
-                Route::Cli => cli(s).await,
+                Route::Cli => cli(s).await.map_err(|e| e.to_string()),
                 Route::Azure => azure::token(&self.request, &self.env, azure::DATABRICKS)
                     .await
-                    .map(Secret::from)
+                    .map(|f| f.token)
                     .map_err(|e| e.text()),
             };
             match result {
@@ -403,7 +370,7 @@ impl Lakebase {
     }
 }
 
-impl std::fmt::Debug for Lakebase {
+impl std::fmt::Debug for Signin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -426,7 +393,9 @@ async fn m2m(host: &str, id: &str, secret: &Secret) -> Result<Secret> {
             ))
     })
     .await
-    .map_err(|e| Error::connection(format!("failed to sign in to Databricks: {url}: {e}")))?;
+    .map_err(|e| {
+        Error::connection(format!("failed to sign in to Databricks: {url}")).with_source(e)
+    })?;
     if !status.is_success() {
         return Err(Error::connection(format!(
             "failed to sign in to Databricks with OAuth M2M (client {id}): {url} answered {status}{}",
@@ -442,7 +411,39 @@ async fn m2m(host: &str, id: &str, secret: &Secret) -> Result<Secret> {
         })
 }
 
-async fn cli(s: &Settings) -> std::result::Result<Secret, String> {
+/// Why `databricks auth token` gave no token.
+#[derive(Debug)]
+pub(crate) enum CliError {
+    NotInstalled,
+    Spawn(std::io::Error),
+    TimedOut,
+    Wait(std::io::Error),
+    Failed(String),
+    NoToken,
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CliError::NotInstalled => f.write_str("databricks CLI not found on PATH"),
+            CliError::Spawn(e) | CliError::Wait(e) => e.fmt(f),
+            CliError::TimedOut => f.write_str("databricks auth token timed out"),
+            CliError::Failed(stderr) => write!(f, "databricks auth token failed: {stderr}"),
+            CliError::NoToken => f.write_str("databricks auth token printed no access_token"),
+        }
+    }
+}
+
+impl std::error::Error for CliError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CliError::Spawn(e) | CliError::Wait(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+async fn cli(s: &Settings) -> std::result::Result<Secret, CliError> {
     let mut args = vec!["auth", "token"];
     match &s.profile {
         Some(p) => args.extend(["--profile", p.as_str()]),
@@ -456,26 +457,23 @@ async fn cli(s: &Settings) -> std::result::Result<Secret, String> {
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => "databricks CLI not found on PATH".to_string(),
-            _ => e.to_string(),
+            std::io::ErrorKind::NotFound => CliError::NotInstalled,
+            _ => CliError::Spawn(e),
         })?;
     let out = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
         .await
-        .map_err(|_| "databricks auth token timed out".to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| CliError::TimedOut)?
+        .map_err(CliError::Wait)?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(format!(
-            "databricks auth token failed: {}",
-            stderr.trim().replace('\n', " ")
-        ));
+        return Err(CliError::Failed(stderr.trim().replace('\n', " ")));
     }
     field(&String::from_utf8_lossy(&out.stdout), "access_token")
         .map(Secret::from)
-        .ok_or_else(|| "databricks auth token printed no access_token".to_string())
+        .ok_or(CliError::NoToken)
 }
 
-async fn credential(s: &Settings, bearer: &Secret) -> Result<Credential> {
+async fn credential(s: &Settings, bearer: &Secret) -> Result<Fetched> {
     let url = format!("{}/api/2.0/postgres/credentials", s.host);
     let body = serde_json::json!({ "endpoint": s.endpoint }).to_string();
     let (status, text) = send(|http| {
@@ -487,9 +485,7 @@ async fn credential(s: &Settings, bearer: &Secret) -> Result<Credential> {
     })
     .await
     .map_err(|e| {
-        Error::connection(format!(
-            "failed to get a Lakebase credential from {url}: {e}"
-        ))
+        Error::connection(format!("failed to get a Lakebase credential from {url}")).with_source(e)
     })?;
     if !status.is_success() {
         return Err(Error::connection(refusal(
@@ -500,9 +496,7 @@ async fn credential(s: &Settings, bearer: &Secret) -> Result<Credential> {
         )));
     }
     parse_credential(&text).map_err(|e| {
-        Error::connection(format!(
-            "failed to get a Lakebase credential from {url}: {e}"
-        ))
+        Error::connection(format!("failed to get a Lakebase credential from {url}")).with_source(e)
     })
 }
 
@@ -554,22 +548,46 @@ fn field(body: &str, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn parse_credential(body: &str) -> std::result::Result<Credential, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| "the answer is not JSON".to_string())?;
+/// Why the credentials API's answer holds no usable credential.
+#[derive(Debug)]
+pub(crate) enum AnswerError {
+    NotJson,
+    NoToken,
+    Expiry { text: String, error: jiff::Error },
+}
+
+impl std::fmt::Display for AnswerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnswerError::NotJson => f.write_str("the answer is not JSON"),
+            AnswerError::NoToken => f.write_str("the answer has no token"),
+            AnswerError::Expiry { text, error } => {
+                write!(f, "invalid expire_time {text:?}: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AnswerError {}
+
+fn parse_credential(body: &str) -> std::result::Result<Fetched, AnswerError> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| AnswerError::NotJson)?;
     let token = value
         .get("token")
         .and_then(|t| t.as_str())
         .filter(|t| !t.is_empty())
-        .ok_or("the answer has no token")?;
+        .ok_or(AnswerError::NoToken)?;
     let expires = match value.get("expire_time").and_then(|t| t.as_str()) {
         Some(t) => Some(
             t.parse::<Timestamp>()
-                .map_err(|e| format!("invalid expire_time {t:?}: {e}"))?,
+                .map_err(|error| AnswerError::Expiry {
+                    text: t.to_string(),
+                    error,
+                })?,
         ),
         None => None,
     };
-    Ok(Credential {
+    Ok(Fetched {
         token: Secret::from(token),
         expires,
     })
@@ -579,33 +597,54 @@ fn retryable(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
+/// A request that got no answer, after `attempts` tries.
+#[derive(Debug)]
+pub(crate) enum SendError {
+    Client(Error),
+    Http {
+        error: reqwest::Error,
+        attempts: u32,
+    },
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::Client(e) => e.fmt(f),
+            SendError::Http { error, attempts } => {
+                f.write_str(&crate::error::chain(error))?;
+                if *attempts > 1 {
+                    write!(f, " (after {attempts} attempts)")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 async fn send(
     build: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
-) -> std::result::Result<(StatusCode, String), String> {
-    let http = client().map_err(|e| e.text())?;
+) -> std::result::Result<(StatusCode, String), SendError> {
+    let http = client().map_err(SendError::Client)?;
     let mut attempt = 1;
     loop {
         let outcome = match build(&http).send().await {
             Ok(r) => {
                 let status = r.status();
-                match r.text().await {
-                    Ok(t) => Ok((status, t)),
-                    Err(e) => Err(crate::error::chain(&e)),
-                }
+                r.text().await.map(|t| (status, t))
             }
-            Err(e) => Err(crate::error::chain(&e)),
+            Err(e) => Err(e),
         };
         let again = match &outcome {
             Ok((status, _)) => retryable(*status),
             Err(_) => true,
         };
         if !again || attempt >= ATTEMPTS {
-            return outcome.map_err(|e| {
-                if attempt > 1 {
-                    format!("{e} (after {attempt} attempts)")
-                } else {
-                    e
-                }
+            return outcome.map_err(|error| SendError::Http {
+                error,
+                attempts: attempt,
             });
         }
         tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
@@ -828,17 +867,6 @@ mod tests {
     }
 
     #[test]
-    fn a_credential_is_reused_until_five_minutes_before_it_expires() {
-        let now: Timestamp = "2026-11-11T10:00:00Z".parse().unwrap();
-        let at = |s: &str| Some(s.parse::<Timestamp>().unwrap());
-        assert!(fresh(at("2026-11-11T11:00:00Z"), now));
-        assert!(fresh(at("2026-11-11T10:05:01Z"), now));
-        assert!(!fresh(at("2026-11-11T10:05:00Z"), now));
-        assert!(!fresh(at("2026-11-11T09:59:00Z"), now));
-        assert!(!fresh(None, now));
-    }
-
-    #[test]
     fn the_credential_answer_is_read_as_the_api_reference_shapes_it() {
         let c =
             parse_credential(r#"{"token":"eyJ.a.b","expire_time":"2026-11-11T10:59:59.123456Z"}"#)
@@ -854,7 +882,7 @@ mod tests {
                 .expires
                 .is_none()
         );
-        let err = |body: &str| parse_credential(body).err().unwrap();
+        let err = |body: &str| parse_credential(body).err().unwrap().to_string();
         assert_eq!(
             err(r#"{"expire_time":"2026-11-11T10:00:00Z"}"#),
             "the answer has no token"
@@ -896,7 +924,7 @@ mod tests {
 
     #[test]
     fn debug_shows_no_secret() {
-        let source = Lakebase {
+        let signin = Signin {
             settings: Settings {
                 host: "https://h".into(),
                 endpoint: EP.into(),
@@ -911,16 +939,16 @@ mod tests {
             },
             request: Options::default(),
             env: Env::default(),
-            current: Mutex::new(Some(Credential {
+        };
+        let source = Lakebase::holding(
+            signin,
+            Fetched {
                 token: Secret::from("lakebase-secret"),
                 expires: None,
-            })),
-            minted: Mutex::new(vec!["lakebase-secret".into()]),
-        };
-        let text = format!(
-            "{source:?} {:?} {:?}",
-            source.settings, source.settings.routes
+            },
         );
+        let settings = &source.mint_source().settings;
+        let text = format!("{source:?} {settings:?} {:?}", settings.routes);
         for secret in ["dapi-secret", "m2m-secret", "lakebase-secret"] {
             assert!(!text.contains(secret), "{text}");
         }

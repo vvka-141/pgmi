@@ -12,6 +12,7 @@ use azure_identity::{
 use base64ct::{Base64, Base64UrlUnpadded, Encoding};
 
 use super::Options;
+use super::renew::{Fetched, Mint};
 use crate::env::Env;
 use crate::error::{Error, Result};
 
@@ -127,7 +128,81 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
     Ok((picked, true))
 }
 
-pub(crate) async fn token(req: &Options, env: &Env, audience: Audience) -> Result<String> {
+/// Why one credential of the chain gave no token, worded as the Azure SDKs
+/// word it.
+#[derive(Debug)]
+pub(crate) enum CredentialError {
+    Sdk(azure_core::Error),
+    Token(azure_core::Error),
+    NoManagedIdentityResponse,
+    Msi(super::azure_msi::MsiError),
+    PowerShellMissing,
+    PowerShellSpawn(std::io::Error),
+    PowerShellTimedOut,
+    PowerShellWait(std::io::Error),
+    AzAccountsMissing,
+    PowerShellFailed(String),
+    PowerShellNoToken,
+    Certificate(certificate::CertificateError),
+}
+
+impl std::fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CredentialError::Sdk(e) => e.fmt(f),
+            CredentialError::Token(e) => f.write_str(&e.to_string().replace('\n', " ")),
+            CredentialError::NoManagedIdentityResponse => {
+                f.write_str("no response from the managed identity endpoint")
+            }
+            CredentialError::Msi(e) => e.fmt(f),
+            CredentialError::PowerShellMissing => f.write_str("executable not found on path"),
+            CredentialError::PowerShellSpawn(e) | CredentialError::PowerShellWait(e) => e.fmt(f),
+            CredentialError::PowerShellTimedOut => f.write_str("Azure PowerShell timed out"),
+            CredentialError::AzAccountsMissing => f.write_str("Az.Accounts module not found"),
+            CredentialError::PowerShellFailed(stderr) => f.write_str(stderr),
+            CredentialError::PowerShellNoToken => f.write_str("Azure PowerShell printed no token"),
+            CredentialError::Certificate(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for CredentialError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CredentialError::Sdk(e) | CredentialError::Token(e) => Some(e),
+            CredentialError::Msi(e) => Some(e),
+            CredentialError::PowerShellSpawn(e) | CredentialError::PowerShellWait(e) => Some(e),
+            CredentialError::Certificate(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Signs in to Entra ID for one audience; each connection asks again unless
+/// the last token has more than five minutes left (Go asks per connection).
+pub(crate) struct Signin {
+    pub(crate) request: Options,
+    pub(crate) env: Env,
+    pub(crate) audience: Audience,
+}
+
+impl std::fmt::Debug for Signin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Signin")
+    }
+}
+
+impl Mint for Signin {
+    async fn mint(&self) -> Result<Fetched> {
+        token(&self.request, &self.env, self.audience).await
+    }
+}
+
+fn expiry(unix_seconds: i64) -> Option<jiff::Timestamp> {
+    jiff::Timestamp::from_second(unix_seconds).ok()
+}
+
+pub(crate) async fn token(req: &Options, env: &Env, audience: Audience) -> Result<Fetched> {
     let ids = ids(req, env)?;
     let (kinds, chain) = plan(&ids, env)?;
     let probing = chain
@@ -139,7 +214,7 @@ pub(crate) async fn token(req: &Options, env: &Env, audience: Audience) -> Resul
         let result = if kind == Kind::Managed && probing {
             match tokio::time::timeout(Duration::from_secs(2), attempt).await {
                 Ok(r) => r,
-                Err(_) => Err("no response from the managed identity endpoint".into()),
+                Err(_) => Err(CredentialError::NoManagedIdentityResponse),
             }
         } else {
             attempt.await
@@ -165,8 +240,8 @@ async fn get(
     ids: &Ids,
     env: &Env,
     audience: Audience,
-) -> std::result::Result<String, String> {
-    let text = |e: azure_core::Error| e.to_string();
+) -> std::result::Result<Fetched, CredentialError> {
+    let text = CredentialError::Sdk;
     let credential: Arc<dyn TokenCredential> = match kind {
         Kind::PowerShell => return powershell(ids.tenant.as_deref(), audience).await,
         Kind::Secret => {
@@ -184,7 +259,8 @@ async fn get(
             .map_err(text)?
         }
         Kind::Certificate => {
-            let assertion = certificate::Assertion::load(ids, env)?;
+            let assertion =
+                certificate::Assertion::load(ids, env).map_err(CredentialError::Certificate)?;
             ClientAssertionCredential::new(
                 ids.tenant.clone().unwrap_or_default(),
                 ids.client.clone().unwrap_or_default(),
@@ -209,7 +285,8 @@ async fn get(
                     audience.resource,
                     env,
                 )
-                .await;
+                .await
+                .map_err(CredentialError::Msi);
             }
             ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
                 user_assigned_id: ids.client.clone().map(UserAssignedId::ClientId),
@@ -233,8 +310,11 @@ async fn get(
     credential
         .get_token(&[audience.scope], None)
         .await
-        .map(|t| t.token.secret().to_string())
-        .map_err(|e| e.to_string().replace('\n', " "))
+        .map(|t| Fetched {
+            token: crate::error::Secret::from(t.token.secret()),
+            expires: expiry(t.expires_on.unix_timestamp()),
+        })
+        .map_err(CredentialError::Token)
 }
 
 fn powershell_script(tenant: Option<&str>, resource: &str) -> String {
@@ -259,7 +339,7 @@ Write-Output (ConvertTo-Json $result -Compress)\n"
 async fn powershell(
     tenant: Option<&str>,
     audience: Audience,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Fetched, CredentialError> {
     let script = powershell_script(tenant, audience.resource);
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = Base64::encode_string(&utf16);
@@ -278,31 +358,37 @@ async fn powershell(
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => "executable not found on path".to_string(),
-            _ => e.to_string(),
+            std::io::ErrorKind::NotFound => CredentialError::PowerShellMissing,
+            _ => CredentialError::PowerShellSpawn(e),
         })?;
     let out = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
         .await
-        .map_err(|_| "Azure PowerShell timed out".to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| CredentialError::PowerShellTimedOut)?
+        .map_err(CredentialError::PowerShellWait)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if stdout.contains("VersionCheckFailed") {
-        return Err("Az.Accounts module not found".into());
+        return Err(CredentialError::AzAccountsMissing);
     }
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(stderr.trim().to_string());
+        return Err(CredentialError::PowerShellFailed(stderr.trim().to_string()));
     }
     let value: serde_json::Value = stdout
         .lines()
         .rev()
         .find_map(|l| serde_json::from_str(l.trim()).ok())
-        .ok_or_else(|| "Azure PowerShell printed no token".to_string())?;
-    value
+        .ok_or(CredentialError::PowerShellNoToken)?;
+    let token = value
         .get("Token")
         .and_then(|t| t.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| "Azure PowerShell printed no token".to_string())
+        .ok_or(CredentialError::PowerShellNoToken)?;
+    Ok(Fetched {
+        token: crate::error::Secret::from(token),
+        expires: value
+            .get("ExpiresOn")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(expiry),
+    })
 }
 
 mod certificate {
@@ -317,6 +403,60 @@ mod certificate {
 
     use super::{Base64UrlUnpadded, Encoding, Ids};
     use crate::env::Env;
+
+    /// Why the certificate in `AZURE_CLIENT_CERTIFICATE_PATH` cannot sign in.
+    #[derive(Debug)]
+    pub(crate) enum CertificateError {
+        Read {
+            path: String,
+            error: std::io::Error,
+        },
+        Pem(rustls_pki_types::pem::Error),
+        NoPemKey(rustls_pki_types::pem::Error),
+        Pkcs12(String),
+        NoKey,
+        NoCertificate,
+        Key(rustls::Error),
+        In {
+            path: String,
+            error: Box<CertificateError>,
+        },
+        NotRsa,
+        Sign(rustls::Error),
+    }
+
+    impl std::fmt::Display for CertificateError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                CertificateError::Read { path, error } => write!(f, "read {path}: {error}"),
+                CertificateError::Pem(e) => e.fmt(f),
+                CertificateError::NoPemKey(e) => write!(f, "no PEM private key found ({e})"),
+                CertificateError::Pkcs12(e) => write!(
+                    f,
+                    "neither a PEM certificate nor a PKCS#12 file this password opens ({e})"
+                ),
+                CertificateError::NoKey => f.write_str("the PKCS#12 file holds no private key"),
+                CertificateError::NoCertificate => {
+                    f.write_str("the PKCS#12 file holds no certificate for its key")
+                }
+                CertificateError::Key(e) | CertificateError::Sign(e) => e.fmt(f),
+                CertificateError::In { path, error } => write!(f, "{path}: {error}"),
+                CertificateError::NotRsa => f.write_str("the certificate key is not an RSA key"),
+            }
+        }
+    }
+
+    impl std::error::Error for CertificateError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                CertificateError::Read { error, .. } => Some(error),
+                CertificateError::Pem(e) | CertificateError::NoPemKey(e) => Some(e),
+                CertificateError::Key(e) | CertificateError::Sign(e) => Some(e),
+                CertificateError::In { error, .. } => Some(error.as_ref()),
+                _ => None,
+            }
+        }
+    }
 
     pub(crate) struct Assertion {
         key: std::sync::Arc<dyn rustls::sign::SigningKey>,
@@ -334,11 +474,11 @@ mod certificate {
     pub(crate) fn read(
         bytes: &[u8],
         password: &str,
-    ) -> std::result::Result<(CertificateDer<'static>, PrivateKeyDer<'static>), String> {
+    ) -> std::result::Result<(CertificateDer<'static>, PrivateKeyDer<'static>), CertificateError>
+    {
         if let Some(cert) = CertificateDer::pem_slice_iter(bytes).next() {
-            let cert = cert.map_err(|e| e.to_string())?;
-            let key = PrivateKeyDer::from_pem_slice(bytes)
-                .map_err(|e| format!("no PEM private key found ({e})"))?;
+            let cert = cert.map_err(CertificateError::Pem)?;
+            let key = PrivateKeyDer::from_pem_slice(bytes).map_err(CertificateError::NoPemKey)?;
             return Ok((cert, key));
         }
         let store = p12_keystore::KeyStore::from_pkcs12(
@@ -346,16 +486,12 @@ mod certificate {
             password,
             p12_keystore::Pkcs12ImportPolicy::Relaxed,
         )
-        .map_err(|e| {
-            format!("neither a PEM certificate nor a PKCS#12 file this password opens ({e})")
-        })?;
-        let (_, chain) = store
-            .private_key_chain()
-            .ok_or("the PKCS#12 file holds no private key")?;
+        .map_err(|e| CertificateError::Pkcs12(e.to_string()))?;
+        let (_, chain) = store.private_key_chain().ok_or(CertificateError::NoKey)?;
         let cert = chain
             .certs()
             .first()
-            .ok_or("the PKCS#12 file holds no certificate for its key")?;
+            .ok_or(CertificateError::NoCertificate)?;
         Ok((
             CertificateDer::from(cert.as_der().to_vec()),
             PrivateKeyDer::Pkcs8(chain.key().as_der().to_vec().into()),
@@ -363,24 +499,31 @@ mod certificate {
     }
 
     impl Assertion {
-        pub(crate) fn load(ids: &Ids, env: &Env) -> std::result::Result<Self, String> {
+        pub(crate) fn load(ids: &Ids, env: &Env) -> std::result::Result<Self, CertificateError> {
             let path = env
                 .non_empty("AZURE_CLIENT_CERTIFICATE_PATH")
                 .ok()
                 .flatten()
                 .unwrap_or_default()
                 .to_string();
-            let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+            let bytes = std::fs::read(&path).map_err(|error| CertificateError::Read {
+                path: path.clone(),
+                error,
+            })?;
+            let within = |error| CertificateError::In {
+                path: path.clone(),
+                error: Box::new(error),
+            };
             let password = env
                 .non_empty("AZURE_CLIENT_CERTIFICATE_PASSWORD")
                 .ok()
                 .flatten()
                 .unwrap_or_default();
-            let (cert, key) = read(&bytes, password).map_err(|e| format!("{path}: {e}"))?;
+            let (cert, key) = read(&bytes, password).map_err(within)?;
             let key = crate::conn::tls::provider()
                 .key_provider
                 .load_private_key(key)
-                .map_err(|e| format!("{path}: {e}"))?;
+                .map_err(|e| within(CertificateError::Key(e)))?;
             let authority = env
                 .non_empty("AZURE_AUTHORITY_HOST")
                 .ok()
@@ -397,7 +540,7 @@ mod certificate {
             })
         }
 
-        fn sign(&self) -> std::result::Result<String, String> {
+        fn sign(&self) -> std::result::Result<String, CertificateError> {
             let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -421,8 +564,10 @@ mod certificate {
             let signer = self
                 .key
                 .choose_scheme(&[SignatureScheme::RSA_PKCS1_SHA256])
-                .ok_or("the certificate key is not an RSA key")?;
-            let signature = signer.sign(input.as_bytes()).map_err(|e| e.to_string())?;
+                .ok_or(CertificateError::NotRsa)?;
+            let signature = signer
+                .sign(input.as_bytes())
+                .map_err(CertificateError::Sign)?;
             Ok(format!(
                 "{input}.{}",
                 Base64UrlUnpadded::encode_string(&signature)
@@ -434,7 +579,10 @@ mod certificate {
     impl ClientAssertion for Assertion {
         async fn secret(&self, _: Option<ClientMethodOptions<'_>>) -> azure_core::Result<String> {
             self.sign().map_err(|e| {
-                azure_core::Error::with_message(azure_core::error::ErrorKind::Credential, e)
+                azure_core::Error::with_message(
+                    azure_core::error::ErrorKind::Credential,
+                    e.to_string(),
+                )
             })
         }
     }
@@ -468,7 +616,9 @@ mod certificate {
                 };
                 assert_eq!(assertion.sign().unwrap().split('.').count(), 3);
             }
-            let wrong = read(include_bytes!("testdata/sp-aes.p12"), "nope").unwrap_err();
+            let wrong = read(include_bytes!("testdata/sp-aes.p12"), "nope")
+                .unwrap_err()
+                .to_string();
             assert!(wrong.contains("PKCS#12"), "{wrong}");
         }
     }
