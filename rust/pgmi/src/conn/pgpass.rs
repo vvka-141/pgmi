@@ -265,7 +265,8 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(!tmp.exists());
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "stale");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]

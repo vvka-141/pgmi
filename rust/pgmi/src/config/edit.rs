@@ -110,10 +110,6 @@ fn write(path: &Path, text: &str, keep_mode: bool) -> Result<()> {
     let fail = |what: &str, e: std::io::Error| {
         Error::general(format!("{what} {}", path.display())).with_source(e)
     };
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".pgmi-tmp");
-    let tmp = std::path::PathBuf::from(tmp);
-    let _ = std::fs::remove_file(&tmp);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -127,10 +123,11 @@ fn write(path: &Path, text: &str, keep_mode: bool) -> Result<()> {
     }
     #[cfg(not(unix))]
     let _ = keep_mode;
-    let written = options.open(&tmp).and_then(|mut f| {
-        f.write_all(text.as_bytes())?;
-        f.sync_all()
-    });
+    let (tmp, file) = open_temp(path, &options).map_err(|e| fail("write", e))?;
+    let written = {
+        let mut f = file;
+        f.write_all(text.as_bytes()).and_then(|()| f.sync_all())
+    };
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
         return Err(fail("write", e));
@@ -139,6 +136,25 @@ fn write(path: &Path, text: &str, keep_mode: bool) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         fail("update", e)
     })
+}
+
+fn open_temp(
+    path: &Path,
+    options: &std::fs::OpenOptions,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut tries = 0;
+    loop {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(format!(".pgmi-tmp.{}.{n}", std::process::id()));
+        let tmp = std::path::PathBuf::from(tmp);
+        match options.open(&tmp) {
+            Ok(f) => return Ok((tmp, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 100 => tries += 1,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -225,6 +241,27 @@ mod tests {
             assert_eq!(cfg.connection.database.as_deref(), Some("it's"), "{out}");
             assert_eq!(cfg.connection.username.as_deref(), Some("true"), "{out}");
         }
+    }
+
+    #[test]
+    fn a_write_leaves_another_writers_temp_file_alone_and_none_of_its_own() {
+        let dir = crate::testdir::TempDir::new("edit-race");
+        let path = dir.join("pgmi.yaml");
+        let theirs = dir.join("pgmi.yaml.pgmi-tmp");
+        std::fs::write(&theirs, "half written").unwrap();
+        let ours = dir.join(format!("pgmi.yaml.pgmi-tmp.{}.0", std::process::id()));
+        std::fs::write(&ours, "planted").unwrap();
+        write_atomic(&path, "a: 1\n").unwrap();
+        write_atomic(&path, "a: 2\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a: 2\n");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "half written");
+        assert_eq!(std::fs::read_to_string(&ours).unwrap(), "planted");
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 3, "{names:?}");
     }
 
     #[test]
