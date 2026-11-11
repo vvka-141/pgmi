@@ -669,7 +669,11 @@ async fn deploy(
     let max_size = walk::max_size(&ctx.env)?;
     let fs = crate::vfs::OsFs::new(a.project.clone());
     let project = guard.blocking(move || walk::load(&fs, max_size)).await?;
-    let meta = metadata::collect(&project.sources)?;
+    let scanned = metadata::scan(&project.sources);
+    scanned
+        .readable()
+        .map_err(walk::scan_failed(Some(&a.project.display().to_string())))?;
+    let meta = scanned.unique()?;
     if let Some(e) = unsupported {
         return Err(e);
     }

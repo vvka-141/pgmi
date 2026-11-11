@@ -83,10 +83,10 @@ fn rows(sources: &[File], metas: &[Meta]) -> Vec<Row> {
 
 pub(crate) fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
     let max_size = walk::max_size(env)?;
-    let scan_failed = |e: Error| Error::new(e.kind(), "failed to scan directory").with_source(e);
+    let scan_failed = walk::scan_failed(None);
     let project = crate::vfs::OsFs::project(path)
         .and_then(|fs| walk::scan(&fs, max_size))
-        .map_err(scan_failed)?;
+        .map_err(&scan_failed)?;
     let scan = metadata::scan(&project.sources);
     scan.readable().map_err(scan_failed)?;
     let metas = scan.unique()?;
@@ -162,7 +162,8 @@ pub(crate) enum Validated {
 
 pub(crate) fn validate_report(path: &Path, env: &Env) -> Result<Validated> {
     let max_size = walk::max_size(env)?;
-    let project = walk::scan(&crate::vfs::OsFs::project(path)?, max_size)?;
+    let project = walk::scan(&crate::vfs::OsFs::project(path)?, max_size)
+        .map_err(|e| Error::new(e.kind(), "validation failed").with_source(e))?;
     let total = project.sources.len() + project.test_dir_files.len();
     let scan = metadata::scan(project.sources.iter());
     if !scan.errors.is_empty() {
@@ -343,10 +344,10 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     }
     stderr("Scanning SQL files...\n");
     let max_size = walk::max_size(env)?;
-    let project = walk::scan(&crate::vfs::OsFs::project(&root)?, max_size)?;
+    let project = walk::scan(&crate::vfs::OsFs::project(&root)?, max_size)
+        .map_err(walk::scan_failed(None))?;
     let scan = metadata::scan(&project.sources);
-    scan.readable()
-        .map_err(|e| Error::new(e.kind(), "failed to scan directory").with_source(e))?;
+    scan.readable().map_err(walk::scan_failed(None))?;
     let metas = scan.metas;
     let under = named
         .strip_prefix(&root)

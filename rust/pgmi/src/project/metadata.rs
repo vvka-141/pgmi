@@ -300,6 +300,7 @@ pub(crate) fn duplicate_line(id: &str, paths: &[String]) -> String {
     format!("{id}: {}", paths.join(", "))
 }
 
+#[cfg(test)]
 pub(crate) fn collect(files: &[File]) -> Result<Vec<Meta>> {
     let scan = scan(files);
     scan.readable()?;

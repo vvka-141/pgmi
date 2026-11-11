@@ -6,4 +6,4 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     expect:
       exit: 14
-      stderr: ["deploy.sql"]
+      stderr: ["deploy.sql", 'expected: {project}/deploy.sql — run `pgmi init` to scaffold one']

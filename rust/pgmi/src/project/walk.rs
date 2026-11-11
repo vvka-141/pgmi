@@ -56,6 +56,16 @@ fn rules(fs: &impl Vfs) -> Result<Rules> {
     }
 }
 
+/// Prefixes a refusal met while scanning the project as Go does:
+/// `failed to scan directory "<path>"` in deploy, without the path elsewhere.
+pub(crate) fn scan_failed(path: Option<&str>) -> impl Fn(Error) -> Error + use<> {
+    let message = path.map_or_else(
+        || "failed to scan directory".to_string(),
+        |p| format!("failed to scan directory \"{p}\""),
+    );
+    move |e| Error::new(e.kind(), message.clone()).with_source(e)
+}
+
 pub(crate) fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let rules = rules(fs)?;
     let mut project = Project::default();
@@ -65,11 +75,12 @@ pub(crate) fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
 }
 
 pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
-    let rules = rules(fs)?;
+    let scanning = scan_failed(Some(&fs.display("")));
+    let rules = rules(fs).map_err(&scanning)?;
     if rules.ignored("deploy.sql", false) {
-        return Err(Error::config(
+        return Err(scanning(Error::config(
             ".pgmiignore hides deploy.sql; add !deploy.sql after the pattern that matches it",
-        ));
+        )));
     }
     let deploy = fs.stat("deploy.sql");
     if deploy
@@ -84,14 +95,18 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     if !deploy.is_ok_and(|s| s.kind == FileKind::File) {
         return Err(Error::new(
             Kind::NoDeploySql,
-            format!("deploy.sql not found in {}", fs.display("")),
+            format!(
+                "deploy.sql not found in {}\nexpected: {} — run `pgmi init` to scaffold one",
+                fs.display(""),
+                fs.display("deploy.sql")
+            ),
         ));
     }
     let mut project = Project {
         deploy_sql: read_text(fs, "deploy.sql", max_size)?,
         ..Project::default()
     };
-    walk(fs, "", false, &rules, max_size, &mut project)?;
+    walk(fs, "", false, &rules, max_size, &mut project).map_err(scanning)?;
     project.ignored.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(project)
 }
@@ -454,6 +469,10 @@ mod tests {
         for fs in [MemFs::default(), MemFs::default().dir("deploy.sql")] {
             let e = load(&fs, MAX).unwrap_err();
             assert_eq!(e.exit_code(), 14, "{}", e.text());
+            assert_eq!(
+                e.text(),
+                "deploy.sql not found in /mem\nexpected: /mem/deploy.sql — run `pgmi init` to scaffold one"
+            );
         }
         assert!(scan(&MemFs::default(), MAX).is_ok());
     }
@@ -468,7 +487,7 @@ mod tests {
             assert_eq!(
                 refused(&fs),
                 format!(
-                    "failed to read ./{name}: refusing to read symlink {name}: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file"
+                    "failed to scan directory \"/mem\": failed to read ./{name}: refusing to read symlink {name}: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file"
                 )
             );
         }
@@ -492,7 +511,7 @@ mod tests {
         assert_eq!(load(&fs, MAX).unwrap().sources[0].content, "SELECT 1;");
         assert_eq!(
             refused(&project().file("a.sql", b"SELECT\0")),
-            "file ./a.sql contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
+            "failed to scan directory \"/mem\": file ./a.sql contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
         );
         assert!(refused(&project().file("a.sql", b"SELECT \xff")).contains("byte offset 7"));
         let big = project().file("a.sql", "x".repeat(11));
@@ -538,10 +557,16 @@ mod tests {
             assert_eq!(
                 refused(&fs),
                 format!(
-                    "failed to read ./{rel}: refusing to read {rel}: not a regular file (a named pipe, socket or device); exclude it in .pgmiignore or remove it"
+                    "failed to scan directory \"/mem\": failed to read ./{rel}: refusing to read {rel}: not a regular file (a named pipe, socket or device); exclude it in .pgmiignore or remove it"
                 )
             );
-            assert_eq!(scan(&fs, MAX).unwrap_err().text(), refused(&fs));
+            assert_eq!(
+                format!(
+                    "failed to scan directory \"/mem\": {}",
+                    scan(&fs, MAX).unwrap_err().text()
+                ),
+                refused(&fs)
+            );
         }
         assert!(
             load(

@@ -31,7 +31,8 @@ states the Rust one under `expect.rust` (`blackbox/README.md`).
 `--timeout` that is not a duration); 3 internal panic; 10 invalid pgmi
 configuration, refused before any database is created, dropped or written;
 11 connection failed, including a `--timeout` that runs out while connecting;
-12 overwrite not approved; 13 SQL failed; 14 `deploy.sql` missing; 15 another
+12 overwrite not approved; 13 SQL failed; 14 `deploy.sql` missing (the message names the expected path and points
+to `pgmi init`); 15 another
 deploy holds the target; 16 `--timeout` exceeded after connecting; 130 SIGINT
 or SIGTERM. Full table: `docs/CLI.md` "Exit Codes".
 An error is one stderr line starting `pgmi: error: `. Usage errors include an
@@ -121,10 +122,11 @@ subcommand, template or shell, or extra arguments, is exit 2. `pgmi` with no
 arguments prints the root help on stdout and exits 0; on a terminal it draws
 the banner on stderr instead, unless `PGMI_NO_BANNER` is set. `deploy --help`
 describes the command, its examples, where the password and parameters come
-from, and every flag. Completion offers `init --template` names and
-`--sslmode` values in every shell; in PowerShell the Rust script completes
-them itself (Rust unit test
-`powershell_completes_template_names_and_sslmode_values`), where Go's script
+from, and every flag. Completion offers `init --template` names,
+`templates describe` names and `--sslmode` values in every shell; in
+PowerShell and fish the Rust script completes them itself (Rust unit tests
+`powershell_completes_template_names_and_sslmode_values`,
+`bash_zsh_and_fish_complete_template_names_after_describe`), where Go's script
 calls back into the binary.
 
 Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
@@ -240,7 +242,11 @@ other than `__test__` and `__tests__` is exit 10. A file larger than the cap
 is exit 10. A named pipe, socket or device that `.pgmiignore` does not hide,
 `deploy.sql` included, is exit 10 (`refusing to read <path>: not a regular
 file (a named pipe, socket or device)`) and is never read, in `deploy` and in
-`info`. The first SIGINT or SIGTERM during the load is exit 130 and a
+`info`. In `deploy` these refusals, `.pgmiignore`'s and a `<pgmi-meta>` block
+that does not parse start with `failed to scan directory "<path>": `; in
+`info`, `metadata plan` and `metadata scaffold` with `failed to scan
+directory: `, in `metadata validate` with `validation failed: `, as in Go.
+The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 

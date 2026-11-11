@@ -1,4 +1,4 @@
-description: the project walk never follows a symbolic link (file or directory) unless .pgmiignore hides it, deploy.sql itself may be one, and a file with a NUL byte or invalid UTF-8 is exit 10 naming the file, in Go's words
+description: the project walk never follows a symbolic link (file or directory) unless .pgmiignore hides it, deploy.sql itself may be one, and a file with a NUL byte or invalid UTF-8 is exit 10 naming the file, in Go's words, after Go's "failed to scan directory" prefix (deploy names the path; info and metadata scaffold do not; metadata validate says "validation failed")
 project:
   files:
     shared/x.sql: SELECT 'outside';
@@ -17,13 +17,19 @@ project:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}/link-file", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ['failed to read \./x\.sql: refusing to read symlink x\.sql: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
+    expect: {exit: 10, stderr: ['failed to scan directory "{project}/link-file": failed to read \./x\.sql: refusing to read symlink x\.sql: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
+  - pgmi: [info, "{project}/link-file"]
+    expect: {exit: 10, stderr: ['error: failed to scan directory: failed to read \./x\.sql: refusing to read symlink']}
+  - pgmi: [metadata, validate, "{project}/link-file"]
+    expect: {exit: 10, stderr: ['error: validation failed: failed to read \./x\.sql: refusing to read symlink']}
+  - pgmi: [metadata, scaffold, "{project}/link-file"]
+    expect: {exit: 10, stderr: ['error: failed to scan directory: failed to read \./x\.sql: refusing to read symlink']}
   - pgmi: [deploy, "{project}/link-dir", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ['failed to read \./lib: refusing to read symlink lib: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
+    expect: {exit: 10, stderr: ['failed to scan directory "{project}/link-dir": failed to read \./lib: refusing to read symlink lib: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
   - pgmi: [deploy, "{project}/nul", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ['file \./data\.bin contains a NUL byte; pgmi loads project files as text, so exclude it in \.pgmiignore or move it out of the project path']}
+    expect: {exit: 10, stderr: ['failed to scan directory "{project}/nul": file \./data\.bin contains a NUL byte; pgmi loads project files as text, so exclude it in \.pgmiignore or move it out of the project path']}
   - pgmi: [deploy, "{project}/utf8", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ["\\./latin1\\.sql", "not valid UTF-8"]}
+    expect: {exit: 10, stderr: ['failed to scan directory "{project}/utf8": file \./latin1\.sql', "not valid UTF-8"]}
   - pgmi: [deploy, "{project}/deploy-utf8", --connection, "{conn}", -d, "{db}"]
     expect: {exit: 10, stderr: ["deploy\\.sql is not valid UTF-8", "offset 7"]}
   - pgmi: [deploy, "{project}/ignored", --connection, "{conn}", -d, "{db}", --json]

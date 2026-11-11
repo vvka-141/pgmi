@@ -1,8 +1,36 @@
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
+use clap::builder::{PossibleValue, StringValueParser, TypedValueParser};
 use clap::{Args, Subcommand};
 
 use super::go_bool;
+
+/// Any text, so `templates describe` keeps its own refusal of an unknown
+/// name; the template names are offered to shell completion.
+#[derive(Clone)]
+struct TemplateName;
+
+impl TypedValueParser for TemplateName {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<String, clap::Error> {
+        StringValueParser::new().parse_ref(cmd, arg, value)
+    }
+
+    fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
+        Some(Box::new(
+            crate::templates::Template::ALL
+                .iter()
+                .map(|t| PossibleValue::new(t.name())),
+        ))
+    }
+}
 
 #[derive(Debug, Args)]
 pub(crate) struct InfoArgs {
@@ -22,7 +50,10 @@ pub(crate) enum TemplatesCommand {
     #[command(about = "List available templates")]
     List,
     #[command(about = "Show the structure and features of a template")]
-    Describe { name: String },
+    Describe {
+        #[arg(value_parser = TemplateName, hide_possible_values = true)]
+        name: String,
+    },
 }
 
 #[derive(Debug, Args)]
