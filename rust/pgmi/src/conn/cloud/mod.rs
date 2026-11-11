@@ -141,7 +141,7 @@ pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &En
         }
         Some(mode) if mode.allows_plaintext() => Err(Error::config(format!(
             "sslmode \"{mode}\" from {} is not allowed with {} authentication: it can send the token without TLS; use require, verify-ca or verify-full",
-            spec.source.label(),
+            spec.sslmode_source,
             provider.label()
         ))),
         Some(_) => Ok(()),

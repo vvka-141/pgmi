@@ -69,6 +69,7 @@ pub(crate) enum ParseError {
     UnterminatedBracket,
     KeyWithoutEquals,
     UnterminatedQuote,
+    TextAfterQuote,
     PartWithoutEquals,
     SslMode(String),
 }
@@ -105,6 +106,10 @@ impl fmt::Display for ParseError {
             ParseError::UnterminatedQuote => {
                 f.write_str("invalid connection string: unterminated quoted value")
             }
+            ParseError::TextAfterQuote => write!(
+                f,
+                "invalid connection string ({HIDDEN}): text after a closing quote; put the whole value inside the quotes"
+            ),
             ParseError::PartWithoutEquals => write!(
                 f,
                 "invalid connection string ({HIDDEN}): a part has no \"=\""
@@ -166,7 +171,38 @@ fn looks_like_ado(s: &str) -> bool {
     let Some((first, _)) = s.split_once('=') else {
         return false;
     };
-    s.contains(';') || first.contains(' ') || first.chars().any(|c| c.is_ascii_uppercase())
+    let first = first.trim();
+    unquoted_semicolon(s) || first.contains(' ') || first.chars().any(|c| c.is_ascii_uppercase())
+}
+
+fn unquoted_semicolon(s: &str) -> bool {
+    let mut chars = s.chars();
+    let mut value_start = false;
+    while let Some(c) = chars.next() {
+        match c {
+            ';' => return true,
+            '=' => value_start = true,
+            '\'' if value_start => {
+                while let Some(q) = chars.next() {
+                    match q {
+                        '\\' => {
+                            chars.next();
+                        }
+                        '\'' => break,
+                        _ => {}
+                    }
+                }
+                value_start = false;
+            }
+            c if c.is_whitespace() => {}
+            '\\' => {
+                value_start = false;
+                chars.next();
+            }
+            _ => value_start = false,
+        }
+    }
+    false
 }
 
 fn decode(s: &str) -> Result<String> {
@@ -281,17 +317,62 @@ fn keyword(s: &str) -> Result<Fields> {
     }
 }
 
+fn ado_pairs(s: &str) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace() || *c == ';').is_some() {}
+        if chars.peek().is_none() {
+            return Ok(out);
+        }
+        let key: String =
+            std::iter::from_fn(|| chars.next_if(|c| *c != '=' && *c != ';')).collect();
+        if chars.next() != Some('=') {
+            return Err(ParseError::PartWithoutEquals);
+        }
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let value = match chars.next_if(|c| *c == '\'' || *c == '"') {
+            Some(quote) => {
+                let mut value = String::new();
+                loop {
+                    match chars.next() {
+                        Some(c) if c == quote => {
+                            if chars.next_if_eq(&quote).is_none() {
+                                break;
+                            }
+                            value.push(quote);
+                        }
+                        Some(c) => value.push(c),
+                        None => return Err(ParseError::UnterminatedQuote),
+                    }
+                }
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                if chars.next_if(|c| *c != ';').is_some() {
+                    return Err(ParseError::TextAfterQuote);
+                }
+                value
+            }
+            None => std::iter::from_fn(|| chars.next_if(|c| *c != ';'))
+                .collect::<String>()
+                .trim()
+                .to_string(),
+        };
+        out.push((key.trim().to_string(), value));
+    }
+}
+
 fn ado(s: &str) -> Result<Fields> {
     let mut out = Fields::new();
-    for part in s.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-        let (k, v) = part.split_once('=').ok_or(ParseError::PartWithoutEquals)?;
-        let v = v.trim().to_string();
-        let key = k.trim().to_ascii_lowercase().replace([' ', '_'], "");
+    let mut host_port = None;
+    for (k, v) in ado_pairs(s)? {
+        let key = k.to_ascii_lowercase().replace([' ', '_'], "");
         let name = match key.as_str() {
             "server" | "host" | "datasource" | "address" | "addr" => match v.rsplit_once(':') {
-                Some((h, p)) if !h.contains(':') && p.chars().all(|c| c.is_ascii_digit()) => {
+                Some((h, p))
+                    if !h.contains([':', ',']) && p.chars().all(|c| c.is_ascii_digit()) =>
+                {
                     out.insert("host".into(), h.to_string());
-                    out.insert("port".into(), p.to_string());
+                    host_port = Some(p.to_string());
                     continue;
                 }
                 _ => "host",
@@ -313,9 +394,12 @@ fn ado(s: &str) -> Result<Fields> {
             "options" => "options",
             "targetsessionattributes" => "target_session_attrs",
             "channelbinding" => "channel_binding",
-            _ => return Err(ParseError::UnknownKey(k.trim().to_string())),
+            _ => return Err(ParseError::UnknownKey(k)),
         };
         out.insert(name.into(), v);
+    }
+    if let Some(p) = host_port {
+        out.insert("port".into(), p);
     }
     Ok(out)
 }
@@ -467,6 +551,98 @@ mod tests {
         ] {
             assert_eq!(fields(input), pairs(want), "{input}");
         }
+    }
+
+    #[test]
+    fn ado_net_quoted_values_keep_semicolons_and_doubled_quotes() {
+        assert_eq!(
+            fields("Host=localhost;Database=mydb;Username=user;Password='p;a=ss'"),
+            pairs(&[
+                ("host", "localhost"),
+                ("dbname", "mydb"),
+                ("user", "user"),
+                ("password", "p;a=ss"),
+            ])
+        );
+        assert_eq!(
+            fields(r#"Host=localhost;Database=mydb;Username=user;Password="a""b;c""#),
+            pairs(&[
+                ("host", "localhost"),
+                ("dbname", "mydb"),
+                ("user", "user"),
+                ("password", r#"a"b;c"#),
+            ])
+        );
+        assert_eq!(
+            fields("Password='p;a=ss'"),
+            pairs(&[("password", "p;a=ss")])
+        );
+        assert_eq!(
+            parse("Host=h;Password='p;a"),
+            Err(ParseError::UnterminatedQuote)
+        );
+        assert_eq!(
+            parse("Host=h;Password='pw'tail;Database=d"),
+            Err(ParseError::TextAfterQuote)
+        );
+    }
+
+    #[test]
+    fn a_quoted_ado_net_value_is_never_read_as_a_key_or_echoed() {
+        for (input, secret) in [
+            ("Host=h;Database=x;Password='p;SecretTail=ss'", None),
+            (
+                "Host=h;Database=x;Password='p;SecretTail=ss",
+                Some("SecretTail"),
+            ),
+            (
+                "Host=h;Database=x;Password='p;SecretTail=ss'junk",
+                Some("SecretTail"),
+            ),
+            (
+                "Host=h;Database=x;Password=\"p;SecretTail\"\"=ss",
+                Some("SecretTail"),
+            ),
+        ] {
+            match (parse(input), secret) {
+                (Ok(f), None) => assert_eq!(f["password"], "p;SecretTail=ss"),
+                (Err(e), Some(secret)) => {
+                    let text = Error::from(e).text();
+                    assert!(!text.contains(secret), "{input}: {text}");
+                }
+                (r, _) => panic!("{input}: {r:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_port_in_the_ado_net_host_wins_wherever_port_stands() {
+        for input in [
+            "Host=127.0.0.1:5433;Port=5999;Database=d;Username=u",
+            "Port=5999;Host=127.0.0.1:5433;Database=d;Username=u",
+        ] {
+            let f = parse(input).unwrap();
+            assert_eq!(
+                (f["host"].as_str(), f["port"].as_str()),
+                ("127.0.0.1", "5433"),
+                "{input}"
+            );
+        }
+        let f = parse("Host=a,b:5433;Database=d").unwrap();
+        assert_eq!(f["host"], "a,b:5433");
+        assert!(!f.contains_key("port"));
+    }
+
+    #[test]
+    fn keyword_value_allows_spaces_around_equals_and_semicolons_in_quotes() {
+        assert_eq!(
+            fields("host = db1   dbname = app"),
+            pairs(&[("host", "db1"), ("dbname", "app")])
+        );
+        assert_eq!(
+            fields(r"host=db1 password='a b\'c;d' dbname=app"),
+            pairs(&[("host", "db1"), ("password", "a b'c;d"), ("dbname", "app")])
+        );
     }
 
     #[test]

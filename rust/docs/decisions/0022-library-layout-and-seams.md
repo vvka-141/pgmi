@@ -250,16 +250,15 @@ land before or between steps, each with a black-box case.
    first host plus the rest, with no `localhost:5432` fallback.
    `conn/resolve_tests.rs` ports resolver group 5 (without `EnvOverrides`:
    Rust has no override notes) and `FormattingNeverPrintsSecrets`;
-   `conn::parse` tests port group 6. Not ported, because Rust behaves
-   differently from Go and changing that is not a refactor: ADO.NET quoted
-   values (`Password='p;a=ss'`, `"a""b;c"`) are split at `;`;
-   `Host=h:6000;Port=5999` takes 5999 where Go keeps the host's port;
-   a keyword/value string with a space before `=` or a `;` inside a
-   quoted value is read as ADO.NET; `PGPORT=" 5432 "` is accepted (libpq
-   does too, Go refuses); the token-auth refusal names the server's source
-   (`flags`, `--connection`), not the sslmode's (`--sslmode`,
-   `$PGSSLMODE`); two granular flags beside an environment string name
-   only the first.
+   `conn::parse` tests port group 6. PGMI-866 then ported the cases that
+   had found Rust worse than Go: ADO.NET quoted values (`Password='p;a=ss'`,
+   `"a""b;c"`), `Host=h:6000;Port=5999` keeping the host's port, a
+   keyword/value string with spaces around `=` or a `;` inside a quoted
+   value, and the token-auth refusal now naming the sslmode's source
+   (`--sslmode`, `PGSSLMODE`, the string's source, `pgmi.yaml`). Still
+   not ported: `PGPORT=" 5432 "` is accepted (libpq does too, Go refuses;
+   a row in the contract's 0.20 table); two granular flags beside an
+   environment string name only the first.
 10. **Typed module errors and `conn::retry`.** Port groups 6 and 7.
     Done 2026-11-11: `ParseError`, `ResolveError` and `MetaError` as
     record 0002 now says; tests match variants instead of substrings
@@ -270,10 +269,9 @@ land before or between steps, each with a black-box case.
     in `dial` call them, and the failure text is the pure
     `dial::connect_error`. Tests: the contract's transient list against
     Go's non-transient SQLSTATEs, the delay table, and the SQLSTATE and
-    hint rules of `connect_error`. Not ported from group 7: Go's
-    message-matching classifier cases (`"broken pipe"`, `"unexpected
-    EOF"`, DNS temporary errors are transient in Go; Rust classifies by
-    `io::ErrorKind` and treats a failed host lookup as final), and the
+    hint rules of `connect_error`. PGMI-866 added Go's transient
+    broken pipe, early close (`UnexpectedEof`) and temporary name-lookup
+    failure (`retry::transient_lookup`). Not ported from group 7: the
     `WrapConnectionError` texts that Rust words differently (`too many
     connections to database`, the pgpass and Azure hints); both are
     behaviour, not structure. The other `Result<_, String>` functions

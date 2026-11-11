@@ -239,7 +239,9 @@ Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-ke
 The connection comes from `--connection`, else `PGMI_CONNECTION_STRING`, else
 `DATABASE_URL`, else `-h/-p/-U` with the `PG*` variables, else `pgmi.yaml`,
 else defaults (localhost:5432, maintenance database `postgres`). A connection
-string may be a URI, libpq keyword/value or ADO.NET. `-d` (or `PGDATABASE`, or
+string may be a URI, libpq keyword/value (spaces around `=`, quoted values
+holding `;`) or ADO.NET (a value quoted with `'` or `"`, a doubled quote
+inside; a port in `Host=h:port` wins over `Port=` wherever it stands). `-d` (or `PGDATABASE`, or
 `pgmi.yaml` `database`) names the target; the string's database is the
 maintenance database. Refused with exit 10: `--connection` with `-h`, `-p` or
 `-U`; `-h`, `-p` or `-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL`;
@@ -248,7 +250,7 @@ maintenance database. Refused with exit 10: `--connection` with `-h`, `-p` or
 came from (`connection: from <source>`). Full reference: `docs/CLI.md`
 "Precedence", `docs/CONFIGURATION.md`.
 
-Cases: `flags/connection-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`.
+Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`.
 
 ### Connection resolution
 
@@ -261,8 +263,8 @@ allowed; a file readable by group or others is ignored with a WARNING. Several
 hosts are tried in order and the error names every one tried;
 `target_session_attrs` takes `any`, `read-write`, `read-only`, `primary`,
 `standby`, `prefer-standby`. `options=` reaches the server. A connection that
-fails transiently (SQLSTATE class 08, 53300, 57P03, refused, reset, unreachable,
-timeout) is tried 4 times in all, waiting about 0.1 s, 0.2 s, 0.4 s, each line
+fails transiently (SQLSTATE class 08, 53300, 57P03, refused, reset, broken pipe,
+closed early, unreachable, timeout, a temporary name-lookup failure) is tried 4 times in all, waiting about 0.1 s, 0.2 s, 0.4 s, each line
 on stderr; other failures are not retried. `max_protocol_version` and
 `min_protocol_version` (`3.0`, `3.2`) are accepted, and a deploy and a cancel
 work with both set to `3.2` (Go speaks 3.2 then; the Rust binary refuses a
@@ -667,7 +669,9 @@ Cases: `connection/keywords`.
 ### PGPORT may list several ports
 
 Go refuses `PGPORT=5432,5433` (exit 10). The Rust binary accepts a list matching
-`PGHOST`, as libpq does.
+`PGHOST`, as libpq does. It also accepts spaces around a port
+(`PGPORT=" 5432 "`), as libpq does, where Go refuses it (owner, 2026-11-11;
+Rust unit test `pgport_edge_cases`).
 
 Cases: `connection/target-session-attrs`.
 
@@ -797,6 +801,7 @@ release notes take their "Behaviour changes" section from this table.
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
 | Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
 | `PGPORT` listing several ports | refused, exit 10 | accepted, one per `PGHOST` entry | owner 2026-11-10 |
+| `PGPORT` with spaces around the number (`" 5432 "`) | refused, exit 10 | accepted, as libpq does | owner 2026-11-11 |
 | `keepalives*`, `load_balance_hosts`, `gssencmode=disable`/`prefer`, `gssdelegation=0`, `sslcompression=0` | exit 11 (the server refuses the setting) | honoured | owner 2026-11-11 |
 | `hostaddr` | exit 10 (keyword form) or 11 (URI) | honoured, no lookup | owner 2026-11-11 |
 | `gssencmode=require`, `gssdelegation=1`, `gsslib`, `sslcompression=1` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |

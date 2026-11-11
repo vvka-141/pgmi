@@ -9,7 +9,8 @@ pub(crate) enum Cause<'a> {
 }
 
 /// Whether trying again may succeed: SQLSTATE class 08, 53300 and 57P03,
-/// and a socket refused, reset, aborted, unreachable or timed out.
+/// and a socket refused, reset, aborted, broken, closed early, unreachable or
+/// timed out.
 pub(crate) fn transient(cause: Cause<'_>) -> bool {
     match cause {
         Cause::Sqlstate(code) => code.starts_with("08") || code == "53300" || code == "57P03",
@@ -18,11 +19,29 @@ pub(crate) fn transient(cause: Cause<'_>) -> bool {
             io::ErrorKind::ConnectionRefused
                 | io::ErrorKind::ConnectionReset
                 | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::UnexpectedEof
                 | io::ErrorKind::TimedOut
                 | io::ErrorKind::HostUnreachable
                 | io::ErrorKind::NetworkUnreachable
         ),
     }
+}
+
+/// Whether a failed host-name lookup may succeed when tried again: the
+/// resolver answered "try again" (EAI_AGAIN; WSATRY_AGAIN on Windows) or
+/// timed out. A name that does not exist is final.
+pub(crate) fn transient_lookup(e: &io::Error) -> bool {
+    const WSATRY_AGAIN: i32 = 11002;
+    if e.kind() == io::ErrorKind::TimedOut
+        || (cfg!(windows) && e.raw_os_error() == Some(WSATRY_AGAIN))
+    {
+        return true;
+    }
+    let text = e.to_string().to_ascii_lowercase();
+    ["temporary failure in name resolution", "try again"]
+        .iter()
+        .any(|m| text.contains(m))
 }
 
 const DELAYS: [Duration; 3] = [
@@ -63,6 +82,8 @@ mod tests {
             ConnectionRefused,
             ConnectionReset,
             ConnectionAborted,
+            BrokenPipe,
+            UnexpectedEof,
             TimedOut,
             HostUnreachable,
             NetworkUnreachable,
@@ -79,6 +100,25 @@ mod tests {
             Other,
         ] {
             assert!(!transient(Cause::Io(kind)), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_temporary_lookup_failure_is_retried_and_an_unknown_name_is_not() {
+        let lookup = |detail: &str| {
+            io::Error::other(format!("failed to lookup address information: {detail}"))
+        };
+        for detail in ["Temporary failure in name resolution", "Try again"] {
+            assert!(transient_lookup(&lookup(detail)), "{detail}");
+        }
+        assert!(transient_lookup(&io::Error::from(io::ErrorKind::TimedOut)));
+        for detail in [
+            "Name or service not known",
+            "Name does not resolve",
+            "nodename nor servname provided, or not known",
+            "No address associated with hostname",
+        ] {
+            assert!(!transient_lookup(&lookup(detail)), "{detail}");
         }
     }
 

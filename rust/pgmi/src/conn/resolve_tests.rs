@@ -915,8 +915,14 @@ fn token_auth_refuses_an_sslmode_that_allows_plaintext() {
                 let e =
                     refused_before_connecting(token_check(provider, fl.clone(), &env, y.as_ref()));
                 let text = e.to_string();
+                let from = match name {
+                    "flag" => "--sslmode",
+                    "connection string" => "--connection",
+                    n if n.starts_with("PGSSLMODE") => "PGSSLMODE",
+                    n => n,
+                };
                 assert!(
-                    text.starts_with(&format!("sslmode \"{mode}\" from ")),
+                    text.starts_with(&format!("sslmode \"{mode}\" from {from} is not allowed")),
                     "{name}: {text}"
                 );
                 assert!(

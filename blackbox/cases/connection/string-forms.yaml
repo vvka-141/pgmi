@@ -1,0 +1,13 @@
+description: a keyword/value string may have spaces around "=" and a quoted value holding ";"; an ADO.NET value may be quoted; an ADO.NET Host with a port wins over Port= wherever it stands
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "host = {host}   port = {port} user = {user} password = {password} dbname = postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "host={host} port={port} user={user} password='{password}' application_name='a;b' dbname=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Host={host};Port={port};Username={user};Password='{password}';Database=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Host={host}:{port};Port=1;Username={user};Password={password};Database=postgres", -d, "{db}"]
+    expect: {exit: 0}

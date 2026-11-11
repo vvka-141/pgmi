@@ -308,6 +308,9 @@ pub(crate) struct Spec {
     pub(crate) target_db: String,
     /// The mode asked for; `sslmode()` is the one used.
     pub(crate) requested_sslmode: Option<SslMode>,
+    /// Where `requested_sslmode` came from: `--sslmode`, `PGSSLMODE`, the
+    /// connection string's source or pgmi.yaml.
+    pub(crate) sslmode_source: &'static str,
     pub(crate) sslrootcert: Option<String>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
@@ -432,6 +435,15 @@ fn finish(
     source: Source,
     no_string: bool,
 ) -> Result<Spec> {
+    let sslmode_source = if flags.sslmode.is_some() {
+        "--sslmode"
+    } else if f.contains_key("sslmode") {
+        source.label()
+    } else if env.non_empty("PGSSLMODE")?.is_some() {
+        "PGSSLMODE"
+    } else {
+        "pgmi.yaml"
+    };
     for (env_name, key) in ENV_DEFAULTS {
         if !f.contains_key(*key)
             && let Some(v) = env.non_empty(env_name)?
@@ -591,6 +603,7 @@ fn finish(
         maintenance_db,
         target_db,
         requested_sslmode,
+        sslmode_source,
         sslrootcert,
         sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),
         sslkey: f.remove("sslkey").filter(|v| !v.is_empty()),

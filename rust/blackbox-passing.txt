@@ -51,6 +51,7 @@ connection/pgpass-world-readable
 connection/pgx-options
 connection/protocol-version
 connection/sslcompression
+connection/string-forms
 connection/target-session-attrs
 connection/tcp-user-timeout
 connection/unix-socket

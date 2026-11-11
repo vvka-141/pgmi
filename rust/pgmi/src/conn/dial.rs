@@ -349,13 +349,21 @@ where
     .abort_handle()
 }
 
-async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, String> {
+struct Unresolved {
+    text: String,
+    transient: bool,
+}
+
+async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, Unresolved> {
     if host.starts_with('/') || host.parse::<std::net::IpAddr>().is_ok() {
         return Ok(vec![host.to_string()]);
     }
     let found = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|e| format!("could not resolve host \"{host}\": {e}"))?;
+        .map_err(|e| Unresolved {
+            text: format!("could not resolve host \"{host}\": {e}"),
+            transient: retry::transient_lookup(&e),
+        })?;
     let mut out: Vec<String> = Vec::new();
     for a in found {
         let ip = a.ip().to_string();
@@ -448,9 +456,9 @@ impl Dialer {
                 };
                 let mut addrs = match resolved {
                     Ok(a) => a,
-                    Err(e) => {
-                        all_transient = false;
-                        errors.push(e);
+                    Err(u) => {
+                        all_transient &= u.transient;
+                        errors.push(u.text);
                         continue;
                     }
                 };
