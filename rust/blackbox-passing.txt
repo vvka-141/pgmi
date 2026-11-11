@@ -146,6 +146,7 @@ terminal/config-refusals
 terminal/config-replace-unparseable
 terminal/config-wizard
 terminal/force-banner
+terminal/force-countdown-timeout
 terminal/init-wizard
 terminal/init-wizard-connection
 terminal/no-terminal-queries

@@ -1,0 +1,20 @@
+description: --timeout covers the --force countdown on a terminal; running out there is exit 16 and drops nothing
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force, --timeout, 3s]
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    timeout: 30
+    expect:
+      exit: 16
+      stdout: ["exceeded --timeout 3s"]
+      stdout_not: ["in 1s\\."]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

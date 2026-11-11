@@ -308,7 +308,14 @@ a danger banner on a terminal unless `PGMI_NO_BANNER` is set, and without a
 countdown when there is no terminal; without `--force` and without a terminal
 it is refused with exit 12 and nothing is dropped. `--force` alone changes
 nothing. End of input at the name prompt is exit 12 (`No input available`);
-SIGINT at the prompt or during the countdown is 130 and drops nothing.
+SIGINT at the prompt or during the countdown is 130 and drops nothing;
+`--timeout` covers them too, and running out there is exit 16 and drops
+nothing. A `--timeout` that runs out during the overwrite's catalog queries
+is 16. Once the drop has begun nothing interrupts it: the create and the
+restore finish (under their own 60-second bound, then cancelled on the
+server), and the run then reports the signal (130) or the timeout (16); the
+summary says `recreated database "<db>", left empty` and `--json` has
+`recreated: true`.
 The recreated database keeps its owner, connection limit, database and
 role-in-database settings, comment and privileges; a deploying role that
 could not put one of them back is refused with exit 10 naming each item, and
@@ -316,7 +323,7 @@ nothing is dropped. A database PostgreSQL marked invalid (connection limit
 -2, left by an interrupted `DROP DATABASE`) comes back with no connection
 limit. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/non-interactive`, `terminal/prompt-cancel`.
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
 
 ### Concurrency
 

@@ -186,6 +186,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Behaviour | Coverage |
 |---|---|
 | `init` wizard, overwrite confirmation (right name / wrong name = 12), `--force` countdown and banner, `config` | ✓ `terminal/*` |
+| `--timeout` during the `--force` countdown = 16, nothing dropped | ✓ `terminal/force-countdown-timeout` |
 | end of input at the prompt = 12, SIGINT at the prompt or countdown = 130, Ctrl-C in `config` = 130 | ✓ `terminal/prompt-cancel`; Esc on the first `config` screen ✗ (did not end the wizard under the runner's pty; not investigated) |
 
 ## Cloud sign-in

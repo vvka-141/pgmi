@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
-use super::{quote_ident, sql_error};
+use super::{Provision, quote_ident, sql_error};
 use crate::conn::dial::Session;
 use crate::conn::resolve::Spec;
 use crate::error::{Error, Kind, Result};
@@ -314,12 +314,20 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     out
 }
 
+const RECREATE: Duration = Duration::from_secs(60);
+
+/// Drops `db` when there is a snapshot, creates it and puts the snapshot
+/// back. Nothing cancels it once it has begun, so a database is never left
+/// dropped or half restored; it has its own bound instead, and cancels the
+/// statement on the server when that runs out. `provision` records the
+/// create as soon as it has happened.
 pub(crate) async fn recreate(
     maintenance: &Session,
     db: &str,
     snapshot: Option<&Snapshot>,
     reporter: &Reporter,
-) -> Result<bool> {
+    provision: &mut Provision,
+) -> Result<()> {
     let work = async {
         let c = &maintenance.client;
         if snapshot.is_some() {
@@ -330,6 +338,11 @@ pub(crate) async fn recreate(
         c.batch_execute(&create_sql(db, snapshot))
             .await
             .map_err(|e| sql_error("create the target database", &e))?;
+        *provision = if snapshot.is_some() {
+            Provision::Recreated
+        } else {
+            Provision::Created
+        };
         let mut failed = Vec::new();
         if let Some(s) = snapshot {
             for (item, sql) in restore_sql(db, s) {
@@ -349,14 +362,17 @@ pub(crate) async fn recreate(
         } else {
             format!("Database \"{db}\" does not exist; creating")
         });
-        Ok(snapshot.is_some())
+        Ok(())
     };
-    match tokio::time::timeout(Duration::from_secs(60), work).await {
+    match tokio::time::timeout(RECREATE, work).await {
         Ok(r) => r,
-        Err(_) => Err(Error::new(
-            Kind::Timeout,
-            format!("--overwrite of \"{db}\" did not finish within 60s"),
-        )),
+        Err(_) => {
+            maintenance.cancel().await;
+            Err(Error::new(
+                Kind::Timeout,
+                format!("--overwrite of \"{db}\" did not finish within 60s"),
+            ))
+        }
     }
 }
 

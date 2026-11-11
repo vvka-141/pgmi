@@ -183,6 +183,16 @@ impl Guard {
         .await
     }
 
+    fn check(&self) -> Result<()> {
+        if self.token.is_cancelled() {
+            Err(self.stop_error())
+        } else if TokioInstant::now() >= self.deadline {
+            Err(self.expired_error())
+        } else {
+            Ok(())
+        }
+    }
+
     async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
@@ -612,28 +622,29 @@ async fn overwrite(
     let maintenance = guard
         .connecting(dialer.connect(spec, &spec.maintenance_db))
         .await?;
-    let exists = guard.connecting(overwrite::claim(&maintenance, db)).await?;
+    let exists = guard
+        .running(&maintenance, overwrite::claim(&maintenance, db))
+        .await?;
     let snapshot = if exists {
-        ctx.approver
-            .approve_drop(db, reporter, &guard.token)
+        guard
+            .waiting(ctx.approver.approve_drop(db, reporter, &guard.token))
             .await?;
         guard
-            .connecting(overwrite::snapshot(&maintenance, db))
+            .running(&maintenance, overwrite::snapshot(&maintenance, db))
             .await?
     } else {
         None
     };
-    let recreated = guard
-        .running(
-            &maintenance,
-            overwrite::recreate(&maintenance, db, snapshot.as_ref(), reporter),
-        )
-        .await?;
-    st.provision = if recreated {
-        Provision::Recreated
-    } else {
-        Provision::Created
-    };
+    guard.check()?;
+    overwrite::recreate(
+        &maintenance,
+        db,
+        snapshot.as_ref(),
+        reporter,
+        &mut st.provision,
+    )
+    .await?;
+    guard.check()?;
     Ok(maintenance)
 }
 
@@ -753,8 +764,14 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
         Some(_) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
         _ => {}
     }
-    if p.loaded.is_some() && p.provision == Provision::Created && committed == 0 {
-        notes.push(format!("created database \"{db}\", left empty"));
+    let verb = match p.provision {
+        Provision::Existing => None,
+        Provision::Created => Some("created"),
+        Provision::Recreated => Some("recreated"),
+    };
+    if let Some(verb) = verb.filter(|_| p.loaded.is_some()) {
+        let left = if committed == 0 { ", left empty" } else { "" };
+        notes.push(format!("{verb} database \"{db}\"{left}"));
     }
     if !notes.is_empty() {
         text.push_str(&format!(" — {}", notes.join("; ")));
@@ -938,6 +955,19 @@ mod tests {
                 .unwrap()
                 .1,
             "app: failed after 1.23s — created database \"app\", left empty"
+        );
+        let recreated = Progress {
+            provision: Provision::Recreated,
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(
+                &recreated,
+                &Err(Error::new(Kind::Interrupted, "interrupted"))
+            )
+            .unwrap()
+            .1,
+            "app: failed after 1.23s — recreated database \"app\", left empty"
         );
         let created_then_sql = Progress {
             execution: executed(0, failure(1, blame::Blame::default())),
