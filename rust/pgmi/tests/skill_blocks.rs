@@ -225,9 +225,21 @@ fn deploy_skill_blocks(
         return Err(out.stderr);
     }
     let seen: BTreeSet<&str> = out.lines().into_iter().collect();
+    let password = std::str::FromStr::from_str(pg.conn())
+        .ok()
+        .and_then(|c: tokio_postgres::Config| {
+            c.get_password()
+                .map(|p| String::from_utf8_lossy(p).into_owned())
+        })
+        .filter(|p| p.len() >= 3);
+    let shown = |m: &str| {
+        password
+            .as_deref()
+            .map_or_else(|| m.to_string(), |p| m.replace(p, "***"))
+    };
     let mut ran = 0;
     for marker in &markers {
-        if !seen.contains(marker.as_str()) {
+        if !seen.contains(shown(marker).as_str()) {
             return Err(format!(
                 "block {marker:?} was written but nothing executed it: put its target where deploy.sql runs files, or in a __test__/ directory"
             ));
