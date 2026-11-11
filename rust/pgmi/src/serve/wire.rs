@@ -4,28 +4,69 @@
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::value::RawValue;
 
-#[derive(Default)]
+/// The longest line read, in bytes; a longer one is dropped unread.
+pub const MAX_LINE: usize = 16 << 20;
+
+/// Splits a byte stream into lines of at most `limit` bytes. A longer line
+/// is never buffered: it is dropped and counted in `take_oversized`.
 pub struct Lines {
     buf: Vec<u8>,
+    limit: usize,
+    skipping: bool,
+    oversized: usize,
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Lines::with_limit(MAX_LINE)
+    }
 }
 
 impl Lines {
+    pub fn with_limit(limit: usize) -> Self {
+        Lines {
+            buf: Vec::new(),
+            limit,
+            skipping: false,
+            oversized: 0,
+        }
+    }
+
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         let mut rest = chunk;
         while let Some(n) = rest.iter().position(|b| *b == b'\n') {
-            let mut line = std::mem::take(&mut self.buf);
-            line.extend_from_slice(&rest[..n]);
-            out.push(line);
+            self.append(&rest[..n]);
+            if !std::mem::take(&mut self.skipping) {
+                out.push(std::mem::take(&mut self.buf));
+            }
             rest = &rest[n + 1..];
         }
-        self.buf.extend_from_slice(rest);
+        self.append(rest);
         out
     }
 
     pub fn finish(&mut self) -> Option<Vec<u8>> {
         let line = std::mem::take(&mut self.buf);
-        (!line.is_empty()).then_some(line)
+        (!std::mem::take(&mut self.skipping) && !line.is_empty()).then_some(line)
+    }
+
+    /// The number of lines dropped for their length since the last call.
+    pub fn take_oversized(&mut self) -> usize {
+        std::mem::take(&mut self.oversized)
+    }
+
+    fn append(&mut self, part: &[u8]) {
+        if self.skipping {
+            return;
+        }
+        if self.buf.len() + part.len() > self.limit {
+            self.skipping = true;
+            self.oversized += 1;
+            self.buf = Vec::new();
+        } else {
+            self.buf.extend_from_slice(part);
+        }
     }
 }
 
@@ -620,6 +661,22 @@ mod tests {
         assert_eq!(l.finish(), None);
     }
 
+    #[test]
+    fn a_line_over_the_limit_is_dropped_and_counted_once() {
+        let mut l = Lines::with_limit(4);
+        assert_eq!(l.feed(b"abcd\nab"), vec![b"abcd".to_vec()]);
+        assert_eq!(l.take_oversized(), 0);
+        assert!(l.feed(b"cde").is_empty());
+        assert_eq!(l.take_oversized(), 1);
+        assert!(l.buf.is_empty());
+        assert_eq!(l.feed(b"fgh\nxy\n"), vec![b"xy".to_vec()]);
+        assert_eq!(l.take_oversized(), 0);
+        assert!(l.feed(b"123456").is_empty());
+        assert_eq!(l.finish(), None);
+        assert_eq!(l.take_oversized(), 1);
+        assert_eq!(l.feed(b"ok\n"), vec![b"ok".to_vec()]);
+    }
+
     proptest::proptest! {
         #[test]
         fn every_line_gets_at_most_one_answer(chunks in proptest::collection::vec(proptest::collection::vec(proptest::num::u8::ANY, 0..64), 0..8)) {
@@ -646,6 +703,23 @@ mod tests {
                     Decoded::Skip => {}
                 }
             }
+        }
+
+        #[test]
+        fn lines_over_the_limit_are_dropped_and_the_rest_kept(chunks in proptest::collection::vec(proptest::collection::vec(proptest::sample::select(vec![b'a', b'\n']), 0..24), 0..8)) {
+            let mut l = Lines::with_limit(8);
+            let mut all = Vec::new();
+            let mut oversized = 0;
+            for c in &chunks {
+                all.extend(l.feed(c));
+                oversized += l.take_oversized();
+            }
+            all.extend(l.finish());
+            let joined: Vec<u8> = chunks.concat();
+            let segments: Vec<&[u8]> = joined.split(|b| *b == b'\n').collect();
+            let kept: Vec<&[u8]> = segments.iter().copied().filter(|s| !s.is_empty() && s.len() <= 8).collect();
+            proptest::prop_assert_eq!(all.iter().filter(|s| !s.is_empty()).map(Vec::as_slice).collect::<Vec<_>>(), kept);
+            proptest::prop_assert_eq!(oversized, segments.iter().filter(|s| s.len() > 8).count());
         }
 
         #[test]

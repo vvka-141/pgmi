@@ -152,7 +152,9 @@ boolean or null is -32600 with a null id; `tools/call` without params or with
 params that are not an object is -32602, an unknown tool -32602; wrong tool
 arguments are a tool result with `isError` and the exit code (10 for a
 missing path or an unknown argument). Blank lines and notifications get no
-answer; a 2 MB line is read; invalid UTF-8 inside a string reads as U+FFFD.
+answer; a 2 MB line is read (the Rust binary reads up to 16 MiB, see "serve
+bounds what a client can make it hold"); invalid UTF-8 inside a string reads
+as U+FFFD.
 String and number ids (`1.5`) are echoed as sent. The bare value `null`
 and an id holding invalid UTF-8 differ between the binaries: see "serve
 answers a bare null and never echoes invalid bytes" under Decided changes.
@@ -684,6 +686,31 @@ Cases: none (Go's answer is not deterministic); Rust unit tests
 `a_request_id_already_in_flight_is_refused`,
 `request_ids_match_by_value_not_by_spelling`.
 
+### serve bounds what a client can make it hold
+
+Owner-decided 2026-11-11 (PGMI-868).
+
+Go reads a line of any length, runs any number of tool calls at once and
+queues any number of answers, so a client can grow serve until it runs out
+of memory. The Rust binary bounds all three:
+
+- A line over 16 MiB (eight times the 2 MB the cases read) is answered at
+  once, while it is still arriving, with `-32600` and a null id (`a message
+  may hold at most 16 MiB`); its bytes are discarded up to the next newline
+  and the session goes on.
+- With 32 tool calls running, another `tools/call` is answered at once with
+  `-32000` (`32 tool calls are already running; wait for one to finish`).
+  `ping`, `tools/list` and `notifications/cancelled` are still served.
+- When 1024 answers are waiting because the client does not read them, the
+  session ends: running calls are cancelled and serve exits as at the end
+  of input.
+
+Cases: none (Go accepts all three); Rust unit tests
+`a_line_over_16_mib_is_refused_at_once_and_the_session_goes_on`,
+`calls_beyond_32_are_refused_and_cancels_still_get_through`,
+`a_client_that_never_reads_is_dropped_once_its_answers_pile_up`,
+`a_line_over_the_limit_is_dropped_and_counted_once`.
+
 ### Two metadata elements in one comment are refused
 
 Owner-decided 2026-11-11 (PGMI-868).
@@ -911,6 +938,9 @@ release notes take their "Behaviour changes" section from this table.
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
+| `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
+| `serve`: a `tools/call` while 32 calls run | runs | newly refused with `-32000` | owner 2026-11-11 |
+| `serve`: 1024 answers the client has not read | queued | the session ends | owner 2026-11-11 |
 | `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |

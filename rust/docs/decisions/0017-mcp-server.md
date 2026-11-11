@@ -138,6 +138,13 @@ overridden. Used only if the hand-written server proves unworkable.
   the session token, which stops the reader and every call; after the
   reader ends, the remaining answers get 2 s (`DRAIN`), so a client that
   keeps stdout open but stops reading cannot hold up the exit.
+- Bounds (PGMI-868, decided changes in the behaviour contract): a line of
+  at most `wire::MAX_LINE` (16 MiB; `Lines` drops a longer one without
+  buffering it and counts it, the reader answers -32600), `MAX_CALLS` (32)
+  tool calls running (the next is -32000), and `QUEUED_ANSWERS` (1024) in
+  the bounded answer channel. The reader never waits on that channel: when
+  it is full, the client is not reading and the session ends, so
+  cancellations are always read. A call waits for room, racing the session.
 - `init`, `metadata_plan`, `metadata_validate` and `ai_contract` answer
   "not implemented in this build" (exit 1) until the commands they wrap land
   (PGMI-833 part B); their argument checks already match Go.

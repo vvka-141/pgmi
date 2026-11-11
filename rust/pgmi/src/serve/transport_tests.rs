@@ -499,3 +499,109 @@ async fn an_output_failure_ends_the_session() {
         .unwrap();
     drop(input);
 }
+
+#[tokio::test]
+async fn a_line_over_16_mib_is_refused_at_once_and_the_session_goes_on() {
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, output) = tokio::io::duplex(64 * 1024);
+    let mut output = BufReader::new(output);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    let head = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo_len","arguments":{"blob":""#;
+    input.write_all(head.as_bytes()).await.unwrap();
+    let blob = vec![b'x'; 1 << 20];
+    for _ in 0..16 {
+        input.write_all(&blob).await.unwrap();
+    }
+    let mut line = String::new();
+    timeout(Duration::from_secs(3), output.read_line(&mut line))
+        .await
+        .expect("no answer before the line ended")
+        .unwrap();
+    let refused: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(refused["error"]["code"], -32600, "{refused}");
+    assert_eq!(refused["id"], Value::Null, "{refused}");
+    let ping = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+    input
+        .write_all(format!("\"}}}}}}\n{ping}\n").as_bytes())
+        .await
+        .unwrap();
+    line.clear();
+    timeout(Duration::from_secs(3), output.read_line(&mut line))
+        .await
+        .expect("no answer to the ping")
+        .unwrap();
+    let answered: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(answered["id"], 2, "{answered}");
+    assert!(answered.get("result").is_some(), "{answered}");
+    drop(input);
+    timeout(Duration::from_secs(3), server)
+        .await
+        .expect("serve did not end")
+        .unwrap();
+    let mut rest = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut output, &mut rest)
+        .await
+        .unwrap();
+    assert_eq!(rest, "", "the rest of the long line was answered");
+}
+
+#[tokio::test]
+async fn calls_beyond_32_are_refused_and_cancels_still_get_through() {
+    let (tools, mut probes) = fakes();
+    let mut s = Running::start(tools);
+    for id in 1..=32 {
+        s.send(&format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"slow"}}}}"#
+        ))
+        .await;
+    }
+    for _ in 0..32 {
+        probes.started.recv().await.unwrap();
+    }
+    s.send(r#"{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"slow"}}"#)
+        .await;
+    let refused: Value = serde_json::from_str(&s.frame().await.unwrap()).unwrap();
+    assert_eq!(refused["id"], 99, "{refused}");
+    assert_eq!(refused["error"]["code"], -32000, "{refused}");
+    s.send(r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#)
+        .await;
+    let stopped = timeout(Duration::from_secs(1), probes.stopped.recv()).await;
+    assert_eq!(stopped.unwrap(), Some("cancelled"));
+    s.send(r#"{"jsonrpc":"2.0","id":100,"method":"ping"}"#)
+        .await;
+    let answered: Value = serde_json::from_str(&s.frame().await.unwrap()).unwrap();
+    assert_eq!(answered["id"], 100, "{answered}");
+    s.stop.cancel();
+    s.ended().await;
+}
+
+#[tokio::test]
+async fn a_client_that_never_reads_is_dropped_once_its_answers_pile_up() {
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, _unread) = tokio::io::duplex(64);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    let pings = tokio::spawn(async move {
+        for id in 0..1500 {
+            let ping = format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n");
+            if input.write_all(ping.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+        input
+    });
+    timeout(Duration::from_secs(10), server)
+        .await
+        .expect("serve kept queueing answers nobody reads")
+        .unwrap();
+    drop(pings);
+}

@@ -12,7 +12,8 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{Sender, channel};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -28,6 +29,9 @@ const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
 const DRAIN: Duration = Duration::from_secs(2);
+const MAX_CALLS: usize = 32;
+const QUEUED_ANSWERS: usize = 1024;
+const BUSY: i64 = -32000;
 
 pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> u8 {
     crate::conn::tls::install();
@@ -54,7 +58,7 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> u8 {
 }
 
 struct Server<T> {
-    out: UnboundedSender<String>,
+    out: Sender<String>,
     calls: Mutex<HashMap<CallId, CancellationToken>>,
     root: CancellationToken,
     tools: Arc<T>,
@@ -73,7 +77,7 @@ pub(crate) async fn serve<T: Toolbox>(
 ) {
     let session = stop.child_token();
     let finished = CancellationToken::new();
-    let (tx, mut rx) = unbounded_channel::<String>();
+    let (tx, mut rx) = channel::<String>(QUEUED_ANSWERS);
     let server = Arc::new(Server {
         out: tx,
         calls: Mutex::new(HashMap::new()),
@@ -98,10 +102,21 @@ pub(crate) async fn serve<T: Toolbox>(
                     }
                     break;
                 }
-                for line in lines.feed(&buf[..n]) {
+                while tasks.try_join_next().is_some() {}
+                let read = lines.feed(&buf[..n]);
+                for _ in 0..lines.take_oversized() {
+                    server.send(wire::error(
+                        None,
+                        INVALID_REQUEST,
+                        &format!(
+                            "invalid request: a message may hold at most {} MiB",
+                            wire::MAX_LINE >> 20
+                        ),
+                    ));
+                }
+                for line in read {
                     server.handle(&line, &mut tasks);
                 }
-                while tasks.try_join_next().is_some() {}
             }
             while tasks.join_next().await.is_some() {}
             drop(server);
@@ -177,7 +192,9 @@ impl CallId {
 
 impl<T: Toolbox> Server<T> {
     fn send(&self, line: String) {
-        let _ = self.out.send(line);
+        if let Err(TrySendError::Full(_)) = self.out.try_send(line) {
+            self.root.cancel();
+        }
     }
 
     fn handle(self: &Arc<Self>, line: &[u8], tasks: &mut JoinSet<()>) {
@@ -320,6 +337,13 @@ impl<T: Toolbox> Server<T> {
                 &format!("request id {id} is already in flight"),
             ));
         }
+        if tasks.len() >= MAX_CALLS {
+            return self.send(wire::error(
+                Some(&id),
+                BUSY,
+                &format!("{MAX_CALLS} tool calls are already running; wait for one to finish"),
+            ));
+        }
         calls.insert(key.clone(), token.clone());
         drop(calls);
         let server = self.clone();
@@ -344,7 +368,11 @@ impl<T: Toolbox> Server<T> {
             if token.is_cancelled() {
                 return;
             }
-            server.send(wire::result(&id, &outcome.render(era.stateless)));
+            let answer = wire::result(&id, &outcome.render(era.stateless));
+            tokio::select! {
+                _ = server.out.send(answer) => {}
+                () = server.root.cancelled() => {}
+            }
         });
     }
 }
@@ -440,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_id_already_in_flight_is_refused() {
-        let (tx, mut rx) = unbounded_channel::<String>();
+        let (tx, mut rx) = channel::<String>(1);
         let server = Arc::new(Server {
             out: tx,
             calls: Mutex::new(HashMap::new()),
