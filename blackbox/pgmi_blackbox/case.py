@@ -1,5 +1,6 @@
 import re
 import signal
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ import yaml
 
 TEMPLATES = ("minimal", "basic", "advanced")
 SERVER_KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
+IMPLEMENTATIONS = ("go", "rust")
 
 
 class CaseError(ValueError):
@@ -93,9 +95,17 @@ class Case:
     home: dict[str, HomeFile] | None = None
 
 
+def implementation(environ: Mapping[str, str]) -> str:
+    impl = environ.get("PGMI_IMPL", "go")
+    if impl not in IMPLEMENTATIONS:
+        raise CaseError(f"PGMI_IMPL={impl!r}: must be one of {', '.join(IMPLEMENTATIONS)}")
+    return impl
+
+
 class _Reader:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, impl: str) -> None:
         self.path = path
+        self.impl = impl
 
     def fail(self, field: str, message: str) -> CaseError:
         return CaseError(f"{self.path}: {field}: {message}")
@@ -143,7 +153,7 @@ class _Reader:
         return dict(value)
 
 
-def load_cases(root: Path, directory: Path) -> list[Case]:
+def load_cases(root: Path, directory: Path, impl: str = "go") -> list[Case]:
     cases = []
     for file in sorted(directory.rglob("*.yaml")):
         rel = str(file.relative_to(root))
@@ -151,12 +161,12 @@ def load_cases(root: Path, directory: Path) -> list[Case]:
             doc = yaml.safe_load(file.read_text())
         except yaml.YAMLError as e:
             raise CaseError(f"{rel}: invalid YAML: {e}") from e
-        cases.append(parse_case(rel, doc))
+        cases.append(parse_case(rel, doc, impl))
     return cases
 
 
-def parse_case(path: str, doc: Any) -> Case:
-    r = _Reader(path)
+def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
+    r = _Reader(path, impl)
     doc = r.mapping(doc, "", {"description", "project", "servers", "home", "steps"}, {"description", "steps"})
     description = r.string(doc["description"], "description")
     project = _project(r, doc.get("project", {}))
@@ -341,7 +351,15 @@ def _expect(r: _Reader, value: Any, field: str, *, pgmi: bool) -> Expect:
     }
     if not pgmi:
         allowed = {"sql", "files", "absent"}
-    value = r.mapping(value, field, allowed, {"exit"} if pgmi else set())
+    value = r.mapping(value, field, allowed | {"rust"}, {"exit"} if pgmi else set())
+    base = {k: v for k, v in value.items() if k != "rust"}
+    rust = r.mapping(value.get("rust", {}), f"{field}.rust", allowed)
+    go_expect = _expect_fields(r, base, field, pgmi=pgmi)
+    rust_expect = _expect_fields(r, base | rust, f"{field}.rust", pgmi=pgmi)
+    return rust_expect if r.impl == "rust" else go_expect
+
+
+def _expect_fields(r: _Reader, value: dict, field: str, *, pgmi: bool) -> Expect:
     exit_code = value.get("exit")
     if pgmi and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
         raise r.fail(f"{field}.exit", "must be an integer")

@@ -9,6 +9,7 @@ make blackbox                                  # build ./cmd/pgmi, start postgre
 PGMI_BIN=/path/to/pgmi make blackbox           # any binary
 PGMI_REFERENCE_BIN=/path/to/go-pgmi make blackbox  # binary for steps marked binary: reference
 PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres make blackbox
+PGMI_IMPL=rust PGMI_BIN=$PWD/target/release/pgmi make blackbox  # Rust expectations
 cd blackbox && uv run pytest -k 13-sql         # one case
 ```
 
@@ -65,8 +66,15 @@ steps:
       files:                       # paths relative to {workdir}; each regex must match
         project/deploy.sql: ["1/0"]
       absent: [project/out.txt]    # paths that must not exist
+      rust: {exit: 10, stderr: []} # optional: these keys replace the ones above under PGMI_IMPL=rust
   - sql: SELECT pg_advisory_lock(1)   # a step can also run SQL against {db}
 ```
+
+`PGMI_IMPL` (`go` or `rust`, default `go`; any other value fails the run)
+says which binary `PGMI_BIN` is. Under `rust`, a step's `expect.rust` keys
+replace the base keys of the same name; keys it does not set stay. Use it only
+where the owner decided the Rust binary differs, and name that section of
+`docs/design/behaviour-contract.md` in the case's description.
 
 Placeholders, replaced in arguments, `env` values, `stdin`, `cwd`, file contents,
 SQL, expected rows, `files` paths, `stdout`/`stderr`/`raw`/`files` regexes (escaped) and `json` strings: `{project}`, `{db}`, `{conn}`

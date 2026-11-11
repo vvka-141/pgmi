@@ -176,6 +176,7 @@ jobs:
         env:
           PGMI_BIN: ${{ github.workspace }}/target/release/pgmi
           PGMI_REFERENCE_BIN: ${{ runner.temp }}/pgmi-go
+          PGMI_IMPL: rust
         run: |
           python -m pip install uv==0.13.6
           cd blackbox

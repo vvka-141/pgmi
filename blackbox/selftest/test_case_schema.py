@@ -1,6 +1,6 @@
 import pytest
 
-from pgmi_blackbox.case import CaseError, Symlink, parse_case
+from pgmi_blackbox.case import CaseError, Symlink, implementation, parse_case
 
 MINIMAL = {
     "description": "deploy succeeds",
@@ -75,9 +75,57 @@ def test_stdin_text_and_hex_repeat_without_newline():
             {**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "files": {"a": ["("]}}}]},
             "steps[0].expect.files.a[0]",
         ),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "rust": {"exitt": 10}}}]},
+            "steps[0].expect.rust.exitt",
+        ),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "rust": {"rust": {}}}}]},
+            "steps[0].expect.rust.rust",
+        ),
+        (
+            {**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "rust": {"stderr": ["("]}}}]},
+            "steps[0].expect.rust.stderr[0]",
+        ),
+        ({**MINIMAL, "steps": [{"sql": "SELECT 1", "expect": {"rust": {"exit": 1}}}]}, "steps[0].expect.rust.exit"),
     ],
 )
 def test_malformed_case_names_file_and_field(doc, field):
     with pytest.raises(CaseError) as err:
         parse_case("cases/bad.yaml", doc)
     assert str(err.value).startswith(f"cases/bad.yaml: {field}:")
+
+
+RUST_OVERRIDE = {
+    **MINIMAL,
+    "steps": [
+        {
+            "pgmi": ["deploy"],
+            "expect": {"exit": 11, "stderr": ["refused"], "stdout": ["done"], "rust": {"exit": 10, "stderr": ["key"]}},
+        }
+    ],
+}
+
+
+def test_rust_override_is_ignored_for_go():
+    expect = parse_case("cases/x.yaml", RUST_OVERRIDE).steps[0].expect
+    assert (expect.exit, expect.stderr, expect.stdout) == (11, ("refused",), ("done",))
+    assert parse_case("cases/x.yaml", RUST_OVERRIDE, "go").steps[0].expect == expect
+
+
+def test_rust_override_replaces_only_the_keys_it_sets():
+    expect = parse_case("cases/x.yaml", RUST_OVERRIDE, "rust").steps[0].expect
+    assert (expect.exit, expect.stderr, expect.stdout) == (10, ("key",), ("done",))
+
+
+@pytest.mark.parametrize(
+    ("environ", "impl"), [({}, "go"), ({"PGMI_IMPL": "go"}, "go"), ({"PGMI_IMPL": "rust"}, "rust")]
+)
+def test_implementation_comes_from_pgmi_impl(environ, impl):
+    assert implementation(environ) == impl
+
+
+@pytest.mark.parametrize("value", ["", "Rust", "c"])
+def test_unknown_implementation_fails_the_run(value):
+    with pytest.raises(CaseError, match="PGMI_IMPL"):
+        implementation({"PGMI_IMPL": value})

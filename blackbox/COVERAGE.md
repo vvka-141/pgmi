@@ -189,6 +189,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 |---|---|
 | Azure through the Azure CLI (no client ID) | ✓ `cloud/azure-cli` (stub `az` on `PATH`) |
 | Azure PowerShell after the CLI and azd; `AZURE_TOKEN_CREDENTIALS` picks one | ✓ `cloud/azure-powershell` (stub `pwsh` on `PATH`) |
+| An `AZURE_TOKEN_CREDENTIALS` value that names no credential: refused before connecting (Go 1, Rust 10) | ✓ `cloud/azure-token-credentials-invalid` |
 | Azure managed identity (`--azure-client-id`) | ✓ `cloud/azure-managed-identity` (fake App Service endpoint) |
 | Azure managed identity on Cloud Shell, Azure ML, Service Fabric | ✓ `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric` (fake endpoints; Service Fabric's certificate is pinned by `IDENTITY_SERVER_THUMBPRINT`) |
 | Azure managed identity on Azure Arc | ✗ the key file must sit in `/var/opt/azcmagent/tokens`, which a case cannot write; Rust unit tests cover the file checks |

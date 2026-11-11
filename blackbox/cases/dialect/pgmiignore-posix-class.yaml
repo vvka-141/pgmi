@@ -1,8 +1,18 @@
-description: a POSIX character class in .pgmiignore is refused today (exit 10), a Go bug kept by the freeze; see COVERAGE.md contract notes
+description: a POSIX character class in .pgmiignore is refused by Go (exit 10, a bug kept by the freeze) and matches as in gitignore on Rust (contract "POSIX character classes in .pgmiignore")
 project:
   files:
     .pgmiignore: "sp[[:space:]]ace.sql\n"
-    deploy.sql: SELECT 1;
+    sp ace.sql: SELECT 1;
+    spxace.sql: SELECT 1;
+    deploy.sql: CREATE TABLE seen AS SELECT path FROM pg_temp.pgmi_source_view;
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ["\\.pgmiignore line 1", "invalid pattern"]}
+    expect:
+      exit: 10
+      stderr: ["\\.pgmiignore line 1", "invalid pattern"]
+      rust:
+        exit: 0
+        stderr: []
+        sql:
+          - query: SELECT path FROM seen ORDER BY path
+            rows: [[./spxace.sql]]

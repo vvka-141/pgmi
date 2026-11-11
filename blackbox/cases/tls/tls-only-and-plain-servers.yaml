@@ -1,11 +1,11 @@
-description: on a server that requires TLS, allow and disable are both refused (pgx does not retry allow with TLS, libpq does), and require is refused by a server without TLS while prefer connects in plaintext
+description: on a server that requires TLS, allow and disable are both refused by Go (pgx does not retry allow with TLS) while Rust retries allow with TLS as libpq does (contract "sslmode=allow retries with TLS"), and require is refused by a server without TLS while prefer connects in plaintext
 servers: [tls_only]
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_only_port}/postgres?sslmode=allow", -d, "{db}"]
-    expect: {exit: 11, stderr: ["no encryption"]}
+    expect: {exit: 11, stderr: ["no encryption"], rust: {exit: 0, stderr: []}}
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_only_port}/postgres?sslmode=disable", -d, "{db}"]
     expect: {exit: 11, stderr: ["no encryption"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=require", -d, "{db}"]

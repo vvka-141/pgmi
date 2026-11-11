@@ -1,4 +1,4 @@
-description: target_session_attrs picks the primary or the standby of a pair whatever the host order; a deploy routed to the standby fails read-only
+description: target_session_attrs picks the primary or the standby of a pair whatever the host order; a deploy routed to the standby fails read-only; a PGPORT list is refused by Go (exit 10) and accepted by Rust, which then reaches the standby first (contract "PGPORT may list several ports")
 servers: [replica]
 project:
   files:
@@ -30,4 +30,4 @@ steps:
       PGPORT: "{standby_port},{primary_port}"
       PGUSER: "{user}"
       PGPASSWORD: "{password}"
-    expect: {exit: 10, stderr: ["PGPORT"]}
+    expect: {exit: 10, stderr: ["PGPORT"], rust: {exit: 13, stderr: ["read-only"]}}

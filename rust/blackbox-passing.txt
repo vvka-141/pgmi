@@ -12,6 +12,7 @@ cloud/azure-managed-identity
 cloud/azure-ml
 cloud/azure-powershell
 cloud/azure-service-fabric
+cloud/azure-token-credentials-invalid
 cloud/dotenv-feeds-sdk
 cloud/token-auth-requires-tls
 commands/ai
@@ -37,10 +38,13 @@ config/pgmi-yaml
 config/pgmi-yaml-invalid
 config/pgmi-yaml-timeout-too-long
 config/precedence
+connection/keywords
 connection/multi-host
 connection/pgpass
 connection/pgpass-wildcard-and-file
+connection/pgpass-world-readable
 connection/protocol-version
+connection/target-session-attrs
 connection/unix-socket
 deploy/advanced-template-converges
 deploy/basic-template-converges
@@ -52,6 +56,7 @@ dialect/pgmi-test-macro-whitespace
 dialect/pgmiignore
 dialect/pgmiignore-hides-deploy
 dialect/pgmiignore-latin1
+dialect/pgmiignore-posix-class
 dialect/project-walk
 env/connection-string-vars
 env/connection-string-vars-refuse-flags
@@ -134,3 +139,4 @@ tls/sslmode-flag-overrides
 tls/sslmode-matrix
 tls/sslmode-refusals
 tls/system-roots
+tls/tls-only-and-plain-servers

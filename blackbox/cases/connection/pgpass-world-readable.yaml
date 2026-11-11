@@ -1,4 +1,4 @@
-description: a .pgpass readable by others is ignored with a warning, as libpq does, so the sign-in has no password and fails with exit 11
+description: a .pgpass readable by others is ignored with a warning, as libpq does, so the sign-in has no password and fails with exit 11; Go reports the server's refusal, Rust reports that no password was found (contract "No password available")
 home:
   .pgpass:
     content: "{host}:{port}:*:{user}:{password}\n"
@@ -8,4 +8,7 @@ project:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}"]
-    expect: {exit: 11, stderr: ["WARNING: password file .*has group or world access", "password authentication failed"]}
+    expect:
+      exit: 11
+      stderr: ["WARNING: password file .*has group or world access", "password authentication failed"]
+      rust: {stderr: ["WARNING: password file .*has group or world access", "no password supplied"]}

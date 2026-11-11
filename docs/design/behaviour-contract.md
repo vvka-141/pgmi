@@ -18,7 +18,9 @@ Case names are paths under `blackbox/cases/` without `.yaml`.
 every cited case exists, and that each section names cases or a reason.
 
 The sections under **Intended changes** and **Decided changes** describe where
-the Rust binary differs from Go on purpose.
+the Rust binary differs from Go on purpose; **Behaviour changes in 0.20** lists
+them with their exit codes. A case that observes one keeps Go's expectation and
+states the Rust one under `expect.rust` (`blackbox/README.md`).
 
 ## Exit codes
 
@@ -474,7 +476,8 @@ Cases: `tls/system-roots`.
 ### POSIX character classes in .pgmiignore
 
 Go refuses `[[:space:]]` and similar as an invalid pattern (exit 10); git
-accepts them. The Rust binary accepts them with git's meaning.
+accepts them. The Rust binary accepts them with git's meaning; the case checks
+that `sp[[:space:]]ace.sql` hides `sp ace.sql` and keeps `spxace.sql`.
 
 Cases: `dialect/pgmiignore-posix-class`.
 
@@ -499,6 +502,8 @@ by the real-Azure runs (PGMI-845).
 
 ### sslrootcert=system refuses a weaker sslmode
 
+Owner-decided 2026-11-11.
+
 Go (pgx) turns any sslmode into `verify-full` when `sslrootcert=system`, even
 an explicit `disable` or `require`. Without an sslmode both binaries use
 `verify-full`. With an explicit weaker sslmode the Rust binary refuses with
@@ -510,6 +515,8 @@ Cases: `tls/system-roots` (the default). The refusal: Rust unit test
 
 ### Connection-string errors never echo the string
 
+Owner-decided 2026-11-11.
+
 Go hides a URI that does not parse, but echoes a stray keyword
 (`missing "=" after "junk"`), an ADO.NET part and a port value. The Rust
 binary never quotes connection-string input in an error, on stderr, in
@@ -520,6 +527,8 @@ Cases: `errors/connection-string-secrets` (the forms Go hides too); Rust unit
 tests `errors_never_echo_the_input`, `errors_redact_the_password`.
 
 ### An unreadable .pgmiignore or a file name that is not UTF-8 is exit 10
+
+Owner-decided 2026-11-11.
 
 A `.pgmiignore` that exists but cannot be read (a directory, no permission) is
 exit 1 in Go; the Rust binary refuses it with exit 10 naming the file. Bytes
@@ -543,7 +552,7 @@ unknown value, is exit 10), `sslsni=0` (no SNI) and `sslcertmode=disable` (no
 client certificate is read or sent), and refuses with exit 10 before
 connecting `sslcrl`, `sslcrldir`, `requirepeer` and `sslcertmode=require`,
 which it cannot check. This extends "Unknown connection-string keys are
-refused before connecting".
+refused before connecting". Owner-decided 2026-11-11 for the refusals.
 
 Cases: none (Go fails these on the server); Rust unit tests
 `tls_keys_are_read_or_refused`, `refusals` (parse), `versions_and_sni_reach_the_config`.
@@ -555,6 +564,7 @@ exit 10 under a TLS sslmode, use `~/.postgresql/postgresql.crt` and `.key` only
 when both exist, and read neither under `sslmode=disable`. The Rust binary
 also refuses, with exit 10, a private key file that group or others can read
 (0600 or less, 0640 when owned by root), as libpq does; Go does not check.
+The permission check is owner-decided 2026-11-11.
 
 Cases: `tls/client-certificate-pairs`; the permission check: Rust unit test
 `a_key_others_can_read_is_refused`.
@@ -570,6 +580,8 @@ Cases: none (the suite runs on Linux); Rust unit test
 `postgres_files_follow_the_platform`.
 
 ### serve refuses a request id already in flight
+
+Owner-decided 2026-11-11.
 
 Go accepts a second `tools/call` whose id matches one still running: both run,
 the first loses its cancellation, and the client gets two answers with one
@@ -593,8 +605,8 @@ No case: none of these is observable from outside without a real cloud.
 ## Decided changes (owner, 2026-11-10)
 
 Each was an open question in the first draft; the owner accepted the libpq
-behaviour in every case. The cases still pin Go's behaviour and flip when the
-Rust binary lands.
+behaviour in every case. Each case keeps Go's expectation and states the Rust
+one under `expect.rust`.
 
 ### sslmode=allow retries with TLS
 
@@ -639,3 +651,52 @@ encrypted keys with `sslpassword` and honours `require_auth`, so no working
 setup breaks at the switch.
 
 Cases: `tls/encrypted-client-key`, `tls/require-auth-and-version`.
+
+### Three smaller differences (owner, 2026-11-11)
+
+After the user confirms replacing a `pgmi.yaml` it cannot read as settings, the Rust
+binary writes a fresh connection block; Go edits the file in place. An
+`AZURE_TOKEN_CREDENTIALS` value that names no credential is refused before
+connecting with exit 10 (Go: 1). Both wizards draw full-screen, as Go's do.
+
+Cases: `cloud/azure-token-credentials-invalid` (the exit code). The fresh
+block: `terminal/config-replace-unparseable` checks what both binaries keep;
+the replacement itself is recorded in `rust/docs/decisions/0013-yaml.md`.
+
+## Behaviour changes in 0.20
+
+### Changed exit codes and newly refused input
+
+Every difference above, old (Go, 0.14) against new (Rust, 0.20). "Owner" rows
+are decided; the others are intended changes from the first draft. The 0.20
+release notes take their "Behaviour changes" section from this table.
+
+| Change | 0.14 (Go) | 0.20 (Rust) | Decided |
+|---|---|---|---|
+| Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| A host with several addresses fails to connect | only the last address's error | every address's error; exit 11 both | intended |
+| POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
+| `metadata scaffold` project-root search | walks past `.git` | stops at `.git`, prints `Project root:` | intended |
+| Azure service principal with a certificate | not reachable | signs in | owner 2026-11-10 |
+| `sslrootcert=system` with an explicit weaker sslmode | upgraded to `verify-full` | newly refused, exit 10 | owner 2026-11-11 |
+| Connection-string parse errors | echo a keyword, ADO.NET part or port | never quote the input; exit codes unchanged | owner 2026-11-11 |
+| `.pgmiignore` that exists but cannot be read | exit 1 | exit 10 | owner 2026-11-11 |
+| Project file whose name is not UTF-8 | exit 13, after the target database was created | newly refused before connecting, exit 10 | owner 2026-11-11 |
+| `sslcrl`, `sslcrldir`, `requirepeer`, `sslcertmode=require` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
+| `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
+| Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |
+| Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
+| `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
+| Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
+| Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
+| `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
+| Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
+| `PGPORT` listing several ports | refused, exit 10 | accepted, one per `PGHOST` entry | owner 2026-11-10 |
+| Server asks for a password and none was found | exit 11, the server's `password authentication failed` | exit 11, `no password supplied` naming where it looked | owner 2026-11-10 |
+| Encrypted legacy client keys, `require_auth` | work | work (kept) | owner 2026-11-10 |
+| Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |
+| `AZURE_TOKEN_CREDENTIALS` naming no credential | exit 1 | exit 10 | owner 2026-11-11 |
+| Wizards | full-screen | full-screen (kept) | owner 2026-11-11 |
+
+No case of its own: each row's section above names its cases or its Rust unit
+test.

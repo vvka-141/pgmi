@@ -1,12 +1,13 @@
+import os
 from pathlib import Path
 
 import pytest
 
-from pgmi_blackbox.case import load_cases
+from pgmi_blackbox.case import implementation, load_cases
 from pgmi_blackbox.runner import Workspace, run_case
 
 HERE = Path(__file__).parent
-CASES = load_cases(HERE, HERE / "cases")
+CASES = load_cases(HERE, HERE / "cases", implementation(os.environ))
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.path for c in CASES])
