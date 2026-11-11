@@ -48,6 +48,9 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     let root = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     let fs = crate::vfs::OsFs::project(&root)?;
     let project = walk::scan(&fs, walk::max_size(env)?).map_err(walk::scan_failed(None))?;
+    metadata::scan(&project.sources)
+        .readable()
+        .map_err(walk::scan_failed(None))?;
     let shown = std::path::absolute(&root).unwrap_or_else(|_| root.clone());
     let detected = scaffolded(&fs);
     let config_file = match ProjectConfig::load(&fs) {

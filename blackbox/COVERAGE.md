@@ -268,6 +268,7 @@ decided in the behaviour contract (PGMI-828), not fixed.
 | `CALL pgmi_test()` with no tests aborts the deploy (13) | ✓ `execution/pgmi-test-without-tests` |
 | `_setup.psql` is a fixture too | ✓ `execution/setup-psql-fixture` |
 | `info` names the version and template that scaffolded the project | ✓ `commands/info-scaffolded-by` |
+| `info` refuses an unparseable `<pgmi-meta>`; `info` and `metadata plan`, `validate`, `scaffold` refuse a `.pgmiignore` hiding deploy.sql (10) | ✓ `commands/info-metadata-refusals` |
 | the maintenance database is dialed only when the target is missing | ✓ `connection/maintenance-database-only-when-needed` |
 | `passfile=` in the string beats `PGPASSFILE` | ✓ `env/passfile-beats-pgpassfile` |
 | Ctrl-C with `--json`: `exitCode` 130 | ✓ `cancel/ctrl-c-json-exit-code` |

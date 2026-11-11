@@ -1,0 +1,41 @@
+description: info refuses a <pgmi-meta> block that does not parse, and info and every metadata subcommand refuse a .pgmiignore that hides deploy.sql, as deploy does (exit 10)
+project:
+  files:
+    badmeta/deploy.sql: SELECT 1;
+    badmeta/a.sql: |
+      /*
+      <pgmi-meta id="not-a-uuid" idempotent="true"></pgmi-meta>
+      */
+      SELECT 1;
+    hidden/.pgmiignore: "*.sql\n"
+    hidden/deploy.sql: SELECT 1;
+    hidden/a.sql: SELECT 1;
+steps:
+  - pgmi: [info, "{project}/badmeta"]
+    expect:
+      exit: 10
+      stderr: ["failed to scan directory", "a\\.sql", "UUID"]
+  - pgmi: [info, "{project}/badmeta", --json]
+    expect:
+      exit: 10
+      stderr: ["a\\.sql"]
+  - pgmi: [info, "{project}/hidden"]
+    expect:
+      exit: 10
+      stderr: ["failed to scan directory", "\\.pgmiignore excludes deploy\\.sql; pgmi cannot deploy without it\\. Remove the pattern, or add !deploy\\.sql after it"]
+  - pgmi: [metadata, plan, "{project}/hidden"]
+    expect:
+      exit: 10
+      stderr: ["failed to scan directory", "\\.pgmiignore excludes deploy\\.sql"]
+  - pgmi: [metadata, validate, "{project}/hidden"]
+    expect:
+      exit: 10
+      stderr: ["validation failed", "\\.pgmiignore excludes deploy\\.sql"]
+  - pgmi: [metadata, scaffold, "{project}/hidden"]
+    expect:
+      exit: 10
+      stderr: ["failed to scan directory", "\\.pgmiignore excludes deploy\\.sql"]
+  - pgmi: [deploy, "{project}/hidden", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["\\.pgmiignore excludes deploy\\.sql; pgmi cannot deploy without it"]

@@ -35,6 +35,7 @@ commands/deploy-help-text
 commands/help
 commands/info
 commands/info-scaffolded-by
+commands/info-metadata-refusals
 commands/init
 commands/init-project-name
 commands/init-unwritable

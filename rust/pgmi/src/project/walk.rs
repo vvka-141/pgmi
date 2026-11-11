@@ -46,14 +46,22 @@ pub(crate) fn max_size(env: &crate::env::Env) -> Result<u64> {
 }
 
 fn rules(fs: &impl Vfs) -> Result<Rules> {
-    match fs.read(".pgmiignore") {
-        Ok(bytes) => Rules::parse(&String::from_utf8_lossy(&bytes)).map_err(Error::config),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Rules::default()),
-        Err(e) => Err(Error::config(format!(
-            "could not read {}: {e}",
-            fs.display(".pgmiignore")
-        ))),
+    let rules = match fs.read(".pgmiignore") {
+        Ok(bytes) => Rules::parse(&String::from_utf8_lossy(&bytes)).map_err(Error::config)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Rules::default(),
+        Err(e) => {
+            return Err(Error::config(format!(
+                "could not read {}: {e}",
+                fs.display(".pgmiignore")
+            )));
+        }
+    };
+    if rules.ignored("deploy.sql", false) {
+        return Err(Error::config(
+            ".pgmiignore excludes deploy.sql; pgmi cannot deploy without it. Remove the pattern, or add !deploy.sql after it",
+        ));
     }
+    Ok(rules)
 }
 
 /// Prefixes a refusal met while scanning the project as Go does:
@@ -77,11 +85,6 @@ pub(crate) fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
 pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let scanning = scan_failed(Some(&fs.display("")));
     let rules = rules(fs).map_err(&scanning)?;
-    if rules.ignored("deploy.sql", false) {
-        return Err(scanning(Error::config(
-            ".pgmiignore hides deploy.sql; add !deploy.sql after the pattern that matches it",
-        )));
-    }
     let deploy = fs.stat("deploy.sql");
     if deploy
         .as_ref()
@@ -126,14 +129,16 @@ fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
             stat.len
         )));
     }
-    let bytes = fs.read(rel).map_err(unreadable)?;
-    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let mut bytes = fs.read(rel).map_err(unreadable)?;
+    if bytes.starts_with(b"\xef\xbb\xbf") {
+        bytes.drain(..3);
+    }
     if bytes.contains(&0) {
         return Err(Error::config(format!(
             "file ./{rel} contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
         )));
     }
-    String::from_utf8(bytes.to_vec()).map_err(|e| {
+    String::from_utf8(bytes).map_err(|e| {
         let at = e.utf8_error().valid_up_to();
         if rel == "deploy.sql" {
             Error::config(format!("deploy.sql is not valid UTF-8 at byte offset {at}"))
@@ -338,6 +343,16 @@ mod tests {
             let text = refused(&project().file(".pgmiignore", format!("{pattern}\n")));
             assert!(text.contains("!deploy.sql"), "{pattern}: {text}");
         }
+    }
+
+    #[test]
+    fn a_scan_refuses_a_pgmiignore_hiding_deploy_sql_as_a_load_does() {
+        let e = scan(&project().file(".pgmiignore", "*.sql\n"), MAX).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            ".pgmiignore excludes deploy.sql; pgmi cannot deploy without it. Remove the pattern, or add !deploy.sql after it"
+        );
     }
 
     #[test]
