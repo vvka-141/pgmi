@@ -21,8 +21,8 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | 13 | SQL failed | ✓ `exit-codes/13-sql-failed` |
 | 14 | deploy.sql missing | ✓ `exit-codes/14-no-deploy-sql` |
 | 15 | concurrent deploy; concurrent `--overwrite`; a deploy started during the overwrite approval | ✓ `exit-codes/15-concurrent-deploy`, `flags/overwrite-concurrent`, `flags/overwrite-deploy-during-approval` |
-| 16 | `--timeout` exceeded | ✓ `exit-codes/16-timeout` |
-| 130 | interrupted | ✓ `exit-codes/130-interrupted` (SIGINT), `exit-codes/130-sigterm` |
+| 16 | `--timeout` exceeded | ✓ `exit-codes/16-timeout`; the cancelled statement's file, phase, SQLSTATE and WHERE in `--json` ✓ `cancel/stopped-record` |
+| 130 | interrupted | ✓ `exit-codes/130-interrupted` (SIGINT), `exit-codes/130-sigterm`; the cancelling line and the cancelled statement's record ✓ `cancel/stopped-record` |
 
 ## Commands
 
@@ -42,11 +42,11 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | advanced template: first-deploy check of the login's attributes and Azure's extension list | ✓ `deploy/advanced-template-preflight` |
 | `version`, `--version`, extra argument = 2 | ✓ `commands/version` |
 | `ai`, `ai contract`, unknown subcommand = 2 | ✓ `commands/ai` |
-| `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion` |
-| `help`, `--help`, `<command> --help`, unknown command / wrong arity = 2 | ✓ `commands/help` |
-| `-v` / `--verbose` (DEBUG notices shown) | ✓ `commands/verbose` |
+| `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion`; PowerShell template and sslmode values ✗ (the scripts differ by design; Rust unit test `powershell_completes_template_names_and_sslmode_values`, checked by hand with `pwsh`) |
+| `help`, `--help`, `<command> --help`, unknown command / wrong arity = 2 | ✓ `commands/help`, `commands/deploy-help-text` |
+| `-v` / `--verbose` (DEBUG notices shown, none from pgmi's own queries; parameter counts, never keys or values) | ✓ `commands/verbose`, `notices/verbose-no-internal-debug`, `params/verbose-counts` |
 | `serve`: initialize, `tools/list` (7 tools), a tool call, malformed message (-32700, session continues), unknown method (-32601), EOF exits 0 | ✓ `serve/session` |
-| `serve`: `deploy` tool with params, ping answered during a deploy, `notifications/cancelled` rolls the deploy back | ✓ `serve/deploy-tool`, `serve/cancel` |
+| `serve`: `deploy` tool with params, ping answered during a deploy, `notifications/cancelled` rolls the deploy back | ✓ `serve/deploy-tool`, `serve/cancel`; WARNINGs in the text block ✓ `serve/deploy-warning-lines` |
 | `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `rust/docs/decisions/go-review.md` |
 | `serve`: protocol versions, `server/discover`, the 2026-07-28 stateless era | ✓ `serve/protocol-versions` |
 | `serve`: no `.env`, overwrite needs `confirmDatabaseName` (12), unknown argument (10) | ✓ `serve/deploy-guards` |
@@ -66,7 +66,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--connection` URI | ✓ every `deploy` case |
 | `--connection` keyword/value, ADO.NET | ✓ `flags/connection-forms` |
 | `-h`, `-p`, `-U`, `-d`; `-h` with `--connection` = 10 | ✓ `flags/granular-flags` |
-| `--compat` | ✓ `flags/compat` |
+| `--compat` (unknown = 10 with the target in the summary and `--json`) | ✓ `flags/compat`, `flags/compat-record` |
 | `--force` (alone; with `--overwrite`, no countdown without a terminal) | ✓ `flags/overwrite-force` |
 | `--overwrite` without `--force`, no terminal | ✓ `exit-codes/12-overwrite-denied` |
 | `--overwrite` restores owner, connection limit, settings, role settings, comment, privileges; refuses (10) what it cannot restore | ✓ `flags/overwrite-restores` |
@@ -76,7 +76,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
 | `--timeout` (`3s`, `90s`, `1h30m`, `0`; not a duration, or longer than a Go duration, = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms`, `commands/usage-errors` |
 | `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
-| `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` ✗ (only reaches Entra, see Cloud sign-in) |
+| `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` > `AZURE_TENANT_ID` > `azure_tenant_id`, and `AWS_REGION`/`AWS_DEFAULT_REGION` > `aws_region` ✓ `cloud/cloud-ids-env-beats-yaml` |
 | `--aws`, `--aws-region` | ✓ `cloud/aws-iam-token` |
 | `--google`, `--google-instance` | ✓ `cloud/google-arguments` |
 
@@ -94,6 +94,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGSSLMODE`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLROOTCERT`, `PGSSLPASSWORD` | ✓ `tls/client-certificate`, `tls/encrypted-client-key` |
 | `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | ✓ `connection/keywords`, `connection/target-session-attrs`, `tls/require-auth-and-version`, `tls/channel-binding-and-direct` |
 | `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
+| `PGSSLSNI`, `PGSSLCERTMODE`, `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` (invalid = 10) | ✓ `env/pg-tls-protocol-variables` |
 | `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal) | ✓ `terminal/colors`, `terminal/force-banner`, `terminal/non-interactive` |
 | no terminal queries outside the wizards | ✓ `terminal/no-terminal-queries` |
 | `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal); split without a shell, default `less -R`, a pager that cannot start | ✓ `terminal/pager`, `terminal/pager-command` |
@@ -112,7 +113,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
 | project walk: symbolic links, NUL bytes, invalid UTF-8, `__name__` directories | ✓ `dialect/project-walk`, `commands/metadata-refusals` |
 | project walk: a named pipe is refused (10), never read, by `deploy` and `info` | ✓ `errors/special-file` |
-| `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10; bytes that are not UTF-8 read leniently) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class`, `dialect/pgmiignore-latin1` |
+| `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10; bytes that are not UTF-8 read leniently) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class`, `dialect/pgmiignore-latin1`; empty or reversed classes = 10, an unclosed `[` literal ✓ `dialect/pgmiignore-broken-patterns` |
 
 ## Connection layer
 

@@ -363,7 +363,7 @@ pub(crate) struct Spec {
     pub(crate) token: Option<crate::conn::cloud::Token>,
 }
 
-const ENV_DEFAULTS: &[(&str, &str)] = &[
+pub(super) const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGHOST", "host"),
     ("PGPORT", "port"),
     ("PGUSER", "user"),
@@ -375,6 +375,10 @@ const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGSSLKEY", "sslkey"),
     ("PGSSLPASSWORD", "sslpassword"),
     ("PGSSLNEGOTIATION", "sslnegotiation"),
+    ("PGSSLSNI", "sslsni"),
+    ("PGSSLCERTMODE", "sslcertmode"),
+    ("PGMINPROTOCOLVERSION", "min_protocol_version"),
+    ("PGMAXPROTOCOLVERSION", "max_protocol_version"),
     ("PGAPPNAME", "application_name"),
     ("PGCONNECT_TIMEOUT", "connect_timeout"),
     ("PGOPTIONS", "options"),
@@ -506,8 +510,13 @@ fn finish(
         "pgmi.yaml"
     };
     for (env_name, key) in ENV_DEFAULTS {
+        let given = if *key == "sslcertmode" {
+            env.get(env_name)?
+        } else {
+            env.non_empty(env_name)?
+        };
         if !f.contains_key(*key)
-            && let Some(v) = env.non_empty(env_name)?
+            && let Some(v) = given
         {
             f.insert((*key).into(), v.to_string());
         }
@@ -591,11 +600,11 @@ fn finish(
         "0" => false,
         o => return Err(value("sslsni", o)),
     };
-    let sslcertmode_disable = match f.remove("sslcertmode").as_deref().unwrap_or("") {
-        "" | "allow" => false,
-        "disable" => true,
-        "require" => return Err(ResolveError::CertModeRequire),
-        o => return Err(value("sslcertmode", o)),
+    let sslcertmode_disable = match f.remove("sslcertmode").as_deref() {
+        None | Some("allow") => false,
+        Some("disable") => true,
+        Some("require") => return Err(ResolveError::CertModeRequire),
+        Some(o) => return Err(value("sslcertmode", o)),
     };
     let tls_versions = tls_versions(
         f.remove("ssl_min_protocol_version").as_ref(),

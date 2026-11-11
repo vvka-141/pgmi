@@ -28,7 +28,7 @@ pub(crate) struct DeployRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
     dotenv_keys: Vec<String>,
-    pub(crate) duration_ms: u64,
+    pub(crate) duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,18 +120,22 @@ impl DeployRecord {
             column: None,
             connection_source: p.connection_source.map(Source::label),
             contract_version: p.contract.then_some("1"),
-            created: loaded.map(|_| p.provision == Provision::Created),
+            created: loaded
+                .map(|_| p.provision == Provision::Created)
+                .or(p.deployer.then_some(false)),
             database: p.database().map(str::to_string),
             detail: None,
             dotenv_keys: facts.dotenv_keys.to_vec(),
-            duration_ms: u64::try_from(facts.elapsed.as_millis()).unwrap_or(u64::MAX),
+            duration_ms: p
+                .deployer
+                .then(|| u64::try_from(facts.elapsed.as_millis()).unwrap_or(u64::MAX)),
             error: None,
             execution_mode: None,
             execution_units: execution.map(|x| x.units),
             exit_code,
             failed_file: None,
             failed_file_candidates: None,
-            files_loaded: loaded.map(|l| l.files),
+            files_loaded: loaded.map(|l| l.files).or(p.deployer.then_some(0)),
             finished_at: timestamp(facts.started + facts.elapsed),
             hint: None,
             ignored_paths: loaded.map(|l| l.ignored.clone()).unwrap_or_default(),
@@ -140,10 +144,12 @@ impl DeployRecord {
             notices,
             notices_truncated,
             overrides: p.overrides.clone(),
-            paths_ignored: loaded.map(|l| l.ignored.len()),
+            paths_ignored: loaded.map(|l| l.ignored.len()).or(p.deployer.then_some(0)),
             pgmi_version: VERSION,
             phase: None,
-            recreated: loaded.map(|_| p.provision == Provision::Recreated),
+            recreated: loaded
+                .map(|_| p.provision == Provision::Recreated)
+                .or(p.deployer.then_some(false)),
             schema_version: 1,
             script: None,
             script_expanded: None,
@@ -160,7 +166,9 @@ impl DeployRecord {
                     port,
                 }
             }),
-            test_macros: execution.map(|x| x.test_macros).or(loaded.map(|_| 0)),
+            test_macros: execution
+                .map(|x| x.test_macros)
+                .or((loaded.is_some() || p.deployer).then_some(0)),
             tls: p.server.as_ref().map(|s| s.tls.clone()),
             units_committed: execution.map(|x| x.committed),
             where_: None,
@@ -169,6 +177,21 @@ impl DeployRecord {
             record.fail(e, execution.and_then(|x| x.failure.as_ref()), facts.secrets);
         }
         record
+    }
+
+    /// Each kept `WARNING` notice as `WARNING: message`, one per line, for
+    /// the text a text-only MCP client shows.
+    pub(crate) fn warning_lines(&self) -> String {
+        let Some(Value::Array(notices)) = &self.notices else {
+            return String::new();
+        };
+        notices
+            .iter()
+            .filter(|n| n["severity"] == "WARNING")
+            .filter_map(|n| n["message"].as_str())
+            .map(|m| format!("WARNING: {m}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Adds a line to the end of `error`.

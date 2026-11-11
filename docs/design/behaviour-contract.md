@@ -119,18 +119,30 @@ Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-dupl
 bash|zsh|fish|powershell`, `help <command>` and `--help`. An unknown
 subcommand, template or shell, or extra arguments, is exit 2. `pgmi` with no
 arguments prints the root help on stdout and exits 0; on a terminal it draws
-the banner on stderr instead, unless `PGMI_NO_BANNER` is set.
+the banner on stderr instead, unless `PGMI_NO_BANNER` is set. `deploy --help`
+describes the command, its examples, where the password and parameters come
+from, and every flag. Completion offers `init --template` names and
+`--sslmode` values in every shell; in PowerShell the Rust script completes
+them itself (Rust unit test
+`powershell_completes_template_names_and_sslmode_values`), where Go's script
+calls back into the binary.
 
-Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`.
+Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
 
 ### Verbose output
 
 `-v` shows `RAISE DEBUG` from `deploy.sql` and lists ignored paths; without it,
 DEBUG is hidden and NOTICE, INFO and WARNING are shown. With `-v` every notice
 line (DETAIL and HINT included) starts with the seconds since the deploy
-started, `[1.23s] `.
+started, `[1.23s] `. No server DEBUG line from pgmi's own queries reaches
+stderr: the message level is raised only after `CALL pgmi_test()` is expanded.
+Parameter loading prints counts only, never a key or a value:
+`[VERBOSE] Loaded N parameter(s) from PGMI_PARAM_* environment variables`,
+per params file `[VERBOSE] Loading parameters from file: <path>` and
+`[VERBOSE] Loaded N parameter(s) from file (total: M)`, and
+`[VERBOSE] CLI parameters override N value(s)`.
 
-Cases: `commands/verbose`, `notices/verbose-elapsed`.
+Cases: `commands/verbose`, `notices/verbose-elapsed`, `notices/verbose-no-internal-debug`, `params/verbose-counts`.
 
 ### serve
 
@@ -185,8 +197,11 @@ second exit code 15. The `timeout` argument takes Go duration syntax (default
 3m): running out is exit code 16 with the statement cancelled on the server,
 a value that is not a duration exit code 10. Cloud sign-in reaches serve only
 through `pgmi.yaml` and the environment; the tool has no cloud arguments.
+The deploy tool's text lists each kept `WARNING` as `WARNING: message`, one
+per line, after the summary line on success and after the exit code on
+failure.
 
-Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`.
+Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`.
 
 ### config
 
@@ -206,15 +221,19 @@ Cases: `terminal/config-wizard`, `terminal/prompt-cancel`, `terminal/config-refu
 Every file under the project path enters the session except the built-in
 exclusions, dot-files and `.pgmiignore` patterns (`.gitignore` syntax: comments,
 globs, classes, `**`, directory patterns, `!`, escapes). A pattern set that
-would hide `deploy.sql` is exit 10. A leading UTF-8 BOM is stripped from every
+would hide `deploy.sql` is exit 10, and so is a bracket class that is empty
+(`[]`, `[!]`, or `]` right after the opening bracket) or holds a reversed
+range (`[z-a]`); an unclosed `[` is a literal bracket. A leading UTF-8 BOM is stripped from every
 file before anything else sees it. Each file is capped at 10 MiB
 (`PGMI_MAX_FILE_SIZE` overrides; it must be a positive whole number of bytes,
 else exit 10). Full reference: `docs/DEPLOY-GUIDE.md` "What gets loaded".
 
 The walk never follows a symbolic link: a linked file or directory that
 `.pgmiignore` does not hide is exit 10 naming it; `deploy.sql` itself may be
-a link. A file containing a NUL byte or invalid UTF-8 is exit 10 naming it
-(for `deploy.sql`, with the byte offset). A directory named `__<name>__`
+a link (`failed to read ./x.sql: refusing to read symlink x.sql: pgmi does
+not follow symlinks; ...`). A file containing a NUL byte (`file ./x.bin
+contains a NUL byte; ...`) or invalid UTF-8 is exit 10 naming it (for
+`deploy.sql`, with the byte offset). A directory named `__<name>__`
 other than `__test__` and `__tests__` is exit 10. A file larger than the cap
 is exit 10. A named pipe, socket or device that `.pgmiignore` does not hide,
 `deploy.sql` included, is exit 10 (`refusing to read <path>: not a regular
@@ -223,7 +242,7 @@ file (a named pipe, socket or device)`) and is never read, in `deploy` and in
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 
@@ -231,7 +250,10 @@ The temporary tables, views and functions `deploy.sql` sees are defined by
 `shared/session/schema.sql` and `shared/contract/api-v1.sql`; every binary
 embeds these files unchanged, so they are the contract. `pgmi ai contract`
 prints the same as JSON. `--compat 1` selects this interface version (the only
-one); any other value is exit 10. Plan order: sort key, then path, byte order; a file
+one); any other value is exit 10, checked after the connection and the
+project are resolved and before connecting, so the summary line and the
+`--json` target, `connectionSource` and `database` are there, with
+`contractVersion` null. Plan order: sort key, then path, byte order; a file
 without metadata sorts by its path; a missing `<description>` is an empty
 string. The session tables are analysed after loading, so deploy.sql and
 pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). Full reference: `docs/session-api.md`.
@@ -244,7 +266,7 @@ md5 of the path's UTF-8 bytes on every encoding. A `client_encoding` the user
 names (connection string, or `PGCLIENTENCODING` in the Rust binary) wins over
 this; see "Every accepted connection key is honoured or refused".
 
-Cases: `execution/loader-at-scale`, `params/precedence`, `commands/ai`, `flags/compat`, `deploy/latin1-database`.
+Cases: `execution/loader-at-scale`, `params/precedence`, `commands/ai`, `flags/compat`, `flags/compat-record`, `deploy/latin1-database`.
 
 ### Parameters
 
@@ -299,8 +321,11 @@ Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flag
 libpq-style: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`,
 `PGAPPNAME` (default `application_name` is `pgmi`), `PGCONNECT_TIMEOUT`,
 `PGPASSFILE`, `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`,
-`PGREQUIREAUTH`, the `PGSSL*` variables; `PGHOSTADDR` and `PGSSLCRL` are
-ignored. `~/.pgpass` (or `PGPASSFILE`) supplies a missing password, wildcards
+`PGREQUIREAUTH`, the `PGSSL*` variables (`PGSSLSNI` and `PGSSLCERTMODE`
+included), `PGMINPROTOCOLVERSION` and `PGMAXPROTOCOLVERSION`; `PGHOSTADDR` and
+`PGSSLCRL` are ignored. Each variable is read as its connection-string key
+and refused the same way (exit 10 before connecting); `PGSSLCERTMODE` set but
+empty is refused too. `~/.pgpass` (or `PGPASSFILE`) supplies a missing password, wildcards
 allowed; a file readable by group or others is ignored with a WARNING. Several
 hosts are tried in order and the error names every one tried;
 `target_session_attrs` takes `any`, `read-write`, `read-only`, `primary`,
@@ -314,7 +339,7 @@ minimum above 3.0, see "A minimum protocol above 3.0 is refused for now");
 `sslsni`, `sslcertmode` and
 `client_encoding` are accepted.
 
-Cases: `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
+Cases: `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
 
 ### TLS
 
@@ -447,9 +472,13 @@ MCP answer carries the connection password in `error`, `detail`, `hint` or
 `where`: Go hides password-shaped text (`password=...`, `PASSWORD '...'`, a
 URI's password), the Rust binary replaces the connection's password,
 `sslpassword` and cloud token with `***`. Notices are recorded as the server
-sent them, in both.
+sent them, in both. A run that stops before it reaches the deploy (a
+mistyped project path, a connection that cannot be resolved) has
+`durationMs`, `created`, `recreated`, `filesLoaded`, `pathsIgnored` and
+`testMacros` null; once it reaches the deploy they are numbers and booleans,
+zero and false until known.
 
-Cases: `deploy/json-success`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
+Cases: `deploy/json-success`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
 
 ### Error attribution
 
@@ -477,7 +506,13 @@ Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`,
 
 `--timeout` (default 3m, Go duration syntax) cancels the running statement on
 the server, gives the server 2 s to report the cancel, and is exit 16; running out while connecting is exit 11. SIGINT or
-SIGTERM cancels and is exit 130; a second SIGINT ends at once, still 130.
+SIGTERM cancels and is exit 130, saying `pgmi: interrupted, cancelling
+deployment... (again to quit at once)`; a second SIGINT ends at once, still
+130. A stopped statement keeps the server's report: the error is `the deploy
+exceeded --timeout <d>; raise it, or pass --timeout 0 for no limit` on a
+timeout and the server's 57014 on a signal, and `failedFile`, `phase`,
+`sqlstate`, `where` and the WHERE and LOCATION lines are those of the
+cancelled statement; the summary line says nothing was committed.
 Cancel works over TLS and over direct TLS negotiation. A timeout longer than a
 Go duration holds (about 2562047h) is refused: exit 2 on the flag, 10 in
 `pgmi.yaml` and in the MCP deploy tool. The ROLLBACK of a deploy.sql that
@@ -486,7 +521,7 @@ get 3 s; a server that does not answer by then has its connection closed,
 which rolls back as well (Rust integration test
 `a_rollback_the_server_never_answers_does_not_hang_the_deploy`).
 
-Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`.
+Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`.
 
 ### Checksums
 
@@ -559,7 +594,10 @@ and `~/.config/gcloud` elsewhere, else the metadata server. Lakebase in Go: a
 token passed as the password, no separate path; the Rust binary adds
 `--databricks` (see "Databricks Lakebase sign-in"). Only one of `--azure`,
 `--aws`, `--google` and `--databricks` may be given (exit 10; the message
-lists `--databricks` only when it was one of them). Real-cloud verification: Azure only (owner decision
+lists `--databricks` only when it was one of them). `pgmi.yaml`'s
+`azure_tenant_id`, `azure_client_id` and `aws_region` are only defaults: the
+flag wins, then the environment (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`;
+`AWS_REGION`, then `AWS_DEFAULT_REGION`), then the yaml value. Real-cloud verification: Azure only (owner decision
 2026-11-10); AWS and Google are checked against local fakes. Observed on a
 real Flexible Server (PGMI-845, 2026-11-11, Go): the Azure CLI, a service
 principal with a secret, system- and user-assigned managed identity, and
@@ -569,7 +607,7 @@ over a wrong `AZURE_TENANT_ID`; a principal without a database role is exit 11
 naming the user (`check that the signed-in identity has a database role and
 that --username matches it`); a wrong tenant is exit 11 (`AADSTS90002`).
 
-Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`.
+Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust dialer is checked against the runner's fake Admin API by

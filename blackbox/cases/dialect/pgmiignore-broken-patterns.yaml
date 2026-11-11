@@ -1,0 +1,30 @@
+description: a .pgmiignore line with an empty or reversed bracket class is refused (exit 10 naming .pgmiignore and the line); an unclosed [ is a literal bracket, so "[abc" hides only a file named "[abc"
+project:
+  files:
+    reversed/.pgmiignore: "ok.sql\nx[z-a].sql\n"
+    reversed/deploy.sql: SELECT 1;
+    empty/.pgmiignore: "[]\n"
+    empty/deploy.sql: SELECT 1;
+    empty-negated/.pgmiignore: "[!]\n"
+    empty-negated/deploy.sql: SELECT 1;
+    bracket-first/.pgmiignore: "[]a]\n"
+    bracket-first/deploy.sql: SELECT 1;
+    unclosed/.pgmiignore: "[abc\n"
+    unclosed/[abc: x
+    unclosed/a.sql: SELECT 1;
+    unclosed/deploy.sql: CREATE TABLE seen AS SELECT path FROM pg_temp.pgmi_source_view;
+steps:
+  - pgmi: [deploy, "{project}/reversed", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['\.pgmiignore line 2']}
+  - pgmi: [deploy, "{project}/empty", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['\.pgmiignore line 1']}
+  - pgmi: [deploy, "{project}/empty-negated", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['\.pgmiignore line 1']}
+  - pgmi: [deploy, "{project}/bracket-first", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['\.pgmiignore line 1']}
+  - pgmi: [deploy, "{project}/unclosed", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM seen ORDER BY path COLLATE "C"
+          rows: [[./a.sql]]

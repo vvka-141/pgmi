@@ -1,4 +1,4 @@
-description: the project walk never follows a symbolic link (file or directory) unless .pgmiignore hides it, deploy.sql itself may be one, and a file with a NUL byte or invalid UTF-8 is exit 10 naming the file
+description: the project walk never follows a symbolic link (file or directory) unless .pgmiignore hides it, deploy.sql itself may be one, and a file with a NUL byte or invalid UTF-8 is exit 10 naming the file, in Go's words
 project:
   files:
     shared/x.sql: SELECT 'outside';
@@ -17,11 +17,11 @@ project:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}/link-file", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ["\\./x\\.sql", "symlink"]}
+    expect: {exit: 10, stderr: ['failed to read \./x\.sql: refusing to read symlink x\.sql: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
   - pgmi: [deploy, "{project}/link-dir", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ["\\./lib", "symlink"]}
+    expect: {exit: 10, stderr: ['failed to read \./lib: refusing to read symlink lib: pgmi does not follow symlinks; exclude it in \.pgmiignore or replace it with the file']}
   - pgmi: [deploy, "{project}/nul", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 10, stderr: ["\\./data\\.bin", "NUL byte"]}
+    expect: {exit: 10, stderr: ['file \./data\.bin contains a NUL byte; pgmi loads project files as text, so exclude it in \.pgmiignore or move it out of the project path']}
   - pgmi: [deploy, "{project}/utf8", --connection, "{conn}", -d, "{db}"]
     expect: {exit: 10, stderr: ["\\./latin1\\.sql", "not valid UTF-8"]}
   - pgmi: [deploy, "{project}/deploy-utf8", --connection, "{conn}", -d, "{db}"]

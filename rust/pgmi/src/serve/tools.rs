@@ -474,13 +474,17 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
     match &result {
         Ok(()) => {
             let (notices, warnings) = run.notice_counts();
-            let text = format!(
+            let mut text = format!(
                 "deployed {}: {} files loaded, {} paths ignored, {notices} notices ({warnings} warnings) in {}ms; the full record is in structuredContent",
                 run.database().unwrap_or_default(),
                 record.files_loaded.unwrap_or(0),
                 record.paths_ignored.unwrap_or(0),
-                record.duration_ms,
+                record.duration_ms.unwrap_or(0),
             );
+            let warning_lines = record.warning_lines();
+            if !warning_lines.is_empty() {
+                let _ = write!(text, "\n{warning_lines}");
+            }
             Outcome {
                 text,
                 structured: to_raw_value(&record).ok(),
@@ -497,6 +501,10 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
             let _ = write!(text, "\nexit code {}", e.exit_code());
             if let Some(phase) = record.phase {
                 let _ = write!(text, ", phase {phase}");
+            }
+            let warning_lines = record.warning_lines();
+            if !warning_lines.is_empty() {
+                let _ = write!(text, "\n{warning_lines}");
             }
             record.message = Some(message);
             Outcome {

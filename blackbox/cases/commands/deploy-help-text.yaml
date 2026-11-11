@@ -1,0 +1,34 @@
+description: deploy --help explains the command, gives examples, says where the password and parameters come from, and describes every connection, TLS, parameter and cloud flag
+steps:
+  - pgmi: [deploy, --help]
+    expect:
+      exit: 0
+      stdout:
+        - 'Run deploy\.sql against a target database\.'
+        - 'pgmi deploy \. -d mydb --params-file prod\.params'
+        - 'Password is never read from a flag\.'
+        - 'Parameter precedence: --param > --params-file \(later wins\) > PGMI_PARAM_\*'
+        - 'A --timeout that runs out while connecting is 11'
+        - 'PostgreSQL connection string: URI, libpq keyword/value'
+        - 'service= and \$PGSERVICE are refused'
+        - 'Precedence: --host > \$PGHOST > pgmi\.yaml > localhost'
+        - 'Precedence: --port > \$PGPORT > pgmi\.yaml > 5432'
+        - 'PostgreSQL user \(default: \$PGUSER or current OS user\)'
+        - 'Target database name \(optional if specified in connection string, or \$PGDATABASE\)'
+        - 'SSL mode: disable\|allow\|prefer\|require\|verify-ca\|verify-full'
+        - 'Precedence: --sslcert > \$PGSSLCERT > pgmi\.yaml'
+        - 'Precedence: --sslkey > \$PGSSLKEY > pgmi\.yaml'
+        - 'Precedence: --sslrootcert > \$PGSSLROOTCERT > pgmi\.yaml'
+        - 'Drop and recreate the database'
+        - 'Never block on an interactive prompt'
+        - 'For query-level timeouts, use SET statement_timeout in SQL'
+        - 'Pin to a specific pgmi session interface version'
+        - 'Emit structured JSON to stdout after deployment'
+        - "Available as session variables: current_setting\\('pgmi\\.key'\\) during deployment"
+        - 'Use - to read stdin \(once\)\. Later files override earlier ones'
+        - 'Azure AD tenant/directory ID \(overrides \$AZURE_TENANT_ID\)'
+        - 'Azure AD application/client ID \(overrides \$AZURE_CLIENT_ID\)'
+        - 'AWS region for RDS endpoint \(overrides \$AWS_REGION\)'
+        - 'Uses Application Default Credentials'
+        - 'Cloud SQL instance connection name \(format: project:region:instance\)'
+        - 'Enable verbose output for all commands'

@@ -1,0 +1,47 @@
+description: a deploy stopped by --timeout (exit 16) or SIGINT (exit 130) in a project file still reports the file, phase, SQLSTATE and WHERE of the cancelled statement in --json and on stderr, says nothing was committed, and SIGINT says it is cancelling
+project:
+  files:
+    deploy.sql: |
+      DO $$
+      DECLARE f record;
+      BEGIN
+        FOR f IN SELECT path, content FROM pg_temp.pgmi_plan_view ORDER BY execution_order LOOP
+          EXECUTE f.content;
+        END LOOP;
+      END $$;
+    migrations/001_slow.sql: SELECT pg_sleep(60);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 2s, --json]
+    timeout: 45
+    expect:
+      exit: 16
+      stderr:
+        - 'failed after [0-9.]+s — nothing committed'
+        - 'pgmi: error: the deploy exceeded --timeout 2s; raise it, or pass --timeout 0 for no limit'
+        - 'WHERE: SQL statement in \./migrations/001_slow\.sql'
+        - 'LOCATION: \./migrations/001_slow\.sql'
+      json:
+        exitCode: 16
+        error: "the deploy exceeded --timeout 2s; raise it, or pass --timeout 0 for no limit"
+        failedFile: ./migrations/001_slow.sql
+        phase: deploy
+        sqlstate: "57014"
+        executionMode: atomic
+        where: "SQL statement in ./migrations/001_slow.sql\nPL/pgSQL function inline_code_block line 5 at EXECUTE"
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    signal: {name: SIGINT, after: 3}
+    timeout: 45
+    expect:
+      exit: 130
+      stderr:
+        - 'pgmi: interrupted, cancelling deployment\.\.\. \(again to quit at once\)'
+        - 'failed after [0-9.]+s — nothing committed'
+        - 'pgmi: error: ERROR: canceling statement due to user request \(SQLSTATE 57014\)'
+        - 'WHERE: SQL statement in \./migrations/001_slow\.sql'
+      json:
+        exitCode: 130
+        error: "ERROR: canceling statement due to user request (SQLSTATE 57014)"
+        failedFile: ./migrations/001_slow.sql
+        phase: deploy
+        sqlstate: "57014"
+        executionMode: atomic

@@ -1,0 +1,23 @@
+description: the deploy tool's text block lists each WARNING as "WARNING, colon, message" after the summary line on success, and after the exit code on failure; a NOTICE is not listed there
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE WARNING 'warn-ok-7c1e'; RAISE NOTICE 'notice-ok-7c1e'; END $$;
+    fails/deploy.sql: |
+      DO $$ BEGIN RAISE WARNING 'warn-fail-7c1e'; END $$;
+      SELECT 1/0;
+steps:
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+      - {until: '"id":2', timeout: 60}
+      - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/fails","connection":"{conn}","database":"{db}"}}}'
+    timeout: 90
+    expect:
+      exit: 0
+      stdout:
+        - '"id":2,"result":\{"content":\[\{"type":"text","text":"deployed (?:[^"\\]|\\.)*the full record is in structuredContent\\nWARNING: warn-ok-7c1e"'
+        - '"id":3,"result":\{"content":\[\{"type":"text","text":"(?:[^"\\]|\\.)*exit code 13(?:[^"\\]|\\.)*\\nWARNING: warn-fail-7c1e"'
+      stdout_not: ['\\nNOTICE: notice-ok-7c1e']

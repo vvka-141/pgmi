@@ -122,6 +122,16 @@ impl Reporter {
         let _ = sink.flush();
     }
 
+    /// A `--verbose` line as Go prints it: `[VERBOSE] ` and no elapsed time.
+    pub(crate) fn verbose(&self, text: &str) {
+        let mut sink = self
+            .sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = writeln!(sink, "[VERBOSE] {text}");
+        let _ = sink.flush();
+    }
+
     pub(crate) fn notice(&self, n: &Notice) {
         let mut text = match &n.severity {
             Severity::Log => return,

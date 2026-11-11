@@ -108,6 +108,7 @@ impl Token {
 pub(crate) fn select(
     asked: &[Provider],
     req: &Options,
+    env: &Env,
     yaml: Option<&ProjectConfig>,
 ) -> Result<Option<(Provider, Options)>> {
     if asked.len() > 1 {
@@ -124,12 +125,27 @@ pub(crate) fn select(
     let Some(provider) = asked.first().copied().or(y.auth_method) else {
         return Ok(None);
     };
+    let pick = |flag: &Option<String>, names: &[&str], yaml: Option<String>| -> Result<_> {
+        if let Some(v) = flag.as_deref().filter(|v| !v.is_empty()) {
+            return Ok(Some(v.to_string()));
+        }
+        for name in names {
+            if let Some(v) = env.non_empty(name)? {
+                return Ok(Some(v.to_string()));
+            }
+        }
+        Ok(yaml)
+    };
     Ok(Some((
         provider,
         Options {
-            tenant_id: req.tenant_id.clone().or(y.azure_tenant_id),
-            client_id: req.client_id.clone().or(y.azure_client_id),
-            aws_region: req.aws_region.clone().or(y.aws_region),
+            tenant_id: pick(&req.tenant_id, &["AZURE_TENANT_ID"], y.azure_tenant_id)?,
+            client_id: pick(&req.client_id, &["AZURE_CLIENT_ID"], y.azure_client_id)?,
+            aws_region: pick(
+                &req.aws_region,
+                &["AWS_REGION", "AWS_DEFAULT_REGION"],
+                y.aws_region,
+            )?,
             google_instance: req.google_instance.clone().or(y.google_instance),
             databricks_endpoint: req.databricks_endpoint.clone(),
         },
@@ -203,7 +219,13 @@ mod tests {
 
     #[test]
     fn two_providers_are_refused() {
-        let e = select(&[Provider::Azure, Provider::Aws], &Options::default(), None).unwrap_err();
+        let e = select(
+            &[Provider::Azure, Provider::Aws],
+            &Options::default(),
+            &Env::default(),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert_eq!(
             e.text(),
@@ -212,6 +234,7 @@ mod tests {
         let e = select(
             &[Provider::Databricks, Provider::Google],
             &Options::default(),
+            &Env::default(),
             None,
         )
         .unwrap_err();
@@ -226,10 +249,14 @@ mod tests {
 
     #[test]
     fn no_provider_anywhere_is_none() {
-        assert!(select(&[], &Options::default(), None).unwrap().is_none());
+        assert!(
+            select(&[], &Options::default(), &Env::default(), None)
+                .unwrap()
+                .is_none()
+        );
         let y = yaml("connection:\n  aws_region: eu-west-1\n");
         assert!(
-            select(&[], &Options::default(), Some(&y))
+            select(&[], &Options::default(), &Env::default(), Some(&y))
                 .unwrap()
                 .is_none()
         );
@@ -244,7 +271,9 @@ mod tests {
             aws_region: Some("from-flag".into()),
             ..Options::default()
         };
-        let (p, r) = select(&[Provider::Aws], &asked, Some(&y)).unwrap().unwrap();
+        let (p, r) = select(&[Provider::Aws], &asked, &Env::default(), Some(&y))
+            .unwrap()
+            .unwrap();
         assert_eq!(p, Provider::Aws);
         assert_eq!(r.aws_region.as_deref(), Some("from-flag"));
         assert_eq!(r.tenant_id.as_deref(), Some("t"));
@@ -253,8 +282,37 @@ mod tests {
     #[test]
     fn the_yaml_auth_method_applies_without_a_flag() {
         let y = yaml("connection:\n  auth_method: google\n  google_instance: p:r:i\n");
-        let (p, r) = select(&[], &Options::default(), Some(&y)).unwrap().unwrap();
+        let (p, r) = select(&[], &Options::default(), &Env::default(), Some(&y))
+            .unwrap()
+            .unwrap();
         assert_eq!(p, Provider::Google);
         assert_eq!(r.google_instance.as_deref(), Some("p:r:i"));
+    }
+
+    #[test]
+    fn the_environment_beats_yaml_values_and_a_flag_beats_both() {
+        let y = yaml(
+            "connection:\n  auth_method: azure\n  azure_tenant_id: yaml-t\n  azure_client_id: yaml-c\n  aws_region: yaml-r\n",
+        );
+        let mut env = Env::default();
+        env.insert("AZURE_TENANT_ID", "env-t");
+        env.insert("AZURE_CLIENT_ID", "env-c");
+        env.insert("AWS_DEFAULT_REGION", "env-default-r");
+        let (_, r) = select(&[], &Options::default(), &env, Some(&y))
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.tenant_id.as_deref(), Some("env-t"));
+        assert_eq!(r.client_id.as_deref(), Some("env-c"));
+        assert_eq!(r.aws_region.as_deref(), Some("env-default-r"));
+        env.insert("AWS_REGION", "env-r");
+        let asked = Options {
+            tenant_id: Some("flag-t".into()),
+            client_id: Some(String::new()),
+            ..Options::default()
+        };
+        let (_, r) = select(&[], &asked, &env, Some(&y)).unwrap().unwrap();
+        assert_eq!(r.tenant_id.as_deref(), Some("flag-t"));
+        assert_eq!(r.client_id.as_deref(), Some("env-c"));
+        assert_eq!(r.aws_region.as_deref(), Some("env-r"));
     }
 }

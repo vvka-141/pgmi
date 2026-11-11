@@ -1,0 +1,36 @@
+description: an unknown --compat is refused after the connection and the project are resolved, before connecting - a FAILED line names the target, and --json carries target, connectionSource and database with contractVersion null and the run counters at zero; a mistyped project path stops earlier, so its record has durationMs and the counters null
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --compat=99, --json]
+    expect:
+      exit: 10
+      stderr: ['^FAILED {db}: failed after \d+\.\d\ds$', 'pgmi: error: unsupported API version "99"; supported: 1']
+      json:
+        connectionSource: --connection
+        contractVersion: null
+        database: "{db}"
+        target: {host: "{host}", database: "{db}"}
+        created: false
+        recreated: false
+        filesLoaded: 0
+        pathsIgnored: 0
+        testMacros: 0
+        serverVersion: null
+        tls: null
+  - pgmi: [deploy, "{project}/nope", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 10
+      stderr: ['project path ".*nope" does not exist']
+      stderr_not: ['FAILED']
+      json:
+        durationMs: null
+        connectionSource: null
+        target: null
+        database: null
+        created: null
+        filesLoaded: null
+        pathsIgnored: null
+        testMacros: null
+        contractVersion: "1"

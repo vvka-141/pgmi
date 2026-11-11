@@ -1,0 +1,23 @@
+description: with -v, parameter loading prints counts only (from PGMI_PARAM_*, each params file with a running total, and --param), never a key or a value
+project:
+  files:
+    deploy.sql: SELECT 1;
+    a.params: "alpha_key=alpha-value-9d1\nbeta_key=beta-value-9d1\n"
+    b.params: "alpha_key=again-9d1\ngamma_key=gamma-value-9d1\n"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v, --params-file, "{project}/a.params", --params-file, "{project}/b.params", --param, "delta_key=delta-value-9d1"]
+    env: {PGMI_PARAM_EPSILON_KEY: epsilon-value-9d1}
+    expect:
+      exit: 0
+      stderr:
+        - '^\[VERBOSE\] Loaded 1 parameter\(s\) from PGMI_PARAM_\* environment variables$'
+        - '^\[VERBOSE\] Loading parameters from file: {project}/a\.params$'
+        - '^\[VERBOSE\] Loaded 2 parameter\(s\) from file \(total: 2\)$'
+        - '^\[VERBOSE\] Loading parameters from file: {project}/b\.params$'
+        - '^\[VERBOSE\] Loaded 2 parameter\(s\) from file \(total: 3\)$'
+        - '^\[VERBOSE\] CLI parameters override 1 value\(s\)$'
+      stderr_not: ["value-9d1", "again-9d1", "alpha_key", "epsilon_key", "EPSILON", "delta_key"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/a.params"]
+    expect:
+      exit: 0
+      stderr_not: ['\[VERBOSE\]']

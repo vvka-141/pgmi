@@ -227,16 +227,6 @@ impl Guard {
         }
     }
 
-    fn timeout_error(&self) -> Error {
-        Error::new(
-            Kind::Timeout,
-            format!(
-                "the deploy exceeded --timeout {}; the running statement was cancelled",
-                crate::duration::render(self.timeout)
-            ),
-        )
-    }
-
     fn expired_error(&self) -> Error {
         Error::new(
             Kind::Timeout,
@@ -311,11 +301,20 @@ impl Guard {
         let stopped = tokio::select! {
             r = &mut fut => return r,
             () = self.token.cancelled() => self.stop_error(),
-            () = tokio::time::sleep_until(self.deadline) => self.timeout_error(),
+            () = tokio::time::sleep_until(self.deadline) => self.expired_error(),
         };
         session.cancel().await;
-        let _ = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
-        Err(stopped)
+        let reported = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
+        Err(match reported {
+            Ok(Err(e)) if e.sql_diagnostics().is_some() => {
+                let text = match stopped.kind() {
+                    Kind::Timeout => stopped.text(),
+                    _ => e.text(),
+                };
+                e.reworded(stopped.kind(), text)
+            }
+            _ => stopped,
+        })
     }
 }
 
@@ -470,13 +469,19 @@ pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime.block_on(async {
             let token = CancellationToken::new();
-            spawn_signals(token.clone(), interrupted.clone());
+            spawn_signals(token.clone(), interrupted.clone(), reporter.clone());
             run.deploy(ctx, &reporter, token, interrupted.clone()).await
         })
     }));
     let mut result = caught.unwrap_or_else(|_| Err(crate::error::panic_error().0));
     if interrupted.load(Ordering::SeqCst) {
-        result = Err(Error::new(Kind::Interrupted, "interrupted"));
+        result = Err(match result {
+            Err(e) if e.sql_diagnostics().is_some() => {
+                let text = e.text();
+                e.reworded(Kind::Interrupted, text)
+            }
+            _ => Error::new(Kind::Interrupted, "interrupted"),
+        });
     }
     runtime.shutdown_timeout(Duration::from_millis(100));
     finish(ctx, &run, &result, &reporter)
@@ -509,7 +514,10 @@ fn timeout_of(ctx: &Context) -> Duration {
         })
 }
 
-fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
+const INTERRUPTED: &str = "pgmi: interrupted, cancelling deployment... (again to quit at once)";
+const INTERRUPTED_AGAIN: &str = "pgmi: interrupted again, quitting";
+
+fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>, reporter: Arc<Reporter>) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
@@ -524,21 +532,25 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>) {
                 _ = int.recv() => {}
                 _ = term.recv() => {}
             }
+            reporter.line(INTERRUPTED);
             flag.store(true, Ordering::SeqCst);
             token.cancel();
             tokio::select! {
                 _ = int.recv() => {}
                 _ = term.recv() => {}
             }
+            reporter.line(INTERRUPTED_AGAIN);
             std::process::exit(i32::from(Kind::Interrupted.exit_code()));
         }
         #[cfg(not(unix))]
         {
             if tokio::signal::ctrl_c().await.is_ok() {
+                reporter.line(INTERRUPTED);
                 flag.store(true, Ordering::SeqCst);
                 token.cancel();
             }
             if tokio::signal::ctrl_c().await.is_ok() {
+                reporter.line(INTERRUPTED_AGAIN);
                 std::process::exit(i32::from(Kind::Interrupted.exit_code()));
             }
         }
@@ -554,20 +566,18 @@ async fn deploy(
     secrets: Secrets,
 ) -> Result<()> {
     let a = &ctx.request;
-    if let Some(c) = &a.compat
-        && c != "1"
-    {
-        return Err(Error::config(format!(
-            "unsupported API version \"{c}\"; supported: 1"
-        )));
-    }
-    st.contract = true;
+    let unsupported = a
+        .compat
+        .as_ref()
+        .filter(|c| *c != "1")
+        .map(|c| Error::config(format!("unsupported API version \"{c}\"; supported: 1")));
+    st.contract = unsupported.is_none();
     let fs = crate::vfs::OsFs::project(&a.project)?;
     let yaml = ProjectConfig::load(&fs)?;
     if let Some(y) = &yaml {
         y.timeout()?;
     }
-    let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, yaml.as_ref())?;
+    let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, &ctx.env, yaml.as_ref())?;
     let yaml_connection = yaml.as_ref().map(|y| &y.connection);
     st.connection_source = Some(resolve::source(&a.connection, &ctx.env, yaml_connection)?);
     st.overrides = overrides(&a.connection, &ctx.env, yaml_connection)?;
@@ -599,13 +609,20 @@ async fn deploy(
         a.params.clone(),
         ctx.stdin,
     );
+    let (notes, verbose) = (reporter.clone(), ctx.verbose);
     let params = guard
         .interruptible(move || {
+            let note = |n: String| {
+                if verbose {
+                    notes.verbose(&n);
+                }
+            };
             let sources = Sources {
                 yaml: yaml_params,
                 env: &env,
                 files: &files,
                 flags: &flags,
+                note: &note,
             };
             if stdin {
                 params::collect(sources, &mut std::io::stdin())
@@ -626,6 +643,9 @@ async fn deploy(
     let fs = crate::vfs::OsFs::new(a.project.clone());
     let project = guard.blocking(move || walk::load(&fs, max_size)).await?;
     let meta = metadata::collect(&project.sources)?;
+    if let Some(e) = unsupported {
+        return Err(e);
+    }
     let files_loaded = project.sources.len() + project.test_dir_files.len();
     st.loaded = Some(Loaded {
         files: files_loaded,
@@ -942,26 +962,23 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
 
 fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool, String)> {
     let db = p.database()?;
-    let e = match result {
-        Ok(()) => {
-            let (files, ignored) = p
-                .loaded
-                .as_ref()
-                .map_or((0, 0), |l| (l.files, l.ignored.len()));
-            let ignored = match ignored {
-                0 => String::new(),
-                n => format!(", {n} paths ignored"),
-            };
-            return Some((
-                true,
-                format!(
-                    "{db}: {files} files loaded{ignored} in {}",
-                    seconds(elapsed)
-                ),
-            ));
-        }
-        Err(e) => e,
-    };
+    if result.is_ok() {
+        let (files, ignored) = p
+            .loaded
+            .as_ref()
+            .map_or((0, 0), |l| (l.files, l.ignored.len()));
+        let ignored = match ignored {
+            0 => String::new(),
+            n => format!(", {n} paths ignored"),
+        };
+        return Some((
+            true,
+            format!(
+                "{db}: {files} files loaded{ignored} in {}",
+                seconds(elapsed)
+            ),
+        ));
+    }
     let mut text = format!("{db}: failed after {}", seconds(elapsed));
     let committed = p.execution.as_ref().map_or(0, |x| x.committed);
     let mut notes = Vec::new();
@@ -974,7 +991,7 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
                 x.units
             );
         }
-        Some(_) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
+        Some(x) if x.failure.is_some() => notes.push("nothing committed".to_string()),
         _ => {}
     }
     let verb = match p.provision {
@@ -1177,6 +1194,15 @@ mod tests {
             summary_of(&atomic, &sql),
             Some((false, "app: failed after 1.23s — nothing committed".into()))
         );
+        for stopped in [
+            Error::new(Kind::Timeout, "the deploy exceeded --timeout 2s"),
+            Error::new(Kind::Interrupted, "interrupted"),
+        ] {
+            assert_eq!(
+                summary_of(&atomic, &Err(stopped)).unwrap().1,
+                "app: failed after 1.23s — nothing committed"
+            );
+        }
         let psql = Progress {
             execution: executed(2, failure(3, blame::Blame::default())),
             ..loaded("app")
@@ -1216,6 +1242,88 @@ mod tests {
             summary_of(&created_then_sql, &sql).unwrap().1,
             "app: failed after 1.23s — nothing committed; created database \"app\", left empty"
         );
+    }
+
+    fn notice(severity: &str, message: &str) -> Notice {
+        Notice {
+            severity: severity.into(),
+            message: message.into(),
+            detail: None,
+            hint: None,
+        }
+    }
+
+    #[test]
+    fn the_record_lists_only_warnings_for_a_text_only_client() {
+        let mut run = Run::start();
+        run.st = loaded("app");
+        {
+            let mut log = run.log.lock().unwrap();
+            log.push(&notice("NOTICE", "  + tests passed"));
+            log.push(&notice("WARNING", "a default password"));
+            log.push(&notice("WARNING", "another"));
+        }
+        let record = run.record(&context(), &Ok(()));
+        assert_eq!(
+            record.warning_lines(),
+            "WARNING: a default password\nWARNING: another"
+        );
+        assert_eq!(Run::start().record(&context(), &Ok(())).warning_lines(), "");
+    }
+
+    #[test]
+    fn counters_are_null_before_the_deploy_and_zero_once_it_began() {
+        let refused = Err(Error::config(
+            "unsupported API version \"99\"; supported: 1",
+        ));
+        let before = serde_json::to_value(Run::start().record(&context(), &refused)).unwrap();
+        for key in [
+            "durationMs",
+            "created",
+            "recreated",
+            "filesLoaded",
+            "pathsIgnored",
+            "testMacros",
+        ] {
+            assert_eq!(before[key], Value::Null, "{key}");
+        }
+        let mut run = Run::start();
+        run.st = Progress {
+            spec: Some(spec("app")),
+            connection_source: Some(Source::ConnectionFlag),
+            deployer: true,
+            ..Progress::default()
+        };
+        let began = serde_json::to_value(run.record(&context(), &refused)).unwrap();
+        assert_eq!(began["contractVersion"], Value::Null);
+        assert_eq!(began["connectionSource"], "--connection");
+        assert_eq!(began["target"]["database"], "app");
+        for (key, want) in [
+            ("created", json!(false)),
+            ("recreated", json!(false)),
+            ("filesLoaded", json!(0)),
+            ("pathsIgnored", json!(0)),
+            ("testMacros", json!(0)),
+        ] {
+            assert_eq!(began[key], want, "{key}");
+        }
+        assert!(began["durationMs"].is_u64());
+    }
+
+    #[test]
+    fn a_stopped_statement_keeps_the_server_report_under_the_stop_kind() {
+        let server = Error::sql("ERROR: canceling statement due to user request (SQLSTATE 57014)")
+            .with_sql(SqlDiagnostics {
+                sqlstate: Some("57014".into()),
+                where_: Some("SQL statement in ./a.sql".into()),
+                ..SqlDiagnostics::default()
+            });
+        let e = server.reworded(Kind::Timeout, "the deploy exceeded --timeout 2s");
+        assert_eq!(e.exit_code(), 16);
+        assert_eq!(e.text(), "the deploy exceeded --timeout 2s");
+        let d = e.sql_diagnostics().unwrap();
+        assert_eq!(d.sqlstate.as_deref(), Some("57014"));
+        assert_eq!(d.where_.as_deref(), Some("SQL statement in ./a.sql"));
     }
 
     fn context() -> Context {

@@ -1,0 +1,20 @@
+description: PGSSLSNI, PGSSLCERTMODE, PGMINPROTOCOLVERSION and PGMAXPROTOCOLVERSION are read like their connection-string keys; an invalid value (an empty PGSSLCERTMODE too) is exit 10 before connecting, a valid one deploys
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMAXPROTOCOLVERSION: "9.9"}
+    expect: {exit: 10, stderr: ['invalid max_protocol_version.*"9\.9"']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMINPROTOCOLVERSION: bogus}
+    expect: {exit: 10, stderr: ['invalid min_protocol_version.*"bogus"']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGSSLCERTMODE: bogus}
+    expect: {exit: 10, stderr: ["invalid sslcertmode.*bogus"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGSSLCERTMODE: ""}
+    expect: {exit: 10, stderr: ["invalid sslcertmode"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGSSLSNI: "0", PGSSLCERTMODE: disable, PGMINPROTOCOLVERSION: "3.0", PGMAXPROTOCOLVERSION: "3.2"}
+    expect: {exit: 0}

@@ -12,6 +12,8 @@ pub(crate) struct Sources<'a> {
     pub(crate) env: &'a Env,
     pub(crate) files: &'a [String],
     pub(crate) flags: &'a [String],
+    /// Receives the `--verbose` lines: counts only, never keys or values.
+    pub(crate) note: &'a dyn Fn(String),
 }
 
 fn valid_key(key: &str) -> bool {
@@ -84,13 +86,21 @@ pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap
         keys.push(name[ENV_PREFIX.len()..].to_string());
         out.insert(name[ENV_PREFIX.len()..].to_lowercase(), value.to_string());
     }
+    let from_env = src.env.with_prefix(ENV_PREFIX).count();
+    if from_env > 0 {
+        (src.note)(format!(
+            "Loaded {from_env} parameter(s) from {ENV_PREFIX}* environment variables"
+        ));
+    }
     let stdin_count = src.files.iter().filter(|f| *f == "-").count();
     if stdin_count > 1 {
         return Err(Error::config(format!(
             "--params-file - (stdin) given {stdin_count} times; stdin can be read only once"
         )));
     }
+    let mut from_files = std::collections::BTreeSet::new();
     for file in src.files {
+        (src.note)(format!("Loading parameters from file: {file}"));
         let (name, text) = if file == "-" {
             let mut s = String::new();
             stdin.read_to_string(&mut s).map_err(|e| {
@@ -117,8 +127,14 @@ pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap
             }
             seen.insert(lower.clone(), k.clone());
             keys.push(k);
+            from_files.insert(lower.clone());
             out.insert(lower, v);
         }
+        (src.note)(format!(
+            "Loaded {} parameter(s) from file (total: {})",
+            seen.len(),
+            from_files.len()
+        ));
     }
     let mut flagged: BTreeMap<String, &str> = BTreeMap::new();
     for p in src.flags {
@@ -144,6 +160,12 @@ pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap
         keys.push(k.to_string());
         out.insert(lower, v.to_string());
     }
+    if !src.flags.is_empty() {
+        (src.note)(format!(
+            "CLI parameters override {} value(s)",
+            src.flags.len()
+        ));
+    }
     check(&out, &keys)?;
     Ok(out)
 }
@@ -168,6 +190,7 @@ mod tests {
                 env: &env,
                 files: &files,
                 flags: &flags,
+                note: &|_| {},
             },
             &mut "a=file\nb=file\n".as_bytes(),
         )
@@ -176,6 +199,34 @@ mod tests {
         assert_eq!(out["b"], "file");
         assert_eq!(out["c"], "env");
         assert_eq!(out["d"], "yaml");
+    }
+
+    #[test]
+    fn verbose_notes_count_parameters_and_never_show_keys_or_values() {
+        let env = Env::from_pairs(&[("PGMI_PARAM_A", "secret-env"), ("PGMI_PARAM_B", "x")]);
+        let flags = vec!["a=secret-flag".to_string()];
+        let files = vec!["-".to_string()];
+        let notes = std::cell::RefCell::new(Vec::new());
+        collect(
+            Sources {
+                yaml: vec![],
+                env: &env,
+                files: &files,
+                flags: &flags,
+                note: &|n| notes.borrow_mut().push(n),
+            },
+            &mut "a=secret-file\nc=1\nC2=2\n".as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            notes.into_inner(),
+            [
+                "Loaded 2 parameter(s) from PGMI_PARAM_* environment variables",
+                "Loading parameters from file: -",
+                "Loaded 3 parameter(s) from file (total: 3)",
+                "CLI parameters override 1 value(s)",
+            ]
+        );
     }
 
     #[test]
@@ -188,6 +239,7 @@ mod tests {
                     env,
                     files,
                     flags,
+                    note: &|_| {},
                 },
                 &mut input.as_bytes(),
             )
@@ -243,6 +295,7 @@ mod tests {
                 env,
                 files,
                 flags: &flags,
+                note: &|_| {},
             },
             &mut &stdin[..],
         )

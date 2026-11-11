@@ -22,9 +22,9 @@ pub(crate) use commands::*;
     subcommand_help_heading = "Available Commands"
 )]
 pub(crate) struct Cli {
-    #[arg(short = 'v', long, global = true, action = ArgAction::SetTrue)]
+    #[arg(short = 'v', long, global = true, action = ArgAction::SetTrue, help = "Enable verbose output for all commands")]
     pub(crate) verbose: bool,
-    #[arg(long, global = true, action = ArgAction::Help)]
+    #[arg(long, global = true, action = ArgAction::Help, help = "Show help for this command")]
     pub(crate) help: Option<bool>,
     #[arg(long, action = ArgAction::SetTrue)]
     pub(crate) version: bool,
@@ -60,7 +60,7 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Deploy a project: load it into a session and run its deploy.sql", after_help = exit_codes_help())]
+    #[command(about = "Deploy a project: load it into a session and run its deploy.sql", long_about = DEPLOY_HELP, after_help = exit_codes_help())]
     Deploy(Box<DeployArgs>),
     #[command(about = "Write a project from a template")]
     Init(InitArgs),
@@ -83,6 +83,50 @@ pub(crate) enum Command {
     #[command(about = "Print a shell completion script to stdout")]
     Completion(CompletionArgs),
 }
+
+const DEPLOY_HELP: &str = "Run deploy.sql against a target database.
+
+pgmi connects, loads project files into pg_temp tables, loads CLI parameters,
+then executes deploy.sql. Transactions, ordering, and idempotency are decided
+by deploy.sql, not by pgmi.
+
+  pgmi deploy . -d mydb
+  pgmi deploy . -d mydb --overwrite --force
+  pgmi deploy . -d mydb --params-file prod.params
+  pgmi deploy . -d mydb --param env=prod --param version=1.2.3
+  ./fetch-secrets | pgmi deploy . -d mydb --params-file -
+
+Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
+string. Cloud auth: --azure, --aws, --google, --databricks (no password needed).
+
+A project .env is loaded into the environment first (variables already set
+win); pgmi serve does not read it.
+
+Parameter precedence: --param > --params-file (later wins) > PGMI_PARAM_*
+environment variables > pgmi.yaml. PGMI_PARAM_DB_PASSWORD=x becomes
+current_setting('pgmi.db_password'); other environment variables are not read.
+Secrets go in the environment or a params file, never in --param.
+
+A --timeout that runs out while connecting is 11: the server was not reached.";
+
+const CONNECTION_HELP: &str =
+    "PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET.
+Its database is the maintenance database for CREATE DATABASE, and also the
+deploy target unless -d says otherwise. It outranks pgmi.yaml's
+connection.database, so a string ending in /postgres deploys into postgres.
+Fields it omits come from $PGHOST, $PGPORT, $PGDATABASE, $PGUSER, $PGAPPNAME
+and $PGCONNECT_TIMEOUT, as in libpq, then from the defaults (localhost:5432/postgres).
+service= and $PGSERVICE are refused: pgmi reads no service files.
+Mutually exclusive with granular flags (--host, --port, --username).
+Alternative: Use PGMI_CONNECTION_STRING or DATABASE_URL environment variable.
+Example: postgresql://user:pass@localhost:5432/postgres";
+
+const DATABASE_HELP: &str =
+    "Target database name (optional if specified in connection string, or $PGDATABASE)
+Examples:
+  -d myapp                          # Deploy to 'myapp' database
+  --connection postgresql://user@host/myapp  # Database from connection string
+  --connection postgresql://user@host/postgres -d myapp  # Override";
 
 const CONFIG_HELP: &str = "Launch the connection wizard and write the result to pgmi.yaml.
 
@@ -122,51 +166,95 @@ pub(crate) struct InitArgs {
 #[derive(Debug, Args)]
 pub(crate) struct DeployArgs {
     pub(crate) project: PathBuf,
-    #[arg(long)]
+    #[arg(long, help = CONNECTION_HELP)]
     pub(crate) connection: Option<Secret>,
-    #[arg(short = 'h', long)]
+    #[arg(
+        short = 'h',
+        long,
+        help = "PostgreSQL server host\nPrecedence: --host > $PGHOST > pgmi.yaml > localhost"
+    )]
     pub(crate) host: Option<String>,
-    #[arg(short = 'p', long)]
+    #[arg(
+        short = 'p',
+        long,
+        help = "PostgreSQL server port\nPrecedence: --port > $PGPORT > pgmi.yaml > 5432"
+    )]
     pub(crate) port: Option<String>,
-    #[arg(short = 'U', long)]
+    #[arg(
+        short = 'U',
+        long,
+        help = "PostgreSQL user (default: $PGUSER or current OS user)"
+    )]
     pub(crate) username: Option<String>,
-    #[arg(short = 'd', long)]
+    #[arg(short = 'd', long, help = DATABASE_HELP)]
     pub(crate) database: Option<String>,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        hide_possible_values = true,
+        help = "SSL mode: disable|allow|prefer|require|verify-ca|verify-full\n(default: prefer, or $PGSSLMODE)"
+    )]
     pub(crate) sslmode: Option<SslMode>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Path to client SSL certificate file\nPrecedence: --sslcert > $PGSSLCERT > pgmi.yaml"
+    )]
     pub(crate) sslcert: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Path to client SSL private key file\nPrecedence: --sslkey > $PGSSLKEY > pgmi.yaml"
+    )]
     pub(crate) sslkey: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Path to root CA certificate for server verification\nPrecedence: --sslrootcert > $PGSSLROOTCERT > pgmi.yaml"
+    )]
     pub(crate) sslrootcert: Option<String>,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Drop and recreate the database\nRequires interactive confirmation unless --force is used\nWithout a terminal and without --force, pgmi refuses (exit 12) rather than prompting")]
     pub(crate) overwrite: bool,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Never block on an interactive prompt (for CI/CD; no-op when nothing would prompt)\nWith --overwrite: replaces the approval prompt with a 5-second countdown (Ctrl-C aborts)\nOnly affects confirmation dialogs, not deployment behavior")]
     pub(crate) force: bool,
-    #[arg(long, value_parser = crate::duration::parse, help = "Catastrophic failure protection, a Go duration such as 90s or 1h30m; 0 turns it off (default 3m0s)")]
+    #[arg(long, value_parser = crate::duration::parse, help = "Catastrophic failure protection timeout (default 3m)\nPrevents indefinite hangs from network issues or deadlocks\nUse 0 to disable the limit\nFor query-level timeouts, use SET statement_timeout in SQL\nExamples: 30s, 5m, 1h30m, 0 (default 3m0s)")]
     pub(crate) timeout: Option<Duration>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Compatibility level (default: latest)\nPin to a specific pgmi session interface version"
+    )]
     pub(crate) compat: Option<String>,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Emit structured JSON to stdout after deployment")]
     pub(crate) json: bool,
-    #[arg(long = "param")]
+    #[arg(
+        long = "param",
+        help = "Parameters as key=value pairs (can be specified multiple times)\nAvailable as session variables: current_setting('pgmi.key') during deployment\nExample: --param env=prod --param region=us-west"
+    )]
     pub(crate) params: Vec<String>,
-    #[arg(long = "params-file")]
+    #[arg(
+        long = "params-file",
+        help = "Load parameters from key=value files, e.g. prod.params (can be specified multiple times)\nUse - to read stdin (once). Later files override earlier ones, CLI --param overrides all"
+    )]
     pub(crate) params_files: Vec<String>,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Enable Azure Entra ID authentication\nUses DefaultAzureCredential chain (Managed Identity, Azure CLI, etc.)")]
     pub(crate) azure: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Azure AD tenant/directory ID (overrides $AZURE_TENANT_ID)"
+    )]
     pub(crate) azure_tenant_id: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Azure AD application/client ID (overrides $AZURE_CLIENT_ID)"
+    )]
     pub(crate) azure_client_id: Option<String>,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Enable AWS IAM database authentication\nUses default AWS credential chain (env vars, config file, IAM role, etc.)")]
     pub(crate) aws: bool,
-    #[arg(long)]
+    #[arg(long, help = "AWS region for RDS endpoint (overrides $AWS_REGION)")]
     pub(crate) aws_region: Option<String>,
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Enable Google Cloud SQL IAM database authentication\nUses Application Default Credentials (gcloud auth, service account, etc.)")]
     pub(crate) google: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Cloud SQL instance connection name (format: project:region:instance)\nRequired when --google is specified"
+    )]
     pub(crate) google_instance: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Sign in to Databricks Lakebase: a database credential from the workspace in DATABRICKS_HOST or ~/.databrickscfg, refreshed before it expires")]
     pub(crate) databricks: bool,

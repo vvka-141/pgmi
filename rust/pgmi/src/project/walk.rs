@@ -113,9 +113,9 @@ fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
     }
     let bytes = fs.read(rel).map_err(unreadable)?;
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    if let Some(at) = bytes.iter().position(|b| *b == 0) {
+    if bytes.contains(&0) {
         return Err(Error::config(format!(
-            "file ./{rel} has a NUL byte at offset {at}, so it is not text; exclude it in .pgmiignore or move it out of the project path"
+            "file ./{rel} contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
         )));
     }
     String::from_utf8(bytes.to_vec()).map_err(|e| {
@@ -192,7 +192,7 @@ fn walk(
         }
         if entry.stat.link {
             return Err(Error::config(format!(
-                "./{child} is a symlink; pgmi does not follow symbolic links, so hide it in .pgmiignore or replace it with the file"
+                "failed to read ./{child}: refusing to read symlink {child}: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file"
             )));
         }
         if entry.stat.kind == FileKind::Other {
@@ -460,12 +460,17 @@ mod tests {
 
     #[test]
     fn symlinks_are_refused_unless_hidden() {
-        for fs in [
-            project().link_to_file("l.sql"),
-            project().link_to_dir("l"),
-            project().dangling_link("l"),
+        for (fs, name) in [
+            (project().link_to_file("l.sql"), "l.sql"),
+            (project().link_to_dir("l"), "l"),
+            (project().dangling_link("l"), "l"),
         ] {
-            assert!(refused(&fs).contains("symlink"));
+            assert_eq!(
+                refused(&fs),
+                format!(
+                    "failed to read ./{name}: refusing to read symlink {name}: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file"
+                )
+            );
         }
         let fs = project().link_to_dir("l").file(".pgmiignore", "l/\n");
         assert!(load(&fs, MAX).unwrap().sources.is_empty());
@@ -485,7 +490,10 @@ mod tests {
     fn text_rules_bom_nul_utf8_and_size() {
         let fs = project().file("a.sql", b"\xef\xbb\xbfSELECT 1;");
         assert_eq!(load(&fs, MAX).unwrap().sources[0].content, "SELECT 1;");
-        assert!(refused(&project().file("a.sql", b"SELECT\0")).contains("NUL byte at offset 6"));
+        assert_eq!(
+            refused(&project().file("a.sql", b"SELECT\0")),
+            "file ./a.sql contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
+        );
         assert!(refused(&project().file("a.sql", b"SELECT \xff")).contains("byte offset 7"));
         let big = project().file("a.sql", "x".repeat(11));
         let e = load(&big, 10).unwrap_err();

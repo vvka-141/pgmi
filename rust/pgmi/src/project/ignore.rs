@@ -79,11 +79,52 @@ fn valid(p: &[u8]) -> bool {
     while i < p.len() {
         match p[i] {
             b'\\' => i += 2,
-            b'[' => match class_end(p, i) {
-                Some(e) => i = e,
-                None => return false,
-            },
+            b'[' => {
+                let first = i + 1 + usize::from(matches!(p.get(i + 1), Some(b'!' | b'^')));
+                if p.get(first) == Some(&b']') {
+                    return false;
+                }
+                match class_end(p, i) {
+                    Some(e) if class_valid(p, first, e) => i = e,
+                    Some(_) => return false,
+                    None => i += 1,
+                }
+            }
             _ => i += 1,
+        }
+    }
+    true
+}
+
+fn class_valid(p: &[u8], mut i: usize, end: usize) -> bool {
+    let last = end - 1;
+    let at = |k: usize| p.get(k).copied();
+    while i < last {
+        if at(i) == Some(b'[') && at(i + 1) == Some(b':') {
+            let Some(close) = p[i + 2..].windows(2).position(|w| w == b":]") else {
+                return false;
+            };
+            if posix(&p[i + 2..i + 2 + close], b'a').is_none() {
+                return false;
+            }
+            i += 2 + close + 2;
+            continue;
+        }
+        if at(i) == Some(b'\\') {
+            i += 1;
+        }
+        let Some(lo) = at(i) else { return false };
+        if at(i + 1) == Some(b'-') && i + 2 < last {
+            let (hi, step) = match at(i + 2) {
+                Some(b'\\') => (at(i + 3), 4),
+                h => (h, 3),
+            };
+            if hi.is_none_or(|hi| lo > hi) {
+                return false;
+            }
+            i += step;
+        } else {
+            i += 1;
         }
     }
     true
@@ -242,6 +283,10 @@ fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
                     pi = end;
                     ti += 1;
                 }
+                None if class_end(p, pi).is_none() && t[ti] == b'[' => {
+                    pi += 1;
+                    ti += 1;
+                }
                 _ => return Match::No,
             },
             b'\\' if pi + 1 < p.len() => {
@@ -347,8 +392,35 @@ mod tests {
         assert!(!r.ignored("docs/keep.sql", false));
         assert!(r.ignored("#hash.sql", false));
         assert_eq!(
-            Rules::parse("ok\na[b\n").err(),
-            Some(".pgmiignore line 2: invalid pattern \"a[b\"".to_string())
+            Rules::parse("ok\na[z-a]\n").err(),
+            Some(".pgmiignore line 2: invalid pattern \"a[z-a]\"".to_string())
         );
+    }
+
+    #[test]
+    fn broken_patterns_are_refused_as_go_refuses_them() {
+        for bad in [
+            "[z-a]",
+            "x[b-a].sql",
+            "[]",
+            "[!]",
+            "[^]",
+            "[]a]",
+            "a[]b",
+            "[[:nosuch:]]",
+        ] {
+            assert!(Rules::parse(bad).is_err(), "{bad} accepted");
+        }
+        for ok in ["[abc", "a[\\]", "[a-]", "[a-a]", "[[:digit:]]", "[!a-z]x"] {
+            assert!(Rules::parse(ok).is_ok(), "{ok} refused");
+        }
+    }
+
+    #[test]
+    fn an_unclosed_bracket_is_a_literal_bracket() {
+        let r = Rules::parse("[abc\n").unwrap();
+        assert!(r.ignored("[abc", false));
+        assert!(!r.ignored("a", false));
+        assert!(!r.ignored("abc", false));
     }
 }

@@ -1,0 +1,15 @@
+description: with -v, RAISE DEBUG from deploy.sql and tests reaches stderr, but no server DEBUG line from pgmi's own queries does (no parse or bind lines from expanding CALL pgmi_test())
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      DO $$ BEGIN RAISE DEBUG 'deploy-debug-4b2e'; END $$;
+      CALL pgmi_test();
+      COMMIT;
+    __test__/test_a.sql: DO $$ BEGIN RAISE DEBUG 'test-debug-4b2e'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v]
+    expect:
+      exit: 0
+      stderr: ["deploy-debug-4b2e", "test-debug-4b2e"]
+      stderr_not: ["parse <unnamed>", "bind <unnamed>", "pgmi_test_generate\\(\\$1"]

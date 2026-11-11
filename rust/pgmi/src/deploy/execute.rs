@@ -77,17 +77,6 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     if !params.is_empty() {
         reporter.line(&format!("Loaded {} parameter(s)", params.len()));
     }
-    if verbose {
-        guard
-            .running(session, async {
-                session
-                    .client
-                    .batch_execute("SET client_min_messages = debug")
-                    .await
-                    .map_err(|e| sql_error("enable DEBUG notices", &e))
-            })
-            .await?;
-    }
     let mut units: Vec<(Unit, LineMap)> = Vec::new();
     let mut count = 0;
     for unit in script::split(&project.deploy_sql) {
@@ -118,6 +107,17 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             },
             lines,
         ));
+    }
+    if verbose {
+        guard
+            .running(session, async {
+                session
+                    .client
+                    .batch_execute("SET client_min_messages = debug")
+                    .await
+                    .map_err(|e| sql_error("enable DEBUG notices", &e))
+            })
+            .await?;
     }
     let execution = execution.insert(Execution {
         test_macros: count,

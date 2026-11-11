@@ -1,5 +1,6 @@
 cancel/ctrl-c-json-exit-code
 cancel/sigint-twice
+cancel/stopped-record
 cancel/timeout-cancels
 cancel/timeout-leaves-invalid-concurrent-index
 cancel/timeout-over-tls
@@ -17,6 +18,7 @@ cloud/azure-ml
 cloud/azure-powershell
 cloud/azure-service-fabric
 cloud/azure-token-credentials-invalid
+cloud/cloud-ids-env-beats-yaml
 cloud/databricks-azure
 cloud/databricks-cli
 cloud/databricks-errors
@@ -29,6 +31,7 @@ cloud/token-auth-requires-tls
 commands/ai
 commands/bare
 commands/completion
+commands/deploy-help-text
 commands/help
 commands/info
 commands/info-scaffolded-by
@@ -83,6 +86,7 @@ deploy/session-tables-analyzed
 dialect/call-glued-to-a-non-ascii-letter
 dialect/nested-deploy-sql-loaded
 dialect/pgmiignore
+dialect/pgmiignore-broken-patterns
 dialect/pgmiignore-hides-deploy
 dialect/pgmiignore-latin1
 dialect/pgmiignore-posix-class
@@ -98,6 +102,7 @@ env/passfile-beats-pgpassfile
 env/pgappname
 env/pgconnect-timeout
 env/pgservice-refused
+env/pg-tls-protocol-variables
 env/pg-variables
 errors/attribution
 errors/connection-failures
@@ -131,6 +136,7 @@ exit-codes/15-concurrent-deploy
 exit-codes/16-timeout
 exit-codes/2-usage
 flags/compat
+flags/compat-record
 flags/connection-forms
 flags/granular-flags
 flags/overwrite-concurrent
@@ -151,16 +157,19 @@ notices/streaming
 notices/summary-line
 notices/unused-tests
 notices/verbose-elapsed
+notices/verbose-no-internal-debug
 params/case-twins
 params/env-var-reaches-session
 params/invalid-key
 params/precedence
+params/verbose-counts
 serve/cancel
 serve/concurrent-deploys
 serve/deploy-guards
 serve/deploys-in-sequence
 serve/deploy-timeout
 serve/deploy-tool
+serve/deploy-warning-lines
 serve/malformed
 serve/null-request
 serve/protocol-versions

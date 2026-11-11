@@ -1,0 +1,57 @@
+description: pgmi.yaml's azure_tenant_id and aws_region are only defaults; the environment beats them and the flag beats both (--azure-tenant-id > AZURE_TENANT_ID > azure_tenant_id; --aws-region > AWS_REGION > AWS_DEFAULT_REGION > aws_region)
+servers: [tls, fakes]
+home:
+  bin/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/az-calls.log"
+      printf '{"accessToken": "{azure_token}", "expiresOn": "2099-01-01 00:00:00.000000", "expires_on": 4070908800, "subscription": "s", "tenant": "t", "tokenType": "Bearer"}\n'
+project:
+  files:
+    azure/deploy.sql: SELECT 1;
+    azure/pgmi.yaml: |
+      connection:
+        auth_method: azure
+        azure_tenant_id: tenant-from-yaml
+    aws/deploy.sql: SELECT 1;
+    aws/pgmi.yaml: |
+      connection:
+        auth_method: aws
+        aws_region: us-east-2
+steps:
+  - pgmi: [deploy, "{project}/azure", --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev, AZURE_TENANT_ID: tenant-from-env}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["--tenant tenant-from-env"]
+  - pgmi: [deploy, "{project}/azure", --azure-tenant-id, tenant-from-flag, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev, AZURE_TENANT_ID: tenant-from-env}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["--tenant tenant-from-flag"]
+  - pgmi: [deploy, "{project}/azure", --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        home/az-calls.log: ["--tenant tenant-from-yaml"]
+  - pgmi: [deploy, "{project}/aws", --connection, "host=127.0.0.1 port={recorder_port} user=iam_env dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_DEFAULT_REGION: sa-east-1}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_env", "password": "[^"]*%2Fsa-east-1%2Frds-db%2F']
+  - pgmi: [deploy, "{project}/aws", --connection, "host=127.0.0.1 port={recorder_port} user=iam_yaml dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "iam_yaml", "password": "[^"]*%2Fus-east-2%2Frds-db%2F']

@@ -1151,6 +1151,98 @@ fn every_accepted_key_is_consumed_or_refused() {
 }
 
 #[test]
+fn every_variable_the_go_driver_reads_is_read_or_refused() {
+    const PGX: &[&str] = &[
+        "PGHOST",
+        "PGPORT",
+        "PGDATABASE",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGPASSFILE",
+        "PGAPPNAME",
+        "PGCONNECT_TIMEOUT",
+        "PGSSLMODE",
+        "PGSSLKEY",
+        "PGSSLCERT",
+        "PGSSLCERTMODE",
+        "PGSSLSNI",
+        "PGSSLROOTCERT",
+        "PGSSLPASSWORD",
+        "PGSSLNEGOTIATION",
+        "PGTARGETSESSIONATTRS",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGTZ",
+        "PGOPTIONS",
+        "PGMINPROTOCOLVERSION",
+        "PGMAXPROTOCOLVERSION",
+        "PGCHANNELBINDING",
+        "PGREQUIREAUTH",
+    ];
+    const ELSEWHERE: &[&str] = &["PGDATABASE", "PGSERVICE", "PGSERVICEFILE", "PGTZ"];
+    for name in PGX {
+        assert!(
+            ENV_DEFAULTS.iter().any(|(n, _)| n == name) || ELSEWHERE.contains(name),
+            "{name} is read by Go (pgx) but not by resolve::ENV_DEFAULTS"
+        );
+    }
+    for (name, key) in ENV_DEFAULTS {
+        assert!(
+            super::parse::KNOWN.contains(key),
+            "{name} feeds {key}, which parse::KNOWN does not accept"
+        );
+    }
+}
+
+#[track_caller]
+fn from_env(name: &str, value: &str) -> Result<Spec, ResolveError> {
+    let mut env = Env::default();
+    env.insert(name, value);
+    resolve(&conn("host=h dbname=d"), &env, None)
+}
+
+#[test]
+fn tls_and_protocol_variables_are_honoured() {
+    let s = from_env("PGSSLSNI", "0").unwrap();
+    assert!(!s.sslsni);
+    let s = from_env("PGSSLCERTMODE", "disable").unwrap();
+    assert!(s.sslcertmode_disable);
+    from_env("PGMINPROTOCOLVERSION", "3.0").unwrap();
+    from_env("PGMAXPROTOCOLVERSION", "3.2").unwrap();
+    let mut env = Env::default();
+    env.insert("PGSSLSNI", "0");
+    let s = resolve(&conn("host=h dbname=d sslsni=1"), &env, None).unwrap();
+    assert!(s.sslsni, "the connection string outranks PGSSLSNI");
+}
+
+#[test]
+fn an_invalid_tls_or_protocol_variable_is_refused_like_its_key() {
+    for (name, value, key) in [
+        ("PGSSLSNI", "2", "sslsni"),
+        ("PGSSLCERTMODE", "bogus", "sslcertmode"),
+        ("PGSSLCERTMODE", "", "sslcertmode"),
+        ("PGMINPROTOCOLVERSION", "bogus", "min_protocol_version"),
+        ("PGMAXPROTOCOLVERSION", "9.9", "max_protocol_version"),
+    ] {
+        let e = refused(from_env(name, value));
+        assert!(
+            matches!(&e, ResolveError::Value { key: k, .. } if *k == key),
+            "{name}={value}: {e:?}"
+        );
+        assert_eq!(Error::from(e).exit_code(), 10);
+    }
+    assert!(matches!(
+        refused(from_env("PGSSLCERTMODE", "require")),
+        ResolveError::CertModeRequire
+    ));
+    assert!(matches!(
+        refused(from_env("PGMINPROTOCOLVERSION", "3.2")),
+        ResolveError::ProtocolUnsupported(_)
+    ));
+    invalid("sslcertmode=''", "sslcertmode");
+}
+
+#[test]
 fn an_unhandled_key_is_refused_before_connecting_as_a_bug() {
     let e = Error::from(ResolveError::Unhandled("newkey".into()));
     assert_eq!(e.exit_code(), 10);

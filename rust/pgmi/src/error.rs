@@ -108,6 +108,16 @@ impl Error {
         self
     }
 
+    /// The same error, server diagnostics kept, under another kind and message.
+    pub(crate) fn reworded(self, kind: Kind, message: impl Into<String>) -> Self {
+        Error {
+            kind,
+            message: message.into(),
+            source: None,
+            sql: self.sql,
+        }
+    }
+
     pub(crate) fn redact(mut self, secrets: &[String]) -> Self {
         self.message = redact(&self.message, secrets);
         self
