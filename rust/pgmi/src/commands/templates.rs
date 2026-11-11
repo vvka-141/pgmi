@@ -1,10 +1,10 @@
 use super::{stderr, stdout};
 use crate::cli::{TemplatesArgs, TemplatesCommand};
 use crate::error::{Error, Result};
-use crate::templates::{LIST, NAMES, describe};
+use crate::templates::Template;
 
 pub(crate) fn unknown(name: &str) -> Error {
-    let mut names = NAMES.to_vec();
+    let mut names = Template::ALL.map(Template::name);
     names.sort_unstable();
     Error::usage(format!(
         "unknown template {name:?} (available: {})\nrun `pgmi templates list` for descriptions",
@@ -17,9 +17,12 @@ pub(crate) fn run(a: &TemplatesArgs, help: impl FnOnce() -> Result<()>) -> Resul
         None => help(),
         Some(TemplatesCommand::List) => {
             let mut text = String::new();
-            for (name, summary, for_) in LIST {
+            for t in Template::ALL {
                 text.push_str(&format!(
-                    "{name:<12} {summary}\n               for: {for_}\n"
+                    "{:<12} {}\n               for: {}\n",
+                    t.name(),
+                    t.summary(),
+                    t.best_for()
                 ));
             }
             stdout(&text)?;
@@ -27,7 +30,10 @@ pub(crate) fn run(a: &TemplatesArgs, help: impl FnOnce() -> Result<()>) -> Resul
             Ok(())
         }
         Some(TemplatesCommand::Describe { name }) => {
-            let text = describe(name).ok_or_else(|| unknown(name))?;
+            let text = name
+                .parse::<Template>()
+                .map_err(|_| unknown(name))?
+                .description();
             stdout(text)?;
             stderr(&format!("\nScaffold with: pgmi init <path> -t {name}\n"));
             Ok(())

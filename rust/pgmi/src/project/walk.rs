@@ -539,7 +539,7 @@ mod tests {
             "BEGIN",
             "RAISE NOTICE",
         ];
-        for name in crate::templates::NAMES {
+        for name in crate::templates::Template::ALL {
             let fs = EmbeddedFs::new(&format!("templates/{name}"));
             let p = load(&fs, MAX).unwrap_or_else(|e| panic!("{name}: {}", e.text()));
             assert!(p.deploy_sql.contains("pg_temp.pgmi"), "{name}");

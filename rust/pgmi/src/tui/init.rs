@@ -3,16 +3,13 @@ use ratatui::widgets::Paragraph;
 
 use super::select::{Outcome, Select};
 use crate::error::{Error, Kind, Result};
-use crate::templates::LIST;
+use crate::templates::Template;
 
 const TITLE: &str = "pgmi init - Project Setup";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Done {
-    Finished {
-        template: &'static str,
-        connect: bool,
-    },
+    Finished { template: Template, connect: bool },
     Cancelled,
 }
 
@@ -26,9 +23,9 @@ impl Wizard {
         Self {
             template: Select {
                 prompt: format!("Select a template  →  {target}"),
-                choices: LIST
+                choices: Template::ALL
                     .iter()
-                    .map(|(n, s, _)| (n.to_string(), s.to_string()))
+                    .map(|t| (t.name().to_string(), t.summary().to_string()))
                     .collect(),
                 help: "↑/↓ navigate • enter select • esc back",
                 cursor: 0,
@@ -41,7 +38,7 @@ impl Wizard {
         if let Some(c) = &mut self.connection {
             return match c.update(key)? {
                 Outcome::Picked(i) => Some(Done::Finished {
-                    template: LIST[self.template.cursor].0,
+                    template: Template::ALL[self.template.cursor],
                     connect: i == 1,
                 }),
                 Outcome::Back => {
@@ -124,7 +121,7 @@ mod tests {
         assert_eq!(
             w.update(key(KeyCode::Enter)),
             Some(Done::Finished {
-                template: "basic",
+                template: Template::Basic,
                 connect: false
             })
         );

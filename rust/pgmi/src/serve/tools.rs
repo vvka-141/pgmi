@@ -9,12 +9,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::wire::{self, Members};
 use crate::cli::{Cli, Command, DeployArgs};
-use crate::commands::metadata;
+use crate::commands::{init, metadata};
 use crate::deploy::{Approval, Context, Run};
 use crate::env::Env;
 use crate::error::Error;
 use crate::error::redact;
 use crate::output::Reporter;
+use crate::templates::Template;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
@@ -88,12 +89,12 @@ impl Tool {
                 }
             }
             Tool::TemplatesList => {
-                let mut list = crate::templates::LIST.to_vec();
-                list.sort_by_key(|t| t.0);
+                let mut list = Template::ALL;
+                list.sort_by_key(|t| t.name());
                 let templates: Vec<Value> = list
                     .iter()
-                    .map(|(name, description, best)| {
-                        json!({"bestFor": best, "description": description, "name": name})
+                    .map(|t| {
+                        json!({"bestFor": t.best_for(), "description": t.summary(), "name": t.name()})
                     })
                     .collect();
                 Outcome::json(&json!({ "templates": templates }))
@@ -122,8 +123,12 @@ fn init(arguments: Option<&RawValue>) -> Result<Value, Error> {
     let template = args.string("template")?.filter(|t| !t.is_empty());
     let template = template.as_deref().unwrap_or("basic");
     let target = std::path::Path::new(&path);
-    crate::init::check_empty(target)?;
-    crate::init::scaffold(target, template, args.string("name")?.as_deref())?;
+    init::check_empty(&crate::vfs::OsFs::new(target))?;
+    init::scaffold(
+        target,
+        init::template(template)?,
+        args.string("name")?.as_deref(),
+    )?;
     Ok(json!({"created": true, "path": path, "template": template}))
 }
 

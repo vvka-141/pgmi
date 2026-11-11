@@ -86,7 +86,7 @@ Add it to Claude Code with:
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
     pub(crate) path: Option<PathBuf>,
-    #[arg(short = 't', long, value_parser = ["minimal", "basic", "advanced"])]
+    #[arg(short = 't', long, value_parser = crate::templates::Template::ALL.map(|t| t.name()))]
     pub(crate) template: Option<String>,
 }
 

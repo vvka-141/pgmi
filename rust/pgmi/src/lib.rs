@@ -11,7 +11,6 @@ mod deploy;
 mod duration;
 mod env;
 mod error;
-mod init;
 mod output;
 mod project;
 pub mod serve;
@@ -54,7 +53,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&
         Some(Command::Version) => return print_version(true),
         Some(Command::Help { command }) => help(&command),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose, env, export),
-        Some(Command::Init(a)) => init::run(&a, &env),
+        Some(Command::Init(a)) => commands::init::run(&a, &env),
         Some(Command::Info(a)) => commands::info::run(&a, &env),
         Some(Command::Templates(a)) => commands::templates::run(&a, || help(&["templates"])),
         Some(Command::Ai(a)) => commands::ai::run(&a, &env),

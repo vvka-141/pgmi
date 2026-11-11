@@ -94,9 +94,9 @@ The lib target is not published as a library API (0001 still holds).
   `--params-file` (arbitrary paths; `params::collect` gets a
   `read: impl Fn(&Path) -> io::Result<String>` like it gets stdin), and the
   write side.
-- **Writes stay `std::fs`, behind pure planners.** `templates::render
-  (template, name, version) -> Vec<(String, Vec<u8>)>` is pure (as in the
-  WIP `init::render`); `commands::init` writes the plan. `metadata scaffold
+- **Writes stay `std::fs`, behind pure planners.** `Template::render(name,
+  version) -> io::Result<Vec<(String, Vec<u8>)>>` is pure; `commands::init`
+  writes the plan. `metadata scaffold
   --write` keeps its atomic, link-refusing writer. A write trait would have
   one implementation and no double.
 - **`deploy::Request`.** Owned domain input: project path, connection
@@ -178,7 +178,11 @@ land before or between steps, each with a black-box case.
    difference from Go needs an owner decision, not a refactor.
 4. **Templates and init.** `Template` enum; `check_empty` over `Vfs`; port
    the rest of scaffold group 9 (pure `render` and `draw` over `Vfs` landed
-   with step 3).
+   with step 3). Done 2026-11-11: `Template::render(name, version)`
+   returns the files; `init` moved to `commands::init`, where `writable`
+   drops the kept files a target already has and `tree` draws the result,
+   both over `Vfs`. `check_empty` lists blocking entries sorted by name,
+   as Go's `os.ReadDir` does (the order was the OS's before).
 5. **`deploy::Request`.** `From<DeployArgs>`; serve builds it directly;
    `cloud::select`, `overwrite` take it; try `tokio::spawn` for tool calls.
 6. **`Approver` and Reporter sink.** Unit tests for the summary line,
