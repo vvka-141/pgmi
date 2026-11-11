@@ -17,6 +17,52 @@ use crate::error::redact;
 use crate::output::Reporter;
 use crate::templates::Template;
 
+/// The tools a server lists and calls.
+pub(crate) trait Toolbox: Send + Sync + 'static {
+    type Tool: Send + 'static;
+
+    /// `tools/list`'s array as JSON text, as clients see it.
+    fn list(&self) -> &str;
+
+    fn tool(&self, name: &str) -> Option<Self::Tool>;
+
+    /// Runs one call. The server polls the future on a blocking-pool thread
+    /// (record 0017), so it need not be `Send`.
+    fn call(
+        &self,
+        tool: Self::Tool,
+        arguments: Option<Box<RawValue>>,
+        token: CancellationToken,
+    ) -> impl std::future::Future<Output = Outcome>;
+}
+
+/// pgmi's own tools.
+pub(crate) struct Tools {
+    pub(crate) env: Env,
+    pub(crate) verbose: bool,
+}
+
+impl Toolbox for Tools {
+    type Tool = Tool;
+
+    fn list(&self) -> &str {
+        super::TOOLS
+    }
+
+    fn tool(&self, name: &str) -> Option<Tool> {
+        Tool::named(name)
+    }
+
+    fn call(
+        &self,
+        tool: Tool,
+        arguments: Option<Box<RawValue>>,
+        token: CancellationToken,
+    ) -> impl std::future::Future<Output = Outcome> {
+        tool.call(arguments, self.env.clone(), self.verbose, token)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
     Deploy,
@@ -166,7 +212,7 @@ pub(crate) struct Outcome {
 }
 
 impl Outcome {
-    fn json(v: &impl Serialize) -> Self {
+    pub(crate) fn json(v: &impl Serialize) -> Self {
         Outcome {
             text: serde_json::to_string_pretty(v).unwrap_or_default(),
             structured: to_raw_value(v).ok(),

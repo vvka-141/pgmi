@@ -209,6 +209,18 @@ land before or between steps, each with a black-box case.
    `test-util` feature is on for tests only.
 7. **Serve over any transport.** `serve(input, output, toolbox, stop)`;
    port MCP group 8 in-process.
+   Done 2026-11-11: `serve::serve(input: impl AsyncRead, output: impl
+   AsyncWrite, tools: Arc<impl Toolbox>, stop: CancellationToken)`. The
+   toolbox is an `Arc`, not a borrow, because each call runs in its own
+   task. `Toolbox` has `list` (the `tools/list` array), `tool(name)` and
+   `call(tool, arguments, token)`; production is `serve::tools::Tools`
+   over the `Tool` enum. The reader and the writer are two futures joined
+   in `serve`, so neither needs `'static`. `run` owns the signal task,
+   which cancels `stop`; a stop already cancelled wins over pending
+   input (`select!` is biased towards it). `serve/transport_tests.rs`
+   ports MCP group 8 over `tokio::io::duplex` and byte slices with a fake
+   toolbox (slow, echo, panicking), including stopping the server while a
+   call runs.
 8. **`DeployRecord`.** Replace `State` and `record()`; pure tests of the
    failure record (`failed_files`, `executionMode`, `phase`).
 9. **Types and secrets.** Enums for connection settings and severity;

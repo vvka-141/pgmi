@@ -103,6 +103,11 @@ overridden. Used only if the hand-written server proves unworkable.
   unset, the first type error is reported). It depends on std and serde_json
   only; the cargo-fuzz target `mcp_decoder` links it as `pgmi::serve::wire`
   (record 0022), and a proptest in `cargo test` checks the same properties.
+- The server is `serve::serve(input, output, toolbox, stop)` over any
+  `AsyncRead`/`AsyncWrite` (record 0022 step 7); `pgmi serve` passes
+  stdin, stdout, pgmi's `Tools` and a token its signal task cancels. The
+  protocol behaviour is unit-tested in-process over `tokio::io::duplex`
+  with a fake toolbox, as Go's `Serve(ctx, in, out)` tests are.
 - Ids are echoed as written (`1e2`, `-0`), through serde_json's `raw_value`.
 - A bare `null` line gets no answer, as in Go (owner question Q1 still
   open). A request whose method starts with `notifications/` is never

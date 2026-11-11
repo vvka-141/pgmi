@@ -1,13 +1,16 @@
 mod tools;
 pub mod wire;
 
+#[cfg(test)]
+mod transport_tests;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -15,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::VERSION;
 use crate::env::Env;
 use crate::error::Kind;
+pub(crate) use tools::{Outcome, Toolbox};
 use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
 
 const STATELESS: &str = "2026-07-28";
@@ -39,66 +43,84 @@ pub(crate) fn run(verbose: bool, env: Env) -> u8 {
             return Kind::General.exit_code();
         }
     };
-    runtime.block_on(serve(env, verbose));
+    let stop = CancellationToken::new();
+    runtime.block_on(async {
+        let signals = tokio::spawn({
+            let stop = stop.clone();
+            async move {
+                stop_signal().await;
+                stop.cancel();
+            }
+        });
+        serve(
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            Arc::new(tools::Tools { env, verbose }),
+            stop,
+        )
+        .await;
+        signals.abort();
+    });
     runtime.shutdown_timeout(Duration::from_millis(100));
     0
 }
 
-struct Server {
+struct Server<T> {
     out: UnboundedSender<String>,
     calls: Mutex<HashMap<String, CancellationToken>>,
     root: CancellationToken,
-    env: Env,
-    verbose: bool,
+    tools: Arc<T>,
 }
 
-async fn serve(env: Env, verbose: bool) {
+/// Serves MCP over newline-delimited JSON-RPC until `input` ends or `stop`
+/// is cancelled. Cancelling `stop` cancels every tool call in flight; a
+/// cancelled call is never answered. Returns once every call has ended and
+/// every answer is written.
+pub(crate) async fn serve<T: Toolbox>(
+    mut input: impl AsyncRead + Unpin,
+    mut output: impl AsyncWrite + Unpin,
+    tools: Arc<T>,
+    stop: CancellationToken,
+) {
     let (tx, mut rx) = unbounded_channel::<String>();
-    let writer = tokio::spawn(async move {
-        let mut out = tokio::io::stdout();
-        while let Some(mut line) = rx.recv().await {
-            line.push('\n');
-            if out.write_all(line.as_bytes()).await.is_err() || out.flush().await.is_err() {
-                return;
-            }
-        }
-    });
     let server = Arc::new(Server {
         out: tx,
         calls: Mutex::new(HashMap::new()),
-        root: CancellationToken::new(),
-        env,
-        verbose,
+        root: stop,
+        tools,
     });
-    let mut tasks = JoinSet::new();
-    let mut stdin = tokio::io::stdin();
-    let mut lines = wire::Lines::default();
-    let mut buf = vec![0u8; 64 * 1024];
-    let root = server.root.clone();
-    let signals = tokio::spawn(async move {
-        stop_signal().await;
-        root.cancel();
-    });
-    loop {
-        let n = tokio::select! {
-            n = stdin.read(&mut buf) => n.unwrap_or(0),
-            () = server.root.cancelled() => break,
-        };
-        if n == 0 {
-            if let Some(line) = lines.finish() {
+    let read = async move {
+        let mut tasks = JoinSet::new();
+        let mut lines = wire::Lines::default();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = tokio::select! {
+                biased;
+                () = server.root.cancelled() => break,
+                n = input.read(&mut buf) => n.unwrap_or(0),
+            };
+            if n == 0 {
+                if let Some(line) = lines.finish() {
+                    server.handle(&line, &mut tasks);
+                }
+                break;
+            }
+            for line in lines.feed(&buf[..n]) {
                 server.handle(&line, &mut tasks);
             }
-            break;
+            while tasks.try_join_next().is_some() {}
         }
-        for line in lines.feed(&buf[..n]) {
-            server.handle(&line, &mut tasks);
+        while tasks.join_next().await.is_some() {}
+    };
+    let write = async move {
+        while let Some(mut line) = rx.recv().await {
+            line.push('\n');
+            if output.write_all(line.as_bytes()).await.is_err() || output.flush().await.is_err() {
+                return;
+            }
         }
-        while tasks.try_join_next().is_some() {}
-    }
-    while tasks.join_next().await.is_some() {}
-    signals.abort();
-    drop(server);
-    let _ = writer.await;
+    };
+    tokio::join!(read, write);
 }
 
 async fn stop_signal() {
@@ -128,7 +150,7 @@ struct Era {
     stateless: bool,
 }
 
-impl Server {
+impl<T: Toolbox> Server<T> {
     fn send(&self, line: String) {
         let _ = self.out.send(line);
     }
@@ -211,7 +233,7 @@ impl Server {
         match (r.method.as_str(), era.stateless) {
             ("initialize", false) => self.send(initialize(&id, r.params.as_deref())),
             ("ping", false) => self.send(wire::result(&id, "{}")),
-            ("tools/list", _) => self.send(tools_list(&id, &era)),
+            ("tools/list", _) => self.send(tools_list(&id, self.tools.list(), &era)),
             ("server/discover", _) => self.send(wire::result(
                 &id,
                 &stateless(json!({
@@ -253,7 +275,7 @@ impl Server {
             Err(e) => return self.send(invalid(&e)),
         };
         let name = fields.string("name").unwrap_or_default();
-        let Some(tool) = tools::Tool::named(&name) else {
+        let Some(tool) = self.tools.tool(&name) else {
             return self.send(wire::error(
                 Some(&id),
                 INVALID_PARAMS,
@@ -276,20 +298,19 @@ impl Server {
         drop(calls);
         let server = self.clone();
         tasks.spawn(async move {
-            let env = server.env.clone();
-            let verbose = server.verbose;
+            let tools = server.tools.clone();
             let task_token = token.clone();
             let handle = tokio::runtime::Handle::current();
             let outcome = match tokio::task::spawn_blocking(move || {
-                handle.block_on(tool.call(arguments, env, verbose, task_token))
+                handle.block_on(tools.call(tool, arguments, task_token))
             })
             .await
             {
                 Ok(o) => o,
-                Err(e) if e.is_panic() => tools::Outcome::panicked(),
-                Err(_) => tools::Outcome::failed(&crate::error::Error::internal(
-                    "the tool call was aborted",
-                )),
+                Err(e) if e.is_panic() => Outcome::panicked(),
+                Err(_) => {
+                    Outcome::failed(&crate::error::Error::internal("the tool call was aborted"))
+                }
             };
             if let Ok(mut calls) = server.calls.lock() {
                 calls.remove(&id);
@@ -347,11 +368,11 @@ fn server_info() -> Value {
 
 const TOOLS: &str = include_str!("tools.json");
 
-fn tools_list(id: &str, era: &Era) -> String {
+fn tools_list(id: &str, list: &str, era: &Era) -> String {
     if !era.stateless {
-        return wire::result(id, &format!("{{\"tools\":{}}}", TOOLS.trim_end()));
+        return wire::result(id, &format!("{{\"tools\":{}}}", list.trim_end()));
     }
-    let tools: Value = serde_json::from_str(TOOLS).unwrap_or_default();
+    let tools: Value = serde_json::from_str(list).unwrap_or_default();
     wire::result(
         id,
         &stateless(json!({"cacheScope": "public", "tools": tools, "ttlMs": 3_600_000})),
@@ -398,8 +419,10 @@ mod tests {
             out: tx,
             calls: Mutex::new(HashMap::new()),
             root: CancellationToken::new(),
-            env: Env::default(),
-            verbose: false,
+            tools: Arc::new(tools::Tools {
+                env: Env::default(),
+                verbose: false,
+            }),
         });
         let busy = CancellationToken::new();
         server
