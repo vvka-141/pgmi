@@ -1,0 +1,15 @@
+description: a parameter key PostgreSQL cannot hold as pgmi.<key> is refused before connecting (exit 10), from a flag or the environment
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "a b=1"]
+    expect: {exit: 10, stderr: ["invalid parameter key 'a b'"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "1abc=1"]
+    expect: {exit: 10, stderr: ["invalid parameter key '1abc'"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk=1"]
+    expect: {exit: 10, stderr: ["invalid parameter key", "1-63 characters"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env:
+      PGMI_PARAM_A-B: "1"
+    expect: {exit: 10, stderr: ["invalid parameter key"]}
