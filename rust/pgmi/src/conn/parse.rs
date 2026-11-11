@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::error::{Error, Result};
+use std::fmt;
+
+use crate::error::{Error, Kind};
 
 pub(crate) type Fields = BTreeMap<String, String>;
 
@@ -52,14 +54,85 @@ pub(crate) const KNOWN: &[&str] = &[
 
 const HIDDEN: &str = "not shown, it may hold a password";
 
+/// Why a connection string was refused. The text never shows the string
+/// itself, which may hold a password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ParseError {
+    UnknownForm,
+    ServiceFile,
+    Hostaddr,
+    Unsupported(&'static str),
+    UnknownKey(String),
+    InvalidPort,
+    PercentEncoding,
+    NotUtf8,
+    UnterminatedBracket,
+    KeyWithoutEquals,
+    UnterminatedQuote,
+    PartWithoutEquals,
+    SslMode(String),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::UnknownForm => write!(
+                f,
+                "invalid connection string ({HIDDEN}): use postgresql://user@host:5432/dbname, host=... dbname=..., or Host=...;Database=..."
+            ),
+            ParseError::ServiceFile => f.write_str(
+                "the connection string names service=, but pgmi reads no service files; spell out host, port and dbname",
+            ),
+            ParseError::Hostaddr => {
+                f.write_str("hostaddr is not supported; put the address in host")
+            }
+            ParseError::Unsupported(k) => {
+                write!(f, "{k} is not supported; remove it from the connection string")
+            }
+            ParseError::UnknownKey(k) => write!(f, "invalid connection option \"{k}\""),
+            ParseError::InvalidPort => write!(
+                f,
+                "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
+            ),
+            ParseError::PercentEncoding => {
+                f.write_str("invalid percent-encoding in connection string")
+            }
+            ParseError::NotUtf8 => f.write_str("connection string is not valid UTF-8"),
+            ParseError::UnterminatedBracket => {
+                f.write_str("unterminated [ in connection string host")
+            }
+            ParseError::KeyWithoutEquals => write!(
+                f,
+                "invalid connection string ({HIDDEN}): a key has no \"=\" after it"
+            ),
+            ParseError::UnterminatedQuote => {
+                f.write_str("invalid connection string: unterminated quoted value")
+            }
+            ParseError::PartWithoutEquals => write!(
+                f,
+                "invalid connection string ({HIDDEN}): a part has no \"=\""
+            ),
+            ParseError::SslMode(v) => write!(f, "invalid SSL Mode \"{v}\""),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+impl From<ParseError> for Error {
+    fn from(e: ParseError) -> Self {
+        Error::new(Kind::Config, e.to_string())
+    }
+}
+
+type Result<T> = std::result::Result<T, ParseError>;
+
 pub(crate) fn parse(s: &str) -> Result<Fields> {
     let t = s.trim();
     let fields = if t.starts_with("postgresql://") || t.starts_with("postgres://") {
         uri(t)?
     } else if !t.contains('=') {
-        return Err(Error::config(
-            "invalid connection string (not shown, it may hold a password): use postgresql://user@host:5432/dbname, host=... dbname=..., or Host=...;Database=...",
-        ));
+        return Err(ParseError::UnknownForm);
     } else if looks_like_ado(t) {
         ado(t)?
     } else {
@@ -71,26 +144,18 @@ pub(crate) fn parse(s: &str) -> Result<Fields> {
 
 fn check(f: &Fields) -> Result<()> {
     if f.contains_key("service") {
-        return Err(Error::config(
-            "the connection string names service=, but pgmi reads no service files; spell out host, port and dbname",
-        ));
+        return Err(ParseError::ServiceFile);
     }
     if f.contains_key("hostaddr") {
-        return Err(Error::config(
-            "hostaddr is not supported; put the address in host",
-        ));
+        return Err(ParseError::Hostaddr);
     }
     for k in ["requirepeer", "sslcrl", "sslcrldir"] {
         if f.get(k).is_some_and(|v| !v.is_empty()) {
-            return Err(Error::config(format!(
-                "{k} is not supported; remove it from the connection string"
-            )));
+            return Err(ParseError::Unsupported(k));
         }
     }
-    for k in f.keys() {
-        if !KNOWN.contains(&k.as_str()) {
-            return Err(Error::config(format!("invalid connection option \"{k}\"")));
-        }
+    if let Some(k) = f.keys().find(|k| !KNOWN.contains(&k.as_str())) {
+        return Err(ParseError::UnknownKey(k.clone()));
     }
     if let Some(ports) = f.get("port")
         && ports
@@ -98,9 +163,7 @@ fn check(f: &Fields) -> Result<()> {
             .map(str::trim)
             .any(|p| !p.is_empty() && p.parse::<u16>().ok().is_none_or(|n| n == 0))
     {
-        return Err(Error::config(format!(
-            "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
-        )));
+        return Err(ParseError::InvalidPort);
     }
     Ok(())
 }
@@ -121,7 +184,7 @@ fn decode(s: &str) -> Result<String> {
             let hex = s
                 .get(i + 1..i + 3)
                 .and_then(|h| u8::from_str_radix(h, 16).ok())
-                .ok_or_else(|| Error::config("invalid percent-encoding in connection string"))?;
+                .ok_or(ParseError::PercentEncoding)?;
             out.push(hex);
             i += 3;
         } else {
@@ -129,7 +192,7 @@ fn decode(s: &str) -> Result<String> {
             i += 1;
         }
     }
-    String::from_utf8(out).map_err(|_| Error::config("connection string is not valid UTF-8"))
+    String::from_utf8(out).map_err(|_| ParseError::NotUtf8)
 }
 
 fn uri(s: &str) -> Result<Fields> {
@@ -157,9 +220,7 @@ fn uri(s: &str) -> Result<Fields> {
     if !hostlist.is_empty() {
         for hp in hostlist.split(',') {
             let (h, p) = if let Some(r) = hp.strip_prefix('[') {
-                let (h, after) = r
-                    .split_once(']')
-                    .ok_or_else(|| Error::config("unterminated [ in connection string host"))?;
+                let (h, after) = r.split_once(']').ok_or(ParseError::UnterminatedBracket)?;
                 (
                     h.to_string(),
                     after.strip_prefix(':').unwrap_or("").to_string(),
@@ -200,9 +261,7 @@ fn keyword(s: &str) -> Result<Fields> {
             std::iter::from_fn(|| chars.next_if(|c| *c != '=' && !c.is_whitespace())).collect();
         while chars.next_if(|c| c.is_whitespace()).is_some() {}
         if chars.next() != Some('=') {
-            return Err(Error::config(format!(
-                "invalid connection string ({HIDDEN}): a key has no \"=\" after it"
-            )));
+            return Err(ParseError::KeyWithoutEquals);
         }
         while chars.next_if(|c| c.is_whitespace()).is_some() {}
         let mut value = String::new();
@@ -212,11 +271,7 @@ fn keyword(s: &str) -> Result<Fields> {
                     Some('\\') => value.extend(chars.next()),
                     Some('\'') => break,
                     Some(c) => value.push(c),
-                    None => {
-                        return Err(Error::config(
-                            "invalid connection string: unterminated quoted value",
-                        ));
-                    }
+                    None => return Err(ParseError::UnterminatedQuote),
                 }
             }
         } else {
@@ -235,11 +290,7 @@ fn keyword(s: &str) -> Result<Fields> {
 fn ado(s: &str) -> Result<Fields> {
     let mut out = Fields::new();
     for part in s.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-        let (k, v) = part.split_once('=').ok_or_else(|| {
-            Error::config(format!(
-                "invalid connection string ({HIDDEN}): a part has no \"=\""
-            ))
-        })?;
+        let (k, v) = part.split_once('=').ok_or(ParseError::PartWithoutEquals)?;
         let v = v.trim().to_string();
         let key = k.trim().to_ascii_lowercase().replace([' ', '_'], "");
         let name = match key.as_str() {
@@ -268,12 +319,7 @@ fn ado(s: &str) -> Result<Fields> {
             "options" => "options",
             "targetsessionattributes" => "target_session_attrs",
             "channelbinding" => "channel_binding",
-            _ => {
-                return Err(Error::config(format!(
-                    "invalid connection option \"{}\"",
-                    k.trim()
-                )));
-            }
+            _ => return Err(ParseError::UnknownKey(k.trim().to_string())),
         };
         out.insert(name.into(), v);
     }
@@ -288,7 +334,7 @@ fn npgsql_sslmode(v: &str) -> Result<String> {
         "require" => "require",
         "verifyca" => "verify-ca",
         "verifyfull" => "verify-full",
-        _ => return Err(Error::config(format!("invalid SSL Mode \"{v}\""))),
+        _ => return Err(ParseError::SslMode(v.to_string())),
     };
     Ok(m.to_string())
 }
@@ -326,20 +372,23 @@ mod tests {
 
     #[test]
     fn refusals() {
-        assert!(parse("service=x").unwrap_err().text().contains("service"));
+        assert_eq!(parse("service=x"), Err(ParseError::ServiceFile));
+        assert!(ParseError::ServiceFile.to_string().contains("service"));
         let e = parse("postgresql://h/db?bogus=1").unwrap_err();
-        assert_eq!(e.text(), "invalid connection option \"bogus\"");
+        assert_eq!(e, ParseError::UnknownKey("bogus".into()));
+        assert_eq!(e.to_string(), "invalid connection option \"bogus\"");
         assert!(parse("postgresql://h/db?statement_cache_capacity=0").is_ok());
         for k in ["requirepeer", "sslcrl", "sslcrldir"] {
             let e = parse(&format!("host=h {k}=x")).unwrap_err();
-            assert!(e.text().starts_with(k), "{}", e.text());
+            assert_eq!(e, ParseError::Unsupported(k));
+            assert!(e.to_string().starts_with(k), "{e}");
             assert!(parse(&format!("host=h {k}=")).is_ok());
         }
     }
 
     fn fields(s: &str) -> Vec<(String, String)> {
         parse(s)
-            .unwrap_or_else(|e| panic!("{s}: {}", e.text()))
+            .unwrap_or_else(|e| panic!("{s}: {e}"))
             .into_iter()
             .collect()
     }
@@ -438,14 +487,13 @@ mod tests {
             let f = parse(&format!("Host=h;Database=d;SSL Mode={given}")).unwrap();
             assert_eq!(f["sslmode"], want, "{given}");
         }
-        assert_eq!(
-            parse("Host=h;SSL Mode=Sometimes").unwrap_err().text(),
-            "invalid SSL Mode \"Sometimes\""
-        );
+        let e = parse("Host=h;SSL Mode=Sometimes").unwrap_err();
+        assert_eq!(e, ParseError::SslMode("Sometimes".into()));
+        assert_eq!(e.to_string(), "invalid SSL Mode \"Sometimes\"");
         for key in ["Pooling", "Trust Server Certificate"] {
             let e = parse(&format!("Host=h;Database=d;{key}=true")).unwrap_err();
-            assert_eq!(e.exit_code(), 10);
-            assert_eq!(e.text(), format!("invalid connection option \"{key}\""));
+            assert_eq!(e, ParseError::UnknownKey(key.into()));
+            assert_eq!(Error::from(e).exit_code(), 10);
         }
     }
 
@@ -470,10 +518,15 @@ mod tests {
             fields("host=db1,db2 port=5432,6000 dbname=app")[1],
             ("host".to_string(), "db1,db2".to_string())
         );
-        for bad in ["host=db1 dbname", "host=db1 password='unterminated"] {
-            assert_eq!(parse(bad).unwrap_err().exit_code(), 10, "{bad}");
-        }
-        assert!(parse("host=db hostaddr=10.0.0.1 dbname=app").is_err());
+        assert_eq!(parse("host=db1 dbname"), Err(ParseError::KeyWithoutEquals));
+        assert_eq!(
+            parse("host=db1 password='unterminated"),
+            Err(ParseError::UnterminatedQuote)
+        );
+        assert_eq!(
+            parse("host=db hostaddr=10.0.0.1 dbname=app"),
+            Err(ParseError::Hostaddr)
+        );
     }
 
     #[test]
@@ -484,7 +537,7 @@ mod tests {
             ("host=db dbanme=app", "dbanme"),
         ] {
             assert_eq!(
-                parse(input).unwrap_err().text(),
+                parse(input).unwrap_err().to_string(),
                 format!("invalid connection option \"{key}\"")
             );
         }
@@ -527,14 +580,9 @@ mod tests {
             "postgresql://localhost:abc/mydb",
             "Host=localhost;Port=abc;Database=mydb",
         ] {
-            let e = parse(bad).unwrap_err();
-            assert!(
-                e.text().starts_with("invalid port in connection string"),
-                "{bad}: {}",
-                e.text()
-            );
+            assert_eq!(parse(bad), Err(ParseError::InvalidPort), "{bad}");
         }
-        assert!(parse("").is_err());
+        assert_eq!(parse(""), Err(ParseError::UnknownForm));
     }
 
     #[test]
@@ -550,8 +598,9 @@ mod tests {
             ("Host=h;Password=x;Port=Secret9", "Secret9"),
         ] {
             let e = parse(input).unwrap_err();
-            assert_eq!(e.exit_code(), 10, "{input}");
-            assert!(!e.text().contains(secret), "{input}: {}", e.text());
+            let text = e.to_string();
+            assert_eq!(Error::from(e).exit_code(), 10, "{input}");
+            assert!(!text.contains(secret), "{input}: {text}");
         }
     }
 }

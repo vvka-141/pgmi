@@ -261,6 +261,25 @@ land before or between steps, each with a black-box case.
    `$PGSSLMODE`); two granular flags beside an environment string name
    only the first.
 10. **Typed module errors and `conn::retry`.** Port groups 6 and 7.
+    Done 2026-11-11: `ParseError`, `ResolveError` and `MetaError` as
+    record 0002 now says; tests match variants instead of substrings
+    where they branch. `error::chain` is the one flattener (`Error::text`
+    and `deploy::sql_error` use it too). `conn::retry` holds
+    `transient(Cause)` (a SQLSTATE or an `io::ErrorKind`) and `delay(n)`
+    over the 100/200/400 ms table; `Dialer::connect` and the classifiers
+    in `dial` call them, and the failure text is the pure
+    `dial::connect_error`. Tests: the contract's transient list against
+    Go's non-transient SQLSTATEs, the delay table, and the SQLSTATE and
+    hint rules of `connect_error`. Not ported from group 7: Go's
+    message-matching classifier cases (`"broken pipe"`, `"unexpected
+    EOF"`, DNS temporary errors are transient in Go; Rust classifies by
+    `io::ErrorKind` and treats a failed host lookup as final), and the
+    `WrapConnectionError` texts that Rust words differently (`too many
+    connections to database`, the pgpass and Azure hints); both are
+    behaviour, not structure. The other `Result<_, String>` functions
+    stay: no caller branches on them (`duration::parse` and `go_bool`
+    feed clap, `tap` and `wire` are fuzzed leaves, the cloud helpers
+    end as one connection error).
 11. **One runtime.** `lib::run` owns it; `deploy::run`, `serve::run`,
     `tui::connection::run` take a handle.
 

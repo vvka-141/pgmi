@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::cloud::{self, Provider};
+use super::parse::ParseError;
 use super::resolve::*;
 use crate::config::yaml::Connection;
 use crate::env::Env;
@@ -22,7 +23,14 @@ fn hosts(s: &Spec) -> Vec<(String, u16)> {
 }
 
 #[track_caller]
-fn refused(r: crate::error::Result<Spec>) -> Error {
+fn refused(r: Result<Spec, ResolveError>) -> ResolveError {
+    let e = r.unwrap_err();
+    assert!(!matches!(e, ResolveError::Env(_)), "{e}");
+    e
+}
+
+#[track_caller]
+fn refused_before_connecting(r: crate::error::Result<Spec>) -> Error {
     let e = r.unwrap_err();
     assert_eq!(e.exit_code(), 10, "{}", e.text());
     e
@@ -60,27 +68,62 @@ fn refusals() {
     let env = Env::from_pairs(&[("DATABASE_URL", "postgresql://h/db")]);
     let mut fl = flags();
     fl.host = Some("x".into());
-    let e = resolve(&fl, &env, None).unwrap_err();
+    let e = refused(resolve(&fl, &env, None));
     assert!(
-        e.text().contains("cannot combine -h with DATABASE_URL"),
-        "{}",
-        e.text()
+        matches!(
+            e,
+            ResolveError::FlagWithEnvString {
+                flag: "-h",
+                source: Source::DatabaseUrl
+            }
+        ),
+        "{e}"
+    );
+    assert!(
+        e.to_string()
+            .contains("cannot combine -h with DATABASE_URL"),
+        "{e}"
     );
     let mut fl = conn("postgresql://h/db");
     fl.host = Some("x".into());
+    let e = refused(resolve(&fl, &Env::default(), None));
+    assert!(matches!(e, ResolveError::ConnectionWith("-h")), "{e}");
     assert!(
-        resolve(&fl, &Env::default(), None)
-            .unwrap_err()
-            .text()
+        e.to_string()
             .contains("cannot combine --connection with -h")
     );
     let env = Env::from_pairs(&[("PGSERVICE", "x")]);
+    let e = refused(resolve(&flags(), &env, None));
+    assert!(matches!(e, ResolveError::ServiceEnv), "{e}");
+    assert!(e.to_string().contains("PGSERVICE"));
+}
+
+#[test]
+fn a_refusal_is_invalid_configuration_and_an_environment_error_keeps_its_kind() {
+    let e = refused(resolve(&conn("host=h"), &Env::default(), None));
+    assert!(matches!(e, ResolveError::NoDatabase), "{e}");
+    assert_eq!(Error::from(e).exit_code(), 10);
+    let e = refused(resolve(
+        &conn("host=h dbname=d bogus=1"),
+        &Env::default(),
+        None,
+    ));
     assert!(
-        resolve(&flags(), &env, None)
-            .unwrap_err()
-            .text()
-            .contains("PGSERVICE")
+        matches!(
+            &e,
+            ResolveError::Parse {
+                source: Source::ConnectionFlag,
+                error: ParseError::UnknownKey(k),
+            } if k == "bogus"
+        ),
+        "{e}"
     );
+    assert_eq!(
+        std::error::Error::source(&e).map(ToString::to_string),
+        Some("invalid connection option \"bogus\"".to_string())
+    );
+    let env = Error::new(crate::error::Kind::General, "env");
+    assert_eq!(Error::from(ResolveError::Env(env)).exit_code(), 1);
 }
 
 #[test]
@@ -88,11 +131,11 @@ fn errors_redact_the_password() {
     let mut fl = conn("host=h password=Sekrit1 sslmode=Sekrit1");
     fl.database = Some("d".into());
     let e = resolve(&fl, &Env::default(), None).unwrap_err();
-    assert!(!e.text().contains("Sekrit1"), "{}", e.text());
+    assert!(!e.to_string().contains("Sekrit1"), "{e}");
     fl.connection = Some("host=h".into());
     let env = Env::from_pairs(&[("PGPASSWORD", "Sekrit2"), ("PGSSLMODE", "Sekrit2")]);
     let e = resolve(&fl, &env, None).unwrap_err();
-    assert!(!e.text().contains("Sekrit2"), "{}", e.text());
+    assert!(!e.to_string().contains("Sekrit2"), "{e}");
 }
 
 #[test]
@@ -118,8 +161,35 @@ fn tls_keys_are_read_or_refused() {
         "sslcertmode=require",
         "sslcertmode=sometimes",
     ] {
-        assert_eq!(spec(bad).unwrap_err().exit_code(), 10, "{bad}");
+        refused(spec(bad));
     }
+    assert!(matches!(
+        refused(spec("ssl_max_protocol_version=TLSv1.1")),
+        ResolveError::TlsRange
+    ));
+    assert!(matches!(
+        refused(spec(
+            "ssl_min_protocol_version=TLSv1 ssl_max_protocol_version=TLSv1.1"
+        )),
+        ResolveError::TlsTooOld
+    ));
+    assert!(matches!(
+        refused(spec(
+            "ssl_min_protocol_version=TLSv1.3 ssl_max_protocol_version=TLSv1.2"
+        )),
+        ResolveError::TlsRange
+    ));
+    assert!(matches!(
+        refused(spec("ssl_min_protocol_version=SSLv3")),
+        ResolveError::Value {
+            key: "ssl_min_protocol_version",
+            ..
+        }
+    ));
+    assert!(matches!(
+        refused(spec("sslcertmode=require")),
+        ResolveError::CertModeRequire
+    ));
 }
 
 #[test]
@@ -132,7 +202,8 @@ fn system_roots_mean_verify_full() {
     for weak in ["disable", "allow", "prefer", "require", "verify-ca"] {
         fl.connection = Some(format!("host=h sslrootcert=system sslmode={weak}").into());
         let e = refused(resolve(&fl, &Env::default(), None));
-        assert!(e.text().contains("sslrootcert=system"), "{}", e.text());
+        assert!(matches!(e, ResolveError::WeakForSystemRoots(_)), "{e}");
+        assert!(e.to_string().contains("sslrootcert=system"), "{e}");
     }
     let env = Env::from_pairs(&[("PGSSLROOTCERT", "system"), ("PGSSLMODE", "require")]);
     fl.connection = Some("host=h".into());
@@ -147,7 +218,7 @@ fn ports_per_host() {
     assert_eq!(s.source, Source::PgHost);
     let env = Env::from_pairs(&[("PGHOST", "a,b,c"), ("PGPORT", "1,2"), ("PGDATABASE", "d")]);
     let e = refused(resolve(&flags(), &env, None));
-    assert_eq!(e.text(), "could not match 2 port numbers to 3 hosts");
+    assert_eq!(e.to_string(), "could not match 2 port numbers to 3 hosts");
 }
 
 #[test]
@@ -235,7 +306,7 @@ fn settings_parse_to_their_values_and_refuse_others() {
             "weak sslmode \"prefer\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")",
         ),
     ] {
-        assert_eq!(refused(spec(bad)).text(), want, "{bad}");
+        assert_eq!(refused(spec(bad)).to_string(), want, "{bad}");
     }
 }
 
@@ -259,7 +330,7 @@ fn connect_timeout_has_a_floor_of_two_seconds_and_zero_means_none() {
     assert_eq!(spec("0").unwrap().connect_timeout, None);
     assert_eq!(spec("-3").unwrap().connect_timeout, None);
     assert_eq!(
-        refused(spec("five")).text(),
+        refused(spec("five")).to_string(),
         "invalid connect_timeout \"five\""
     );
 }
@@ -349,10 +420,10 @@ fn database_url_is_used_unless_a_connection_flag_names_another() {
 fn a_string_without_a_database_leaves_postgres_as_the_maintenance_database() {
     let mut fl = conn("postgresql://user:pass@localhost:5432");
     let e = refused(resolve(&fl, &Env::default(), None));
+    assert!(matches!(e, ResolveError::NoDatabase), "{e}");
     assert!(
-        e.text().starts_with("database name is required"),
-        "{}",
-        e.text()
+        e.to_string().starts_with("database name is required"),
+        "{e}"
     );
     let y = yaml();
     let s = resolve(&fl, &Env::default(), Some(&y)).unwrap();
@@ -381,7 +452,10 @@ fn pgport_edge_cases() {
     assert_eq!(port("").unwrap().first().1, 5432);
     assert_eq!(port(" 5432 ").unwrap().first().1, 5432);
     for bad in ["abc", "-1", "999999", "0", "not-a-number"] {
-        assert_eq!(refused(port(bad)).text(), format!("invalid port \"{bad}\""));
+        assert_eq!(
+            refused(port(bad)).to_string(),
+            format!("invalid port \"{bad}\"")
+        );
     }
 }
 
@@ -513,7 +587,18 @@ fn service_files_are_refused() {
     ] {
         let fl = s.map_or_else(flags, conn);
         let e = refused(resolve(&fl, &Env::from_pairs(&env), None));
-        assert!(e.text().contains("service"), "{s:?}: {}", e.text());
+        assert!(
+            matches!(
+                e,
+                ResolveError::ServiceEnv
+                    | ResolveError::Parse {
+                        error: ParseError::ServiceFile,
+                        ..
+                    }
+            ),
+            "{s:?}: {e}"
+        );
+        assert!(e.to_string().contains("service"), "{s:?}: {e}");
     }
 }
 
@@ -638,8 +723,8 @@ fn a_string_replaces_the_pgmi_yaml_connection_block() {
 fn a_server_flag_next_to_an_environment_string_is_refused() {
     let one = |fl: Flags, env: &[(&str, &str)], want: &str| {
         let e = refused(resolve(&fl, &Env::from_pairs(env), None));
-        assert!(e.text().contains(want), "{}", e.text());
-        assert!(!e.text().contains("secret"), "{}", e.text());
+        assert!(e.to_string().contains(want), "{e}");
+        assert!(!e.to_string().contains("secret"), "{e}");
     };
     let mut fl = flags();
     fl.host = Some("flaghost".into());
@@ -697,7 +782,7 @@ fn the_connection_flag_and_the_sslmode_flag_are_refused_together() {
     fl.sslmode = Some("require".into());
     let e = refused(resolve(&fl, &Env::default(), None));
     assert_eq!(
-        e.text(),
+        e.to_string(),
         "cannot combine --connection with --sslmode; put sslmode in the connection string"
     );
 }
@@ -706,7 +791,7 @@ fn the_connection_flag_and_the_sslmode_flag_are_refused_together() {
 fn an_unknown_key_in_a_string_is_refused_before_connecting() {
     let e = refused(resolve(&conn("host=db bogus=1"), &Env::default(), None));
     assert_eq!(
-        e.text(),
+        e.to_string(),
         "--connection: invalid connection option \"bogus\""
     );
 }
@@ -794,8 +879,9 @@ fn token_auth_refuses_an_sslmode_that_allows_plaintext() {
         for (name, fl, env, y) in sslmode_sources(mode) {
             for provider in [Provider::Azure, Provider::Aws] {
                 let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                let e = refused(token_check(provider, fl.clone(), &env, y.as_ref()));
-                let text = e.text();
+                let e =
+                    refused_before_connecting(token_check(provider, fl.clone(), &env, y.as_ref()));
+                let text = e.to_string();
                 assert!(
                     text.starts_with(&format!("sslmode \"{mode}\" from ")),
                     "{name}: {text}"
@@ -816,7 +902,7 @@ fn token_auth_accepts_a_tls_only_sslmode() {
             for provider in [Provider::Azure, Provider::Aws] {
                 let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
                 let s = token_check(provider, fl.clone(), &env, y.as_ref())
-                    .unwrap_or_else(|e| panic!("{name}: {}", e.text()));
+                    .unwrap_or_else(|e| panic!("{name}: {e}"));
                 assert_eq!(s.sslmode(), mode, "{name}");
             }
         }

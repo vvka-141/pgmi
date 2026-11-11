@@ -54,15 +54,7 @@ pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
                 },
             })
         }
-        None => {
-            let mut text = e.to_string();
-            let mut cur = std::error::Error::source(e);
-            while let Some(c) = cur {
-                text.push_str(&format!(": {c}"));
-                cur = c.source();
-            }
-            Error::connection(format!("{context}: {text}"))
-        }
+        None => Error::connection(format!("{context}: {}", crate::error::chain(e))),
     }
 }
 

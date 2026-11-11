@@ -6,5 +6,6 @@ pub(crate) mod pgpass;
 pub(crate) mod resolve;
 #[cfg(test)]
 mod resolve_tests;
+mod retry;
 pub mod tap;
 pub(crate) mod tls;

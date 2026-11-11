@@ -124,17 +124,10 @@ impl Error {
     }
 
     pub(crate) fn text(&self) -> String {
-        let mut out = self.message.clone();
-        let mut cur: Option<&(dyn std::error::Error + 'static)> = match &self.source {
-            Some(s) => Some(s.as_ref()),
-            None => None,
-        };
-        while let Some(e) = cur {
-            out.push_str(": ");
-            out.push_str(&e.to_string());
-            cur = e.source();
+        match &self.source {
+            Some(s) => format!("{}: {}", self.message, chain(s.as_ref())),
+            None => self.message.clone(),
         }
-        out
     }
 }
 

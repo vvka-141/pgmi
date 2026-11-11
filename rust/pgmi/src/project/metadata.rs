@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use super::lexer::{self, Kind};
 use super::walk::{File, is_sql};
@@ -46,7 +47,72 @@ fn parse_bool(s: &str) -> Option<bool> {
 
 const FORMAT_HINT: &str = "Format reference: .agents/skills/pgmi-metadata/SKILL.md (scaffolded by pgmi init) or https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md";
 
-fn xml_error(path: &str, e: &roxmltree::Error) -> String {
+/// Why one file's `<pgmi-meta>` block was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MetaError {
+    Xml {
+        path: String,
+        line: u32,
+        text: String,
+    },
+    Multiple {
+        path: String,
+    },
+    TooLarge {
+        path: String,
+        bytes: usize,
+    },
+    Idempotent {
+        path: String,
+        value: String,
+    },
+    NotUuid {
+        path: String,
+        reason: String,
+    },
+    Invalid {
+        path: String,
+        problems: Vec<String>,
+    },
+}
+
+impl fmt::Display for MetaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MetaError::Xml { path, line, text } => write!(
+                f,
+                "metadata error in {path} (line {line}): {text}\n\nHint: Check that all XML tags are properly closed and attributes are quoted."
+            ),
+            MetaError::Multiple { path } => write!(
+                f,
+                "metadata error in {path}: Multiple metadata blocks found\n\nHint: Only one <pgmi-meta> block is allowed per file. Remove duplicates."
+            ),
+            MetaError::TooLarge { path, bytes } => write!(
+                f,
+                "metadata error in {path}: <pgmi-meta> block is {bytes} bytes, over the {MAX_BLOCK}-byte limit"
+            ),
+            MetaError::Idempotent { path, value } => write!(
+                f,
+                "metadata error in {path}: idempotent attribute must be true or false, got {value:?}\n\nHint: {FORMAT_HINT}"
+            ),
+            MetaError::NotUuid { path, reason } => write!(
+                f,
+                "metadata error in {path}: id attribute is not a UUID: {reason}\n\nHint: Generate one with SELECT gen_random_uuid();\n{FORMAT_HINT}"
+            ),
+            MetaError::Invalid { path, problems } => {
+                write!(f, "invalid PGMI metadata in {path}:")?;
+                for (i, p) in problems.iter().enumerate() {
+                    write!(f, "\n  {}. {p}", i + 1)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for MetaError {}
+
+fn xml_error(path: &str, e: &roxmltree::Error) -> MetaError {
     let pos = e.pos();
     let text = match e {
         roxmltree::Error::UnexpectedEndOfStream => "unexpected EOF".to_string(),
@@ -61,13 +127,14 @@ fn xml_error(path: &str, e: &roxmltree::Error) -> String {
             }
         }
     };
-    format!(
-        "metadata error in {path} (line {}): {text}\n\nHint: Check that all XML tags are properly closed and attributes are quoted.",
-        pos.row
-    )
+    MetaError::Xml {
+        path: path.to_string(),
+        line: pos.row,
+        text,
+    }
 }
 
-pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, String> {
+pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, MetaError> {
     let found = blocks(content);
     let Some(xml) = found.first().copied() else {
         if content.contains("<pgmi-meta") && unclosed_block(content) {
@@ -76,24 +143,23 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
         return Ok(None);
     };
     if found.len() > 1 {
-        return Err(format!(
-            "metadata error in {path}: Multiple metadata blocks found\n\nHint: Only one <pgmi-meta> block is allowed per file. Remove duplicates."
-        ));
+        return Err(MetaError::Multiple {
+            path: path.to_string(),
+        });
     }
     if xml.len() > MAX_BLOCK {
-        return Err(format!(
-            "metadata error in {path}: <pgmi-meta> block is {} bytes, over the {MAX_BLOCK}-byte limit",
-            xml.len()
-        ));
+        return Err(MetaError::TooLarge {
+            path: path.to_string(),
+            bytes: xml.len(),
+        });
     }
     let doc = roxmltree::Document::parse(xml).map_err(|e| xml_error(path, &e))?;
     let root = doc.root_element();
     let mut problems = Vec::new();
     let idempotent = match root.attribute("idempotent") {
-        Some(v) => Some(parse_bool(v).ok_or_else(|| {
-            format!(
-                "metadata error in {path}: idempotent attribute must be true or false, got {v:?}\n\nHint: {FORMAT_HINT}"
-            )
+        Some(v) => Some(parse_bool(v).ok_or_else(|| MetaError::Idempotent {
+            path: path.to_string(),
+            value: v.to_string(),
         })?),
         None => {
             problems.push("idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n  false: the script runs once and its id is recorded.".to_string());
@@ -103,10 +169,9 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
     let id = match root.attribute("id").unwrap_or("") {
         "" => None,
         text => {
-            let id = uuid::Uuid::parse_str(text).map_err(|e| {
-                format!(
-                    "metadata error in {path}: id attribute is not a UUID: {e}\n\nHint: Generate one with SELECT gen_random_uuid();\n{FORMAT_HINT}"
-                )
+            let id = uuid::Uuid::parse_str(text).map_err(|e| MetaError::NotUuid {
+                path: path.to_string(),
+                reason: e.to_string(),
             })?;
             (!id.is_nil()).then_some(id)
         }
@@ -138,15 +203,10 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
         }
     }
     let (Some(id), Some(idempotent), true) = (id, idempotent, problems.is_empty()) else {
-        let list: Vec<String> = problems
-            .iter()
-            .enumerate()
-            .map(|(i, p)| format!("  {}. {p}", i + 1))
-            .collect();
-        return Err(format!(
-            "invalid PGMI metadata in {path}:\n{}",
-            list.join("\n")
-        ));
+        return Err(MetaError::Invalid {
+            path: path.to_string(),
+            problems,
+        });
     };
     Ok(Some(Meta {
         path: path.to_string(),
@@ -190,7 +250,7 @@ pub(crate) fn outside_comment(content: &str, meta: Option<&Meta>) -> bool {
 #[derive(Debug, Default)]
 pub(crate) struct Scan {
     pub(crate) metas: Vec<Meta>,
-    pub(crate) errors: Vec<String>,
+    pub(crate) errors: Vec<MetaError>,
     pub(crate) duplicates: Vec<(String, Vec<String>)>,
 }
 
@@ -225,7 +285,8 @@ pub(crate) fn duplicate_line(id: &str, paths: &[String]) -> String {
 pub(crate) fn collect(files: &[File]) -> Result<Vec<Meta>> {
     let scan = scan(files);
     if !scan.errors.is_empty() {
-        return Err(Error::config(scan.errors.join("\n")));
+        let errors: Vec<String> = scan.errors.iter().map(ToString::to_string).collect();
+        return Err(Error::config(errors.join("\n")));
     }
     if !scan.duplicates.is_empty() {
         let lines: Vec<String> = scan
@@ -282,7 +343,9 @@ mod tests {
             "/* <pgmi-meta id=\"not-a-uuid\" idempotent=\"true\"></pgmi-meta> */",
         )
         .unwrap_err();
-        assert!(e.contains("bad.sql") && e.contains("UUID"));
+        assert!(matches!(&e, MetaError::NotUuid { path, .. } if path == "./bad.sql"));
+        let text = e.to_string();
+        assert!(text.contains("bad.sql") && text.contains("UUID"), "{text}");
         let meta = |body: &str| {
             parse(
                 "./a.sql",
@@ -297,32 +360,34 @@ mod tests {
                 .unwrap();
         assert_eq!(m.sort_keys, vec![" 3 "]);
         assert_eq!(m.description.as_deref(), Some("a & b A"));
+        let problems = |e: MetaError| match e {
+            MetaError::Invalid { problems, .. } => problems.join("\n"),
+            other => panic!("not Invalid: {other}"),
+        };
         assert!(
-            meta("<sortKeys><key>  </key></sortKeys>")
-                .unwrap_err()
+            problems(meta("<sortKeys><key>  </key></sortKeys>").unwrap_err())
                 .contains("sortKeys[0] cannot be empty")
         );
         assert!(
-            meta("<description> </description>")
-                .unwrap_err()
-                .contains("only whitespace")
+            problems(meta("<description> </description>").unwrap_err()).contains("only whitespace")
+        );
+        let e = meta("<description>&nbsp;</description>").unwrap_err();
+        assert!(matches!(e, MetaError::Xml { .. }), "{e}");
+        assert!(e.to_string().contains("nbsp"), "{e}");
+        let e = parse("./a.sql", "/* <pgmi-meta id=\"0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01\" idempotent=\"true\"><sortKeys> */")
+            .unwrap_err();
+        assert!(
+            matches!(&e, MetaError::Xml { text, .. } if text == "unexpected EOF"),
+            "{e}"
         );
         assert!(
-            meta("<description>&nbsp;</description>")
+            problems(
+                parse(
+                    "./a.sql",
+                    "/* <pgmi-meta id=\"00000000-0000-0000-0000-000000000000\" idempotent=\"true\"/> */"
+                )
                 .unwrap_err()
-                .contains("nbsp")
-        );
-        assert!(
-            parse("./a.sql", "/* <pgmi-meta id=\"0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01\" idempotent=\"true\"><sortKeys> */")
-                .unwrap_err()
-                .contains("unexpected EOF")
-        );
-        assert!(
-            parse(
-                "./a.sql",
-                "/* <pgmi-meta id=\"00000000-0000-0000-0000-000000000000\" idempotent=\"true\"/> */"
             )
-            .unwrap_err()
             .contains("nil UUID")
         );
         assert_eq!(

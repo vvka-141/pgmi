@@ -159,7 +159,7 @@ pub(crate) fn validate_report(
     let total = project.sources.len() + project.test_dir_files.len();
     let scan = metadata::scan(&files);
     if !scan.errors.is_empty() {
-        return Ok(Err(scan.errors));
+        return Ok(Err(scan.errors.iter().map(ToString::to_string).collect()));
     }
     let by_path: BTreeSet<&str> = scan.metas.iter().map(|m| m.path.as_str()).collect();
     let warnings: Vec<String> = files

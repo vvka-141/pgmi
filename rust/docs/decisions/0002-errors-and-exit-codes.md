@@ -73,6 +73,16 @@ pub struct Error {
 - Every new failure site picks a kind on purpose; review checks it.
 - No `anyhow` in the binary. `thiserror` may appear inside a module whose
   errors have structure (pgpass parsing), converted at its boundary.
+  As built (PGMI-857 step 10): hand-written enums, no `thiserror`, where a
+  caller or a test branches: `conn::parse::ParseError`,
+  `conn::resolve::ResolveError` (its `Parse` variant keeps the
+  `ParseError` as `source`) and `project::metadata::MetaError`. The first
+  two have one `From<_> for Error` each that picks the kind (`Config`;
+  `ResolveError::Env` keeps the environment error as it was);
+  `metadata::collect` joins every file's `MetaError` into one `Config`
+  error, as `metadata validate` lists them. `Error::text`, the dial errors
+  and `deploy::sql_error` flatten a source chain through the one
+  `error::chain`.
 
 ## Serves
 

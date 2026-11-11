@@ -11,6 +11,7 @@ use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
 use super::pgpass;
 use super::resolve::{ChannelBinding, Spec, SslMode, TargetSessionAttrs};
+use super::retry::{self, Cause};
 use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
@@ -91,23 +92,14 @@ enum Failure {
 }
 
 fn classify_io(e: &std::io::Error) -> bool {
-    use std::io::ErrorKind::*;
-    matches!(
-        e.kind(),
-        ConnectionRefused
-            | ConnectionReset
-            | ConnectionAborted
-            | TimedOut
-            | HostUnreachable
-            | NetworkUnreachable
-    )
+    retry::transient(Cause::Io(e.kind()))
 }
 
 fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure {
     if let Some(db) = e.as_db_error() {
         let code = db.code().code();
         let text = format!("{} (SQLSTATE {code})", db.message());
-        if code.starts_with("08") || code == "53300" || code == "57P03" {
+        if retry::transient(Cause::Sqlstate(code)) {
             return Failure::Transient(text);
         }
         if code == "28000" {
@@ -400,22 +392,21 @@ impl Dialer {
         if spec.sslmode() != SslMode::Disable {
             super::tls::require_cpu()?;
         }
-        let delays = [100u64, 200, 400];
         let mut attempt_no = 0;
         loop {
             attempt_no += 1;
             match self.connect_once(spec, db).await {
                 Ok(s) => return Ok(s),
                 Err((e, transient)) => {
-                    if !transient || attempt_no > delays.len() {
+                    let Some(wait) = retry::delay(attempt_no).filter(|_| transient) else {
                         return Err(e);
-                    }
-                    let wait = delays[attempt_no - 1];
+                    };
                     (self.log)(format!(
-                        "Connection attempt {attempt_no} failed: {}; retrying in {wait}ms",
-                        e.text()
+                        "Connection attempt {attempt_no} failed: {}; retrying in {}ms",
+                        e.text(),
+                        wait.as_millis()
                     ));
-                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    tokio::time::sleep(wait).await;
                 }
             }
         }
@@ -435,8 +426,6 @@ impl Dialer {
         let mut errors: Vec<String> = Vec::new();
         let mut codes: Vec<String> = Vec::new();
         let mut all_transient = true;
-        let hint_tls =
-            |s: &str| s.contains("x509") || s.contains("TLS") || s.contains("certificate");
         for want in passes {
             for (host, port) in spec.hosts.iter() {
                 let resolved = if spec.token.as_ref().and_then(|t| t.google()).is_some() {
@@ -528,25 +517,33 @@ impl Dialer {
                 }
             }
         }
-        let joined = errors.join("; ");
-        let mut message = format!("connect to \"{db}\": {joined}");
-        if joined.contains("connection refused") {
-            let (h, p) = spec.first();
-            message.push_str(&format!(
-                "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
-            ));
-        }
-        if hint_tls(&joined) {
-            message.push_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert");
-        }
-        let mut error = Error::connection(message);
-        if let Some(code) = codes.first().filter(|c| codes.iter().all(|o| o == *c)) {
-            error = error.with_sql(crate::error::SqlDiagnostics {
-                sqlstate: Some(code.clone()),
-                ..Default::default()
-            });
-        }
+        let error = connect_error(db, &errors, &codes, spec.first());
         Err((error, all_transient && !errors.is_empty()))
+    }
+}
+
+fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u16)) -> Error {
+    let joined = errors.join("; ");
+    let mut message = format!("connect to \"{db}\": {joined}");
+    if joined.contains("connection refused") {
+        let (h, p) = first;
+        message.push_str(&format!(
+            "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
+        ));
+    }
+    if ["x509", "TLS", "certificate"]
+        .iter()
+        .any(|w| joined.contains(w))
+    {
+        message.push_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert");
+    }
+    let error = Error::connection(message);
+    match codes.first().filter(|c| codes.iter().all(|o| o == *c)) {
+        Some(code) => error.with_sql(crate::error::SqlDiagnostics {
+            sqlstate: Some(code.clone()),
+            ..Default::default()
+        }),
+        None => error,
     }
 }
 
@@ -580,6 +577,62 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sqlstate(e: &Error) -> Option<&str> {
+        e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref())
+    }
+
+    #[test]
+    fn a_connect_error_keeps_the_sqlstate_every_host_agreed_on() {
+        let one = |codes: &[&str]| {
+            let codes: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
+            connect_error("d", &["h:5432: refused".into()], &codes, ("h", 5432))
+        };
+        let e = one(&["42501"]);
+        assert_eq!(e.exit_code(), 11);
+        assert_eq!(sqlstate(&e), Some("42501"));
+        assert_eq!(sqlstate(&one(&["53300", "53300"])), Some("53300"));
+        assert_eq!(sqlstate(&one(&["53300", "28P01"])), None);
+        assert_eq!(sqlstate(&one(&[])), None);
+    }
+
+    #[test]
+    fn a_connect_error_names_every_host_and_hints_at_the_cause() {
+        let errors = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let e = connect_error(
+            "app",
+            &errors(&["connection refused to a:1", "b:2: timeout expired"]),
+            &[],
+            ("a", 1),
+        );
+        assert_eq!(
+            e.text(),
+            "connect to \"app\": connection refused to a:1; b:2: timeout expired\nis PostgreSQL running? check: pg_isready -h a -p 1\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
+        );
+        for tls in [
+            "x509: unknown authority",
+            "TLS handshake",
+            "bad certificate",
+        ] {
+            let e = connect_error("app", &errors(&[tls]), &[], ("a", 1));
+            assert!(
+                e.text()
+                    .ends_with("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert"),
+                "{}",
+                e.text()
+            );
+        }
+        let e = connect_error(
+            "app",
+            &errors(&["h:5432: password authentication failed (SQLSTATE 28P01)"]),
+            &["28P01".into()],
+            ("h", 5432),
+        );
+        assert_eq!(
+            e.text(),
+            "connect to \"app\": h:5432: password authentication failed (SQLSTATE 28P01)"
+        );
+    }
 
     #[test]
     fn a_refused_token_points_at_the_database_role() {

@@ -474,7 +474,8 @@ impl Form {
             }
             Method::Uri => {
                 required(0, "connection string")?;
-                let f = crate::conn::parse::parse(&self.value(0)).map_err(|e| (0, e.text()))?;
+                let f =
+                    crate::conn::parse::parse(&self.value(0)).map_err(|e| (0, e.to_string()))?;
                 let get = |k: &str| f.get(k).cloned().unwrap_or_default();
                 let port = match f.get("port") {
                     None => 5432,
@@ -846,7 +847,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         connection: Some(s.keyword_string().into()),
         ..Default::default()
     };
-    let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(|e| e.text())?;
+    let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(|e| e.to_string())?;
     let dialer = crate::conn::dial::Dialer {
         notices: std::sync::Arc::new(|_| {}),
         log: std::sync::Arc::new(|_| {}),
