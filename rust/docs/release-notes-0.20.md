@@ -42,3 +42,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   allow-listed, before it changes anything. On Databricks Lakebase it sets
   `provider_role_pattern` and `provider_schemas` itself. Both template
   READMEs say what each host needs.
+- **The Go library is gone.** pgmi 0.20 is a Rust program with no library
+  crate. Go programs that embedded `pkg/pgmi` pin the `go-legacy` tag; Python
+  and Node get thin wrappers over `deploy --json` (PGMI-850).
+- **Google Cloud SQL** goes through pgmi's own dialer, and a transient
+  connection failure is retried like on every other route.

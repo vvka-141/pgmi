@@ -1044,6 +1044,9 @@ release notes take their "Behaviour changes" section from this table.
 | Wizard selection lists | stop at the ends | wrap around | owner 2026-11-11 |
 | Advanced template: a login without `CREATEDB`/`CREATEROLE`, or extensions Azure has not allow-listed | fails partway, exit 13 | named before anything changes, exit 13 | owner 2026-11-11 |
 | Advanced template on Lakebase without `provider_role_pattern`/`provider_schemas` | refused by the guards, exit 13 | detected; deploys | owner 2026-11-11 |
+| Google Cloud SQL: a transient connection failure | not retried | retried with backoff, as every other route | intended |
+| Google Cloud SQL dialer | Google's Go connector | pgmi's own dialer (record 0009): TLS by the dialer, inner `sslmode=disable`, IAM login, as before | owner 2026-11-10 |
+| `--version` / `version` | Go build info | the same two lines (and the repository line); `Commit`/`Built` from the release build, else `unknown` | intended |
 | Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
