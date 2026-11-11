@@ -4,7 +4,63 @@ pub(crate) enum Mode {
     Strict,
 }
 
-pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
+/// A line of a `.env` or params file that cannot be read, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParseError {
+    pub(crate) line: usize,
+    pub(crate) reason: Reason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Reason {
+    NoEquals,
+    InvalidKey(String),
+    Unterminated(char),
+    EscapeInDoubleQuotes,
+    UnquotedComment,
+    Ambiguous { key: String, why: Ambiguity },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ambiguity {
+    TextAfterQuote,
+    CommentAfterSpace,
+    Variable,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "line {}: ", self.line)?;
+        match &self.reason {
+            Reason::NoEquals => f.write_str("expected KEY=VALUE"),
+            Reason::InvalidKey(key) => write!(f, "invalid key {key:?}"),
+            Reason::Unterminated(q) => write!(f, "unterminated {q} quote"),
+            Reason::EscapeInDoubleQuotes => f.write_str(
+                "a backslash or $ inside double quotes is read differently by .env tools; use single quotes for a literal value",
+            ),
+            Reason::UnquotedComment => f.write_str(
+                "an unquoted # after a space starts a comment in some .env tools and not in others; use single quotes to keep it",
+            ),
+            Reason::Ambiguous { key, why } => {
+                let why = match why {
+                    Ambiguity::TextAfterQuote => {
+                        "has an unterminated quote or text after the closing one"
+                    }
+                    Ambiguity::CommentAfterSpace => "has # after a space, where a comment starts",
+                    Ambiguity::Variable => "has $, where a variable expands",
+                };
+                write!(
+                    f,
+                    "the value of {key} {why}, so a .env file reads it differently; put it in single quotes"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, ParseError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -24,14 +80,20 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
             continue;
         }
         let Some(eq) = raw.find('=') else {
-            return Err(format!("line {start_line}: expected KEY=VALUE"));
+            return Err(ParseError {
+                line: start_line,
+                reason: Reason::NoEquals,
+            });
         };
         let mut key = raw[..eq].trim();
         if let Some(rest) = key.strip_prefix("export ") {
             key = rest.trim();
         }
         if key.is_empty() || key.chars().any(char::is_whitespace) {
-            return Err(format!("line {start_line}: invalid key {key:?}"));
+            return Err(ParseError {
+                line: start_line,
+                reason: Reason::InvalidKey(key.to_string()),
+            });
         }
         let eq_chars = raw[..eq].chars().count() + 1;
         let mut j = i + eq_chars;
@@ -45,7 +107,10 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                 let mut k = j + 1;
                 loop {
                     let Some(&c) = chars.get(k) else {
-                        return Err(format!("line {start_line}: unterminated {q} quote"));
+                        return Err(ParseError {
+                            line: start_line,
+                            reason: Reason::Unterminated(q),
+                        });
                     };
                     if c == q {
                         break;
@@ -54,9 +119,10 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                         line += 1;
                     }
                     if q == '"' && (c == '\\' || c == '$') && mode == Mode::Strict {
-                        return Err(format!(
-                            "line {start_line}: a backslash or $ inside double quotes is read differently by .env tools; use single quotes for a literal value"
-                        ));
+                        return Err(ParseError {
+                            line: start_line,
+                            reason: Reason::EscapeInDoubleQuotes,
+                        });
                     }
                     if q == '"' && c == '\\' {
                         k += 1;
@@ -66,7 +132,10 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                             Some('t') => v.push('\t'),
                             Some(&o) => v.push(o),
                             None => {
-                                return Err(format!("line {start_line}: unterminated {q} quote"));
+                                return Err(ParseError {
+                                    line: start_line,
+                                    reason: Reason::Unterminated(q),
+                                });
                             }
                         }
                     } else {
@@ -85,11 +154,7 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                 }
                 let after: String = chars[k + 1..e].iter().collect();
                 if mode == Mode::Strict && (line != start_line || !after.trim().is_empty()) {
-                    return Err(ambiguous(
-                        start_line,
-                        key,
-                        "has an unterminated quote or text after the closing one",
-                    ));
+                    return Err(ambiguous(start_line, key, Ambiguity::TextAfterQuote));
                 }
                 i = e + 1;
                 line += 1;
@@ -99,24 +164,17 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                 let rest = rest.strip_suffix('\r').unwrap_or(&rest);
                 let mut v = rest.to_string();
                 if mode == Mode::Strict && rest.trim_start().starts_with('#') {
-                    return Err(ambiguous(
-                        start_line,
-                        key,
-                        "has # after a space, where a comment starts",
-                    ));
+                    return Err(ambiguous(start_line, key, Ambiguity::CommentAfterSpace));
                 }
                 if mode == Mode::Strict && rest.contains('$') {
-                    return Err(ambiguous(
-                        start_line,
-                        key,
-                        "has $, where a variable expands",
-                    ));
+                    return Err(ambiguous(start_line, key, Ambiguity::Variable));
                 }
                 if let Some(pos) = find_comment(rest) {
                     if mode == Mode::Strict {
-                        return Err(format!(
-                            "line {start_line}: an unquoted # after a space starts a comment in some .env tools and not in others; use single quotes to keep it"
-                        ));
+                        return Err(ParseError {
+                            line: start_line,
+                            reason: Reason::UnquotedComment,
+                        });
                     }
                     v.truncate(pos);
                 }
@@ -166,10 +224,14 @@ fn expand(s: &str, earlier: &[(String, String)]) -> String {
     out
 }
 
-fn ambiguous(line: usize, key: &str, why: &str) -> String {
-    format!(
-        "line {line}: the value of {key} {why}, so a .env file reads it differently; put it in single quotes"
-    )
+fn ambiguous(line: usize, key: &str, why: Ambiguity) -> ParseError {
+    ParseError {
+        line,
+        reason: Reason::Ambiguous {
+            key: key.to_string(),
+            why,
+        },
+    }
 }
 
 fn find_comment(s: &str) -> Option<usize> {
@@ -223,9 +285,13 @@ mod tests {
 
     #[test]
     fn strict_refusals() {
-        let e = parse("double=\"a \\n b\"\n", Mode::Strict).unwrap_err();
+        let e = parse("double=\"a \\n b\"\n", Mode::Strict)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("backslash or $ inside double quotes") && e.contains("single quotes"));
-        let e = parse("inline=value # c\n", Mode::Strict).unwrap_err();
+        let e = parse("inline=value # c\n", Mode::Strict)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("# after a space") && e.contains("single quotes"));
         assert!(parse("a=x#y\n", Mode::Strict).is_ok());
     }
@@ -239,7 +305,7 @@ mod tests {
             ("a='x\ny'\n", "unterminated quote"),
             ("a=#x\n", "has # after a space"),
         ] {
-            let e = parse(text, Mode::Strict).unwrap_err();
+            let e = parse(text, Mode::Strict).unwrap_err().to_string();
             assert!(
                 e.starts_with("line 1: the value of a ")
                     && e.contains(why)

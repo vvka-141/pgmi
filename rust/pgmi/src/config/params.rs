@@ -124,8 +124,9 @@ pub(crate) fn collect(
             })?;
             (file.clone(), t)
         };
-        let pairs = dotenv::parse(&text, Mode::Strict)
-            .map_err(|e| Error::config(format!("failed to parse params file {name}: {e}")))?;
+        let pairs = dotenv::parse(&text, Mode::Strict).map_err(|e| {
+            Error::config(format!("failed to parse params file {name}")).with_source(e)
+        })?;
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
         for (k, v) in pairs {
             let lower = k.to_lowercase();

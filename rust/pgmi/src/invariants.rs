@@ -594,12 +594,9 @@ pub fn dotenv_text(text: &str) -> Checked {
         .into_iter()
         .filter_map(|r| r.as_ref().err())
     {
-        let line = e
-            .strip_prefix("line ")
-            .and_then(|r| r.split(':').next())
-            .and_then(|n| n.parse::<usize>().ok());
         ensure!(
-            line.is_some_and(|n| (1..=lines).contains(&n)),
+            (1..=lines).contains(&e.line)
+                && e.to_string().starts_with(&format!("line {}: ", e.line)),
             "the error names no line of the text: {e}"
         );
     }
