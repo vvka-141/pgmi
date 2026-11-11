@@ -220,6 +220,20 @@ impl Guard {
         .await
     }
 
+    /// Like `blocking`, but only a signal or a cancel stops it: `--timeout`
+    /// does not bound reading `--params-file -`, in Go either.
+    async fn interruptible<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        tokio::select! {
+            r = tokio::task::spawn_blocking(work) => {
+                r.map_err(|e| Error::internal(format!("blocking task: {e}")))?
+            }
+            _ = self.token.cancelled() => Err(self.stop_error()),
+        }
+    }
+
     fn check(&self) -> Result<()> {
         if self.token.is_cancelled() {
             Err(self.stop_error())
@@ -468,17 +482,28 @@ async fn deploy(
         y.timeout()?;
     }
     let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, yaml.as_ref())?;
-    let sources = Sources {
-        yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
-        env: &ctx.env,
-        files: &a.params_files,
-        flags: &a.params,
-    };
-    let params = if ctx.stdin {
-        params::collect(sources, &mut std::io::stdin())?
-    } else {
-        params::collect(sources, &mut NoStdin)?
-    };
+    let yaml_params = yaml.as_ref().map(|y| y.param_values()).unwrap_or_default();
+    let (env, files, flags, stdin) = (
+        ctx.env.clone(),
+        a.params_files.clone(),
+        a.params.clone(),
+        ctx.stdin,
+    );
+    let params = guard
+        .interruptible(move || {
+            let sources = Sources {
+                yaml: yaml_params,
+                env: &env,
+                files: &files,
+                flags: &flags,
+            };
+            if stdin {
+                params::collect(sources, &mut std::io::stdin())
+            } else {
+                params::collect(sources, &mut NoStdin)
+            }
+        })
+        .await?;
     let mut spec = resolve::resolve(
         &a.connection,
         &ctx.env,
@@ -898,6 +923,31 @@ mod tests {
         g.interrupted.store(true, Ordering::SeqCst);
         g.token.cancel();
         let e = stuck(&g).await;
+        assert_eq!((e.exit_code(), e.text()), (130, "interrupted".to_string()));
+    }
+
+    #[tokio::test]
+    async fn reading_stdin_gives_way_to_the_first_signal_but_not_to_the_timeout() {
+        let g = guard(Duration::from_millis(20));
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let read = g.interruptible(move || {
+            let _ = wait.recv();
+            Ok(())
+        });
+        tokio::pin!(read);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut read)
+                .await
+                .is_err(),
+            "--timeout must not stop the stdin read"
+        );
+        g.interrupted.store(true, Ordering::SeqCst);
+        g.token.cancel();
+        let e = tokio::time::timeout(Duration::from_secs(5), read)
+            .await
+            .expect("a signal must stop the stdin read")
+            .unwrap_err();
+        drop(release);
         assert_eq!((e.exit_code(), e.text()), (130, "interrupted".to_string()));
     }
 
