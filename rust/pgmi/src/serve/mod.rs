@@ -27,6 +27,7 @@ const META_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
+const DRAIN: Duration = Duration::from_secs(2);
 
 pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> u8 {
     crate::conn::tls::install();
@@ -59,52 +60,72 @@ struct Server<T> {
     tools: Arc<T>,
 }
 
-/// Serves MCP over newline-delimited JSON-RPC until `input` ends or `stop`
-/// is cancelled. Cancelling `stop` cancels every tool call in flight; a
-/// cancelled call is never answered. Returns once every call has ended and
-/// every answer is written.
+/// Serves MCP over newline-delimited JSON-RPC until `input` ends, `stop` is
+/// cancelled or writing to `output` fails. Ending cancels every tool call in
+/// flight; a cancelled call is never answered. Returns once every call has
+/// ended and the answers are written, giving a client that stops reading
+/// `DRAIN` to take them.
 pub(crate) async fn serve<T: Toolbox>(
     mut input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
     tools: Arc<T>,
     stop: CancellationToken,
 ) {
+    let session = stop.child_token();
+    let finished = CancellationToken::new();
     let (tx, mut rx) = unbounded_channel::<String>();
     let server = Arc::new(Server {
         out: tx,
         calls: Mutex::new(HashMap::new()),
-        root: stop,
+        root: session.clone(),
         tools,
     });
-    let read = async move {
-        let mut tasks = JoinSet::new();
-        let mut lines = wire::Lines::default();
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            let n = tokio::select! {
-                biased;
-                () = server.root.cancelled() => break,
-                n = input.read(&mut buf) => n.unwrap_or(0),
-            };
-            if n == 0 {
-                if let Some(line) = lines.finish() {
+    let read = {
+        let finished = finished.clone();
+        async move {
+            let mut tasks = JoinSet::new();
+            let mut lines = wire::Lines::default();
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = tokio::select! {
+                    biased;
+                    () = server.root.cancelled() => break,
+                    n = input.read(&mut buf) => n.unwrap_or(0),
+                };
+                if n == 0 {
+                    if let Some(line) = lines.finish() {
+                        server.handle(&line, &mut tasks);
+                    }
+                    break;
+                }
+                for line in lines.feed(&buf[..n]) {
                     server.handle(&line, &mut tasks);
                 }
-                break;
+                while tasks.try_join_next().is_some() {}
             }
-            for line in lines.feed(&buf[..n]) {
-                server.handle(&line, &mut tasks);
-            }
-            while tasks.try_join_next().is_some() {}
+            while tasks.join_next().await.is_some() {}
+            drop(server);
+            finished.cancel();
         }
-        while tasks.join_next().await.is_some() {}
     };
     let write = async move {
-        while let Some(mut line) = rx.recv().await {
-            line.push('\n');
-            if output.write_all(line.as_bytes()).await.is_err() || output.flush().await.is_err() {
-                return;
+        let deliver = async {
+            while let Some(mut line) = rx.recv().await {
+                line.push('\n');
+                if output.write_all(line.as_bytes()).await.is_err() || output.flush().await.is_err()
+                {
+                    return false;
+                }
             }
+            true
+        };
+        tokio::pin!(deliver);
+        let delivered = tokio::select! {
+            ok = &mut deliver => ok,
+            () = finished.cancelled() => tokio::time::timeout(DRAIN, &mut deliver).await.unwrap_or(false),
+        };
+        if !delivered {
+            session.cancel();
         }
     };
     tokio::join!(read, write);

@@ -449,3 +449,53 @@ async fn a_legacy_session_is_unchanged() {
     assert!(r[1]["result"].get("resultType").is_none(), "{}", r[1]);
     assert_eq!(r[1]["result"]["structuredContent"]["echoed"], true);
 }
+
+#[tokio::test]
+async fn a_client_that_stops_reading_does_not_hold_up_the_stop() {
+    let (mut input, server_in) = tokio::io::duplex(1024);
+    let (server_out, _unread) = tokio::io::duplex(64);
+    let stop = CancellationToken::new();
+    let server = tokio::spawn(serve(server_in, server_out, fakes().0, stop.clone()));
+    for id in 0..50 {
+        let ping = format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n");
+        input.write_all(ping.as_bytes()).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    stop.cancel();
+    timeout(Duration::from_secs(10), server)
+        .await
+        .expect("serve waited for a client that never reads")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_output_failure_ends_the_session() {
+    let (tools, mut probes) = fakes();
+    let (mut input, server_in) = tokio::io::duplex(1024);
+    let (server_out, gone) = tokio::io::duplex(1024);
+    drop(gone);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        tools,
+        CancellationToken::new(),
+    ));
+    let call = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow"}}"#;
+    input
+        .write_all(format!("{call}\n").as_bytes())
+        .await
+        .unwrap();
+    probes.started.recv().await.unwrap();
+    let ping = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+    input
+        .write_all(format!("{ping}\n").as_bytes())
+        .await
+        .unwrap();
+    let stopped = timeout(Duration::from_secs(3), probes.stopped.recv()).await;
+    assert_eq!(stopped.expect("the call kept running"), Some("cancelled"));
+    timeout(Duration::from_secs(3), server)
+        .await
+        .expect("serve kept reading after its output failed")
+        .unwrap();
+    drop(input);
+}

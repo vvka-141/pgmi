@@ -134,6 +134,10 @@ overridden. Used only if the hand-written server proves unworkable.
   owning its data, but a dozen were needed and every new borrowed call
   would break `serve` again, so the workaround stays until the trait
   solver accepts the future as written.
+- The writer task watches the session (PGMI-868): a failed write cancels
+  the session token, which stops the reader and every call; after the
+  reader ends, the remaining answers get 2 s (`DRAIN`), so a client that
+  keeps stdout open but stops reading cannot hold up the exit.
 - `init`, `metadata_plan`, `metadata_validate` and `ai_contract` answer
   "not implemented in this build" (exit 1) until the commands they wrap land
   (PGMI-833 part B); their argument checks already match Go.

@@ -135,6 +135,14 @@ answered during a deploy, and `notifications/cancelled` stops a running deploy,
 which rolls back. End of input exits 0. Full reference: `docs/CLI.md`
 "pgmi serve".
 
+Once input ends or SIGINT/SIGTERM arrives and the running calls have ended,
+a client that no longer reads gets 2 s to take the remaining answers before
+serve exits. A failed write to stdout ends the session: running calls are
+cancelled and nothing more is read (Go stops reading only when an answer
+written by the reader fails, and then waits for the running calls). Rust unit tests
+`a_client_that_stops_reading_does_not_hold_up_the_stop`,
+`an_output_failure_ends_the_session`.
+
 Malformed input, each answered and the session continuing: text that is not
 JSON, including invalid UTF-8 outside a string, is -32700 with a null id;
 JSON that is not a request object (`[]`, a number, a string) or has a member
