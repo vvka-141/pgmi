@@ -71,8 +71,10 @@ mod tests {
         let fs = MemFs::default().unreadable_file(".env");
         let e = project_dotenv(&fs, &Env::default()).unwrap_err();
         assert_eq!(e.exit_code(), 10);
+        let path = std::path::Path::new("/mem").join(".env");
         assert!(
-            e.text().starts_with("failed to read /mem/.env: "),
+            e.text()
+                .starts_with(&format!("failed to read {}: ", path.display())),
             "{}",
             e.text()
         );

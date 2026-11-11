@@ -547,7 +547,10 @@ mod tests {
         let fs = MemFs::default().special("deploy.sql");
         assert_eq!(
             refused(&fs),
-            "/mem/deploy.sql is not a regular file (a named pipe, socket or device)"
+            format!(
+                "{} is not a regular file (a named pipe, socket or device)",
+                std::path::Path::new("/mem").join("deploy.sql").display()
+            )
         );
     }
 
@@ -625,7 +628,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn non_utf8_file_name_is_refused_unless_hidden() {
         use std::os::unix::ffi::OsStrExt;
