@@ -221,6 +221,35 @@ jobs:
       - name: Packaged files equal tracked files
         run: rust/check-package.sh
 
+  fuzz:
+    name: Fuzz (Rust)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      CARGO_TERM_COLOR: never
+      NIGHTLY: nightly-2026-10-28
+    defaults:
+      run:
+        working-directory: rust/pgmi/fuzz
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        run: |
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          cargo +"$NIGHTLY" install --locked cargo-fuzz@0.13.2
+      - name: tap_reader
+        run: cargo +"$NIGHTLY" fuzz run tap_reader -- -max_total_time=120
+      - name: mcp_decoder
+        if: success() || failure()
+        run: cargo +"$NIGHTLY" fuzz run mcp_decoder -- -max_total_time=120
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: rust/pgmi/fuzz/artifacts/
+          if-no-files-found: ignore
+
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,
   # .pgpass location, CRLF through the head/tail splitter, signal handling.

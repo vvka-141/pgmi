@@ -45,7 +45,8 @@ three hold (checklist on PGMI-833, where `pgmi serve` is built):
    the Go binary first.
 2. A fuzz target (cargo-fuzz) on the input parser: the line reader and the
    message decoder never panic, and every line gets one answer or none,
-   exactly as the cases say.
+   exactly as the cases say. Met: `mcp_decoder` runs for two minutes on
+   every push in the CI job `fuzz` (PGMI-861).
 3. The fallback below stays a fallback.
 
 ## Fallback only

@@ -100,11 +100,12 @@ Every `###` section of the behaviour contract and the records that serve it.
 - Driver (owner review): tokio-postgres unpatched plus pgmi's own layer, no
   fork and no upstream PR; the layer is permanent. The spike passed six of
   six. Done only with a `pgmi serve` case, a fuzz target and TLS start from
-  sslmode. The fork patches stay in `patches/` as reference only. (0005)
+  sslmode; the fuzz target runs in the CI job `fuzz` (PGMI-861). The fork
+  patches stay in `patches/` as reference only. (0005)
 - MCP server (owner review): hand-written, like Go. Done only when it
   matches Go's behaviour under black-box cases (malformed input included)
-  and the input parser has a fuzz target. rmcp plus pgmi's own transport is
-  the fallback only. (0017)
+  and the input parser has a fuzz target, run in the CI job `fuzz`
+  (PGMI-861). rmcp plus pgmi's own transport is the fallback only. (0017)
 
 ## Open questions
 

@@ -68,7 +68,8 @@ first ticket that builds the real connection code):
 1. A black-box case for `pgmi serve`: several deploys on one connection, where
    a deploy that leaves a transaction open is detected and handled, and the
    next deploy on the same connection is not refused.
-2. A fuzz target on the server-message reader.
+2. A fuzz target on the server-message reader. Met: `tap_reader` runs for
+   two minutes on every push in the CI job `fuzz` (PGMI-861).
 3. TLS start taken from the resolved sslmode, not from watching the wire for
    pgmi's own SSLRequest.
 
