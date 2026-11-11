@@ -33,10 +33,11 @@ refuses a backslash or `$` inside double quotes and an unquoted ` #`
 Own parser; option 2.
 
 - `main` is synchronous until the runtime starts (record 0003). In order:
-  parse arguments; snapshot `std::env::vars_os()` into an `Env` map; for
-  `deploy`, read `<project>/.env`, add the keys not already set to the map,
-  and export exactly those with `set_var` (one `unsafe` block, with the
-  invariant written next to it); then start the runtime. After that point
+  snapshot `std::env::vars_os()` into an `Env` map (in `main`, once); parse
+  arguments (`pgmi::run`); for `deploy`, read `<project>/.env`, add the keys
+  not already set to the map, and export exactly those with `set_var` (one
+  `unsafe` block in `main`, handed to the library as the `export` closure,
+  with the invariant written next to it); then start the runtime. After that point
   nothing calls `set_var` or `remove_var`.
 - All pgmi code reads the `Env` map, passed down explicitly; nothing reads
   `std::env::var` directly. Tests build an `Env` by hand.

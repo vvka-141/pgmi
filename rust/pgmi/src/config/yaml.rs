@@ -7,35 +7,35 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectConfig {
+pub(crate) struct ProjectConfig {
     #[serde(default)]
-    pub connection: Connection,
+    pub(crate) connection: Connection,
     #[serde(default)]
-    pub params: BTreeMap<String, Option<String>>,
-    pub timeout: Option<String>,
+    pub(crate) params: BTreeMap<String, Option<String>>,
+    pub(crate) timeout: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Connection {
-    pub host: Option<String>,
-    pub port: Option<String>,
-    pub username: Option<String>,
-    pub database: Option<String>,
-    pub maintenance_database: Option<String>,
-    pub sslmode: Option<String>,
-    pub sslcert: Option<String>,
-    pub sslkey: Option<String>,
-    pub sslrootcert: Option<String>,
-    pub auth_method: Option<String>,
-    pub azure_tenant_id: Option<String>,
-    pub azure_client_id: Option<String>,
-    pub aws_region: Option<String>,
-    pub google_instance: Option<String>,
+pub(crate) struct Connection {
+    pub(crate) host: Option<String>,
+    pub(crate) port: Option<String>,
+    pub(crate) username: Option<String>,
+    pub(crate) database: Option<String>,
+    pub(crate) maintenance_database: Option<String>,
+    pub(crate) sslmode: Option<String>,
+    pub(crate) sslcert: Option<String>,
+    pub(crate) sslkey: Option<String>,
+    pub(crate) sslrootcert: Option<String>,
+    pub(crate) auth_method: Option<String>,
+    pub(crate) azure_tenant_id: Option<String>,
+    pub(crate) azure_client_id: Option<String>,
+    pub(crate) aws_region: Option<String>,
+    pub(crate) google_instance: Option<String>,
 }
 
 impl ProjectConfig {
-    pub fn load(project: &Path) -> Result<Option<Self>> {
+    pub(crate) fn load(project: &Path) -> Result<Option<Self>> {
         let path = project.join("pgmi.yaml");
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
@@ -47,7 +47,7 @@ impl ProjectConfig {
         Self::parse(&text).map(Some)
     }
 
-    pub fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         if text.trim().is_empty() {
             return Ok(Self::default());
         }
@@ -63,7 +63,7 @@ impl ProjectConfig {
         Ok(cfg)
     }
 
-    pub fn timeout(&self) -> Result<Option<std::time::Duration>> {
+    pub(crate) fn timeout(&self) -> Result<Option<std::time::Duration>> {
         self.timeout
             .as_deref()
             .map(|t| {
@@ -73,7 +73,7 @@ impl ProjectConfig {
             .transpose()
     }
 
-    pub fn param_values(&self) -> Vec<(String, String)> {
+    pub(crate) fn param_values(&self) -> Vec<(String, String)> {
         self.params
             .iter()
             .map(|(k, v)| (k.clone(), v.clone().unwrap_or_default()))

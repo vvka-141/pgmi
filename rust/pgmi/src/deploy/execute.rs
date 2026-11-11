@@ -6,7 +6,7 @@ use tokio_postgres::types::Type;
 use super::script::{self, Unit};
 use super::session::{self, Load};
 use super::{Guard, State, sql_error};
-use crate::cli::VERSION;
+use crate::VERSION;
 use crate::conn::dial::Session;
 use crate::conn::tap::IDLE;
 use crate::error::{Error, Result};
@@ -14,15 +14,15 @@ use crate::output::Reporter;
 use crate::project::metadata::Meta;
 use crate::project::walk::Project;
 
-pub struct Run<'a> {
-    pub session: &'a Session,
-    pub guard: &'a Guard,
-    pub reporter: &'a Arc<Reporter>,
-    pub project: &'a Project,
-    pub meta: &'a [Meta],
-    pub params: &'a BTreeMap<String, String>,
-    pub verbose: bool,
-    pub state: &'a mut State,
+pub(crate) struct Run<'a> {
+    pub(crate) session: &'a Session,
+    pub(crate) guard: &'a Guard,
+    pub(crate) reporter: &'a Arc<Reporter>,
+    pub(crate) project: &'a Project,
+    pub(crate) meta: &'a [Meta],
+    pub(crate) params: &'a BTreeMap<String, String>,
+    pub(crate) verbose: bool,
+    pub(crate) state: &'a mut State,
 }
 
 async fn generate(
@@ -43,7 +43,7 @@ async fn generate(
         .ok_or_else(|| Error::sql("pgmi_test_generate() returned nothing"))
 }
 
-pub async fn run(r: Run<'_>) -> Result<()> {
+pub(crate) async fn run(r: Run<'_>) -> Result<()> {
     let Run {
         session,
         guard,

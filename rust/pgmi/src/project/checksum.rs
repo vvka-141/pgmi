@@ -2,11 +2,11 @@ use sha2::{Digest, Sha256};
 
 use super::lexer::{self, Kind};
 
-pub fn raw(content: &[u8]) -> String {
+pub(crate) fn raw(content: &[u8]) -> String {
     hex(&Sha256::digest(content))
 }
 
-pub fn normalized(content: &[u8]) -> String {
+pub(crate) fn normalized(content: &[u8]) -> String {
     hex(&Sha256::digest(normalize(content)))
 }
 
@@ -14,7 +14,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn normalize(src: &[u8]) -> Vec<u8> {
+pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
     let mut pending_space = false;
     for t in lexer::tokens(src) {

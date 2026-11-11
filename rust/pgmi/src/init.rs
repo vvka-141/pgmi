@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::InitArgs;
 use crate::commands::config::stopped;
+use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::tui::connection::Done;
 use crate::vfs::{self, EmbeddedFs, Kind, OsFs, Vfs};
@@ -10,7 +11,7 @@ use crate::vfs::{self, EmbeddedFs, Kind, OsFs, Vfs};
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
 const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
 
-pub fn check_empty(target: &Path) -> Result<()> {
+pub(crate) fn check_empty(target: &Path) -> Result<()> {
     if let Ok(entries) = std::fs::read_dir(target) {
         let blocking: Vec<String> = entries
             .filter_map(|e| e.ok())
@@ -28,19 +29,18 @@ pub fn check_empty(target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run(a: &InitArgs) -> Result<()> {
+pub(crate) fn run(a: &InitArgs, env: &Env) -> Result<()> {
     let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     check_empty(&target)?;
     let mut connection = None;
     let template = match a.template.as_deref() {
         Some(t) => t,
-        None if crate::tui::interactive(&crate::env::Env::snapshot()) => {
+        None if crate::tui::interactive(env) => {
             match crate::tui::init::run(&target.display().to_string())? {
                 crate::tui::init::Done::Finished { template, connect } => {
                     if connect {
-                        let env = crate::env::Env::snapshot();
-                        connection = Some(match crate::tui::connection::run(None, &env)? {
-                            Done::Finished(s) => (s, env),
+                        connection = Some(match crate::tui::connection::run(None, env)? {
+                            Done::Finished(s) => s,
                             Done::Cancelled => return Err(stopped("init", false)),
                             Done::Interrupted => return Err(stopped("init", true)),
                         });
@@ -64,7 +64,7 @@ pub fn run(a: &InitArgs) -> Result<()> {
     tree.push('\n');
     let _ = std::io::stdout().lock().write_all(tree.as_bytes());
     let mut db = None;
-    if let Some((s, env)) = &connection {
+    if let Some(s) = &connection {
         match crate::commands::config::save(&target, s, false) {
             Err(e) => {
                 let _ = writeln!(
@@ -89,7 +89,7 @@ pub fn run(a: &InitArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()> {
+pub(crate) fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()> {
     let name = match name {
         Some(n) => n.to_string(),
         None => std::path::absolute(target)
@@ -107,7 +107,7 @@ pub fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()>
     Ok(())
 }
 
-pub fn render(template: &str, name: &str) -> Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn render(template: &str, name: &str) -> Result<Vec<(String, Vec<u8>)>> {
     let unknown = || Error::usage(format!("unknown template: {template}"));
     if !crate::commands::templates::NAMES.contains(&template) {
         return Err(unknown());
@@ -133,7 +133,7 @@ pub fn render(template: &str, name: &str) -> Result<Vec<(String, Vec<u8>)>> {
             if rel == "deploy.sql" {
                 let mut text = format!(
                     "-- Scaffolded by pgmi {} from the {template} template.\n",
-                    crate::cli::VERSION
+                    crate::VERSION
                 )
                 .into_bytes();
                 text.extend_from_slice(&bytes);
@@ -248,7 +248,7 @@ mod tests {
             assert!(
                 p.deploy_sql.starts_with(&format!(
                     "-- Scaffolded by pgmi {} from the {t} template.\n",
-                    crate::cli::VERSION
+                    crate::VERSION
                 )),
                 "{t}"
             );

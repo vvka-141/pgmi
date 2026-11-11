@@ -6,7 +6,7 @@ use yaml_edit::Document;
 
 use crate::error::{Error, Result};
 
-pub const KEYS: [&str; 14] = [
+pub(crate) const KEYS: [&str; 14] = [
     "host",
     "port",
     "username",
@@ -23,7 +23,7 @@ pub const KEYS: [&str; 14] = [
     "google_instance",
 ];
 
-pub fn fresh(values: &[(&str, String)]) -> String {
+pub(crate) fn fresh(values: &[(&str, String)]) -> String {
     let mut out = String::from("connection:\n");
     for (k, v) in values.iter().filter(|(_, v)| !v.is_empty()) {
         out.push_str(&format!("  {k}: {}\n", scalar(v)));
@@ -47,7 +47,7 @@ fn scalar(v: &str) -> String {
     }
 }
 
-pub fn set_connection(text: &str, values: &[(&str, String)]) -> String {
+pub(crate) fn set_connection(text: &str, values: &[(&str, String)]) -> String {
     if text.trim().is_empty() {
         return fresh(values);
     }
@@ -94,11 +94,11 @@ fn placeholder(line: &str, key: &str) -> bool {
             .is_some_and(|rest| rest.trim_start().starts_with(&format!("{key}:")))
 }
 
-pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
     write(path, text, true)
 }
 
-pub fn write_private(path: &Path, text: &str) -> Result<()> {
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
     write(path, text, false)
 }
 

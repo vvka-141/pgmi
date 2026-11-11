@@ -7,20 +7,20 @@ use crate::env::Env;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Default, Clone)]
-pub struct Flags {
-    pub connection: Option<String>,
-    pub host: Option<String>,
-    pub port: Option<String>,
-    pub username: Option<String>,
-    pub database: Option<String>,
-    pub sslmode: Option<String>,
-    pub sslcert: Option<String>,
-    pub sslkey: Option<String>,
-    pub sslrootcert: Option<String>,
+pub(crate) struct Flags {
+    pub(crate) connection: Option<String>,
+    pub(crate) host: Option<String>,
+    pub(crate) port: Option<String>,
+    pub(crate) username: Option<String>,
+    pub(crate) database: Option<String>,
+    pub(crate) sslmode: Option<String>,
+    pub(crate) sslcert: Option<String>,
+    pub(crate) sslkey: Option<String>,
+    pub(crate) sslrootcert: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
+pub(crate) enum Source {
     ConnectionFlag,
     PgmiConnectionString,
     DatabaseUrl,
@@ -31,7 +31,7 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Source::ConnectionFlag => "--connection",
             Source::PgmiConnectionString => "PGMI_CONNECTION_STRING",
@@ -43,39 +43,39 @@ impl Source {
         }
     }
 
-    pub fn typed(self) -> bool {
+    pub(crate) fn typed(self) -> bool {
         matches!(self, Source::ConnectionFlag | Source::Flags)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Spec {
-    pub hosts: Vec<(String, u16)>,
-    pub user: String,
-    pub password: Option<String>,
-    pub passfile: Option<PathBuf>,
-    pub maintenance_db: String,
-    pub target_db: String,
-    pub sslmode: String,
-    pub sslrootcert: Option<String>,
-    pub sslcert: Option<String>,
-    pub sslkey: Option<String>,
-    pub sslpassword: Option<String>,
-    pub sslnegotiation_direct: bool,
-    pub sslsni: bool,
-    pub sslcertmode_disable: bool,
-    pub tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
-    pub channel_binding: String,
-    pub require_auth: Option<String>,
-    pub application_name: String,
-    pub connect_timeout: Option<Duration>,
-    pub options: Option<String>,
-    pub timezone: Option<String>,
-    pub target_session_attrs: String,
-    pub source: Source,
-    pub pg_files: Option<crate::env::PgFiles>,
-    pub sslmode_set: bool,
-    pub token: Option<crate::cloud::Token>,
+pub(crate) struct Spec {
+    pub(crate) hosts: Vec<(String, u16)>,
+    pub(crate) user: String,
+    pub(crate) password: Option<String>,
+    pub(crate) passfile: Option<PathBuf>,
+    pub(crate) maintenance_db: String,
+    pub(crate) target_db: String,
+    pub(crate) sslmode: String,
+    pub(crate) sslrootcert: Option<String>,
+    pub(crate) sslcert: Option<String>,
+    pub(crate) sslkey: Option<String>,
+    pub(crate) sslpassword: Option<String>,
+    pub(crate) sslnegotiation_direct: bool,
+    pub(crate) sslsni: bool,
+    pub(crate) sslcertmode_disable: bool,
+    pub(crate) tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
+    pub(crate) channel_binding: String,
+    pub(crate) require_auth: Option<String>,
+    pub(crate) application_name: String,
+    pub(crate) connect_timeout: Option<Duration>,
+    pub(crate) options: Option<String>,
+    pub(crate) timezone: Option<String>,
+    pub(crate) target_session_attrs: String,
+    pub(crate) source: Source,
+    pub(crate) pg_files: Option<crate::env::PgFiles>,
+    pub(crate) sslmode_set: bool,
+    pub(crate) token: Option<crate::cloud::Token>,
 }
 
 const ENV_DEFAULTS: &[(&str, &str)] = &[
@@ -98,7 +98,7 @@ const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGREQUIREAUTH", "require_auth"),
 ];
 
-pub fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
+pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
     if env.non_empty("PGSERVICE")?.is_some() {
         return Err(Error::config(
             "PGSERVICE is set, but pgmi reads no service files; unset it and name the server with --connection, PGHOST or pgmi.yaml",
@@ -442,14 +442,14 @@ fn tls_versions(
 }
 
 impl Spec {
-    pub fn first(&self) -> (&str, u16) {
+    pub(crate) fn first(&self) -> (&str, u16) {
         self.hosts
             .first()
             .map(|(h, p)| (h.as_str(), *p))
             .unwrap_or(("localhost", 5432))
     }
 
-    pub fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         let (h, p) = self.first();
         format!("{h}:{p}/{}", self.target_db)
     }

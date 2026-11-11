@@ -152,7 +152,10 @@ land before or between steps, each with a black-box case.
    fuzz targets link the lib; `pub` -> `pub(crate)` except the listed
    items; `VERSION` to the root; `Env::snapshot` once in `main`.
    Port `TestDeployCmdHasNoOrchestrationFlags` as a unit test on
-   `Cli::command()`.
+   `Cli::command()`. Done 2026-11-11: `pub` items are `serve::wire` and
+   `conn::tap` (what the fuzz targets link), `run`, `Env`,
+   `install_panic_hook` and `PANIC_EXIT_CODE`; the rest is `pub(crate)`.
+   clap's usage and help texts moved to `cli::usage`.
 2. **Break cycles.** `cloud` under `conn`; `Notice` to `output`;
    `redact`/`chain` to `error`; `templates` data module; `duration` out of
    `cli`. No behaviour change.

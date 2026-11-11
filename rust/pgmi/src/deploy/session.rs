@@ -25,17 +25,17 @@ async fn load_json(client: &Client, sql: &str, payload: serde_json::Value) -> Re
     Ok(())
 }
 
-pub struct Load<'a> {
-    pub version: &'a str,
-    pub params: &'a BTreeMap<String, String>,
-    pub sources: &'a [File],
-    pub tests: &'a [File],
-    pub metadata: &'a [Meta],
+pub(crate) struct Load<'a> {
+    pub(crate) version: &'a str,
+    pub(crate) params: &'a BTreeMap<String, String>,
+    pub(crate) sources: &'a [File],
+    pub(crate) tests: &'a [File],
+    pub(crate) metadata: &'a [Meta],
 }
 
 const BATCH_BYTES: usize = 8 << 20;
 
-pub async fn load(client: &Client, l: Load<'_>) -> Result<()> {
+pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
@@ -149,7 +149,7 @@ fn test_depth(dir: &str) -> usize {
     parts.len().saturating_sub(first + 1)
 }
 
-pub fn test_directories(tests: &[File]) -> Vec<(String, Option<String>, usize)> {
+pub(crate) fn test_directories(tests: &[File]) -> Vec<(String, Option<String>, usize)> {
     let dirs: BTreeSet<&str> = tests.iter().map(|f| split_path(&f.path).0).collect();
     dirs.iter()
         .map(|d| {

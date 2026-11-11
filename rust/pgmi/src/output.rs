@@ -8,16 +8,16 @@ use serde_json::{Map, Value, json};
 use crate::conn::dial::Notice;
 use crate::env::Env;
 
-pub struct Reporter {
+pub(crate) struct Reporter {
     verbose: bool,
     start: Instant,
-    pub fancy: bool,
-    pub color: bool,
+    pub(crate) fancy: bool,
+    pub(crate) color: bool,
     lock: Mutex<()>,
 }
 
 impl Reporter {
-    pub fn new(verbose: bool, env: &Env) -> Arc<Self> {
+    pub(crate) fn new(verbose: bool, env: &Env) -> Arc<Self> {
         let term =
             std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
         let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
@@ -30,7 +30,7 @@ impl Reporter {
         })
     }
 
-    pub fn line(&self, text: &str) {
+    pub(crate) fn line(&self, text: &str) {
         let _guard = self.lock.lock();
         let mut err = std::io::stderr().lock();
         if self.verbose {
@@ -43,7 +43,7 @@ impl Reporter {
         }
     }
 
-    pub fn notice(&self, n: &Notice) {
+    pub(crate) fn notice(&self, n: &Notice) {
         match n.severity.as_str() {
             "LOG" => return,
             "DEBUG" if !self.verbose => return,
@@ -62,7 +62,7 @@ impl Reporter {
         self.line(&text);
     }
 
-    pub fn summary(&self, ok: bool, text: &str) {
+    pub(crate) fn summary(&self, ok: bool, text: &str) {
         let (word, open, close) = match (ok, self.fancy, self.color) {
             (true, true, true) => ("✓", "\x1b[32m", "\x1b[0m"),
             (true, true, false) => ("✓", "", ""),
@@ -76,13 +76,13 @@ impl Reporter {
 }
 
 #[derive(Default)]
-pub struct NoticeLog {
+pub(crate) struct NoticeLog {
     head: Vec<Value>,
     warnings: Vec<Value>,
     tail: VecDeque<Value>,
     dropped: u64,
-    pub total: u64,
-    pub warning_total: u64,
+    pub(crate) total: u64,
+    pub(crate) warning_total: u64,
 }
 
 const HEAD: usize = 50;
@@ -90,7 +90,7 @@ const WARNINGS: usize = 200;
 const TAIL: usize = 150;
 
 impl NoticeLog {
-    pub fn push(&mut self, n: &Notice) {
+    pub(crate) fn push(&mut self, n: &Notice) {
         if n.severity == "LOG" {
             return;
         }
@@ -124,7 +124,7 @@ impl NoticeLog {
         }
     }
 
-    pub fn finish(&self) -> (Value, Option<u64>) {
+    pub(crate) fn finish(&self) -> (Value, Option<u64>) {
         let all: Vec<Value> = self
             .head
             .iter()
@@ -139,7 +139,7 @@ impl NoticeLog {
     }
 }
 
-pub fn redact(text: &str, secrets: &[String]) -> String {
+pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     for s in secrets.iter().filter(|s| s.len() >= 3) {
         out = out.replace(s.as_str(), "***");
@@ -147,11 +147,11 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
     out
 }
 
-pub fn seconds(d: std::time::Duration) -> String {
+pub(crate) fn seconds(d: std::time::Duration) -> String {
     format!("{:.2}s", d.as_secs_f64())
 }
 
-pub fn timestamp(t: std::time::SystemTime) -> String {
+pub(crate) fn timestamp(t: std::time::SystemTime) -> String {
     match jiff::Timestamp::try_from(t) {
         Ok(ts) => ts.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         Err(_) => String::new(),

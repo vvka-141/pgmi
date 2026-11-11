@@ -8,7 +8,7 @@ use crate::error::{Error, Kind, Result};
 const TITLE: &str = "pgmi init - Project Setup";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Done {
+pub(crate) enum Done {
     Finished {
         template: &'static str,
         connect: bool,
@@ -16,13 +16,13 @@ pub enum Done {
     Cancelled,
 }
 
-pub struct Wizard {
+pub(crate) struct Wizard {
     template: Select,
     connection: Option<Select>,
 }
 
 impl Wizard {
-    pub fn new(target: &str) -> Self {
+    pub(crate) fn new(target: &str) -> Self {
         Self {
             template: Select {
                 prompt: format!("Select a template  →  {target}"),
@@ -37,7 +37,7 @@ impl Wizard {
         }
     }
 
-    pub fn update(&mut self, key: KeyEvent) -> Option<Done> {
+    pub(crate) fn update(&mut self, key: KeyEvent) -> Option<Done> {
         if let Some(c) = &mut self.connection {
             return match c.update(key)? {
                 Outcome::Picked(i) => Some(Done::Finished {
@@ -74,7 +74,7 @@ impl Wizard {
         }
     }
 
-    pub fn view(&self) -> Paragraph<'static> {
+    pub(crate) fn view(&self) -> Paragraph<'static> {
         let lines = match &self.connection {
             Some(c) => c.view(TITLE),
             None => self.template.view(TITLE),
@@ -83,7 +83,7 @@ impl Wizard {
     }
 }
 
-pub fn run(target: &str) -> Result<Done> {
+pub(crate) fn run(target: &str) -> Result<Done> {
     let mut wizard = Wizard::new(target);
     let mut screen = super::Screen::open()?;
     loop {
@@ -103,7 +103,7 @@ pub fn run(target: &str) -> Result<Done> {
     }
 }
 
-pub fn cancelled() -> Error {
+pub(crate) fn cancelled() -> Error {
     Error::new(Kind::Interrupted, "init cancelled")
 }
 

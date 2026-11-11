@@ -1,6 +1,6 @@
-pub mod connection;
-pub mod init;
-pub mod select;
+pub(crate) mod connection;
+pub(crate) mod init;
+pub(crate) mod select;
 
 use std::io::{BufRead, IsTerminal, Stdout, Write};
 
@@ -12,14 +12,14 @@ use ratatui::backend::CrosstermBackend;
 use crate::env::Env;
 use crate::error::{Error, Result};
 
-pub fn interactive(env: &Env) -> bool {
+pub(crate) fn interactive(env: &Env) -> bool {
     std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && env.non_empty("CI").ok().flatten().is_none()
         && env.get("PGMI_NON_INTERACTIVE").ok().flatten() != Some("1")
 }
 
-pub fn confirm(message: &str) -> bool {
+pub(crate) fn confirm(message: &str) -> bool {
     let _ = write!(std::io::stderr(), "{message} [Y/n]: ");
     let mut line = String::new();
     match std::io::stdin().lock().read_line(&mut line) {
@@ -28,14 +28,14 @@ pub fn confirm(message: &str) -> bool {
     }
 }
 
-pub fn io(e: std::io::Error) -> Error {
+pub(crate) fn io(e: std::io::Error) -> Error {
     Error::general("terminal").with_source(e)
 }
 
-pub struct Screen(pub Terminal<CrosstermBackend<Stdout>>);
+pub(crate) struct Screen(pub Terminal<CrosstermBackend<Stdout>>);
 
 impl Screen {
-    pub fn open() -> Result<Self> {
+    pub(crate) fn open() -> Result<Self> {
         terminal::enable_raw_mode().map_err(io)?;
         let mut out = std::io::stdout();
         if let Err(e) = execute!(out, EnterAlternateScreen, cursor::Hide) {
@@ -47,7 +47,7 @@ impl Screen {
             .map_err(io)
     }
 
-    pub fn reset(&mut self) -> Result<()> {
+    pub(crate) fn reset(&mut self) -> Result<()> {
         execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All)).map_err(io)?;
         self.0 = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(io)?;
         Ok(())

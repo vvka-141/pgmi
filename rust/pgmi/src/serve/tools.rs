@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::output::{Reporter, redact};
 
 #[derive(Clone, Copy)]
-pub enum Tool {
+pub(crate) enum Tool {
     Deploy,
     Init,
     MetadataPlan,
@@ -40,7 +40,7 @@ const DEPLOY_ARGS: [&str; 10] = [
 ];
 
 impl Tool {
-    pub fn named(name: &str) -> Option<Tool> {
+    pub(crate) fn named(name: &str) -> Option<Tool> {
         Some(match name {
             "deploy" => Tool::Deploy,
             "init" => Tool::Init,
@@ -53,7 +53,7 @@ impl Tool {
         })
     }
 
-    pub async fn call(
+    pub(crate) async fn call(
         self,
         arguments: Option<&RawValue>,
         env: &Env,
@@ -151,7 +151,7 @@ struct Failure<'a> {
     stack: Option<&'a str>,
 }
 
-pub struct Outcome {
+pub(crate) struct Outcome {
     text: String,
     structured: Option<Box<RawValue>>,
     is_error: bool,
@@ -166,11 +166,11 @@ impl Outcome {
         }
     }
 
-    pub fn failed(e: &Error) -> Self {
+    pub(crate) fn failed(e: &Error) -> Self {
         Self::failure(&e.text(), e.exit_code(), None)
     }
 
-    pub fn panicked() -> Self {
+    pub(crate) fn panicked() -> Self {
         let (e, stack) = crate::error::panic_error();
         Self::failure(&e.text(), e.exit_code(), Some(&stack))
     }
@@ -188,7 +188,7 @@ impl Outcome {
         }
     }
 
-    pub fn render(&self, stateless: bool) -> String {
+    pub(crate) fn render(&self, stateless: bool) -> String {
         let result = ToolResult {
             content: [Text {
                 kind: "text",

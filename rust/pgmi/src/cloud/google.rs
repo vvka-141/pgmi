@@ -19,7 +19,7 @@ const ADMIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.admin";
 const LOGIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.login";
 const PORT: u16 = 3307;
 
-pub struct Dialer {
+pub(crate) struct Dialer {
     address: String,
     config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
@@ -27,11 +27,11 @@ pub struct Dialer {
 }
 
 impl Dialer {
-    pub fn password(&self) -> String {
+    pub(crate) fn password(&self) -> String {
         self.login_token.clone()
     }
 
-    pub async fn dial(
+    pub(crate) async fn dial(
         &self,
     ) -> std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
         let tcp = tokio::net::TcpStream::connect((self.address.as_str(), PORT)).await?;
@@ -114,7 +114,7 @@ async fn access_token(scope: &str, env: &Env) -> Result<String> {
     }
 }
 
-pub async fn dialer(req: &Request, env: &Env) -> Result<Dialer> {
+pub(crate) async fn dialer(req: &Request, env: &Env) -> Result<Dialer> {
     let instance = req.google_instance.clone().unwrap_or_default();
     let (project, _region, name) = instance_parts(&instance)?;
     let admin = access_token(ADMIN_SCOPE, env).await?;

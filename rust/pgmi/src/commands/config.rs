@@ -8,7 +8,7 @@ use crate::env::Env;
 use crate::error::{Error, Kind, Result};
 use crate::tui::connection::{self, Done, Settings};
 
-pub fn run(a: &ConfigArgs, env: &Env) -> Result<()> {
+pub(crate) fn run(a: &ConfigArgs, env: &Env) -> Result<()> {
     if !crate::tui::interactive(env) {
         return Err(Error::usage(
             "config requires an interactive terminal\nfor CI, write pgmi.yaml by hand or use PG* environment variables",
@@ -55,7 +55,7 @@ pub fn run(a: &ConfigArgs, env: &Env) -> Result<()> {
     Ok(())
 }
 
-pub fn stopped(what: &str, interrupted: bool) -> Error {
+pub(crate) fn stopped(what: &str, interrupted: bool) -> Error {
     if interrupted {
         Error::new(Kind::Interrupted, format!("{what} interrupted"))
     } else {
@@ -63,7 +63,7 @@ pub fn stopped(what: &str, interrupted: bool) -> Error {
     }
 }
 
-pub fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
+pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
     let path = target.join("pgmi.yaml");
     let values = s.yaml();
     let text = match std::fs::read_to_string(&path) {
@@ -74,7 +74,7 @@ pub fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
         .map_err(|e| Error::general(format!("failed to save config: {}", e.text())))
 }
 
-pub fn offer_pgpass(s: &Settings, env: &Env) {
+pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
     if s.password.is_empty() {
         return;
     }

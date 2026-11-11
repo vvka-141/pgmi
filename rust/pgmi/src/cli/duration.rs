@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub fn parse(s: &str) -> Result<Duration, String> {
+pub(crate) fn parse(s: &str) -> Result<Duration, String> {
     let bad = || format!("invalid duration {s:?}");
     let mut rest = s;
     let negative = rest.starts_with('-');
@@ -50,7 +50,7 @@ pub fn parse(s: &str) -> Result<Duration, String> {
 
 const MAX_SECS: f64 = i64::MAX as f64 / 1e9;
 
-pub fn render(d: Duration) -> String {
+pub(crate) fn render(d: Duration) -> String {
     if d.is_zero() {
         return "0s".into();
     }

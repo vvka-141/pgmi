@@ -21,11 +21,11 @@ use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
 use super::resolve::Spec;
 use crate::error::{Error, Result};
 
-pub fn provider() -> Arc<CryptoProvider> {
+pub(crate) fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls_graviola::default_provider())
 }
 
-pub fn install() {
+pub(crate) fn install() {
     let _ = CryptoProvider::install_default(rustls_graviola::default_provider());
 }
 
@@ -80,7 +80,7 @@ fn missing_cpu_features(has: impl Fn(&str) -> bool) -> Vec<&'static str> {
     CPU_FEATURES.iter().copied().filter(|f| !has(f)).collect()
 }
 
-pub fn require_cpu() -> Result<()> {
+pub(crate) fn require_cpu() -> Result<()> {
     let missing = missing_cpu_features(cpu_has);
     if missing.is_empty() {
         return Ok(());
@@ -93,21 +93,21 @@ pub fn require_cpu() -> Result<()> {
 }
 
 #[derive(Debug)]
-pub enum Names {
+pub(crate) enum Names {
     Ignore,
     Check,
     CommonName(String),
 }
 
 #[derive(Debug)]
-pub struct Verifier {
+pub(crate) struct Verifier {
     chain: Option<Arc<WebPkiServerVerifier>>,
     names: Names,
     provider: Arc<CryptoProvider>,
 }
 
 impl Verifier {
-    pub fn new(chain: Option<Arc<WebPkiServerVerifier>>, names: Names) -> Arc<Self> {
+    pub(crate) fn new(chain: Option<Arc<WebPkiServerVerifier>>, names: Names) -> Arc<Self> {
         Arc::new(Verifier {
             chain,
             names,
@@ -196,8 +196,8 @@ impl ServerCertVerifier for Verifier {
     }
 }
 
-pub struct Tls {
-    pub config: Arc<ClientConfig>,
+pub(crate) struct Tls {
+    pub(crate) config: Arc<ClientConfig>,
 }
 
 fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
@@ -257,7 +257,7 @@ fn existing(p: PathBuf) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-pub fn effective_mode(spec: &Spec) -> String {
+pub(crate) fn effective_mode(spec: &Spec) -> String {
     let mut mode = spec.sslmode.clone();
     if mode == "require" && root_path(spec).is_some() {
         mode = "verify-ca".into();
@@ -324,7 +324,7 @@ fn check_key_mode(_: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn config(spec: &Spec) -> Result<Tls> {
+pub(crate) fn config(spec: &Spec) -> Result<Tls> {
     let provider = provider();
     let mode = effective_mode(spec);
     let verify = matches!(mode.as_str(), "verify-ca" | "verify-full");
@@ -389,10 +389,10 @@ pub fn config(spec: &Spec) -> Result<Tls> {
 }
 
 #[derive(Clone)]
-pub struct Connect {
-    pub config: Arc<ClientConfig>,
-    pub host: String,
-    pub version: Arc<Mutex<Option<String>>>,
+pub(crate) struct Connect {
+    pub(crate) config: Arc<ClientConfig>,
+    pub(crate) host: String,
+    pub(crate) version: Arc<Mutex<Option<String>>>,
 }
 
 impl<S> TlsConnect<S> for Connect
@@ -427,7 +427,7 @@ where
     }
 }
 
-pub struct PgTls<S>(tokio_rustls::client::TlsStream<S>);
+pub(crate) struct PgTls<S>(tokio_rustls::client::TlsStream<S>);
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for PgTls<S> {
     fn poll_read(
@@ -519,7 +519,7 @@ fn signature_oid(der: &[u8]) -> Option<&[u8]> {
     (tag == 0x06).then_some(oid)
 }
 
-pub fn describe_failure(text: &str, host: &str) -> String {
+pub(crate) fn describe_failure(text: &str, host: &str) -> String {
     text.replace(
         "invalid peer certificate: UnknownIssuer",
         "x509: certificate signed by unknown authority",

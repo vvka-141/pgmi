@@ -5,7 +5,7 @@ use md5::{Digest, Md5};
 use rustls_pki_types::{PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer};
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum KeyError {
+pub(crate) enum KeyError {
     NeedsPassword,
     WrongPassword,
     Malformed(String),
@@ -13,12 +13,15 @@ pub enum KeyError {
 
 const ENCRYPTED_PKCS8: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
 
-pub fn is_encrypted(pem: &[u8]) -> bool {
+pub(crate) fn is_encrypted(pem: &[u8]) -> bool {
     let text = String::from_utf8_lossy(pem);
     text.contains(ENCRYPTED_PKCS8) || text.contains("Proc-Type: 4,ENCRYPTED")
 }
 
-pub fn decrypt(pem: &[u8], password: Option<&str>) -> Result<PrivateKeyDer<'static>, KeyError> {
+pub(crate) fn decrypt(
+    pem: &[u8],
+    password: Option<&str>,
+) -> Result<PrivateKeyDer<'static>, KeyError> {
     let text = std::str::from_utf8(pem).map_err(|_| KeyError::Malformed("not PEM text".into()))?;
     let password = password.ok_or(KeyError::NeedsPassword)?;
     if text.contains(ENCRYPTED_PKCS8) {

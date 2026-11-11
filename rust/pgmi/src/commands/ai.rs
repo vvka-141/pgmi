@@ -6,9 +6,9 @@ use crate::cli::{AiArgs, AiCommand};
 use crate::env::Env;
 use crate::error::Result;
 
-pub const CONTRACT: &str = include_str!("contract.json");
+pub(crate) const CONTRACT: &str = include_str!("contract.json");
 
-pub fn run(a: &AiArgs, env: &Env) -> Result<()> {
+pub(crate) fn run(a: &AiArgs, env: &Env) -> Result<()> {
     let text = match a.command {
         None => pgmi_shared::file("ai/overview.md")
             .and_then(|b| std::str::from_utf8(b).ok())
@@ -33,7 +33,7 @@ fn pager(env: &Env) -> Result<Option<Vec<String>>> {
     })
 }
 
-pub fn page(text: &str, env: &Env) -> Result<()> {
+pub(crate) fn page(text: &str, env: &Env) -> Result<()> {
     let Some(words) = pager(env)? else {
         return stdout(text);
     };

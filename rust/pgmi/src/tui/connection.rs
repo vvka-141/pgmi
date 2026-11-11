@@ -90,24 +90,24 @@ const PROVIDERS: [Provider; 5] = [
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Settings {
-    pub auth_method: Option<&'static str>,
-    pub host: String,
-    pub port: u16,
-    pub database: String,
-    pub maintenance: String,
-    pub username: String,
-    pub password: String,
-    pub sslmode: String,
-    pub sslcert: String,
-    pub sslkey: String,
-    pub sslrootcert: String,
-    pub aws_region: String,
-    pub google_instance: String,
+pub(crate) struct Settings {
+    pub(crate) auth_method: Option<&'static str>,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) database: String,
+    pub(crate) maintenance: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) sslmode: String,
+    pub(crate) sslcert: String,
+    pub(crate) sslkey: String,
+    pub(crate) sslrootcert: String,
+    pub(crate) aws_region: String,
+    pub(crate) google_instance: String,
 }
 
 impl Settings {
-    pub fn yaml(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn yaml(&self) -> Vec<(&'static str, String)> {
         let port = if self.port == 0 {
             String::new()
         } else {
@@ -570,19 +570,19 @@ enum Test {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Done {
+pub(crate) enum Done {
     Finished(Box<Settings>),
     Cancelled,
     Interrupted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Effect {
+pub(crate) enum Effect {
     Test(Box<Settings>),
     Done(Done),
 }
 
-pub struct Wizard {
+pub(crate) struct Wizard {
     provider: Select,
     auth: Option<Select>,
     form: Option<Form>,
@@ -591,7 +591,7 @@ pub struct Wizard {
 }
 
 impl Wizard {
-    pub fn new(initial: Option<Connection>) -> Self {
+    pub(crate) fn new(initial: Option<Connection>) -> Self {
         Self {
             provider: Select {
                 prompt: "Where is your PostgreSQL server?".into(),
@@ -609,7 +609,7 @@ impl Wizard {
         }
     }
 
-    pub fn page(&self) -> (u8, u8) {
+    pub(crate) fn page(&self) -> (u8, u8) {
         let test = match &self.test {
             Some((_, Test::Running(_))) => 1,
             Some((_, Test::Passed(_))) => 2,
@@ -635,7 +635,7 @@ impl Wizard {
         self.form = Some(Form::new(self.provider.cursor, method, initial));
     }
 
-    pub fn update(&mut self, key: KeyEvent) -> Option<Effect> {
+    pub(crate) fn update(&mut self, key: KeyEvent) -> Option<Effect> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
@@ -732,7 +732,7 @@ impl Wizard {
         }
     }
 
-    pub fn tested(&mut self, result: std::result::Result<String, String>) {
+    pub(crate) fn tested(&mut self, result: std::result::Result<String, String>) {
         if let Some((_, t)) = &mut self.test {
             *t = match result {
                 Ok(info) => Test::Passed(info),
@@ -741,13 +741,13 @@ impl Wizard {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         if let Some((_, Test::Running(n))) = &mut self.test {
             *n = (*n + 1) % SPINNER.len();
         }
     }
 
-    pub fn view(&self) -> Paragraph<'static> {
+    pub(crate) fn view(&self) -> Paragraph<'static> {
         let lines = if let Some((s, t)) = &self.test {
             test_lines(s, t)
         } else if let Some(f) = &self.form {
@@ -836,7 +836,7 @@ fn test_lines(s: &Settings, t: &Test) -> Vec<Line<'static>> {
     lines
 }
 
-pub async fn test(s: Settings, env: Env) -> std::result::Result<String, String> {
+pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, String> {
     if let Some(label) = s.token_label() {
         return Ok(format!(
             "{label} authentication configured (not tested — token is fetched at deploy time)"
@@ -871,7 +871,7 @@ pub async fn test(s: Settings, env: Env) -> std::result::Result<String, String> 
         .unwrap_or_else(|_| Err("timeout: no answer within 10s".into()))
 }
 
-pub fn run(initial: Option<Connection>, env: &Env) -> Result<Done> {
+pub(crate) fn run(initial: Option<Connection>, env: &Env) -> Result<Done> {
     let mut wizard = Wizard::new(initial);
     let mut screen = super::Screen::open()?;
     let (tx, rx) = mpsc::channel();

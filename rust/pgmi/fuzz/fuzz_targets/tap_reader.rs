@@ -1,10 +1,7 @@
 #![no_main]
-#![allow(dead_code)]
-
-#[path = "../../src/conn/tap.rs"]
-mod tap;
 
 use libfuzzer_sys::fuzz_target;
+use pgmi::conn::tap;
 
 const POLICIES: [Option<&str>; 4] = [None, Some("scram-sha-256"), Some("!md5"), Some("password,md5")];
 

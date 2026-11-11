@@ -3,26 +3,26 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+pub(crate) enum Outcome {
     Picked(usize),
     Back,
     Cancel,
 }
 
 #[derive(Debug, Clone)]
-pub struct Select {
-    pub prompt: String,
-    pub choices: Vec<(String, String)>,
-    pub help: &'static str,
-    pub cursor: usize,
+pub(crate) struct Select {
+    pub(crate) prompt: String,
+    pub(crate) choices: Vec<(String, String)>,
+    pub(crate) help: &'static str,
+    pub(crate) cursor: usize,
 }
 
-pub const ACCENT: Color = Color::Indexed(39);
-pub const MUTED: Color = Color::Indexed(245);
-pub const FAINT: Color = Color::Indexed(240);
+pub(crate) const ACCENT: Color = Color::Indexed(39);
+pub(crate) const MUTED: Color = Color::Indexed(245);
+pub(crate) const FAINT: Color = Color::Indexed(240);
 
 impl Select {
-    pub fn update(&mut self, key: KeyEvent) -> Option<Outcome> {
+    pub(crate) fn update(&mut self, key: KeyEvent) -> Option<Outcome> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
@@ -53,7 +53,7 @@ impl Select {
         }
     }
 
-    pub fn view(&self, title: &str) -> Vec<Line<'static>> {
+    pub(crate) fn view(&self, title: &str) -> Vec<Line<'static>> {
         let mut lines = vec![
             Line::from(Span::styled(
                 title.to_string(),

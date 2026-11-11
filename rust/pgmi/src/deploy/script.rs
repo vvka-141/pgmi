@@ -1,9 +1,9 @@
 use crate::project::lexer::{self, Kind, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unit {
-    pub text: String,
-    pub line: usize,
+pub(crate) struct Unit {
+    pub(crate) text: String,
+    pub(crate) line: usize,
 }
 
 fn words<'a>(src: &'a [u8], toks: &[Token]) -> Vec<&'a [u8]> {
@@ -17,7 +17,7 @@ fn eq(a: &[u8], b: &str) -> bool {
     a.eq_ignore_ascii_case(b.as_bytes())
 }
 
-pub fn is_terminator(stmt: &[&[u8]]) -> bool {
+pub(crate) fn is_terminator(stmt: &[&[u8]]) -> bool {
     let Some((first, rest)) = stmt.split_first() else {
         return false;
     };
@@ -41,7 +41,7 @@ pub fn is_terminator(stmt: &[&[u8]]) -> bool {
     }
 }
 
-pub fn statements(src: &str) -> Vec<(usize, usize)> {
+pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     let bytes = src.as_bytes();
     let toks = lexer::tokens(bytes);
     let mut out = Vec::new();
@@ -83,7 +83,7 @@ fn line_of(src: &str, pos: usize) -> usize {
         + 1
 }
 
-pub fn split(src: &str) -> Vec<Unit> {
+pub(crate) fn split(src: &str) -> Vec<Unit> {
     let bytes = src.as_bytes();
     let stmts = statements(src);
     let mut units = Vec::new();
@@ -131,11 +131,11 @@ pub fn split(src: &str) -> Vec<Unit> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Macro {
-    pub start: usize,
-    pub end: usize,
-    pub pattern: Option<String>,
-    pub callback: Option<String>,
+pub(crate) struct Macro {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) pattern: Option<String>,
+    pub(crate) callback: Option<String>,
 }
 
 fn literal(src: &[u8], t: &Token) -> Option<String> {
@@ -144,7 +144,7 @@ fn literal(src: &[u8], t: &Token) -> Option<String> {
     Some(body.replace("''", "'"))
 }
 
-pub fn macros(src: &str) -> Vec<Macro> {
+pub(crate) fn macros(src: &str) -> Vec<Macro> {
     let bytes = src.as_bytes();
     let toks: Vec<Token> = lexer::tokens(bytes);
     let sig: Vec<&Token> = toks
@@ -218,7 +218,7 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
     ))
 }
 
-pub fn expand(src: &str, found: &[Macro], generated: &[String]) -> String {
+pub(crate) fn expand(src: &str, found: &[Macro], generated: &[String]) -> String {
     let mut out = String::with_capacity(src.len());
     let mut at = 0;
     for (m, g) in found.iter().zip(generated) {

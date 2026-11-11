@@ -1,5 +1,6 @@
-pub mod commands;
-pub mod duration;
+pub(crate) mod commands;
+pub(crate) mod duration;
+pub(crate) mod usage;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -7,9 +8,7 @@ use std::time::Duration;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::error::Kind;
-pub use commands::*;
-
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) use commands::*;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -20,19 +19,19 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
     disable_help_subcommand = true,
     subcommand_help_heading = "Available Commands"
 )]
-pub struct Cli {
+pub(crate) struct Cli {
     #[arg(short = 'v', long, global = true, action = ArgAction::SetTrue)]
-    pub verbose: bool,
+    pub(crate) verbose: bool,
     #[arg(long, global = true, action = ArgAction::Help)]
-    pub help: Option<bool>,
+    pub(crate) help: Option<bool>,
     #[arg(long, action = ArgAction::SetTrue)]
-    pub version: bool,
+    pub(crate) version: bool,
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub(crate) command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum Command {
+pub(crate) enum Command {
     #[command(about = "Deploy a project: load it into a session and run its deploy.sql", after_help = exit_codes_help())]
     Deploy(Box<DeployArgs>),
     #[command(about = "Write a project from a template")]
@@ -86,64 +85,64 @@ Add it to Claude Code with:
   claude mcp add pgmi -- pgmi serve";
 
 #[derive(Debug, Args)]
-pub struct InitArgs {
-    pub path: Option<PathBuf>,
+pub(crate) struct InitArgs {
+    pub(crate) path: Option<PathBuf>,
     #[arg(short = 't', long, value_parser = ["minimal", "basic", "advanced"])]
-    pub template: Option<String>,
+    pub(crate) template: Option<String>,
 }
 
 #[derive(Debug, Args)]
-pub struct DeployArgs {
-    pub project: PathBuf,
+pub(crate) struct DeployArgs {
+    pub(crate) project: PathBuf,
     #[arg(long)]
-    pub connection: Option<String>,
+    pub(crate) connection: Option<String>,
     #[arg(short = 'h', long)]
-    pub host: Option<String>,
+    pub(crate) host: Option<String>,
     #[arg(short = 'p', long)]
-    pub port: Option<String>,
+    pub(crate) port: Option<String>,
     #[arg(short = 'U', long)]
-    pub username: Option<String>,
+    pub(crate) username: Option<String>,
     #[arg(short = 'd', long)]
-    pub database: Option<String>,
+    pub(crate) database: Option<String>,
     #[arg(long, value_parser = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"])]
-    pub sslmode: Option<String>,
+    pub(crate) sslmode: Option<String>,
     #[arg(long)]
-    pub sslcert: Option<String>,
+    pub(crate) sslcert: Option<String>,
     #[arg(long)]
-    pub sslkey: Option<String>,
+    pub(crate) sslkey: Option<String>,
     #[arg(long)]
-    pub sslrootcert: Option<String>,
+    pub(crate) sslrootcert: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub overwrite: bool,
+    pub(crate) overwrite: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub force: bool,
+    pub(crate) force: bool,
     #[arg(long, value_parser = duration::parse, help = "Catastrophic failure protection, a Go duration such as 90s or 1h30m; 0 turns it off (default 3m0s)")]
-    pub timeout: Option<Duration>,
+    pub(crate) timeout: Option<Duration>,
     #[arg(long)]
-    pub compat: Option<String>,
+    pub(crate) compat: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub json: bool,
+    pub(crate) json: bool,
     #[arg(long = "param")]
-    pub params: Vec<String>,
+    pub(crate) params: Vec<String>,
     #[arg(long = "params-file")]
-    pub params_files: Vec<String>,
+    pub(crate) params_files: Vec<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub azure: bool,
+    pub(crate) azure: bool,
     #[arg(long)]
-    pub azure_tenant_id: Option<String>,
+    pub(crate) azure_tenant_id: Option<String>,
     #[arg(long)]
-    pub azure_client_id: Option<String>,
+    pub(crate) azure_client_id: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub aws: bool,
+    pub(crate) aws: bool,
     #[arg(long)]
-    pub aws_region: Option<String>,
+    pub(crate) aws_region: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
-    pub google: bool,
+    pub(crate) google: bool,
     #[arg(long)]
-    pub google_instance: Option<String>,
+    pub(crate) google_instance: Option<String>,
 }
 
-pub fn go_bool(s: &str) -> Result<bool, String> {
+pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
     match s {
         "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
         "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
@@ -167,6 +166,29 @@ mod tests {
     #[test]
     fn definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn deploy_has_no_orchestration_flags() {
+        let cli = Cli::command();
+        let deploy = cli.find_subcommand("deploy").unwrap();
+        let flags: Vec<&str> = deploy
+            .get_arguments()
+            .filter_map(|a| a.get_long())
+            .collect();
+        assert!(flags.contains(&"overwrite"), "{flags:?}");
+        for flag in flags {
+            assert!(
+                !["dry-run", "quiet", "rollback", "test-only"].contains(&flag),
+                "--{flag} controls deployment behaviour; that belongs in deploy.sql"
+            );
+            assert!(
+                !["skip-", "only-", "no-"]
+                    .iter()
+                    .any(|p| flag.starts_with(p)),
+                "--{flag} filters execution; that belongs in a deploy.sql WHERE clause"
+            );
+        }
     }
 
     #[test]

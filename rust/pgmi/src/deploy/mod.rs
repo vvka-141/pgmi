@@ -1,6 +1,6 @@
 mod execute;
 mod overwrite;
-pub mod script;
+pub(crate) mod script;
 mod session;
 
 use std::future::Future;
@@ -13,7 +13,8 @@ use serde_json::{Map, Value, json};
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{DeployArgs, VERSION};
+use crate::VERSION;
+use crate::cli::DeployArgs;
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
 use crate::conn::dial::{Dialer, Notice, Session};
@@ -24,7 +25,7 @@ use crate::error::{Error, Kind, Result, SqlDiagnostics};
 use crate::output::{NoticeLog, Reporter, redact, seconds, timestamp};
 use crate::project::{metadata, walk};
 
-pub fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
+pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
     match e.as_db_error() {
         Some(db) => {
             let code = db.code().code().to_string();
@@ -59,17 +60,17 @@ pub fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
     }
 }
 
-pub struct Context {
-    pub args: DeployArgs,
-    pub verbose: bool,
-    pub env: Env,
-    pub dotenv_keys: Vec<String>,
-    pub maintenance_db: Option<String>,
-    pub stdin: bool,
-    pub approval: Approval,
+pub(crate) struct Context {
+    pub(crate) args: DeployArgs,
+    pub(crate) verbose: bool,
+    pub(crate) env: Env,
+    pub(crate) dotenv_keys: Vec<String>,
+    pub(crate) maintenance_db: Option<String>,
+    pub(crate) stdin: bool,
+    pub(crate) approval: Approval,
 }
 
-pub enum Approval {
+pub(crate) enum Approval {
     Prompt,
     Confirm(Option<String>),
 }
@@ -145,7 +146,7 @@ impl Guard {
     }
 }
 
-pub struct Run {
+pub(crate) struct Run {
     st: State,
     log: Arc<Mutex<NoticeLog>>,
     started: SystemTime,
@@ -153,7 +154,7 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Run {
             st: State::default(),
             log: Arc::new(Mutex::new(NoticeLog::default())),
@@ -162,7 +163,7 @@ impl Run {
         }
     }
 
-    pub async fn deploy(
+    pub(crate) async fn deploy(
         &mut self,
         ctx: &Context,
         reporter: &Arc<Reporter>,
@@ -179,22 +180,22 @@ impl Run {
         deploy(ctx, &mut self.st, &guard, reporter, self.log.clone()).await
     }
 
-    pub fn reached_deployer(&self) -> bool {
+    pub(crate) fn reached_deployer(&self) -> bool {
         self.st.deployer
     }
 
-    pub fn database(&self) -> Option<&str> {
+    pub(crate) fn database(&self) -> Option<&str> {
         self.st.database.as_deref()
     }
 
-    pub fn notice_counts(&self) -> (u64, u64) {
+    pub(crate) fn notice_counts(&self) -> (u64, u64) {
         self.log
             .lock()
             .map(|l| (l.total, l.warning_total))
             .unwrap_or_default()
     }
 
-    pub fn location(&self, e: &Error) -> Option<&str> {
+    pub(crate) fn location(&self, e: &Error) -> Option<&str> {
         if e.kind() != Kind::Sql || self.st.failed_unit.is_none() {
             return None;
         }
@@ -205,7 +206,7 @@ impl Run {
         })
     }
 
-    pub fn secrets(&self) -> Vec<String> {
+    pub(crate) fn secrets(&self) -> Vec<String> {
         self.st
             .spec
             .iter()
@@ -218,7 +219,7 @@ impl Run {
             .collect()
     }
 
-    pub fn record(&self, ctx: &Context, result: &Result<()>) -> Value {
+    pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> Value {
         let code = match result {
             Ok(()) => 0,
             Err(e) => e.exit_code(),
@@ -236,7 +237,7 @@ impl Run {
     }
 }
 
-pub fn run(ctx: Context) -> u8 {
+pub(crate) fn run(ctx: Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -579,7 +580,7 @@ impl std::io::Read for NoStdin {
     }
 }
 
-pub fn quote_ident(s: &str) -> String {
+pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 

@@ -5,7 +5,7 @@ use super::stdout;
 use crate::cli::{Cli, CompletionArgs};
 use crate::error::{Error, Result};
 
-pub fn run(a: &CompletionArgs) -> Result<()> {
+pub(crate) fn run(a: &CompletionArgs) -> Result<()> {
     let shell = match a.shell.as_str() {
         "bash" => Shell::Bash,
         "zsh" => Shell::Zsh,

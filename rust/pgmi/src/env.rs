@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
+/// The process environment, read once by the caller of [`crate::run`].
 #[derive(Debug, Default, Clone)]
 pub struct Env {
     vars: BTreeMap<String, String>,
@@ -15,7 +16,7 @@ impl Env {
         Self::from_os(std::env::vars_os())
     }
 
-    pub fn from_os(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
+    pub(crate) fn from_os(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         let mut env = Env::default();
         for (k, v) in vars {
             let Ok(k) = k.into_string() else { continue };
@@ -32,7 +33,7 @@ impl Env {
     }
 
     #[cfg(test)]
-    pub fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+    pub(crate) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
         Self::from_os(
             pairs
                 .iter()
@@ -40,7 +41,7 @@ impl Env {
         )
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<&str>> {
+    pub(crate) fn get(&self, name: &str) -> Result<Option<&str>> {
         let key = norm(name);
         if self.not_utf8.contains(&key) {
             return Err(Error::config(format!(
@@ -50,31 +51,34 @@ impl Env {
         Ok(self.vars.get(&key).map(String::as_str))
     }
 
-    pub fn non_empty(&self, name: &str) -> Result<Option<&str>> {
+    pub(crate) fn non_empty(&self, name: &str) -> Result<Option<&str>> {
         Ok(self.get(name)?.filter(|v| !v.is_empty()))
     }
 
-    pub fn contains(&self, name: &str) -> bool {
+    pub(crate) fn contains(&self, name: &str) -> bool {
         let key = norm(name);
         self.vars.contains_key(&key) || self.not_utf8.contains(&key)
     }
 
-    pub fn insert(&mut self, name: &str, value: &str) {
+    pub(crate) fn insert(&mut self, name: &str, value: &str) {
         self.vars.insert(norm(name), value.to_string());
     }
 
-    pub fn with_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> {
+    pub(crate) fn with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a str)> {
         self.vars
             .iter()
             .filter(move |(k, _)| k.starts_with(&norm(prefix)))
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub fn home(&self) -> Option<PathBuf> {
+    pub(crate) fn home(&self) -> Option<PathBuf> {
         self.home_for(cfg!(windows))
     }
 
-    pub fn pg_files(&self) -> Option<PgFiles> {
+    pub(crate) fn pg_files(&self) -> Option<PgFiles> {
         self.pg_files_for(cfg!(windows))
     }
 
@@ -106,9 +110,9 @@ impl Env {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PgFiles {
-    pub dir: PathBuf,
-    pub pgpass: PathBuf,
+pub(crate) struct PgFiles {
+    pub(crate) dir: PathBuf,
+    pub(crate) pgpass: PathBuf,
 }
 
 #[cfg(windows)]

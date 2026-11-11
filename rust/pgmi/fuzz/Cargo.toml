@@ -9,10 +9,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
-serde = "1.0.228"
+pgmi = { path = ".." }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
-tokio = { version = "1.54.1", features = ["io-util"] }
-tokio-postgres = { version = "0.7.18", default-features = false }
 
 [[bin]]
 name = "tap_reader"

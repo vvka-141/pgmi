@@ -13,25 +13,25 @@ use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
 
-pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 type Stream = Box<dyn Io>;
 
 #[derive(Debug, Clone)]
-pub struct Notice {
-    pub severity: String,
-    pub message: String,
-    pub detail: Option<String>,
-    pub hint: Option<String>,
+pub(crate) struct Notice {
+    pub(crate) severity: String,
+    pub(crate) message: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) hint: Option<String>,
 }
 
-pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
-pub type LogSink = Arc<dyn Fn(String) + Send + Sync>;
+pub(crate) type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
+pub(crate) type LogSink = Arc<dyn Fn(String) + Send + Sync>;
 
-pub struct Session {
-    pub client: Client,
-    pub tap: Arc<tap::Shared>,
-    pub tls_version: Option<String>,
+pub(crate) struct Session {
+    pub(crate) client: Client,
+    pub(crate) tap: Arc<tap::Shared>,
+    pub(crate) tls_version: Option<String>,
     cancel: CancelToken,
     tls: Option<Connect>,
     peer: Peer,
@@ -45,7 +45,7 @@ enum Peer {
     Google(crate::cloud::Token),
 }
 
-pub fn notice_of(db: &DbError) -> Notice {
+pub(crate) fn notice_of(db: &DbError) -> Notice {
     let severity = db
         .parsed_severity()
         .map(|s| s.to_string())
@@ -387,13 +387,13 @@ async fn matches_attrs(c: &Client, attrs: &str) -> std::result::Result<bool, Str
     })
 }
 
-pub struct Dialer {
-    pub notices: NoticeSink,
-    pub log: LogSink,
+pub(crate) struct Dialer {
+    pub(crate) notices: NoticeSink,
+    pub(crate) log: LogSink,
 }
 
 impl Dialer {
-    pub async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
+    pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
         if spec.sslmode != "disable" {
             super::tls::require_cpu()?;
         }
@@ -548,7 +548,7 @@ impl Dialer {
 }
 
 impl Session {
-    pub async fn cancel(&self) {
+    pub(crate) async fn cancel(&self) {
         let fut = async {
             let Ok(socket) = dial(&self.peer).await else {
                 return;
@@ -565,11 +565,11 @@ impl Session {
         let _ = tokio::time::timeout(Duration::from_secs(2), fut).await;
     }
 
-    pub fn disconnect(&self) {
+    pub(crate) fn disconnect(&self) {
         self.connection.abort();
     }
 
-    pub fn tls_enabled(&self) -> bool {
+    pub(crate) fn tls_enabled(&self) -> bool {
         self.tls_version.is_some()
     }
 }

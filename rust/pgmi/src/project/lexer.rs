@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(crate) enum Kind {
     Space,
     LineComment,
     BlockComment,
@@ -15,30 +15,30 @@ pub enum Kind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Token {
-    pub kind: Kind,
-    pub start: usize,
-    pub end: usize,
+pub(crate) struct Token {
+    pub(crate) kind: Kind,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 impl Token {
-    pub fn text<'a>(&self, src: &'a [u8]) -> &'a [u8] {
+    pub(crate) fn text<'a>(&self, src: &'a [u8]) -> &'a [u8] {
         &src[self.start..self.end]
     }
 
-    pub fn is_trivia(&self) -> bool {
+    pub(crate) fn is_trivia(&self) -> bool {
         matches!(
             self.kind,
             Kind::Space | Kind::LineComment | Kind::BlockComment
         )
     }
 
-    pub fn is_word(&self, src: &[u8], word: &str) -> bool {
+    pub(crate) fn is_word(&self, src: &[u8], word: &str) -> bool {
         self.kind == Kind::Word && self.text(src).eq_ignore_ascii_case(word.as_bytes())
     }
 }
 
-pub fn is_space(b: u8) -> bool {
+pub(crate) fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
@@ -50,7 +50,7 @@ fn is_ident(b: u8) -> bool {
     is_ident_start(b) || b.is_ascii_digit() || b == b'$'
 }
 
-pub fn tokens(src: &[u8]) -> Vec<Token> {
+pub(crate) fn tokens(src: &[u8]) -> Vec<Token> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < src.len() {

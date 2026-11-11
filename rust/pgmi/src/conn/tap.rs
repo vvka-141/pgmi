@@ -1,3 +1,7 @@
+//! Reads the backend messages that pass through a connection to track the
+//! transaction status and the auth policy. Public for the `tap_reader` fuzz
+//! target only; not a stable API.
+
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -8,7 +12,7 @@ use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
 
-pub const IDLE: u8 = b'I';
+pub(crate) const IDLE: u8 = b'I';
 
 pub struct Shared {
     status: AtomicU8,
@@ -148,7 +152,7 @@ impl Parser {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Start {
+pub(crate) enum Start {
     Plain,
     Negotiated,
     Direct,
@@ -161,7 +165,7 @@ enum Mode {
     Dormant,
 }
 
-pub struct Tap<S> {
+pub(crate) struct Tap<S> {
     inner: S,
     shared: Arc<Shared>,
     parser: Parser,
@@ -169,7 +173,7 @@ pub struct Tap<S> {
 }
 
 impl<S> Tap<S> {
-    pub fn socket(inner: S, shared: Arc<Shared>, start: Start) -> Self {
+    pub(crate) fn socket(inner: S, shared: Arc<Shared>, start: Start) -> Self {
         let mode = match start {
             Start::Plain => Mode::Parsing,
             Start::Negotiated => Mode::AwaitingSslAnswer,
@@ -250,9 +254,9 @@ impl<S: TlsStream + Unpin> TlsStream for Tap<S> {
     }
 }
 
-pub struct TapConnect<C> {
-    pub inner: C,
-    pub shared: Arc<Shared>,
+pub(crate) struct TapConnect<C> {
+    pub(crate) inner: C,
+    pub(crate) shared: Arc<Shared>,
 }
 
 impl<S, C> TlsConnect<S> for TapConnect<C>

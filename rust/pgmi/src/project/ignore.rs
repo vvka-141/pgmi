@@ -7,12 +7,12 @@ struct Pattern {
 }
 
 #[derive(Debug, Default)]
-pub struct Rules {
+pub(crate) struct Rules {
     patterns: Vec<Pattern>,
 }
 
 impl Rules {
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let mut patterns = Vec::new();
         for (n, line) in text.lines().enumerate() {
             let line = line.strip_suffix('\r').unwrap_or(line);
@@ -58,7 +58,7 @@ impl Rules {
         Ok(Rules { patterns })
     }
 
-    pub fn ignored(&self, path: &str, is_dir: bool) -> bool {
+    pub(crate) fn ignored(&self, path: &str, is_dir: bool) -> bool {
         let base = path.rsplit('/').next().unwrap_or(path);
         let mut out = false;
         for p in &self.patterns {
@@ -172,7 +172,7 @@ fn class_match(p: &[u8], open: usize, c: u8) -> Option<(bool, usize)> {
     Some((hit != negated && c != b'/', end))
 }
 
-pub fn wildmatch(p: &[u8], t: &[u8]) -> bool {
+pub(crate) fn wildmatch(p: &[u8], t: &[u8]) -> bool {
     matches(p, 0, t, 0) == Match::Yes
 }
 

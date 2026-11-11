@@ -21,13 +21,13 @@ use super::http::{client, encode};
 use crate::env::Env;
 use crate::error::{Error, Result};
 
-pub struct Signer {
+pub(crate) struct Signer {
     credentials: Credentials,
     region: String,
     minted: std::sync::Mutex<Vec<String>>,
 }
 
-pub fn region(req: &Request, env: &Env) -> Result<String> {
+pub(crate) fn region(req: &Request, env: &Env) -> Result<String> {
     if let Some(r) = req.aws_region.as_deref().filter(|r| !r.is_empty()) {
         return Ok(r.to_string());
     }
@@ -41,7 +41,7 @@ pub fn region(req: &Request, env: &Env) -> Result<String> {
     ))
 }
 
-pub async fn signer(req: &Request, env: &Env) -> Result<Signer> {
+pub(crate) async fn signer(req: &Request, env: &Env) -> Result<Signer> {
     let region = region(req, env)?;
     let http = SharedHttpClient::new(Reqwest(client()?));
     let config = aws_config::defaults(BehaviorVersion::latest())
@@ -79,7 +79,12 @@ fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
 }
 
 impl Signer {
-    pub fn token(&self, host: &str, port: u16, user: &str) -> std::result::Result<String, String> {
+    pub(crate) fn token(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+    ) -> std::result::Result<String, String> {
         let token = self.token_at(host, port, user, SystemTime::now())?;
         if let Ok(mut m) = self.minted.lock() {
             m.push(token.clone());
@@ -87,7 +92,7 @@ impl Signer {
         Ok(token)
     }
 
-    pub fn minted(&self) -> Vec<String> {
+    pub(crate) fn minted(&self) -> Vec<String> {
         self.minted.lock().map(|m| m.clone()).unwrap_or_default()
     }
 

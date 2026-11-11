@@ -30,7 +30,7 @@ fn banner(db: &str) -> String {
     format!("╔{bar}╗\n{blank}\n{}\n{blank}\n╚{bar}╝", art.trim_end())
 }
 
-pub async fn approve(
+pub(crate) async fn approve(
     a: &DeployArgs,
     spec: &Spec,
     env: &Env,
@@ -108,8 +108,8 @@ const LIST_GUCS: [&str; 6] = [
     "unix_socket_directories",
 ];
 
-pub struct Plan {
-    pub maintenance: Session,
+pub(crate) struct Plan {
+    pub(crate) maintenance: Session,
     db: String,
     snapshot: Option<Snapshot>,
 }
@@ -148,7 +148,7 @@ fn text(r: &Row, i: usize) -> String {
     r.get::<_, Option<String>>(i).unwrap_or_default()
 }
 
-pub fn refuse_maintenance(spec: &Spec) -> Result<()> {
+pub(crate) fn refuse_maintenance(spec: &Spec) -> Result<()> {
     if spec.target_db == spec.maintenance_db {
         return Err(Error::config(format!(
             "cannot overwrite maintenance database \"{}\"\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d",
@@ -158,7 +158,7 @@ pub fn refuse_maintenance(spec: &Spec) -> Result<()> {
     Ok(())
 }
 
-pub async fn prepare(dialer: &Dialer, spec: &Spec) -> Result<Plan> {
+pub(crate) async fn prepare(dialer: &Dialer, spec: &Spec) -> Result<Plan> {
     let db = spec.target_db.clone();
     let maintenance = dialer.connect(spec, &spec.maintenance_db).await?;
     let c = &maintenance.client;
@@ -391,7 +391,7 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     out
 }
 
-pub async fn recreate(plan: &Plan, reporter: &Reporter) -> Result<bool> {
+pub(crate) async fn recreate(plan: &Plan, reporter: &Reporter) -> Result<bool> {
     let Plan {
         maintenance,
         db,

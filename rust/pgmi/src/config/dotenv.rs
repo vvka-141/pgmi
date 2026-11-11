@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
+pub(crate) enum Mode {
     Dotenv,
     Strict,
 }
 
-pub fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, String> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();

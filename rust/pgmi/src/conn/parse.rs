@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::error::{Error, Result};
 
-pub type Fields = BTreeMap<String, String>;
+pub(crate) type Fields = BTreeMap<String, String>;
 
-pub const KNOWN: &[&str] = &[
+pub(crate) const KNOWN: &[&str] = &[
     "host",
     "port",
     "dbname",
@@ -52,7 +52,7 @@ pub const KNOWN: &[&str] = &[
 
 const HIDDEN: &str = "not shown, it may hold a password";
 
-pub fn parse(s: &str) -> Result<Fields> {
+pub(crate) fn parse(s: &str) -> Result<Fields> {
     let t = s.trim();
     let fields = if t.starts_with("postgresql://") || t.starts_with("postgres://") {
         uri(t)?

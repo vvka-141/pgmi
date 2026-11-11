@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(crate) enum Kind {
     General,
     Usage,
     Internal,
@@ -16,7 +16,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn exit_code(self) -> u8 {
+    pub(crate) const fn exit_code(self) -> u8 {
         match self {
             Kind::General => 1,
             Kind::Usage => 2,
@@ -32,7 +32,7 @@ impl Kind {
         }
     }
 
-    pub const TABLE: [(Kind, &'static str); 11] = [
+    pub(crate) const TABLE: [(Kind, &'static str); 11] = [
         (Kind::General, "general error"),
         (Kind::Usage, "usage error"),
         (Kind::Internal, "internal error (panic)"),
@@ -51,16 +51,16 @@ impl Kind {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct SqlDiagnostics {
-    pub sqlstate: Option<String>,
-    pub detail: Option<String>,
-    pub hint: Option<String>,
-    pub where_: Option<String>,
-    pub internal_query: Option<String>,
+pub(crate) struct SqlDiagnostics {
+    pub(crate) sqlstate: Option<String>,
+    pub(crate) detail: Option<String>,
+    pub(crate) hint: Option<String>,
+    pub(crate) where_: Option<String>,
+    pub(crate) internal_query: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct Error {
+pub(crate) struct Error {
     kind: Kind,
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
@@ -68,7 +68,7 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn new(kind: Kind, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: Kind, message: impl Into<String>) -> Self {
         Error {
             kind,
             message: message.into(),
@@ -77,53 +77,53 @@ impl Error {
         }
     }
 
-    pub fn usage(m: impl Into<String>) -> Self {
+    pub(crate) fn usage(m: impl Into<String>) -> Self {
         Self::new(Kind::Usage, m)
     }
-    pub fn config(m: impl Into<String>) -> Self {
+    pub(crate) fn config(m: impl Into<String>) -> Self {
         Self::new(Kind::Config, m)
     }
-    pub fn connection(m: impl Into<String>) -> Self {
+    pub(crate) fn connection(m: impl Into<String>) -> Self {
         Self::new(Kind::Connection, m)
     }
-    pub fn general(m: impl Into<String>) -> Self {
+    pub(crate) fn general(m: impl Into<String>) -> Self {
         Self::new(Kind::General, m)
     }
-    pub fn sql(m: impl Into<String>) -> Self {
+    pub(crate) fn sql(m: impl Into<String>) -> Self {
         Self::new(Kind::Sql, m)
     }
-    pub fn internal(m: impl Into<String>) -> Self {
+    pub(crate) fn internal(m: impl Into<String>) -> Self {
         Self::new(Kind::Internal, m)
     }
 
-    pub fn with_source(mut self, e: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub(crate) fn with_source(mut self, e: impl std::error::Error + Send + Sync + 'static) -> Self {
         self.source = Some(Box::new(e));
         self
     }
 
-    pub fn with_sql(mut self, d: SqlDiagnostics) -> Self {
+    pub(crate) fn with_sql(mut self, d: SqlDiagnostics) -> Self {
         self.sql = Some(Box::new(d));
         self
     }
 
-    pub fn redact(mut self, secrets: &[String]) -> Self {
+    pub(crate) fn redact(mut self, secrets: &[String]) -> Self {
         self.message = crate::output::redact(&self.message, secrets);
         self
     }
 
-    pub fn kind(&self) -> Kind {
+    pub(crate) fn kind(&self) -> Kind {
         self.kind
     }
 
-    pub fn exit_code(&self) -> u8 {
+    pub(crate) fn exit_code(&self) -> u8 {
         self.kind.exit_code()
     }
 
-    pub fn sql_diagnostics(&self) -> Option<&SqlDiagnostics> {
+    pub(crate) fn sql_diagnostics(&self) -> Option<&SqlDiagnostics> {
         self.sql.as_deref()
     }
 
-    pub fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let mut out = self.message.clone();
         let mut cur: Option<&(dyn std::error::Error + 'static)> = match &self.source {
             Some(s) => Some(s.as_ref()),
@@ -146,10 +146,12 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 static LAST_PANIC: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
+/// Prints a panic as `pgmi: internal error: ...` and keeps it for the
+/// `--json` record and the MCP answer.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         use std::io::Write;
@@ -161,7 +163,7 @@ pub fn install_panic_hook() {
     }));
 }
 
-pub fn panic_error() -> (Error, String) {
+pub(crate) fn panic_error() -> (Error, String) {
     let (message, stack) = LAST_PANIC
         .lock()
         .ok()

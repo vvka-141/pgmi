@@ -5,13 +5,13 @@ use super::dotenv::{self, Mode};
 use crate::env::Env;
 use crate::error::{Error, Result};
 
-pub const ENV_PREFIX: &str = "PGMI_PARAM_";
+pub(crate) const ENV_PREFIX: &str = "PGMI_PARAM_";
 
-pub struct Sources<'a> {
-    pub yaml: Vec<(String, String)>,
-    pub env: &'a Env,
-    pub files: &'a [String],
-    pub flags: &'a [String],
+pub(crate) struct Sources<'a> {
+    pub(crate) yaml: Vec<(String, String)>,
+    pub(crate) env: &'a Env,
+    pub(crate) files: &'a [String],
+    pub(crate) flags: &'a [String],
 }
 
 fn valid_key(key: &str) -> bool {
@@ -37,7 +37,7 @@ fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap<String, String>> {
+pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     let mut keys: Vec<String> = Vec::new();
     for (k, v) in src.yaml {

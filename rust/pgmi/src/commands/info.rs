@@ -42,7 +42,7 @@ fn directory(path: &str) -> String {
     }
 }
 
-pub fn run(a: &InfoArgs, env: &Env) -> Result<()> {
+pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     let root = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     let fs = crate::vfs::OsFs::project(&root)?;
     let project = walk::scan(&fs, walk::max_size(env)?)?;

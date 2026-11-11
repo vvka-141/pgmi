@@ -10,27 +10,27 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(crate) enum Kind {
     File,
     Dir,
     Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Stat {
-    pub kind: Kind,
-    pub link: bool,
-    pub len: u64,
+pub(crate) struct Stat {
+    pub(crate) kind: Kind,
+    pub(crate) link: bool,
+    pub(crate) len: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    pub name: String,
-    pub utf8: bool,
-    pub stat: Stat,
+pub(crate) struct Entry {
+    pub(crate) name: String,
+    pub(crate) utf8: bool,
+    pub(crate) stat: Stat,
 }
 
-pub trait Vfs {
+pub(crate) trait Vfs {
     fn root(&self) -> &Path;
     fn stat(&self, rel: &str) -> io::Result<Stat>;
     fn read(&self, rel: &str) -> io::Result<Vec<u8>>;
@@ -46,16 +46,16 @@ pub trait Vfs {
 }
 
 #[derive(Debug, Clone)]
-pub struct OsFs {
+pub(crate) struct OsFs {
     root: PathBuf,
 }
 
 impl OsFs {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
+    pub(crate) fn new(root: impl Into<PathBuf>) -> Self {
         OsFs { root: root.into() }
     }
 
-    pub fn project(root: &Path) -> Result<Self> {
+    pub(crate) fn project(root: &Path) -> Result<Self> {
         let display = root.display();
         match std::fs::metadata(root) {
             Err(_) => Err(Error::config(format!(
@@ -126,7 +126,7 @@ impl Vfs for OsFs {
     }
 }
 
-pub fn files(fs: &impl Vfs) -> io::Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn files(fs: &impl Vfs) -> io::Result<Vec<(String, Vec<u8>)>> {
     fn walk(fs: &impl Vfs, rel: &str, out: &mut Vec<(String, Vec<u8>)>) -> io::Result<()> {
         for entry in fs.read_dir(rel)? {
             let child = if rel.is_empty() {
@@ -176,7 +176,7 @@ impl Node {
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct MemFs {
+pub(crate) struct MemFs {
     root: PathBuf,
     nodes: std::collections::BTreeMap<String, Node>,
 }
@@ -195,50 +195,50 @@ impl Default for MemFs {
 
 #[cfg(test)]
 impl MemFs {
-    pub fn from_files(files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
+    pub(crate) fn from_files(files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
         files
             .into_iter()
             .fold(Self::default(), |fs, (rel, body)| fs.file(&rel, body))
     }
 
     #[must_use]
-    pub fn file(mut self, rel: &str, body: impl AsRef<[u8]>) -> Self {
+    pub(crate) fn file(mut self, rel: &str, body: impl AsRef<[u8]>) -> Self {
         self.insert(rel, Node::File(body.as_ref().to_vec()));
         self
     }
 
     #[must_use]
-    pub fn dir(mut self, rel: &str) -> Self {
+    pub(crate) fn dir(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Dir);
         self
     }
 
     #[must_use]
-    pub fn link_to_file(mut self, rel: &str) -> Self {
+    pub(crate) fn link_to_file(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Link(Some(Box::new(Node::File(Vec::new())))));
         self
     }
 
     #[must_use]
-    pub fn link_to_dir(mut self, rel: &str) -> Self {
+    pub(crate) fn link_to_dir(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Link(Some(Box::new(Node::Dir))));
         self
     }
 
     #[must_use]
-    pub fn unreadable_file(mut self, rel: &str) -> Self {
+    pub(crate) fn unreadable_file(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Unreadable(Kind::File));
         self
     }
 
     #[must_use]
-    pub fn unreadable_dir(mut self, rel: &str) -> Self {
+    pub(crate) fn unreadable_dir(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Unreadable(Kind::Dir));
         self
     }
 
     #[must_use]
-    pub fn dangling_link(mut self, rel: &str) -> Self {
+    pub(crate) fn dangling_link(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Link(None));
         self
     }
@@ -311,13 +311,13 @@ impl Vfs for MemFs {
 
 /// A tree embedded in the binary by `pgmi-shared`, such as `templates/basic`.
 #[derive(Debug, Clone)]
-pub struct EmbeddedFs {
+pub(crate) struct EmbeddedFs {
     prefix: String,
     root: PathBuf,
 }
 
 impl EmbeddedFs {
-    pub fn new(prefix: &str) -> Self {
+    pub(crate) fn new(prefix: &str) -> Self {
         EmbeddedFs {
             prefix: prefix.trim_end_matches('/').to_string(),
             root: PathBuf::from(prefix),

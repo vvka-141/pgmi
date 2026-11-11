@@ -5,20 +5,20 @@ use clap::{Args, Subcommand};
 use super::go_bool;
 
 #[derive(Debug, Args)]
-pub struct InfoArgs {
-    pub path: Option<PathBuf>,
+pub(crate) struct InfoArgs {
+    pub(crate) path: Option<PathBuf>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Emit structured JSON to stdout")]
-    pub json: bool,
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]
-pub struct TemplatesArgs {
+pub(crate) struct TemplatesArgs {
     #[command(subcommand)]
-    pub command: Option<TemplatesCommand>,
+    pub(crate) command: Option<TemplatesCommand>,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum TemplatesCommand {
+pub(crate) enum TemplatesCommand {
     #[command(about = "List available templates")]
     List,
     #[command(about = "Show the structure and features of a template")]
@@ -26,25 +26,25 @@ pub enum TemplatesCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct AiArgs {
+pub(crate) struct AiArgs {
     #[command(subcommand)]
-    pub command: Option<AiCommand>,
+    pub(crate) command: Option<AiCommand>,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum AiCommand {
+pub(crate) enum AiCommand {
     #[command(about = "Print the machine-readable session-API contract")]
     Contract,
 }
 
 #[derive(Debug, Args)]
-pub struct MetadataArgs {
+pub(crate) struct MetadataArgs {
     #[command(subcommand)]
-    pub command: Option<MetadataCommand>,
+    pub(crate) command: Option<MetadataCommand>,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum MetadataCommand {
+pub(crate) enum MetadataCommand {
     #[command(about = "Show the execution plan pgmi_plan_view will hold")]
     Plan(MetadataReport),
     #[command(about = "Check every <pgmi-meta> block and refuse bad or duplicate ids")]
@@ -54,33 +54,33 @@ pub enum MetadataCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct MetadataReport {
-    pub path: PathBuf,
+pub(crate) struct MetadataReport {
+    pub(crate) path: PathBuf,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Emit structured JSON to stdout")]
-    pub json: bool,
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]
-pub struct ScaffoldArgs {
-    pub path: PathBuf,
+pub(crate) struct ScaffoldArgs {
+    pub(crate) path: PathBuf,
     #[arg(
         long,
         help = "Sort-key prefix for the generated keys, e.g. 005/core/ (default: the prefix of existing metadata in the same directory)"
     )]
-    pub sort_key: Option<String>,
+    pub(crate) sort_key: Option<String>,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "true", value_parser = go_bool, help = "Mark generated scripts as idempotent")]
-    pub idempotent: bool,
+    pub(crate) idempotent: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Write generated metadata to files (default: preview only)")]
-    pub write: bool,
+    pub(crate) write: bool,
 }
 
 #[derive(Debug, Args)]
-pub struct CompletionArgs {
+pub(crate) struct CompletionArgs {
     #[arg(value_parser = ["bash", "zsh", "fish", "powershell"])]
-    pub shell: String,
+    pub(crate) shell: String,
 }
 
 #[derive(Debug, Args)]
-pub struct ConfigArgs {
-    pub path: Option<PathBuf>,
+pub(crate) struct ConfigArgs {
+    pub(crate) path: Option<PathBuf>,
 }

@@ -115,7 +115,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
     Ok((picked, true))
 }
 
-pub async fn token(req: &Request, env: &Env) -> Result<String> {
+pub(crate) async fn token(req: &Request, env: &Env) -> Result<String> {
     let ids = ids(req, env)?;
     let (kinds, chain) = plan(&ids, env)?;
     let probing = chain
@@ -293,7 +293,7 @@ mod certificate {
     use crate::env::Env;
     use base64::Engine;
 
-    pub struct Assertion {
+    pub(crate) struct Assertion {
         key: std::sync::Arc<dyn rustls::sign::SigningKey>,
         thumbprint: String,
         audience: String,
@@ -306,7 +306,7 @@ mod certificate {
         }
     }
 
-    pub fn read(
+    pub(crate) fn read(
         bytes: &[u8],
         password: &str,
     ) -> std::result::Result<(CertificateDer<'static>, PrivateKeyDer<'static>), String> {
@@ -338,7 +338,7 @@ mod certificate {
     }
 
     impl Assertion {
-        pub fn load(ids: &Ids, env: &Env) -> std::result::Result<Self, String> {
+        pub(crate) fn load(ids: &Ids, env: &Env) -> std::result::Result<Self, String> {
             let path = env
                 .non_empty("AZURE_CLIENT_CERTIFICATE_PATH")
                 .ok()

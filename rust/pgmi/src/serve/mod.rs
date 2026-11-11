@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::VERSION;
+use crate::VERSION;
 use crate::env::Env;
 use crate::error::Kind;
 use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
@@ -24,9 +24,8 @@ const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
 
-pub fn run(verbose: bool) -> u8 {
+pub(crate) fn run(verbose: bool, env: Env) -> u8 {
     crate::conn::tls::install();
-    let env = Env::snapshot();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

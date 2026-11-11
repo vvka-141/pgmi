@@ -5,17 +5,17 @@ use super::walk::{File, is_sql};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Meta {
-    pub path: String,
-    pub id: String,
-    pub idempotent: bool,
-    pub sort_keys: Vec<String>,
-    pub description: Option<String>,
+pub(crate) struct Meta {
+    pub(crate) path: String,
+    pub(crate) id: String,
+    pub(crate) idempotent: bool,
+    pub(crate) sort_keys: Vec<String>,
+    pub(crate) description: Option<String>,
 }
 
 const MAX_BLOCK: usize = 10240;
 
-pub fn blocks(content: &str) -> Vec<&str> {
+pub(crate) fn blocks(content: &str) -> Vec<&str> {
     let src = content.as_bytes();
     lexer::tokens(src)
         .into_iter()
@@ -67,7 +67,7 @@ fn xml_error(path: &str, e: &roxmltree::Error) -> String {
     )
 }
 
-pub fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, String> {
+pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, String> {
     let found = blocks(content);
     let Some(xml) = found.first().copied() else {
         if content.contains("<pgmi-meta") && unclosed_block(content) {
@@ -175,7 +175,7 @@ fn unclosed_block(content: &str) -> bool {
         })
 }
 
-pub fn fallback_id(path: &str) -> String {
+pub(crate) fn fallback_id(path: &str) -> String {
     use md5::Digest;
     let digest = md5::Md5::digest(path.as_bytes());
     let mut bytes = [0u8; 16];
@@ -183,18 +183,18 @@ pub fn fallback_id(path: &str) -> String {
     uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
 }
 
-pub fn outside_comment(content: &str, meta: Option<&Meta>) -> bool {
+pub(crate) fn outside_comment(content: &str, meta: Option<&Meta>) -> bool {
     meta.is_none() && content.contains("<pgmi-meta") && !unclosed_block(content)
 }
 
 #[derive(Debug, Default)]
-pub struct Scan {
-    pub metas: Vec<Meta>,
-    pub errors: Vec<String>,
-    pub duplicates: Vec<(String, Vec<String>)>,
+pub(crate) struct Scan {
+    pub(crate) metas: Vec<Meta>,
+    pub(crate) errors: Vec<String>,
+    pub(crate) duplicates: Vec<(String, Vec<String>)>,
 }
 
-pub fn scan(files: &[File]) -> Scan {
+pub(crate) fn scan(files: &[File]) -> Scan {
     let mut out = Scan::default();
     for f in files.iter().filter(|f| is_sql(&f.path)) {
         match parse(&f.path, &f.content) {
@@ -218,11 +218,11 @@ pub fn scan(files: &[File]) -> Scan {
     out
 }
 
-pub fn duplicate_line(id: &str, paths: &[String]) -> String {
+pub(crate) fn duplicate_line(id: &str, paths: &[String]) -> String {
     format!("{id}: {}", paths.join(", "))
 }
 
-pub fn collect(files: &[File]) -> Result<Vec<Meta>> {
+pub(crate) fn collect(files: &[File]) -> Result<Vec<Meta>> {
     let scan = scan(files);
     if !scan.errors.is_empty() {
         return Err(Error::config(scan.errors.join("\n")));

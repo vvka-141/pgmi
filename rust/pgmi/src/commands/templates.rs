@@ -2,9 +2,9 @@ use super::{stderr, stdout};
 use crate::cli::{TemplatesArgs, TemplatesCommand};
 use crate::error::{Error, Result};
 
-pub const NAMES: [&str; 3] = ["minimal", "basic", "advanced"];
+pub(crate) const NAMES: [&str; 3] = ["minimal", "basic", "advanced"];
 
-pub const LIST: [(&str, &str, &str); 3] = [
+pub(crate) const LIST: [(&str, &str, &str); 3] = [
     (
         "minimal",
         "A deploy.sql loop, hello_world.sql and a .pgmiignore; nothing else",
@@ -31,7 +31,7 @@ fn describe_text(name: &str) -> Option<&'static str> {
     }
 }
 
-pub fn unknown(name: &str) -> Error {
+pub(crate) fn unknown(name: &str) -> Error {
     let mut names = NAMES.to_vec();
     names.sort_unstable();
     Error::usage(format!(
@@ -40,7 +40,7 @@ pub fn unknown(name: &str) -> Error {
     ))
 }
 
-pub fn run(a: &TemplatesArgs, help: impl FnOnce() -> Result<()>) -> Result<()> {
+pub(crate) fn run(a: &TemplatesArgs, help: impl FnOnce() -> Result<()>) -> Result<()> {
     match &a.command {
         None => help(),
         Some(TemplatesCommand::List) => {

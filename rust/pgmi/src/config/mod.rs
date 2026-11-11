@@ -1,7 +1,7 @@
-pub mod dotenv;
-pub mod edit;
-pub mod params;
-pub mod yaml;
+pub(crate) mod dotenv;
+pub(crate) mod edit;
+pub(crate) mod params;
+pub(crate) mod yaml;
 
 use std::io::Write;
 use std::path::Path;
@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::env::Env;
 use crate::error::{Error, Result};
 
-pub fn project_dotenv(project: &Path, env: &Env) -> Result<Vec<(String, String)>> {
+pub(crate) fn project_dotenv(project: &Path, env: &Env) -> Result<Vec<(String, String)>> {
     let path = project.join(".env");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,

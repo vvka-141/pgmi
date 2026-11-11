@@ -1,7 +1,7 @@
-pub mod dial;
+pub(crate) mod dial;
 mod keys;
-pub mod parse;
-pub mod pgpass;
-pub mod resolve;
+pub(crate) mod parse;
+pub(crate) mod pgpass;
+pub(crate) mod resolve;
 pub mod tap;
-pub mod tls;
+pub(crate) mod tls;

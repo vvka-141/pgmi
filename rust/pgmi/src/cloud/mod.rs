@@ -13,14 +13,14 @@ use crate::env::Env;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
+pub(crate) enum Provider {
     Azure,
     Aws,
     Google,
 }
 
 impl Provider {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Provider::Azure => "Azure Entra ID",
             Provider::Aws => "AWS IAM",
@@ -30,15 +30,15 @@ impl Provider {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Request {
-    pub tenant_id: Option<String>,
-    pub client_id: Option<String>,
-    pub aws_region: Option<String>,
-    pub google_instance: Option<String>,
+pub(crate) struct Request {
+    pub(crate) tenant_id: Option<String>,
+    pub(crate) client_id: Option<String>,
+    pub(crate) aws_region: Option<String>,
+    pub(crate) google_instance: Option<String>,
 }
 
 #[derive(Clone)]
-pub enum Token {
+pub(crate) enum Token {
     Fixed(Provider, String),
     Aws(Arc<aws::Signer>),
     Google(Arc<google::Dialer>),
@@ -51,7 +51,7 @@ impl std::fmt::Debug for Token {
 }
 
 impl Token {
-    pub fn provider(&self) -> Provider {
+    pub(crate) fn provider(&self) -> Provider {
         match self {
             Token::Fixed(p, _) => *p,
             Token::Aws(_) => Provider::Aws,
@@ -59,7 +59,7 @@ impl Token {
         }
     }
 
-    pub fn password(
+    pub(crate) fn password(
         &self,
         host: &str,
         port: u16,
@@ -72,7 +72,7 @@ impl Token {
         }
     }
 
-    pub fn secrets(&self) -> Vec<String> {
+    pub(crate) fn secrets(&self) -> Vec<String> {
         match self {
             Token::Fixed(_, t) => vec![t.clone()],
             Token::Aws(s) => s.minted(),
@@ -80,7 +80,7 @@ impl Token {
         }
     }
 
-    pub fn google(&self) -> Option<&Arc<google::Dialer>> {
+    pub(crate) fn google(&self) -> Option<&Arc<google::Dialer>> {
         match self {
             Token::Google(d) => Some(d),
             _ => None,
@@ -88,7 +88,10 @@ impl Token {
     }
 }
 
-pub fn select(a: &DeployArgs, yaml: Option<&ProjectConfig>) -> Result<Option<(Provider, Request)>> {
+pub(crate) fn select(
+    a: &DeployArgs,
+    yaml: Option<&ProjectConfig>,
+) -> Result<Option<(Provider, Request)>> {
     let flags = [a.azure, a.aws, a.google].iter().filter(|f| **f).count();
     if flags > 1 {
         return Err(Error::config(
@@ -121,7 +124,7 @@ pub fn select(a: &DeployArgs, yaml: Option<&ProjectConfig>) -> Result<Option<(Pr
     )))
 }
 
-pub fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &Env) -> Result<()> {
+pub(crate) fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &Env) -> Result<()> {
     match provider {
         Provider::Google => {
             if req.google_instance.as_deref().is_none_or(str::is_empty) {
@@ -154,7 +157,7 @@ pub fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &Env) -> R
     Ok(())
 }
 
-pub async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
+pub(crate) async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
         Provider::Azure => azure::token(req, env)

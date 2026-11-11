@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::project::metadata::{self, Meta};
 use crate::project::walk::{self, File, is_sql};
 
-pub fn run(a: &MetadataArgs, env: &Env, help: impl FnOnce() -> Result<()>) -> Result<()> {
+pub(crate) fn run(a: &MetadataArgs, env: &Env, help: impl FnOnce() -> Result<()>) -> Result<()> {
     match &a.command {
         None => help(),
         Some(MetadataCommand::Plan(r)) => plan(r, env),
@@ -45,7 +45,7 @@ struct Row {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Plan {
+pub(crate) struct Plan {
     total_files: usize,
     plan: Vec<Row>,
 }
@@ -80,7 +80,7 @@ fn rows(sources: &[File], metas: &[Meta]) -> Vec<Row> {
     rows
 }
 
-pub fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
+pub(crate) fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
     let max_size = walk::max_size(env)?;
     let (project, metas) = crate::vfs::OsFs::project(path)
         .and_then(|fs| walk::scan(&fs, max_size))
@@ -135,20 +135,20 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Validation {
-    pub total_files: usize,
-    pub files_with_metadata: usize,
-    pub files_without_metadata: usize,
-    pub validation_passed: bool,
-    pub duplicate_ids: Vec<String>,
-    pub warnings: Vec<String>,
+pub(crate) struct Validation {
+    pub(crate) total_files: usize,
+    pub(crate) files_with_metadata: usize,
+    pub(crate) files_without_metadata: usize,
+    pub(crate) validation_passed: bool,
+    pub(crate) duplicate_ids: Vec<String>,
+    pub(crate) warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<u8>,
+    pub(crate) exit_code: Option<u8>,
 }
 
-pub fn validate_report(
+pub(crate) fn validate_report(
     path: &Path,
     env: &Env,
 ) -> Result<std::result::Result<Validation, Vec<String>>> {
@@ -256,7 +256,7 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub fn block(id: &str, idempotent: bool, description: &str, key: &str) -> String {
+pub(crate) fn block(id: &str, idempotent: bool, description: &str, key: &str) -> String {
     format!(
         "/*\n<pgmi-meta\n    id=\"{id}\"\n    idempotent=\"{idempotent}\">\n  <description>\n    {}\n  </description>\n  <sortKeys>\n    <key>{}</key>\n  </sortKeys>\n</pgmi-meta>\n*/\n\n",
         xml_escape(description),

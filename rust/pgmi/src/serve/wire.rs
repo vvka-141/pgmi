@@ -1,3 +1,6 @@
+//! The MCP line splitter and JSON-RPC decoder. Public for the `mcp_decoder`
+//! fuzz target only; not a stable API.
+
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::value::RawValue;
 
@@ -41,10 +44,10 @@ pub enum Decoded {
     Notification(Request),
 }
 
-pub const PARSE_ERROR: i64 = -32700;
-pub const INVALID_REQUEST: i64 = -32600;
-pub const METHOD_NOT_FOUND: i64 = -32601;
-pub const INVALID_PARAMS: i64 = -32602;
+pub(crate) const PARSE_ERROR: i64 = -32700;
+pub(crate) const INVALID_REQUEST: i64 = -32600;
+pub(crate) const METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const INVALID_PARAMS: i64 = -32602;
 
 pub fn decode(line: &[u8]) -> Decoded {
     if line.iter().all(|b| is_space(*b)) {
@@ -105,11 +108,11 @@ pub fn decode(line: &[u8]) -> Decoded {
     Decoded::Request(request)
 }
 
-pub fn error(id: Option<&str>, code: i64, message: &str) -> String {
+pub(crate) fn error(id: Option<&str>, code: i64, message: &str) -> String {
     error_with(id, code, message, None)
 }
 
-pub fn error_with(
+pub(crate) fn error_with(
     id: Option<&str>,
     code: i64,
     message: &str,
@@ -126,22 +129,22 @@ pub fn error_with(
     )
 }
 
-pub fn result(id: &str, result: &str) -> String {
+pub(crate) fn result(id: &str, result: &str) -> String {
     format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}}}")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Field {
+pub(crate) enum Field {
     String,
     Raw,
 }
 
-pub struct Fields<'a> {
+pub(crate) struct Fields<'a> {
     values: Vec<(&'static str, &'a RawValue)>,
 }
 
 impl<'a> Fields<'a> {
-    pub fn raw(&self, name: &str) -> Option<&'a RawValue> {
+    pub(crate) fn raw(&self, name: &str) -> Option<&'a RawValue> {
         self.values
             .iter()
             .rev()
@@ -149,13 +152,13 @@ impl<'a> Fields<'a> {
             .map(|(_, v)| *v)
     }
 
-    pub fn string(&self, name: &str) -> Option<String> {
+    pub(crate) fn string(&self, name: &str) -> Option<String> {
         self.raw(name)
             .and_then(|v| serde_json::from_str::<String>(v.get()).ok())
     }
 }
 
-pub fn kind(raw: &RawValue) -> &'static str {
+pub(crate) fn kind(raw: &RawValue) -> &'static str {
     match raw.get().bytes().find(|b| !is_space(*b)) {
         Some(b'{') => "object",
         Some(b'[') => "array",
@@ -166,7 +169,7 @@ pub fn kind(raw: &RawValue) -> &'static str {
     }
 }
 
-pub fn go_struct<'a>(
+pub(crate) fn go_struct<'a>(
     raw: &'a RawValue,
     value_type: &str,
     struct_name: &str,
@@ -214,7 +217,7 @@ pub fn go_struct<'a>(
     }
 }
 
-pub struct Members<'a>(pub Vec<(String, &'a RawValue)>);
+pub(crate) struct Members<'a>(pub Vec<(String, &'a RawValue)>);
 
 impl<'de: 'a, 'a> Deserialize<'de> for Members<'a> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -240,7 +243,7 @@ fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 
-pub fn lossy(bytes: &[u8]) -> String {
+pub(crate) fn lossy(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         out.push_str(chunk.valid());
@@ -282,7 +285,7 @@ enum Want {
 
 const EOF: &str = "unexpected end of JSON input";
 
-pub fn validate(b: &[u8]) -> Result<(), String> {
+pub(crate) fn validate(b: &[u8]) -> Result<(), String> {
     let bad = |c: u8, context: &str| Err(format!("invalid character {} {context}", quote_char(c)));
     let mut stack: Vec<bool> = Vec::new();
     let mut want = Want::Value;

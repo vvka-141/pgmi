@@ -30,9 +30,10 @@ statement runs, and `--timeout` and SIGINT must cancel on the server.
 Option 3: `tokio` with features `rt-multi-thread`, `net`, `io-util`,
 `io-std`, `time`, `signal`, `sync`, `process`, `fs`, `macros`.
 
-- `main` is synchronous. It parses arguments, builds the environment snapshot
-  and exports the project `.env` (record 0016) while only one thread exists,
-  then builds the runtime and `block_on`s the command.
+- `main` and `pgmi::run` are synchronous. `main` builds the environment
+  snapshot; `run` parses arguments and exports the project `.env` through
+  `main`'s closure (record 0016) while only one thread exists, then builds
+  the runtime and `block_on`s the command.
 - Cancellation is one `tokio_util::sync::CancellationToken` per deploy,
   fired by `--timeout`, SIGINT/SIGTERM (`tokio::signal`) or MCP
   `notifications/cancelled`. The deploy `select!`s on it and sends the

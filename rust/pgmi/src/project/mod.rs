@@ -1,5 +1,5 @@
-pub mod checksum;
-pub mod ignore;
-pub mod lexer;
-pub mod metadata;
-pub mod walk;
+pub(crate) mod checksum;
+pub(crate) mod ignore;
+pub(crate) mod lexer;
+pub(crate) mod metadata;
+pub(crate) mod walk;

@@ -11,7 +11,7 @@ use super::http::{client, encode};
 use crate::env::Env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
+pub(crate) enum Source {
     Arc,
     CloudShell,
     ServiceFabric,
@@ -29,7 +29,7 @@ impl Source {
     }
 }
 
-pub fn source(env: &Env) -> Option<Source> {
+pub(crate) fn source(env: &Env) -> Option<Source> {
     let set = |n: &str| env.non_empty(n).ok().flatten().is_some();
     if set("IDENTITY_ENDPOINT") {
         if set("IDENTITY_HEADER") {
@@ -64,7 +64,7 @@ fn query(base: &str, pairs: &[(&str, &str)]) -> String {
     format!("{base}{sep}{}", joined.join("&"))
 }
 
-pub async fn token(
+pub(crate) async fn token(
     source: Source,
     client_id: Option<&str>,
     resource: &str,

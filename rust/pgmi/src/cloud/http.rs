@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::error::{Error, Result};
 
-pub fn client() -> Result<reqwest::Client> {
+pub(crate) fn client() -> Result<reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(c) = CLIENT.get() {
         return Ok(c.clone());
@@ -16,7 +16,7 @@ pub fn client() -> Result<reqwest::Client> {
     Ok(CLIENT.get_or_init(|| built).clone())
 }
 
-pub fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {

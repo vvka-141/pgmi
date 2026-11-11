@@ -1,11 +1,11 @@
 use std::path::Path;
 
-pub struct Lookup {
-    pub password: Option<String>,
-    pub warning: Option<String>,
+pub(crate) struct Lookup {
+    pub(crate) password: Option<String>,
+    pub(crate) warning: Option<String>,
 }
 
-pub fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Lookup {
+pub(crate) fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Lookup {
     let none = Lookup {
         password: None,
         warning: None,
@@ -88,11 +88,11 @@ fn find(text: &str, host: &str, port: &str, db: &str, user: &str) -> Option<Stri
     None
 }
 
-pub fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace(':', "\\:")
 }
 
-pub fn save(
+pub(crate) fn save(
     path: &Path,
     host: &str,
     port: u16,

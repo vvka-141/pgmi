@@ -101,8 +101,8 @@ overridden. Used only if the hand-written server proves unworkable.
   per-byte U+FFFD decoding inside strings, and Go's struct decoding rules
   (case-insensitive member names, last duplicate wins, `null` leaves a field
   unset, the first type error is reported). It depends on std and serde_json
-  only, so the cargo-fuzz target `mcp_decoder` includes it by path; a
-  proptest in `cargo test` checks the same properties.
+  only; the cargo-fuzz target `mcp_decoder` links it as `pgmi::serve::wire`
+  (record 0022), and a proptest in `cargo test` checks the same properties.
 - Ids are echoed as written (`1e2`, `-0`), through serde_json's `raw_value`.
 - A bare `null` line gets no answer, as in Go (owner question Q1 still
   open). A request whose method starts with `notifications/` is never

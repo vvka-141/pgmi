@@ -1,10 +1,7 @@
 #![no_main]
-#![allow(dead_code)]
-
-#[path = "../../src/serve/wire.rs"]
-mod wire;
 
 use libfuzzer_sys::fuzz_target;
+use pgmi::serve::wire;
 
 fuzz_target!(|data: &[u8]| {
     let Some((&head, rest)) = data.split_first() else {

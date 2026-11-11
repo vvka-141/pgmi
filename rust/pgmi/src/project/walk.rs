@@ -2,30 +2,30 @@ use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
 use crate::vfs::{Kind as FileKind, Vfs};
 
-pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
-pub struct File {
-    pub path: String,
-    pub content: String,
+pub(crate) struct File {
+    pub(crate) path: String,
+    pub(crate) content: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct Ignored {
-    pub path: String,
-    pub rule: &'static str,
+pub(crate) struct Ignored {
+    pub(crate) path: String,
+    pub(crate) rule: &'static str,
 }
 
 #[derive(Debug, Default)]
-pub struct Project {
-    pub deploy_sql: String,
-    pub sources: Vec<File>,
-    pub tests: Vec<File>,
-    pub test_dir_files: Vec<String>,
-    pub ignored: Vec<Ignored>,
+pub(crate) struct Project {
+    pub(crate) deploy_sql: String,
+    pub(crate) sources: Vec<File>,
+    pub(crate) tests: Vec<File>,
+    pub(crate) test_dir_files: Vec<String>,
+    pub(crate) ignored: Vec<Ignored>,
 }
 
-pub fn is_sql(name: &str) -> bool {
+pub(crate) fn is_sql(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     [
         ".sql", ".ddl", ".dml", ".dql", ".dcl", ".psql", ".pgsql", ".plpgsql",
@@ -34,7 +34,7 @@ pub fn is_sql(name: &str) -> bool {
     .any(|e| lower.ends_with(e))
 }
 
-pub fn max_size(env: &crate::env::Env) -> Result<u64> {
+pub(crate) fn max_size(env: &crate::env::Env) -> Result<u64> {
     match env.non_empty("PGMI_MAX_FILE_SIZE")? {
         None => Ok(DEFAULT_MAX_FILE_SIZE),
         Some(v) => v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
@@ -56,7 +56,7 @@ fn rules(fs: &impl Vfs) -> Result<Rules> {
     }
 }
 
-pub fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
+pub(crate) fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let rules = rules(fs)?;
     let mut project = Project::default();
     walk(fs, "", false, &rules, max_size, &mut project)?;
@@ -64,7 +64,7 @@ pub fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     Ok(project)
 }
 
-pub fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
+pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let rules = rules(fs)?;
     if rules.ignored("deploy.sql", false) {
         return Err(Error::config(
