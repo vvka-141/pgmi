@@ -53,22 +53,48 @@ pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&
         Some(Command::Version) => return print_version(true),
         Some(Command::Help { command }) => help(&command),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose, env, export),
-        Some(Command::Init(a)) => commands::init::run(&a, &env),
+        Some(Command::Init(a)) => with_runtime(|rt| commands::init::run(&a, &env, rt)),
         Some(Command::Info(a)) => commands::info::run(&a, &env),
         Some(Command::Templates(a)) => commands::templates::run(&a, || help(&["templates"])),
         Some(Command::Ai(a)) => commands::ai::run(&a, &env),
         Some(Command::Metadata(a)) => commands::metadata::run(&a, &env, || help(&["metadata"])),
         Some(Command::Completion(a)) => commands::completion::run(&a),
-        Some(Command::Serve) => return serve::run(cli.verbose, env),
-        Some(Command::Config(a)) => commands::config::run(&a, &env),
+        Some(Command::Serve) => {
+            return match runtime() {
+                Ok(rt) => serve::run(rt, cli.verbose, env),
+                Err(e) => report(&e),
+            };
+        }
+        Some(Command::Config(a)) => with_runtime(|rt| commands::config::run(&a, &env, rt)),
     };
     match result {
         Ok(()) => 0,
-        Err(e) => {
-            let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());
-            e.exit_code()
-        }
+        Err(e) => report(&e),
     }
+}
+
+fn report(e: &Error) -> u8 {
+    let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());
+    e.exit_code()
+}
+
+/// The one tokio runtime of a run (record 0003). Built only after the
+/// project `.env` is exported, because `export` must run while pgmi has a
+/// single thread (record 0016).
+fn runtime() -> error::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::general("start the runtime").with_source(e))
+}
+
+fn with_runtime(
+    command: impl FnOnce(&tokio::runtime::Handle) -> error::Result<()>,
+) -> error::Result<()> {
+    let runtime = runtime()?;
+    let result = command(runtime.handle());
+    runtime.shutdown_background();
+    result
 }
 
 fn run_deploy(
@@ -89,16 +115,26 @@ fn run_deploy(
         export(k, v);
         env.insert(k, v);
     }
+    let runtime = match runtime() {
+        Ok(r) => r,
+        Err(e) => {
+            output::Reporter::new(verbose, &env).line(&format!("pgmi: error: {}", e.text()));
+            return e.exit_code();
+        }
+    };
     let request = deploy::Request::from(args);
     let approver = Box::new(deploy::Terminal::new(request.force, &env));
-    deploy::run(deploy::Context {
-        request,
-        verbose,
-        env,
-        dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
-        stdin: true,
-        approver,
-    })
+    deploy::run(
+        runtime,
+        deploy::Context {
+            request,
+            verbose,
+            env,
+            dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
+            stdin: true,
+            approver,
+        },
+    )
 }
 
 fn print_version(long: bool) -> u8 {

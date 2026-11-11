@@ -282,6 +282,10 @@ land before or between steps, each with a black-box case.
     end as one connection error).
 11. **One runtime.** `lib::run` owns it; `deploy::run`, `serve::run`,
     `tui::connection::run` take a handle.
+    Done 2026-11-11: `lib::runtime` builds the multi-thread runtime;
+    `deploy::run` and `serve::run` take it by value (they shut it down in
+    their own order), `init` and `config` pass a `Handle` to
+    `tui::connection::run`. Record 0003 has the details.
 
 Separate tickets, in parallel after steps 3 and 7: port the remaining Go
 unit groups (2, 3, 4, 10, 12, wizards); a fuzz/property target for

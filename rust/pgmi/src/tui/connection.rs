@@ -872,7 +872,11 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
         .unwrap_or_else(|_| Err("timeout: no answer within 10s".into()))
 }
 
-pub(crate) fn run(initial: Option<Connection>, env: &Env) -> Result<Done> {
+pub(crate) fn run(
+    initial: Option<Connection>,
+    env: &Env,
+    runtime: &tokio::runtime::Handle,
+) -> Result<Done> {
     let mut wizard = Wizard::new(initial);
     let mut screen = super::Screen::open()?;
     let (tx, rx) = mpsc::channel();
@@ -891,13 +895,9 @@ pub(crate) fn run(initial: Option<Connection>, env: &Env) -> Result<Done> {
                     Some(Effect::Test(s)) => {
                         let tx = tx.clone();
                         let env = env.clone();
-                        std::thread::spawn(move || {
-                            let result = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .map_err(|e| e.to_string())
-                                .and_then(|rt| rt.block_on(test(*s, env)));
-                            let _ = tx.send(result);
+                        let handle = runtime.clone();
+                        runtime.spawn_blocking(move || {
+                            let _ = tx.send(handle.block_on(test(*s, env)));
                         });
                     }
                     None => {}

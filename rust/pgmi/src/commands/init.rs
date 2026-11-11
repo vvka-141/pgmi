@@ -38,7 +38,7 @@ pub(crate) fn check_empty(target: &impl Vfs) -> Result<()> {
     )))
 }
 
-pub(crate) fn run(a: &InitArgs, env: &Env) -> Result<()> {
+pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> Result<()> {
     let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     check_empty(&OsFs::new(&target))?;
     let mut connection = None;
@@ -48,7 +48,7 @@ pub(crate) fn run(a: &InitArgs, env: &Env) -> Result<()> {
             match crate::tui::init::run(&target.display().to_string())? {
                 crate::tui::init::Done::Finished { template, connect } => {
                     if connect {
-                        connection = Some(match crate::tui::connection::run(None, env)? {
+                        connection = Some(match crate::tui::connection::run(None, env, runtime)? {
                             Done::Finished(s) => s,
                             Done::Cancelled => return Err(stopped("init", false)),
                             Done::Interrupted => return Err(stopped("init", true)),

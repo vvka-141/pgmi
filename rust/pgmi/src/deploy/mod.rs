@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use tokio::runtime::Runtime;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
@@ -263,18 +264,8 @@ impl Run {
     }
 }
 
-pub(crate) fn run(ctx: Context) -> u8 {
+pub(crate) fn run(runtime: Runtime, ctx: Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            reporter.line(&format!("pgmi: error: start the runtime: {e}"));
-            return Kind::General.exit_code();
-        }
-    };
     let mut run = Run::start();
     let interrupted = Arc::new(AtomicBool::new(false));
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

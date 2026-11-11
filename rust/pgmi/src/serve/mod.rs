@@ -11,13 +11,13 @@ use std::time::Duration;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::VERSION;
 use crate::env::Env;
-use crate::error::Kind;
 pub(crate) use tools::{Outcome, Toolbox};
 use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
 
@@ -28,21 +28,8 @@ const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
 
-pub(crate) fn run(verbose: bool, env: Env) -> u8 {
+pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> u8 {
     crate::conn::tls::install();
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = std::io::Write::write_all(
-                &mut std::io::stderr(),
-                format!("pgmi: error: start the runtime: {e}\n").as_bytes(),
-            );
-            return Kind::General.exit_code();
-        }
-    };
     let stop = CancellationToken::new();
     runtime.block_on(async {
         let signals = tokio::spawn({

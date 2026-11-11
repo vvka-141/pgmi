@@ -8,7 +8,7 @@ use crate::env::Env;
 use crate::error::{Error, Kind, Result};
 use crate::tui::connection::{self, Done, Settings};
 
-pub(crate) fn run(a: &ConfigArgs, env: &Env) -> Result<()> {
+pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -> Result<()> {
     if !crate::tui::interactive(env) {
         return Err(Error::usage(
             "config requires an interactive terminal\nfor CI, write pgmi.yaml by hand or use PG* environment variables",
@@ -44,7 +44,7 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env) -> Result<()> {
             }
         },
     }
-    let settings = match connection::run(initial, env)? {
+    let settings = match connection::run(initial, env, runtime)? {
         Done::Finished(s) => s,
         Done::Cancelled => return Err(stopped("config", false)),
         Done::Interrupted => return Err(stopped("config", true)),
