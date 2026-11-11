@@ -23,13 +23,16 @@ steps:
       - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
       - '{"jsonrpc":"2.0","method":"notifications/initialized"}'
       - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/open","connection":"{conn}","database":"{db}"}}}'
-      - wait: 4
+      - until: '"id":2,"result"'
+        timeout: 45
       - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/good","connection":"{conn}","database":"{db}"}}}'
-      - wait: 4
+      - until: '"id":3,"result"'
+        timeout: 45
       - '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/tail","connection":"{conn}","database":"{db}"}}}'
-      - wait: 4
+      - until: '"id":4,"result"'
+        timeout: 45
       - '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/good","connection":"{conn}","database":"{db}"}}}'
-    timeout: 60
+    timeout: 150
     expect:
       exit: 0
       stdout:

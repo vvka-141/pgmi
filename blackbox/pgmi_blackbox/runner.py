@@ -18,7 +18,7 @@ from typing import Any
 
 import psycopg
 
-from pgmi_blackbox.case import Case, Expect, Fifo, Step, Symlink
+from pgmi_blackbox.case import Case, Expect, Fifo, Step, Symlink, Until
 from pgmi_blackbox.server import Server
 
 _silent: socket.socket | None = None
@@ -55,6 +55,16 @@ class Workspace:
         for key, value in self._values().items():
             text = text.replace(key, value)
         return text
+
+    def chunk(self, c: "str | float | bytes | Until") -> "str | float | bytes | Until":
+        if isinstance(c, str):
+            return self.substitute(c)
+        if isinstance(c, Until):
+            pattern = c.pattern
+            for key, value in self._values().items():
+                pattern = pattern.replace(key, re.escape(value))
+            return Until(pattern, c.timeout)
+        return c
 
     def _values(self) -> dict[str, str]:
         return {
@@ -188,8 +198,8 @@ def _start_tty(ws: Workspace, step: Step, argv: list[str]) -> Running:
     os.close(slave)
     run = Running(proc, argv, [], [], [], time.monotonic())
     run.threads.append(threading.Thread(target=_read_tty, args=(master, run.stdout, run.raw), daemon=True))
-    chunks = [ws.substitute(c) if isinstance(c, str) else c for c in (step.stdin or ())]
-    run.threads.append(threading.Thread(target=_feed_tty, args=(master, chunks), daemon=True))
+    chunks = [ws.chunk(c) for c in (step.stdin or ())]
+    run.threads.append(threading.Thread(target=_feed_tty, args=(master, chunks, run.stdout), daemon=True))
     for t in run.threads:
         t.start()
     return run
@@ -211,9 +221,18 @@ def _read_tty(master: int, sink: list[str], raw: list[str]) -> None:
     sink.append(ANSI.sub("", text).replace("\r", ""))
 
 
-def _feed_tty(master: int, chunks: list[str | float | bytes]) -> None:
+def _await(chunk: Until, output: list[str]) -> None:
+    deadline = time.monotonic() + chunk.timeout
+    pattern = re.compile(chunk.pattern)
+    while time.monotonic() < deadline and not pattern.search("".join(output)):
+        time.sleep(0.05)
+
+
+def _feed_tty(master: int, chunks: list, output: list[str]) -> None:
     for chunk in chunks:
-        if isinstance(chunk, str | bytes):
+        if isinstance(chunk, Until):
+            _await(chunk, output)
+        elif isinstance(chunk, str | bytes):
             try:
                 os.write(master, chunk.encode() if isinstance(chunk, str) else chunk)
             except OSError:
@@ -238,11 +257,11 @@ def _start(ws: Workspace, step: Step) -> Running:
         errors="replace",
     )
     run = Running(proc, argv, [], [], [], time.monotonic())
-    run.threads.append(threading.Thread(target=lambda: run.stdout.append(proc.stdout.read()), daemon=True))
+    run.threads.append(threading.Thread(target=lambda: run.stdout.extend(iter(proc.stdout.readline, "")), daemon=True))
     run.threads.append(threading.Thread(target=_lines, args=(proc.stderr, run.stderr, run.started), daemon=True))
     if step.stdin is not None:
-        chunks = [ws.substitute(c) if isinstance(c, str) else c for c in step.stdin]
-        run.threads.append(threading.Thread(target=_feed, args=(proc.stdin, chunks), daemon=True))
+        chunks = [ws.chunk(c) for c in step.stdin]
+        run.threads.append(threading.Thread(target=_feed, args=(proc.stdin, chunks, run.stdout), daemon=True))
     for t in run.threads:
         t.start()
     return _signal(step, run)
@@ -260,10 +279,12 @@ def _lines(stream, sink: list[tuple[float, str]], started: float) -> None:
         sink.append((time.monotonic() - started, line))
 
 
-def _feed(stdin, chunks: list[str | float | bytes]) -> None:
+def _feed(stdin, chunks: list, output: list[str]) -> None:
     try:
         for chunk in chunks:
-            if isinstance(chunk, str):
+            if isinstance(chunk, Until):
+                _await(chunk, output)
+            elif isinstance(chunk, str):
                 stdin.write(chunk)
                 stdin.flush()
             elif isinstance(chunk, bytes):

@@ -49,7 +49,7 @@ class Step:
     args: tuple[str, ...] | None
     sql: str | None
     env: dict[str, str]
-    stdin: tuple[str | float | bytes, ...] | None
+    stdin: tuple["str | float | bytes | Until", ...] | None
     delay: float
     background: bool
     signals: tuple[Signal, ...]
@@ -292,11 +292,14 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     background = value.get("background", False)
     if not isinstance(background, bool):
         raise r.fail(f"{field}.background", "must be true or false")
+    stdin = _stdin(r, value["stdin"], f"{field}.stdin") if "stdin" in value else None
+    if value.get("tty") and any(isinstance(c, Until) for c in stdin or ()):
+        raise r.fail(f"{field}.stdin", "until does not go with tty")
     return Step(
         args=args,
         sql=sql,
         env=r.string_map(value.get("env", {}), f"{field}.env"),
-        stdin=_stdin(r, value["stdin"], f"{field}.stdin") if "stdin" in value else None,
+        stdin=stdin,
         delay=r.number(value.get("delay", 0), f"{field}.delay"),
         background=background,
         signals=_signals(r, value.get("signal", []), f"{field}.signal"),
@@ -309,21 +312,39 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     )
 
 
-def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float | bytes, ...]:
+@dataclass(frozen=True)
+class Until:
+    pattern: str
+    timeout: float
+
+
+def _stdin(r: _Reader, value: Any, field: str) -> tuple[str | float | bytes | Until, ...]:
     if isinstance(value, str):
         return (value,)
     if not isinstance(value, list):
-        raise r.fail(field, "must be a string or a list of lines, {wait: seconds}, {text: ...} and {hex: ...}")
-    chunks: list[str | float | bytes] = []
+        raise r.fail(field, "must be a string or a list of lines, {wait: seconds}, {until: regex}, {text: ...} and {hex: ...}")
+    chunks: list[str | float | bytes | Until] = []
     for i, item in enumerate(value):
         if isinstance(item, str):
             chunks.append(item if item.endswith("\n") else item + "\n")
             continue
         at = f"{field}[{i}]"
-        item = r.mapping(item, at, {"wait", "text", "hex", "times"})
-        kinds = [k for k in ("wait", "text", "hex") if k in item]
+        item = r.mapping(item, at, {"wait", "until", "timeout", "text", "hex", "times"})
+        kinds = [k for k in ("wait", "until", "text", "hex") if k in item]
         if len(kinds) != 1:
-            raise r.fail(at, "needs exactly one of wait, text or hex")
+            raise r.fail(at, "needs exactly one of wait, until, text or hex")
+        if "timeout" in item and kinds[0] != "until":
+            raise r.fail(f"{at}.timeout", "only goes with until")
+        if kinds[0] == "until":
+            if "times" in item:
+                raise r.fail(f"{at}.times", "only goes with text or hex")
+            pattern = r.string(item["until"], f"{at}.until")
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise r.fail(f"{at}.until", f"invalid regex: {e}") from e
+            chunks.append(Until(pattern, r.number(item.get("timeout", 30), f"{at}.timeout")))
+            continue
         if kinds[0] == "wait":
             if "times" in item:
                 raise r.fail(f"{at}.times", "only goes with text or hex")

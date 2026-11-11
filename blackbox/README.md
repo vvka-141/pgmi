@@ -43,6 +43,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_TOKEN: abc}   # optional
     stdin: "a=b\n"                 # optional; or a list of lines, {wait: seconds},
+                                   # {until: regex, timeout: 30} (holds the next line until stdout matches; not with tty),
                                    # {text: "...", times: n} and {hex: "ff0a", times: n} (no newline added)
     cwd: "{project}"               # optional: working directory (default {workdir})
     delay: 0                       # optional: seconds to wait before starting

@@ -1,6 +1,6 @@
 import pytest
 
-from pgmi_blackbox.case import CaseError, Fifo, Symlink, implementation, parse_case
+from pgmi_blackbox.case import CaseError, Fifo, Symlink, Until, implementation, parse_case
 
 MINIMAL = {
     "description": "deploy succeeds",
@@ -154,3 +154,14 @@ def test_implementation_comes_from_pgmi_impl(environ, impl):
 def test_unknown_implementation_fails_the_run(value):
     with pytest.raises(CaseError, match="PGMI_IMPL"):
         implementation({"PGMI_IMPL": value})
+
+
+def test_stdin_until_holds_a_regex_and_refuses_bad_ones():
+    doc = {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": ["a", {"until": '"id":2', "timeout": 5}, "b"], "expect": {"exit": 0}}]}
+    step = parse_case("cases/x.yaml", doc).steps[0]
+    assert step.stdin[1] == Until('"id":2', 5)
+    for bad in ({"until": "("}, {"until": "x", "times": 2}, {"wait": 1, "timeout": 2}):
+        with pytest.raises(CaseError):
+            parse_case("cases/x.yaml", {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": [bad], "expect": {"exit": 0}}]})
+    with pytest.raises(CaseError):
+        parse_case("cases/x.yaml", {**MINIMAL, "steps": [{"pgmi": ["serve"], "tty": True, "stdin": [{"until": "x"}], "expect": {"exit": 0}}]})
