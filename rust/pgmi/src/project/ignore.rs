@@ -173,11 +173,22 @@ fn class_match(p: &[u8], open: usize, c: u8) -> Option<(bool, usize)> {
 }
 
 pub fn wildmatch(p: &[u8], t: &[u8]) -> bool {
-    matches(p, 0, t, 0)
+    matches(p, 0, t, 0) == Match::Yes
 }
 
-fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Match {
+    Yes,
+    No,
+    AbortAll,
+    AbortToStarStar,
+}
+
+fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
     while pi < p.len() {
+        if ti >= t.len() && p[pi] != b'*' {
+            return Match::AbortAll;
+        }
         match p[pi] {
             b'*' => {
                 let double = p.get(pi + 1) == Some(&b'*');
@@ -186,69 +197,70 @@ fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> bool {
                     && (pi + 2 == p.len() || p[pi + 2] == b'/')
                 {
                     if pi + 2 == p.len() {
-                        return true;
+                        return Match::Yes;
                     }
                     let rest = pi + 3;
-                    if matches(p, rest, t, ti) {
-                        return true;
-                    }
-                    for k in ti..t.len() {
-                        if t[k] == b'/' && matches(p, rest, t, k + 1) {
-                            return true;
+                    let starts = std::iter::once(ti)
+                        .chain((ti..t.len()).filter(|k| t[*k] == b'/').map(|k| k + 1));
+                    for k in starts {
+                        if let r @ (Match::Yes | Match::AbortAll) = matches(p, rest, t, k) {
+                            return r;
                         }
                     }
-                    return false;
+                    return Match::No;
                 }
                 while pi < p.len() && p[pi] == b'*' {
                     pi += 1;
                 }
                 if pi == p.len() {
-                    return !t[ti..].contains(&b'/');
+                    return if t[ti..].contains(&b'/') {
+                        Match::No
+                    } else {
+                        Match::Yes
+                    };
                 }
-                for k in ti..=t.len() {
-                    if matches(p, pi, t, k) {
-                        return true;
+                for k in ti..t.len() {
+                    match matches(p, pi, t, k) {
+                        Match::No => {}
+                        r => return r,
                     }
-                    if k < t.len() && t[k] == b'/' {
-                        return false;
+                    if t[k] == b'/' {
+                        return Match::AbortToStarStar;
                     }
                 }
-                return false;
+                return Match::AbortAll;
             }
             b'?' => {
-                if ti >= t.len() || t[ti] == b'/' {
-                    return false;
+                if t[ti] == b'/' {
+                    return Match::No;
                 }
                 pi += 1;
                 ti += 1;
             }
-            b'[' => {
-                let Some(&c) = t.get(ti) else { return false };
-                match class_match(p, pi, c) {
-                    Some((true, end)) => {
-                        pi = end;
-                        ti += 1;
-                    }
-                    _ => return false,
+            b'[' => match class_match(p, pi, t[ti]) {
+                Some((true, end)) => {
+                    pi = end;
+                    ti += 1;
                 }
-            }
+                _ => return Match::No,
+            },
             b'\\' if pi + 1 < p.len() => {
-                if t.get(ti) != Some(&p[pi + 1]) {
-                    return false;
+                if t[ti] != p[pi + 1] {
+                    return Match::No;
                 }
                 pi += 2;
                 ti += 1;
             }
             c => {
-                if t.get(ti) != Some(&c) {
-                    return false;
+                if t[ti] != c {
+                    return Match::No;
                 }
                 pi += 1;
                 ti += 1;
             }
         }
     }
-    ti == t.len()
+    if ti == t.len() { Match::Yes } else { Match::No }
 }
 
 #[cfg(test)]
@@ -275,6 +287,53 @@ mod tests {
         assert!(wildmatch(b"sp[[:space:]]ace.sql", b"sp ace.sql"));
         assert!(wildmatch(b"* (copy)*", b"a (copy).sql"));
         assert!(wildmatch(b"*~", b"a.sql~"));
+    }
+
+    #[test]
+    fn many_stars_do_not_backtrack_exponentially() {
+        let text = vec![b'a'; 60];
+        let started = std::time::Instant::now();
+        assert!(!wildmatch(b"*a*a*a*a*a*a*a*a*b", &text));
+        assert!(!wildmatch(b"**/*a*a*a*a*a*a*a*a*b", &text));
+        assert!(wildmatch(b"*a*a*a*a*a*a*a*a*a", &text));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    fn naive(p: &[u8], pi: usize, t: &[u8], ti: usize) -> bool {
+        let Some(&c) = p.get(pi) else {
+            return ti == t.len();
+        };
+        match c {
+            b'*' if p.get(pi + 1) == Some(&b'*')
+                && (pi == 0 || p[pi - 1] == b'/')
+                && (pi + 2 == p.len() || p[pi + 2] == b'/') =>
+            {
+                pi + 2 == p.len()
+                    || naive(p, pi + 3, t, ti)
+                    || (ti..t.len()).any(|k| t[k] == b'/' && naive(p, pi + 3, t, k + 1))
+            }
+            b'*' => {
+                let mut q = pi;
+                while p.get(q) == Some(&b'*') {
+                    q += 1;
+                }
+                (ti..=t.len())
+                    .take_while(|k| *k == ti || t[k - 1] != b'/')
+                    .any(|k| naive(p, q, t, k))
+            }
+            b'?' => t.get(ti).is_some_and(|x| *x != b'/') && naive(p, pi + 1, t, ti + 1),
+            c => t.get(ti) == Some(&c) && naive(p, pi + 1, t, ti + 1),
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn abort_rule_keeps_the_answer(
+            p in proptest::collection::vec(proptest::sample::select(b"ab/*?".to_vec()), 0..10),
+            t in proptest::collection::vec(proptest::sample::select(b"ab/".to_vec()), 0..10),
+        ) {
+            proptest::prop_assert_eq!(wildmatch(&p, &t), naive(&p, 0, &t, 0));
+        }
     }
 
     #[test]
