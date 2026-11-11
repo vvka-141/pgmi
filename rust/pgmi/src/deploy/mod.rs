@@ -1250,6 +1250,8 @@ mod tests {
             hint: Some("hint s3cret-pw".into()),
             where_: Some("where s3cret-pw".into()),
             internal_query: None,
+            position: None,
+            internal_position: None,
         });
         let r = record_of(loaded("app"), &Err(e));
         assert_eq!(
