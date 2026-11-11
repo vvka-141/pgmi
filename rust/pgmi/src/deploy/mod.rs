@@ -26,7 +26,6 @@ use crate::conn::cloud::{self, Provider};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::overrides::{Override, overrides};
 use crate::conn::resolve::{self, Source, Spec};
-use crate::conn::tls;
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
@@ -886,7 +885,7 @@ impl Steps<'_> {
             version,
             tls: Tls {
                 enabled: session.tls_enabled(),
-                sslmode: tls::effective_mode(spec),
+                sslmode: spec.sslmode(),
                 version: session.tls_version.clone(),
             },
         })
