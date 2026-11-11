@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use super::{json, stderr, stdout};
 use crate::cli::{MetadataArgs, MetadataCommand, MetadataReport, ScaffoldArgs};
+use crate::config::edit::write_atomic;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::project::metadata::{self, Meta};
@@ -372,25 +373,6 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     Ok(())
 }
 
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.pgmi-tmp"));
-    let io = |e| Error::general(format!("write {}", path.display())).with_source(e);
-    if let Ok(meta) = std::fs::metadata(path) {
-        std::fs::write(&tmp, text).map_err(io)?;
-        let _ = std::fs::set_permissions(&tmp, meta.permissions());
-    } else {
-        std::fs::write(&tmp, text).map_err(io)?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        io(e)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +437,23 @@ mod tests {
         assert_eq!(project_root(&lib), lib);
         std::fs::write(base.join("repo/deploy.sql"), "SELECT 1;").unwrap();
         assert_eq!(project_root(&lib), base.join("repo"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_never_follows_a_planted_temp_link() {
+        let base = std::env::temp_dir().join(format!("pgmi-plant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let victim = base.join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        for name in [".a.sql.pgmi-tmp", "a.sql.pgmi-tmp"] {
+            std::os::unix::fs::symlink(&victim, base.join(name)).unwrap();
+        }
+        write_atomic(&base.join("a.sql"), "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(base.join("a.sql")).unwrap(), "new");
         std::fs::remove_dir_all(&base).unwrap();
     }
 
