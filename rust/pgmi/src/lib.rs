@@ -7,6 +7,8 @@ mod cli;
 mod commands;
 mod config;
 pub mod conn;
+#[cfg(test)]
+mod content_tests;
 mod deploy;
 mod duration;
 mod env;

@@ -64,6 +64,8 @@ testhooks = []
 [dev-dependencies]
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 tokio = { version = "1.54.1", features = ["test-util"] }
+regex-lite = "0.1.9"
+unicode-normalization = "0.1.26"
 
 [lints]
 workspace = true
