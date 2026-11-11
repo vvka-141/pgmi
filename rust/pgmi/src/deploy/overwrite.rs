@@ -252,7 +252,7 @@ async fn snapshot(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snaps
 }
 
 fn literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 fn locale_clause(own: &[String]) -> String {
@@ -445,13 +445,14 @@ mod tests {
     fn list_settings_are_split_and_quoted() {
         assert_eq!(
             set_clause("search_path=app, \"with space\", public"),
-            "SET \"search_path\" = 'app', 'with space', 'public'"
+            "SET \"search_path\" = E'app', E'with space', E'public'"
         );
         assert_eq!(
             set_clause("DateStyle=ISO, DMY"),
-            "SET \"DateStyle\" = 'ISO, DMY'"
+            "SET \"DateStyle\" = E'ISO, DMY'"
         );
-        assert_eq!(set_clause("x=it's"), "SET \"x\" = 'it''s'");
+        assert_eq!(set_clause("x=it's"), "SET \"x\" = E'it''s'");
+        assert_eq!(set_clause("x=a\\b"), "SET \"x\" = E'a\\\\b'");
         assert_eq!(split_list("\"a\"\"b\", c"), ["a\"b", "c"]);
     }
 
@@ -471,7 +472,7 @@ mod tests {
         };
         assert_eq!(
             create_sql("d", Some(&s)),
-            "CREATE DATABASE \"d\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' LOCALE_PROVIDER icu ICU_LOCALE 'de-DE' ICU_RULES '&a < b' OWNER \"o\"\"w\" CONNECTION LIMIT 3"
+            "CREATE DATABASE \"d\" TEMPLATE template0 ENCODING E'UTF8' LC_COLLATE E'C' LC_CTYPE E'C' LOCALE_PROVIDER icu ICU_LOCALE E'de-DE' ICU_RULES E'&a < b' OWNER \"o\"\"w\" CONNECTION LIMIT 3"
         );
         assert_eq!(create_sql("d", None), "CREATE DATABASE \"d\"");
     }
@@ -497,9 +498,9 @@ mod tests {
         assert_eq!(
             sql,
             [
-                "ALTER DATABASE \"d\" SET \"statement_timeout\" = '5s'",
-                "ALTER ROLE \"r\" IN DATABASE \"d\" SET \"work_mem\" = '8MB'",
-                "COMMENT ON DATABASE \"d\" IS 'c'",
+                "ALTER DATABASE \"d\" SET \"statement_timeout\" = E'5s'",
+                "ALTER ROLE \"r\" IN DATABASE \"d\" SET \"work_mem\" = E'8MB'",
+                "COMMENT ON DATABASE \"d\" IS E'c'",
                 "REVOKE ALL ON DATABASE \"d\" FROM PUBLIC;\nGRANT CONNECT ON DATABASE \"d\" TO PUBLIC;\nGRANT TEMPORARY ON DATABASE \"d\" TO \"r\" WITH GRANT OPTION",
             ]
         );
