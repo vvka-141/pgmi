@@ -84,6 +84,7 @@ env/pgservice-refused
 errors/attribution
 errors/connection-failures
 errors/connection-string-secrets
+errors/diagnostics-secrets
 errors/head-syntax
 errors/line-and-column
 errors/temporary-privilege

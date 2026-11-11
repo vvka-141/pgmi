@@ -127,6 +127,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 12 | syntax error in deploy.sql | ✓ `errors/head-syntax` |
 | 13, 14 | error inside an executed file names the file | ✓ `errors/attribution` |
 | 15 | `--json` failure record: `sqlstate`, `failedFile` | ✓ `errors/attribution` |
+| 15a | the connection password never reaches `--json` through DETAIL, HINT or CONTEXT | ✓ `errors/diagnostics-secrets` |
 | 16 | 42501 TEMPORARY guidance; wrong password; missing maintenance database; hba reject | ✓ `errors/temporary-privilege`, `errors/connection-failures`, `tls/tls-only-and-plain-servers`; 53300, 57P03 ✗ (server states a case cannot produce reliably) |
 | 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |

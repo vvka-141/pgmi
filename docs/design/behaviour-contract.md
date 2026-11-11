@@ -376,9 +376,14 @@ Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/co
 One JSON object on stdout at the end of every run, success or failure, with the
 keys and meanings in `docs/CLI.md` "--json output" (`schemaVersion` 1). The
 parsed value is the contract, not the bytes: Go escapes `<`, `>`, `&` as
-`\u003c` and so on, and indents with two spaces.
+`\u003c` and so on, and indents with two spaces. Neither the record nor the
+MCP answer carries the connection password in `error`, `detail`, `hint` or
+`where`: Go hides password-shaped text (`password=...`, `PASSWORD '...'`, a
+URI's password), the Rust binary replaces the connection's password,
+`sslpassword` and cloud token with `***`. Notices are recorded as the server
+sent them, in both.
 
-Cases: `deploy/json-success`, `deploy/json-failure`, `errors/attribution`, `execution/atomic-head`, `config/dotenv`.
+Cases: `deploy/json-success`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
 
 ### Error attribution
 

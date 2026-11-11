@@ -1115,6 +1115,27 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_record_redacts_detail_hint_and_where() {
+        let e = Error::sql("x").with_sql(crate::error::SqlDiagnostics {
+            sqlstate: Some("P0001".into()),
+            detail: Some("detail s3cret-pw".into()),
+            hint: Some("hint s3cret-pw".into()),
+            where_: Some("where s3cret-pw".into()),
+            internal_query: None,
+        });
+        let r = record_of(loaded("app"), &Err(e));
+        assert_eq!(
+            [&r["detail"], &r["hint"], &r["where"]],
+            [
+                &json!("detail ***"),
+                &json!("hint ***"),
+                &json!("where ***")
+            ]
+        );
+        assert!(!r.to_string().contains("s3cret-pw"), "{r}");
+    }
+
+    #[test]
     fn a_failure_without_sql_diagnostics_has_no_phase() {
         let p = Progress {
             execution: executed(0, failure(3, blame::Blame::default())),
