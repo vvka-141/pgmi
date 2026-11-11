@@ -90,9 +90,13 @@ pub fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
 }
 
 fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
-    let stat = fs
-        .stat(rel)
-        .map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
+    let unreadable = |e: std::io::Error| {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        Error::config(format!(
+            "failed to read ./{rel}: cannot read {name}: {e}; exclude it in .pgmiignore or make it readable"
+        ))
+    };
+    let stat = fs.stat(rel).map_err(unreadable)?;
     if stat.len > max_size {
         let name = rel.rsplit('/').next().unwrap_or(rel);
         return Err(Error::config(format!(
@@ -100,9 +104,7 @@ fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
             stat.len
         )));
     }
-    let bytes = fs
-        .read(rel)
-        .map_err(|e| Error::general(format!("read {rel}")).with_source(e))?;
+    let bytes = fs.read(rel).map_err(unreadable)?;
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
     if let Some(at) = bytes.iter().position(|b| *b == 0) {
         return Err(Error::config(format!(
@@ -130,7 +132,10 @@ fn walk(
     out: &mut Project,
 ) -> Result<()> {
     let entries = fs.read_dir(rel).map_err(|e| {
-        Error::general(format!("read directory {}", fs.display(rel))).with_source(e)
+        Error::config(format!(
+            "cannot read {}: {e}; exclude it in .pgmiignore or make it readable",
+            fs.display(rel)
+        ))
     })?;
     for entry in entries {
         let name = entry.name;
@@ -340,6 +345,31 @@ mod tests {
         let e = load(&big, 10).unwrap_err();
         assert!(e.text().contains("exceeds 10-byte limit"), "{}", e.text());
         assert!(load(&big, 11).is_ok());
+    }
+
+    #[test]
+    fn unreadable_files_and_directories_are_invalid_config() {
+        for (fs, path) in [
+            (project().unreadable_file("secret.sql"), "./secret.sql"),
+            (project().unreadable_dir("locked"), "locked"),
+            (
+                project().unreadable_file("__test__/t.sql"),
+                "./__test__/t.sql",
+            ),
+        ] {
+            let text = refused(&fs);
+            assert!(text.contains(path), "{text}");
+            assert!(text.contains(".pgmiignore"), "{text}");
+        }
+        assert!(
+            load(
+                &project()
+                    .unreadable_dir("locked")
+                    .file(".pgmiignore", "locked/\n"),
+                MAX
+            )
+            .is_ok()
+        );
     }
 
     #[test]

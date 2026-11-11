@@ -112,10 +112,9 @@ impl Vfs for OsFs {
 
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>> {
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(self.path(rel))?.flatten() {
-            let Ok(stat) = os_stat(&entry.path()) else {
-                continue;
-            };
+        for entry in std::fs::read_dir(self.path(rel))? {
+            let entry = entry?;
+            let stat = os_stat(&entry.path())?;
             let (name, utf8) = match entry.file_name().into_string() {
                 Ok(n) => (n, true),
                 Err(n) => (n.to_string_lossy().into_owned(), false),
@@ -155,6 +154,7 @@ enum Node {
     File(Vec<u8>),
     Dir,
     Link(Option<Box<Node>>),
+    Unreadable(Kind),
 }
 
 #[cfg(test)]
@@ -167,6 +167,7 @@ impl Node {
         let (kind, len) = match target {
             Some(Node::File(b)) => (Kind::File, b.len() as u64),
             Some(Node::Dir) => (Kind::Dir, 0),
+            Some(Node::Unreadable(k)) => (*k, 0),
             _ => (Kind::Other, 0),
         };
         Stat { kind, link, len }
@@ -225,6 +226,18 @@ impl MemFs {
     }
 
     #[must_use]
+    pub fn unreadable_file(mut self, rel: &str) -> Self {
+        self.insert(rel, Node::Unreadable(Kind::File));
+        self
+    }
+
+    #[must_use]
+    pub fn unreadable_dir(mut self, rel: &str) -> Self {
+        self.insert(rel, Node::Unreadable(Kind::Dir));
+        self
+    }
+
+    #[must_use]
     pub fn dangling_link(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Link(None));
         self
@@ -265,11 +278,16 @@ impl Vfs for MemFs {
             },
             Node::Link(None) => Err(io::ErrorKind::NotFound.into()),
             Node::Dir => Err(io::ErrorKind::IsADirectory.into()),
+            Node::Unreadable(_) => Err(io::ErrorKind::PermissionDenied.into()),
         }
     }
 
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>> {
-        if self.node(rel)?.stat().kind != Kind::Dir {
+        let node = self.node(rel)?;
+        if matches!(node, Node::Unreadable(_)) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        if node.stat().kind != Kind::Dir {
             return Err(io::ErrorKind::NotADirectory.into());
         }
         let prefix = if rel.is_empty() {
