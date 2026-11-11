@@ -247,13 +247,18 @@ BEGIN
 
     -- The dev password default is a local convenience. It applies only to a
     -- new database or one already labelled dev: relabelling a database to dev
-    -- needs explicit passwords.
+    -- needs explicit passwords. Lakebase refuses a weak password when the
+    -- transaction commits, so there it is a generated one.
     IF v_env = 'dev' AND COALESCE(v_label, 'dev') = 'dev' THEN
         UPDATE pg_temp.deployment_parameter
-        SET value = 'postgres'
+        SET value = CASE WHEN pg_temp.on_lakebase()
+                         THEN replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
+                         ELSE 'postgres' END
         WHERE value IS NULL AND key ~ 'password$';
         GET DIAGNOSTICS v_defaulted = ROW_COUNT;
-        IF v_defaulted > 0 THEN
+        IF v_defaulted > 0 AND pg_temp.on_lakebase() THEN
+            RAISE WARNING 'pgmi: env=dev on Databricks Lakebase, which refuses a weak password: role password(s) set to a generated value. Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD to choose one.';
+        ELSIF v_defaulted > 0 THEN
             RAISE WARNING 'pgmi: env=dev — role password(s) defaulted to ''postgres''. This is for local/disposable databases only. For any shared deploy use env=test or env=prod and set each *_password through PGMI_PARAM_<NAME> or --params-file -, never --param.';
         END IF;
     END IF;
@@ -764,6 +769,11 @@ BEGIN
 END $extensions$;
 
 
+-- public stays closed. A managed host may own it through its admin group
+-- (Azure: azure_pg_admin), which the deploy login belongs to and the owner
+-- role does not, so the login closes it before switching.
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+
 -- ============================================================================
 -- OWNER PHASE: SET ROLE and Create Schemas
 -- ============================================================================
@@ -817,7 +827,6 @@ BEGIN
     COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
     COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
-    REVOKE ALL ON SCHEMA public FROM PUBLIC;
     REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
 
     EXECUTE format('GRANT USAGE ON SCHEMA api, common, core, membership TO %I', v_api_role);

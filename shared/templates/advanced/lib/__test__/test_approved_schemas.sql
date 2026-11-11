@@ -63,7 +63,8 @@ $$;
 
 DO $$
 DECLARE
-    v_bad text;
+    v_owner text := current_user;
+    v_bad   text;
 BEGIN
     SELECT string_agg(d, E'\n  ' ORDER BY d) INTO v_bad FROM pg_temp.schema_drift() d;
     IF v_bad IS NOT NULL THEN
@@ -74,7 +75,9 @@ BEGIN
     CREATE SCHEMA schema_probe;
     EXECUTE format('GRANT USAGE ON SCHEMA internal TO %I', pg_temp.deployment_setting('database_api_role'));
     EXECUTE format('REVOKE USAGE ON SCHEMA internal FROM %I', pg_temp.deployment_setting('database_kernel_role'));
+    RESET ROLE;
     GRANT USAGE ON SCHEMA public TO PUBLIC;
+    EXECUTE format('SET ROLE %I', v_owner);
     SELECT string_agg(d, '; ' ORDER BY d) INTO v_bad FROM pg_temp.schema_drift() d;
     IF v_bad IS DISTINCT FROM format('internal: USAGE granted to %s, not in the list; internal: USAGE to %s is listed, not granted; '
                                      'public: USAGE granted to PUBLIC, not in the list; schema_probe: not an approved schema',

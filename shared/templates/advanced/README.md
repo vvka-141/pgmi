@@ -162,7 +162,7 @@ anything, and names what is missing.
 | Azure Database for PostgreSQL | Add the five extensions to the server parameter `azure.extensions`, keeping what it lists: `az postgres flexible-server parameter set --resource-group <group> --server-name <server> --name azure.extensions --value UUID-OSSP,PGCRYPTO,PG_TRGM,HSTORE,BTREE_GIST`. Sign in with `--azure` |
 | Amazon RDS and Aurora | Sign in with `--aws`; pass the RDS certificate bundle with `--sslrootcert` |
 | Google Cloud SQL | Sign in with `--google --google-instance <project:region:instance>`. An IAM user needs `ALTER ROLE "<user>" CREATEDB CREATEROLE`, run as `postgres` |
-| Databricks Lakebase | Connect to the maintenance database `databricks_postgres` ([Lakebase guide](https://vvka-141.github.io/pgmi/docs/lakebase/)). The deploy recognises Lakebase and sets `provider_role_pattern` and `provider_schemas` itself |
+| Databricks Lakebase | Connect to the maintenance database `databricks_postgres` ([Lakebase guide](https://vvka-141.github.io/pgmi/docs/lakebase/)). The deploy recognises Lakebase and sets `provider_role_pattern` and `provider_schemas` itself; with `env=dev` the admin password is a generated one, because Lakebase refuses `postgres` |
 
 Connect to the server directly, not through a transaction pooler (PgBouncer
 on port 6432, RDS Proxy): a deploy is one session.
@@ -476,7 +476,7 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
 | `env` | - | **Yes** | `dev`, `test` or `prod`. See [Environments](#environments) |
-| `database_admin_password` | `postgres` when `env=dev` on a new or dev-labelled database | **Yes**, otherwise | Admin role password |
+| `database_admin_password` | `postgres` when `env=dev` on a new or dev-labelled database (on Lakebase, which refuses a weak password, a generated value) | **Yes**, otherwise | Admin role password |
 | `relabel_environment` | empty | No | Change the database's label; must equal `env` |
 | `upgrade` | `false` | No | `true` refuses unless the database already carries the label `env` names |
 | `platform_operators` | `[]` | No | JSON array of platform operators (`email`, optional `displayName`, `issuer` + `subject`); synced every deploy, a person left out loses the status; an email-only entry names the address's verified holder, or a new verified person (an unverified holder is never promoted); an entry with `issuer` and `subject` names that login's person and verifies the address on it, refused (22023) when another person holds the address verified |

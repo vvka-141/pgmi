@@ -79,10 +79,19 @@ flag, the login's needed attributes (`CREATEDB`; advanced also
 directly rather than through a transaction pooler, and the Lakebase
 maintenance database.
 
-## Left open, decided by evidence from a real run
+## Settled by the first real run (2026-11-11)
 
-- Whether Lakebase refuses the advanced template's dev admin password
-  `postgres`. If it does, the dev default becomes a generated value.
-- Whether `public` is owned by a provider group on Azure, RDS or Cloud SQL so
-  that the deploy's revoke on it only warns. If so, the revoke moves before
-  the deploy switches to the owner role.
+The journey ran on real Azure and Lakebase (record in
+`.private/research/rust-migration-2026-11-10/real-cloud-baseline.md`). The
+basic template passed both, unchanged. The Azure extension check and the
+Lakebase detection worked. Two template defects showed:
+
+- **Azure owns `public` through `azure_pg_admin`.** The revoke on `public`
+  ran as the owner role and only warned, so the schema guard failed. The
+  deploy login belongs to that group: it now closes `public` before
+  switching to the owner role, and the guard's own probe on `public` does
+  the same.
+- **Lakebase refuses the password `postgres` when the transaction commits.**
+  With `env=dev` on Lakebase the admin password is now a generated value,
+  with a warning that says how to choose one. Elsewhere the dev default
+  stays `postgres`, as the README promises.

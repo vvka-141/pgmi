@@ -13,6 +13,8 @@ pub fn scaffold(files: &[(&str, &str)]) -> Project {
     p
 }
 
+type Pair<'a> = (&'a str, &'a str);
+
 fn quoted(params: &[(&str, &str)]) -> Vec<(String, String)> {
     params
         .iter()
@@ -45,7 +47,14 @@ pub fn deploy_via(
     params: &[(&str, &str)],
 ) -> Outcome {
     let mut d = pg.deploy(project, db).arg("--json");
-    for (k, v) in quoted(params) {
+    let (lines, one_line): (Vec<Pair>, Vec<Pair>) = params
+        .iter()
+        .copied()
+        .partition(|(_, v)| v.contains(['\n', '\r']));
+    for (k, v) in lines {
+        d = d.env(&format!("PGMI_PARAM_{}", k.to_uppercase()), v);
+    }
+    for (k, v) in quoted(&one_line) {
         d = d.param(&k, &v);
     }
     if overwrite {

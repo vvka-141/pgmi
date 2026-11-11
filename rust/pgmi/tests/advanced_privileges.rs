@@ -465,5 +465,34 @@ fn lakebase_is_detected_and_deploys_without_provider_settings() {
     );
     drop(target);
     drop(db);
+
+    let dev_name = format!("{name}_dev");
+    let dev = pg.database(&dev_name);
+    create_database(&pg, &dev);
+    dev.client().exec(&provider_fixture(
+        LAKEBASE_ROLES[0],
+        LAKEBASE_ROLES[1],
+        LAKEBASE_ROLES[2],
+    ));
+    let out = ok(
+        deploy(&pg, &p, &dev, false, &[("env", "dev")]),
+        "env=dev on a Lakebase-shaped database",
+    );
+    assert!(
+        out.stderr.contains("set to a generated value"),
+        "the dev password must be generated on Lakebase, which refuses postgres:\n{}",
+        out.stderr
+    );
+    assert!(
+        common::Client::try_connect(&dev, &format!("{dev_name}_admin"), "postgres").is_err(),
+        "the admin login must not accept the password postgres on Lakebase"
+    );
+    drop(dev);
+    for role in ["_admin", "_api", "_kernel", "_owner", "_jobs"] {
+        let _ = admin.batch(&format!(
+            "DROP ROLE IF EXISTS {}",
+            ident(&format!("{dev_name}{role}"))
+        ));
+    }
     drop_roles();
 }

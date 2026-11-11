@@ -61,6 +61,7 @@ impl Pg {
             params: Vec::new(),
             args: Vec::new(),
             conn: None,
+            env: Vec::new(),
         }
     }
 }
@@ -318,6 +319,7 @@ pub struct Deploy<'a> {
     params: Vec<(String, String)>,
     args: Vec<String>,
     conn: Option<String>,
+    env: Vec<(String, String)>,
 }
 
 pub struct Outcome {
@@ -384,6 +386,11 @@ impl Deploy<'_> {
         self
     }
 
+    pub fn env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_string(), value.to_string()));
+        self
+    }
+
     pub fn arg(mut self, a: &str) -> Self {
         self.args.push(a.to_string());
         self
@@ -403,6 +410,7 @@ impl Deploy<'_> {
             .args(&self.args)
             .env_clear()
             .env("PGMI_NO_BANNER", "1")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

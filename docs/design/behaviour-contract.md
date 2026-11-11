@@ -81,7 +81,7 @@ first advanced deploy names what the login lacks (`CREATEDB`, `CREATEROLE`)
 and, when the server has Azure's `azure.extensions`, the template's extensions
 missing from it. On a database with the role `databricks_superuser` and the
 schema `__db_system` (Lakebase), `provider_role_pattern` and
-`provider_schemas` default to Lakebase's values (record 0024).
+`provider_schemas` default to Lakebase's values, and the `env=dev` admin password is a generated one (record 0024).
 
 Cases: `deploy/basic-template-converges`, `deploy/basic-template-provider-functions`, `deploy/advanced-template-converges`, `deploy/advanced-template-preflight`, `checksums/cross-binary-redeploy`, `checksums/cross-binary-redeploy-advanced`.
 
