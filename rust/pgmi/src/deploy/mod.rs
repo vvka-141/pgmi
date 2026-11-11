@@ -490,11 +490,15 @@ async fn deploy(
                 "Database \"{}\" does not exist; creating",
                 spec.target_db
             ));
-            maintenance
-                .client
-                .batch_execute(&format!("CREATE DATABASE {}", quote_ident(&spec.target_db)))
-                .await
-                .map_err(|e| sql_error("create the target database", &e))?;
+            guard
+                .running(&maintenance, async {
+                    maintenance
+                        .client
+                        .batch_execute(&format!("CREATE DATABASE {}", quote_ident(&spec.target_db)))
+                        .await
+                        .map_err(|e| sql_error("create the target database", &e))
+                })
+                .await?;
             st.created = Some(true);
             drop(maintenance);
             guard
@@ -503,10 +507,14 @@ async fn deploy(
         }
         Err(e) => return Err(e),
     };
-    let version = first_value(&session, "SHOW server_version")
-        .await
-        .ok()
-        .flatten();
+    let version = guard
+        .running(&session, async {
+            Ok(first_value(&session, "SHOW server_version")
+                .await
+                .ok()
+                .flatten())
+        })
+        .await?;
     st.server_version = version;
     st.tls = Some(json!({
         "enabled": session.tls_enabled(),

@@ -75,11 +75,15 @@ pub async fn run(r: Run<'_>) -> Result<()> {
         reporter.line(&format!("Loaded {} parameter(s)", params.len()));
     }
     if verbose {
-        session
-            .client
-            .batch_execute("SET client_min_messages = debug")
-            .await
-            .map_err(|e| sql_error("enable DEBUG notices", &e))?;
+        guard
+            .running(session, async {
+                session
+                    .client
+                    .batch_execute("SET client_min_messages = debug")
+                    .await
+                    .map_err(|e| sql_error("enable DEBUG notices", &e))
+            })
+            .await?;
     }
     let mut units: Vec<Unit> = Vec::new();
     let mut macro_units = Vec::new();
