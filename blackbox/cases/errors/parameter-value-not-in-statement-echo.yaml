@@ -1,0 +1,12 @@
+description: a parameter reaches SQL through current_setting, so a failing statement that reads it echoes the statement text without the value, in stderr and in --json (SECURITY.md)
+project:
+  files:
+    deploy.sql: SELECT current_setting('pgmi.s'), 1/0;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    env: {PGMI_PARAM_S: topsecretXYZ}
+    expect:
+      exit: 13
+      stderr: ['division by zero']
+      stderr_not: ['topsecretXYZ']
+      stdout_not: ['topsecretXYZ']

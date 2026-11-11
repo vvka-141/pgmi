@@ -471,7 +471,7 @@ named. `phase` is `test` when the file lies under `__test__/` or `__tests__/`.
 A `PASSWORD '...'` literal in these lines is shown as `[redacted]`. A login
 without the TEMPORARY privilege is told the `GRANT` it needs.
 
-Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`, `errors/line-and-column`.
+Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`, `errors/line-and-column`, `errors/parameter-value-not-in-statement-echo`.
 
 ### Timeout, cancellation, interruption
 

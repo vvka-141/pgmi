@@ -104,6 +104,7 @@ errors/connection-string-secrets
 errors/diagnostics-secrets
 errors/head-syntax
 errors/line-and-column
+errors/parameter-value-not-in-statement-echo
 errors/special-file
 errors/temporary-privilege
 execution/atomic-head

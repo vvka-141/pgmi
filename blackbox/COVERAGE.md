@@ -271,3 +271,4 @@ decided in the behaviour contract (PGMI-828), not fixed.
 | Ctrl-C with `--json`: `exitCode` 130 | ✓ `cancel/ctrl-c-json-exit-code` |
 | a concurrent index cut off by `--timeout`: exit 16, INVALID index left | ✓ `cancel/timeout-leaves-invalid-concurrent-index` |
 | a nested `deploy.sql` is loaded; `--verbose` names ignored paths | ✓ `dialect/nested-deploy-sql-loaded` |
+| a parameter value never reaches the statement text pgmi echoes on an error | ✓ `errors/parameter-value-not-in-statement-echo` |
