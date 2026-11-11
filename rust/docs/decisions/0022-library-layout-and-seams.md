@@ -158,7 +158,10 @@ land before or between steps, each with a black-box case.
    clap's usage and help texts moved to `cli::usage`.
 2. **Break cycles.** `cloud` under `conn`; `Notice` to `output`;
    `redact`/`chain` to `error`; `templates` data module; `duration` out of
-   `cli`. No behaviour change.
+   `cli`. No behaviour change. Done 2026-11-11: the dial and AWS error
+   flatteners are now `error::chain`; `Severity` waits for step 9. One
+   upward edge is left: `conn::cloud::select` takes `cli::DeployArgs`
+   until step 5.
 3. **`Vfs`.** Landed 2026-11-11 (`vfs.rs`: `OsFs`, `EmbeddedFs`, `MemFs`
    with error injection; entry errors returned; walker, `.pgmiignore` and
    `init` read through it). Still to do: the `Name` enum, and

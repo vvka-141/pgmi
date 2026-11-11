@@ -107,7 +107,7 @@ impl Error {
     }
 
     pub(crate) fn redact(mut self, secrets: &[String]) -> Self {
-        self.message = crate::output::redact(&self.message, secrets);
+        self.message = redact(&self.message, secrets);
         self
     }
 
@@ -148,6 +148,30 @@ impl std::error::Error for Error {}
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
+/// Replaces every secret of three or more bytes in `text` with `***`.
+pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_string();
+    for s in secrets.iter().filter(|s| s.len() >= 3) {
+        out = out.replace(s.as_str(), "***");
+    }
+    out
+}
+
+/// Joins an error and its sources with `: `, leaving out a source whose text
+/// an earlier one already contains.
+pub(crate) fn chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut cur = e.source();
+    while let Some(c) = cur {
+        let t = c.to_string();
+        if !parts.iter().any(|p| p.contains(&t)) {
+            parts.push(t);
+        }
+        cur = c.source();
+    }
+    parts.join(": ")
+}
+
 static LAST_PANIC: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
 /// Prints a panic as `pgmi: internal error: ...` and keeps it for the
@@ -186,5 +210,36 @@ mod tests {
         let e = Error::connection("connect").with_source(std::io::Error::other("refused"));
         assert_eq!(e.text(), "connect: refused");
         assert_eq!(e.exit_code(), 11);
+    }
+
+    #[test]
+    fn redact_hides_secrets_of_three_bytes_or_more() {
+        assert_eq!(
+            redact("postgresql://u:secret@h", &["secret".into()]),
+            "postgresql://u:***@h"
+        );
+        assert_eq!(redact("a:ab@h", &["ab".into()]), "a:ab@h");
+    }
+
+    #[test]
+    fn chain_skips_a_source_already_in_the_text() {
+        #[derive(Debug)]
+        struct Outer(std::io::Error);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "dial: {}", self.0)
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        assert_eq!(
+            chain(&Outer(std::io::Error::other("refused"))),
+            "dial: refused"
+        );
+        let e = std::io::Error::other(Outer(std::io::Error::other("refused")));
+        assert_eq!(chain(&e), "dial: refused");
     }
 }

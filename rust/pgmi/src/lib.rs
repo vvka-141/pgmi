@@ -4,17 +4,18 @@
 #![forbid(unsafe_code)]
 
 mod cli;
-mod cloud;
 mod commands;
 mod config;
 pub mod conn;
 mod deploy;
+mod duration;
 mod env;
 mod error;
 mod init;
 mod output;
 mod project;
 pub mod serve;
+mod templates;
 mod tui;
 mod vfs;
 

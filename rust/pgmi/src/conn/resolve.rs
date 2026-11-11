@@ -75,7 +75,7 @@ pub(crate) struct Spec {
     pub(crate) source: Source,
     pub(crate) pg_files: Option<crate::env::PgFiles>,
     pub(crate) sslmode_set: bool,
-    pub(crate) token: Option<crate::cloud::Token>,
+    pub(crate) token: Option<crate::conn::cloud::Token>,
 }
 
 const ENV_DEFAULTS: &[(&str, &str)] = &[

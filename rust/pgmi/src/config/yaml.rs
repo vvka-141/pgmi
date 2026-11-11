@@ -67,7 +67,7 @@ impl ProjectConfig {
         self.timeout
             .as_deref()
             .map(|t| {
-                crate::cli::duration::parse(t)
+                crate::duration::parse(t)
                     .map_err(|e| Error::config(format!("failed to load pgmi.yaml: timeout: {e}")))
             })
             .transpose()

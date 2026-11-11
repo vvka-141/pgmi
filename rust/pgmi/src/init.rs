@@ -109,7 +109,7 @@ pub(crate) fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Res
 
 pub(crate) fn render(template: &str, name: &str) -> Result<Vec<(String, Vec<u8>)>> {
     let unknown = || Error::usage(format!("unknown template: {template}"));
-    if !crate::commands::templates::NAMES.contains(&template) {
+    if !crate::templates::NAMES.contains(&template) {
         return Err(unknown());
     }
     let read = |e: std::io::Error| Error::internal(format!("embedded template {template}: {e}"));
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn every_template_scaffolds_a_project_that_loads_in_memory() {
-        for t in crate::commands::templates::NAMES {
+        for t in crate::templates::NAMES {
             let fs = rendered(t, "shop");
             let p = walk::load(&fs, walk::DEFAULT_MAX_FILE_SIZE)
                 .unwrap_or_else(|e| panic!("{t}: {}", e.text()));

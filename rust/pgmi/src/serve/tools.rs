@@ -13,7 +13,8 @@ use crate::commands::metadata;
 use crate::deploy::{Approval, Context, Run};
 use crate::env::Env;
 use crate::error::Error;
-use crate::output::{Reporter, redact};
+use crate::error::redact;
+use crate::output::Reporter;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
@@ -87,7 +88,7 @@ impl Tool {
                 }
             }
             Tool::TemplatesList => {
-                let mut list = crate::commands::templates::LIST.to_vec();
+                let mut list = crate::templates::LIST.to_vec();
                 list.sort_by_key(|t| t.0);
                 let templates: Vec<Value> = list
                     .iter()
@@ -371,7 +372,7 @@ fn deploy_context(
     let timeout = match timeout {
         None => None,
         Some(t) => Some(
-            crate::cli::duration::parse(&t)
+            crate::duration::parse(&t)
                 .map_err(|e| Error::config(format!("invalid timeout: time: {e}")))?,
         ),
     };

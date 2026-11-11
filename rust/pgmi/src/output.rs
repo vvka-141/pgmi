@@ -5,8 +5,16 @@ use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
-use crate::conn::dial::Notice;
 use crate::env::Env;
+
+/// A server message: NOTICE, WARNING, DEBUG and the like.
+#[derive(Debug, Clone)]
+pub(crate) struct Notice {
+    pub(crate) severity: String,
+    pub(crate) message: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) hint: Option<String>,
+}
 
 pub(crate) struct Reporter {
     verbose: bool,
@@ -139,14 +147,6 @@ impl NoticeLog {
     }
 }
 
-pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
-    let mut out = text.to_string();
-    for s in secrets.iter().filter(|s| s.len() >= 3) {
-        out = out.replace(s.as_str(), "***");
-    }
-    out
-}
-
 pub(crate) fn seconds(d: std::time::Duration) -> String {
     format!("{:.2}s", d.as_secs_f64())
 }
@@ -185,10 +185,6 @@ mod tests {
     #[test]
     fn formats() {
         assert_eq!(seconds(std::time::Duration::from_millis(316)), "0.32s");
-        assert_eq!(
-            redact("postgresql://u:secret@h", &["secret".into()]),
-            "postgresql://u:***@h"
-        );
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_793_628_131_402);
         assert!(timestamp(t).ends_with(".402Z"));
     }

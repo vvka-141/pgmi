@@ -2,8 +2,8 @@ use crossterm::event::{Event, KeyEvent};
 use ratatui::widgets::Paragraph;
 
 use super::select::{Outcome, Select};
-use crate::commands::templates::LIST;
 use crate::error::{Error, Kind, Result};
+use crate::templates::LIST;
 
 const TITLE: &str = "pgmi init - Project Setup";
 

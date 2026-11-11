@@ -17,12 +17,13 @@ use crate::VERSION;
 use crate::cli::DeployArgs;
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
-use crate::conn::dial::{Dialer, Notice, Session};
+use crate::conn::dial::{Dialer, Session};
 use crate::conn::resolve::{self, Flags, Spec};
 use crate::conn::tls;
 use crate::env::Env;
+use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
-use crate::output::{NoticeLog, Reporter, redact, seconds, timestamp};
+use crate::output::{Notice, NoticeLog, Reporter, seconds, timestamp};
 use crate::project::{metadata, walk};
 
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
@@ -116,7 +117,7 @@ impl Guard {
             Kind::Timeout,
             format!(
                 "the deploy exceeded --timeout {}; the running statement was cancelled",
-                crate::cli::duration::render(self.timeout)
+                crate::duration::render(self.timeout)
             ),
         )
     }
@@ -352,7 +353,7 @@ async fn deploy(
     if let Some(y) = &yaml {
         y.timeout()?;
     }
-    let cloud = crate::cloud::select(a, yaml.as_ref())?;
+    let cloud = crate::conn::cloud::select(a, yaml.as_ref())?;
     let sources = Sources {
         yaml: yaml.as_ref().map(|y| y.param_values()).unwrap_or_default(),
         env: &ctx.env,
@@ -377,7 +378,7 @@ async fn deploy(
     };
     let mut spec = resolve::resolve(&flags, &ctx.env, yaml.as_ref().map(|y| &y.connection))?;
     if let Some((provider, req)) = &cloud {
-        crate::cloud::check(*provider, req, &mut spec, &ctx.env)?;
+        crate::conn::cloud::check(*provider, req, &mut spec, &ctx.env)?;
     }
     if let Some(m) = &ctx.maintenance_db {
         spec.maintenance_db = m.clone();
@@ -465,7 +466,7 @@ async fn deploy(
     };
     if let Some((provider, req)) = &cloud {
         let token = guard
-            .connecting(crate::cloud::token(*provider, req, &ctx.env))
+            .connecting(crate::conn::cloud::token(*provider, req, &ctx.env))
             .await?;
         spec.token = Some(token);
         st.spec = Some(spec.clone());

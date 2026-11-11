@@ -1,3 +1,6 @@
+//! Go-style durations such as `90s` or `1h30m`, for `--timeout`, `pgmi.yaml`
+//! and the MCP deploy tool.
+
 use std::time::Duration;
 
 pub(crate) fn parse(s: &str) -> Result<Duration, String> {

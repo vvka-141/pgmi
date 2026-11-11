@@ -119,7 +119,7 @@ always works.
   (PBES2) and legacy 3DES both open; the first certificate of the key's
   chain gives the `x5t#S256` thumbprint. Unit-tested against fixtures made
   with `openssl pkcs12 -export`.
-- The managed-identity sources the Rust SDK lacks (`cloud/azure_msi.rs`),
+- The managed-identity sources the Rust SDK lacks (`conn/cloud/azure_msi.rs`),
   detected as the Go and Rust SDKs do (`IDENTITY_ENDPOINT` with
   `IDENTITY_HEADER` and `IDENTITY_SERVER_THUMBPRINT`: Service Fabric; with
   `IMDS_ENDPOINT`: Arc; `MSI_ENDPOINT` with `MSI_SECRET`: Azure ML, alone:

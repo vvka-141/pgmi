@@ -1,5 +1,4 @@
 pub(crate) mod commands;
-pub(crate) mod duration;
 pub(crate) mod usage;
 
 use std::path::PathBuf;
@@ -116,7 +115,7 @@ pub(crate) struct DeployArgs {
     pub(crate) overwrite: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
     pub(crate) force: bool,
-    #[arg(long, value_parser = duration::parse, help = "Catastrophic failure protection, a Go duration such as 90s or 1h30m; 0 turns it off (default 3m0s)")]
+    #[arg(long, value_parser = crate::duration::parse, help = "Catastrophic failure protection, a Go duration such as 90s or 1h30m; 0 turns it off (default 3m0s)")]
     pub(crate) timeout: Option<Duration>,
     #[arg(long)]
     pub(crate) compat: Option<String>,

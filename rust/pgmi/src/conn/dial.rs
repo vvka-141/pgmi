@@ -12,18 +12,11 @@ use super::resolve::Spec;
 use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
+use crate::output::Notice;
 
 pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 type Stream = Box<dyn Io>;
-
-#[derive(Debug, Clone)]
-pub(crate) struct Notice {
-    pub(crate) severity: String,
-    pub(crate) message: String,
-    pub(crate) detail: Option<String>,
-    pub(crate) hint: Option<String>,
-}
 
 pub(crate) type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 pub(crate) type LogSink = Arc<dyn Fn(String) + Send + Sync>;
@@ -42,7 +35,7 @@ pub(crate) struct Session {
 enum Peer {
     Tcp(std::net::SocketAddr),
     Socket(String),
-    Google(crate::cloud::Token),
+    Google(crate::conn::cloud::Token),
 }
 
 pub(crate) fn notice_of(db: &DbError) -> Notice {
@@ -108,19 +101,6 @@ fn classify_io(e: &std::io::Error) -> bool {
     )
 }
 
-fn chain(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut parts = vec![e.to_string()];
-    let mut cur = e.source();
-    while let Some(c) = cur {
-        let t = c.to_string();
-        if !parts.iter().any(|p| p.contains(&t)) {
-            parts.push(t);
-        }
-        cur = c.source();
-    }
-    parts.join(": ")
-}
-
 fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure {
     if let Some(db) = e.as_db_error() {
         let code = db.code().code();
@@ -148,7 +128,7 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure
         }
         cur = c.source();
     }
-    let text = chain(e);
+    let text = crate::error::chain(e);
     if text.contains("password missing") {
         return Failure::Fatal(format!(
             "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"

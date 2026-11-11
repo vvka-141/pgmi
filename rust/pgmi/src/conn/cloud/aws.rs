@@ -55,7 +55,7 @@ pub(crate) async fn signer(req: &Request, env: &Env) -> Result<Signer> {
     let credentials = provider.provide_credentials().await.map_err(|e| {
         Error::connection(format!(
             "failed to acquire AWS IAM token: {}",
-            error_chain(&e)
+            crate::error::chain(&e)
         ))
     })?;
     Ok(Signer {
@@ -63,19 +63,6 @@ pub(crate) async fn signer(req: &Request, env: &Env) -> Result<Signer> {
         region,
         minted: Default::default(),
     })
-}
-
-fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut parts = vec![e.to_string()];
-    let mut cur = e.source();
-    while let Some(c) = cur {
-        let t = c.to_string();
-        if !parts.iter().any(|p| p.contains(&t)) {
-            parts.push(t);
-        }
-        cur = c.source();
-    }
-    parts.join(": ")
 }
 
 impl Signer {
