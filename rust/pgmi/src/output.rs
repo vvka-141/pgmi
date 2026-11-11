@@ -54,6 +54,21 @@ pub(crate) struct Notice {
     pub(crate) hint: Option<String>,
 }
 
+impl Notice {
+    fn json(&self) -> Value {
+        let mut v = Map::new();
+        v.insert("severity".into(), json!(self.severity.as_str()));
+        v.insert("message".into(), json!(self.message));
+        if let Some(d) = &self.detail {
+            v.insert("detail".into(), json!(d));
+        }
+        if let Some(h) = &self.hint {
+            v.insert("hint".into(), json!(h));
+        }
+        Value::Object(v)
+    }
+}
+
 /// Writes pgmi's own lines to one sink (stderr in production), one whole
 /// line at a time even when several deploys share it.
 pub(crate) struct Reporter {
@@ -137,9 +152,9 @@ impl Reporter {
 
 #[derive(Default)]
 pub(crate) struct NoticeLog {
-    head: Vec<Value>,
-    warnings: Vec<Value>,
-    tail: VecDeque<Value>,
+    head: Vec<Notice>,
+    warnings: Vec<Notice>,
+    tail: VecDeque<Notice>,
     dropped: u64,
     pub(crate) total: u64,
     pub(crate) warning_total: u64,
@@ -158,25 +173,15 @@ impl NoticeLog {
         if n.severity == Severity::Warning {
             self.warning_total += 1;
         }
-        let mut v = Map::new();
-        v.insert("severity".into(), json!(n.severity.as_str()));
-        v.insert("message".into(), json!(n.message));
-        if let Some(d) = &n.detail {
-            v.insert("detail".into(), json!(d));
-        }
-        if let Some(h) = &n.hint {
-            v.insert("hint".into(), json!(h));
-        }
-        let v = Value::Object(v);
         if self.head.len() < HEAD {
-            self.head.push(v);
+            self.head.push(n.clone());
             return;
         }
-        self.tail.push_back(v);
+        self.tail.push_back(n.clone());
         if self.tail.len() > TAIL
             && let Some(old) = self.tail.pop_front()
         {
-            if old["severity"] == "WARNING" && self.warnings.len() < WARNINGS {
+            if old.severity == Severity::Warning && self.warnings.len() < WARNINGS {
                 self.warnings.push(old);
             } else {
                 self.dropped += 1;
@@ -190,7 +195,7 @@ impl NoticeLog {
             .iter()
             .chain(&self.warnings)
             .chain(&self.tail)
-            .cloned()
+            .map(Notice::json)
             .collect();
         (
             Value::Array(all),

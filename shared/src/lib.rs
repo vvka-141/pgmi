@@ -1,5 +1,7 @@
 include!(concat!(env!("OUT_DIR"), "/files.rs"));
 
+/// The embedded file at `path`, relative to `shared/` with `/` separators
+/// (`templates/basic/deploy.sql`); `None` when nothing is embedded there.
 pub fn file(path: &str) -> Option<&'static [u8]> {
     FILES
         .binary_search_by(|(p, _)| p.cmp(&path))
@@ -7,6 +9,9 @@ pub fn file(path: &str) -> Option<&'static [u8]> {
         .map(|i| FILES[i].1)
 }
 
+/// Every embedded file whose path starts with `prefix`, in path order. The
+/// prefix is matched as text: pass `templates/basic/`, with the slash, for
+/// one directory.
 pub fn dir(prefix: &str) -> impl Iterator<Item = (&'static str, &'static [u8])> + '_ {
     let start = FILES.partition_point(|(p, _)| *p < prefix);
     FILES[start..]
@@ -21,6 +26,7 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    /// Runs `git ls-files`, so it needs a git checkout of the repository.
     fn embedded_files_equal_tracked_files() {
         let out = Command::new("git")
             .args([

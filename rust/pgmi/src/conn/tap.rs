@@ -76,6 +76,7 @@ impl Shared {
         }))
     }
 
+    /// The status of the last ReadyForQuery read so far; `Idle` before any.
     pub fn status(&self) -> TxStatus {
         self.status.load(Ordering::Acquire).into()
     }

@@ -139,8 +139,10 @@ impl Tool {
                 match path_argument(arguments, &["path"], "cli.mcpPathArgs")
                     .and_then(|(p, _)| metadata::validate_report(std::path::Path::new(&p), env))
                 {
-                    Ok(Ok(v)) => Outcome::json(&v),
-                    Ok(Err(errors)) => Outcome::failed(&Error::config(errors.join("\n"))),
+                    Ok(metadata::Validated::Report(v)) => Outcome::json(&v),
+                    Ok(metadata::Validated::Unreadable(errors)) => {
+                        Outcome::failed(&Error::config(errors.join("\n")))
+                    }
                     Err(e) => Outcome::failed(&e),
                 }
             }

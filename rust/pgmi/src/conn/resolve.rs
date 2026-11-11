@@ -318,8 +318,11 @@ pub(crate) struct Spec {
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslpassword: Option<Secret>,
+    /// `sslnegotiation=direct`: TLS from the first byte, ALPN `postgresql`.
     pub(crate) sslnegotiation_direct: bool,
     pub(crate) sslsni: bool,
+    /// `sslcertmode=disable`: never send a client certificate, even one in
+    /// `~/.postgresql`.
     pub(crate) sslcertmode_disable: bool,
     pub(crate) tls_versions: Vec<&'static rustls::SupportedProtocolVersion>,
     pub(crate) channel_binding: ChannelBinding,

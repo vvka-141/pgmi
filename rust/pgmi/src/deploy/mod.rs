@@ -252,6 +252,9 @@ impl Guard {
         }
     }
 
+    /// Runs `fut` on `session` until it ends, the deploy is stopped or the
+    /// deadline passes. On a stop it sends PostgreSQL's cancel request,
+    /// then gives `fut` 2 s to finish before it returns the stop's error.
     async fn running<T>(
         &self,
         session: &Session,

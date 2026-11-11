@@ -276,9 +276,9 @@ pub(crate) struct Scan {
     pub(crate) duplicates: Vec<(String, Vec<String>)>,
 }
 
-pub(crate) fn scan(files: &[File]) -> Scan {
+pub(crate) fn scan<'a>(files: impl IntoIterator<Item = &'a File>) -> Scan {
     let mut out = Scan::default();
-    for f in files.iter().filter(|f| is_sql(&f.path)) {
+    for f in files.into_iter().filter(|f| is_sql(&f.path)) {
         match parse(&f.path, &f.content) {
             Ok(Some(m)) => out.metas.push(m),
             Ok(None) => {}

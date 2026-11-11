@@ -85,7 +85,7 @@ pub(crate) fn plan_report(path: &Path, env: &Env) -> Result<Plan> {
     let (project, metas) = crate::vfs::OsFs::project(path)
         .and_then(|fs| walk::scan(&fs, max_size))
         .and_then(|p| metadata::collect(&p.sources).map(|m| (p, m)))
-        .map_err(|e| Error::new(e.kind(), format!("failed to scan directory: {}", e.text())))?;
+        .map_err(|e| Error::new(e.kind(), "failed to scan directory").with_source(e))?;
     Ok(Plan {
         total_files: project.sources.len(),
         plan: rows(&project.sources, &metas),
@@ -148,22 +148,26 @@ pub(crate) struct Validation {
     pub(crate) exit_code: Option<u8>,
 }
 
-pub(crate) fn validate_report(
-    path: &Path,
-    env: &Env,
-) -> Result<std::result::Result<Validation, Vec<String>>> {
+/// What `metadata validate` found: a report, or the `<pgmi-meta>` blocks
+/// it could not read.
+pub(crate) enum Validated {
+    Report(Validation),
+    Unreadable(Vec<String>),
+}
+
+pub(crate) fn validate_report(path: &Path, env: &Env) -> Result<Validated> {
     let max_size = walk::max_size(env)?;
     let project = walk::scan(&crate::vfs::OsFs::project(path)?, max_size)?;
-    let mut files: Vec<File> = project.sources.clone();
-    files.extend(project.tests.iter().cloned());
+    let files = project.sources.iter().chain(&project.tests);
     let total = project.sources.len() + project.test_dir_files.len();
-    let scan = metadata::scan(&files);
+    let scan = metadata::scan(files.clone());
     if !scan.errors.is_empty() {
-        return Ok(Err(scan.errors.iter().map(ToString::to_string).collect()));
+        return Ok(Validated::Unreadable(
+            scan.errors.iter().map(ToString::to_string).collect(),
+        ));
     }
     let by_path: BTreeSet<&str> = scan.metas.iter().map(|m| m.path.as_str()).collect();
     let warnings: Vec<String> = files
-        .iter()
         .filter(|f| is_sql(&f.path) && !by_path.contains(f.path.as_str()))
         .filter(|f| metadata::outside_comment(&f.content, None))
         .map(|f| format!("{}: <pgmi-meta> outside a /* */ block comment is not read; a -- line comment or a string is ignored, so this file has no metadata", f.path))
@@ -174,7 +178,7 @@ pub(crate) fn validate_report(
         .map(|(id, p)| metadata::duplicate_line(id, p))
         .collect();
     let with = scan.metas.len();
-    Ok(Ok(Validation {
+    Ok(Validated::Report(Validation {
         total_files: total,
         files_with_metadata: with,
         files_without_metadata: total - with,
@@ -190,8 +194,8 @@ fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
     let report = validate_report(&r.path, env)
         .map_err(|e| failed(r.json, e, serde_json::json!({"validationPassed": false})))?;
     let mut v = match report {
-        Ok(v) => v,
-        Err(errors) => {
+        Validated::Report(v) => v,
+        Validated::Unreadable(errors) => {
             let e = Error::config(format!("validation failed: {}", errors.join("\n")));
             return Err(failed(
                 r.json,

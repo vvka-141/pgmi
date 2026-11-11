@@ -462,6 +462,11 @@ pub(crate) struct Dialer {
 }
 
 impl Dialer {
+    /// Connects to `db`: every host in order (shuffled under
+    /// `load_balance_hosts=random`), every address of each, `sslmode=allow`
+    /// as plaintext then TLS, `prefer-standby` as two passes, until one
+    /// satisfies `target_session_attrs`. A round whose failures were all
+    /// transient is retried with backoff (`conn::retry`).
     pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
         if spec.sslmode() != SslMode::Disable {
             super::tls::require_cpu()?;
@@ -628,6 +633,8 @@ fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u1
 }
 
 impl Session {
+    /// Sends PostgreSQL's cancel request over a new socket to the same peer,
+    /// with the session's TLS; best effort, at most 2 s, errors ignored.
     pub(crate) async fn cancel(&self) {
         let fut = async {
             let Ok(socket) = dial(&self.peer, &self.tcp).await else {
@@ -645,6 +652,7 @@ impl Session {
         let _ = tokio::time::timeout(Duration::from_secs(2), fut).await;
     }
 
+    /// Drops the connection without a goodbye: aborts the task that drives it.
     pub(crate) fn disconnect(&self) {
         self.connection.abort();
     }
