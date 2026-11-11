@@ -270,8 +270,9 @@ sslmode `disable`, `allow` (plaintext), `prefer` (TLS when the server offers
 it), `require` (no verification, unless a root certificate is given, which makes
 it `verify-ca`), `verify-ca` (chain only), `verify-full` (chain and host name;
 an IP address needs an IP SAN). The root certificate is `sslrootcert`, else
-`~/.postgresql/root.crt`; `sslrootcert=system` uses the platform trust store
-(and `SSL_CERT_FILE`). The client certificate is `sslcert`/`sslkey`, else
+`~/.postgresql/root.crt`, else the platform trust store (as pgx does; libpq
+would refuse); `sslrootcert=system` names the platform trust store
+explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate is `sslcert`/`sslkey`, else
 `~/.postgresql/postgresql.crt`/`.key`; an encrypted key opens with
 `sslpassword`, a wrong one is exit 10. `channel_binding=require` needs TLS;
 `sslnegotiation=direct` is supported; `require_auth` refuses another method.
@@ -279,7 +280,7 @@ an IP address needs an IP SAN). The root certificate is `sslrootcert`, else
 sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. `--json`
 reports `tls.enabled`, `tls.version` (`TLS 1.3`), `tls.sslmode`.
 
-Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/encrypted-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`.
+Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`.
 
 ### Target database, overwrite and approval
 

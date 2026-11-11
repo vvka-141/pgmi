@@ -1,0 +1,14 @@
+description: verify-ca and verify-full with no sslrootcert and no ~/.postgresql/root.crt check the server against the system trust store, which SSL_CERT_FILE replaces (as pgx does; Azure relies on it)
+servers: [tls]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-ca", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full", -d, "{db}"]
+    expect: {exit: 11, stderr: ["unknown authority|refused"]}

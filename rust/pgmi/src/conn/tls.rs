@@ -331,22 +331,22 @@ pub fn config(spec: &Spec) -> Result<Tls> {
     let chain = if verify {
         let mut roots = RootCertStore::empty();
         match root_path(spec).as_deref() {
-            Some("system") => {
-                let found = rustls_native_certs::load_native_certs();
-                if found.certs.is_empty() {
-                    return Err(Error::config(
-                        "sslrootcert=system: no certificates found in the system trust store",
-                    ));
-                }
-                roots.add_parsable_certificates(found.certs);
-            }
-            Some(path) => {
+            Some(path) if path != "system" => {
                 roots.add_parsable_certificates(read_certs(Path::new(path))?);
             }
-            None => {
-                return Err(Error::config(format!(
-                    "sslmode {mode} needs a root certificate: set sslrootcert or put one in ~/.postgresql/root.crt"
-                )));
+            named => {
+                let found = rustls_native_certs::load_native_certs();
+                if found.certs.is_empty() {
+                    return Err(Error::config(if named.is_some() {
+                        "sslrootcert=system: no certificates found in the system trust store"
+                            .to_string()
+                    } else {
+                        format!(
+                            "sslmode {mode}: no root certificate given and none found in the system trust store; set sslrootcert or put one in ~/.postgresql/root.crt"
+                        )
+                    }));
+                }
+                roots.add_parsable_certificates(found.certs);
             }
         }
         Some(
@@ -576,6 +576,24 @@ mod tests {
         ))
         .unwrap();
         assert!(!t.config.enable_sni);
+    }
+
+    #[test]
+    fn verification_without_a_root_uses_the_system_store() {
+        let home = std::env::temp_dir().join(format!("pgmi-noroot-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let system = !rustls_native_certs::load_native_certs().certs.is_empty();
+        for mode in ["verify-ca", "verify-full"] {
+            let r = config(&spec(&format!("sslmode={mode}"), Some(&home)));
+            match r {
+                Ok(_) => assert!(system, "{mode}"),
+                Err(e) => {
+                    assert!(!system, "{mode}: {}", e.text());
+                    assert!(e.text().contains("system trust store"), "{}", e.text());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

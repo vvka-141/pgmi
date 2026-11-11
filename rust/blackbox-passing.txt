@@ -140,3 +140,4 @@ tls/sslmode-matrix
 tls/sslmode-refusals
 tls/system-roots
 tls/tls-only-and-plain-servers
+tls/verify-without-root
