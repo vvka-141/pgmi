@@ -74,9 +74,14 @@ class Symlink:
 
 
 @dataclass(frozen=True, slots=True)
+class Fifo:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class Project:
     init: str | None
-    files: dict[str, str | bytes | Symlink]
+    files: dict[str, str | bytes | Symlink | Fifo]
     generate: Generate | None = None
 
 
@@ -229,18 +234,23 @@ def _project(r: _Reader, value: Any) -> Project:
     return Project(init, _project_files(r, value.get("files", {})), generate)
 
 
-def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink]:
+def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink | Fifo]:
     if not isinstance(value, dict):
         raise r.fail("project.files", "must map paths to contents")
-    files: dict[str, str | bytes | Symlink] = {}
+    files: dict[str, str | bytes | Symlink | Fifo] = {}
     for path, item in value.items():
         at = f"project.files.{path}"
         if isinstance(item, str):
             files[path] = item
             continue
-        item = r.mapping(item, at, {"hex", "symlink"})
+        item = r.mapping(item, at, {"hex", "symlink", "fifo"})
         if len(item) != 1:
-            raise r.fail(at, "needs exactly one of hex or symlink")
+            raise r.fail(at, "needs exactly one of hex, symlink or fifo")
+        if "fifo" in item:
+            if item["fifo"] is not True:
+                raise r.fail(f"{at}.fifo", "must be true")
+            files[path] = Fifo()
+            continue
         if "symlink" in item:
             files[path] = Symlink(r.string(item["symlink"], f"{at}.symlink"))
             continue

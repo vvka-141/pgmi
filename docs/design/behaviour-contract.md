@@ -196,9 +196,14 @@ The walk never follows a symbolic link: a linked file or directory that
 a link. A file containing a NUL byte or invalid UTF-8 is exit 10 naming it
 (for `deploy.sql`, with the byte offset). A directory named `__<name>__`
 other than `__test__` and `__tests__` is exit 10. A file larger than the cap
-is exit 10.
+is exit 10. A named pipe, socket or device that `.pgmiignore` does not hide,
+`deploy.sql` included, is exit 10 (`refusing to read <path>: not a regular
+file (a named pipe, socket or device)`) and is never read, in `deploy` and in
+`info`. The first SIGINT or SIGTERM during the load is exit 130 and a
+`--timeout` that runs out there is exit 16, as in Go, which loads after
+connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 

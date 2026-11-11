@@ -38,6 +38,7 @@ project:
       SELECT 1/0;
     data.bin: {hex: "610062"}        # raw bytes
     link.sql: {symlink: ../x.sql}    # a symbolic link
+    pipe.sql: {fifo: true}           # a named pipe
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_TOKEN: abc}   # optional

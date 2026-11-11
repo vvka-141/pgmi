@@ -153,6 +153,36 @@ impl Guard {
         )
     }
 
+    fn expired_error(&self) -> Error {
+        Error::new(
+            Kind::Timeout,
+            format!(
+                "the deploy exceeded --timeout {}; raise it, or pass --timeout 0 for no limit",
+                crate::duration::render(self.timeout)
+            ),
+        )
+    }
+
+    async fn waiting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
+        tokio::select! {
+            r = fut => r,
+            _ = self.token.cancelled() => Err(self.stop_error()),
+            _ = tokio::time::sleep_until(self.deadline) => Err(self.expired_error()),
+        }
+    }
+
+    async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        self.waiting(async {
+            tokio::task::spawn_blocking(work)
+                .await
+                .map_err(|e| Error::internal(format!("blocking task: {e}")))?
+        })
+        .await
+    }
+
     async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
@@ -424,9 +454,7 @@ async fn deploy(
     st.deployer = true;
     let max_size = walk::max_size(&ctx.env)?;
     let fs = crate::vfs::OsFs::new(a.project.clone());
-    let project = tokio::task::spawn_blocking(move || walk::load(&fs, max_size))
-        .await
-        .map_err(|e| Error::internal(format!("project loader: {e}")))??;
+    let project = guard.blocking(move || walk::load(&fs, max_size)).await?;
     let meta = metadata::collect(&project.sources)?;
     let files_loaded = project.sources.len() + project.test_dir_files.len();
     st.loaded = Some(Loaded {
@@ -712,6 +740,50 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    fn guard(timeout: Duration) -> Guard {
+        Guard {
+            token: CancellationToken::new(),
+            deadline: deadline(timeout),
+            timeout,
+            interrupted: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    async fn stuck(guard: &Guard) -> Error {
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(5),
+            guard.blocking(move || {
+                let _ = wait.recv();
+                Ok(())
+            }),
+        )
+        .await;
+        drop(release);
+        stopped
+            .expect("blocking work must not hold up a stop")
+            .unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn blocking_work_gives_way_to_the_first_signal() {
+        let g = guard(Duration::from_secs(60));
+        g.interrupted.store(true, Ordering::SeqCst);
+        g.token.cancel();
+        let e = stuck(&g).await;
+        assert_eq!((e.exit_code(), e.text()), (130, "interrupted".to_string()));
+    }
+
+    #[tokio::test]
+    async fn blocking_work_gives_way_to_the_timeout() {
+        let e = stuck(&guard(Duration::from_millis(50))).await;
+        assert_eq!(e.exit_code(), 16);
+        assert_eq!(
+            e.text(),
+            "the deploy exceeded --timeout 50ms; raise it, or pass --timeout 0 for no limit"
+        );
+    }
 
     #[test]
     fn a_cancelled_deploy_is_not_a_timeout() {

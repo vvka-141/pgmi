@@ -4,10 +4,13 @@
 //! Paths are relative to the tree's root, `/`-separated, and `""` is the
 //! root itself.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+
+/// Why a named pipe, socket or device in a project is never read.
+pub(crate) const NOT_REGULAR: &str = "not a regular file (a named pipe, socket or device)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -122,6 +125,22 @@ fn os_stat(path: &Path) -> io::Result<Stat> {
     })
 }
 
+fn open_regular(path: &Path) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = options.open(path)?;
+    let meta = file.metadata()?;
+    if meta.is_dir() {
+        return Err(io::ErrorKind::IsADirectory.into());
+    }
+    if !meta.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, NOT_REGULAR));
+    }
+    Ok(file)
+}
+
 impl Vfs for OsFs {
     fn root(&self) -> &Path {
         &self.root
@@ -132,7 +151,9 @@ impl Vfs for OsFs {
     }
 
     fn read(&self, rel: &str) -> io::Result<Vec<u8>> {
-        std::fs::read(self.path(rel))
+        let mut out = Vec::new();
+        open_regular(&self.path(rel))?.read_to_end(&mut out)?;
+        Ok(out)
     }
 
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>> {
@@ -260,6 +281,12 @@ impl MemFs {
     #[must_use]
     pub(crate) fn unreadable_dir(mut self, rel: &str) -> Self {
         self.insert(rel, Node::Unreadable(Kind::Dir));
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn special(mut self, rel: &str) -> Self {
+        self.insert(rel, Node::Unreadable(Kind::Other));
         self
     }
 
@@ -494,6 +521,28 @@ mod tests {
             fs.stat("missing").unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn os_fs_refuses_a_named_pipe_instead_of_waiting_for_a_writer() {
+        let dir = std::env::temp_dir().join(format!("pgmi-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("pipe.sql"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let fs = OsFs::new(&dir);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(fs.read("pipe.sql")));
+        let read = rx.recv_timeout(std::time::Duration::from_secs(5));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let e = read
+            .expect("reading a named pipe must not wait")
+            .unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), NOT_REGULAR);
     }
 
     #[test]

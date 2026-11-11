@@ -87,6 +87,7 @@ errors/connection-string-secrets
 errors/diagnostics-secrets
 errors/head-syntax
 errors/line-and-column
+errors/special-file
 errors/temporary-privilege
 execution/atomic-head
 execution/loader-at-scale

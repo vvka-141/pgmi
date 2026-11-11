@@ -1,6 +1,6 @@
 import pytest
 
-from pgmi_blackbox.case import CaseError, Symlink, implementation, parse_case
+from pgmi_blackbox.case import CaseError, Fifo, Symlink, implementation, parse_case
 
 MINIMAL = {
     "description": "deploy succeeds",
@@ -28,10 +28,15 @@ def test_stdin_list_keeps_lines_and_waits():
     assert parse_case("cases/x.yaml", doc).steps[0].stdin == ("a\n", 2.0, "b\n")
 
 
-def test_project_files_take_text_hex_and_symlinks():
-    files = {"a.sql": "SELECT 1;", "b.dat": {"hex": "00ff"}, "c.sql": {"symlink": "../x.sql"}}
+def test_project_files_take_text_hex_symlinks_and_fifos():
+    files = {"a.sql": "SELECT 1;", "b.dat": {"hex": "00ff"}, "c.sql": {"symlink": "../x.sql"}, "d.sql": {"fifo": True}}
     project = parse_case("cases/x.yaml", {**MINIMAL, "project": {"files": files}}).project
-    assert project.files == {"a.sql": "SELECT 1;", "b.dat": b"\x00\xff", "c.sql": Symlink("../x.sql")}
+    assert project.files == {
+        "a.sql": "SELECT 1;",
+        "b.dat": b"\x00\xff",
+        "c.sql": Symlink("../x.sql"),
+        "d.sql": Fifo(),
+    }
 
 
 def test_stdin_text_and_hex_repeat_without_newline():
@@ -75,6 +80,7 @@ def test_stdin_text_and_hex_repeat_without_newline():
         ),
         ({**MINIMAL, "project": {"files": {"a": {"hex": "0"}}}}, "project.files.a.hex"),
         ({**MINIMAL, "project": {"files": {"a": {"hex": "00", "symlink": "b"}}}}, "project.files.a"),
+        ({**MINIMAL, "project": {"files": {"a": {"fifo": "yes"}}}}, "project.files.a.fifo"),
         ({**MINIMAL, "project": {"files": {"a": 1}}}, "project.files.a"),
         ({**MINIMAL, "steps": [{"pgmi": ["x"], "expect": {"exit": 0, "files": ["a"]}}]}, "steps[0].expect.files"),
         (

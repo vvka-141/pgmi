@@ -1,6 +1,6 @@
 use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
-use crate::vfs::{Kind as FileKind, Name, Vfs};
+use crate::vfs::{Kind as FileKind, NOT_REGULAR, Name, Vfs};
 
 pub(crate) const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -71,10 +71,17 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
             ".pgmiignore hides deploy.sql; add !deploy.sql after the pattern that matches it",
         ));
     }
-    if !fs
-        .stat("deploy.sql")
-        .is_ok_and(|s| s.kind == FileKind::File)
+    let deploy = fs.stat("deploy.sql");
+    if deploy
+        .as_ref()
+        .is_ok_and(|s| s.kind == FileKind::Other && !s.link)
     {
+        return Err(Error::config(format!(
+            "{} is {NOT_REGULAR}",
+            fs.display("deploy.sql")
+        )));
+    }
+    if !deploy.is_ok_and(|s| s.kind == FileKind::File) {
         return Err(Error::new(
             Kind::NoDeploySql,
             format!("deploy.sql not found in {}", fs.display("")),
@@ -186,6 +193,11 @@ fn walk(
         if entry.stat.link {
             return Err(Error::config(format!(
                 "./{child} is a symlink; pgmi does not follow symbolic links, so hide it in .pgmiignore or replace it with the file"
+            )));
+        }
+        if entry.stat.kind == FileKind::Other {
+            return Err(Error::config(format!(
+                "failed to read ./{child}: refusing to read {child}: {NOT_REGULAR}; exclude it in .pgmiignore or remove it"
             )));
         }
         if is_dir {
@@ -503,6 +515,39 @@ mod tests {
                 MAX
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_named_pipe_socket_or_device_is_refused_before_it_is_read() {
+        for (fs, rel) in [
+            (project().special("pipe.sql"), "pipe.sql"),
+            (
+                project().special("__test__/notes.txt"),
+                "__test__/notes.txt",
+            ),
+        ] {
+            assert_eq!(
+                refused(&fs),
+                format!(
+                    "failed to read ./{rel}: refusing to read {rel}: not a regular file (a named pipe, socket or device); exclude it in .pgmiignore or remove it"
+                )
+            );
+            assert!(scan(&fs, MAX).is_err());
+        }
+        assert!(
+            load(
+                &project()
+                    .special("pipe.sql")
+                    .file(".pgmiignore", "pipe.sql\n"),
+                MAX
+            )
+            .is_ok()
+        );
+        let fs = MemFs::default().special("deploy.sql");
+        assert_eq!(
+            refused(&fs),
+            "/mem/deploy.sql is not a regular file (a named pipe, socket or device)"
         );
     }
 

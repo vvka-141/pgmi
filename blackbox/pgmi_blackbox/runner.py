@@ -18,7 +18,7 @@ from typing import Any
 
 import psycopg
 
-from pgmi_blackbox.case import Case, Expect, Step, Symlink
+from pgmi_blackbox.case import Case, Expect, Fifo, Step, Symlink
 from pgmi_blackbox.server import Server
 
 _silent: socket.socket | None = None
@@ -156,6 +156,8 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(content, Symlink):
             target.symlink_to(ws.substitute(content.target))
+        elif isinstance(content, Fifo):
+            os.mkfifo(target)
         elif isinstance(content, bytes):
             target.write_bytes(content)
         else:

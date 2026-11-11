@@ -1,0 +1,16 @@
+description: a named pipe in the project is refused with exit 10 by deploy and info, never read (reading one would wait for a writer for ever)
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pipe.sql: {fifo: true}
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    timeout: 20
+    expect:
+      exit: 10
+      stderr: ["refusing to read pipe\\.sql: not a regular file \\(a named pipe, socket or device\\); exclude it in \\.pgmiignore or remove it"]
+  - pgmi: [info, "{project}"]
+    timeout: 20
+    expect:
+      exit: 10
+      stderr: ["refusing to read pipe\\.sql: not a regular file"]
