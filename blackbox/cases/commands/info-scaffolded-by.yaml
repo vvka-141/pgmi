@@ -1,0 +1,8 @@
+description: info names the pgmi version and template that scaffolded the project, read from the first line init writes into deploy.sql
+project:
+  init: basic
+steps:
+  - pgmi: [info, "{project}"]
+    expect:
+      exit: 0
+      stdout: ['Scaffolded by: pgmi \S+, basic template']

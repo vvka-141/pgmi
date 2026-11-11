@@ -258,3 +258,16 @@ decided in the behaviour contract (PGMI-828), not fixed.
 - A POSIX class such as `[[:space:]]` in `.pgmiignore` is refused as an invalid
   pattern, exit 10 (`dialect/pgmiignore-posix-class`); git accepts it. A Go bug
   left in place by the freeze; the Rust version should accept it.
+
+## Documented promises pinned by the docs review (PGMI-879)
+
+| Promise | Case |
+|---|---|
+| `CALL pgmi_test()` with no tests aborts the deploy (13) | ✓ `execution/pgmi-test-without-tests` |
+| `_setup.psql` is a fixture too | ✓ `execution/setup-psql-fixture` |
+| `info` names the version and template that scaffolded the project | ✓ `commands/info-scaffolded-by` |
+| the maintenance database is dialed only when the target is missing | ✓ `connection/maintenance-database-only-when-needed` |
+| `passfile=` in the string beats `PGPASSFILE` | ✓ `env/passfile-beats-pgpassfile` |
+| Ctrl-C with `--json`: `exitCode` 130 | ✓ `cancel/ctrl-c-json-exit-code` |
+| a concurrent index cut off by `--timeout`: exit 16, INVALID index left | ✓ `cancel/timeout-leaves-invalid-concurrent-index` |
+| a nested `deploy.sql` is loaded; `--verbose` names ignored paths | ✓ `dialect/nested-deploy-sql-loaded` |

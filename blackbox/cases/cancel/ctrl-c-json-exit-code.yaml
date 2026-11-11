@@ -1,0 +1,11 @@
+description: Ctrl-C during a deploy with --json reports status failed and exitCode 130, the code the process exits with
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(30);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    signal: {name: SIGINT, after: 3}
+    timeout: 60
+    expect:
+      exit: 130
+      json: {status: failed, exitCode: 130}

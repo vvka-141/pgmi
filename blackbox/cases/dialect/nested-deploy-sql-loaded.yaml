@@ -1,0 +1,16 @@
+description: only the root deploy.sql is left out of the session; a nested deploy.sql is loaded as a source file with is_sql_file true; --verbose names each path discovery ignored and why
+project:
+  files:
+    nested/deploy.sql: SELECT 1;
+    .hidden/x.sql: SELECT 1;
+    deploy.sql: |
+      CREATE TABLE seen AS
+      SELECT path, is_sql_file FROM pg_temp.pgmi_source_view WHERE path LIKE '%deploy.sql';
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --verbose]
+    expect:
+      exit: 0
+      stderr: ['ignored \./\.hidden/']
+      sql:
+        - query: SELECT path, is_sql_file FROM seen
+          rows: [["./nested/deploy.sql", true]]

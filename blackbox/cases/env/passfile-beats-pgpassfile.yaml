@@ -1,0 +1,12 @@
+description: a passfile= in the connection string wins over PGPASSFILE, as in libpq
+home:
+  good.pgpass: {content: "{host}:{port}:*:{user}:{password}\n", mode: "0600"}
+  wrong.pgpass: {content: "{host}:{port}:*:{user}:not-the-password\n", mode: "0600"}
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "host={host} port={port} user={user} dbname=postgres passfile={home}/good.pgpass", -d, "{db}"]
+    env: {PGPASSFILE: "{home}/wrong.pgpass"}
+    expect:
+      exit: 0

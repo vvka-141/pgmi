@@ -1,0 +1,19 @@
+description: pgmi connects to the target first and dials the maintenance database only when the target is missing (or with --overwrite), so a maintenance_database that does not exist is harmless for an existing target
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      connection:
+        maintenance_database: pgmi_no_such_maintenance_db
+steps:
+  - pgmi: [deploy, "{project}", -h, "{host}", -p, "{port}", -U, "{user}", -d, "{db}"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 11
+      stderr: ['pgmi_no_such_maintenance_db']
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", -h, "{host}", -p, "{port}", -U, "{user}", -d, "{db}"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0

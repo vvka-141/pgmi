@@ -1,0 +1,16 @@
+description: CALL pgmi_test() with no file under a __test__/ directory raises and the deploy aborts (exit 13), as WHY-PGMI.md and the session API say
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE marker (id int);
+      CALL pgmi_test();
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ['no tests were discovered']
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'marker'
+          rows: [[0]]

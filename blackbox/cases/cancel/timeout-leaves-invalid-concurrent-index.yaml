@@ -1,0 +1,17 @@
+description: a CREATE INDEX CONCURRENTLY cut off by --timeout exits 16 and leaves an INVALID index, as CICD.md says (drop it and deploy again)
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE t (x int);
+      INSERT INTO t SELECT generate_series(1, 5);
+      CREATE FUNCTION slow(int) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT $1 FROM pg_sleep(1)';
+      COMMIT;
+      CREATE INDEX CONCURRENTLY t_slow ON t ((slow(x)));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 3s]
+    timeout: 60
+    expect:
+      exit: 16
+      sql:
+        - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'public.t_slow'::regclass
+          rows: [[false]]

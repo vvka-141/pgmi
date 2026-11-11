@@ -1,0 +1,17 @@
+description: a __test__/_setup.psql runs as the directory's fixture, as _setup.sql does
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CALL pgmi_test();
+      COMMIT;
+    __test__/_setup.psql: CREATE TEMP TABLE fixture_ran (ok boolean); INSERT INTO fixture_ran VALUES (true);
+    __test__/test_fixture.sql: |
+      DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM fixture_ran) THEN RAISE EXCEPTION 'TEST FAILED: the _setup.psql fixture did not run'; END IF;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ['Fixture: \./__test__/_setup\.psql']

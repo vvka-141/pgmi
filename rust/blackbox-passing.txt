@@ -1,5 +1,7 @@
+cancel/ctrl-c-json-exit-code
 cancel/sigint-twice
 cancel/timeout-cancels
+cancel/timeout-leaves-invalid-concurrent-index
 cancel/timeout-over-tls
 checksums/cross-binary-redeploy
 checksums/cross-binary-redeploy-advanced
@@ -27,6 +29,7 @@ commands/bare
 commands/completion
 commands/help
 commands/info
+commands/info-scaffolded-by
 commands/init
 commands/init-project-name
 commands/init-unwritable
@@ -55,6 +58,7 @@ connection/hostaddr
 connection/keepalives
 connection/keywords
 connection/load-balance-hosts
+connection/maintenance-database-only-when-needed
 connection/multi-host
 connection/pgpass
 connection/pgpass-wildcard-and-file
@@ -75,6 +79,7 @@ deploy/json-success
 deploy/latin1-database
 deploy/session-tables-analyzed
 dialect/call-glued-to-a-non-ascii-letter
+dialect/nested-deploy-sql-loaded
 dialect/pgmiignore
 dialect/pgmiignore-hides-deploy
 dialect/pgmiignore-latin1
@@ -87,6 +92,7 @@ dialect/project-walk
 env/connection-string-vars
 env/connection-string-vars-refuse-flags
 env/ignored-variables
+env/passfile-beats-pgpassfile
 env/pgappname
 env/pgconnect-timeout
 env/pgservice-refused
@@ -106,6 +112,8 @@ execution/loader-at-scale
 execution/open-transaction
 execution/pgmi-test-in-block
 execution/pgmi-test-needs-begin
+execution/pgmi-test-without-tests
+execution/setup-psql-fixture
 execution/tail-autocommit
 execution/tail-block-fails
 exit-codes/0-success
