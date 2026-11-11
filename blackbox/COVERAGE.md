@@ -138,7 +138,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 13, 14 | error inside an executed file names the file | ✓ `errors/attribution` |
 | 15 | `--json` failure record: `sqlstate`, `failedFile` | ✓ `errors/attribution` |
 | 15a | the connection password never reaches `--json` through DETAIL, HINT or CONTEXT | ✓ `errors/diagnostics-secrets` |
-| 15b | the connection password printed in a notice, an error, `--json` or a serve answer is `***` (Rust; Go prints it) | ✓ `notices/secrets-redacted` |
+| 15b | the connection password printed in a notice, an error, `--json` or a serve answer is `***` (Rust; Go prints it), also when it came from `~/.pgpass` | ✓ `notices/secrets-redacted`, `notices/pgpass-secret-redacted` |
 | 16 | 42501 TEMPORARY guidance; wrong password; missing maintenance database; hba reject | ✓ `errors/temporary-privilege`, `errors/connection-failures`, `tls/tls-only-and-plain-servers`; 53300, 57P03 ✗ (server states a case cannot produce reliably) |
 | 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
@@ -156,7 +156,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
 | 29a | libpq keys Go sends to the server (keepalives, `tcp_user_timeout`, `load_balance_hosts`, `hostaddr`, GSSAPI keys, `sslcompression`, `client_encoding`) and the pgx options' values | ✓ `connection/keepalives`, `connection/tcp-user-timeout`, `connection/load-balance-hosts`, `connection/hostaddr`, `connection/gssapi-keys`, `connection/sslcompression`, `connection/client-encoding`, `connection/pgx-options` |
 | 29b | keyword/value with spaces around `=` and a `;` in a quoted value; ADO.NET quoted values; ADO.NET `Host=h:port` beats `Port=` | ✓ `connection/string-forms` |
-| 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root` |
+| 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca; `pgmi.yaml`'s certificate paths apply beside a connection string | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/yaml-certificates-with-string` |
 | 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
 | 32 | `sslrootcert=system`, with `SSL_CERT_FILE`; it makes `verify-full` the default | ✓ `tls/system-roots` |
 | 33 | server without TLS: prefer plaintext, require refused; TLS-only server: allow refused | ✓ `tls/tls-only-and-plain-servers` |

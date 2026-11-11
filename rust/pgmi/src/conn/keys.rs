@@ -9,6 +9,42 @@ pub(crate) enum KeyError {
     NeedsPassword,
     WrongPassword,
     Malformed(String),
+    TooCostly(String),
+}
+
+pub(crate) const MAX_ITERATIONS: u32 = 1_000_000;
+pub(crate) const MAX_SCRYPT_COST: u64 = 1 << 23;
+
+fn bounded_iterations(kdf: &str, n: u64) -> Result<(), KeyError> {
+    if n > u64::from(MAX_ITERATIONS) {
+        return Err(KeyError::TooCostly(format!(
+            "{kdf} iteration count {n} is above {MAX_ITERATIONS}"
+        )));
+    }
+    Ok(())
+}
+
+fn bounded(scheme: &pkcs8::pkcs5::EncryptionScheme) -> Result<(), KeyError> {
+    use pkcs8::pkcs5::{EncryptionScheme, pbes2::Kdf};
+    let EncryptionScheme::Pbes2(params) = scheme else {
+        return Ok(());
+    };
+    match &params.kdf {
+        Kdf::Pbkdf2(p) => bounded_iterations("PBKDF2", u64::from(p.iteration_count)),
+        Kdf::Scrypt(p) => {
+            let cost = p
+                .cost_parameter
+                .saturating_mul(u64::from(p.block_size))
+                .saturating_mul(u64::from(p.parallelization));
+            if cost > MAX_SCRYPT_COST {
+                return Err(KeyError::TooCostly(format!(
+                    "scrypt cost N*r*p = {cost} is above {MAX_SCRYPT_COST}"
+                )));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 const ENCRYPTED_PKCS8: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
@@ -75,6 +111,7 @@ fn pkcs8(text: &str, password: &str) -> Result<PrivateKeyDer<'static>, KeyError>
     }
     let info = pkcs8::EncryptedPrivateKeyInfoRef::from_der(&block.der)
         .map_err(|e| KeyError::Malformed(e.to_string()))?;
+    bounded(&info.encryption_algorithm)?;
     let doc = info
         .decrypt(password)
         .map_err(|_| KeyError::WrongPassword)?;
@@ -102,6 +139,7 @@ fn pbe_sha1_3des(
             "PBE-SHA1-3DES iteration count is not positive".into(),
         ));
     }
+    bounded_iterations("PBE-SHA1-3DES", params.iterations.unsigned_abs().into())?;
     let salt = params.salt.as_bytes();
     let derive = |kind, len| {
         derive_key_utf8::<sha1::Sha1>(password, salt, kind, params.iterations, len)
@@ -254,6 +292,87 @@ mod tests {
             Err(KeyError::WrongPassword)
         );
         assert_eq!(decrypt(encrypted, None), Err(KeyError::NeedsPassword));
+    }
+
+    fn as_pem(der: &[u8]) -> String {
+        format!(
+            "{ENCRYPTED_PKCS8}\n{}\n-----END ENCRYPTED PRIVATE KEY-----\n",
+            base64ct::Base64::encode_string(der)
+        )
+    }
+
+    fn pbes2_with(text: &str, edit: impl FnOnce(&mut pkcs8::pkcs5::pbes2::Kdf)) -> String {
+        use pkcs8::der::{Decode, Encode};
+        let der = pem(text).unwrap().der;
+        let mut info = pkcs8::EncryptedPrivateKeyInfoRef::from_der(&der).unwrap();
+        let pkcs8::pkcs5::EncryptionScheme::Pbes2(params) = &mut info.encryption_algorithm else {
+            panic!("not PBES2")
+        };
+        edit(&mut params.kdf);
+        as_pem(&info.to_der().unwrap())
+    }
+
+    #[test]
+    fn keys_openssl_writes_open_and_a_runaway_cost_is_refused() {
+        use pkcs8::pkcs5::pbes2::Kdf;
+        let pbkdf2 = include_str!("cloud/testdata/client-ec-pbes2.pem");
+        let scrypt = include_str!("cloud/testdata/client-ec-scrypt.pem");
+        for text in [pbkdf2, scrypt] {
+            assert!(decrypt(text.as_bytes(), Some("key-passphrase")).is_ok());
+        }
+        let at_bound = pbes2_with(pbkdf2, |k| {
+            if let Kdf::Pbkdf2(p) = k {
+                p.iteration_count = MAX_ITERATIONS + 1;
+            }
+        });
+        assert_eq!(
+            decrypt(at_bound.as_bytes(), Some("key-passphrase")),
+            Err(KeyError::TooCostly(
+                "PBKDF2 iteration count 1000001 is above 1000000".into()
+            ))
+        );
+        let huge = pbes2_with(pbkdf2, |k| {
+            if let Kdf::Pbkdf2(p) = k {
+                p.iteration_count = u32::MAX;
+            }
+        });
+        assert!(matches!(
+            decrypt(huge.as_bytes(), Some("key-passphrase")),
+            Err(KeyError::TooCostly(_))
+        ));
+        let costly = pbes2_with(scrypt, |k| {
+            if let Kdf::Scrypt(p) = k {
+                p.cost_parameter = 1 << 21;
+            }
+        });
+        assert_eq!(
+            decrypt(costly.as_bytes(), Some("key-passphrase")),
+            Err(KeyError::TooCostly(
+                "scrypt cost N*r*p = 16777216 is above 8388608".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_pbe_sha1_3des_key_with_a_runaway_iteration_count_is_refused() {
+        use pkcs8::der::{Decode, Encode};
+        let der = pem(include_str!("cloud/testdata/client-ec-pbe-sha1-3des.pem"))
+            .unwrap()
+            .der;
+        let mut info = pkcs12::pbe_params::EncryptedPrivateKeyInfo::from_der(&der).unwrap();
+        let any = info.encryption_algorithm.parameters.as_ref().unwrap();
+        let mut params = any
+            .decode_as::<pkcs12::pbe_params::Pkcs12PbeParams>()
+            .unwrap();
+        params.iterations = i32::MAX;
+        info.encryption_algorithm.parameters = Some(pkcs8::der::Any::encode_from(&params).unwrap());
+        let text = as_pem(&info.to_der().unwrap());
+        assert_eq!(
+            decrypt(text.as_bytes(), Some("key-passphrase")),
+            Err(KeyError::TooCostly(
+                "PBE-SHA1-3DES iteration count 2147483647 is above 1000000".into()
+            ))
+        );
     }
 
     #[test]

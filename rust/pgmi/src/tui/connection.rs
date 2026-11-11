@@ -930,6 +930,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> std::result::Result<String, S
     let dialer = crate::conn::dial::Dialer {
         notices: std::sync::Arc::new(|_| {}),
         log: std::sync::Arc::new(|_| {}),
+        secret: std::sync::Arc::new(|_| {}),
     };
     let work = async {
         let session = dialer

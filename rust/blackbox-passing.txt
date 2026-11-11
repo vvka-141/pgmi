@@ -151,6 +151,7 @@ formats/dotenv-edges
 formats/dotenv-expansion
 formats/params-file-edges
 formats/pgmi-yaml-edges
+notices/pgpass-secret-redacted
 notices/secrets-redacted
 notices/severity
 notices/streaming
@@ -204,3 +205,4 @@ tls/sslmode-refusals
 tls/system-roots
 tls/tls-only-and-plain-servers
 tls/verify-without-root
+tls/yaml-certificates-with-string

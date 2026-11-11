@@ -242,6 +242,10 @@ fn read_key(path: &Path, password: Option<&str>) -> Result<PrivateKeyDer<'static
                 KeyError::Malformed(m) => {
                     format!("could not read private key \"{}\": {m}", path.display())
                 }
+                KeyError::TooCostly(m) => format!(
+                    "private key \"{}\": {m}; re-encrypt it with openssl's defaults: openssl pkcs8 -topk8 -v2 aes-256-cbc",
+                    path.display()
+                ),
             })
         });
     }
@@ -651,6 +655,31 @@ mod tests {
                 .unwrap_err()
                 .text()
                 .contains("group or world")
+        );
+    }
+
+    #[test]
+    fn a_key_whose_encryption_would_run_for_hours_is_refused_by_name() {
+        let dir = crate::testdir::TempDir::new("costly-key");
+        let key = dir.join("client.key");
+        std::fs::write(
+            &key,
+            include_str!("cloud/testdata/client-ec-pbes2-runaway.pem"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let e = read_key(&key, Some("key-passphrase")).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            format!(
+                "private key \"{}\": PBKDF2 iteration count 2147483647 is above 1000000; re-encrypt it with openssl's defaults: openssl pkcs8 -topk8 -v2 aes-256-cbc",
+                key.display()
+            )
         );
     }
 

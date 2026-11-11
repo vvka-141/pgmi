@@ -527,12 +527,22 @@ fn finish(
             ("port", &y.port),
             ("user", &y.username),
             ("sslmode", &y.sslmode),
+        ] {
+            if let Some(v) = v {
+                f.entry(k.into()).or_insert_with(|| v.clone());
+            }
+        }
+    }
+    if let Some(y) = yaml {
+        for (k, v) in [
             ("sslcert", &y.sslcert),
             ("sslkey", &y.sslkey),
             ("sslrootcert", &y.sslrootcert),
         ] {
-            if let Some(v) = v {
-                f.entry(k.into()).or_insert_with(|| v.clone());
+            if let Some(v) = v.as_ref().filter(|v| !v.is_empty())
+                && f.get(k).is_none_or(String::is_empty)
+            {
+                f.insert(k.into(), v.clone());
             }
         }
     }

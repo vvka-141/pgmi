@@ -351,7 +351,9 @@ an IP address needs an IP SAN). The root certificate is `sslrootcert`, else
 would refuse); `sslrootcert=system` names the platform trust store
 explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate is `sslcert`/`sslkey`, else
 `~/.postgresql/postgresql.crt`/`.key`; an encrypted key opens with
-`sslpassword`, a wrong one is exit 10. `channel_binding=require` needs TLS;
+`sslpassword`, a wrong one is exit 10. Each of the three paths comes from
+the flag, else the connection string, else `PGSSL*`, else `pgmi.yaml`, with or
+without a connection string. `channel_binding=require` needs TLS;
 `sslnegotiation=direct` is supported; `require_auth` refuses another method.
 `--sslmode` replaces the sslmode of a string from the environment. Token
 sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. When that
@@ -360,7 +362,7 @@ sslmode came from `pgmi.yaml`, the Rust binary names the line and the fix
 (owner 2026-11-11, PGMI-873; case `cloud/token-auth-pgmi-yaml-sslmode`). `--json`
 reports `tls.enabled`, `tls.version` (`TLS 1.3`), `tls.sslmode`.
 
-Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `cloud/token-auth-requires-tls`, `cloud/token-auth-pgmi-yaml-sslmode`.
+Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `tls/yaml-certificates-with-string`, `cloud/token-auth-requires-tls`, `cloud/token-auth-pgmi-yaml-sslmode`.
 
 ### Target database, overwrite and approval
 
@@ -807,9 +809,11 @@ password, `sslpassword`, and every sign-in token (Azure, AWS, Google,
 Databricks, renewed ones included). This covers notices (message, DETAIL,
 HINT) on stderr, in `--json` and in serve answers, and errors on the same
 three paths. Values shorter than three bytes are left alone, so a one-letter
-password does not blank out every letter. No pattern is guessed.
+password does not blank out every letter. No pattern is guessed. A password
+read from a password file (`~/.pgpass`, `PGPASSFILE`, `passfile`) is known
+from the moment it is read, for the maintenance and the target database.
 
-Cases: `notices/secrets-redacted`.
+Cases: `notices/secrets-redacted`, `notices/pgpass-secret-redacted`.
 
 ### A non-ASCII letter glued to CALL belongs to the word
 

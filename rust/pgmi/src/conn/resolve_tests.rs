@@ -731,6 +731,36 @@ fn a_strings_certificates_beat_the_environment() {
 }
 
 #[test]
+fn pgmi_yaml_certificates_apply_beside_a_connection_string() {
+    let y = Connection {
+        sslcert: Some("yaml.crt".into()),
+        sslkey: Some("yaml.key".into()),
+        sslrootcert: Some("yaml-ca.crt".into()),
+        ..Connection::default()
+    };
+    let s = resolve(
+        &conn("postgresql://u@h/db?sslmode=require"),
+        &Env::default(),
+        Some(&y),
+    )
+    .unwrap();
+    assert_eq!(s.sslrootcert.as_deref(), Some("yaml-ca.crt"));
+    assert_eq!(s.sslcert.as_deref(), Some("yaml.crt"));
+    assert_eq!(s.sslkey.as_deref(), Some("yaml.key"));
+
+    let env = Env::from_pairs(&[("PGSSLKEY", "env.key")]);
+    let s = resolve(
+        &conn("postgresql://u@h/db?sslcert=conn.crt&sslrootcert="),
+        &env,
+        Some(&y),
+    )
+    .unwrap();
+    assert_eq!(s.sslcert.as_deref(), Some("conn.crt"));
+    assert_eq!(s.sslkey.as_deref(), Some("env.key"));
+    assert_eq!(s.sslrootcert.as_deref(), Some("yaml-ca.crt"));
+}
+
+#[test]
 fn a_certificate_flag_beats_the_string() {
     let mut fl = conn("postgresql://u@h/db?sslmode=verify-full&sslrootcert=/from/conn-ca.crt");
     fl.sslrootcert = Some("/from/flag-ca.crt".into());

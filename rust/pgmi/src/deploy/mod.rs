@@ -327,22 +327,43 @@ fn spec_secrets(s: &Spec) -> Vec<String> {
         .collect()
 }
 
+#[derive(Default)]
+struct Known {
+    spec: Option<Spec>,
+    found: Vec<String>,
+}
+
 /// The secrets of a deploy: its connection's passwords and sign-in tokens,
-/// read again for each notice because a token can be renewed mid-deploy.
+/// read again for each notice because a token can be renewed mid-deploy,
+/// and the passwords the dialer found in a password file.
 #[derive(Clone, Default)]
-struct Secrets(Arc<Mutex<Option<Spec>>>);
+struct Secrets(Arc<Mutex<Known>>);
 
 impl Secrets {
     fn set(&self, spec: &Spec) {
         if let Ok(mut s) = self.0.lock() {
-            *s = Some(spec.clone());
+            s.spec = Some(spec.clone());
+        }
+    }
+
+    fn found(&self, secret: &str) {
+        if let Ok(mut s) = self.0.lock()
+            && !s.found.iter().any(|f| f == secret)
+        {
+            s.found.push(secret.to_string());
         }
     }
 
     fn list(&self) -> Vec<String> {
         self.0
             .lock()
-            .map(|s| s.iter().flat_map(spec_secrets).collect())
+            .map(|s| {
+                s.spec
+                    .iter()
+                    .flat_map(spec_secrets)
+                    .chain(s.found.iter().cloned())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -443,7 +464,12 @@ impl Run {
     }
 
     pub(crate) fn secrets(&self) -> Vec<String> {
-        self.st.spec.iter().flat_map(spec_secrets).collect()
+        self.st
+            .spec
+            .iter()
+            .flat_map(spec_secrets)
+            .chain(self.secrets.list())
+            .collect()
     }
 
     pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {
@@ -675,6 +701,10 @@ async fn deploy(
             let r = reporter.clone();
             Arc::new(move |line: String| r.line(&redact(&line, &line_secrets.list())))
         },
+        secret: {
+            let s = secrets.clone();
+            Arc::new(move |found: &str| s.found(found))
+        },
     };
     if let Some((provider, req)) = &cloud {
         let token = guard
@@ -903,17 +933,27 @@ async fn check_server(session: &Session) -> Result<()> {
         )
         .await
         .map_err(|e| sql_error("read the server version", &e))?;
-    let (num, text) = rows
-        .iter()
-        .find_map(|m| match m {
-            tokio_postgres::SimpleQueryMessage::Row(r) => Some((
-                r.get(0).unwrap_or_default().to_string(),
-                r.get(1).unwrap_or_default().to_string(),
-            )),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let (num, text) = match first_row(&rows) {
+        Some(r) => {
+            let read = |i| {
+                r.try_get(i)
+                    .map(|v| v.unwrap_or_default().to_string())
+                    .map_err(|e| sql_error("read the server version", &e))
+            };
+            (read(0)?, read(1)?)
+        }
+        None => Default::default(),
+    };
     supported_server(&num, &text)
+}
+
+fn first_row(
+    messages: &[tokio_postgres::SimpleQueryMessage],
+) -> Option<&tokio_postgres::SimpleQueryRow> {
+    messages.iter().find_map(|m| match m {
+        tokio_postgres::SimpleQueryMessage::Row(r) => Some(r),
+        _ => None,
+    })
 }
 
 async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
@@ -922,10 +962,10 @@ async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
         .simple_query(sql)
         .await
         .map_err(|e| sql_error("query the server", &e))?;
-    Ok(rows.iter().find_map(|m| match m {
-        tokio_postgres::SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
-        _ => None,
-    }))
+    first_row(&rows)
+        .map(|r| r.try_get(0).map_err(|e| sql_error("query the server", &e)))
+        .transpose()
+        .map(|v| v.flatten().map(str::to_string))
 }
 
 fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) -> u8 {
@@ -1095,6 +1135,26 @@ mod tests {
         assert!(!e.text().contains("--timeout"), "{}", e.text());
         guard.interrupted.store(true, Ordering::SeqCst);
         assert_eq!(guard.stop_error().text(), "interrupted");
+    }
+
+    #[test]
+    fn a_password_the_dialer_found_is_redacted_like_the_specs() {
+        let secrets = Secrets::default();
+        secrets.set(&spec("d"));
+        secrets.found("from-pgpass");
+        let n = secrets.notice(Notice {
+            severity: crate::output::Severity::Notice,
+            message: "a=from-pgpass b=s3cret-pw".into(),
+            detail: Some("from-pgpass".into()),
+            hint: None,
+        });
+        assert_eq!(n.message, "a=*** b=***");
+        assert_eq!(n.detail.as_deref(), Some("***"));
+        let run = Run {
+            secrets,
+            ..Run::start()
+        };
+        assert!(run.secrets().iter().any(|s| s == "from-pgpass"));
     }
 
     fn spec(db: &str) -> Spec {

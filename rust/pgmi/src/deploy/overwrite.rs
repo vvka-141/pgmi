@@ -50,8 +50,17 @@ async fn rows(client: &tokio_postgres::Client, sql: &str, db: &str) -> Result<Ve
         .map_err(|e| sql_error("read the target database", &e))
 }
 
-fn text(r: &Row, i: usize) -> String {
-    r.get::<_, Option<String>>(i).unwrap_or_default()
+fn get<'a, T: tokio_postgres::types::FromSql<'a>>(r: &'a Row, i: usize) -> Result<T> {
+    r.try_get(i)
+        .map_err(|e| sql_error("read the target database", &e))
+}
+
+fn text(r: &Row, i: usize) -> Result<String> {
+    Ok(get::<Option<String>>(r, i)?.unwrap_or_default())
+}
+
+fn first<T: for<'a> tokio_postgres::types::FromSql<'a>>(rows: &[Row]) -> Result<Option<T>> {
+    rows.first().map(|r| get(r, 0)).transpose()
 }
 
 pub(crate) fn refuse_maintenance(target: &str, maintenance: &str) -> Result<()> {
@@ -73,7 +82,7 @@ pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
         db,
     )
     .await?;
-    if !held.first().is_some_and(|r| r.get::<_, bool>(0)) {
+    if first::<bool>(&held)? != Some(true) {
         return Err(Error::new(
             Kind::Locked,
             format!("another pgmi --overwrite of \"{db}\" is running"),
@@ -85,7 +94,7 @@ pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
         db,
     )
     .await?;
-    match template.first().map(|r| r.get::<_, bool>(0)) {
+    match first::<bool>(&template)? {
         Some(true) => Err(Error::config(format!(
             "cannot drop template database \"{db}\" (template0/template1 are protected by PostgreSQL)"
         ))),
@@ -105,11 +114,8 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
         return Ok(None);
     };
     let snapshot = capture(c, &r, db).await?;
-    let gaps: Vec<String> = rows(c, manager_sql("restore_gaps")?, db)
-        .await?
-        .first()
-        .map(|r| r.get(0))
-        .unwrap_or_default();
+    let gaps: Vec<String> =
+        first(&rows(c, manager_sql("restore_gaps")?, db).await?)?.unwrap_or_default();
     if !gaps.is_empty() {
         return Err(Error::config(format!(
             "--overwrite would drop \"{db}\" and could not restore, as the deploying role:\n  {}\nnothing was dropped; deploy as the database owner or a superuser, or remove these first",
@@ -122,7 +128,7 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
         db,
     )
     .await?;
-    if locked.first().map(|r| r.get::<_, String>(0)).as_deref() == Some("true") {
+    if first::<String>(&locked)?.as_deref() == Some("true") {
         return Err(Error::new(
             Kind::Locked,
             format!(
@@ -134,40 +140,44 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
 }
 
 async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapshot> {
-    let own: Vec<String> = (0..6).map(|i| text(r, i)).collect();
-    let template: Vec<String> = (10..16).map(|i| text(r, i)).collect();
-    let role_settings = rows(
-        c,
-        &format!(
-            "SELECT v::text FROM ({}) AS q(v)",
-            manager_sql("role_settings")?
-        ),
-        db,
-    )
-    .await?
-    .first()
-    .and_then(|r| serde_json::from_str(&r.get::<_, String>(0)).ok())
+    let own: Vec<String> = (0..6).map(|i| text(r, i)).collect::<Result<_>>()?;
+    let template: Vec<String> = (10..16).map(|i| text(r, i)).collect::<Result<_>>()?;
+    let role_settings = first::<String>(
+        &rows(
+            c,
+            &format!(
+                "SELECT v::text FROM ({}) AS q(v)",
+                manager_sql("role_settings")?
+            ),
+            db,
+        )
+        .await?,
+    )?
+    .and_then(|v| serde_json::from_str(&v).ok())
     .unwrap_or_default();
-    let acl = rows(c, manager_sql("acl")?, db).await?;
-    let acl = acl.first().and_then(|r| {
-        r.get::<_, bool>(0).then(|| {
-            let grantees: Vec<String> = r.get(1);
-            let privileges: Vec<String> = r.get(2);
-            let grantable: Vec<bool> = r.get(3);
-            grantees
-                .into_iter()
-                .zip(privileges)
-                .zip(grantable)
-                .map(|((g, p), o)| (g, p, o))
-                .collect()
-        })
-    });
+    let acl_rows = rows(c, manager_sql("acl")?, db).await?;
+    let acl = match acl_rows.first() {
+        Some(r) if get::<bool>(r, 0)? => {
+            let grantees: Vec<String> = get(r, 1)?;
+            let privileges: Vec<String> = get(r, 2)?;
+            let grantable: Vec<bool> = get(r, 3)?;
+            Some(
+                grantees
+                    .into_iter()
+                    .zip(privileges)
+                    .zip(grantable)
+                    .map(|((g, p), o)| (g, p, o))
+                    .collect(),
+            )
+        }
+        _ => None,
+    };
     Ok(Snapshot {
         locale: (own != template).then(|| locale_clause(&own)),
-        owner: text(r, 6),
-        connlimit: r.get(7),
-        settings: r.get(8),
-        comment: r.get(9),
+        owner: text(r, 6)?,
+        connlimit: get(r, 7)?,
+        settings: get(r, 8)?,
+        comment: get(r, 9)?,
         role_settings,
         acl,
     })

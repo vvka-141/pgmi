@@ -21,6 +21,7 @@ use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
 use crate::error::{Error, Result};
 use crate::output::{Notice, Severity};
+use rustls::ClientConfig;
 
 enum Stream {
     Tcp(tokio::net::TcpStream),
@@ -70,6 +71,7 @@ impl AsyncWrite for Stream {
 
 pub(crate) type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 pub(crate) type LogSink = Arc<dyn Fn(String) + Send + Sync>;
+pub(crate) type SecretSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub(crate) struct Session {
     pub(crate) client: Client,
@@ -80,6 +82,23 @@ pub(crate) struct Session {
     peer: Peer,
     tcp: Tcp,
     connection: tokio::task::AbortHandle,
+}
+
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let driver = self.connection.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    tokio::time::sleep(CLOSE_GRACE).await;
+                    driver.abort();
+                });
+            }
+            Err(_) => driver.abort(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -236,8 +255,11 @@ struct Attempt<'a> {
     host: &'a str,
     port: u16,
     tls_mode: SslMode,
+    tls: Option<Arc<ClientConfig>>,
+    want: TargetSessionAttrs,
     notices: NoticeSink,
     log: LogSink,
+    secret: SecretSink,
 }
 
 async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
@@ -275,6 +297,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
         },
     };
     if let Some(p) = &password {
+        (a.secret)(p);
         config.password(p);
     }
     let mut options = spec.options.clone().unwrap_or_default();
@@ -310,7 +333,9 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     let tls_config = if matches!(sslmode_of(mode), PgSslMode::Disable) {
         None
     } else {
-        Some(tls::config(spec).map_err(|e| DialFailure::Config(e.text()))?)
+        Some(a.tls.clone().ok_or_else(|| {
+            DialFailure::Config("TLS setup: no TLS configuration for this host".into())
+        })?)
     };
     let version = Arc::new(Mutex::new(None));
     let run = async {
@@ -348,7 +373,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
             }
             Some(t) => {
                 let connect = Connect {
-                    config: t.config.clone(),
+                    config: t.clone(),
                     host: a.name.to_string(),
                     version: version.clone(),
                 };
@@ -370,14 +395,17 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
             }
         }
     };
-    let (client, tls, peer, connection) = match spec.connect_timeout {
-        Some(t) => tokio::time::timeout(t, run)
+    let deadline = spec
+        .connect_timeout
+        .map(|t| tokio::time::Instant::now() + t);
+    let (client, tls, peer, connection) = match deadline {
+        Some(d) => tokio::time::timeout_at(d, run)
             .await
             .map_err(|_| DialFailure::Transient("timeout expired".into()))??,
         None => run.await?,
     };
     let tls_version = version.lock().ok().and_then(|v| v.clone());
-    Ok(Session {
+    let session = Session {
         cancel: client.cancel_token(),
         client,
         tap: shared,
@@ -386,7 +414,22 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
         peer,
         tcp: spec.tcp,
         connection,
-    })
+    };
+    let probe = matches_attrs(&session.client, a.want);
+    let satisfied = match deadline {
+        Some(d) => tokio::time::timeout_at(d, probe)
+            .await
+            .map_err(|_| DialFailure::Fatal("timeout expired".into()))?,
+        None => probe.await,
+    };
+    match satisfied {
+        Ok(true) => Ok(session),
+        Ok(false) => Err(DialFailure::Fatal(format!(
+            "server does not satisfy target_session_attrs={}",
+            a.want
+        ))),
+        Err(e) => Err(DialFailure::Fatal(e)),
+    }
 }
 
 fn drive<S, T>(
@@ -447,8 +490,8 @@ async fn matches_attrs(c: &Client, attrs: TargetSessionAttrs) -> std::result::Re
         _ => None,
     });
     let Some(row) = row else { return Ok(false) };
-    let read_only = row.get(0) == Some("on");
-    let recovery = row.get(1) == Some("true");
+    let read_only = row.try_get(0).map_err(|e| e.to_string())? == Some("on");
+    let recovery = row.try_get(1).map_err(|e| e.to_string())? == Some("true");
     Ok(match attrs {
         TargetSessionAttrs::Any => true,
         TargetSessionAttrs::ReadWrite => !read_only,
@@ -461,6 +504,7 @@ async fn matches_attrs(c: &Client, attrs: TargetSessionAttrs) -> std::result::Re
 pub(crate) struct Dialer {
     pub(crate) notices: NoticeSink,
     pub(crate) log: LogSink,
+    pub(crate) secret: SecretSink,
 }
 
 impl Dialer {
@@ -470,13 +514,23 @@ impl Dialer {
     /// satisfies `target_session_attrs`. A round whose failures were all
     /// transient is retried with backoff (`conn::retry`).
     pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
+        tap::Shared::new(spec.require_auth.as_deref()).map_err(|e| Error::config(e.to_string()))?;
         if spec.sslmode() != SslMode::Disable {
             super::tls::require_cpu()?;
         }
+        let tls = if needs_tls(spec) {
+            let owned = spec.clone();
+            let built = tokio::task::spawn_blocking(move || tls::config(&owned))
+                .await
+                .map_err(|e| Error::internal("building the TLS configuration").with_source(e))??;
+            Some(built.config)
+        } else {
+            None
+        };
         let mut attempt_no = 0;
         loop {
             attempt_no += 1;
-            match self.connect_once(spec, db).await {
+            match self.connect_once(spec, db, tls.as_ref()).await {
                 Ok(s) => return Ok(s),
                 Err((e, transient)) => {
                     let Some(wait) = retry::delay(attempt_no).filter(|_| transient) else {
@@ -497,6 +551,7 @@ impl Dialer {
         &self,
         spec: &Spec,
         db: &str,
+        tls: Option<&Arc<ClientConfig>>,
     ) -> std::result::Result<Session, (Error, bool)> {
         let passes = match spec.target_session_attrs {
             TargetSessionAttrs::PreferStandby => {
@@ -547,8 +602,11 @@ impl Dialer {
                             host: &addr,
                             port,
                             tls_mode: mode,
+                            tls: tls.cloned(),
+                            want,
                             notices: self.notices.clone(),
                             log: self.log.clone(),
+                            secret: self.secret.clone(),
                         })
                         .await;
                         match r {
@@ -562,19 +620,7 @@ impl Dialer {
                         }
                     }
                     match outcome {
-                        Some(Ok(s)) => match matches_attrs(&s.client, want).await {
-                            Ok(true) => return Ok(s),
-                            Ok(false) => {
-                                all_transient = false;
-                                errors.push(format!(
-                                    "{label}: server does not satisfy target_session_attrs={want}"
-                                ));
-                            }
-                            Err(e) => {
-                                all_transient = false;
-                                errors.push(format!("{label}: {e}"));
-                            }
-                        },
+                        Some(Ok(s)) => return Ok(s),
                         Some(Err(DialFailure::Config(t))) => {
                             return Err((Error::config(t), false));
                         }
@@ -601,6 +647,15 @@ impl Dialer {
         let error = connect_error(db, &errors, &codes, spec.first());
         Err((error, all_transient && !errors.is_empty()))
     }
+}
+
+fn needs_tls(spec: &Spec) -> bool {
+    spec.sslmode() != SslMode::Disable
+        && spec.token.as_ref().and_then(|t| t.google()).is_none()
+        && spec
+            .hosts
+            .endpoints()
+            .any(|e| e.addr.is_some() || !e.name.starts_with('/'))
 }
 
 fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
@@ -762,6 +817,96 @@ mod tests {
         assert!(t.ends_with(
             "check that the signed-in identity has a database role and that --username matches it"
         ));
+    }
+
+    async fn silent_after_startup(listener: tokio::net::TcpListener) -> std::io::Result<usize> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut socket, _) = listener.accept().await?;
+        let len = socket.read_u32().await?;
+        let mut startup = vec![0; usize::try_from(len).unwrap_or(0).saturating_sub(4)];
+        socket.read_exact(&mut startup).await?;
+        socket
+            .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+            .await?;
+        let mut rest = Vec::new();
+        socket.read_to_end(&mut rest).await
+    }
+
+    fn quiet() -> Dialer {
+        Dialer {
+            notices: Arc::new(|_| {}),
+            log: Arc::new(|_| {}),
+            secret: Arc::new(|_| {}),
+        }
+    }
+
+    fn spec_for(conn: &str) -> Spec {
+        let flags = super::super::resolve::Flags {
+            connection: Some(conn.into()),
+            ..Default::default()
+        };
+        super::super::resolve::resolve(&flags, &crate::env::Env::default(), None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn connect_timeout_bounds_the_session_attrs_probe_and_the_socket_is_closed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(silent_after_startup(listener));
+        let spec = spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable target_session_attrs=read-write connect_timeout=2"
+        ));
+        let started = std::time::Instant::now();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(20), quiet().connect(&spec, "d")).await;
+        let Ok(Err(e)) = outcome else {
+            panic!("the probe was not bounded by connect_timeout")
+        };
+        assert!(e.text().contains("timeout expired"), "{}", e.text());
+        assert_eq!(e.exit_code(), 11);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let closed = tokio::time::timeout(CLOSE_GRACE * 5, server).await;
+        assert!(
+            matches!(closed, Ok(Ok(Ok(_)))),
+            "the connection outlived its dropped session"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn opening_an_encrypted_key_leaves_the_runtime_free() {
+        let dir = crate::testdir::TempDir::new("slow-key");
+        let (cert, key) = (dir.join("client.crt"), dir.join("client.key"));
+        std::fs::write(&cert, include_str!("cloud/testdata/sp.crt")).unwrap();
+        std::fs::write(
+            &key,
+            include_str!("cloud/testdata/client-ec-pbes2-slow.pem"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let spec = spec_for(&format!(
+            "host=127.0.0.1 port=1 user=u dbname=d sslmode=require sslcert={} sslkey={} sslpassword=wrong",
+            cert.display(),
+            key.display()
+        ));
+        let started = std::time::Instant::now();
+        let _ = tokio::time::timeout(Duration::from_millis(50), quiet().connect(&spec, "d")).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mistyped_require_auth_is_refused_before_any_lookup() {
+        let spec = spec_for("host=db.invalid user=u dbname=d require_auth=scram-sha265");
+        let e = quiet().connect(&spec, "d").await.err().unwrap();
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        assert_eq!(e.text(), "invalid require_auth method: \"scram-sha265\"");
     }
 
     #[tokio::test]

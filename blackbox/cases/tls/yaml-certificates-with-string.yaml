@@ -1,0 +1,19 @@
+description: pgmi.yaml's sslrootcert, sslcert and sslkey apply beside a connection string; require with a root certificate verifies the chain, so the wrong CA is refused
+servers: [tls]
+project:
+  files:
+    wrong/pgmi.yaml: |
+      connection:
+        sslrootcert: "{wrong_ca}"
+    wrong/deploy.sql: SELECT 1;
+    pair/pgmi.yaml: |
+      connection:
+        sslrootcert: "{ca}"
+        sslcert: "{client_cert}"
+        sslkey: "{client_key}"
+    pair/deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/wrong", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}"]
+    expect: {exit: 11}
+  - pgmi: [deploy, "{project}/pair", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true}}}
