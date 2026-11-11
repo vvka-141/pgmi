@@ -139,41 +139,41 @@ END $$;
 -- or a view someone replaced by hand, is replaced again.
 DO $$
 DECLARE
-    v_stmt text := 'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n';
+    v_stmt text := 'CREATE OR REPLACE VIEW core.ensure_view_probe AS SELECT 1 AS n';
 BEGIN
     RAISE NOTICE '→ Testing view convergence';
 
-    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
+    IF (core.ensure_view('core.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a missing view must be created';
     END IF;
-    IF core.ensure_view('public.ensure_view_probe', v_stmt) THEN
+    IF core.ensure_view('core.ensure_view_probe', v_stmt) THEN
         RAISE EXCEPTION 'TEST FAILED: an unchanged view must be left alone';
     END IF;
 
-    EXECUTE 'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 2 AS n';
-    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
+    EXECUTE 'CREATE OR REPLACE VIEW core.ensure_view_probe AS SELECT 2 AS n';
+    IF (core.ensure_view('core.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a view replaced by hand must be converged back';
     END IF;
-    IF (SELECT n FROM public.ensure_view_probe) IS DISTINCT FROM 1 THEN
+    IF (SELECT n FROM core.ensure_view_probe) IS DISTINCT FROM 1 THEN
         RAISE EXCEPTION 'TEST FAILED: the converged view must carry the requested definition';
     END IF;
 
-    IF (core.ensure_view('public.ensure_view_probe',
-            'CREATE OR REPLACE VIEW public.ensure_view_probe AS SELECT 1 AS n, 3 AS m')) IS NOT TRUE THEN
+    IF (core.ensure_view('core.ensure_view_probe',
+            'CREATE OR REPLACE VIEW core.ensure_view_probe AS SELECT 1 AS n, 3 AS m')) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a changed statement must replace the view';
     END IF;
 
-    v_stmt := 'CREATE OR REPLACE VIEW public.ensure_view_probe WITH (security_invoker = true) AS SELECT 1 AS n, 3 AS m';
-    PERFORM core.ensure_view('public.ensure_view_probe', v_stmt);
-    ALTER VIEW public.ensure_view_probe RESET (security_invoker);
-    IF (core.ensure_view('public.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
+    v_stmt := 'CREATE OR REPLACE VIEW core.ensure_view_probe WITH (security_invoker = true) AS SELECT 1 AS n, 3 AS m';
+    PERFORM core.ensure_view('core.ensure_view_probe', v_stmt);
+    ALTER VIEW core.ensure_view_probe RESET (security_invoker);
+    IF (core.ensure_view('core.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a view whose options were altered by hand must be replaced';
     END IF;
     IF (SELECT 'security_invoker=true' = ANY (reloptions) FROM pg_class
-            WHERE oid = 'public.ensure_view_probe'::regclass) IS NOT TRUE THEN
+            WHERE oid = 'core.ensure_view_probe'::regclass) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: the replaced view must carry security_invoker again';
     END IF;
 
-    DROP VIEW public.ensure_view_probe;
+    DROP VIEW core.ensure_view_probe;
     RAISE NOTICE '  ✓ unchanged views are skipped; changed or hand-edited ones (options too) are replaced';
 END $$;

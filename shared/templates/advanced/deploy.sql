@@ -769,9 +769,11 @@ BEGIN
 END $extensions$;
 
 
--- public stays closed. A managed host may own it through its admin group
--- (Azure: azure_pg_admin), which the deploy login belongs to and the owner
--- role does not, so the login closes it before switching.
+-- public stays closed. Who may close it depends on the host: on Azure
+-- azure_pg_admin owns it, and only the deploy login belongs to that group; on
+-- Lakebase the login's revoke acts for databricks_superuser and removes
+-- nothing, while the owner role's does. So both revoke: the login here, the
+-- owner role in the owner phase.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 
 -- ============================================================================
@@ -827,6 +829,9 @@ BEGIN
     COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
     COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
+    IF has_schema_privilege('public', 'USAGE WITH GRANT OPTION') THEN
+        REVOKE ALL ON SCHEMA public FROM PUBLIC;
+    END IF;
     REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
 
     EXECUTE format('GRANT USAGE ON SCHEMA api, common, core, membership TO %I', v_api_role);
