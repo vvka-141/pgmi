@@ -447,7 +447,14 @@ naming the user and pointing at `--username`.
 `--google`: needs `--google-instance` (exit 10); connects through the Cloud SQL
 connector with IAM authentication. Lakebase: a token passed as the password,
 no separate path. Real-cloud verification: Azure only (owner decision
-2026-11-10, PGMI-845, pending); AWS and Google are checked against local fakes.
+2026-11-10); AWS and Google are checked against local fakes. Observed on a
+real Flexible Server (PGMI-845, 2026-11-11, Go): the Azure CLI, a service
+principal with a secret, system- and user-assigned managed identity, and
+workload identity each deploy with `verify-full` and no `sslrootcert`, the
+server's roots coming from the system trust store; `--azure-tenant-id` wins
+over a wrong `AZURE_TENANT_ID`; a principal without a database role is exit 11
+naming the user (`check that the signed-in identity has a database role and
+that --username matches it`); a wrong tenant is exit 11 (`AADSTS90002`).
 
 Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`.
 Service principal and the real Cloud SQL connector: no case; neither can be
@@ -498,8 +505,11 @@ it routes to workload and managed identity only. The Rust binary supports it
 `AZURE_CLIENT_CERTIFICATE_PATH` (PEM or PKCS#12, optional
 `AZURE_CLIENT_CERTIFICATE_PASSWORD`), it signs in as that service principal.
 When both a secret and a certificate are set, the secret wins.
-No case: instance discovery always calls `login.microsoftonline.com`; verified
-by the real-Azure runs (PGMI-845).
+With a certificate and a client ID set, Go goes to managed identity and, off
+Azure, fails with exit 11 after the IMDS probe gives up (about two minutes).
+No case: instance discovery always calls `login.microsoftonline.com`; the
+Rust binary signed in with PEM and PKCS#12 against real Azure (PGMI-845,
+2026-11-11).
 
 ### sslrootcert=system refuses a weaker sslmode
 

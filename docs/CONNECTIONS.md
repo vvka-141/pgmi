@@ -38,10 +38,11 @@ Never put a password on the command line: a password inside `--connection` is vi
 
 Passwordless authentication to Azure Database for PostgreSQL Flexible Server.
 Tested by hand against a real Flexible Server, not in CI. Last checked
-2026-11-09 for v0.14.1: PostgreSQL 18, signed in through the Azure CLI,
-`--sslmode verify-full`, a basic-template deploy with its tests and a
-converging redeploy. Service
-principal and managed identity were not part of that check.
+2026-11-11: PostgreSQL 18, `--sslmode verify-full`, a basic-template deploy
+with its tests, signed in through the Azure CLI, a service principal with a
+secret, a system-assigned and a user-assigned managed identity on an Azure VM,
+workload identity from a GitHub Actions OIDC token, and `--azure-tenant-id`
+overriding `AZURE_TENANT_ID`.
 
 ```bash
 # Managed Identity (no credentials needed on Azure VMs, App Service, Functions)
