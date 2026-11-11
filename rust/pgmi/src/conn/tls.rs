@@ -196,10 +196,6 @@ impl ServerCertVerifier for Verifier {
     }
 }
 
-pub(crate) struct Tls {
-    pub(crate) config: Arc<ClientConfig>,
-}
-
 fn read_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let certs: Vec<_> = CertificateDer::pem_file_iter(path)
         .and_then(std::iter::Iterator::collect::<std::result::Result<Vec<_>, _>>)
@@ -327,7 +323,14 @@ fn check_key_mode(_: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn config(spec: &Spec) -> Result<Tls> {
+pub(crate) fn config(spec: &Spec) -> Result<Arc<ClientConfig>> {
+    config_with(spec, || rustls_native_certs::load_native_certs().certs)
+}
+
+fn config_with(
+    spec: &Spec,
+    system_roots: impl FnOnce() -> Vec<CertificateDer<'static>>,
+) -> Result<Arc<ClientConfig>> {
     let provider = provider();
     let mode = effective_mode(spec);
     let verify = matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull);
@@ -338,8 +341,8 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
                 roots.add_parsable_certificates(read_certs(Path::new(path))?);
             }
             named => {
-                let found = rustls_native_certs::load_native_certs();
-                if found.certs.is_empty() {
+                let found = system_roots();
+                if found.is_empty() {
                     return Err(Error::config(if named.is_some() {
                         "sslrootcert=system: no certificates found in the system trust store"
                             .to_string()
@@ -349,7 +352,7 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
                         )
                     }));
                 }
-                roots.add_parsable_certificates(found.certs);
+                roots.add_parsable_certificates(found);
             }
         }
         Some(
@@ -386,9 +389,7 @@ pub(crate) fn config(spec: &Spec) -> Result<Tls> {
     if spec.sslnegotiation == SslNegotiation::Direct {
         config.alpn_protocols = vec![b"postgresql".to_vec()];
     }
-    Ok(Tls {
-        config: Arc::new(config),
-    })
+    Ok(Arc::new(config))
 }
 
 #[derive(Clone)]
@@ -522,19 +523,46 @@ fn signature_oid(der: &[u8]) -> Option<&[u8]> {
     (tag == 0x06).then_some(oid)
 }
 
-pub(crate) fn describe_failure(text: &str, host: &str) -> String {
-    text.replace(
-        "invalid peer certificate: UnknownIssuer",
-        "x509: certificate signed by unknown authority",
-    )
-    .replace(
-        "invalid peer certificate: NotValidForName",
-        &format!("x509: certificate is not valid for {host}"),
-    )
-    .replace(
-        "invalid peer certificate: certificate not valid for name",
-        &format!("x509: certificate is not valid for {host}"),
-    )
+/// The error's text, with a certificate the server's chain or name failed
+/// worded as Go's x509 package words it.
+pub(crate) fn describe_failure(e: &(dyn std::error::Error + 'static), host: &str) -> String {
+    let text = crate::error::chain(e);
+    let Some(rustls::Error::InvalidCertificate(cause)) = rustls_error(e) else {
+        return text;
+    };
+    let shown = rustls::Error::InvalidCertificate(cause.clone()).to_string();
+    let wrong_name = format!("x509: certificate is not valid for {host}");
+    let worded = match cause {
+        CertificateError::UnknownIssuer => "x509: certificate signed by unknown authority".into(),
+        CertificateError::NotValidForName => wrong_name,
+        CertificateError::NotValidForNameContext { .. } => shown.replacen(
+            "invalid peer certificate: certificate not valid for name",
+            &wrong_name,
+            1,
+        ),
+        _ => return text,
+    };
+    text.replace(&shown, &worded)
+}
+
+/// The rustls error in `e`'s chain, also inside an `io::Error`, which does
+/// not list its payload as a source.
+fn rustls_error<'a>(e: &'a (dyn std::error::Error + 'static)) -> Option<&'a rustls::Error> {
+    let mut cur = Some(e);
+    while let Some(c) = cur {
+        if let Some(r) = c.downcast_ref::<rustls::Error>() {
+            return Some(r);
+        }
+        if let Some(r) = c
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::get_ref)
+            .and_then(|i| i.downcast_ref::<rustls::Error>())
+        {
+            return Some(r);
+        }
+        cur = c.source();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -572,29 +600,76 @@ mod tests {
     #[test]
     fn versions_and_sni_reach_the_config() {
         let t = config(&spec("sslmode=require", None)).unwrap();
-        assert!(t.config.enable_sni);
+        assert!(t.enable_sni);
         let t = config(&spec(
             "sslmode=require ssl_max_protocol_version=TLSv1.2 sslsni=0",
             None,
         ))
         .unwrap();
-        assert!(!t.config.enable_sni);
+        assert!(!t.enable_sni);
+    }
+
+    fn a_root() -> Vec<CertificateDer<'static>> {
+        CertificateDer::pem_slice_iter(include_bytes!("cloud/testdata/sp.crt"))
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
     }
 
     #[test]
     fn verification_without_a_root_uses_the_system_store() {
         let home = crate::testdir::TempDir::new("noroot");
-        let system = !rustls_native_certs::load_native_certs().certs.is_empty();
         for mode in ["verify-ca", "verify-full"] {
-            let r = config(&spec(&format!("sslmode={mode}"), Some(home.path())));
-            match r {
-                Ok(_) => assert!(system, "{mode}"),
-                Err(e) => {
-                    assert!(!system, "{mode}: {}", e.text());
-                    assert!(e.text().contains("system trust store"), "{}", e.text());
-                }
-            }
+            let s = spec(&format!("sslmode={mode}"), Some(home.path()));
+            let asked = std::cell::Cell::new(false);
+            config_with(&s, || {
+                asked.set(true);
+                a_root()
+            })
+            .unwrap();
+            assert!(asked.get(), "{mode}: the system store was not read");
+            let e = config_with(&s, Vec::new).unwrap_err();
+            assert_eq!(e.exit_code(), 10);
+            assert_eq!(
+                e.text(),
+                format!(
+                    "sslmode {mode}: no root certificate given and none found in the system trust store; set sslrootcert or put one in ~/.postgresql/root.crt"
+                )
+            );
         }
+        let system = spec("sslrootcert=system", Some(home.path()));
+        assert_eq!(
+            config_with(&system, Vec::new).unwrap_err().text(),
+            "sslrootcert=system: no certificates found in the system trust store"
+        );
+        config_with(&system, a_root).unwrap();
+        let given = spec("sslmode=require", Some(home.path()));
+        config_with(&given, || panic!("require without a root reads no store")).unwrap();
+    }
+
+    #[test]
+    fn certificate_failures_are_worded_as_go_words_them() {
+        let wrap = |c: CertificateError| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                rustls::Error::InvalidCertificate(c),
+            )
+        };
+        assert_eq!(
+            describe_failure(&wrap(CertificateError::UnknownIssuer), "h"),
+            "x509: certificate signed by unknown authority"
+        );
+        assert_eq!(
+            describe_failure(&wrap(CertificateError::NotValidForName), "h"),
+            "x509: certificate is not valid for h"
+        );
+        let other = wrap(CertificateError::Expired);
+        assert_eq!(describe_failure(&other, "h"), other.to_string());
+        let plain = std::io::Error::other("invalid peer certificate: UnknownIssuer");
+        assert_eq!(
+            describe_failure(&plain, "h"),
+            "invalid peer certificate: UnknownIssuer",
+            "only a rustls error is reworded, never text that looks like one"
+        );
     }
 
     fn pg_dir(home: &crate::testdir::TempDir) -> PathBuf {

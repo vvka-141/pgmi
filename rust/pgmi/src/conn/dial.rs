@@ -155,13 +155,102 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
     }
 }
 
+/// A server's refusal: its message and SQLSTATE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Answer {
+    message: String,
+    code: String,
+}
+
+impl Answer {
+    fn of(db: &DbError) -> Self {
+        Answer {
+            message: db.message().to_string(),
+            code: db.code().code().to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (SQLSTATE {})", self.message, self.code)
+    }
+}
+
+#[derive(Debug)]
 enum DialFailure {
     Transient(String),
     ConnectionRefused,
     Fatal(String),
-    Server(String, String),
+    Server(Answer),
     Config(String),
-    Refused(String),
+    Refused(Answer),
+}
+
+/// One server that gave no session, and why.
+#[derive(Debug)]
+enum Failed {
+    Lookup(Unresolved),
+    At {
+        host: String,
+        port: u16,
+        label: String,
+        failure: DialFailure,
+    },
+}
+
+impl Failed {
+    fn code(&self) -> Option<&str> {
+        match self {
+            Failed::At {
+                failure: DialFailure::Server(a),
+                ..
+            } => Some(&a.code),
+            _ => None,
+        }
+    }
+
+    fn connection_refused(&self) -> bool {
+        matches!(
+            self,
+            Failed::At {
+                failure: DialFailure::ConnectionRefused,
+                ..
+            }
+        )
+    }
+
+    fn transient(&self) -> bool {
+        match self {
+            Failed::Lookup(u) => u.transient,
+            Failed::At { failure, .. } => {
+                matches!(
+                    failure,
+                    DialFailure::Transient(_) | DialFailure::ConnectionRefused
+                )
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failed::Lookup(u) => f.write_str(&u.text),
+            Failed::At {
+                host,
+                port,
+                label,
+                failure,
+            } => match failure {
+                DialFailure::ConnectionRefused => write!(f, "connection refused to {host}:{port}"),
+                DialFailure::Transient(t) | DialFailure::Fatal(t) | DialFailure::Config(t) => {
+                    write!(f, "{label}: {t}")
+                }
+                DialFailure::Server(a) | DialFailure::Refused(a) => write!(f, "{label}: {a}"),
+            },
+        }
+    }
 }
 
 fn classify_io(e: &std::io::Error) -> bool {
@@ -172,17 +261,23 @@ fn refuses_auth(e: &tap::Error) -> bool {
     matches!(e, tap::Error::AuthRequirement { .. })
 }
 
-fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> DialFailure {
+/// Why `connect_raw` failed. `no_password` is whether the server asked for
+/// a password this attempt did not have.
+fn classify_pg(
+    e: &tokio_postgres::Error,
+    host: &str,
+    passfile: &str,
+    no_password: bool,
+) -> DialFailure {
     if let Some(db) = e.as_db_error() {
-        let code = db.code().code();
-        let text = format!("{} (SQLSTATE {code})", db.message());
-        if retry::transient(Cause::Sqlstate(code)) {
-            return DialFailure::Transient(text);
+        let answer = Answer::of(db);
+        if retry::transient(Cause::Sqlstate(&answer.code)) {
+            return DialFailure::Transient(answer.to_string());
         }
-        if code == "28000" {
-            return DialFailure::Refused(text);
+        if answer.code == "28000" {
+            return DialFailure::Refused(answer);
         }
-        return DialFailure::Server(text, code.to_string());
+        return DialFailure::Server(answer);
     }
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(c) = cur {
@@ -206,13 +301,12 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> DialFai
         }
         cur = c.source();
     }
-    let text = crate::error::chain(e);
-    if text.contains("password missing") {
+    if no_password {
         return DialFailure::Fatal(format!(
             "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
         ));
     }
-    DialFailure::Fatal(tls::describe_failure(&text, host))
+    DialFailure::Fatal(tls::describe_failure(e, host))
 }
 
 fn refused_token(
@@ -298,6 +392,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
             None => None,
         },
     };
+    let no_password = password.is_none();
     if let Some(p) = &password {
         (a.secret)(p);
         config.password(p);
@@ -368,7 +463,12 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
                 let (client, connection) =
                     config.connect_raw(stream, NoTls).await.map_err(|e| {
                         refused_token(
-                            classify_pg(&e, a.name, &passfile_text),
+                            classify_pg(
+                                &e,
+                                a.name,
+                                &passfile_text,
+                                no_password && shared.asked_password(),
+                            ),
                             &e,
                             spec,
                             config.get_dbname(),
@@ -390,7 +490,12 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
                 let (client, connection) =
                     config.connect_raw(stream, tapped).await.map_err(|e| {
                         refused_token(
-                            classify_pg(&e, a.name, &passfile_text),
+                            classify_pg(
+                                &e,
+                                a.name,
+                                &passfile_text,
+                                no_password && shared.asked_password(),
+                            ),
                             &e,
                             spec,
                             config.get_dbname(),
@@ -434,7 +539,7 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
             "server does not satisfy target_session_attrs={}",
             a.want
         ))),
-        Err(e) => Err(DialFailure::Fatal(e)),
+        Err(e) => Err(DialFailure::Fatal(e.to_string())),
     }
 }
 
@@ -458,6 +563,7 @@ where
     .abort_handle()
 }
 
+#[derive(Debug)]
 struct Unresolved {
     text: String,
     transient: bool,
@@ -483,21 +589,23 @@ async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, Un
     Ok(out)
 }
 
-async fn matches_attrs(c: &Client, attrs: TargetSessionAttrs) -> std::result::Result<bool, String> {
+async fn matches_attrs(
+    c: &Client,
+    attrs: TargetSessionAttrs,
+) -> std::result::Result<bool, tokio_postgres::Error> {
     if attrs == TargetSessionAttrs::Any {
         return Ok(true);
     }
     let rows = c
         .simple_query("SELECT current_setting('transaction_read_only'), pg_is_in_recovery()::text")
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let row = rows.iter().find_map(|m| match m {
         tokio_postgres::SimpleQueryMessage::Row(r) => Some(r),
         _ => None,
     });
     let Some(row) = row else { return Ok(false) };
-    let read_only = row.try_get(0).map_err(|e| e.to_string())? == Some("on");
-    let recovery = row.try_get(1).map_err(|e| e.to_string())? == Some("true");
+    let read_only = row.try_get(0)? == Some("on");
+    let recovery = row.try_get(1)? == Some("true");
     Ok(match attrs {
         TargetSessionAttrs::Any => true,
         TargetSessionAttrs::ReadWrite => !read_only,
@@ -531,7 +639,7 @@ impl Dialer {
             let built = tokio::task::spawn_blocking(move || tls::config(&owned))
                 .await
                 .map_err(|e| Error::internal("building the TLS configuration").with_source(e))??;
-            Some(built.config)
+            Some(built)
         } else {
             None
         };
@@ -567,9 +675,7 @@ impl Dialer {
             }
             attrs => vec![attrs],
         };
-        let mut errors: Vec<String> = Vec::new();
-        let mut codes: Vec<String> = Vec::new();
-        let mut all_transient = true;
+        let mut failed: Vec<Failed> = Vec::new();
         for want in passes {
             let mut endpoints: Vec<_> = spec.hosts.endpoints().collect();
             balance(&mut endpoints, spec.load_balance_hosts);
@@ -585,8 +691,7 @@ impl Dialer {
                 let mut addrs = match resolved {
                     Ok(a) => a,
                     Err(u) => {
-                        all_transient &= u.transient;
-                        errors.push(u.text);
+                        failed.push(Failed::Lookup(u));
                         continue;
                     }
                 };
@@ -632,28 +737,19 @@ impl Dialer {
                         Some(Err(DialFailure::Config(t))) => {
                             return Err((Error::config(t), false));
                         }
-                        Some(Err(DialFailure::ConnectionRefused)) => {
-                            errors.push(format!("connection refused to {host}:{port}"));
-                        }
-                        Some(Err(DialFailure::Transient(t))) => {
-                            errors.push(format!("{label}: {t}"));
-                        }
-                        Some(Err(DialFailure::Server(t, code))) => {
-                            all_transient = false;
-                            codes.push(code);
-                            errors.push(format!("{label}: {t}"));
-                        }
-                        Some(Err(DialFailure::Fatal(t) | DialFailure::Refused(t))) => {
-                            all_transient = false;
-                            errors.push(format!("{label}: {t}"));
-                        }
+                        Some(Err(failure)) => failed.push(Failed::At {
+                            host: host.to_string(),
+                            port,
+                            label,
+                            failure,
+                        }),
                         None => {}
                     }
                 }
             }
         }
-        let error = connect_error(db, &errors, &codes, spec.first());
-        Err((error, all_transient && !errors.is_empty()))
+        let transient = !failed.is_empty() && failed.iter().all(Failed::transient);
+        Err((connect_error(db, &failed, spec.first()), transient))
     }
 }
 
@@ -672,10 +768,14 @@ fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
     }
 }
 
-fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u16)) -> Error {
-    let joined = errors.join("; ");
+fn connect_error(db: &str, failed: &[Failed], first: (&str, u16)) -> Error {
+    let joined = failed
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
     let mut message = format!("connect to \"{db}\": {joined}");
-    if joined.contains("connection refused") {
+    if failed.iter().any(Failed::connection_refused) {
         let (h, p) = first;
         let _ = write!(
             message,
@@ -689,9 +789,11 @@ fn connect_error(db: &str, errors: &[String], codes: &[String], first: (&str, u1
         message.push_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert");
     }
     let error = Error::connection(message);
-    match codes.first().filter(|c| codes.iter().all(|o| o == *c)) {
+    let mut codes = failed.iter().filter_map(Failed::code);
+    let first_code = codes.next();
+    match first_code.filter(|c| codes.all(|o| o == *c)) {
         Some(code) => error.with_sql(crate::error::SqlDiagnostics {
-            sqlstate: Some(code.clone()),
+            sqlstate: Some(code.to_string()),
             ..Default::default()
         }),
         None => error,
@@ -841,27 +943,55 @@ mod tests {
         assert!(orders.len() > 1, "20 shuffles of 8 hosts gave one order");
     }
 
+    fn at(host: &str, port: u16, failure: DialFailure) -> Failed {
+        Failed::At {
+            host: host.into(),
+            port,
+            label: format!("{host}:{port}"),
+            failure,
+        }
+    }
+
+    fn server(code: &str) -> Failed {
+        at(
+            "h",
+            5432,
+            DialFailure::Server(Answer {
+                message: "refused".into(),
+                code: code.into(),
+            }),
+        )
+    }
+
     #[test]
     fn a_connect_error_keeps_the_sqlstate_every_host_agreed_on() {
-        let one = |codes: &[&str]| {
-            let codes: Vec<String> = codes.iter().map(ToString::to_string).collect();
-            connect_error("d", &["h:5432: refused".into()], &codes, ("h", 5432))
-        };
-        let e = one(&["42501"]);
+        let one = |failed: Vec<Failed>| connect_error("d", &failed, ("h", 5432));
+        let e = one(vec![server("42501")]);
         assert_eq!(e.exit_code(), 11);
         assert_eq!(sqlstate(&e), Some("42501"));
-        assert_eq!(sqlstate(&one(&["53300", "53300"])), Some("53300"));
-        assert_eq!(sqlstate(&one(&["53300", "28P01"])), None);
-        assert_eq!(sqlstate(&one(&[])), None);
+        assert_eq!(
+            e.text(),
+            "connect to \"d\": h:5432: refused (SQLSTATE 42501)"
+        );
+        assert_eq!(
+            sqlstate(&one(vec![server("53300"), server("53300")])),
+            Some("53300")
+        );
+        assert_eq!(sqlstate(&one(vec![server("53300"), server("28P01")])), None);
+        assert_eq!(
+            sqlstate(&one(vec![at("h", 1, DialFailure::Fatal("x".into()))])),
+            None
+        );
     }
 
     #[test]
     fn a_connect_error_names_every_host_and_hints_at_the_cause() {
-        let errors = |e: &[&str]| e.iter().map(ToString::to_string).collect::<Vec<_>>();
         let e = connect_error(
             "app",
-            &errors(&["connection refused to a:1", "b:2: timeout expired"]),
-            &[],
+            &[
+                at("a", 1, DialFailure::ConnectionRefused),
+                at("b", 2, DialFailure::Transient("timeout expired".into())),
+            ],
             ("a", 1),
         );
         assert_eq!(
@@ -873,7 +1003,11 @@ mod tests {
             "TLS handshake",
             "bad certificate",
         ] {
-            let e = connect_error("app", &errors(&[tls]), &[], ("a", 1));
+            let e = connect_error(
+                "app",
+                &[at("a", 1, DialFailure::Fatal(tls.into()))],
+                ("a", 1),
+            );
             assert!(
                 e.text()
                     .ends_with("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert"),
@@ -883,14 +1017,66 @@ mod tests {
         }
         let e = connect_error(
             "app",
-            &errors(&["h:5432: password authentication failed (SQLSTATE 28P01)"]),
-            &["28P01".into()],
+            &[at(
+                "h",
+                5432,
+                DialFailure::Refused(Answer {
+                    message: "password authentication failed".into(),
+                    code: "28P01".into(),
+                }),
+            )],
             ("h", 5432),
         );
         assert_eq!(
             e.text(),
             "connect to \"app\": h:5432: password authentication failed (SQLSTATE 28P01)"
         );
+    }
+
+    #[tokio::test]
+    async fn a_server_asking_for_a_password_none_was_given_for_is_named() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (listener, port) = super::fake::listen().await;
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(len) = socket.read_u32().await else {
+                return;
+            };
+            let mut startup = vec![0; usize::try_from(len).unwrap_or(0).saturating_sub(4)];
+            let _ = socket.read_exact(&mut startup).await;
+            let _ = socket.write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 3]).await;
+            let _ = socket.read_u8().await;
+        });
+        let spec = spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable passfile=/nowhere/pgpass"
+        ));
+        let Err(e) = quiet().connect(&spec, "d").await else {
+            panic!("a password was not needed")
+        };
+        assert_eq!(e.exit_code(), 11);
+        assert_eq!(
+            e.text(),
+            "connect to \"d\": 127.0.0.1:{port}: no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or /nowhere/pgpass"
+                .replace("{port}", &port.to_string())
+        );
+    }
+
+    #[test]
+    fn only_transient_failures_make_a_round_worth_retrying() {
+        let lookup = |transient| {
+            Failed::Lookup(Unresolved {
+                text: "could not resolve host".into(),
+                transient,
+            })
+        };
+        assert!(lookup(true).transient());
+        assert!(!lookup(false).transient());
+        assert!(at("h", 1, DialFailure::ConnectionRefused).transient());
+        assert!(at("h", 1, DialFailure::Transient("t".into())).transient());
+        assert!(!server("53300").transient());
+        assert!(!at("h", 1, DialFailure::Fatal("f".into())).transient());
     }
 
     #[test]
