@@ -291,7 +291,9 @@ Separate tickets, in parallel after steps 3 and 7: port the remaining Go
 unit groups (2, 3, 4, 10, 12, wizards); a fuzz/property target for
 `conn::parse`; port the content linters and the template deployment tests
 of `internal/scaffold` and `internal/services` to `rust/pgmi/tests/` before
-switch day.
+switch day. That port landed 2026-11-11 (PGMI-862): linters in
+`src/content_tests/`, deployments in `tests/`, mapped in
+`rust/docs/test-parity-shared.md`.
 
 ### Left alone
 

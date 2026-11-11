@@ -200,7 +200,23 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # The template deployment tests run in parallel; each advanced deploy
+      # takes more locks than the default max_locks_per_transaction allows
+      # several of at once, and a services container cannot pass -c.
+      # PostgreSQL 17 proves the advanced template refuses a server below its floor.
+      - name: PostgreSQL for the deployment tests
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18 -c max_locks_per_transaction=256
+          docker run -d --name pg17 -p 5417:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+          for c in pg pg17; do
+            for _ in $(seq 60); do docker exec $c pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+            docker exec $c pg_isready -h 127.0.0.1 -U postgres
+          done
       - name: Test
+        env:
+          PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          PGMI_TEST_CONN_PG17: postgresql://postgres:postgres@127.0.0.1:5417/postgres
+          PGMI_REQUIRE_DB: '1'
         run: cargo test --locked --workspace
       - name: Panic exits 3 (testhooks)
         run: cargo test --locked -p pgmi --features testhooks --test panic
