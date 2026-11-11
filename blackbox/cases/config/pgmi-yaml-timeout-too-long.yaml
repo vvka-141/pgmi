@@ -1,0 +1,9 @@
+description: a pgmi.yaml timeout longer than a Go duration holds is invalid configuration (exit 10), not a crash
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      timeout: 4000000000000000h
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["timeout"]}

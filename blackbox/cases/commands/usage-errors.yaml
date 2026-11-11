@@ -16,6 +16,8 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_: v}
     expect: {exit: 10, stderr: ["PGMI_PARAM_ has no parameter name"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 4000000000000000h]
+    expect: {exit: 2, stderr: ["--timeout"]}
   - pgmi: [deploy, --help]
     expect: {exit: 0, stdout: ["\\(default 3m0s\\)"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "list=a,b", --timeout, "0"]

@@ -42,8 +42,13 @@ pub fn parse(s: &str) -> Result<Duration, String> {
     if negative && total > 0.0 {
         return Err(format!("invalid duration {s:?}: must not be negative"));
     }
+    if total > MAX_SECS {
+        return Err(bad());
+    }
     Duration::try_from_secs_f64(total).map_err(|_| bad())
 }
+
+const MAX_SECS: f64 = i64::MAX as f64 / 1e9;
 
 pub fn render(d: Duration) -> String {
     if d.is_zero() {
@@ -78,6 +83,13 @@ pub fn render(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn longer_than_go_can_hold_is_refused() {
+        assert!(parse("4000000000000000h").is_err());
+        assert!(parse("2562048h").is_err());
+        assert!(parse("2562047h").is_ok());
+    }
 
     #[test]
     fn go_forms() {

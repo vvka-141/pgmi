@@ -172,7 +172,7 @@ impl Run {
         let timeout = timeout_of(ctx);
         let guard = Guard {
             token,
-            deadline: TokioInstant::now() + timeout,
+            deadline: deadline(timeout),
             timeout,
             interrupted,
         };
@@ -266,6 +266,13 @@ pub fn run(ctx: Context) -> u8 {
     }
     runtime.shutdown_timeout(Duration::from_millis(100));
     finish(&ctx, &run, result, &reporter)
+}
+
+fn deadline(timeout: Duration) -> TokioInstant {
+    let now = TokioInstant::now();
+    now.checked_add(timeout)
+        .or_else(|| now.checked_add(Duration::from_secs(100 * 365 * 24 * 3600)))
+        .unwrap_or(now)
 }
 
 fn timeout_of(ctx: &Context) -> Duration {
@@ -754,4 +761,15 @@ fn record(
         }
     }
     Value::Object(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_huge_timeout_never_overflows_the_deadline() {
+        let far = deadline(Duration::MAX);
+        assert!(far > TokioInstant::now() + Duration::from_secs(365 * 24 * 3600));
+    }
 }

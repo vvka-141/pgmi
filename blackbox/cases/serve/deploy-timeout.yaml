@@ -1,4 +1,4 @@
-description: the serve deploy tool takes a timeout argument in Go duration syntax - running out is exit code 16 and the statement is cancelled on the server; a timeout that is not a duration is exit code 10
+description: the serve deploy tool takes a timeout argument in Go duration syntax - running out is exit code 16 and the statement is cancelled on the server; a timeout that is not a duration, or longer than a Go duration holds, is exit code 10
 project:
   files:
     deploy.sql: SELECT pg_sleep(30);
@@ -8,12 +8,14 @@ steps:
       - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
       - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","timeout":"2s"}}}'
       - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","timeout":"soon"}}}'
+      - '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","timeout":"4000000000000000h"}}}'
     timeout: 20
     expect:
       exit: 0
       stdout:
         - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*"exitCode":16.*"isError":true}}$'
         - '(?m)^{"jsonrpc":"2.0","id":3,"result":{.*invalid timeout.*"exitCode":10.*"isError":true}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":4,"result":{.*invalid timeout.*"exitCode":10.*"isError":true}}$'
       sql:
         - query: SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND query LIKE '%pg_sleep(30)%' AND pid <> pg_backend_pid()
           rows: [[0]]

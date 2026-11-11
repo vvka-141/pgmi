@@ -35,6 +35,7 @@ commands/version
 config/dotenv
 config/pgmi-yaml
 config/pgmi-yaml-invalid
+config/pgmi-yaml-timeout-too-long
 config/precedence
 connection/multi-host
 connection/pgpass

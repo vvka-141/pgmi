@@ -69,7 +69,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--json` | ✓ `deploy/json-success`, `deploy/json-failure` |
 | `--param` (never split on commas) | ✓ `params/precedence`, `commands/usage-errors` |
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
-| `--timeout` (`3s`, `90s`, `1h30m`, `0`; not a duration = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms`, `commands/usage-errors` |
+| `--timeout` (`3s`, `90s`, `1h30m`, `0`; not a duration, or longer than a Go duration, = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms`, `commands/usage-errors` |
 | `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
 | `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` ✗ (only reaches Entra, see Cloud sign-in) |
 | `--aws`, `--aws-region` | ✓ `cloud/aws-iam-token` |
@@ -98,7 +98,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 
 | Source | Coverage |
 |---|---|
-| `pgmi.yaml` connection, params, timeout; unknown key = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid` |
+| `pgmi.yaml` connection, params, timeout; unknown key or a timeout too long = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/pgmi-yaml-timeout-too-long` |
 | precedence: flags > environment > `pgmi.yaml` > defaults, with the `connection: from ...` line | ✓ `config/precedence`, `config/pgmi-yaml`, `env/connection-string-vars` |
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
 | `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
