@@ -1,102 +1,13 @@
-use std::io::{BufRead, IsTerminal};
 use std::time::Duration;
 
 use tokio_postgres::Row;
 use tokio_postgres::types::Type;
-use tokio_util::sync::CancellationToken;
 
-use super::{Request, quote_ident, sql_error};
+use super::{quote_ident, sql_error};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::resolve::Spec;
-use crate::env::Env;
 use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
-
-fn interactive(env: &Env) -> bool {
-    std::io::stdin().is_terminal()
-        && std::io::stderr().is_terminal()
-        && env.non_empty("CI").ok().flatten().is_none()
-        && env.get("PGMI_NON_INTERACTIVE").ok().flatten() != Some("1")
-}
-
-fn banner(db: &str) -> String {
-    let art = pgmi_shared::file("art/skull.txt")
-        .and_then(|b| std::str::from_utf8(b).ok())
-        .unwrap_or("")
-        .replace("${dbname}", db);
-    let bar = "═".repeat(71);
-    let blank = format!("║{}║", " ".repeat(71));
-    format!("╔{bar}╗\n{blank}\n{}\n{blank}\n╚{bar}╝", art.trim_end())
-}
-
-pub(crate) async fn approve(
-    request: &Request,
-    spec: &Spec,
-    env: &Env,
-    reporter: &Reporter,
-    token: &CancellationToken,
-) -> Result<()> {
-    let db = spec.target_db.clone();
-    let interrupted = || Error::new(Kind::Interrupted, "interrupted");
-    if request.force {
-        if !interactive(env) {
-            reporter.line(&format!("--force: dropping and recreating \"{db}\""));
-            return Ok(());
-        }
-        if env.non_empty("PGMI_NO_BANNER").ok().flatten().is_none() {
-            reporter.line(&banner(&db));
-        }
-        for left in (1..=5).rev() {
-            reporter.line(&format!(
-                "--force: DROP DATABASE \"{db}\" in {left}s. Ctrl-C aborts."
-            ));
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
-                _ = token.cancelled() => return Err(interrupted()),
-            }
-        }
-        return Ok(());
-    }
-    if !interactive(env) {
-        return Err(Error::new(
-            Kind::Denied,
-            format!(
-                "approval denied: --overwrite must be confirmed at a terminal, and this is not one; pass --force to drop and recreate \"{db}\" from a script or CI job"
-            ),
-        ));
-    }
-    reporter.line(&format!(
-        "WARNING: about to DROP and RECREATE database \"{db}\". This deletes all data.\nType the database name to confirm:"
-    ));
-    let read = tokio::task::spawn_blocking(|| {
-        let mut line = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map(|n| (n, line))
-    });
-    let (n, line) = tokio::select! {
-        r = read => r
-            .map_err(|e| Error::internal(format!("prompt: {e}")))?
-            .map_err(|e| Error::new(Kind::Denied, "approval denied").with_source(e))?,
-        _ = token.cancelled() => return Err(interrupted()),
-    };
-    if n == 0 {
-        return Err(Error::new(
-            Kind::Denied,
-            "approval denied: No input available. Cancelled.",
-        ));
-    }
-    let typed = line.trim_end_matches(['\r', '\n']);
-    if typed != db {
-        return Err(Error::new(
-            Kind::Denied,
-            format!("approval denied: \"{typed}\" does not match \"{db}\". Cancelled."),
-        ));
-    }
-    reporter.line("Confirmed.");
-    Ok(())
-}
 
 const LIST_GUCS: [&str; 6] = [
     "local_preload_libraries",

@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::wire::{self, Members};
 use crate::commands::{init, metadata};
 use crate::conn::resolve::Flags;
-use crate::deploy::{Approval, Context, Request, Run};
+use crate::deploy::{ConfirmedName, Context, Request, Run};
 use crate::env::Env;
 use crate::error::Error;
 use crate::error::redact;
@@ -402,7 +402,7 @@ fn deploy_context(
         env: env.clone(),
         dotenv_keys: Vec::new(),
         stdin: false,
-        approval: Approval::Confirm(confirm),
+        approver: Box::new(ConfirmedName(confirm)),
     })
 }
 
@@ -521,7 +521,8 @@ mod tests {
         assert_eq!(r.params_files, ["a", "b"]);
         assert!(r.overwrite && !r.force && !r.json && r.compat.is_none() && r.cloud.is_empty());
         assert!(!ctx.stdin);
-        assert!(matches!(ctx.approval, Approval::Confirm(Some(ref d)) if d == "-d"));
+        ctx.approver.before_connecting("-d").unwrap();
+        assert!(ctx.approver.before_connecting("d").is_err());
     }
 
     #[test]

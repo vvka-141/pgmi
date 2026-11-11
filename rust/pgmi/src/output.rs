@@ -16,12 +16,14 @@ pub(crate) struct Notice {
     pub(crate) hint: Option<String>,
 }
 
+/// Writes pgmi's own lines to one sink (stderr in production), one whole
+/// line at a time even when several deploys share it.
 pub(crate) struct Reporter {
     verbose: bool,
     start: Instant,
-    pub(crate) fancy: bool,
-    pub(crate) color: bool,
-    lock: Mutex<()>,
+    fancy: bool,
+    color: bool,
+    sink: Mutex<Box<dyn Write + Send>>,
 }
 
 impl Reporter {
@@ -29,26 +31,41 @@ impl Reporter {
         let term =
             std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
         let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
-        Arc::new(Reporter {
+        Arc::new(Self::to(
+            Box::new(std::io::stderr()),
+            verbose,
+            term,
+            term && !no_color,
+        ))
+    }
+
+    pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, fancy: bool, color: bool) -> Self {
+        Reporter {
             verbose,
             start: Instant::now(),
-            fancy: term,
-            color: term && !no_color,
-            lock: Mutex::new(()),
-        })
+            fancy,
+            color,
+            sink: Mutex::new(sink),
+        }
     }
 
     pub(crate) fn line(&self, text: &str) {
-        let _guard = self.lock.lock();
-        let mut err = std::io::stderr().lock();
+        let mut sink = self
+            .sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut out = String::new();
         if self.verbose {
             let t = self.start.elapsed().as_secs_f64();
             for l in text.lines() {
-                let _ = writeln!(err, "[{t:.2}s] {l}");
+                out.push_str(&format!("[{t:.2}s] {l}\n"));
             }
         } else {
-            let _ = writeln!(err, "{text}");
+            out.push_str(text);
+            out.push('\n');
         }
+        let _ = sink.write_all(out.as_bytes());
+        let _ = sink.flush();
     }
 
     pub(crate) fn notice(&self, n: &Notice) {
@@ -158,9 +175,103 @@ pub(crate) fn timestamp(t: std::time::SystemTime) -> String {
     }
 }
 
+/// A `Reporter` sink that keeps what was written, for tests.
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
+
+#[cfg(test)]
+impl Captured {
+    pub(crate) fn reporter(verbose: bool, fancy: bool, color: bool) -> (Reporter, Captured) {
+        let out = Captured::default();
+        (
+            Reporter::to(Box::new(out.clone()), verbose, fancy, color),
+            out,
+        )
+    }
+
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[cfg(test)]
+impl Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notice(sev: &str, detail: Option<&str>, hint: Option<&str>) -> Notice {
+        Notice {
+            severity: sev.into(),
+            message: "msg".into(),
+            detail: detail.map(str::to_string),
+            hint: hint.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_summary_glyph_follows_the_terminal() {
+        for (fancy, color, ok, want) in [
+            (false, false, true, "ok app: done\n"),
+            (false, false, false, "FAILED app: done\n"),
+            (true, false, true, "✓ app: done\n"),
+            (true, false, false, "✗ app: done\n"),
+            (true, true, true, "\x1b[32m✓\x1b[0m app: done\n"),
+            (true, true, false, "\x1b[31m✗\x1b[0m app: done\n"),
+        ] {
+            let (r, out) = Captured::reporter(false, fancy, color);
+            r.summary(ok, "app: done");
+            assert_eq!(out.text(), want, "fancy={fancy} color={color} ok={ok}");
+        }
+    }
+
+    #[test]
+    fn verbose_prefixes_every_line_with_the_elapsed_time() {
+        let (r, out) = Captured::reporter(true, false, false);
+        r.line("one\ntwo");
+        let text = out.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        for (line, body) in lines.iter().zip(["one", "two"]) {
+            let (stamp, rest) = line.split_once("] ").unwrap();
+            assert_eq!(rest, body);
+            let secs = stamp.strip_prefix('[').unwrap().strip_suffix('s').unwrap();
+            assert_eq!(secs.split_once('.').unwrap().1.len(), 2, "{line}");
+        }
+        let (r, out) = Captured::reporter(false, false, false);
+        r.line("one\ntwo");
+        assert_eq!(out.text(), "one\ntwo\n");
+    }
+
+    #[test]
+    fn notices_are_laid_out_as_psql_does() {
+        let (r, out) = Captured::reporter(false, false, false);
+        r.notice(&notice("NOTICE", None, None));
+        r.notice(&notice("INFO", None, None));
+        r.notice(&notice("WARNING", Some("d"), Some("h")));
+        r.notice(&notice("LOG", None, None));
+        r.notice(&notice("DEBUG", None, None));
+        assert_eq!(
+            out.text(),
+            "msg\nmsg\nWARNING:  msg\nDETAIL:  d\nHINT:  h\n"
+        );
+        let (r, out) = Captured::reporter(true, false, false);
+        r.notice(&notice("DEBUG", None, None));
+        r.notice(&notice("LOG", None, None));
+        assert!(out.text().ends_with("] msg\n"), "{}", out.text());
+        assert_eq!(out.text().lines().count(), 1);
+    }
 
     fn n(sev: &str, i: usize) -> Notice {
         Notice {

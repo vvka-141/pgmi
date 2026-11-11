@@ -89,13 +89,15 @@ fn run_deploy(
         export(k, v);
         env.insert(k, v);
     }
+    let request = deploy::Request::from(args);
+    let approver = Box::new(deploy::Terminal::new(request.force, &env));
     deploy::run(deploy::Context {
-        request: args.into(),
+        request,
         verbose,
         env,
         dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
         stdin: true,
-        approval: deploy::Approval::Prompt,
+        approver,
     })
 }
 

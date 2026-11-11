@@ -1,3 +1,4 @@
+mod approve;
 mod execute;
 mod overwrite;
 mod request;
@@ -26,6 +27,7 @@ use crate::error::{Error, Kind, Result, SqlDiagnostics};
 use crate::output::{Notice, NoticeLog, Reporter, seconds, timestamp};
 use crate::project::{metadata, walk};
 
+pub(crate) use approve::{Approver, ConfirmedName, Terminal};
 pub(crate) use request::Request;
 
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
@@ -69,12 +71,7 @@ pub(crate) struct Context {
     pub(crate) env: Env,
     pub(crate) dotenv_keys: Vec<String>,
     pub(crate) stdin: bool,
-    pub(crate) approval: Approval,
-}
-
-pub(crate) enum Approval {
-    Prompt,
-    Confirm(Option<String>),
+    pub(crate) approver: Box<dyn Approver>,
 }
 
 #[derive(Default)]
@@ -383,29 +380,8 @@ async fn deploy(
     if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
         test_panic();
     }
-    if a.overwrite
-        && let Approval::Confirm(confirm) = &ctx.approval
-    {
-        let db = &spec.target_db;
-        match confirm {
-            None => {
-                return Err(Error::new(
-                    Kind::Denied,
-                    format!(
-                        "overwrite=true drops database \"{db}\": pass confirmDatabaseName=\"{db}\" to confirm"
-                    ),
-                ));
-            }
-            Some(c) if c != db => {
-                return Err(Error::new(
-                    Kind::Denied,
-                    format!(
-                        "confirmDatabaseName \"{c}\" does not match database \"{db}\"; nothing was deployed and no database was dropped"
-                    ),
-                ));
-            }
-            Some(_) => {}
-        }
+    if a.overwrite {
+        ctx.approver.before_connecting(&spec.target_db)?;
     }
     st.deployer = true;
     let max_size = walk::max_size(&ctx.env)?;
@@ -464,8 +440,10 @@ async fn deploy(
     }
     if a.overwrite {
         let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
-        if plan.drops_a_database() && matches!(ctx.approval, Approval::Prompt) {
-            overwrite::approve(a, &spec, &ctx.env, reporter, &guard.token).await?;
+        if plan.drops_a_database() {
+            ctx.approver
+                .approve_drop(&spec.target_db, reporter, &guard.token)
+                .await?;
         }
         let recreated = guard
             .running(&plan.maintenance, overwrite::recreate(&plan, reporter))
@@ -599,45 +577,8 @@ fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> 
         Err(e) => e.exit_code(),
     };
     let secrets = run.secrets();
-    if let Some(db) = &st.database {
-        match &result {
-            Ok(()) => reporter.summary(
-                true,
-                &format!(
-                    "{db}: {} files loaded{} in {}",
-                    st.files_loaded.unwrap_or(0),
-                    match st
-                        .paths_ignored
-                        .as_ref()
-                        .and_then(Value::as_array)
-                        .map_or(0, Vec::len)
-                    {
-                        0 => String::new(),
-                        n => format!(", {n} paths ignored"),
-                    },
-                    seconds(elapsed)
-                ),
-            ),
-            Err(e) => {
-                let mut text = format!("{db}: failed after {}", seconds(elapsed));
-                let committed = st.committed.unwrap_or(0);
-                let mut notes = Vec::new();
-                match (st.units, st.failed_unit) {
-                    (Some(units), Some(failed)) if committed > 0 => text.push_str(&format!(
-                        " (unit {failed} of {units} failed; {committed} earlier unit(s) already committed)"
-                    )),
-                    (Some(_), _) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
-                    _ => {}
-                }
-                if st.created == Some(true) && committed == 0 {
-                    notes.push(format!("created database \"{db}\", left empty"));
-                }
-                if !notes.is_empty() {
-                    text.push_str(&format!(" — {}", notes.join("; ")));
-                }
-                reporter.summary(false, &text);
-            }
-        }
+    if let Some((ok, text)) = summary(st, &result, elapsed) {
+        reporter.summary(ok, &text);
     }
     if let Err(e) = &result {
         reporter.line(&redact(&format!("pgmi: error: {}", e.text()), &secrets));
@@ -652,6 +593,49 @@ fn finish(ctx: &Context, run: &Run, result: Result<()>, reporter: &Reporter) -> 
         let _ = writeln!(out, "{text}");
     }
     code
+}
+
+fn summary(st: &State, result: &Result<()>, elapsed: Duration) -> Option<(bool, String)> {
+    let db = st.database.as_deref()?;
+    let e = match result {
+        Ok(()) => {
+            let ignored = match st
+                .paths_ignored
+                .as_ref()
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+            {
+                0 => String::new(),
+                n => format!(", {n} paths ignored"),
+            };
+            return Some((
+                true,
+                format!(
+                    "{db}: {} files loaded{ignored} in {}",
+                    st.files_loaded.unwrap_or(0),
+                    seconds(elapsed)
+                ),
+            ));
+        }
+        Err(e) => e,
+    };
+    let mut text = format!("{db}: failed after {}", seconds(elapsed));
+    let committed = st.committed.unwrap_or(0);
+    let mut notes = Vec::new();
+    match (st.units, st.failed_unit) {
+        (Some(units), Some(failed)) if committed > 0 => text.push_str(&format!(
+            " (unit {failed} of {units} failed; {committed} earlier unit(s) already committed)"
+        )),
+        (Some(_), _) if e.kind() == Kind::Sql => notes.push("nothing committed".to_string()),
+        _ => {}
+    }
+    if st.created == Some(true) && committed == 0 {
+        notes.push(format!("created database \"{db}\", left empty"));
+    }
+    if !notes.is_empty() {
+        text.push_str(&format!(" — {}", notes.join("; ")));
+    }
+    Some((false, text))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -790,6 +774,120 @@ mod tests {
         assert!(!e.text().contains("--timeout"), "{}", e.text());
         guard.interrupted.store(true, Ordering::SeqCst);
         assert_eq!(guard.stop_error().text(), "interrupted");
+    }
+
+    fn loaded(db: &str) -> State {
+        State {
+            database: Some(db.into()),
+            files_loaded: Some(3),
+            paths_ignored: Some(json!([])),
+            created: Some(false),
+            ..State::default()
+        }
+    }
+
+    fn summary_of(st: &State, result: &Result<()>) -> Option<(bool, String)> {
+        summary(st, result, Duration::from_millis(1234))
+    }
+
+    #[test]
+    fn the_summary_counts_files_and_ignored_paths() {
+        assert_eq!(
+            summary_of(&loaded("app"), &Ok(())),
+            Some((true, "app: 3 files loaded in 1.23s".into()))
+        );
+        let st = State {
+            paths_ignored: Some(json!([{"path": "a"}, {"path": "b"}])),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&st, &Ok(())).unwrap().1,
+            "app: 3 files loaded, 2 paths ignored in 1.23s"
+        );
+        assert_eq!(summary_of(&State::default(), &Ok(())), None);
+    }
+
+    #[test]
+    fn a_failed_summary_says_what_was_committed() {
+        let sql = Err(Error::sql("boom"));
+        let atomic = State {
+            units: Some(3),
+            committed: Some(0),
+            failed_unit: Some(1),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&atomic, &sql),
+            Some((false, "app: failed after 1.23s — nothing committed".into()))
+        );
+        let psql = State {
+            committed: Some(2),
+            failed_unit: Some(3),
+            ..atomic
+        };
+        assert_eq!(
+            summary_of(&psql, &sql).unwrap().1,
+            "app: failed after 1.23s (unit 3 of 3 failed; 2 earlier unit(s) already committed)"
+        );
+        let created = State {
+            created: Some(true),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&created, &Err(Error::connection("refused")))
+                .unwrap()
+                .1,
+            "app: failed after 1.23s — created database \"app\", left empty"
+        );
+        let created_then_sql = State {
+            units: Some(1),
+            committed: Some(0),
+            failed_unit: Some(1),
+            ..created
+        };
+        assert_eq!(
+            summary_of(&created_then_sql, &sql).unwrap().1,
+            "app: failed after 1.23s — nothing committed; created database \"app\", left empty"
+        );
+    }
+
+    #[test]
+    fn the_error_line_never_shows_the_password() {
+        let env = Env::default();
+        let flags = resolve::Flags {
+            connection: Some("postgresql://u:s3cret-pw@db.example:6543/app".into()),
+            ..resolve::Flags::default()
+        };
+        let mut run = Run::start();
+        run.st = State {
+            spec: Some(resolve::resolve(&flags, &env, None).unwrap()),
+            units: Some(1),
+            committed: Some(0),
+            failed_unit: Some(1),
+            ..loaded("app")
+        };
+        let ctx = Context {
+            request: Request::default(),
+            verbose: false,
+            env,
+            dotenv_keys: Vec::new(),
+            stdin: false,
+            approver: Box::new(ConfirmedName(None)),
+        };
+        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        let code = finish(
+            &ctx,
+            &run,
+            Err(Error::sql("password s3cret-pw rejected")),
+            &reporter,
+        );
+        assert_eq!(code, 13);
+        let text = out.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[0].starts_with("FAILED app: failed after "), "{text}");
+        assert_eq!(lines[1], "pgmi: error: password *** rejected");
+        assert_eq!(lines[2], "LOCATION: deploy.sql");
+        assert_eq!(lines.len(), 3, "{text}");
     }
 
     #[test]

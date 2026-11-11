@@ -29,7 +29,9 @@ truncated to the first 50, up to 200 WARNINGs from the middle and the last
 ## Decision
 
 - A `Reporter` owns stderr: one lock, one line per write, the colour and
-  glyph decision of record 0012, the `-v` elapsed prefix. No tracing
+  glyph decision of record 0012, the `-v` elapsed prefix. The sink is a
+  `Box<dyn Write + Send>` given at construction (stderr in production, a
+  buffer in unit tests; record 0022 step 6). No tracing
   subscriber is installed, so SDK logs go nowhere, with or without `-v`.
 - Notices are taken from the connection future as they arrive (record 0004).
   The label is the unlocalised severity (the protocol's `V` field), so

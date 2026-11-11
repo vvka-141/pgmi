@@ -105,10 +105,10 @@ The lib target is not published as a library API (0001 still holds).
   `cloud::select` and `overwrite` take it. Removes the clap re-parse in
   serve. It did not make the deploy future `Send` (step 5, record 0017),
   so the blocking-pool workaround stays.
-- **`Approver`.** `async fn approve(&self, db: &str, token) -> Result<()>`
-  (or an enum with a boxed terminal variant): `Terminal` (current prompt and
-  `--force` countdown), `ConfirmedName(Option<String>)` (serve), and test
-  doubles. Two real impls plus doubles justify the trait.
+- **`Approver`.** `before_connecting(db)` and `async fn approve_drop(db,
+  reporter, token)`: `Terminal` (current prompt and `--force` countdown),
+  `ConfirmedName(Option<String>)` (serve), and test doubles. Two real
+  impls plus doubles justify the trait.
 - **Reporter sink.** `Reporter` owns `Mutex<Box<dyn Write + Send>>`;
   `stderr()` in production, `Vec<u8>` in tests. Summary line, verbose
   prefixes and redaction become unit-testable.
@@ -196,6 +196,17 @@ land before or between steps, each with a black-box case.
    rustc's auto-trait check; record 0017 says where and why.
 6. **`Approver` and Reporter sink.** Unit tests for the summary line,
    refusal texts, `--force` countdown cancel (with `tokio::time::pause`).
+   Done 2026-11-11: `deploy::approve` holds the `Approver` trait
+   (`async_trait(?Send)`, so `Context` keeps a `Box<dyn Approver>`) with
+   two calls: `before_connecting` (serve's `ConfirmedName` refuses a
+   missing or wrong name there) and `approve_drop` right before an
+   existing database is dropped (`Terminal`: the typed confirmation, or
+   `--force` with the five-second countdown when a person is watching).
+   `Terminal` reads its answer through an injected function, the doubles
+   in the tests. `Reporter::to(sink, verbose, fancy, color)` takes any
+   `Write + Send` and writes each line in one call; `Reporter::new` is
+   stderr. The summary line is the pure `deploy::summary`. tokio's
+   `test-util` feature is on for tests only.
 7. **Serve over any transport.** `serve(input, output, toolbox, stop)`;
    port MCP group 8 in-process.
 8. **`DeployRecord`.** Replace `State` and `record()`; pure tests of the
