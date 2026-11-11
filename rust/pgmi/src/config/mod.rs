@@ -1,4 +1,5 @@
 pub mod dotenv;
+pub mod edit;
 pub mod params;
 pub mod yaml;
 

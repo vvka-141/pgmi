@@ -61,9 +61,7 @@ fn run() -> u8 {
         }
         Some(Command::Completion(a)) => commands::completion::run(&a),
         Some(Command::Serve) => return serve::run(cli.verbose),
-        Some(Command::Config(_)) => Err(Error::usage(
-            "this command is not implemented in this build",
-        )),
+        Some(Command::Config(a)) => commands::config::run(&a, &Env::snapshot()),
     };
     match result {
         Ok(()) => 0,

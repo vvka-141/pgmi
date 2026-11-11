@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod completion;
+pub mod config;
 pub mod info;
 pub mod metadata;
 pub mod templates;

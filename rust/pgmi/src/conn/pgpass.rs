@@ -92,9 +92,83 @@ fn find(text: &str, host: &str, port: &str, db: &str, user: &str) -> Option<Stri
     None
 }
 
+pub fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace(':', "\\:")
+}
+
+pub fn save(
+    path: &Path,
+    host: &str,
+    port: u16,
+    dbs: &[&str],
+    user: &str,
+    password: &str,
+) -> crate::error::Result<()> {
+    use crate::error::Error;
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(dir)
+            .map_err(|e| Error::general("create .pgpass directory").with_source(e))?;
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(Error::general("failed to read existing .pgpass").with_source(e));
+        }
+    };
+    let prefixes: Vec<String> = dbs
+        .iter()
+        .map(|db| format!("{}:{port}:{}:{}:", escape(host), escape(db), escape(user)))
+        .collect();
+    let mut lines: Vec<String> = prefixes
+        .iter()
+        .map(|p| format!("{p}{}", escape(password)))
+        .collect();
+    let kept = existing.trim_end_matches('\n');
+    lines.extend(
+        kept.split('\n')
+            .filter(|l| !kept.is_empty() && !prefixes.iter().any(|p| l.starts_with(p.as_str())))
+            .map(str::to_string),
+    );
+    let mut text = lines.join("\n");
+    text.push('\n');
+    crate::config::edit::write_private(path, &text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_puts_entries_first_and_escapes() {
+        let dir = std::env::temp_dir().join(format!("pgmi-pgpass-{}", std::process::id()));
+        let path = dir.join("sub").join(".pgpass");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "*:*:*:u:old\nh\\:x:5432:db:u:stale\n").unwrap();
+        save(&path, "h:x", 5432, &["db", "postgres"], "u", "p:w\\d").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            "h\\:x:5432:db:u:p\\:w\\\\d\nh\\:x:5432:postgres:u:p\\:w\\\\d\n*:*:*:u:old\n"
+        );
+        assert_eq!(
+            find(&text, "h:x", "5432", "db", "u").as_deref(),
+            Some("p:w\\d")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn matching() {

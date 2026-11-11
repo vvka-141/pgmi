@@ -44,6 +44,7 @@ rustls-native-certs = "0.8.5"
 rustls-pki-types = { version = "1.16.0", features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
+yaml-edit = { version = "0.3.6", default-features = false }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 sha2 = "0.11.1"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "io-std", "time", "signal", "sync", "macros", "fs"] }

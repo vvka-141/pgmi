@@ -79,3 +79,8 @@ pub struct CompletionArgs {
     #[arg(value_parser = ["bash", "zsh", "fish", "powershell"])]
     pub shell: String,
 }
+
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    pub path: Option<PathBuf>,
+}

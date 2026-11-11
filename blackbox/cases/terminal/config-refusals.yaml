@@ -1,0 +1,28 @@
+description: pgmi config without a terminal is exit 2; on a terminal, an unparseable pgmi.yaml is only replaced after confirmation (n is exit 12 and keeps the file), and Esc in the wizard is exit 12
+project:
+  files:
+    pgmi.yaml: |
+      connection: [broken
+steps:
+  - pgmi: [config, "{project}"]
+    expect:
+      exit: 2
+      stderr: ["interactive terminal"]
+      files:
+        project/pgmi.yaml: ["connection: \\[broken"]
+  - pgmi: [config, "{project}"]
+    tty: true
+    stdin: [{wait: 2}, "n\r"]
+    timeout: 30
+    expect:
+      exit: 12
+      stdout: ["could not be parsed", "Overwrite the unparseable pgmi\\.yaml\\?"]
+      files:
+        project/pgmi.yaml: ["connection: \\[broken"]
+  - pgmi: [config, "{workdir}/fresh"]
+    tty: true
+    stdin: [{wait: 2}, {text: "\x1b"}, {wait: 1}, {text: "\x1b"}, {wait: 1}]
+    timeout: 30
+    expect:
+      exit: 12
+      absent: [fresh/pgmi.yaml]

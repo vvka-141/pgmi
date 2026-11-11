@@ -1,0 +1,39 @@
+description: on a terminal, answering Yes to "Set up the connection now?" in init runs the connection wizard, writes the scaffolded pgmi.yaml with the settings, keeps its comments, saves the password and names the database in the next steps
+steps:
+  - pgmi: [init, "{workdir}/wiz"]
+    tty: true
+    stdin:
+      - {wait: 2}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - "\r"
+      - {wait: 1}
+      - "\x15127.0.0.1"
+      - "\t"
+      - "\x15{port}"
+      - "\t"
+      - "{db}"
+      - "\t"
+      - "\t"
+      - "\x15{user}"
+      - "\t"
+      - "{password}"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 4}
+      - "\r"
+      - {wait: 2}
+      - "y\r"
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["Connected to 127\\.0\\.0\\.1:{port}", "Wrote .*\\(basic template\\)", "Wrote .*pgmi\\.yaml", "Saved to ", "-d {db}"]
+      files:
+        wiz/pgmi.yaml: ["# pgmi project configuration", "host: 127\\.0\\.0\\.1", "port: {port}", "database: {db}", "timeout: 3m"]
+        home/.pgpass: ["127\\.0\\.0\\.1:{port}:{db}:"]

@@ -59,9 +59,11 @@ and without a terminal it writes `minimal`; on a terminal it runs the wizard. A
 file named `<name>.scaffold` is written as `<name>`. A target holding anything
 but `pgmi.yaml`, `.env` or `.git` is exit 2; an unknown template is exit 2.
 `{{PROJECT_NAME}}` in a template becomes the target folder's name, as is in
-text files and JSON-escaped in `.json` files.
+text files and JSON-escaped in `.json` files. Answering Yes to "Set up the
+connection now?" runs the `config` wizard and writes its settings into the
+scaffolded `pgmi.yaml`.
 
-Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`.
+Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`.
 
 ### Template deployments
 
@@ -169,10 +171,11 @@ Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, 
 `pgmi config [path]` is a terminal wizard: it asks before replacing the
 connection settings of an existing `pgmi.yaml`, tests the connection, writes
 `pgmi.yaml` keeping the file's comments and other keys, and offers to save the
-password to `~/.pgpass`. Without a terminal it is exit 2. Ctrl-C in the
-wizard is exit 130.
+password to `~/.pgpass`. A `pgmi.yaml` that does not parse is replaced only
+after a confirmation. Without a terminal it is exit 2. Declining a prompt or
+Esc on the first screen is exit 12; Ctrl-C in the wizard is exit 130.
 
-Cases: `terminal/config-wizard`, `terminal/prompt-cancel`.
+Cases: `terminal/config-wizard`, `terminal/prompt-cancel`, `terminal/config-refusals`, `terminal/config-replace-unparseable`.
 
 ## Deploy
 

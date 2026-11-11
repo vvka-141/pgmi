@@ -69,8 +69,26 @@ Option 1 for the two wizards; plain line I/O for the rest.
   leaves the alternate screen.
 - A pty may deliver Enter as `\n` plus `\r`; Ctrl-J and other control
   characters are ignored by the select lists.
-- Answering Yes to "Set up the connection now?" prints where to set the
-  connection; the config wizard is not built yet.
+- The config wizard (`tui/connection.rs`) follows Go's screens: provider,
+  authentication method, a form per method, and the connection test against
+  the maintenance database (token methods are not tested, as in Go). The
+  test runs on a thread with its own current-thread runtime and reports
+  through a channel; the loop polls keys every 100 ms to turn the spinner.
+  Each page change (stage, or the test finishing) clears the screen and
+  starts a fresh `Terminal`, so a line such as `Connected to ...` is written
+  whole, never as a diff against the previous page.
+- Form fields edit with a cursor: Left/Right/Home/End, Backspace/Delete,
+  Ctrl-U clears before the cursor, Ctrl-K after, Ctrl-A/Ctrl-E; other control
+  characters are ignored.
+- The `[Y/n]` prompts (overwrite settings, unparseable file, `.pgpass`) are a
+  line read from stdin outside the wizard; end of input is No.
+- `init`: Yes to "Set up the connection now?" runs the same wizard after the
+  template screen and before scaffolding (cancelling it cancels init); the
+  settings are written into the scaffolded `pgmi.yaml` and the next steps
+  name the chosen database (`terminal/init-wizard-connection`).
+- `.pgpass` is replaced through a temporary file and a rename, mode 0600, the
+  new lines first (libpq takes the first match), lines with the same
+  host:port:db:user dropped.
 
 ## Serves
 

@@ -17,9 +17,9 @@ pub struct Select {
     pub cursor: usize,
 }
 
-const ACCENT: Color = Color::Indexed(39);
-const MUTED: Color = Color::Indexed(245);
-const FAINT: Color = Color::Indexed(240);
+pub const ACCENT: Color = Color::Indexed(39);
+pub const MUTED: Color = Color::Indexed(245);
+pub const FAINT: Color = Color::Indexed(240);
 
 impl Select {
     pub fn update(&mut self, key: KeyEvent) -> Option<Outcome> {

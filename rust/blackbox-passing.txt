@@ -120,3 +120,8 @@ tls/sslmode-flag-overrides
 tls/sslmode-matrix
 tls/sslmode-refusals
 tls/system-roots
+terminal/config-wizard
+terminal/prompt-cancel
+terminal/config-refusals
+terminal/config-replace-unparseable
+terminal/init-wizard-connection

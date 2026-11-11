@@ -1,0 +1,45 @@
+description: pgmi config replaces an unparseable pgmi.yaml once confirmed, and a deploy then reads the new connection settings
+project:
+  files:
+    deploy.sql: CREATE TABLE seen AS SELECT current_database()::text AS db;
+    pgmi.yaml: |
+      connection: [broken
+steps:
+  - pgmi: [config, "{project}"]
+    tty: true
+    stdin:
+      - {wait: 2}
+      - "y\r"
+      - {wait: 1}
+      - "\r"
+      - {wait: 1}
+      - "\x15127.0.0.1"
+      - "\t"
+      - "\x15{port}"
+      - "\t"
+      - "{db}"
+      - "\t"
+      - "\t"
+      - "\x15{user}"
+      - "\t"
+      - "{password}"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 4}
+      - "\r"
+      - {wait: 2}
+      - "n\r"
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["Connected to 127\\.0\\.0\\.1:{port}", "Wrote .*pgmi\\.yaml", "Tip: provide password"]
+      files:
+        project/pgmi.yaml: ["host: 127\\.0\\.0\\.1", "database: {db}"]
+      absent: [home/.pgpass]
+  - pgmi: [deploy, "{project}"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT db FROM seen
+          rows: [["{db}"]]

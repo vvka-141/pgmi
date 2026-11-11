@@ -1,7 +1,6 @@
 pub mod commands;
 pub mod duration;
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -52,11 +51,19 @@ pub enum Command {
     Ai(AiArgs),
     #[command(about = "Expose pgmi's commands as MCP tools over stdio", long_about = SERVE_HELP)]
     Serve,
-    #[command(about = "Connection wizard (not implemented in this build)")]
-    Config(Rest),
+    #[command(about = "Run the connection wizard and save to pgmi.yaml", long_about = CONFIG_HELP)]
+    Config(ConfigArgs),
     #[command(about = "Print a shell completion script to stdout")]
     Completion(CompletionArgs),
 }
+
+const CONFIG_HELP: &str = "Launch the connection wizard and write the result to pgmi.yaml.
+
+  pgmi config              In the current directory
+  pgmi config ./project    In ./project
+
+The wizard handles local, Azure Entra ID, AWS IAM, and Google Cloud SQL
+auth. Requires an interactive terminal — for CI, write pgmi.yaml by hand.";
 
 const SERVE_HELP: &str = "Expose pgmi's commands as MCP tools over stdio (JSON-RPC 2.0).
 
@@ -77,12 +84,6 @@ holds exits 15.
 Add it to Claude Code with:
 
   claude mcp add pgmi -- pgmi serve";
-
-#[derive(Debug, Args)]
-pub struct Rest {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    pub args: Vec<OsString>,
-}
 
 #[derive(Debug, Args)]
 pub struct InitArgs {

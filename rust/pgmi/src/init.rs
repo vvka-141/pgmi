@@ -2,7 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::cli::InitArgs;
+use crate::commands::config::stopped;
 use crate::error::{Error, Result};
+use crate::tui::connection::Done;
 
 const KEPT: &[&str] = &["pgmi.yaml", ".env", ".git"];
 const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
@@ -28,16 +30,20 @@ pub fn check_empty(target: &Path) -> Result<()> {
 pub fn run(a: &InitArgs) -> Result<()> {
     let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     check_empty(&target)?;
-    let mut connect = false;
+    let mut connection = None;
     let template = match a.template.as_deref() {
         Some(t) => t,
         None if crate::tui::interactive(&crate::env::Env::snapshot()) => {
             match crate::tui::init::run(&target.display().to_string())? {
-                crate::tui::init::Done::Finished {
-                    template,
-                    connect: c,
-                } => {
-                    connect = c;
+                crate::tui::init::Done::Finished { template, connect } => {
+                    if connect {
+                        let env = crate::env::Env::snapshot();
+                        connection = Some(match crate::tui::connection::run(None, &env)? {
+                            Done::Finished(s) => (s, env),
+                            Done::Cancelled => return Err(stopped("init", false)),
+                            Done::Interrupted => return Err(stopped("init", true)),
+                        });
+                    }
                     template
                 }
                 crate::tui::init::Done::Cancelled => return Err(crate::tui::init::cancelled()),
@@ -56,15 +62,29 @@ pub fn run(a: &InitArgs) -> Result<()> {
     draw(&absolute, "", &mut tree);
     tree.push('\n');
     let _ = std::io::stdout().lock().write_all(tree.as_bytes());
-    let _ =
-        std::io::stderr().write_all(next_steps(template, &target.display().to_string()).as_bytes());
-    if connect {
-        let _ = writeln!(
-            std::io::stderr(),
-            "\nThe connection wizard is not in this build yet; set the connection in {} or pass --connection to pgmi deploy.",
-            target.join("pgmi.yaml").display()
-        );
+    let mut db = None;
+    if let Some((s, env)) = &connection {
+        match crate::commands::config::save(&target, s, false) {
+            Err(e) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "WARNING: could not save connection: {}",
+                    e.text()
+                );
+            }
+            Ok(()) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "Wrote {}",
+                    target.join("pgmi.yaml").display()
+                );
+                crate::commands::config::offer_pgpass(s, env);
+                db = Some(s.database.as_str()).filter(|d| !d.is_empty());
+            }
+        }
     }
+    let _ = std::io::stderr()
+        .write_all(next_steps(template, &target.display().to_string(), db).as_bytes());
     Ok(())
 }
 
@@ -130,16 +150,21 @@ pub fn scaffold(target: &Path, template: &str, name: Option<&str>) -> Result<()>
 
 const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\ncommit them, and edit them as your conventions change. Run \"pgmi ai\" for the\ndocs that match this pgmi version.\n";
 
-fn next_steps(template: &str, target: &str) -> String {
+fn next_steps(template: &str, target: &str, db: Option<&str>) -> String {
+    let db = db.unwrap_or(if template == "advanced" {
+        "myapp_dev"
+    } else {
+        "mydb"
+    });
     match template {
         "minimal" => format!(
-            "\nNext:\n  pgmi deploy {target} -d mydb\n\ndeploy.sql runs every .sql file in path order. Add files, then change its\nquery to decide what runs. Run \"pgmi ai\" for the docs that match this version.\n"
+            "\nNext:\n  pgmi deploy {target} -d {db}\n\ndeploy.sql runs every .sql file in path order. Add files, then change its\nquery to decide what runs. Run \"pgmi ai\" for the docs that match this version.\n"
         ),
         "basic" => {
-            format!("\nNext:\n  pgmi deploy {target} -d mydb --param env=dev\n\n{AGENTS_NOTE}")
+            format!("\nNext:\n  pgmi deploy {target} -d {db} --param env=dev\n\n{AGENTS_NOTE}")
         }
         _ => format!(
-            "Managed-cloud note: the advanced template needs PostgreSQL 18 or newer and the\nuuid-ossp, pgcrypto, pg_trgm, hstore and btree_gist extensions. No superuser\nrequired: deploy as a role with CREATEROLE and CREATEDB. Details:\nhttps://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql\n\nNext:\n  pgmi deploy {target} -d myapp_dev --param env=dev\n\nFor a shared database use env=test or env=prod, with the passwords in\nPGMI_PARAM_* environment variables or a --params-file.\n\n{AGENTS_NOTE}"
+            "Managed-cloud note: the advanced template needs PostgreSQL 18 or newer and the\nuuid-ossp, pgcrypto, pg_trgm, hstore and btree_gist extensions. No superuser\nrequired: deploy as a role with CREATEROLE and CREATEDB. Details:\nhttps://github.com/vvka-141/pgmi/blob/main/docs/PRODUCTION.md#managed-cloud-postgresql\n\nNext:\n  pgmi deploy {target} -d {db} --param env=dev\n\nFor a shared database use env=test or env=prod, with the passwords in\nPGMI_PARAM_* environment variables or a --params-file.\n\n{AGENTS_NOTE}"
         ),
     }
 }

@@ -1,10 +1,4 @@
-use std::io::Stdout;
-
 use crossterm::event::{Event, KeyEvent};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{cursor, execute, terminal};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::Paragraph;
 
 use super::select::{Outcome, Select};
@@ -89,45 +83,21 @@ impl Wizard {
     }
 }
 
-struct Screen(Terminal<CrosstermBackend<Stdout>>);
-
-impl Screen {
-    fn open() -> std::io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        let mut out = std::io::stdout();
-        if let Err(e) = execute!(out, EnterAlternateScreen, cursor::Hide) {
-            let _ = terminal::disable_raw_mode();
-            return Err(e);
-        }
-        Terminal::new(CrosstermBackend::new(out)).map(Self)
-    }
-}
-
-impl Drop for Screen {
-    fn drop(&mut self) {
-        let _ = execute!(self.0.backend_mut(), LeaveAlternateScreen, cursor::Show);
-        let _ = terminal::disable_raw_mode();
-    }
-}
-
 pub fn run(target: &str) -> Result<Done> {
-    let io = |e: std::io::Error| Error::general("terminal").with_source(e);
     let mut wizard = Wizard::new(target);
-    let mut screen = Screen::open().map_err(io)?;
+    let mut screen = super::Screen::open()?;
     loop {
         screen
             .0
             .draw(|f| f.render_widget(wizard.view(), f.area()))
-            .map_err(io)?;
-        if let Event::Key(key) = crossterm::event::read().map_err(io)? {
+            .map_err(super::io)?;
+        if let Event::Key(key) = crossterm::event::read().map_err(super::io)? {
             let stage = wizard.connection.is_some();
             if let Some(done) = wizard.update(key) {
                 return Ok(done);
             }
             if stage != wizard.connection.is_some() {
-                execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All))
-                    .map_err(io)?;
-                screen.0 = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(io)?;
+                screen.reset()?;
             }
         }
     }
