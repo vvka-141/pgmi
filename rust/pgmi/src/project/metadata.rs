@@ -123,7 +123,10 @@ impl fmt::Display for MetaError {
                 for (i, p) in problems.iter().enumerate() {
                     write!(f, "\n  {}. {p}", i + 1)?;
                 }
-                Ok(())
+                write!(
+                    f,
+                    "\n\nSee metadata format documentation:\n  {FORMAT_HINT}\n  Generate template: pgmi metadata scaffold <path>"
+                )
             }
         }
     }
@@ -181,7 +184,7 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
             value: v.to_string(),
         })?),
         None => {
-            problems.push("idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n  false: the script runs once and its id is recorded.".to_string());
+            problems.push("idempotent attribute is required (idempotent=\"true\" or idempotent=\"false\").\n  true: the script is safe to rerun every deploy (CREATE OR REPLACE, IF NOT EXISTS).\n  false: the script runs once per id (tracked one-time migration).".to_string());
             None
         }
     };
@@ -196,7 +199,7 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
         }
     };
     if id.is_none() {
-        problems.push("id attribute is required and cannot be the nil UUID (00000000-0000-0000-0000-000000000000).\n  Each script must have a unique identifier.".to_string());
+        problems.push("id attribute is required and cannot be the nil UUID (00000000-0000-0000-0000-000000000000).\n  Each script must have a unique identifier.\n  Generate with: uuidgen (Linux/Mac), [guid]::NewGuid() (PowerShell), or https://www.uuidgenerator.net/".to_string());
     }
     let mut sort_keys = Vec::new();
     let mut description = None;
@@ -213,7 +216,7 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
                 for key in child.children().filter(|k| k.has_tag_name("key")) {
                     let text = element_text(key);
                     if text.trim().is_empty() {
-                        problems.push(format!("sortKeys[{}] cannot be empty or whitespace-only.\n  Provide meaningful sort keys for execution ordering.", sort_keys.len()));
+                        problems.push(format!("sortKeys[{}] cannot be empty or whitespace-only.\n  Provide meaningful sort keys for execution ordering.\n  Recommended format: \"phase/sequence\" (e.g., \"10-utils/0010\", \"30-core/2000\")", sort_keys.len()));
                     }
                     sort_keys.push(text);
                 }
@@ -324,6 +327,7 @@ pub(crate) fn collect(files: &[File]) -> Result<Vec<Meta>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vfs::{MemFs, Vfs};
 
     #[test]
     fn reads_block() {
@@ -455,6 +459,406 @@ mod tests {
         assert_eq!(
             scan(&[f("./two.sql"), f("./one.sql")]).duplicates[0].1,
             vec!["./one.sql", "./two.sql"]
+        );
+    }
+
+    const ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+    const REFERENCE: [&str; 2] = [
+        ".agents/skills/pgmi-metadata/SKILL.md",
+        "https://github.com/vvka-141/pgmi/blob/main/docs/METADATA.md",
+    ];
+
+    fn block(attrs: &str, body: &str) -> String {
+        format!("/*\n<pgmi-meta {attrs}>\n{body}\n</pgmi-meta>\n*/\nSELECT 1;\n")
+    }
+
+    fn problems(e: MetaError) -> Vec<String> {
+        match e {
+            MetaError::Invalid { problems, .. } => problems,
+            other => panic!("not Invalid: {other}"),
+        }
+    }
+
+    #[test]
+    fn every_field_and_the_minimal_form_are_read() {
+        let m = parse(
+            "./test.sql",
+            &block(
+                &format!("\n    id=\"{ID}\"\n    idempotent=\"true\""),
+                "  <description>Test script with all fields</description>\n  <sortKeys>\n    <key>00000000-0000-0000-0000-000000000000/0001</key>\n  </sortKeys>",
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            m,
+            Meta {
+                path: "./test.sql".into(),
+                id: ID.into(),
+                idempotent: true,
+                sort_keys: vec!["00000000-0000-0000-0000-000000000000/0001".into()],
+                description: Some("Test script with all fields".into()),
+            }
+        );
+        let m = parse(
+            "./minimal.sql",
+            &block(
+                &format!("id=\"{ID}\" idempotent=\"false\""),
+                "<sortKeys><key>001</key></sortKeys>",
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!m.idempotent);
+        assert_eq!(m.description, None);
+        assert_eq!(m.sort_keys, ["001"]);
+    }
+
+    #[test]
+    fn a_file_without_a_block_has_no_metadata() {
+        for content in [
+            "SELECT 1 FROM test;",
+            "/* Just a regular comment */\nSELECT 1;\n",
+            "/*\n\n\n*/\nSELECT 1;\n",
+            &format!("/*\n<PGMI-META id=\"{ID}\" idempotent=\"true\">\n</PGMI-META>\n*/\n"),
+            "/*",
+            "/*x",
+            "/*/",
+        ] {
+            assert_eq!(parse("./a.sql", content), Ok(None), "{content:?}");
+        }
+    }
+
+    #[test]
+    fn an_unterminated_comment_holding_a_block_is_an_xml_error() {
+        let e = parse("./half.sql", "/* <pgmi-meta id=\"x\">").unwrap_err();
+        assert!(
+            matches!(&e, MetaError::Xml { path, .. } if path == "./half.sql"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn two_blocks_in_separate_comments_are_refused() {
+        let one = block(
+            &format!("id=\"{ID}\" idempotent=\"true\""),
+            "<sortKeys><key>001</key></sortKeys>",
+        );
+        let two = block(
+            "id=\"7603e3af-b8d9-46a5-8c4c-7f74d39e17f9\" idempotent=\"true\"",
+            "<sortKeys><key>002</key></sortKeys>",
+        );
+        for content in [format!("{one}\n{two}"), format!("{one}{one}")] {
+            let e = parse("./duplicate.sql", &content).unwrap_err();
+            assert!(
+                matches!(&e, MetaError::Multiple { path } if path == "./duplicate.sql"),
+                "{e}"
+            );
+            assert!(e.to_string().contains("Multiple metadata blocks found"));
+        }
+    }
+
+    #[test]
+    fn a_block_over_10_kib_is_refused() {
+        let content = block(
+            &format!("id=\"{ID}\" idempotent=\"true\""),
+            &format!("<description>{}</description>", "x".repeat(MAX_BLOCK)),
+        );
+        let e = parse("./large.sql", &content).unwrap_err();
+        assert!(
+            matches!(&e, MetaError::TooLarge { path, bytes } if path == "./large.sql" && *bytes > MAX_BLOCK),
+            "{e}"
+        );
+        assert_eq!(MAX_BLOCK, 10 * 1024);
+    }
+
+    #[test]
+    fn malformed_xml_is_an_xml_error() {
+        for content in [
+            format!(
+                "/*\n<pgmi-meta id=\"{ID}\" idempotent=\"true\">\n  <description>Unclosed\n  <sortKeys><key>001</key></sortKeys>\n</pgmi-meta>\n*/"
+            ),
+            format!(
+                "/*\n<pgmi-meta id=\"{ID}\" idempotent=\"true\">\n  <description>Test</description>\n  <sortKeys><key>001</key></sortKeys>\n*/"
+            ),
+            format!(
+                "/*\n<pgmi-meta id={ID} idempotent=\"true\">\n  <sortKeys><key>001</key></sortKeys>\n</pgmi-meta>\n*/"
+            ),
+        ] {
+            let e = parse("./invalid.sql", &content).unwrap_err();
+            assert!(
+                matches!(&e, MetaError::Xml { path, .. } if path == "./invalid.sql"),
+                "{content}: {e}"
+            );
+            assert!(
+                e.to_string().starts_with("metadata error in ./invalid.sql"),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn attribute_errors_name_the_attribute_and_the_reference() {
+        let e = parse(
+            "./a.sql",
+            &block("id=\"not-a-valid-uuid\" idempotent=\"true\"", ""),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, MetaError::NotUuid { path, .. } if path == "./a.sql"),
+            "{e}"
+        );
+        assert!(e.to_string().contains("id attribute is not a UUID"));
+        let e = parse(
+            "./a.sql",
+            &block(
+                "id=\"11111111-1111-4111-8111-111111111111\" idempotent=\"maybe\"",
+                "",
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            MetaError::Idempotent {
+                path: "./a.sql".into(),
+                value: "maybe".into()
+            }
+        );
+        for e in [
+            parse("./a.sql", &block("id=\"abc\" idempotent=\"true\"", "")).unwrap_err(),
+            e,
+            parse(
+                "./a.sql",
+                &block(
+                    "id=\"00000000-0000-0000-0000-000000000000\" idempotent=\"true\"",
+                    "",
+                ),
+            )
+            .unwrap_err(),
+        ] {
+            let text = e.to_string();
+            for want in REFERENCE {
+                assert!(text.contains(want), "{text}");
+            }
+            assert!(
+                !text.contains("pgmi ai skill") && !text.contains("schema.xsd"),
+                "{text}"
+            );
+        }
+        let fs = MemFs::from_files(
+            crate::templates::Template::Basic
+                .render("proj", crate::VERSION)
+                .unwrap(),
+        );
+        assert!(
+            fs.read_to_string(".agents/skills/pgmi-metadata/SKILL.md")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn idempotent_takes_the_boolean_spellings() {
+        for (value, want) in [
+            ("true", true),
+            ("false", false),
+            ("1", true),
+            ("TRUE", true),
+        ] {
+            let m = parse(
+                "./b.sql",
+                &block(&format!("id=\"{ID}\" idempotent=\"{value}\""), ""),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(m.idempotent, want, "{value}");
+        }
+        let e = parse(
+            "./b.sql",
+            &block(&format!("id=\"{ID}\" idempotent=\"yes\""), ""),
+        )
+        .unwrap_err();
+        assert!(matches!(e, MetaError::Idempotent { .. }), "{e}");
+    }
+
+    #[test]
+    fn a_later_comment_can_hold_the_block() {
+        let content = format!(
+            "/* First comment - no metadata */\n\n{}",
+            block(
+                &format!("id=\"{ID}\" idempotent=\"true\""),
+                "<description>Metadata in second comment</description>"
+            )
+        );
+        let m = parse("./second.sql", &content).unwrap().unwrap();
+        assert_eq!(m.description.as_deref(), Some("Metadata in second comment"));
+    }
+
+    #[test]
+    fn literals_and_nested_comments_do_not_fool_the_reader() {
+        let one = format!("/*\n<pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta>\n*/\n");
+        for content in [
+            format!(
+                "/*\n<pgmi-meta id=\"{ID}\" idempotent=\"true\">\n  <description>handles /* and */ in input</description>\n</pgmi-meta>\n*/\nSELECT 1;"
+            ),
+            format!(
+                "INSERT INTO doc VALUES ('/* <pgmi-meta id=\"x\" idempotent=\"true\"/> */');\n{one}SELECT 1;"
+            ),
+            format!(
+                "DO $$ BEGIN RAISE NOTICE '/* <pgmi-meta id=\"x\" idempotent=\"true\"/> */'; END $$;\n{one}"
+            ),
+            format!("/* banner /* inner */ still banner */\n{one}SELECT 1;"),
+            format!("CREATE TABLE \"/* <pgmi-meta id=\\\"x\\\"/> */\" (a int);\n{one}"),
+        ] {
+            let m = parse("./x.sql", &content).unwrap().unwrap();
+            assert_eq!(m.id, ID, "{content}");
+        }
+    }
+
+    #[test]
+    fn validation_problems_are_all_listed_with_their_hints() {
+        let attrs = format!("id=\"{ID}\" idempotent=\"true\"");
+        let missing = problems(parse("./a.sql", &block(&format!("id=\"{ID}\""), "")).unwrap_err());
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].starts_with("idempotent attribute is required"));
+        for key in ["", "   \t\n  "] {
+            let p = problems(
+                parse(
+                    "./a.sql",
+                    &block(&attrs, &format!("<sortKeys><key>{key}</key></sortKeys>")),
+                )
+                .unwrap_err(),
+            );
+            assert_eq!(p.len(), 1, "{key:?}");
+            assert!(
+                p[0].starts_with("sortKeys[0] cannot be empty or whitespace-only."),
+                "{}",
+                p[0]
+            );
+            assert!(p[0].contains("Recommended format"), "{}", p[0]);
+        }
+        let p = problems(
+            parse(
+                "./a.sql",
+                &block(&attrs, "<description>   \n\t   </description>"),
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(p.len(), 1);
+        assert!(p[0].starts_with("description element contains only whitespace."));
+        let nil = problems(
+            parse(
+                "./nil.sql",
+                &block(
+                    "id=\"00000000-0000-0000-0000-000000000000\" idempotent=\"true\"",
+                    "",
+                ),
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(nil.len(), 1);
+        assert!(
+            nil[0].contains("nil UUID") && nil[0].contains("uuidgen"),
+            "{}",
+            nil[0]
+        );
+        let e = parse(
+            "./multiple.sql",
+            &block(
+                "id=\"00000000-0000-0000-0000-000000000000\" idempotent=\"true\"",
+                "<sortKeys><key></key></sortKeys><description>   </description>",
+            ),
+        )
+        .unwrap_err();
+        let text = e.to_string();
+        let p = problems(e);
+        assert_eq!(p.len(), 3);
+        assert!(
+            p[0].starts_with("id attribute")
+                && p[1].starts_with("sortKeys[0]")
+                && p[2].starts_with("description")
+        );
+        assert!(
+            text.starts_with("invalid PGMI metadata in ./multiple.sql:\n  1. id attribute"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n  2. sortKeys[0]") && text.contains("\n  3. description"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Generate template: pgmi metadata scaffold <path>"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn fallback_id_is_the_md5_of_the_path_as_a_uuid() {
+        for (path, want) in [
+            (
+                "./migrations/001_users.sql",
+                "8cb96d1a-b6fc-e524-d4f0-95b95baba1da",
+            ),
+            (
+                "./migrations/002_products.sql",
+                "6181c9f2-7bb4-745c-ae41-9defe40e815e",
+            ),
+            ("./setup/schema.sql", "82ec6a0f-18fa-4012-a152-9e40b2b60e26"),
+            ("", "d41d8cd9-8f00-b204-e980-0998ecf8427e"),
+            (
+                "./migrations/001_Users.sql",
+                "adfe0358-5851-fcf0-89d4-b5cdc7b2f152",
+            ),
+            (
+                "migrations/001_users.sql",
+                "c087268b-446c-067e-a694-6486424348e2",
+            ),
+        ] {
+            assert_eq!(fallback_id(path), want, "{path:?}");
+        }
+        let ids: std::collections::BTreeSet<String> = [
+            "./post-deployment/grants.sql",
+            "./migrations/001_test with spaces.sql",
+            "./migrations/002-test-with-dashes.sql",
+            "./migrations/003_test_with_underscores.sql",
+            "./migrations/004.test.with.dots.sql",
+            "./migrations/005 (test).sql",
+        ]
+        .into_iter()
+        .map(fallback_id)
+        .collect();
+        assert_eq!(ids.len(), 6);
+        assert!(!ids.contains("00000000-0000-0000-0000-000000000000"));
+    }
+
+    #[test]
+    fn unique_ids_and_files_without_metadata_pass() {
+        let with = |p: &str, id: &str| File {
+            path: p.into(),
+            content: format!("/* <pgmi-meta id=\"{id}\" idempotent=\"true\"/> */"),
+        };
+        let plain = |p: &str| File {
+            path: p.into(),
+            content: "SELECT 1;".into(),
+        };
+        let ok = collect(&[
+            with("./a.sql", "11111111-1111-4111-8111-111111111111"),
+            with("./b.sql", "22222222-2222-4222-8222-222222222222"),
+            plain("./c.sql"),
+            plain("./d.txt"),
+        ])
+        .unwrap();
+        assert_eq!(ok.len(), 2);
+        let e = collect(&[
+            with("./b.sql", "11111111-1111-4111-8111-111111111111"),
+            with("./a.sql", "11111111-1111-4111-8111-111111111111"),
+        ])
+        .unwrap_err();
+        assert_eq!(e.kind(), crate::error::Kind::Config);
+        assert!(
+            e.text()
+                .contains("11111111-1111-4111-8111-111111111111: ./a.sql, ./b.sql"),
+            "{}",
+            e.text()
         );
     }
 }

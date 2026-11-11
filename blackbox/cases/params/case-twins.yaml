@@ -1,0 +1,24 @@
+description: two keys that differ only in case within one source (pgmi.yaml params, PGMI_PARAM_* variables) are refused before connecting (exit 10); across sources they are one parameter and the later source wins
+project:
+  files:
+    yaml/pgmi.yaml: "params:\n  Region: eu\n  region: us\n"
+    yaml/deploy.sql: SELECT 1;
+    deploy.sql: |
+      CREATE TABLE seen (value text);
+      INSERT INTO seen VALUES (current_setting('pgmi.region', true));
+steps:
+  - pgmi: [deploy, "{project}/yaml", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["pgmi.yaml", "differ only in case"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env:
+      PGMI_PARAM_Region: eu
+      PGMI_PARAM_REGION: us
+    expect: {exit: 10, stderr: ["PGMI_PARAM_", "differ only in case"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, "REGION=cli"]
+    env:
+      PGMI_PARAM_Region: eu
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT value FROM seen
+          rows: [[cli]]

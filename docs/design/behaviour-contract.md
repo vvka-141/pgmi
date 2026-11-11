@@ -245,13 +245,16 @@ first and never overrides a variable already set), `pgmi.yaml` `params`. Keys
 are lower-cased. Each reaches `deploy.sql` as `current_setting('pgmi.<key>')`
 and in `pgmi_parameter_view`. Refused with exit 10: an empty `PGMI_PARAM_*`, a
 `--param` without `=`, a missing params file, two keys differing only in case
-in one file or in two `--param` flags, a `PGMI_PARAM_` with nothing after the
-prefix, a key that is not a PostgreSQL identifier of 1-63 characters (letter
-or underscore first, then letters, digits, underscores), and a value holding
-a NUL byte. All are refused before connecting. Full reference: `docs/CLI.md`
+within one source (one file, the `--param` flags, the `PGMI_PARAM_*`
+variables, `pgmi.yaml` `params`; across sources they are one parameter and the
+higher source wins), a `PGMI_PARAM_` with nothing after the prefix, a
+`PGMI_PARAM_*` variable that is not valid UTF-8, a key that is not a
+PostgreSQL identifier of 1-63 characters (letter or underscore first, then
+letters, digits, underscores), and a value holding a NUL byte. All are refused
+before connecting. Full reference: `docs/CLI.md`
 "Parameter Flags".
 
-Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-key`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
+Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-key`, `params/case-twins`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
 
 ### Connection sources
 
@@ -313,7 +316,10 @@ Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/d
 
 ### Target database, overwrite and approval
 
-A missing target is created (`Database "<name>" does not exist; creating`).
+A missing target is created (`Database "<name>" does not exist; creating`); a
+`CREATE DATABASE` that finds the database already created by another deploy is
+exit 15. A server older than PostgreSQL 15 is refused with exit 10 before
+anything is created or dropped.
 `--overwrite` drops and recreates it: on a terminal after the user types the
 database name (a wrong name is exit 12); with `--force` after a countdown, with
 a danger banner on a terminal unless `PGMI_NO_BANNER` is set, and without a
@@ -364,7 +370,11 @@ transaction fails with exit 13 and rolls it back. `--json` reports
 `executionMode` (`atomic` or `psql`) and `executionUnits`/`unitsCommitted`. Full
 reference: `docs/DEPLOY-GUIDE.md` "Atomic mode, then psql mode".
 
-Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-transaction`, `execution/tail-block-fails`.
+A head that ends with `COMMIT AND CHAIN` or `END AND CHAIN` counts as committed
+although the session is never idle after it; a `deploy.sql` that ends right
+there succeeds, and the empty chained transaction is rolled back.
+
+Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`.
 
 ### Test macro
 
@@ -376,7 +386,9 @@ Outside an explicit transaction block it fails with 25P01. `--json`
 `testMacros` counts the expansions. Comments may stand between the macro's
 tokens; only ASCII white space (space, tab, CR, LF, FF) separates them, so
 after a no-break space or a vertical tab the text reaches the server
-unexpanded. `NULL` as the pattern means every test. Full reference:
+unexpanded. `NULL` or `''` as the pattern means every test, and `NULL` or `''`
+as the callback means the default one; a callback that is not a
+`[schema.]function` identifier is refused with exit 10. Full reference:
 `docs/TESTING.md`.
 
 When SQL test files are loaded (fixtures count) but `deploy.sql` expands no
@@ -384,7 +396,7 @@ macro and does not contain `pgmi_test` anywhere (any case), stderr says `N test
 file(s) loaded; deploy.sql never calls pgmi_test(), so none of them run` after
 `Executing deploy.sql`; the deploy goes on.
 
-Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`., `notices/unused-tests`
+Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block`, `dialect/pgmi-test-macro-comments`, `dialect/pgmi-test-macro-whitespace`, `dialect/pgmi-test-macro-arguments`, `notices/unused-tests`
 
 ### Notices and the summary line
 

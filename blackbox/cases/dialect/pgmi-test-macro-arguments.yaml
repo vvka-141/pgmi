@@ -1,0 +1,13 @@
+description: an empty pattern or callback in CALL pgmi_test() means the default; a callback that is not a [schema.]function identifier is refused with exit 10
+project:
+  files:
+    empty/deploy.sql: "BEGIN;\nCALL pgmi_test('', '');\nCOMMIT;\n"
+    empty/__test__/test_a.sql: SELECT 1;
+    bad/deploy.sql: "BEGIN;\nCALL pgmi_test('.*', 'DROP TABLE users; --');\nCOMMIT;\n"
+    bad/__test__/test_a.sql: SELECT 1;
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/empty", --connection, "{conn}", -d, "{db}", --json]
+    expect: {exit: 0, json: {testMacros: 1}}
+  - pgmi: [deploy, "{project}/bad", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ["invalid callback"]}

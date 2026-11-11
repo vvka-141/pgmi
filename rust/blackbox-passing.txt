@@ -67,6 +67,7 @@ deploy/json-failure
 deploy/json-success
 deploy/latin1-database
 dialect/pgmi-test-macro
+dialect/pgmi-test-macro-arguments
 dialect/pgmi-test-macro-comments
 dialect/pgmi-test-macro-whitespace
 dialect/pgmiignore
@@ -90,6 +91,7 @@ errors/line-and-column
 errors/special-file
 errors/temporary-privilege
 execution/atomic-head
+execution/commit-and-chain
 execution/loader-at-scale
 execution/open-transaction
 execution/pgmi-test-in-block
@@ -127,6 +129,7 @@ notices/streaming
 notices/summary-line
 notices/unused-tests
 notices/verbose-elapsed
+params/case-twins
 params/env-var-reaches-session
 params/invalid-key
 params/precedence

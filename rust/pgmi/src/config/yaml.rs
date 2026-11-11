@@ -116,6 +116,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(empty.connection.host.is_none() && empty.params.is_empty());
+        let empty = ProjectConfig::load(&MemFs::default().file("pgmi.yaml", ""))
+            .unwrap()
+            .unwrap();
+        assert!(
+            empty.connection.host.is_none() && empty.params.is_empty() && empty.timeout.is_none()
+        );
         let cfg = ProjectConfig::load(&MemFs::default().file("pgmi.yaml", "timeout: 90s\n"))
             .unwrap()
             .unwrap();
@@ -126,6 +132,10 @@ mod tests {
         for (fs, text) in [
             (
                 MemFs::default().file("pgmi.yaml", "connection: [unclosed\n"),
+                "failed to load pgmi.yaml: ",
+            ),
+            (
+                MemFs::default().file("pgmi.yaml", "{{invalid"),
                 "failed to load pgmi.yaml: ",
             ),
             (
@@ -155,5 +165,39 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.connection.port.as_deref(), Some("5432"));
         assert_eq!(cfg.timeout.as_deref(), Some("3m"));
+    }
+
+    #[test]
+    fn every_field_is_read() {
+        let cfg = ProjectConfig::parse(
+            "connection:\n  host: myhost\n  port: 5433\n  username: myuser\n  database: mydb\n  sslmode: require\n  sslcert: /path/client.crt\n  sslkey: /path/client.key\n  sslrootcert: /path/ca.crt\n\nparams:\n  env: production\n  region: us-west\n\ntimeout: 10m\n",
+        )
+        .unwrap();
+        let c = &cfg.connection;
+        assert_eq!(c.host.as_deref(), Some("myhost"));
+        assert_eq!(c.port.as_deref(), Some("5433"));
+        assert_eq!(c.username.as_deref(), Some("myuser"));
+        assert_eq!(c.database.as_deref(), Some("mydb"));
+        assert_eq!(c.sslmode.as_deref(), Some("require"));
+        assert_eq!(c.sslcert.as_deref(), Some("/path/client.crt"));
+        assert_eq!(c.sslkey.as_deref(), Some("/path/client.key"));
+        assert_eq!(c.sslrootcert.as_deref(), Some("/path/ca.crt"));
+        assert_eq!(
+            cfg.param_values(),
+            [
+                ("env".to_string(), "production".to_string()),
+                ("region".to_string(), "us-west".to_string())
+            ]
+        );
+        assert_eq!(
+            cfg.timeout().unwrap(),
+            Some(std::time::Duration::from_secs(600))
+        );
+        let minimal = ProjectConfig::parse("params:\n  env: development\n").unwrap();
+        assert!(minimal.connection.host.is_none() && minimal.connection.port.is_none());
+        assert_eq!(
+            minimal.param_values(),
+            [("env".to_string(), "development".to_string())]
+        );
     }
 }

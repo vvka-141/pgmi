@@ -37,13 +37,39 @@ fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+    for k in keys {
+        if let Some(prev) = seen.insert(k.to_lowercase(), k)
+            && prev != k
+        {
+            return Err(Error::config(format!(
+                "{source}: parameters {prev:?} and {k:?} differ only in case; the session stores keys lowercased, so pass one"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     let mut keys: Vec<String> = Vec::new();
+    no_case_twins("pgmi.yaml params", src.yaml.iter().map(|(k, _)| k.as_str()))?;
     for (k, v) in src.yaml {
         keys.push(k.clone());
         out.insert(k.to_lowercase(), v);
     }
+    if let Some(name) = src.env.not_utf8_with_prefix(ENV_PREFIX) {
+        return Err(Error::config(format!(
+            "environment variable {name} is not valid UTF-8"
+        )));
+    }
+    no_case_twins(
+        &format!("{ENV_PREFIX}* environment variables"),
+        src.env
+            .with_prefix(ENV_PREFIX)
+            .map(|(name, _)| &name[ENV_PREFIX.len()..]),
+    )?;
     for (name, value) in src.env.with_prefix(ENV_PREFIX) {
         if name.len() == ENV_PREFIX.len() {
             return Err(Error::config(format!(
@@ -125,6 +151,7 @@ pub(crate) fn collect(src: Sources<'_>, stdin: &mut dyn Read) -> Result<BTreeMap
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Kind;
 
     #[test]
     fn precedence() {
@@ -197,5 +224,176 @@ mod tests {
         assert!(!e.text().contains("a\0b"));
         let env = Env::from_pairs(&[("PGMI_PARAM_A-B", "1")]);
         assert_eq!(run(&env, &[], &[], "").unwrap_err().exit_code(), 10);
+    }
+
+    fn run(
+        yaml: &[(&str, &str)],
+        env: &Env,
+        files: &[String],
+        flags: &[&str],
+        stdin: &[u8],
+    ) -> Result<BTreeMap<String, String>> {
+        let flags: Vec<String> = flags.iter().map(|f| (*f).to_string()).collect();
+        collect(
+            Sources {
+                yaml: yaml
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                env,
+                files,
+                flags: &flags,
+            },
+            &mut &stdin[..],
+        )
+    }
+
+    fn key_check(key: &str) -> Result<BTreeMap<String, String>> {
+        run(&[], &Env::default(), &[], &[&format!("{key}=v")], b"")
+    }
+
+    #[test]
+    fn keys_that_are_not_postgres_identifiers_are_invalid_config() {
+        for key in [
+            "",
+            "bad key",
+            "bad-key",
+            "bad.key",
+            "key;DROP TABLE",
+            "'; DROP TABLE users;--",
+            "key\n",
+            "key\t",
+            "key@domain",
+            "key()",
+            "1abc",
+            "123",
+            &"a".repeat(64),
+        ] {
+            let e = key_check(key).unwrap_err();
+            assert_eq!(e.kind(), Kind::Config, "{key:?}: {}", e.text());
+        }
+    }
+
+    #[test]
+    fn identifier_keys_are_accepted_and_folded() {
+        for key in [
+            "mykey",
+            "MYKEY",
+            "MyKey",
+            "my_key",
+            "key123",
+            "key_123_test",
+            "_private",
+            "suffix_underscore_",
+            "a1",
+            "x",
+            "A",
+            &"a".repeat(63),
+        ] {
+            let out = key_check(key).unwrap();
+            assert_eq!(out.get(&key.to_lowercase()).map(String::as_str), Some("v"));
+        }
+    }
+
+    #[test]
+    fn a_bad_value_error_names_the_key_and_not_the_value() {
+        let e = run(&[], &Env::default(), &[], &["db_password=sec\0ret"], b"").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert_eq!(
+            e.text(),
+            "invalid parameter value for 'db_password': contains NUL byte at offset 3"
+        );
+        let stdin = b"api_key=before\xff\xfeafter\n";
+        let e = run(&[], &Env::default(), &["-".into()], &[], stdin).unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(!e.text().contains("before"), "{}", e.text());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_environment_parameter_is_invalid_config() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let env = Env::from_os([(
+            OsString::from("PGMI_PARAM_API_KEY"),
+            OsString::from_vec(b"before\xff\xfeafter".to_vec()),
+        )]);
+        let e = run(&[], &env, &[], &[], b"").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert_eq!(
+            e.text(),
+            "environment variable PGMI_PARAM_API_KEY is not valid UTF-8"
+        );
+        let env = Env::from_os([(
+            OsString::from_vec(b"PGMI_PARAM_K\xff".to_vec()),
+            OsString::from("v"),
+        )]);
+        assert_eq!(
+            run(&[], &env, &[], &[], b"").unwrap_err().kind(),
+            Kind::Config
+        );
+    }
+
+    #[test]
+    fn case_twins_within_one_source_are_invalid_config() {
+        let none = Env::default();
+        let e = run(&[("Region", "eu"), ("region", "us")], &none, &[], &[], b"").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(e.text().starts_with("pgmi.yaml params: "), "{}", e.text());
+        let e = run(&[], &none, &[], &["Env=a", "env=b"], b"").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        let e = run(&[], &none, &["-".into()], &[], b"Abc=1\nabc=2\n").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(e.text().contains("- (stdin)"), "{}", e.text());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn environment_case_twins_are_invalid_config() {
+        let env = Env::from_pairs(&[("PGMI_PARAM_Region", "eu"), ("PGMI_PARAM_REGION", "us")]);
+        let e = run(&[], &env, &[], &[], b"").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(
+            e.text().starts_with("PGMI_PARAM_* environment variables: "),
+            "{}",
+            e.text()
+        );
+    }
+
+    #[test]
+    fn case_twins_across_sources_are_one_parameter_and_the_later_source_wins() {
+        let out = run(
+            &[("DB_Url", "yaml")],
+            &Env::default(),
+            &[],
+            &["db_url=cli", "env=b"],
+            b"",
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            BTreeMap::from([("db_url".into(), "cli".into()), ("env".into(), "b".into())])
+        );
+    }
+
+    #[test]
+    fn case_twins_across_params_files_the_later_file_wins() {
+        let dir = crate::testdir::TempDir::new("params");
+        for (name, text) in [("a.env", "Env=a"), ("b.env", "env=b"), ("c.env", "ENV=c")] {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        let path = |n: &str| dir.join(n).display().to_string();
+        let out = run(
+            &[],
+            &Env::default(),
+            &[path("a.env"), path("b.env")],
+            &[],
+            b"",
+        )
+        .unwrap();
+        assert_eq!(out, BTreeMap::from([("env".into(), "b".into())]));
+        let files = [path("b.env"), path("a.env"), path("c.env")];
+        let out = run(&[], &Env::default(), &files, &[], b"").unwrap();
+        assert_eq!(out, BTreeMap::from([("env".into(), "c".into())]));
     }
 }

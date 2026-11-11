@@ -19,13 +19,15 @@ impl Env {
     pub(crate) fn from_os(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         let mut env = Env::default();
         for (k, v) in vars {
-            let Ok(k) = k.into_string() else { continue };
-            match v.into_string() {
-                Ok(v) => {
+            match (k.into_string(), v.into_string()) {
+                (Ok(k), Ok(v)) => {
                     env.vars.insert(norm(&k), v);
                 }
-                Err(_) => {
+                (Ok(k), Err(_)) => {
                     env.not_utf8.insert(norm(&k));
+                }
+                (Err(k), _) => {
+                    env.not_utf8.insert(norm(&k.to_string_lossy()));
                 }
             }
         }
@@ -72,6 +74,13 @@ impl Env {
             .iter()
             .filter(move |(k, _)| k.starts_with(&norm(prefix)))
             .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    pub(crate) fn not_utf8_with_prefix<'a>(&'a self, prefix: &'a str) -> Option<&'a str> {
+        self.not_utf8
+            .iter()
+            .find(|k| k.starts_with(&norm(prefix)))
+            .map(String::as_str)
     }
 
     pub(crate) fn pg_files(&self) -> Option<PgFiles> {

@@ -5,7 +5,6 @@ use tokio_postgres::types::Type;
 
 use super::{Provision, quote_ident, sql_error};
 use crate::conn::dial::Session;
-use crate::conn::resolve::Spec;
 use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
 
@@ -54,11 +53,10 @@ fn text(r: &Row, i: usize) -> String {
     r.get::<_, Option<String>>(i).unwrap_or_default()
 }
 
-pub(crate) fn refuse_maintenance(spec: &Spec) -> Result<()> {
-    if spec.target_db == spec.maintenance_db {
+pub(crate) fn refuse_maintenance(target: &str, maintenance: &str) -> Result<()> {
+    if target == maintenance {
         return Err(Error::config(format!(
-            "cannot overwrite maintenance database \"{}\"\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d",
-            spec.target_db
+            "cannot overwrite maintenance database \"{target}\"\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d"
         )));
     }
     Ok(())
@@ -460,5 +458,23 @@ mod tests {
                 "REVOKE ALL ON DATABASE \"d\" FROM PUBLIC;\nGRANT CONNECT ON DATABASE \"d\" TO PUBLIC;\nGRANT TEMPORARY ON DATABASE \"d\" TO \"r\" WITH GRANT OPTION",
             ]
         );
+    }
+
+    #[test]
+    fn the_maintenance_database_is_never_the_overwrite_target() {
+        let e = refuse_maintenance("postgres", "postgres").unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(
+            e.text()
+                .starts_with("cannot overwrite maintenance database \"postgres\"")
+        );
+        assert_eq!(
+            refuse_maintenance("admin_db", "admin_db")
+                .unwrap_err()
+                .kind(),
+            Kind::Config
+        );
+        assert!(refuse_maintenance("myapp", "postgres").is_ok());
+        assert!(refuse_maintenance("POSTGRES", "postgres").is_ok());
     }
 }

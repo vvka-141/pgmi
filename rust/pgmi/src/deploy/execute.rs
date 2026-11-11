@@ -96,6 +96,9 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             units.push((unit, LineMap::default()));
             continue;
         }
+        for cb in found.iter().filter_map(|m| m.callback.as_deref()) {
+            script::check_callback(cb)?;
+        }
         let mut generated = Vec::new();
         for m in &found {
             let sql = guard
@@ -154,11 +157,11 @@ pub(crate) async fn run(r: Run<'_>) -> Result<()> {
             });
             return Err(e);
         }
-        if session.tap.status() == IDLE {
+        if session.tap.status() == IDLE || (i == 0 && script::head_commits(&unit.text)) {
             execution.committed = i + 1;
         }
     }
-    if session.tap.status() != IDLE {
+    if execution.committed < units.len() {
         execution.failure = Some(Failure {
             unit: units.len(),
             blame: Blame::default(),

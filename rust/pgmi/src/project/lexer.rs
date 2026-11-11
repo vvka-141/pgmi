@@ -226,4 +226,47 @@ mod tests {
         let k = kinds("$1 + $2");
         assert_eq!(k[0], (Kind::Other, "$".into()));
     }
+
+    #[test]
+    fn only_real_comments_are_comments() {
+        let comments = |s: &str| -> Vec<String> {
+            kinds(s)
+                .into_iter()
+                .filter(|(k, _)| matches!(k, Kind::LineComment | Kind::BlockComment))
+                .map(|(_, t)| t)
+                .collect()
+        };
+        for (src, want) in [
+            ("SELECT 1; -- comment", &["-- comment"][..]),
+            ("--\nSELECT 1;", &["--"]),
+            (
+                "-- first\nSELECT 1; -- second\n-- third",
+                &["-- first", "-- second", "-- third"],
+            ),
+            (
+                "/* c1 */SELECT/* c2 */ 1;/* c3 */",
+                &["/* c1 */", "/* c2 */", "/* c3 */"],
+            ),
+            ("SELECT /* line1\nline2 */ 1;", &["/* line1\nline2 */"]),
+            (
+                "/* a /* b /* c */ b */ a */SELECT 1;",
+                &["/* a /* b /* c */ b */ a */"],
+            ),
+            ("/* /* nested */ */", &["/* /* nested */ */"]),
+            ("/* $$not string$$ */SELECT 1;", &["/* $$not string$$ */"]),
+            ("SELECT '--not comment', '/* no */', 'it''s -- no';", &[]),
+            ("SELECT $$--not comment$$, $tag$/*nope*/$tag$;", &[]),
+            ("SELECT $a$ content $b$ -- inner $b$ more $a$;", &[]),
+            (
+                "CREATE FUNCTION f() AS $$ SELECT '--'; $$ LANGUAGE sql; -- c",
+                &["-- c"],
+            ),
+            ("SELECT $1$--comment$1$;", &["--comment$1$;"]),
+            ("SELECT 1-2, 1/2, 1*2;", &[]),
+            ("SELECT 'unclosed -- x", &[]),
+            ("", &[]),
+        ] {
+            assert_eq!(comments(src), want, "{src:?}");
+        }
+    }
 }

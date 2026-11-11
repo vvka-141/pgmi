@@ -34,15 +34,36 @@ pub(crate) use record::DeployRecord;
 use record::Tls;
 pub(crate) use request::Request;
 
+fn privilege_hint(context: &str, code: &str) -> Option<&'static str> {
+    match (code, context) {
+        ("42501", "create the session tables") => Some(
+            "the login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE <db> TO <role>",
+        ),
+        ("42501", "create the target database") => Some(
+            "the database does not exist and this role cannot create it: check the -d name, or grant the role CREATEDB",
+        ),
+        _ => None,
+    }
+}
+
+fn created_elsewhere(e: Error) -> Error {
+    match e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) {
+        Some("42P04" | "23505") => Error::new(
+            Kind::Locked,
+            "the database was created by another deploy while this one was starting",
+        ),
+        _ => e,
+    }
+}
+
 pub(crate) fn sql_error(context: &str, e: &tokio_postgres::Error) -> Error {
     match e.as_db_error() {
         Some(db) => {
             let code = db.code().code().to_string();
             let mut message = format!("ERROR: {} (SQLSTATE {code})", db.message());
-            if code == "42501" && context == "create the session tables" {
-                message.push_str(
-                    "\nthe login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE <db> TO <role>",
-                );
+            if let Some(hint) = privilege_hint(context, &code) {
+                message.push('\n');
+                message.push_str(hint);
             }
             let (position, internal_position, internal_query) = match db.position() {
                 Some(ErrorPosition::Original(p)) => (usize::try_from(*p).ok(), None, None),
@@ -485,7 +506,7 @@ async fn deploy(
         }
     }
     if a.overwrite {
-        overwrite::refuse_maintenance(&spec)?;
+        overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
     }
     let sink_reporter = reporter.clone();
     let sink_log = log.clone();
@@ -522,6 +543,9 @@ async fn deploy(
             let maintenance = guard
                 .connecting(dialer.connect(&spec, &spec.maintenance_db))
                 .await?;
+            guard
+                .running(&maintenance, check_server(&maintenance))
+                .await?;
             reporter.line(&format!(
                 "Database \"{}\" does not exist; creating",
                 spec.target_db
@@ -532,7 +556,7 @@ async fn deploy(
                         .client
                         .batch_execute(&format!("CREATE DATABASE {}", quote_ident(&spec.target_db)))
                         .await
-                        .map_err(|e| sql_error("create the target database", &e))
+                        .map_err(|e| created_elsewhere(sql_error("create the target database", &e)))
                 })
                 .await?;
             st.provision = Provision::Created;
@@ -543,6 +567,7 @@ async fn deploy(
         }
         Err(e) => return Err(e),
     };
+    guard.running(&session, check_server(&session)).await?;
     guard
         .running(
             &session,
@@ -622,6 +647,9 @@ async fn overwrite(
     let maintenance = guard
         .connecting(dialer.connect(spec, &spec.maintenance_db))
         .await?;
+    guard
+        .running(&maintenance, check_server(&maintenance))
+        .await?;
     let exists = guard
         .running(&maintenance, overwrite::claim(&maintenance, db))
         .await?;
@@ -690,6 +718,39 @@ async fn client_encoding(session: &Session, named: Option<&str>) -> Result<()> {
                 .map_or_else(|| crate::error::chain(&e), |d| d.message().to_string());
             Error::connection(format!("client_encoding \"{encoding}\": {reason}"))
         })
+}
+
+const MIN_SERVER_VERSION_NUM: u32 = 150_000;
+
+fn supported_server(num: &str, text: &str) -> Result<()> {
+    match num.trim().parse::<u32>() {
+        Ok(n) if n >= MIN_SERVER_VERSION_NUM => Ok(()),
+        _ => Err(Error::config(format!(
+            "this server reports PostgreSQL {text}, and pgmi requires {} or newer",
+            MIN_SERVER_VERSION_NUM / 10_000
+        ))),
+    }
+}
+
+async fn check_server(session: &Session) -> Result<()> {
+    let rows = session
+        .client
+        .simple_query(
+            "SELECT current_setting('server_version_num'), current_setting('server_version')",
+        )
+        .await
+        .map_err(|e| sql_error("read the server version", &e))?;
+    let (num, text) = rows
+        .iter()
+        .find_map(|m| match m {
+            tokio_postgres::SimpleQueryMessage::Row(r) => Some((
+                r.get(0).unwrap_or_default().to_string(),
+                r.get(1).unwrap_or_default().to_string(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_default();
+    supported_server(&num, &text)
 }
 
 async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
@@ -1290,5 +1351,55 @@ mod tests {
     fn a_huge_timeout_never_overflows_the_deadline() {
         let far = deadline(Duration::MAX);
         assert!(far > TokioInstant::now() + Duration::from_secs(365 * 24 * 3600));
+    }
+
+    #[test]
+    fn a_server_below_postgres_15_is_refused_as_invalid_config() {
+        for (num, text) in [
+            ("110016", "11.16 (Debian 11.16-1.pgdg90+1)"),
+            ("140023", "14.23"),
+            ("", ""),
+        ] {
+            let e = supported_server(num, text).unwrap_err();
+            assert_eq!(e.kind(), Kind::Config, "{text}");
+            assert_eq!(
+                e.text(),
+                format!("this server reports PostgreSQL {text}, and pgmi requires 15 or newer")
+            );
+        }
+        for (num, text) in [
+            ("150000", "15.0"),
+            ("150018", "15.18 (Debian 15.18-1.pgdg120+1)"),
+            ("180004", "18.4"),
+        ] {
+            assert!(supported_server(num, text).is_ok(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_lost_create_race_is_a_concurrent_deploy() {
+        let failed = |code: &str| {
+            created_elsewhere(Error::sql("ERROR: x").with_sql(SqlDiagnostics {
+                sqlstate: Some(code.into()),
+                ..SqlDiagnostics::default()
+            }))
+        };
+        for code in ["42P04", "23505"] {
+            let e = failed(code);
+            assert_eq!(e.kind(), Kind::Locked, "{code}");
+            assert!(!e.text().contains("pg_database_datname_index"));
+        }
+        let e = failed("42501");
+        assert_eq!(e.kind(), Kind::Sql);
+        assert_eq!(e.text(), "ERROR: x");
+        let hint = privilege_hint("create the target database", "42501").unwrap();
+        assert!(hint.contains("-d") && hint.contains("CREATEDB"));
+        assert!(
+            privilege_hint("create the session tables", "42501")
+                .unwrap()
+                .contains("TEMPORARY")
+        );
+        assert_eq!(privilege_hint("create the target database", "42P04"), None);
+        assert_eq!(privilege_hint("execute deploy.sql", "42501"), None);
     }
 }

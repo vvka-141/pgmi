@@ -1,3 +1,4 @@
+use crate::error::{Error, Result};
 use crate::project::lexer::{self, Kind, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,16 @@ pub(crate) fn is_terminator(stmt: &[&[u8]]) -> bool {
         [and, no, chain] => eq(and, "AND") && eq(no, "NO") && eq(chain, "CHAIN"),
         _ => false,
     }
+}
+
+pub(crate) fn head_commits(head: &str) -> bool {
+    let bytes = head.as_bytes();
+    statements(head)
+        .iter()
+        .rev()
+        .map(|(s, e)| words(&bytes[*s..*e], &lexer::tokens(&bytes[*s..*e])))
+        .find(|w| !w.is_empty())
+        .is_some_and(|w| (eq(w[0], "COMMIT") || eq(w[0], "END")) && is_terminator(&w))
 }
 
 pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
@@ -203,11 +214,37 @@ fn macro_at(src: &[u8], sig: &[&Token], i: usize) -> Option<(Macro, usize)> {
         Macro {
             start: sig[i].start,
             end: close.end,
-            pattern: it.next().flatten(),
-            callback: it.next().flatten(),
+            pattern: it.next().flatten().filter(|p| !p.is_empty()),
+            callback: it.next().flatten().filter(|c| !c.is_empty()),
         },
         j + 1,
     ))
+}
+
+pub(crate) fn check_callback(callback: &str) -> Result<()> {
+    let parts: Vec<&str> = callback.split('.').collect();
+    let refuse = |why: String| {
+        Err(Error::config(format!(
+            "invalid callback {callback:?}: {why}"
+        )))
+    };
+    if parts.len() > 2 {
+        return refuse("expected [schema.]function format".into());
+    }
+    for part in parts {
+        let mut chars = part.chars();
+        match chars.next() {
+            None => return refuse("empty identifier".into()),
+            Some(_) if part.len() > 63 => {
+                return refuse(format!("identifier {part:?} exceeds 63 character limit"));
+            }
+            Some(c)
+                if (c.is_ascii_alphabetic() || c == '_')
+                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') => {}
+            Some(_) => return refuse(format!("{part:?} is not a valid identifier")),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,5 +402,267 @@ mod tests {
         assert!(macros("CALL\x0bpgmi_test();").is_empty());
         assert!(macros("CALL\u{a0}pgmi_test();").is_empty());
         assert_eq!(macros("CALL\x0c\tpgmi_test\r\n();").len(), 1);
+    }
+
+    #[test]
+    fn crlf_splits_like_lf() {
+        for (src, want) in [
+            ("BEGIN;\nSELECT 1;\nCOMMIT;\nSELECT 2;\n", 2),
+            ("BEGIN;\nSELECT 1;\nCOMMIT;\n", 1),
+            ("COMMIT;\nSELECT 1;\nSELECT 2;\n", 3),
+        ] {
+            let crlf = src.replace('\n', "\r\n");
+            assert_eq!(split(src).len(), want, "{src:?}");
+            assert_eq!(split(&crlf).len(), want, "{crlf:?}");
+        }
+    }
+
+    #[test]
+    fn every_unit_knows_where_it_starts_in_the_file() {
+        let src = "BEGIN;\nSELECT 1;\nCOMMIT;\nSELECT 'a';\nSELECT 'b';\n";
+        let units = split(src);
+        assert_eq!(units.len(), 3);
+        for u in &units {
+            assert_eq!(&src[u.start..u.start + u.text.len()], u.text);
+        }
+        for (u, stmt) in units[1..].iter().zip(["SELECT 'a';", "SELECT 'b';"]) {
+            assert_eq!(
+                u.start + u.text.find("SELECT").unwrap(),
+                src.find(stmt).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn a_tail_heavy_script_splits_in_linear_space() {
+        let mut src = String::from("BEGIN;\nSELECT 1;\nCOMMIT;\n");
+        for _ in 0..4000 {
+            src.push_str("UPDATE t SET c = c + 1 WHERE id = 00000000;\n");
+        }
+        let units = split(&src);
+        assert_eq!(units.len(), 4001);
+        assert!(units.iter().map(|u| u.text.len()).sum::<usize>() <= src.len());
+    }
+
+    #[test]
+    fn the_template_shape_is_a_head_and_one_banner_unit() {
+        let src = "BEGIN;\nSELECT pg_temp.deploy();\nSAVEPOINT _tests;\nROLLBACK TO SAVEPOINT _tests;\nCOMMIT;\nDO $$\nBEGIN\n    RAISE NOTICE 'done';\nEND $$;\n";
+        let units = split(src);
+        assert_eq!(units.len(), 2);
+        assert!(units[0].text.trim_end().ends_with("COMMIT;"));
+        assert!(units[1].text.contains("RAISE NOTICE"));
+    }
+
+    #[test]
+    fn head_commits_only_on_commit_or_end() {
+        for (src, want) in [
+            ("BEGIN; CREATE TABLE t(id int); COMMIT; SELECT 1;", true),
+            (
+                "BEGIN; INSERT INTO t VALUES (1); COMMIT AND CHAIN; SELECT 1/0;",
+                true,
+            ),
+            (
+                "BEGIN; INSERT INTO t VALUES (1); END AND CHAIN; SELECT 1;",
+                true,
+            ),
+            ("BEGIN; INSERT INTO t VALUES (1); END; SELECT 1;", true),
+            (
+                "BEGIN; INSERT INTO t VALUES (1); ROLLBACK AND CHAIN; SELECT 1;",
+                false,
+            ),
+            ("BEGIN; INSERT INTO t VALUES (1); ABORT; SELECT 1;", false),
+            (
+                "BEGIN;\nINSERT INTO t VALUES (1); -- a comment; COMMIT\nCOMMIT WORK AND CHAIN;\nSELECT 1;",
+                true,
+            ),
+        ] {
+            let units = split(src);
+            assert!(units.len() >= 2, "{src:?}");
+            assert_eq!(head_commits(&units[0].text), want, "{src:?}");
+        }
+        assert!(!head_commits("BEGIN; SELECT 1;"));
+        assert!(!head_commits("-- COMMIT;\nSELECT 1;"));
+    }
+
+    #[test]
+    fn a_macro_in_the_head_expands_inside_the_head() {
+        let expansion = "SAVEPOINT __pgmi_d1__;\nDO $__pgmi__$ BEGIN EXECUTE 'SELECT 1'; END $__pgmi__$;\nROLLBACK TO SAVEPOINT __pgmi_d1__;\nRELEASE SAVEPOINT __pgmi_d1__;";
+        let units = split("BEGIN;\nCALL pgmi_test();\nCOMMIT;\nSELECT 'tail';\n");
+        assert_eq!(units.len(), 2);
+        assert!(macros(&units[1].text).is_empty());
+        let (head, _) = expand(&units[0].text, &macros(&units[0].text), &[expansion.into()]);
+        assert!(head.trim_end().ends_with("COMMIT;"));
+        assert!(
+            head.contains("SAVEPOINT __pgmi_d1__;")
+                && head.contains("ROLLBACK TO SAVEPOINT __pgmi_d1__;")
+        );
+        assert_eq!(split(&head).len(), 1);
+    }
+
+    #[test]
+    fn a_macro_in_the_tail_is_one_unit_and_its_savepoints_stay_together() {
+        let units = split("BEGIN;\nSELECT 1;\nCOMMIT;\nCALL pgmi_test();\n");
+        assert_eq!(units.len(), 2);
+        let found = macros(&units[1].text);
+        assert_eq!(found.len(), 1);
+        let (tail, _) = expand(
+            &units[1].text,
+            &found,
+            &["SAVEPOINT a;\nSELECT 1;\nRELEASE SAVEPOINT a;".into()],
+        );
+        assert_eq!(
+            tail.trim(),
+            "SAVEPOINT a;\nSELECT 1;\nRELEASE SAVEPOINT a;;"
+        );
+    }
+
+    #[test]
+    fn an_empty_expansion_leaves_the_rest_in_place() {
+        let src = "BEGIN;\nCALL pgmi_test();\nCOMMIT;";
+        let found = macros(src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            expand(src, &found, &[String::new()]).0,
+            "BEGIN;\n;\nCOMMIT;"
+        );
+        assert_eq!(expand("", &macros(""), &[]).0, "");
+    }
+
+    #[test]
+    fn an_empty_pattern_or_callback_means_the_default() {
+        let m = macros("CALL pgmi_test('', '');");
+        assert_eq!(m.len(), 1);
+        assert_eq!(
+            (m[0].pattern.as_deref(), m[0].callback.as_deref()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn line_map_maps_expanded_lines_back_to_the_file() {
+        let src = "BEGIN;\nSAVEPOINT s;\nCALL pgmi_test();\nROLLBACK TO SAVEPOINT s;\nCOMMIT;\nSELECT 1/0;\n";
+        let (_, lines) = expand(src, &macros(src), &["A;\nB;\nC;\nD;".into()]);
+        for (expanded, want) in [
+            (1, (1, false)),
+            (2, (2, false)),
+            (3, (3, true)),
+            (6, (3, true)),
+            (7, (4, false)),
+            (9, (6, false)),
+        ] {
+            assert_eq!(lines.original(expanded), want, "line {expanded}");
+        }
+        let src = "CALL pgmi_test();\nX;\nCALL pgmi_test();\nY;\n";
+        let (_, lines) = expand(src, &macros(src), &["a;\nb;".into(), "c;\nd;\ne;".into()]);
+        for (expanded, want) in [(3, 2), (4, 3), (6, 3), (7, 4)] {
+            assert_eq!(lines.original(expanded).0, want, "line {expanded}");
+        }
+    }
+
+    #[test]
+    fn callback_names_are_bare_or_schema_qualified_identifiers() {
+        for ok in [
+            "my_callback",
+            "pg_temp.my_callback",
+            "myschema.my_func",
+            "_private",
+            "Func123",
+            "UPPER_CASE",
+        ] {
+            assert!(check_callback(ok).is_ok(), "{ok}");
+        }
+        for (bad, why) in [
+            ("schema.func.extra", "expected [schema.]function format"),
+            (".", "empty identifier"),
+            ("schema.", "empty identifier"),
+            (".func", "empty identifier"),
+            ("123start", "\"123start\" is not a valid identifier"),
+            ("has-dash", "\"has-dash\" is not a valid identifier"),
+            ("has space", "\"has space\" is not a valid identifier"),
+            (
+                "func;DROP TABLE",
+                "\"func;DROP TABLE\" is not a valid identifier",
+            ),
+            (
+                "DROP TABLE users; --",
+                "\"DROP TABLE users; --\" is not a valid identifier",
+            ),
+        ] {
+            let e = check_callback(bad).unwrap_err();
+            assert_eq!(e.kind(), crate::error::Kind::Config, "{bad}");
+            assert_eq!(e.text(), format!("invalid callback {bad:?}: {why}"));
+        }
+        let long = "a".repeat(64);
+        assert_eq!(
+            check_callback(&long).unwrap_err().text(),
+            format!("invalid callback {long:?}: identifier {long:?} exceeds 63 character limit")
+        );
+        assert!(check_callback(&"a".repeat(63)).is_ok());
+    }
+
+    #[test]
+    fn a_non_ascii_character_glued_to_call_is_part_of_the_word() {
+        for src in [
+            "\u{a0}CALL pgmi_test();",
+            "\u{2014}CALL pgmi_test();",
+            "\u{4e00}CALL pgmi_test();",
+        ] {
+            assert!(macros(src).is_empty(), "{src:?}");
+        }
+        let src = "\u{4e00} CALL pgmi_test();";
+        let m = macros(src);
+        assert_eq!(m.len(), 1);
+        assert_eq!(&src[m[0].start..m[0].end], "CALL pgmi_test()");
+    }
+
+    #[test]
+    fn only_a_complete_call_outside_literals_is_a_macro() {
+        for src in [
+            "",
+            "SELECT * FROM users;",
+            "CALL pgmi_testing();",
+            "CALL pgmi_test",
+            "CALL pgmi_test(",
+            "SELECT pgmi_test()",
+            "PERFORM pgmi_test()",
+            "pgmi_test()",
+            "EXECUTE 'CALL pgmi_test();';",
+            "EXECUTE E'x\\'; CALL pgmi_test();';",
+            "SELECT 1 AS \"CALL pgmi_test();\";",
+            "CREATE FUNCTION f() RETURNS void AS $body$ SELECT 'CALL pgmi_test()' $body$ LANGUAGE sql;",
+            "DO $$ BEGIN CALL pgmi_test(); END $$;",
+            "-- CALL pgmi_test('./api/**');\nSELECT 1;",
+            "/* a /* nested */ CALL pgmi_test(); */ SELECT 1;",
+        ] {
+            assert!(macros(src).is_empty(), "{src:?}");
+        }
+        let src = "SELECT 'x';CALL pgmi_test('./api/**');SELECT 'y'; CALL pgmi_test(NULL)";
+        let m = macros(src);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].pattern.as_deref(), Some("./api/**"));
+        assert_eq!(m[1].pattern, None);
+        assert!(m[0].start < m[1].start);
+        assert_eq!(&src[m[1].start..m[1].end], "CALL pgmi_test(NULL)");
+    }
+
+    #[test]
+    fn every_macro_form_the_contract_publishes_is_detected() {
+        let contract: serde_json::Value =
+            serde_json::from_str(crate::commands::ai::CONTRACT).unwrap();
+        let forms = contract["macros"].as_array().unwrap();
+        assert!(!forms.is_empty());
+        for form in forms.iter().map(|m| m["form"].as_str().unwrap()) {
+            let src = format!("BEGIN;\n{form};\nCOMMIT;\n");
+            let found = macros(&src);
+            assert_eq!(found.len(), 1, "{form}");
+            assert_eq!(&src[found[0].start..found[0].end], form);
+            let args: Vec<&str> = form.split('\'').skip(1).step_by(2).collect();
+            assert_eq!(found[0].pattern.as_deref(), args.first().copied(), "{form}");
+            assert_eq!(found[0].callback.as_deref(), args.get(1).copied(), "{form}");
+        }
+        assert_eq!(
+            macros("BEGIN;\nCALL pg_temp.pgmi_test();\nCOMMIT;\n").len(),
+            1
+        );
     }
 }

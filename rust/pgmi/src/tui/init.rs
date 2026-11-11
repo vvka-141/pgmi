@@ -134,4 +134,58 @@ mod tests {
         assert_eq!(w.update(key(KeyCode::Esc)), None);
         assert_eq!(w.update(key(KeyCode::Esc)), Some(Done::Cancelled));
     }
+
+    fn texts(w: &Wizard) -> Vec<String> {
+        let lines = match &w.connection {
+            Some(c) => c.view(TITLE),
+            None => w.template.view(TITLE),
+        };
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn yes_asks_for_the_connection_wizard() {
+        let mut w = Wizard::new("/tmp/x");
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert_eq!(w.update(key(KeyCode::Down)), None);
+        assert_eq!(
+            w.update(key(KeyCode::Enter)),
+            Some(Done::Finished {
+                template: Template::ALL[0],
+                connect: true
+            })
+        );
+    }
+
+    #[test]
+    fn ctrl_c_stops_init_on_either_screen() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(Wizard::new("/tmp/x").update(ctrl_c), Some(Done::Cancelled));
+        let mut w = Wizard::new("/tmp/x");
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.update(ctrl_c), Some(Done::Cancelled));
+        assert_eq!(cancelled().kind(), Kind::Interrupted);
+    }
+
+    #[test]
+    fn the_template_screen_lists_every_template_with_aligned_radios() {
+        let mut w = Wizard::new("/tmp/x");
+        for _ in 0..2 {
+            let lines = texts(&w);
+            for t in Template::ALL {
+                if w.connection.is_none() {
+                    assert!(lines.iter().any(|l| l.contains(t.name())), "{}", t.name());
+                }
+            }
+            let cols: std::collections::BTreeSet<usize> = lines
+                .iter()
+                .filter_map(|l| l.find(['●', '○']).map(|i| l[..i].chars().count()))
+                .collect();
+            assert_eq!(cols.len(), 1, "{lines:?}");
+            w.update(key(KeyCode::Enter));
+        }
+    }
 }

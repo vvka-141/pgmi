@@ -289,7 +289,8 @@ land before or between steps, each with a black-box case.
     `tui::connection::run`. Record 0003 has the details.
 
 Separate tickets, in parallel after steps 3 and 7: port the remaining Go
-unit groups (2, 3, 4, 10, 12, wizards); a fuzz/property target for
+unit groups (2, 3, 4, 10, 12, wizards; done 2026-11-11, PGMI-863, mapped in
+`rust/docs/test-parity-units.md` with the parity fixes the ports forced); a fuzz/property target for
 `conn::parse` (done 2026-11-11 with the lexer, splitter, metadata, `.env` and
 `.pgpass` targets, PGMI-864 and PGMI-870: proptests in `invariants.rs`, one
 cargo-fuzz target per parser, the CI job `fuzz` blocking); port the content linters and the template deployment tests

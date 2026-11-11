@@ -1,0 +1,21 @@
+description: COMMIT AND CHAIN ending the head commits it although the session is never idle; a failure after it reports the head as committed, and a deploy.sql that ends right after it succeeds
+project:
+  files:
+    chain/deploy.sql: "BEGIN;\nCREATE TABLE chain_probe (id int);\nINSERT INTO chain_probe VALUES (1);\nCOMMIT AND CHAIN;\nSELECT 1/0;\n"
+    single/deploy.sql: "BEGIN;\nCREATE TABLE chain_single (id int);\nCOMMIT AND CHAIN;\n"
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/chain", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      json: {executionMode: psql, unitsCommitted: 1}
+      sql:
+        - query: SELECT count(*) FROM chain_probe
+          rows: [[1]]
+  - pgmi: [deploy, "{project}/single", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      json: {unitsCommitted: 1}
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'chain_single'
+          rows: [[1]]

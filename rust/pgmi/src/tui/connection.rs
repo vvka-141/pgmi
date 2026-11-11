@@ -1088,4 +1088,506 @@ mod tests {
         i.edit(ctrl('j'));
         assert_eq!(i.text(), "c");
     }
+
+    fn text(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn screen(w: &Wizard, width: u16, height: u16) -> String {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        w.view().render(area, &mut buf);
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn values(w: &Wizard) -> Vec<String> {
+        w.form
+            .as_ref()
+            .unwrap()
+            .inputs
+            .iter()
+            .map(Input::text)
+            .collect()
+    }
+
+    fn focus(w: &Wizard) -> usize {
+        w.form.as_ref().unwrap().focus
+    }
+
+    fn local_with_database(w: &mut Wizard, db: &str) -> Option<Effect> {
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        typed(w, db);
+        for _ in 0..3 {
+            w.update(key(KeyCode::Enter));
+        }
+        w.update(key(KeyCode::Enter))
+    }
+
+    fn provider(w: &mut Wizard, downs: usize) {
+        for _ in 0..downs {
+            w.update(key(KeyCode::Down));
+        }
+        w.update(key(KeyCode::Enter));
+    }
+
+    fn defaults(db: &str) -> Settings {
+        Settings {
+            host: "localhost".into(),
+            port: 5432,
+            database: db.into(),
+            maintenance: "postgres".into(),
+            username: "postgres".into(),
+            sslmode: "prefer".into(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn the_wizard_starts_on_the_first_provider() {
+        let w = Wizard::new(None);
+        assert_eq!(w.provider.cursor, 0);
+        assert_eq!(w.page(), (0, 0));
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Down));
+        assert_eq!(w.provider.cursor, 1);
+        w.update(key(KeyCode::Up));
+        assert_eq!(w.provider.cursor, 0);
+    }
+
+    #[test]
+    fn the_provider_list_wraps_at_both_ends() {
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Up));
+        assert_eq!(w.provider.cursor, PROVIDERS.len() - 1);
+        w.update(key(KeyCode::Down));
+        assert_eq!(w.provider.cursor, 0);
+    }
+
+    #[test]
+    fn local_opens_the_host_form_with_its_defaults() {
+        let mut w = Wizard::new(None);
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert!(w.auth.is_none());
+        assert_eq!(w.form.as_ref().unwrap().method, Method::Password);
+        assert_eq!(
+            values(&w),
+            ["localhost", "5432", "", "postgres", "postgres", ""]
+        );
+        assert_eq!(w.page(), (2, 0));
+    }
+
+    #[test]
+    fn enter_walks_the_fields_then_submits_the_defaults() {
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        for want in 1..=2 {
+            assert_eq!(w.update(key(KeyCode::Enter)), None);
+            assert_eq!(focus(&w), want);
+        }
+        typed(&mut w, "testdb");
+        for want in 3..=5 {
+            assert_eq!(w.update(key(KeyCode::Enter)), None);
+            assert_eq!(focus(&w), want);
+        }
+        assert_eq!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Test(Box::new(defaults("testdb"))))
+        );
+        assert_eq!(w.page(), (3, 1));
+        w.tested(Ok("PostgreSQL 16.1".into()));
+        assert_eq!(w.page(), (3, 2));
+        assert_eq!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Done(Done::Finished(Box::new(defaults("testdb")))))
+        );
+    }
+
+    #[test]
+    fn tab_and_backtab_move_focus_within_the_form() {
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::BackTab));
+        assert_eq!(focus(&w), 0);
+        w.update(key(KeyCode::Tab));
+        assert_eq!(focus(&w), 1);
+        w.update(key(KeyCode::BackTab));
+        assert_eq!(focus(&w), 0);
+        for _ in 0..6 {
+            w.update(key(KeyCode::Tab));
+        }
+        assert_eq!(focus(&w), 5);
+    }
+
+    #[test]
+    fn a_missing_database_is_named_under_its_field_and_typing_clears_it() {
+        let mut w = Wizard::new(None);
+        assert_eq!(local_with_database(&mut w, ""), None);
+        let f = w.form.as_ref().unwrap();
+        assert_eq!(
+            (f.focus, f.error.as_str()),
+            (2, "database name is required")
+        );
+        let view = text(&f.lines());
+        let (err, maint) = (
+            view.find("database name is required").unwrap(),
+            view.find("Maintenance DB:").unwrap(),
+        );
+        assert!(err < maint, "{view}");
+        w.update(key(KeyCode::Char('x')));
+        assert_eq!(w.form.as_ref().unwrap().error, "");
+    }
+
+    #[test]
+    fn esc_after_a_failed_test_returns_to_the_form_with_the_values_kept() {
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        typed(&mut w, "trialb");
+        for _ in 0..3 {
+            w.update(key(KeyCode::Enter));
+        }
+        typed(&mut w, "nope");
+        let before = values(&w);
+        assert!(matches!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Test(_))
+        ));
+        w.tested(Err("refused".into()));
+        assert_eq!(w.page(), (3, 3));
+        assert!(
+            text(&test_lines(
+                &defaults("trialb"),
+                &Test::Failed("refused".into())
+            ))
+            .contains("✗ Connection failed")
+        );
+        assert_eq!(w.update(key(KeyCode::Esc)), None);
+        assert_eq!(w.page(), (2, 0));
+        assert_eq!(values(&w), before);
+        assert_eq!(focus(&w), 5);
+    }
+
+    #[test]
+    fn enter_after_a_failed_test_tests_the_same_settings_again() {
+        let mut w = Wizard::new(None);
+        let Some(Effect::Test(first)) = local_with_database(&mut w, "testdb") else {
+            panic!("no test");
+        };
+        assert_eq!(first.maintenance, "postgres");
+        w.tested(Err("timeout".into()));
+        assert_eq!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Test(first.clone()))
+        );
+        assert_eq!(w.page(), (3, 1));
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        w.tested(Ok("PostgreSQL 16.1".into()));
+        assert_eq!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Done(Done::Finished(first)))
+        );
+    }
+
+    #[test]
+    fn the_success_screen_names_the_maintenance_database() {
+        let s = defaults("testdb");
+        let view = text(&test_lines(&s, &Test::Passed("PostgreSQL 18.0".into())));
+        assert!(
+            view.contains("✓ Connected to localhost:5432/postgres"),
+            "{view}"
+        );
+        assert!(
+            view.contains("testdb is created on the first deploy"),
+            "{view}"
+        );
+    }
+
+    #[test]
+    fn azure_entra_id_takes_three_fields_and_needs_a_database() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 1);
+        assert!(w.auth.is_some() && w.form.is_none());
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.form.as_ref().unwrap().inputs.len(), 3);
+        typed(&mut w, "myserver.postgres.database.azure.com");
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert_eq!(w.form.as_ref().unwrap().error, "database name is required");
+        assert_eq!(focus(&w), 1);
+        typed(&mut w, "testdb");
+        w.update(key(KeyCode::Enter));
+        let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
+            panic!("no test");
+        };
+        assert_eq!(
+            (s.auth_method, s.sslmode.as_str()),
+            (Some("azure"), "require")
+        );
+        w.tested(Ok("configured".into()));
+        assert!(matches!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Done(Done::Finished(_)))
+        ));
+    }
+
+    #[test]
+    fn aws_iam_takes_five_fields_and_needs_a_host() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 2);
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.form.as_ref().unwrap().inputs.len(), 5);
+        for _ in 0..4 {
+            w.update(key(KeyCode::Enter));
+        }
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert_eq!(w.form.as_ref().unwrap().error, "host is required");
+        assert_eq!(focus(&w), 0);
+        typed(&mut w, "mydb.xxx.us-east-1.rds.amazonaws.com");
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Enter));
+        typed(&mut w, "mydb");
+        w.update(key(KeyCode::Enter));
+        typed(&mut w, "iam_user");
+        w.update(key(KeyCode::Enter));
+        typed(&mut w, "us-east-1");
+        let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
+            panic!("no test");
+        };
+        assert_eq!(
+            (
+                s.auth_method,
+                s.aws_region.as_str(),
+                s.port,
+                s.database.as_str()
+            ),
+            (Some("aws"), "us-east-1", 5432, "mydb")
+        );
+    }
+
+    #[test]
+    fn google_iam_needs_an_instance() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 3);
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.form.as_ref().unwrap().inputs.len(), 3);
+        w.update(key(KeyCode::Enter));
+        typed(&mut w, "mydb");
+        w.update(key(KeyCode::Enter));
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert_eq!(
+            w.form.as_ref().unwrap().error,
+            "instance connection name is required"
+        );
+    }
+
+    #[test]
+    fn a_connection_string_is_required_and_must_parse() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 4);
+        assert_eq!(w.form.as_ref().unwrap().inputs.len(), 1);
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert_eq!(
+            w.form.as_ref().unwrap().error,
+            "connection string is required"
+        );
+        typed(&mut w, "postgresql://user:pass@localhost:5432/mydb");
+        let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
+            panic!("no test");
+        };
+        assert_eq!(s.maintenance, "postgres");
+        w.tested(Ok("Connected".into()));
+        assert!(matches!(
+            w.update(key(KeyCode::Enter)),
+            Some(Effect::Done(Done::Finished(_)))
+        ));
+        let mut w = Wizard::new(None);
+        provider(&mut w, 4);
+        typed(&mut w, "not-a-valid-connection-string");
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        assert!(!w.form.as_ref().unwrap().error.is_empty());
+        assert!(w.test.is_none());
+    }
+
+    #[test]
+    fn an_unparseable_connection_string_never_shows_its_password() {
+        let mut w = Wizard::new(None);
+        provider(&mut w, 4);
+        typed(
+            &mut w,
+            "postgresql://user:pa%ssword-SECRET@localhost:5432/db",
+        );
+        assert_eq!(w.update(key(KeyCode::Enter)), None);
+        let error = &w.form.as_ref().unwrap().error;
+        assert_eq!(error, "invalid percent-encoding in connection string");
+    }
+
+    #[test]
+    fn an_unusable_port_falls_back_to_5432() {
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        w.update(key(KeyCode::Tab));
+        w.update(ctrl('u'));
+        typed(&mut w, "abc");
+        assert_eq!(values(&w)[1], "abc");
+        let Some(Effect::Test(s)) = ({
+            w.update(key(KeyCode::Tab));
+            typed(&mut w, "testdb");
+            for _ in 0..3 {
+                w.update(key(KeyCode::Tab));
+            }
+            w.update(key(KeyCode::Enter))
+        }) else {
+            panic!("no test");
+        };
+        assert_eq!(s.port, 5432);
+    }
+
+    #[test]
+    fn q_is_not_a_key_and_the_footer_does_not_offer_it() {
+        let mut w = Wizard::new(None);
+        assert_eq!(w.update(key(KeyCode::Char('q'))), None);
+        assert_eq!(w.page(), (0, 0));
+        assert!(
+            !w.provider
+                .view(TITLE)
+                .iter()
+                .any(|l| text(std::slice::from_ref(l)).contains("q quit"))
+        );
+    }
+
+    #[test]
+    fn every_screen_shows_its_title_and_choices() {
+        let w = Wizard::new(None);
+        let view = text(&w.provider.view(TITLE));
+        assert!(view.contains("Connection Setup"));
+        for p in &PROVIDERS {
+            assert!(view.contains(p.name), "{}", p.name);
+        }
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        let view = text(&w.form.as_ref().unwrap().lines());
+        for label in ["Host:", "Port:", "Database (required):"] {
+            assert!(view.contains(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn the_focused_field_and_the_error_fit_80_by_24() {
+        let labels = [
+            "Host:",
+            "Port:",
+            "Database (required):",
+            "Maintenance DB:",
+            "Username:",
+            "Password:",
+        ];
+        let mut w = Wizard::new(None);
+        w.update(key(KeyCode::Enter));
+        for (i, label) in labels.iter().enumerate() {
+            assert_eq!(focus(&w), i);
+            assert!(screen(&w, 80, 24).contains(label), "{label}");
+            w.update(key(KeyCode::Tab));
+        }
+        let mut w = Wizard::new(None);
+        local_with_database(&mut w, "");
+        assert!(screen(&w, 80, 24).contains("database name is required"));
+        for downs in 0..PROVIDERS.len() {
+            let mut w = Wizard::new(None);
+            provider(&mut w, downs);
+            if w.form.is_none() {
+                w.update(key(KeyCode::Enter));
+            }
+            let view = screen(&w, 80, 24);
+            assert!(
+                view.contains(w.form.as_ref().unwrap().inputs[0].label),
+                "{view}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_existing_config_prefills_the_host_form() {
+        let initial = Connection {
+            host: Some("127.0.0.1".into()),
+            port: Some("55602".into()),
+            database: Some("trialw1".into()),
+            maintenance_database: Some("template1".into()),
+            username: Some("app".into()),
+            ..Connection::default()
+        };
+        let mut w = Wizard::new(Some(initial));
+        w.update(key(KeyCode::Enter));
+        assert_eq!(
+            values(&w),
+            ["127.0.0.1", "55602", "trialw1", "template1", "app", ""]
+        );
+    }
+
+    #[test]
+    fn existing_tls_is_kept_but_a_token_never_gets_a_plaintext_capable_mode() {
+        let initial = |mode: &str| Connection {
+            sslmode: Some(mode.into()),
+            sslcert: Some("/client.crt".into()),
+            sslkey: Some("/client.key".into()),
+            sslrootcert: Some("/ca.pem".into()),
+            ..Connection::default()
+        };
+        let with = |auth: Option<&'static str>, mode: &str, kept: Option<&str>| {
+            let mut s = Settings {
+                auth_method: auth,
+                sslmode: mode.into(),
+                ..Settings::default()
+            };
+            if let Some(k) = kept {
+                keep_tls(&mut s, &initial(k));
+            }
+            s
+        };
+        let s = with(None, "prefer", Some("verify-full"));
+        assert_eq!(
+            (
+                s.sslmode.as_str(),
+                s.sslrootcert.as_str(),
+                s.sslcert.as_str(),
+                s.sslkey.as_str()
+            ),
+            ("verify-full", "/ca.pem", "/client.crt", "/client.key")
+        );
+        assert_eq!(
+            with(Some("azure"), "require", Some("verify-full")).sslmode,
+            "verify-full"
+        );
+        assert_eq!(
+            with(Some("azure"), "require", Some("prefer")).sslmode,
+            "require"
+        );
+        assert_eq!(
+            with(Some("aws"), "require", Some("disable")).sslmode,
+            "require"
+        );
+        let mut w = Wizard::new(None);
+        let Some(Effect::Test(s)) = local_with_database(&mut w, "d") else {
+            panic!("no test");
+        };
+        assert_eq!(s.sslmode, "prefer");
+    }
 }
