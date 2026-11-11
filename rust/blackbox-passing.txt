@@ -110,6 +110,8 @@ exit-codes/2-usage
 flags/compat
 flags/connection-forms
 flags/granular-flags
+flags/overwrite-concurrent
+flags/overwrite-deploy-during-approval
 flags/overwrite-force
 flags/overwrite-invalid-database
 flags/overwrite-new-database

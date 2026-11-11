@@ -20,7 +20,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | 12 | overwrite denied | ✓ `exit-codes/12-overwrite-denied` |
 | 13 | SQL failed | ✓ `exit-codes/13-sql-failed` |
 | 14 | deploy.sql missing | ✓ `exit-codes/14-no-deploy-sql` |
-| 15 | concurrent deploy | ✓ `exit-codes/15-concurrent-deploy` |
+| 15 | concurrent deploy; concurrent `--overwrite`; a deploy started during the overwrite approval | ✓ `exit-codes/15-concurrent-deploy`, `flags/overwrite-concurrent`, `flags/overwrite-deploy-during-approval` |
 | 16 | `--timeout` exceeded | ✓ `exit-codes/16-timeout` |
 | 130 | interrupted | ✓ `exit-codes/130-interrupted` (SIGINT), `exit-codes/130-sigterm` |
 

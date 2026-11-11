@@ -1,0 +1,26 @@
+description: --overwrite checks for a running deploy after the approval, right before the drop; a deploy that started during the --force countdown is not killed and the overwrite is exit 15
+project:
+  files:
+    deploy.sql: |
+      SELECT pg_sleep(coalesce(current_setting('pgmi.sleep', true), '0')::float8);
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    background: true
+    timeout: 40
+    expect:
+      exit: 15
+      stdout: ["another pgmi deploy(ment)? is running against \"{db}\""]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, sleep=7]
+    delay: 1.5
+    timeout: 30
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]

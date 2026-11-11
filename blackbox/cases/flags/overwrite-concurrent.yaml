@@ -1,0 +1,25 @@
+description: a second --overwrite of a database whose --overwrite is still waiting (here in the --force countdown) is exit 15 and drops nothing; the first one finishes
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    background: true
+    timeout: 40
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    delay: 2
+    timeout: 30
+    expect:
+      exit: 15
+      stderr: ["another pgmi --overwrite of \"{db}\" is running"]

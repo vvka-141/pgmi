@@ -4,7 +4,7 @@ use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
 use super::{quote_ident, sql_error};
-use crate::conn::dial::{Dialer, Session};
+use crate::conn::dial::Session;
 use crate::conn::resolve::Spec;
 use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
@@ -18,19 +18,9 @@ const LIST_GUCS: [&str; 6] = [
     "unix_socket_directories",
 ];
 
-pub(crate) struct Plan {
-    pub(crate) maintenance: Session,
-    db: String,
-    snapshot: Option<Snapshot>,
-}
-
-impl Plan {
-    pub(crate) fn drops_a_database(&self) -> bool {
-        self.snapshot.is_some()
-    }
-}
-
-struct Snapshot {
+/// What an existing target looked like before the drop: put back after the
+/// recreate.
+pub(crate) struct Snapshot {
     locale: Option<String>,
     owner: String,
     connlimit: i32,
@@ -74,42 +64,63 @@ pub(crate) fn refuse_maintenance(spec: &Spec) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn prepare(dialer: &Dialer, spec: &Spec) -> Result<Plan> {
-    let db = spec.target_db.clone();
-    let maintenance = dialer.connect(spec, &spec.maintenance_db).await?;
+/// Takes the lock that serialises `--overwrite` runs on `db`, held until
+/// `maintenance` closes, and reports whether `db` exists.
+pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
     let c = &maintenance.client;
+    let held = rows(
+        c,
+        "SELECT pg_try_advisory_lock(hashtextextended('pgmi.overwrite.' || $1, 0))",
+        db,
+    )
+    .await?;
+    if !held.first().is_some_and(|r| r.get::<_, bool>(0)) {
+        return Err(Error::new(
+            Kind::Locked,
+            format!("another pgmi --overwrite of \"{db}\" is running"),
+        ));
+    }
     let template = rows(
         c,
         "SELECT datistemplate FROM pg_database WHERE datname = $1",
-        &db,
+        db,
     )
     .await?;
-    if template.first().is_some_and(|r| r.get::<_, bool>(0)) {
-        return Err(Error::config(format!(
+    match template.first().map(|r| r.get::<_, bool>(0)) {
+        Some(true) => Err(Error::config(format!(
             "cannot drop template database \"{db}\" (template0/template1 are protected by PostgreSQL)"
-        )));
+        ))),
+        found => Ok(found.is_some()),
     }
-    let snapshot = match rows(c, manager_sql("settings")?, &db).await?.first() {
-        None => None,
-        Some(r) => Some(snapshot(c, r, &db).await?),
+}
+
+/// Reads what the recreate must put back, and refuses when it could not, or
+/// when a deploy is running against `db`. `None`: `db` is gone already.
+pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<Snapshot>> {
+    let c = &maintenance.client;
+    let Some(r) = rows(c, manager_sql("settings")?, db)
+        .await?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
     };
-    if snapshot.is_some() {
-        let gaps: Vec<String> = rows(c, manager_sql("restore_gaps")?, &db)
-            .await?
-            .first()
-            .map(|r| r.get(0))
-            .unwrap_or_default();
-        if !gaps.is_empty() {
-            return Err(Error::config(format!(
-                "--overwrite would drop \"{db}\" and could not restore, as the deploying role:\n  {}\nnothing was dropped; deploy as the database owner or a superuser, or remove these first",
-                gaps.join("\n  ")
-            )));
-        }
+    let snapshot = capture(c, &r, db).await?;
+    let gaps: Vec<String> = rows(c, manager_sql("restore_gaps")?, db)
+        .await?
+        .first()
+        .map(|r| r.get(0))
+        .unwrap_or_default();
+    if !gaps.is_empty() {
+        return Err(Error::config(format!(
+            "--overwrite would drop \"{db}\" and could not restore, as the deploying role:\n  {}\nnothing was dropped; deploy as the database owner or a superuser, or remove these first",
+            gaps.join("\n  ")
+        )));
     }
     let locked = rows(
         c,
         &format!("SELECT ({})::text", manager_sql("deploy_locked")?),
-        &db,
+        db,
     )
     .await?;
     if locked.first().map(|r| r.get::<_, String>(0)).as_deref() == Some("true") {
@@ -120,14 +131,10 @@ pub(crate) async fn prepare(dialer: &Dialer, spec: &Spec) -> Result<Plan> {
             ),
         ));
     }
-    Ok(Plan {
-        maintenance,
-        db,
-        snapshot,
-    })
+    Ok(Some(snapshot))
 }
 
-async fn snapshot(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapshot> {
+async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapshot> {
     let own: Vec<String> = (0..6).map(|i| text(r, i)).collect();
     let template: Vec<String> = (10..16).map(|i| text(r, i)).collect();
     let role_settings = rows(
@@ -307,12 +314,12 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     out
 }
 
-pub(crate) async fn recreate(plan: &Plan, reporter: &Reporter) -> Result<bool> {
-    let Plan {
-        maintenance,
-        db,
-        snapshot,
-    } = plan;
+pub(crate) async fn recreate(
+    maintenance: &Session,
+    db: &str,
+    snapshot: Option<&Snapshot>,
+    reporter: &Reporter,
+) -> Result<bool> {
     let work = async {
         let c = &maintenance.client;
         if snapshot.is_some() {
@@ -320,11 +327,11 @@ pub(crate) async fn recreate(plan: &Plan, reporter: &Reporter) -> Result<bool> {
                 .await
                 .map_err(|e| sql_error("drop the target database", &e))?;
         }
-        c.batch_execute(&create_sql(db, snapshot.as_ref()))
+        c.batch_execute(&create_sql(db, snapshot))
             .await
             .map_err(|e| sql_error("create the target database", &e))?;
         let mut failed = Vec::new();
-        if let Some(s) = &snapshot {
+        if let Some(s) = snapshot {
             for (item, sql) in restore_sql(db, s) {
                 if let Err(e) = c.batch_execute(&sql).await {
                     failed.push(format!("{item}: {}", sql_error("restore", &e).text()));

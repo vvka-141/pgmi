@@ -325,7 +325,14 @@ whole run; a second deploy to the same target is exit 15. The lock is released
 on every path, including a failure and a `deploy.sql` that ends inside an open
 transaction.
 
-Cases: `exit-codes/15-concurrent-deploy`, `execution/open-transaction`, `execution/tail-block-fails`.
+`--overwrite` also takes a lock keyed on the target name, on the maintenance
+database, before it looks at the target, and holds it until the deploy ends: a
+second `--overwrite` of the same target is exit 15 (`another pgmi --overwrite
+of "<db>" is running`) and drops nothing. The check for a running deploy comes
+after the approval, right before the drop: a deploy that started during the
+prompt or the countdown is not ended, and the overwrite is exit 15.
+
+Cases: `exit-codes/15-concurrent-deploy`, `execution/open-transaction`, `execution/tail-block-fails`, `flags/overwrite-concurrent`, `flags/overwrite-deploy-during-approval`. Rust integration test `a_held_overwrite_lock_refuses_a_second_overwrite_with_exit_15`.
 
 ### Execution contract
 

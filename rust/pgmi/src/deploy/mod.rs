@@ -498,22 +498,11 @@ async fn deploy(
         spec.token = Some(token);
         st.spec = Some(spec.clone());
     }
-    if a.overwrite {
-        let plan = guard.connecting(overwrite::prepare(&dialer, &spec)).await?;
-        if plan.drops_a_database() {
-            ctx.approver
-                .approve_drop(&spec.target_db, reporter, &guard.token)
-                .await?;
-        }
-        let recreated = guard
-            .running(&plan.maintenance, overwrite::recreate(&plan, reporter))
-            .await?;
-        st.provision = if recreated {
-            Provision::Recreated
-        } else {
-            Provision::Created
-        };
-    }
+    let _overwrite = if a.overwrite {
+        Some(overwrite(ctx, st, guard, reporter, &dialer, &spec).await?)
+    } else {
+        None
+    };
     let session = match guard
         .connecting(dialer.connect(&spec, &spec.target_db))
         .await
@@ -609,6 +598,43 @@ async fn deploy(
         session.disconnect();
     }
     outcome
+}
+
+async fn overwrite(
+    ctx: &Context,
+    st: &mut Progress,
+    guard: &Guard,
+    reporter: &Reporter,
+    dialer: &Dialer,
+    spec: &Spec,
+) -> Result<Session> {
+    let db = spec.target_db.as_str();
+    let maintenance = guard
+        .connecting(dialer.connect(spec, &spec.maintenance_db))
+        .await?;
+    let exists = guard.connecting(overwrite::claim(&maintenance, db)).await?;
+    let snapshot = if exists {
+        ctx.approver
+            .approve_drop(db, reporter, &guard.token)
+            .await?;
+        guard
+            .connecting(overwrite::snapshot(&maintenance, db))
+            .await?
+    } else {
+        None
+    };
+    let recreated = guard
+        .running(
+            &maintenance,
+            overwrite::recreate(&maintenance, db, snapshot.as_ref(), reporter),
+        )
+        .await?;
+    st.provision = if recreated {
+        Provision::Recreated
+    } else {
+        Provision::Created
+    };
+    Ok(maintenance)
 }
 
 #[cfg(feature = "testhooks")]
