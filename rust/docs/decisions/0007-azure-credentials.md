@@ -112,8 +112,34 @@ always works.
   certificate assertion signed by the provider of `tls::provider()`.
   `cloud/azure-cli`, `cloud/azure-managed-identity` and
   `cloud/azure-powershell` pass.
-- Not yet: PKCS#12 certificates (PEM holding the certificate and its key
-  only), and the Arc, Cloud Shell, Service Fabric and Azure ML sources.
+- PKCS#12 certificates through p12-keystore 0.4 (pure Rust, the RustCrypto
+  0.11 generation pgmi already uses: pkcs8, des, cbc; it adds cms, pkcs12,
+  pkcs5, rc2, x509-parser). PEM is tried first; otherwise the file is read as
+  PKCS#12 with `AZURE_CLIENT_CERTIFICATE_PASSWORD` (empty when unset), AES
+  (PBES2) and legacy 3DES both open; the first certificate of the key's
+  chain gives the `x5t#S256` thumbprint. Unit-tested against fixtures made
+  with `openssl pkcs12 -export`.
+- The managed-identity sources the Rust SDK lacks (`cloud/azure_msi.rs`),
+  detected as the Go and Rust SDKs do (`IDENTITY_ENDPOINT` with
+  `IDENTITY_HEADER` and `IDENTITY_SERVER_THUMBPRINT`: Service Fabric; with
+  `IMDS_ENDPOINT`: Arc; `MSI_ENDPOINT` with `MSI_SECRET`: Azure ML, alone:
+  Cloud Shell); App Service and IMDS stay with azure_identity.
+  - Cloud Shell: a form POST with `Metadata: true`.
+  - Azure ML: GET, api-version 2017-09-01, `clientid` from the client ID or
+    `DEFAULT_IDENTITY_CLIENT_ID`, header `secret`.
+  - Service Fabric: GET, api-version 2019-07-01-preview, header `Secret`,
+    the endpoint's certificate accepted only when its SHA-1 matches
+    `IDENTITY_SERVER_THUMBPRINT` (Go refuses a wrong thumbprint too).
+  - Arc: the 401 challenge names a key file, accepted only in
+    `/var/opt/azcmagent/tokens` (Windows: `%ProgramData%\AzureConnectedMachineAgent\Tokens`),
+    with a `.key` extension and at most 4096 bytes; the second request sends
+    it as `Authorization: Basic`.
+  - A user-assigned ID on Arc, Cloud Shell or Service Fabric is an error,
+    as in the Go SDK.
+  `cloud/azure-cloud-shell`, `cloud/azure-ml` and `cloud/azure-service-fabric`
+  pass on both binaries. Arc has no case (the key folder is a system path).
+  The default chain does not time-box managed identity when one of these
+  variables is set.
 - An invalid `AZURE_TOKEN_CREDENTIALS` is exit 10 (Go: 1); it is refused
   before connecting.
 - In the default chain, system-assigned managed identity over IMDS gets two

@@ -125,3 +125,6 @@ terminal/prompt-cancel
 terminal/config-refusals
 terminal/config-replace-unparseable
 terminal/init-wizard-connection
+cloud/azure-cloud-shell
+cloud/azure-ml
+cloud/azure-service-fabric

@@ -190,6 +190,8 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Azure through the Azure CLI (no client ID) | ✓ `cloud/azure-cli` (stub `az` on `PATH`) |
 | Azure PowerShell after the CLI and azd; `AZURE_TOKEN_CREDENTIALS` picks one | ✓ `cloud/azure-powershell` (stub `pwsh` on `PATH`) |
 | Azure managed identity (`--azure-client-id`) | ✓ `cloud/azure-managed-identity` (fake App Service endpoint) |
+| Azure managed identity on Cloud Shell, Azure ML, Service Fabric | ✓ `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric` (fake endpoints; Service Fabric's certificate is pinned by `IDENTITY_SERVER_THUMBPRINT`) |
+| Azure managed identity on Azure Arc | ✗ the key file must sit in `/var/opt/azcmagent/tokens`, which a case cannot write; Rust unit tests cover the file checks |
 | Azure service principal (`AZURE_CLIENT_SECRET`) | ✗ instance discovery always calls `login.microsoftonline.com`; the manual Azure acceptance check in the release checklist covers it |
 | token sign-in refuses `prefer`/`disable` (10) | ✓ `cloud/token-auth-requires-tls` |
 | AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |

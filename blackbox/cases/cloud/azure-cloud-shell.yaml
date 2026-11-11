@@ -1,0 +1,13 @@
+description: --azure in Azure Cloud Shell (MSI_ENDPOINT without MSI_SECRET) signs in through the Cloud Shell managed identity endpoint, a form POST with the Metadata header asking for the PostgreSQL resource
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {MSI_ENDPOINT: "{fake_http}/cloudshell", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        "{fake_http_log}": ["POST /cloudshell .*\"[Mm]etadata\": \"true\".* resource=https%3A%2F%2Fossrdbms-aad\\.database\\.windows\\.net"]

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import random
 import socket
@@ -240,6 +241,9 @@ def start_fakes(root: Path, certs: Path) -> dict[str, str]:
         "{fake_https_log}": str(https_log),
         "{recorder_log}": str(pg_log),
         "{azure_token}": AZURE_TOKEN,
+        "{fake_https_thumbprint}": hashlib.sha1(
+            ssl.PEM_cert_to_DER_cert((certs / "server.crt").read_text())
+        ).hexdigest().upper(),
     }
 
 

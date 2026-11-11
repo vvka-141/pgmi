@@ -1,0 +1,13 @@
+description: --azure with --azure-client-id on Azure Machine Learning (MSI_ENDPOINT and MSI_SECRET) asks the endpoint with the secret header, the client ID and the PostgreSQL resource
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --azure-client-id, 22222222-2222-2222-2222-222222222222, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {MSI_ENDPOINT: "{fake_http}/azureml", MSI_SECRET: ml-secret}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        "{fake_http_log}": ["GET /azureml\\?.*clientid=22222222-2222-2222-2222-222222222222.* .*\"[Ss]ecret\": \"ml-secret\"", "GET /azureml\\?.*resource=https%3A%2F%2Fossrdbms-aad\\.database\\.windows\\.net"]

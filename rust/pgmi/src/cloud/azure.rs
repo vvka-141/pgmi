@@ -118,7 +118,9 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
 pub async fn token(req: &Request, env: &Env) -> Result<String> {
     let ids = ids(req, env)?;
     let (kinds, chain) = plan(&ids, env)?;
-    let probing = chain && env.non_empty("IDENTITY_ENDPOINT")?.is_none();
+    let probing = chain
+        && env.non_empty("IDENTITY_ENDPOINT")?.is_none()
+        && env.non_empty("MSI_ENDPOINT")?.is_none();
     let mut failures = Vec::new();
     for kind in kinds {
         let attempt = get(kind, &ids, env);
@@ -182,11 +184,16 @@ async fn get(kind: Kind, ids: &Ids, env: &Env) -> std::result::Result<String, St
             }))
             .map_err(text)?
         }
-        Kind::Managed => ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
-            user_assigned_id: ids.client.clone().map(UserAssignedId::ClientId),
-            ..Default::default()
-        }))
-        .map_err(text)?,
+        Kind::Managed => {
+            if let Some(source) = super::azure_msi::source(env) {
+                return super::azure_msi::token(source, ids.client.as_deref(), RESOURCE, env).await;
+            }
+            ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
+                user_assigned_id: ids.client.clone().map(UserAssignedId::ClientId),
+                ..Default::default()
+            }))
+            .map_err(text)?
+        }
         Kind::Cli => AzureCliCredential::new(Some(AzureCliCredentialOptions {
             tenant_id: ids.tenant.clone(),
             ..Default::default()
@@ -299,6 +306,37 @@ mod certificate {
         }
     }
 
+    pub fn read(
+        bytes: &[u8],
+        password: &str,
+    ) -> std::result::Result<(CertificateDer<'static>, PrivateKeyDer<'static>), String> {
+        if let Some(cert) = CertificateDer::pem_slice_iter(bytes).next() {
+            let cert = cert.map_err(|e| e.to_string())?;
+            let key = PrivateKeyDer::from_pem_slice(bytes)
+                .map_err(|e| format!("no PEM private key found ({e})"))?;
+            return Ok((cert, key));
+        }
+        let store = p12_keystore::KeyStore::from_pkcs12(
+            bytes,
+            password,
+            p12_keystore::Pkcs12ImportPolicy::Relaxed,
+        )
+        .map_err(|e| {
+            format!("neither a PEM certificate nor a PKCS#12 file this password opens ({e})")
+        })?;
+        let (_, chain) = store
+            .private_key_chain()
+            .ok_or("the PKCS#12 file holds no private key")?;
+        let cert = chain
+            .certs()
+            .first()
+            .ok_or("the PKCS#12 file holds no certificate for its key")?;
+        Ok((
+            CertificateDer::from(cert.as_der().to_vec()),
+            PrivateKeyDer::Pkcs8(chain.key().as_der().to_vec().into()),
+        ))
+    }
+
     impl Assertion {
         pub fn load(ids: &Ids, env: &Env) -> std::result::Result<Self, String> {
             let path = env
@@ -308,14 +346,12 @@ mod certificate {
                 .unwrap_or_default()
                 .to_string();
             let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
-            let cert = CertificateDer::pem_slice_iter(&bytes)
-                .next()
-                .and_then(|c| c.ok())
-                .ok_or_else(|| {
-                    format!("{path}: no PEM certificate found; pgmi reads a PEM file holding the certificate and its private key")
-                })?;
-            let key = PrivateKeyDer::from_pem_slice(&bytes)
-                .map_err(|e| format!("{path}: no PEM private key found ({e})"))?;
+            let password = env
+                .non_empty("AZURE_CLIENT_CERTIFICATE_PASSWORD")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let (cert, key) = read(&bytes, password).map_err(|e| format!("{path}: {e}"))?;
             let key = crate::conn::tls::provider()
                 .key_provider
                 .load_private_key(key)
@@ -372,6 +408,40 @@ mod certificate {
             self.sign().map_err(|e| {
                 azure_core::Error::with_message(azure_core::error::ErrorKind::Credential, e)
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const PEM: &[u8] = include_bytes!("testdata/sp.pem");
+
+        #[test]
+        fn pem_and_pkcs12_give_the_same_certificate_and_a_working_key() {
+            crate::conn::tls::install();
+            let (want, _) = read(PEM, "").unwrap();
+            for (bytes, password) in [
+                (PEM, ""),
+                (&include_bytes!("testdata/sp-aes.p12")[..], "p12-pass"),
+                (&include_bytes!("testdata/sp-3des.p12")[..], "p12-pass"),
+                (&include_bytes!("testdata/sp-nopass.p12")[..], ""),
+            ] {
+                let (cert, key) = read(bytes, password).unwrap();
+                assert_eq!(cert, want);
+                let assertion = Assertion {
+                    key: crate::conn::tls::provider()
+                        .key_provider
+                        .load_private_key(key)
+                        .unwrap(),
+                    thumbprint: String::new(),
+                    audience: "a".into(),
+                    client: "c".into(),
+                };
+                assert_eq!(assertion.sign().unwrap().split('.').count(), 3);
+            }
+            let wrong = read(include_bytes!("testdata/sp-aes.p12"), "nope").unwrap_err();
+            assert!(wrong.contains("PKCS#12"), "{wrong}");
         }
     }
 }

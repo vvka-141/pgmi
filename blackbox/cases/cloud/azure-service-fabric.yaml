@@ -1,0 +1,13 @@
+description: --azure on Service Fabric (IDENTITY_ENDPOINT, IDENTITY_HEADER and IDENTITY_SERVER_THUMBPRINT) asks the HTTPS endpoint, which presents a certificate no root trusts, with the Secret header and the PostgreSQL resource
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {IDENTITY_ENDPOINT: "{fake_https}/fabric", IDENTITY_HEADER: fabric-secret, IDENTITY_SERVER_THUMBPRINT: "{fake_https_thumbprint}", PATH: "/nonexistent"}
+    timeout: 60
+    expect:
+      exit: 0
+      files:
+        "{fake_https_log}": ["GET /fabric\\?.*resource=https%3A%2F%2Fossrdbms-aad\\.database\\.windows\\.net.* .*\"[Ss]ecret\": \"fabric-secret\""]

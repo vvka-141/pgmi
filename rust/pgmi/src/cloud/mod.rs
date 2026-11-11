@@ -1,5 +1,6 @@
 mod aws;
 mod azure;
+mod azure_msi;
 mod google;
 mod http;
 
