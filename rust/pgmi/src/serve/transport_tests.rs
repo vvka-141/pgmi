@@ -175,6 +175,39 @@ async fn ping_is_answered_and_cancel_stops_a_slow_tool_call() {
 }
 
 #[tokio::test]
+async fn request_ids_match_by_value_not_by_spelling() {
+    let (tools, mut probes) = fakes();
+    let mut s = Running::start(tools);
+    s.send(r#"{"jsonrpc":"2.0","id":"job","method":"tools/call","params":{"name":"slow"}}"#)
+        .await;
+    probes.started.recv().await.unwrap();
+    s.send(r#"{"jsonrpc":"2.0","id":"\u006aob","method":"tools/call","params":{"name":"slow"}}"#)
+        .await;
+    let frame = s.frame().await.unwrap();
+    assert!(frame.contains("-32600"), "{frame}");
+    assert!(frame.contains("already in flight"), "{frame}");
+    s.send(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow"}}"#)
+        .await;
+    probes.started.recv().await.unwrap();
+    s.send(r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"1"}}"#)
+        .await;
+    s.send(
+        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"\u006aob"}}"#,
+    )
+    .await;
+    let stopped = timeout(Duration::from_secs(1), probes.stopped.recv()).await;
+    assert_eq!(stopped.unwrap(), Some("cancelled"));
+    assert!(
+        timeout(Duration::from_millis(300), probes.stopped.recv())
+            .await
+            .is_err(),
+        "the string id \"1\" cancelled the number id 1"
+    );
+    s.stop.cancel();
+    s.ended().await;
+}
+
+#[tokio::test]
 async fn stopping_the_server_during_a_tool_call_ends_it_cleanly() {
     let (tools, mut probes) = fakes();
     let mut s = Running::start(tools);

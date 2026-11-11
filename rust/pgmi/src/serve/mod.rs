@@ -54,7 +54,7 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> u8 {
 
 struct Server<T> {
     out: UnboundedSender<String>,
-    calls: Mutex<HashMap<String, CancellationToken>>,
+    calls: Mutex<HashMap<CallId, CancellationToken>>,
     root: CancellationToken,
     tools: Arc<T>,
 }
@@ -137,6 +137,23 @@ struct Era {
     stateless: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CallId {
+    Text(String),
+    Number(String),
+}
+
+impl CallId {
+    fn of(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        match raw.as_bytes().first()? {
+            b'"' => serde_json::from_str(raw).ok().map(CallId::Text),
+            b'-' | b'0'..=b'9' => Some(CallId::Number(raw.to_string())),
+            _ => None,
+        }
+    }
+}
+
 impl<T: Toolbox> Server<T> {
     fn send(&self, line: String) {
         let _ = self.out.send(line);
@@ -167,7 +184,7 @@ impl<T: Toolbox> Server<T> {
                 m.0.into_iter()
                     .rev()
                     .find(|(k, _)| k == "requestId")
-                    .map(|(_, v)| v.get().to_string())
+                    .and_then(|(_, v)| CallId::of(v.get()))
             })
         else {
             return;
@@ -270,18 +287,19 @@ impl<T: Toolbox> Server<T> {
             ));
         };
         let arguments = fields.raw("arguments").map(RawValue::to_owned);
+        let Some(key) = CallId::of(&id) else { return };
         let token = self.root.child_token();
         let Ok(mut calls) = self.calls.lock() else {
             return;
         };
-        if calls.contains_key(&id) {
+        if calls.contains_key(&key) {
             return self.send(wire::error(
                 Some(&id),
                 INVALID_REQUEST,
                 &format!("request id {id} is already in flight"),
             ));
         }
-        calls.insert(id.clone(), token.clone());
+        calls.insert(key.clone(), token.clone());
         drop(calls);
         let server = self.clone();
         tasks.spawn(async move {
@@ -300,7 +318,7 @@ impl<T: Toolbox> Server<T> {
                 }
             };
             if let Ok(mut calls) = server.calls.lock() {
-                calls.remove(&id);
+                calls.remove(&key);
             }
             if token.is_cancelled() {
                 return;
@@ -416,7 +434,7 @@ mod tests {
             .calls
             .lock()
             .unwrap()
-            .insert("7".into(), busy.clone());
+            .insert(CallId::Number("7".into()), busy.clone());
         let mut tasks = JoinSet::new();
         server.handle(
             br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
@@ -427,7 +445,13 @@ mod tests {
         assert!(answer.contains("already in flight"), "{answer}");
         assert!(tasks.is_empty());
         assert!(!busy.is_cancelled());
-        assert!(server.calls.lock().unwrap().contains_key("7"));
+        assert!(
+            server
+                .calls
+                .lock()
+                .unwrap()
+                .contains_key(&CallId::Number("7".into()))
+        );
     }
 
     #[test]

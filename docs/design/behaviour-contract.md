@@ -661,8 +661,14 @@ the first loses its cancellation, and the client gets two answers with one
 id. The Rust binary answers the second at once with `-32600` (`request id 7
 is already in flight`) and leaves the first running.
 
-Cases: none (Go's answer is not deterministic); Rust unit test
-`a_request_id_already_in_flight_is_refused`.
+Go matches ids by their spelling, so `"\u006aob"` neither cancels nor
+duplicates a call whose id is `"job"`. The Rust binary matches the decoded
+value (PGMI-868): a string id by its text, a number id as written, and a
+string never matches a number (`"1"` is not `1`).
+
+Cases: none (Go's answer is not deterministic); Rust unit tests
+`a_request_id_already_in_flight_is_refused`,
+`request_ids_match_by_value_not_by_spelling`.
 
 ### Nothing that cannot be reached is carried over
 
@@ -880,6 +886,7 @@ release notes take their "Behaviour changes" section from this table.
 | `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
+| `serve`: a cancel or a repeated id spelled with escapes (`"\u006aob"` for `"job"`) | missed | matched by the decoded string | owner 2026-11-11 |
 | Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
 | Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
