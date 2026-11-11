@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::VERSION;
 use crate::env::Env;
 use crate::error::Kind;
-use wire::{Decoded, Field, INVALID_PARAMS, METHOD_NOT_FOUND, Request};
+use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
 
 const STATELESS: &str = "2026-07-28";
 const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
@@ -268,9 +268,18 @@ impl Server {
         };
         let arguments = fields.raw("arguments").map(RawValue::to_owned);
         let token = self.root.child_token();
-        if let Ok(mut calls) = self.calls.lock() {
-            calls.insert(id.clone(), token.clone());
+        let Ok(mut calls) = self.calls.lock() else {
+            return;
+        };
+        if calls.contains_key(&id) {
+            return self.send(wire::error(
+                Some(&id),
+                INVALID_REQUEST,
+                &format!("request id {id} is already in flight"),
+            ));
         }
+        calls.insert(id.clone(), token.clone());
+        drop(calls);
         let server = self.clone();
         tasks.spawn(async move {
             let env = server.env.clone();
@@ -386,6 +395,35 @@ mod tests {
         for name in names {
             assert!(tools::Tool::named(name).is_some(), "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_request_id_already_in_flight_is_refused() {
+        let (tx, mut rx) = unbounded_channel::<String>();
+        let server = Arc::new(Server {
+            out: tx,
+            calls: Mutex::new(HashMap::new()),
+            root: CancellationToken::new(),
+            env: Env::default(),
+            verbose: false,
+        });
+        let busy = CancellationToken::new();
+        server
+            .calls
+            .lock()
+            .unwrap()
+            .insert("7".into(), busy.clone());
+        let mut tasks = JoinSet::new();
+        server.handle(
+            br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
+            &mut tasks,
+        );
+        let answer = rx.recv().await.unwrap();
+        assert!(answer.contains("-32600"), "{answer}");
+        assert!(answer.contains("already in flight"), "{answer}");
+        assert!(tasks.is_empty());
+        assert!(!busy.is_cancelled());
+        assert!(server.calls.lock().unwrap().contains_key("7"));
     }
 
     #[test]

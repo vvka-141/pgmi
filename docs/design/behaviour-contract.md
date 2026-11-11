@@ -564,6 +564,16 @@ the same), and `pgmi config` saves the password there; the home directory is
 Cases: none (the suite runs on Linux); Rust unit test
 `postgres_files_follow_the_platform`.
 
+### serve refuses a request id already in flight
+
+Go accepts a second `tools/call` whose id matches one still running: both run,
+the first loses its cancellation, and the client gets two answers with one
+id. The Rust binary answers the second at once with `-32600` (`request id 7
+is already in flight`) and leaves the first running.
+
+Cases: none (Go's answer is not deterministic); Rust unit test
+`a_request_id_already_in_flight_is_refused`.
+
 ### Nothing that cannot be reached is carried over
 
 Go's Azure username/password login (resource-owner password) is unreachable
