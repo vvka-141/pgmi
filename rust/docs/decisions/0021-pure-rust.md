@@ -1,8 +1,8 @@
 # 0021: Pure Rust, no C or C++ in the build
 
-Status: accepted in part, 2026-11-10. Ticket: PGMI-855 (owner requirement).
-Two choices wait for the owner: the crypto provider and the platform linkers
-(below). Checked on crates.io and by building, 2026-11-10.
+Status: accepted, 2026-11-10; the crypto provider and the platform linkers
+decided by the owner on 2026-11-11 (below). Ticket: PGMI-855 (owner
+requirement). Checked on crates.io and by building, 2026-11-10.
 
 ## Context
 
@@ -66,30 +66,33 @@ cc and ld removed.
   the system trust store through them). Go's binary uses the same operating
   system interfaces.
 
-## Waiting for the owner
+## Owner decisions (2026-11-11, PGMI-855)
 
-1. **Crypto provider.** Both candidates passed every TLS black-box case the
-   spike passes with ring (16 of 19; the same three known failures), with no
-   C compiler:
-   - **rustls-rustcrypto 0.1.0-pre.0** (RustCrypto organisation): Rust only,
-     every target. Its README says "do not use this in production": not
-     complete, slower than ring, not audited as a set.
-   - **graviola 0.4.5 via rustls-graviola 0.4.0** (by the rustls author):
-     Rust plus inline assembly taken from s2n-bignum (formally verified),
-     built by rustc alone. Production-intended and fast, but only x86_64 and
-     aarch64, and it needs `avx2`, `adx` and `bmi2` on x86_64 (Intel
-     Broadwell, AMD Zen, 2014 on) and `aes`, `sha2`, `pmull` on aarch64.
-     All five release targets are x86_64 or aarch64.
-   - **ring 0.17.14**: C and assembly; an exception the requirement does not
-     allow without the owner's approval.
-
-   Until the owner chooses, the build uses graviola: no C compiler, made for
-   production use. Changing provider is one line in `tls::provider()`.
-2. **Platform linkers.** Linux needs none (rust-lld). macOS links with
-   Apple's linker on a macOS runner (record 0018 already builds there),
-   Windows with the MSVC linker on a Windows runner. Neither compiles C, but
-   both come from a C toolchain. Record 0018's zig cross-builds are dropped:
-   zig is a C compiler.
+1. **Crypto provider: graviola** (0.4.5 via rustls-graviola 0.4.0, by the
+   rustls author). Rust plus inline assembly taken from s2n-bignum
+   (formally verified), built by rustc alone; assembly written inside Rust
+   is acceptable, a C compiler or C/C++ source is not.
+   - rustls-rustcrypto is rejected: its README says "do not use this in
+     production".
+   - ring (C and assembly) stays excluded.
+   - **CPU requirement.** x86-64: `aes`, `pclmulqdq`, `ssse3`, `avx`,
+     `avx2`, `bmi1`, `bmi2`, `adx` (Intel Broadwell, AMD Zen and later,
+     about 2014 on). arm64: `neon`, `aes`, `pmull`, `sha2` (Apple silicon,
+     Graviton, Raspberry Pi 5; not Raspberry Pi 4). graviola itself panics
+     on a CPU without them, so pgmi checks first (`tls::require_cpu`)
+     before any TLS connection and any cloud sign-in, and refuses with
+     exit 10 naming the missing features. Work that needs no cryptography
+     (`init`, `templates`, `metadata`, a deploy with `sslmode=disable`)
+     runs on any CPU.
+   - **Fallback:** if graviola goes stale, switching provider is one line
+     in `tls::provider()` and `tls::install()` (rustls-rustcrypto once it is
+     production-ready, or another pure-Rust provider); the CPU check then
+     goes with it.
+2. **Platform linkers accepted.** Linux needs none (rust-lld). macOS links
+   with Apple's linker on a macOS runner, Windows with the MSVC linker on a
+   Windows runner. They only link Rust output; no C/C++ source is
+   compiled. The CI gate still fails if any crate compiles C/C++. Record
+   0018's zig cross-builds are dropped: zig is a C compiler.
 
 ## Consequences
 

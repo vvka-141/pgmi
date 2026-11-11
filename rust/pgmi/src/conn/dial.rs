@@ -394,6 +394,9 @@ pub struct Dialer {
 
 impl Dialer {
     pub async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
+        if spec.sslmode != "disable" {
+            super::tls::require_cpu()?;
+        }
         let delays = [100u64, 200, 400];
         let mut attempt_no = 0;
         loop {

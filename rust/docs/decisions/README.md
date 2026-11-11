@@ -16,7 +16,7 @@ them.
 | [0003](0003-async-runtime.md) | tokio multi-thread runtime, started after the environment is settled; one cancellation token per deploy |
 | [0004](0004-postgres-connection-layer.md) | tokio-postgres `connect_raw` with pgmi's own libpq-style resolution; the five decided libpq behaviours; simple protocol and unnamed statements only |
 | [0005](0005-tokio-postgres-unpatched.md) | tokio-postgres from crates.io unpatched; a 195-line layer on pgmi's own connection reads the transaction status and enforces `require_auth` (spike: six of six cases pass); the fork patch kept as fallback only |
-| [0006](0006-tls.md) | rustls on a pure-Rust provider (graviola until the owner chooses, record 0021), one verifier for all sslmodes, rustls-native-certs for `system`, own legacy-key decryption and own tokio-postgres TLS adapter |
+| [0006](0006-tls.md) | rustls on graviola (owner, 2026-11-11; CPU features checked first, record 0021), one verifier for all sslmodes, rustls-native-certs for `system`, own legacy-key decryption and own tokio-postgres TLS adapter |
 | [0007](0007-azure-credentials.md) | azure_identity without default features, pgmi's own chain; certificate service principal via a self-signed client assertion (no OpenSSL); every Entra route listed with its real-Azure coverage |
 | [0008](0008-aws-credentials.md) | aws-config credentials on pgmi's own reqwest-based HTTP client; the RDS token signed with aws-sigv4 directly, not aws-sdk-rds |
 | [0009](0009-google-cloud-sql.md) | Spike B's own dialer; google-cloud-auth without default features; Admin API URL overridable for fakes |
@@ -31,7 +31,7 @@ them.
 | [0018](0018-release-and-packaging.md) | GoReleaser OSS run on a macOS runner (prebuilt import is Pro only); wheels and npm packages assembled from the release binaries |
 | [0019](0019-output.md) | Own stderr Reporter, no tracing subscriber; one serde struct for `--json` and the serve deploy result; jiff timestamps |
 | [0020](0020-metadata-xml.md) | roxmltree for `<pgmi-meta>`, uuid for ids; scaffold stops at `.git` |
-| [0021](0021-pure-rust.md) | Pure Rust (PGMI-855): features that keep C out of every cloud crate, a CI gate banning C-compiling crates and checking every target with no C compiler; provider and platform linkers wait for the owner |
+| [0021](0021-pure-rust.md) | Pure Rust (PGMI-855): features that keep C out of every cloud crate, a CI gate banning C-compiling crates and checking every target with no C compiler; graviola and the platform linkers accepted by the owner (2026-11-11) |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage

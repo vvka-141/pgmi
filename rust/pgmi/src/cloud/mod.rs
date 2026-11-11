@@ -155,6 +155,7 @@ pub fn check(provider: Provider, req: &Request, spec: &mut Spec, env: &Env) -> R
 }
 
 pub async fn token(provider: Provider, req: &Request, env: &Env) -> Result<Token> {
+    crate::conn::tls::require_cpu()?;
     match provider {
         Provider::Azure => azure::token(req, env)
             .await

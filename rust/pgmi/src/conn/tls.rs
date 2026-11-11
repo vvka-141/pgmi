@@ -29,6 +29,69 @@ pub fn install() {
     let _ = CryptoProvider::install_default(rustls_graviola::default_provider());
 }
 
+#[cfg(target_arch = "x86_64")]
+const CPU_FEATURES: &[&str] = &[
+    "aes",
+    "pclmulqdq",
+    "ssse3",
+    "avx",
+    "avx2",
+    "bmi1",
+    "bmi2",
+    "adx",
+];
+#[cfg(target_arch = "aarch64")]
+const CPU_FEATURES: &[&str] = &["neon", "aes", "pmull", "sha2"];
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const CPU_FEATURES: &[&str] = &[];
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_has(feature: &str) -> bool {
+    match feature {
+        "aes" => std::arch::is_x86_feature_detected!("aes"),
+        "pclmulqdq" => std::arch::is_x86_feature_detected!("pclmulqdq"),
+        "ssse3" => std::arch::is_x86_feature_detected!("ssse3"),
+        "avx" => std::arch::is_x86_feature_detected!("avx"),
+        "avx2" => std::arch::is_x86_feature_detected!("avx2"),
+        "bmi1" => std::arch::is_x86_feature_detected!("bmi1"),
+        "bmi2" => std::arch::is_x86_feature_detected!("bmi2"),
+        "adx" => std::arch::is_x86_feature_detected!("adx"),
+        _ => false,
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn cpu_has(feature: &str) -> bool {
+    match feature {
+        "neon" => std::arch::is_aarch64_feature_detected!("neon"),
+        "aes" => std::arch::is_aarch64_feature_detected!("aes"),
+        "pmull" => std::arch::is_aarch64_feature_detected!("pmull"),
+        "sha2" => std::arch::is_aarch64_feature_detected!("sha2"),
+        _ => false,
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn cpu_has(_: &str) -> bool {
+    true
+}
+
+fn missing_cpu_features(has: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    CPU_FEATURES.iter().copied().filter(|f| !has(f)).collect()
+}
+
+pub fn require_cpu() -> Result<()> {
+    let missing = missing_cpu_features(cpu_has);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Error::config(format!(
+        "this CPU lacks {} needed for TLS and cloud sign-in; pgmi needs a CPU with {} (x86-64 from about 2014 on, or arm64 with the crypto extensions)",
+        missing.join(", "),
+        CPU_FEATURES.join(", ")
+    )))
+}
+
 #[derive(Debug)]
 pub enum Names {
     Ignore,
@@ -487,6 +550,20 @@ mod tests {
             ..Default::default()
         };
         super::super::resolve::resolve(&flags, &crate::env::Env::from_pairs(&pairs), None).unwrap()
+    }
+
+    #[test]
+    fn missing_cpu_features_are_named_and_refused() {
+        assert!(missing_cpu_features(|_| true).is_empty());
+        assert_eq!(missing_cpu_features(|_| false), CPU_FEATURES);
+        let lacking = CPU_FEATURES.first().copied();
+        let missing = missing_cpu_features(|f| Some(f) != lacking);
+        assert_eq!(missing, lacking.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn this_machine_runs_the_crypto_provider() {
+        assert!(require_cpu().is_ok());
     }
 
     #[test]
