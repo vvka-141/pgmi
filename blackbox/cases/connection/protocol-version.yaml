@@ -1,11 +1,13 @@
-description: max_protocol_version=3.2 is accepted and the deploy works over protocol 3.2, including a --timeout that cancels a running statement (the longer 3.2 cancel key); sslsni=0, sslcertmode=disable and client_encoding are accepted
+description: max_protocol_version=3.2 is accepted and the deploy works over protocol 3.2 (Rust refuses min_protocol_version=3.2 before connecting until its layer speaks 3.2, owner decision 2026-11-11), including a --timeout that cancels a running statement (the longer 3.2 cancel key); sslsni=0, sslcertmode=disable and client_encoding are accepted
 project:
   files:
     deploy.sql: SELECT 1;
     slow/deploy.sql: SELECT pg_sleep(30);
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}?max_protocol_version=3.2&min_protocol_version=3.2", -d, "{db}"]
-    expect: {exit: 0}
+    expect:
+      exit: 0
+      rust: {exit: 10, stderr: ["min_protocol_version=3.2: protocol 3.2 is not supported yet"]}
   - pgmi: [deploy, "{project}/slow", --connection, "{conn}?max_protocol_version=3.2", -d, "{db}", --timeout, 2s]
     timeout: 20
     expect:

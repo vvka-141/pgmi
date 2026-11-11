@@ -193,6 +193,36 @@ fn tls_keys_are_read_or_refused() {
 }
 
 #[test]
+fn a_minimum_protocol_above_3_0_is_refused_until_the_layer_speaks_it() {
+    let spec = |s: &str| {
+        let mut fl = conn(&format!("host=h {s}"));
+        fl.database = Some("d".into());
+        resolve(&fl, &Env::default(), None)
+    };
+    for ok in [
+        "",
+        "min_protocol_version=3.0",
+        "max_protocol_version=3.2",
+        "max_protocol_version=latest",
+        "min_protocol_version=3.0 max_protocol_version=3.2",
+    ] {
+        assert!(spec(ok).is_ok(), "{ok}");
+    }
+    for v in ["3.2", "latest"] {
+        let e = refused(spec(&format!("min_protocol_version={v}")));
+        assert!(matches!(&e, ResolveError::ProtocolUnsupported(got) if got == v));
+        assert!(e.to_string().contains("not supported yet"), "{e}");
+    }
+    assert!(matches!(
+        refused(spec("max_protocol_version=4")),
+        ResolveError::Value {
+            key: "max_protocol_version",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn system_roots_mean_verify_full() {
     let mut fl = conn("host=h sslrootcert=system");
     fl.database = Some("d".into());

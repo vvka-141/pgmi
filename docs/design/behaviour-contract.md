@@ -259,7 +259,9 @@ fails transiently (SQLSTATE class 08, 53300, 57P03, refused, reset, unreachable,
 timeout) is tried 4 times in all, waiting about 0.1 s, 0.2 s, 0.4 s, each line
 on stderr; other failures are not retried. `max_protocol_version` and
 `min_protocol_version` (`3.0`, `3.2`) are accepted, and a deploy and a cancel
-work with both set to `3.2` (Go speaks 3.2 then); `sslsni`, `sslcertmode` and
+work with both set to `3.2` (Go speaks 3.2 then; the Rust binary refuses a
+minimum above 3.0, see "A minimum protocol above 3.0 is refused for now");
+`sslsni`, `sslcertmode` and
 `client_encoding` are accepted.
 
 Cases: `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
@@ -673,6 +675,17 @@ valid JSON (questions Q1 and Q2 in `rust/docs/decisions/go-review.md`).
 
 Cases: `serve/null-request`; Q2 by the Rust unit tests of `serve::wire`.
 
+### A minimum protocol above 3.0 is refused for now (owner, 2026-11-11)
+
+Go (pgx) speaks protocol 3.2 when `min_protocol_version=3.2` asks for it. The
+Rust driver speaks 3.0 only, so the Rust binary refuses `min_protocol_version`
+`3.2` or `latest` before connecting, exit 10 (`protocol 3.2 is not supported
+yet`). `max_protocol_version` is honoured: it caps the version, and 3.0 is
+always within it. Adding 3.2 to pgmi's own connection layer is PGMI-865, done
+only if a user asks (question Q4 in `rust/docs/decisions/go-review.md`).
+
+Cases: `connection/protocol-version`.
+
 ### Three smaller differences (owner, 2026-11-11)
 
 After the user confirms replacing a `pgmi.yaml` it cannot read as settings, the Rust
@@ -707,6 +720,7 @@ release notes take their "Behaviour changes" section from this table.
 | `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
+| `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |

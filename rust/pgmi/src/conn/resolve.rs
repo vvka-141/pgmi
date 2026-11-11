@@ -150,6 +150,7 @@ pub(crate) enum ResolveError {
     CertModeRequire,
     TlsRange,
     TlsTooOld,
+    ProtocolUnsupported(String),
     ConnectTimeout(String),
 }
 
@@ -197,6 +198,10 @@ impl fmt::Display for ResolveError {
             ),
             ResolveError::TlsTooOld => f.write_str(
                 "ssl_max_protocol_version is below TLSv1.2; pgmi speaks TLSv1.2 and TLSv1.3",
+            ),
+            ResolveError::ProtocolUnsupported(v) => write!(
+                f,
+                "min_protocol_version={v}: protocol {v} is not supported yet; pgmi speaks protocol 3.0, so remove min_protocol_version or set it to 3.0"
             ),
             ResolveError::ConnectTimeout(t) => write!(f, "invalid connect_timeout \"{t}\""),
         }
@@ -488,6 +493,18 @@ fn finish(
         f.get("ssl_min_protocol_version"),
         f.get("ssl_max_protocol_version"),
     )?;
+    for key in ["min_protocol_version", "max_protocol_version"] {
+        match f.get(key).map(String::as_str) {
+            None | Some("3.0" | "3.2" | "latest") => {}
+            Some(o) => return Err(value(key, o)),
+        }
+    }
+    if let Some(v) = f
+        .get("min_protocol_version")
+        .filter(|v| v.as_str() != "3.0")
+    {
+        return Err(ResolveError::ProtocolUnsupported(v.clone()));
+    }
     let channel_binding = f
         .get("channel_binding")
         .map_or(Ok(ChannelBinding::Prefer), |v| {
