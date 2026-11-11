@@ -140,20 +140,31 @@ fn classify_pg(e: &tokio_postgres::Error, host: &str, passfile: &str) -> Failure
     Failure::Fatal(tls::describe_failure(&text, host))
 }
 
-fn refused_token(f: Failure, e: &tokio_postgres::Error, spec: &Spec) -> Failure {
+fn refused_token(
+    f: Failure,
+    e: &tokio_postgres::Error,
+    spec: &Spec,
+    db_name: Option<&str>,
+) -> Failure {
     let (Some(token), Some(db)) = (&spec.token, e.as_db_error()) else {
         return f;
     };
     if !db.code().code().starts_with("28") {
         return f;
     }
-    Failure::Fatal(format!(
-        "{} token was refused for user \"{}\": {} (SQLSTATE {}); if the database role has another name, pass it with --username",
+    Failure::Fatal(refused_token_text(
         token.provider().label(),
-        spec.user,
+        &spec.user,
+        db_name.unwrap_or(&spec.target_db),
         db.message(),
-        db.code().code()
+        db.code().code(),
     ))
+}
+
+fn refused_token_text(provider: &str, user: &str, db: &str, message: &str, code: &str) -> String {
+    format!(
+        "the {provider} token was refused for user \"{user}\" on database \"{db}\": {message} (SQLSTATE {code}); check that the signed-in identity has a database role and that --username matches it"
+    )
 }
 
 fn sslmode_of(mode: &str) -> SslMode {
@@ -264,7 +275,12 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
             None => {
                 let (client, connection) =
                     config.connect_raw(stream, NoTls).await.map_err(|e| {
-                        refused_token(classify_pg(&e, a.name, &passfile_text), &e, spec)
+                        refused_token(
+                            classify_pg(&e, a.name, &passfile_text),
+                            &e,
+                            spec,
+                            config.get_dbname(),
+                        )
                     })?;
                 let task = drive(connection, notices);
                 Ok((client, None, peer, task))
@@ -281,7 +297,12 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, Failure> {
                 };
                 let (client, connection) =
                     config.connect_raw(stream, tapped).await.map_err(|e| {
-                        refused_token(classify_pg(&e, a.name, &passfile_text), &e, spec)
+                        refused_token(
+                            classify_pg(&e, a.name, &passfile_text),
+                            &e,
+                            spec,
+                            config.get_dbname(),
+                        )
                     })?;
                 let task = drive(connection, notices);
                 Ok((client, Some(connect), peer, task))
@@ -557,6 +578,26 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_token_points_at_the_database_role() {
+        let t = refused_token_text(
+            "Azure Entra ID",
+            "app",
+            "shop",
+            "password authentication failed",
+            "28P01",
+        );
+        assert!(
+            t.starts_with(
+                "the Azure Entra ID token was refused for user \"app\" on database \"shop\""
+            ),
+            "{t}"
+        );
+        assert!(t.ends_with(
+            "check that the signed-in identity has a database role and that --username matches it"
+        ));
+    }
 
     #[tokio::test]
     async fn the_cancel_goes_to_the_address_that_answered() {
