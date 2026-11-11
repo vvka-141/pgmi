@@ -1,9 +1,12 @@
-description: --params-file reads .env syntax keyed without the PGMI_PARAM_ prefix, but refuses what .env readers disagree on (exit 10) - a backslash or $ inside double quotes, an unquoted # after a space - where a .env file accepts it
+description: --params-file reads .env syntax keyed without the PGMI_PARAM_ prefix, but refuses what .env readers disagree on (exit 10) - a backslash or $ inside double quotes, an unquoted # after a space, an unquoted $, text after a closing quote, a quote across lines - where a .env file accepts it
 project:
   files:
     p.env: "plain=plain value\nexport exported=exported\nsingle='single $HOME kept'\nequals=a=b=c\n# commented=never\nMixedCase=kept as given\nunicode=ünï ✓\n"
     escaped.env: "double=\"double \\n escape\"\n"
     hash.env: "inline=value # inline comment\n"
+    dollar.env: "a=$HOME\n"
+    trailing.env: "a=\"x\" y\n"
+    multiline.env: "a='x\ny'\n"
     deploy.sql: |
       CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
 steps:
@@ -23,3 +26,9 @@ steps:
     expect: {exit: 10, stderr: ["backslash or \\$ inside double quotes", "single quotes"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/hash.env"]
     expect: {exit: 10, stderr: ["# after a space", "single quotes"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/dollar.env"]
+    expect: {exit: 10, stderr: ["line 1: the value of a has \\$, where a variable expands", "single quotes"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/trailing.env"]
+    expect: {exit: 10, stderr: ["line 1: the value of a has an unterminated quote or text after the closing one"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/multiline.env"]
+    expect: {exit: 10, stderr: ["line 1: the value of a has an unterminated quote"]}

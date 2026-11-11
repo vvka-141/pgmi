@@ -55,6 +55,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `init`: `{{PROJECT_NAME}}`, JSON-escaped in `.json` | ✓ `commands/init-project-name`; file modes 0644/0755 ✗ (the runner checks content only) |
 | `pgmi` with no arguments | ✓ `commands/bare` |
 | `pgmi: error:` prefix, unknown subcommand and shorthand, `-h` on deploy, several cloud flags = 10 | ✓ `commands/usage-errors` |
+| `-h` is help (exit 0) on every command but deploy; an invalid `--sslmode` value = 10 | ✓ `commands/short-help-and-sslmode-value` |
 | metadata id spellings, XML leniency, fallback id; broken blocks = 10 | ✓ `commands/metadata-forms`, `commands/metadata-refusals` |
 | summary line format; `-v` elapsed prefix on notices | ✓ `notices/summary-line`, `notices/verbose-elapsed` |
 

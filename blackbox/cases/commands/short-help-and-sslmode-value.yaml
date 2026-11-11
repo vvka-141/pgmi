@@ -1,0 +1,14 @@
+description: -h prints help (exit 0) on every command except deploy, where it is --host; an invalid --sslmode value is a configuration error (exit 10) naming the valid modes
+steps:
+  - pgmi: ["-h"]
+    expect: {exit: 0, stdout: ['deploy']}
+  - pgmi: [info, "-h"]
+    expect: {exit: 0, stdout: ['info']}
+  - pgmi: [metadata, plan, "-h"]
+    expect: {exit: 0, stdout: ['plan']}
+  - pgmi: [deploy, "-h"]
+    expect: {exit: 2}
+  - pgmi: [deploy, "{workdir}", --sslmode, bogus, -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ['invalid --sslmode "bogus" \(valid: disable, allow, prefer, require, verify-ca, verify-full\)']

@@ -618,7 +618,8 @@ pub fn dotenv_text(text: &str) -> Checked {
     Ok(())
 }
 
-/// Pairs written with single quotes read back unchanged in both modes, and
+/// Pairs written with single quotes read back unchanged in both modes (one
+/// line each in strict mode, which refuses a quote across lines, as Go), and
 /// pairs written with double quotes and escapes read back in dotenv mode.
 pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
     let pairs: Vec<(String, String)> = pairs
@@ -640,14 +641,22 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
         .iter()
         .map(|(k, v)| (k.clone(), v.replace('\'', "")))
         .collect();
-    let text = single.iter().fold(String::new(), |mut s, (k, v)| {
-        let _ = writeln!(s, "{k}='{v}'");
-        s
-    });
-    for mode in [Mode::Dotenv, Mode::Strict] {
-        let got = dotenv::parse(&text, mode).map_err(|e| format!("{mode:?} {text:?}: {e}"))?;
-        ensure!(got == single, "{mode:?} {text:?} read as {got:?}");
-    }
+    let quoted = |pairs: &[(String, String)]| {
+        pairs.iter().fold(String::new(), |mut s, (k, v)| {
+            let _ = writeln!(s, "{k}='{v}'");
+            s
+        })
+    };
+    let text = quoted(&single);
+    let got = dotenv::parse(&text, Mode::Dotenv).map_err(|e| format!("{text:?}: {e}"))?;
+    ensure!(got == single, "{text:?} read as {got:?}");
+    let one_line: Vec<(String, String)> = single
+        .iter()
+        .map(|(k, v)| (k.clone(), v.replace(['\n', '\r'], "")))
+        .collect();
+    let text = quoted(&one_line);
+    let got = dotenv::parse(&text, Mode::Strict).map_err(|e| format!("strict {text:?}: {e}"))?;
+    ensure!(got == one_line, "strict {text:?} read as {got:?}");
     let double: Vec<(String, String)> = pairs
         .iter()
         .map(|(k, v)| (k.clone(), v.replace('$', "")))

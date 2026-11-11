@@ -37,6 +37,7 @@ commands/metadata-invalid
 commands/metadata-refusals
 commands/metadata-scaffold-and-checks
 commands/metadata-scaffold-run-once
+commands/short-help-and-sslmode-value
 commands/templates
 commands/usage-errors
 commands/verbose

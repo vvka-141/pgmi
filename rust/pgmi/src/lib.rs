@@ -29,8 +29,6 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::Write;
 
-use clap::Parser;
-
 use cli::usage::{clap_error, help};
 use cli::{Cli, Command};
 pub use env::Env;
@@ -49,7 +47,7 @@ pub const PANIC_EXIT_CODE: u8 = Kind::Internal.exit_code();
 /// before it starts any thread (record 0016).
 pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&str, &str)) -> u8 {
     let args: Vec<OsString> = args.into_iter().collect();
-    let cli = match Cli::try_parse_from(&args) {
+    let cli = match Cli::parse_args(&args) {
         Ok(c) => c,
         Err(e) => return clap_error(&e, &args),
     };

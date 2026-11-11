@@ -83,6 +83,14 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                 while e < chars.len() && chars[e] != '\n' {
                     e += 1;
                 }
+                let after: String = chars[k + 1..e].iter().collect();
+                if mode == Mode::Strict && (line != start_line || !after.trim().is_empty()) {
+                    return Err(ambiguous(
+                        start_line,
+                        key,
+                        "has an unterminated quote or text after the closing one",
+                    ));
+                }
                 i = e + 1;
                 line += 1;
             }
@@ -90,6 +98,20 @@ pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, Str
                 let rest: String = chars[j.min(end)..end].iter().collect();
                 let rest = rest.strip_suffix('\r').unwrap_or(&rest);
                 let mut v = rest.to_string();
+                if mode == Mode::Strict && rest.trim_start().starts_with('#') {
+                    return Err(ambiguous(
+                        start_line,
+                        key,
+                        "has # after a space, where a comment starts",
+                    ));
+                }
+                if mode == Mode::Strict && rest.contains('$') {
+                    return Err(ambiguous(
+                        start_line,
+                        key,
+                        "has $, where a variable expands",
+                    ));
+                }
                 if let Some(pos) = find_comment(rest) {
                     if mode == Mode::Strict {
                         return Err(format!(
@@ -142,6 +164,12 @@ fn expand(s: &str, earlier: &[(String, String)]) -> String {
     }
     out.push_str(rest);
     out
+}
+
+fn ambiguous(line: usize, key: &str, why: &str) -> String {
+    format!(
+        "line {line}: the value of {key} {why}, so a .env file reads it differently; put it in single quotes"
+    )
 }
 
 fn find_comment(s: &str) -> Option<usize> {
@@ -200,5 +228,28 @@ mod tests {
         let e = parse("inline=value # c\n", Mode::Strict).unwrap_err();
         assert!(e.contains("# after a space") && e.contains("single quotes"));
         assert!(parse("a=x#y\n", Mode::Strict).is_ok());
+    }
+
+    #[test]
+    fn strict_refuses_what_go_refuses() {
+        for (text, why) in [
+            ("a=$X\n", "has $, where a variable expands"),
+            ("a=\"x\" y\n", "text after the closing one"),
+            ("a='x'y\n", "text after the closing one"),
+            ("a='x\ny'\n", "unterminated quote"),
+            ("a=#x\n", "has # after a space"),
+        ] {
+            let e = parse(text, Mode::Strict).unwrap_err();
+            assert!(
+                e.starts_with("line 1: the value of a ")
+                    && e.contains(why)
+                    && e.ends_with("put it in single quotes"),
+                "{text:?}: {e}"
+            );
+        }
+        assert_eq!(
+            parse("a='$x' \nb=\"y\"\n", Mode::Strict).unwrap(),
+            [("a".into(), "$x".into()), ("b".into(), "y".into())]
+        );
     }
 }

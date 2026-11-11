@@ -32,6 +32,32 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
+impl Cli {
+    /// The command line as Go reads it: `-h` is help on every command except
+    /// `deploy`, where it is `--host`.
+    pub(crate) fn command_line() -> clap::Command {
+        fn short_help(c: clap::Command) -> clap::Command {
+            let c = if c.get_name() == "deploy" {
+                c
+            } else {
+                c.arg(
+                    clap::Arg::new("short_help")
+                        .short('h')
+                        .action(ArgAction::Help)
+                        .hide(true),
+                )
+            };
+            c.mut_subcommands(short_help)
+        }
+        short_help(<Self as clap::CommandFactory>::command())
+    }
+
+    pub(crate) fn parse_args(args: &[std::ffi::OsString]) -> Result<Self, clap::Error> {
+        let matches = Self::command_line().try_get_matches_from(args)?;
+        <Self as clap::FromArgMatches>::from_arg_matches(&matches)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     #[command(about = "Deploy a project: load it into a session and run its deploy.sql", after_help = exit_codes_help())]
@@ -231,6 +257,7 @@ mod tests {
     #[test]
     fn definition_is_valid() {
         Cli::command().debug_assert();
+        Cli::command_line().debug_assert();
     }
 
     #[test]

@@ -8,7 +8,7 @@ use super::Cli;
 use crate::error::{Error, Kind, Result};
 
 pub(crate) fn help<S: AsRef<str>>(command: &[S]) -> Result<()> {
-    let mut target = Cli::command();
+    let mut target = Cli::command_line();
     target.build();
     for name in command {
         let name = name.as_ref();
@@ -32,6 +32,18 @@ pub(crate) fn clap_error(e: &clap::Error, args: &[OsString]) -> u8 {
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
             let _ = write!(std::io::stdout(), "{}", e.render());
             0
+        }
+        ErrorKind::InvalidValue if matches!(e.get(ContextKind::InvalidArg), Some(ContextValue::String(a)) if a.starts_with("--sslmode")) =>
+        {
+            let value = match e.get(ContextKind::InvalidValue) {
+                Some(ContextValue::String(v)) => v.as_str(),
+                _ => "",
+            };
+            let _ = writeln!(
+                std::io::stderr(),
+                "pgmi: error: invalid --sslmode {value:?} (valid: disable, allow, prefer, require, verify-ca, verify-full)"
+            );
+            Kind::Config.exit_code()
         }
         _ => {
             let _ = writeln!(std::io::stderr(), "pgmi: error: {}", usage_text(e, args));
