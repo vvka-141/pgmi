@@ -22,7 +22,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
 use crate::conn::dial::{Dialer, Session};
-use crate::conn::resolve::{self, Spec};
+use crate::conn::overrides::{Override, overrides};
+use crate::conn::resolve::{self, Source, Spec};
 use crate::conn::tls;
 use crate::env::Env;
 use crate::error::redact;
@@ -117,6 +118,8 @@ pub(crate) struct Context {
 #[derive(Default)]
 pub(crate) struct Progress {
     contract: bool,
+    connection_source: Option<Source>,
+    overrides: Vec<Override>,
     spec: Option<Spec>,
     deployer: bool,
     loaded: Option<Loaded>,
@@ -133,6 +136,49 @@ impl Progress {
     fn failure(&self) -> Option<&Failure> {
         self.execution.as_ref()?.failure.as_ref()
     }
+
+    /// The line that ends a failure to connect, or to resolve the
+    /// connection: where the connection came from, unless it was typed on
+    /// the command line.
+    fn connection_note(&self, e: &Error) -> Option<String> {
+        let source = self.connection_source.filter(|s| !s.typed())?;
+        (e.kind() == Kind::Connection || self.spec.is_none())
+            .then(|| format!("(connection {})", source.origin()))
+    }
+}
+
+/// The stderr lines that say where each connection setting came from: the
+/// source (unless typed), the keys the project `.env` set, every `pgmi.yaml`
+/// value another source replaced, and `PGOPTIONS`.
+fn provenance(
+    spec: &Spec,
+    dotenv_path: &str,
+    dotenv_keys: &[String],
+    overrides: &[Override],
+    pgoptions: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !spec.source.typed() {
+        let set_by = spec
+            .source
+            .variable()
+            .filter(|v| dotenv_keys.iter().any(|k| k == v))
+            .map(|_| format!(" (set by {dotenv_path})"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "connection: {}{set_by} ({})",
+            spec.source.origin(),
+            spec.describe()
+        ));
+    }
+    if !dotenv_keys.is_empty() {
+        lines.push(format!("{dotenv_path} applied: {}", dotenv_keys.join(", ")));
+    }
+    lines.extend(overrides.iter().map(ToString::to_string));
+    if pgoptions {
+        lines.push("session options: from PGOPTIONS".into());
+    }
+    lines
 }
 
 struct Loaded {
@@ -522,6 +568,27 @@ async fn deploy(
         y.timeout()?;
     }
     let cloud = crate::conn::cloud::select(&a.cloud, &a.cloud_request, yaml.as_ref())?;
+    let yaml_connection = yaml.as_ref().map(|y| &y.connection);
+    st.connection_source = Some(resolve::source(&a.connection, &ctx.env, yaml_connection)?);
+    st.overrides = overrides(&a.connection, &ctx.env, yaml_connection)?;
+    let mut spec = resolve::resolve(&a.connection, &ctx.env, yaml_connection)?;
+    if let Some((provider, req)) = &cloud {
+        crate::conn::cloud::check(*provider, req, &mut spec, &ctx.env)?;
+    }
+    if let Some(m) = &a.maintenance_db {
+        spec.maintenance_db = m.clone();
+    }
+    st.spec = Some(spec.clone());
+    secrets.set(&spec);
+    for line in provenance(
+        &spec,
+        &crate::config::dotenv_path(&a.project),
+        &ctx.dotenv_keys,
+        &st.overrides,
+        ctx.env.non_empty("PGOPTIONS")?.is_some(),
+    ) {
+        reporter.line(&line);
+    }
     let yaml_params = yaml
         .as_ref()
         .map(super::config::yaml::ProjectConfig::param_values)
@@ -547,19 +614,6 @@ async fn deploy(
             }
         })
         .await?;
-    let mut spec = resolve::resolve(
-        &a.connection,
-        &ctx.env,
-        yaml.as_ref().map(|y| &y.connection),
-    )?;
-    if let Some((provider, req)) = &cloud {
-        crate::conn::cloud::check(*provider, req, &mut spec, &ctx.env)?;
-    }
-    if let Some(m) = &a.maintenance_db {
-        spec.maintenance_db = m.clone();
-    }
-    st.spec = Some(spec.clone());
-    secrets.set(&spec);
     #[cfg(feature = "testhooks")]
     if ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
         test_panic();
@@ -580,14 +634,6 @@ async fn deploy(
     if ctx.verbose {
         for i in &project.ignored {
             reporter.line(&format!("ignored {} ({})", i.path, i.rule));
-        }
-    }
-    if !spec.source.typed() {
-        let label = spec.source.label();
-        if label == "defaults" {
-            reporter.line(&format!("connection: defaults ({})", spec.describe()));
-        } else {
-            reporter.line(&format!("connection: from {label} ({})", spec.describe()));
         }
     }
     if a.overwrite {
@@ -873,12 +919,20 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
     if let Some((ok, text)) = summary(st, result, elapsed) {
         reporter.summary(ok, &text);
     }
+    let note = result.as_ref().err().and_then(|e| st.connection_note(e));
     if let Err(e) = result {
-        let text = format!("pgmi: error: {}{}", e.text(), run.diagnostics(e));
+        let note = note
+            .as_deref()
+            .map(|n| format!("\n{n}"))
+            .unwrap_or_default();
+        let text = format!("pgmi: error: {}{note}{}", e.text(), run.diagnostics(e));
         reporter.line(&redact(&blame::redact_sql_passwords(&text), &secrets));
     }
     if ctx.request.json {
-        let record = run.record(ctx, result);
+        let mut record = run.record(ctx, result);
+        if let Some(n) = note.filter(|_| !st.deployer) {
+            record.note_error(&n);
+        }
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();
         let _ = writeln!(out, "{text}");
@@ -1037,6 +1091,7 @@ mod tests {
     fn loaded(db: &str) -> Progress {
         Progress {
             contract: true,
+            connection_source: Some(Source::ConnectionFlag),
             spec: Some(spec(db)),
             deployer: true,
             loaded: Some(Loaded {
@@ -1524,5 +1579,188 @@ mod tests {
         );
         assert_eq!(privilege_hint("42P04", Some(Needs::CreateDb)), None);
         assert_eq!(privilege_hint("42501", None), None);
+    }
+
+    fn yaml_connection(text: &str) -> crate::config::yaml::Connection {
+        ProjectConfig::parse(text).unwrap().connection
+    }
+
+    fn provenance_of(
+        flags: &resolve::Flags,
+        env: &[(&str, &str)],
+        yaml: &str,
+        dotenv_keys: &[&str],
+    ) -> Vec<String> {
+        let env = Env::from_pairs(env);
+        let yaml = yaml_connection(yaml);
+        let spec = resolve::resolve(flags, &env, Some(&yaml)).unwrap();
+        let notes = overrides(flags, &env, Some(&yaml)).unwrap();
+        let keys: Vec<String> = dotenv_keys.iter().map(ToString::to_string).collect();
+        provenance(
+            &spec,
+            "./app/.env",
+            &keys,
+            &notes,
+            env.non_empty("PGOPTIONS").unwrap().is_some(),
+        )
+    }
+
+    #[test]
+    fn the_source_lines_name_dotenv_overrides_and_pgoptions() {
+        let none = resolve::Flags::default();
+        assert_eq!(
+            provenance_of(
+                &none,
+                &[
+                    (
+                        "PGMI_CONNECTION_STRING",
+                        "postgresql://app:pw@127.0.0.1:1/dotenv_db"
+                    ),
+                    ("PGMI_PARAM_TOKEN", "t"),
+                    ("PGOPTIONS", "-c default_transaction_read_only=on"),
+                ],
+                "connection:\n  database: myapp\n",
+                &["PGMI_CONNECTION_STRING", "PGMI_PARAM_TOKEN"],
+            ),
+            [
+                "connection: from PGMI_CONNECTION_STRING (set by ./app/.env) (127.0.0.1:1/dotenv_db)",
+                "./app/.env applied: PGMI_CONNECTION_STRING, PGMI_PARAM_TOKEN",
+                "database: from PGMI_CONNECTION_STRING (dotenv_db), not pgmi.yaml (myapp)",
+                "session options: from PGOPTIONS",
+            ]
+        );
+        assert_eq!(
+            provenance_of(
+                &none,
+                &[("PGHOST", "127.0.0.1"), ("PGSSLMODE", "disable")],
+                "connection:\n  database: myapp\n  sslmode: verify-full\n",
+                &["PGSSLMODE"],
+            ),
+            [
+                "connection: from PGHOST (127.0.0.1:5432/myapp)",
+                "./app/.env applied: PGSSLMODE",
+                "sslmode: from PGSSLMODE (disable), not pgmi.yaml (verify-full)",
+            ]
+        );
+        assert_eq!(
+            provenance_of(
+                &none,
+                &[("DATABASE_URL", "postgresql://u@127.0.0.1/postgres")],
+                "connection:\n  sslmode: verify-full\n",
+                &[],
+            ),
+            [
+                "connection: from DATABASE_URL (127.0.0.1:5432/postgres)",
+                "sslmode: pgmi.yaml (verify-full) does not apply to the connection string from DATABASE_URL; set sslmode in the string",
+            ]
+        );
+        assert_eq!(
+            provenance_of(&none, &[], "connection:\n  database: myapp\n", &[]),
+            ["connection: defaults (localhost:5432/myapp)"]
+        );
+        let typed = resolve::Flags {
+            connection: Some("postgresql://u@127.0.0.1/postgres".into()),
+            ..resolve::Flags::default()
+        };
+        assert_eq!(
+            provenance_of(&typed, &[("PGOPTIONS", "-c a=b")], "", &[]),
+            ["session options: from PGOPTIONS"]
+        );
+    }
+
+    #[test]
+    fn a_connection_failure_names_where_an_untyped_connection_came_from() {
+        let resolved = Progress {
+            connection_source: Some(Source::PgmiConnectionString),
+            spec: Some(spec("app")),
+            ..Progress::default()
+        };
+        let refused = Error::connection("connect to \"app\"")
+            .with_source(std::io::Error::other("connection refused"));
+        assert_eq!(
+            resolved.connection_note(&refused).as_deref(),
+            Some("(connection from PGMI_CONNECTION_STRING)")
+        );
+        assert_eq!(
+            resolved.connection_note(&Error::config("invalid parameter format")),
+            None
+        );
+        let resolving = Progress {
+            connection_source: Some(Source::Defaults),
+            ..Progress::default()
+        };
+        assert_eq!(
+            resolving.connection_note(&Error::config("bad")).as_deref(),
+            Some("(connection defaults)")
+        );
+        let typed = Progress {
+            connection_source: Some(Source::ConnectionFlag),
+            ..Progress::default()
+        };
+        assert_eq!(typed.connection_note(&Error::connection("x")), None);
+        assert_eq!(
+            Progress::default().connection_note(&Error::config("project path does not exist")),
+            None
+        );
+
+        let mut run = Run::start();
+        run.st = Progress {
+            deployer: true,
+            ..resolved
+        };
+        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        assert_eq!(finish(&context(), &run, &Err(refused), &reporter), 11);
+        let text = out.text();
+        let lines: Vec<&str> = text.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            [
+                "pgmi: error: connect to \"app\": connection refused",
+                "(connection from PGMI_CONNECTION_STRING)"
+            ],
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_note_ends_the_record_error_too() {
+        let mut run = Run::start();
+        let mut record = run.record(&context(), &Err(Error::config("bad")));
+        record.note_error("(connection defaults)");
+        let r = serde_json::to_value(&record).unwrap();
+        assert_eq!(r["error"], "bad\n(connection defaults)");
+        run.st.deployer = true;
+        let mut ok = run.record(&context(), &Ok(()));
+        ok.note_error("(connection defaults)");
+        assert!(serde_json::to_value(&ok).unwrap().get("error").is_none());
+    }
+
+    #[test]
+    fn the_record_names_the_source_and_every_override() {
+        let env = Env::from_pairs(&[
+            ("DATABASE_URL", "postgresql://app@127.0.0.1:1"),
+            ("PGDATABASE", "fromenv"),
+        ]);
+        let yaml = yaml_connection("connection:\n  database: myapp\n");
+        let p = Progress {
+            connection_source: Some(Source::DatabaseUrl),
+            overrides: overrides(&resolve::Flags::default(), &env, Some(&yaml)).unwrap(),
+            ..Progress::default()
+        };
+        let mut run = Run::start();
+        run.st = p;
+        let text =
+            serde_json::to_string(&run.record(&context(), &Err(Error::connection("refused"))))
+                .unwrap();
+        assert!(
+            text.contains(r#""overrides":[{"field":"database","from":"PGDATABASE","value":"fromenv","notFrom":"pgmi.yaml","notValue":"myapp"}]"#),
+            "{text}"
+        );
+        let r: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(r["connectionSource"], "DATABASE_URL");
+        assert_eq!(
+            r["overrides"],
+            json!([{"field": "database", "from": "PGDATABASE", "value": "fromenv", "notFrom": "pgmi.yaml", "notValue": "myapp"}])
+        );
     }
 }

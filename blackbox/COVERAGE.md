@@ -87,6 +87,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGMI_PARAM_<NAME>` | ✓ `params/env-var-reaches-session`, `params/precedence`, `exit-codes/10-invalid-config` |
 | `PGMI_CONNECTION_STRING`, `DATABASE_URL` (and their order, and the `connection: from ...` line) | ✓ `env/connection-string-vars` |
 | `-h`/`-p`/`-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL` = 10 | ✓ `env/connection-string-vars-refuse-flags` |
+| a connect or resolve failure ends with `(connection from <source>)` / `(connection defaults)` unless typed | ✓ `errors/connection-source` |
 | `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGAPPNAME`, `PGCONNECT_TIMEOUT` | ✓ `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout` |
 | `PGPASSFILE`, `~/.pgpass` | ✓ `connection/pgpass*` |
 | `PGSERVICE` and `service=` refused | ✓ `env/pgservice-refused` |
@@ -106,6 +107,8 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `pgmi.yaml` connection, params, timeout; unknown key or a timeout too long = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/pgmi-yaml-timeout-too-long` |
 | precedence: flags > environment > `pgmi.yaml` > defaults, with the `connection: from ...` line | ✓ `config/precedence`, `config/pgmi-yaml`, `env/connection-string-vars` |
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
+| `.env` named on stderr: `(set by <path>)` on the connection line, `<path> applied: <keys>` (never values; `./` for a relative project path) | ✓ `config/dotenv-provenance` |
+| a `PG*` variable or connection string replacing a `pgmi.yaml` connection value (database, host, port, user, sslmode, certificates) named on stderr and in `--json` `overrides`; a string dropping `pgmi.yaml`'s sslmode; `session options: from PGOPTIONS` | ✓ `config/overrides` |
 | `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
 | project walk: symbolic links, NUL bytes, invalid UTF-8, `__name__` directories | ✓ `dialect/project-walk`, `commands/metadata-refusals` |
 | project walk: a named pipe is refused (10), never read, by `deploy` and `info` | ✓ `errors/special-file` |

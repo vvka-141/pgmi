@@ -54,6 +54,25 @@ impl Source {
     pub(crate) fn typed(self) -> bool {
         matches!(self, Source::ConnectionFlag | Source::Flags)
     }
+
+    /// The environment variable the source is, which a project `.env` may
+    /// have set.
+    pub(crate) fn variable(self) -> Option<&'static str> {
+        match self {
+            Source::PgmiConnectionString | Source::DatabaseUrl | Source::PgHost => {
+                Some(self.label())
+            }
+            Source::ConnectionFlag | Source::Flags | Source::Yaml | Source::Defaults => None,
+        }
+    }
+
+    /// `defaults`, or `from <source>`.
+    pub(crate) fn origin(self) -> String {
+        match self {
+            Source::Defaults => "defaults".into(),
+            other => format!("from {}", other.label()),
+        }
+    }
 }
 
 /// A value a connection setting does not accept.
@@ -377,20 +396,15 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
     .into_iter()
     .filter_map(|(set, name)| set.then_some(name))
     .collect();
-    let string = if let Some(c) = &flags.connection {
+    if flags.connection.is_some() {
         if let Some(first) = granular.first() {
             return Err(ResolveError::ConnectionWith(first));
         }
         if flags.sslmode.is_some() {
             return Err(ResolveError::ConnectionWithSslmode);
         }
-        Some((c.expose().to_string(), Source::ConnectionFlag))
-    } else if let Some(c) = env.non_empty("PGMI_CONNECTION_STRING")? {
-        Some((c.to_string(), Source::PgmiConnectionString))
-    } else {
-        env.non_empty("DATABASE_URL")?
-            .map(|c| (c.to_string(), Source::DatabaseUrl))
-    };
+    }
+    let string = connection_string(flags, env)?;
     if let (Some((_, source)), Some(flag)) = (&string, granular.first()) {
         return Err(ResolveError::FlagWithEnvString {
             flag,
@@ -409,15 +423,7 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
         string_db = f.remove("dbname").filter(|d| !d.is_empty());
         source = *src;
     } else {
-        source = if flags.host.is_some() {
-            Source::Flags
-        } else if env.non_empty("PGHOST")?.is_some() {
-            Source::PgHost
-        } else if yaml.is_some_and(|y| y.host.is_some()) {
-            Source::Yaml
-        } else {
-            Source::Defaults
-        };
+        source = host_source(flags, env, yaml)?;
         for (k, v) in [
             ("host", &flags.host),
             ("port", &flags.port),
@@ -445,6 +451,40 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
         string.is_none(),
     )
     .map_err(|e| e.redact(&secrets))
+}
+
+/// The connection string that wins, and where it came from: `--connection`,
+/// else `PGMI_CONNECTION_STRING`, else `DATABASE_URL`.
+pub(super) fn connection_string(flags: &Flags, env: &Env) -> Result<Option<(String, Source)>> {
+    if let Some(c) = &flags.connection {
+        return Ok(Some((c.expose().to_string(), Source::ConnectionFlag)));
+    }
+    if let Some(c) = env.non_empty("PGMI_CONNECTION_STRING")? {
+        return Ok(Some((c.to_string(), Source::PgmiConnectionString)));
+    }
+    Ok(env
+        .non_empty("DATABASE_URL")?
+        .map(|c| (c.to_string(), Source::DatabaseUrl)))
+}
+
+fn host_source(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Source> {
+    Ok(if flags.host.is_some() {
+        Source::Flags
+    } else if env.non_empty("PGHOST")?.is_some() {
+        Source::PgHost
+    } else if yaml.is_some_and(|y| y.host.is_some()) {
+        Source::Yaml
+    } else {
+        Source::Defaults
+    })
+}
+
+/// Where the connection comes from, known even when resolving it then fails.
+pub(crate) fn source(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Source> {
+    match connection_string(flags, env)? {
+        Some((_, source)) => Ok(source),
+        None => host_source(flags, env, yaml),
+    }
 }
 
 fn finish(

@@ -4,10 +4,38 @@ pub(crate) mod params;
 pub(crate) mod yaml;
 
 use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::vfs::Vfs;
+
+/// The project `.env` as the deploy names it: the project path joined and
+/// cleaned, with `./` before a relative path that does not climb out.
+pub(crate) fn dotenv_path(project: &Path) -> String {
+    let joined = project.join(".env");
+    let mut parts: Vec<Component<'_>> = Vec::new();
+    for c in joined.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match parts.last() {
+                Some(Component::Normal(_)) => {
+                    parts.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => parts.push(c),
+            },
+            _ => parts.push(c),
+        }
+    }
+    let path: PathBuf = parts.iter().collect();
+    let text = path.display().to_string();
+    if path.is_absolute() || text.starts_with("..") {
+        text
+    } else {
+        format!("./{text}")
+    }
+}
 
 pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(String, String)>> {
     let text = match project.read_to_string(".env") {
@@ -56,6 +84,22 @@ mod tests {
             project_dotenv(&fs, &env).unwrap(),
             [("A".into(), "x".into()), ("B".into(), "2".into())]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dotenv_path_reads_as_go_names_it() {
+        for (project, want) in [
+            (".", "./.env"),
+            ("app", "./app/.env"),
+            ("./app/", "./app/.env"),
+            ("a/../b", "./b/.env"),
+            ("..", "../.env"),
+            ("../app", "../app/.env"),
+            ("/srv/app/./x/..", "/srv/app/.env"),
+        ] {
+            assert_eq!(dotenv_path(Path::new(project)), want, "{project}");
+        }
     }
 
     #[test]

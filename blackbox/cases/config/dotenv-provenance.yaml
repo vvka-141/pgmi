@@ -1,0 +1,32 @@
+description: a connection source the project .env set is tagged (set by <path>), and one line names the .env and the keys it set, never their values; the path is ./-relative when the project path is relative
+project:
+  files:
+    .env: |
+      PGMI_CONNECTION_STRING={conn}
+      PGMI_PARAM_TOKEN=dotenv-Secret-77
+      PGMI_PARAM_SHELL=dotenv
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}", --json]
+    env: {PGMI_PARAM_SHELL: shell}
+    expect:
+      exit: 0
+      stderr:
+        - '^connection: from PGMI_CONNECTION_STRING \(set by {project}/\.env\) \({host}:{port}/{db}\)$'
+        - '^{project}/\.env applied: PGMI_CONNECTION_STRING, PGMI_PARAM_TOKEN$'
+      stderr_not: [dotenv-Secret-77, PGMI_PARAM_SHELL]
+      stdout_not: [dotenv-Secret-77]
+      json: {connectionSource: PGMI_CONNECTION_STRING, dotenvKeys: [PGMI_CONNECTION_STRING, PGMI_PARAM_TOKEN]}
+  - pgmi: [deploy, project, -d, "{db}"]
+    cwd: "{workdir}"
+    expect:
+      exit: 0
+      stderr:
+        - '^connection: from PGMI_CONNECTION_STRING \(set by \./project/\.env\) \({host}:{port}/{db}\)$'
+        - '^\./project/\.env applied: PGMI_CONNECTION_STRING, PGMI_PARAM_SHELL, PGMI_PARAM_TOKEN$'
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGMI_CONNECTION_STRING: "{conn}", PGMI_PARAM_TOKEN: shell, PGMI_PARAM_SHELL: shell}
+    expect:
+      exit: 0
+      stderr: ['^connection: from PGMI_CONNECTION_STRING \({host}:{port}/{db}\)$']
+      stderr_not: [set by, applied]

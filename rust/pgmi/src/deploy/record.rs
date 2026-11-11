@@ -6,6 +6,8 @@ use serde_json::Value;
 use super::blame::redact_sql_passwords;
 use super::{Failure, Progress, Provision};
 use crate::VERSION;
+use crate::conn::overrides::Override;
+use crate::conn::resolve::Source;
 use crate::error::{Result, redact};
 use crate::output::timestamp;
 use crate::project::walk::Ignored;
@@ -51,7 +53,7 @@ pub(crate) struct DeployRecord {
     notices: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notices_truncated: Option<u64>,
-    overrides: [(); 0],
+    overrides: Vec<Override>,
     pub(crate) paths_ignored: Option<usize>,
     pgmi_version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -116,7 +118,7 @@ impl DeployRecord {
         };
         let mut record = DeployRecord {
             column: None,
-            connection_source: p.spec.as_ref().map(|s| s.source.label()),
+            connection_source: p.connection_source.map(Source::label),
             contract_version: p.contract.then_some("1"),
             created: loaded.map(|_| p.provision == Provision::Created),
             database: p.database().map(str::to_string),
@@ -137,7 +139,7 @@ impl DeployRecord {
             message: None,
             notices,
             notices_truncated,
-            overrides: [],
+            overrides: p.overrides.clone(),
             paths_ignored: loaded.map(|l| l.ignored.len()),
             pgmi_version: VERSION,
             phase: None,
@@ -167,6 +169,14 @@ impl DeployRecord {
             record.fail(e, execution.and_then(|x| x.failure.as_ref()), facts.secrets);
         }
         record
+    }
+
+    /// Adds a line to the end of `error`.
+    pub(crate) fn note_error(&mut self, note: &str) {
+        if let Some(e) = &mut self.error {
+            e.push('\n');
+            e.push_str(note);
+        }
     }
 
     fn fail(&mut self, e: &crate::error::Error, failure: Option<&Failure>, secrets: &[String]) {

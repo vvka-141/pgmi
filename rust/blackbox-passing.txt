@@ -43,6 +43,8 @@ commands/usage-errors
 commands/verbose
 commands/version
 config/dotenv
+config/dotenv-provenance
+config/overrides
 config/pgmi-yaml
 config/pgmi-yaml-invalid
 config/pgmi-yaml-timeout-too-long
@@ -91,6 +93,7 @@ env/pgservice-refused
 env/pg-variables
 errors/attribution
 errors/connection-failures
+errors/connection-source
 errors/connection-string-secrets
 errors/diagnostics-secrets
 errors/head-syntax

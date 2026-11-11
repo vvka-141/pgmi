@@ -1,0 +1,65 @@
+description: a PG* variable or a connection string that replaces a pgmi.yaml connection value is named on stderr and in --json overrides; a string drops pgmi.yaml's sslmode and says so; PGOPTIONS is named, never its value
+project:
+  files:
+    pgmi.yaml: |
+      connection:
+        host: nowhere.invalid
+        port: 1
+        username: nobody
+        database: wrong_db_from_yaml
+        sslmode: verify-full
+    deploy.sql: CREATE TABLE IF NOT EXISTS marker (db text); INSERT INTO marker VALUES (current_database());
+steps:
+  - pgmi: [deploy, "{project}", --json]
+    env:
+      PGHOST: "{host}"
+      PGPORT: "{port}"
+      PGUSER: "{user}"
+      PGPASSWORD: "{password}"
+      PGDATABASE: "{db}"
+      PGSSLMODE: disable
+      PGOPTIONS: "-c work_mem=7MB"
+    expect:
+      exit: 0
+      stderr:
+        - '^connection: from PGHOST \({host}:{port}/{db}\)$'
+        - '^database: from PGDATABASE \({db}\), not pgmi.yaml \(wrong_db_from_yaml\)$'
+        - '^host: from PGHOST \({host}\), not pgmi.yaml \(nowhere.invalid\)$'
+        - '^port: from PGPORT \({port}\), not pgmi.yaml \(1\)$'
+        - '^user: from PGUSER \({user}\), not pgmi.yaml \(nobody\)$'
+        - '^sslmode: from PGSSLMODE \(disable\), not pgmi.yaml \(verify-full\)$'
+        - '^session options: from PGOPTIONS$'
+      stderr_not: [work_mem, applied]
+      json:
+        connectionSource: PGHOST
+        overrides:
+          - {field: database, from: PGDATABASE, value: "{db}", notFrom: pgmi.yaml, notValue: wrong_db_from_yaml}
+          - {field: host, from: PGHOST, value: "{host}", notFrom: pgmi.yaml, notValue: nowhere.invalid}
+          - {field: port, from: PGPORT, value: "{port}", notFrom: pgmi.yaml, notValue: "1"}
+          - {field: user, from: PGUSER, value: "{user}", notFrom: pgmi.yaml, notValue: nobody}
+          - {field: sslmode, from: PGSSLMODE, value: disable, notFrom: pgmi.yaml, notValue: verify-full}
+      sql:
+        - query: SELECT db FROM marker
+          rows: [["{db}"]]
+  - pgmi: [deploy, "{project}", -d, "{db}", --json]
+    env: {DATABASE_URL: "{conn}"}
+    expect:
+      exit: 0
+      stderr:
+        - '^connection: from DATABASE_URL \({host}:{port}/{db}\)$'
+        - '^sslmode: pgmi.yaml \(verify-full\) does not apply to the connection string from DATABASE_URL; set sslmode in the string$'
+      stderr_not: ['^database: ', '^session options']
+      json:
+        connectionSource: DATABASE_URL
+        overrides:
+          - {field: sslmode, from: DATABASE_URL, value: "", notFrom: pgmi.yaml, notValue: verify-full}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      stderr:
+        - '^sslmode: pgmi.yaml \(verify-full\) does not apply to the connection string from --connection; set sslmode in the string$'
+      stderr_not: ['^connection: ', '^database: ']
+      json:
+        connectionSource: "--connection"
+        overrides:
+          - {field: sslmode, from: "--connection", value: "", notFrom: pgmi.yaml, notValue: verify-full}

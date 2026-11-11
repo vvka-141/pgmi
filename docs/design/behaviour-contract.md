@@ -278,10 +278,21 @@ maintenance database. Refused with exit 10: `--connection` with `-h`, `-p` or
 `-U`; `-h`, `-p` or `-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL`;
 `--connection` with `--sslmode`; `PGSERVICE` or `service=`; an unknown key in
 `pgmi.yaml`. Unless typed on the command line, stderr says where the connection
-came from (`connection: from <source>`). Full reference: `docs/CLI.md`
-"Precedence", `docs/CONFIGURATION.md`.
+came from (`connection: from <source>`, or `connection: defaults`), with
+`(set by <path>)` after the name when the project `.env` set that variable.
+Then, on stderr whatever the source: `<path> applied: <keys>` (the keys `.env`
+set, never their values; `<path>` starts `./` when the project path is
+relative), one line per `pgmi.yaml` connection value another source replaced
+(`<field>: from <source> (<value>), not pgmi.yaml (<value>)`, also in `--json`
+`overrides`) or that a connection string drops (`sslmode: pgmi.yaml (...) does
+not apply to the connection string from <source>; set sslmode in the string`),
+and `session options: from PGOPTIONS` (never the value). A failure to connect,
+or to resolve the connection, ends with `(connection from <source>)` or
+`(connection defaults)` unless the connection was typed; the `--json` `error`
+carries that line only when resolving failed. Full reference: `docs/CLI.md`
+"Precedence", `docs/CONFIGURATION.md`, `docs/CICD.md` "What the log shows".
 
-Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`.
+Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`, `config/overrides`, `config/dotenv-provenance`, `errors/connection-source`.
 
 ### Connection resolution
 

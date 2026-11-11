@@ -1,0 +1,35 @@
+description: a failure to connect, or to resolve the connection, ends with where an untyped connection came from, (connection from <source>) or (connection defaults), on stderr (and in the --json error when resolving failed); not for other errors, nor for a connection typed with --connection
+project:
+  files:
+    pgmi.yaml: |
+      connection:
+        database: app
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}", --json]
+    env: {PGMI_CONNECTION_STRING: "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=2"}
+    expect:
+      exit: 11
+      stderr: ['^\(connection from PGMI_CONNECTION_STRING\)$']
+      json: {exitCode: 11, connectionSource: PGMI_CONNECTION_STRING}
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGPORT: "1", PGCONNECT_TIMEOUT: "2"}
+    expect:
+      exit: 11
+      stderr: ['^\(connection defaults\)$']
+  - pgmi: [deploy, "{project}", -d, "{db}", --json]
+    env: {DATABASE_URL: "postgresql://[bad"}
+    expect:
+      exit: 10
+      stderr: ['^\(connection from DATABASE_URL\)$']
+      stdout: ['"error": ".*\\n\(connection from DATABASE_URL\)"']
+      json: {connectionSource: DATABASE_URL}
+  - pgmi: [deploy, "{project}", -d, "{db}", --param, noequals]
+    env: {PGMI_CONNECTION_STRING: "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=2"}
+    expect:
+      exit: 10
+      stderr_not: ['\(connection ']
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@127.0.0.1:1/postgres?connect_timeout=2", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr_not: ['\(connection ']

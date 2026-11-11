@@ -255,8 +255,9 @@ land before or between steps, each with a black-box case.
    `password`, `sslpassword`, the Azure token, the wizard's password and
    `--connection` in `Flags`/`DeployArgs`. `Spec::hosts` is `Hosts`, a
    first host plus the rest, with no `localhost:5432` fallback.
-   `conn/resolve_tests.rs` ports resolver group 5 (without `EnvOverrides`:
-   Rust has no override notes) and `FormattingNeverPrintsSecrets`;
+   `conn/resolve_tests.rs` ports resolver group 5 and
+   `FormattingNeverPrintsSecrets`; `EnvOverrides` is `conn::overrides`
+   with its own tests (PGMI-875);
    `conn::parse` tests port group 6. PGMI-866 then ported the cases that
    had found Rust worse than Go: ADO.NET quoted values (`Password='p;a=ss'`,
    `"a""b;c"`), `Host=h:6000;Port=5999` keeping the host's port, a
