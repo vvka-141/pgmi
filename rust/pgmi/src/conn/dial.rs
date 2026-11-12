@@ -194,6 +194,14 @@ enum Origin {
 }
 
 impl Origin {
+    fn closed_early(&self) -> bool {
+        match self {
+            Origin::Io(e) => e.kind() == std::io::ErrorKind::UnexpectedEof,
+            Origin::Driver(e) => e.is_closed(),
+            Origin::Token(_) => false,
+        }
+    }
+
     fn error(&self) -> &(dyn std::error::Error + 'static) {
         match self {
             Origin::Io(e) => e,
@@ -285,6 +293,20 @@ impl Failed {
             Failed::At { failure, .. } => failure.code(),
             Failed::Lookup(_) => None,
         }
+    }
+
+    fn answer(&self) -> Option<&str> {
+        match self {
+            Failed::At {
+                failure: DialFailure::Server(a),
+                ..
+            } => Some(&a.code),
+            _ => None,
+        }
+    }
+
+    fn closed_early(&self) -> bool {
+        matches!(self, Failed::At { failure: DialFailure::Broken { origin, .. }, .. } if origin.closed_early())
     }
 
     fn connection_refused(&self) -> bool {
@@ -847,6 +869,7 @@ impl Dialer {
         let first = spec.first();
         Err(Unconnected {
             db: db.to_string(),
+            maintenance: db == spec.maintenance_db && db != spec.target_db,
             failed,
             first: (first.name.clone(), first.port),
         })
@@ -969,6 +992,7 @@ fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
 #[derive(Debug)]
 pub(crate) struct Unconnected {
     db: String,
+    maintenance: bool,
     failed: Vec<Failed>,
     first: (String, u16),
 }
@@ -976,6 +1000,12 @@ pub(crate) struct Unconnected {
 impl Unconnected {
     fn transient(&self) -> bool {
         !self.failed.is_empty() && self.failed.iter().all(Failed::transient)
+    }
+
+    fn answer(&self) -> Option<&str> {
+        let mut codes = self.failed.iter().filter_map(Failed::answer);
+        let first = codes.next();
+        first.filter(|c| codes.all(|o| o == *c))
     }
 
     fn sqlstate(&self) -> Option<&str> {
@@ -987,6 +1017,13 @@ impl Unconnected {
 
 impl std::fmt::Display for Unconnected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.maintenance && self.answer() == Some("3D000") {
+            return write!(
+                f,
+                "maintenance database \"{}\" does not exist\npgmi connects to it to create or drop the target; point it at an existing database such as postgres: the database in the connection string, or connection.maintenance_database in pgmi.yaml",
+                self.db
+            );
+        }
         let joined = self
             .failed
             .iter()
@@ -1001,7 +1038,20 @@ impl std::fmt::Display for Unconnected {
                 "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
             )?;
         }
-        if ["x509", "TLS", "certificate"]
+        match self.answer() {
+            Some("53300") => {
+                f.write_str("\nthe server is at max_connections; close idle backends or wait")?;
+            }
+            Some("57P03") => f.write_str("\nit is starting up or recovering; retry shortly")?,
+            _ => {}
+        }
+        if self.failed.iter().any(Failed::closed_early) {
+            let (h, p) = &self.first;
+            write!(
+                f,
+                "\nthe server closed the connection; it may still be starting up; check: pg_isready -h {h} -p {p}"
+            )?;
+        } else if ["x509", "TLS", "certificate"]
             .iter()
             .any(|w| joined.contains(w))
         {
@@ -1194,6 +1244,62 @@ mod tests {
         )
     }
 
+    fn unconnected(maintenance: bool, failed: Vec<Failed>) -> String {
+        Unconnected {
+            db: "m".into(),
+            maintenance,
+            failed,
+            first: ("h".into(), 5432),
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn a_missing_maintenance_database_says_what_it_is_and_where_to_set_it() {
+        let text = unconnected(true, vec![server("3D000")]);
+        assert!(
+            text.starts_with("maintenance database \"m\" does not exist\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("connection.maintenance_database in pgmi.yaml"),
+            "{text}"
+        );
+        let target = unconnected(false, vec![server("3D000")]);
+        assert_eq!(target, "connect to \"m\": h:5432: refused (SQLSTATE 3D000)");
+    }
+
+    #[test]
+    fn a_full_or_starting_server_and_an_early_close_get_a_next_step() {
+        let full = unconnected(false, vec![server("53300")]);
+        assert!(
+            full.ends_with("\nthe server is at max_connections; close idle backends or wait"),
+            "{full}"
+        );
+        assert!(
+            unconnected(false, vec![server("57P03")])
+                .ends_with("\nit is starting up or recovering; retry shortly")
+        );
+        let eof = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "TLS handshake: early eof",
+        );
+        let closed = unconnected(
+            false,
+            vec![at(
+                "h",
+                5432,
+                DialFailure::Broken {
+                    text: eof.to_string(),
+                    class: Class::Transient,
+                    origin: Origin::Io(eof),
+                },
+            )],
+        );
+        assert!(closed.ends_with("\nthe server closed the connection; it may still be starting up; check: pg_isready -h h -p 5432"), "{closed}");
+        assert!(!closed.contains("--sslmode"), "{closed}");
+    }
+
     fn fatal(text: &str) -> DialFailure {
         DialFailure::Broken {
             text: text.into(),
@@ -1214,6 +1320,7 @@ mod tests {
     fn connect_error(db: &str, failed: Vec<Failed>, first: (&str, u16)) -> Error {
         Unconnected {
             db: db.into(),
+            maintenance: false,
             failed,
             first: (first.0.into(), first.1),
         }

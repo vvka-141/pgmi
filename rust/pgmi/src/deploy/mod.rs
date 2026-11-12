@@ -86,7 +86,7 @@ pub(crate) fn sql_error_needing(
     match e.as_db_error() {
         Some(db) => {
             let code = db.code().code().to_string();
-            let mut message = format!("ERROR: {} (SQLSTATE {code})", db.message());
+            let mut message = format!("{}: {} (SQLSTATE {code})", db.severity(), db.message());
             if let Some(hint) = privilege_hint(&code, needs) {
                 message.push('\n');
                 message.push_str(hint);
