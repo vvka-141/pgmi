@@ -40,9 +40,19 @@ async fn generate(
         )
         .await
         .map_err(|e| sql_error("expand CALL pgmi_test()", e))?;
-    rows.first()
-        .and_then(|r| r.try_get::<_, Option<String>>(0).ok().flatten())
-        .ok_or_else(|| Error::sql("pgmi_test_generate() returned nothing"))
+    generated(rows.first().map(|r| r.try_get::<_, Option<String>>(0)))
+}
+
+/// The SQL `pgmi_test_generate()` returned; a value that does not decode is
+/// that failure, not "nothing".
+fn generated<E: std::error::Error + Send + Sync + 'static>(
+    value: Option<std::result::Result<Option<String>, E>>,
+) -> Result<String> {
+    match value {
+        Some(Ok(Some(sql))) => Ok(sql),
+        Some(Err(e)) => Err(Error::sql("read the output of pgmi_test_generate()").with_source(e)),
+        Some(Ok(None)) | None => Err(Error::sql("pgmi_test_generate() returned nothing")),
+    }
 }
 
 pub(crate) async fn run(r: Input<'_>) -> Result<()> {
@@ -182,6 +192,26 @@ fn unused_tests_notice(project: &Project, macros: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_test_plan_that_does_not_decode_is_not_reported_as_empty() {
+        let e =
+            super::generated::<std::io::Error>(Some(Err(std::io::Error::other("invalid UTF-8"))))
+                .unwrap_err();
+        assert_eq!(
+            e.text(),
+            "read the output of pgmi_test_generate(): invalid UTF-8"
+        );
+        assert_eq!(e.exit_code(), 13);
+        for nothing in [None, Some(Ok(None))] {
+            let e = super::generated::<std::io::Error>(nothing).unwrap_err();
+            assert_eq!(e.text(), "pgmi_test_generate() returned nothing");
+        }
+        assert_eq!(
+            super::generated::<std::io::Error>(Some(Ok(Some("SELECT 1".into())))).unwrap(),
+            "SELECT 1"
+        );
+    }
+
     use super::*;
 
     fn project(deploy_sql: &str, tests: &[&str]) -> Project {

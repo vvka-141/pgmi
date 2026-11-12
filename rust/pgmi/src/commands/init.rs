@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::cli::InitArgs;
-use crate::commands::config::stopped;
+use crate::commands::config::interrupted;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::templates::Template;
@@ -77,7 +77,7 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
                     template
                 }
                 Done::Cancelled => return Err(tui::init::cancelled()),
-                Done::Interrupted => return Err(stopped("init", true)),
+                Done::Interrupted => return Err(interrupted("init")),
             }
         }
         None => Template::Minimal,

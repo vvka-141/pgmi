@@ -25,14 +25,14 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -
             Ok(cfg) => {
                 stderr("pgmi.yaml exists.\n");
                 if !crate::tui::confirm("Overwrite connection settings?") {
-                    return Err(stopped("config", false));
+                    return Err(cancelled("config"));
                 }
                 initial = Some(cfg.connection);
             }
             Err(e) => {
                 stderr(&format!("{}\n", unparseable(&e)));
                 if !crate::tui::confirm("Overwrite the unparseable pgmi.yaml?") {
-                    return Err(stopped("config", false));
+                    return Err(cancelled("config"));
                 }
                 replace = true;
             }
@@ -40,8 +40,8 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -
     }
     let settings = match connection::run(initial, env, runtime)? {
         Done::Finished(s) => s,
-        Done::Cancelled => return Err(stopped("config", false)),
-        Done::Interrupted => return Err(stopped("config", true)),
+        Done::Cancelled => return Err(cancelled("config")),
+        Done::Interrupted => return Err(interrupted("config")),
     };
     save(&target, &settings, replace)?;
     stderr(&format!("Wrote {}\n", path.display()));
@@ -49,12 +49,14 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -
     Ok(())
 }
 
-pub(crate) fn stopped(what: &str, interrupted: bool) -> Error {
-    if interrupted {
-        Error::new(Kind::Interrupted, format!("{what} interrupted"))
-    } else {
-        Error::new(Kind::Denied, format!("{what} cancelled"))
-    }
+/// A wizard the user left with Esc or "no": exit 12, as Go.
+pub(crate) fn cancelled(what: &str) -> Error {
+    Error::new(Kind::Denied, format!("{what} cancelled"))
+}
+
+/// A wizard left with Ctrl-C: exit 130.
+pub(crate) fn interrupted(what: &str) -> Error {
+    Error::new(Kind::Interrupted, format!("{what} interrupted"))
 }
 
 fn unparseable(e: &Error) -> String {
@@ -66,17 +68,22 @@ fn unparseable(e: &Error) -> String {
 }
 
 /// Writes the connection settings into `target/pgmi.yaml`, keeping the rest
-/// of an existing file. An existing file that does not parse is replaced
-/// only when `replace` says the user agreed to it; otherwise it is refused.
+/// of an existing file. An existing file that cannot be read or does not
+/// parse is replaced only when `replace` says the user agreed to it;
+/// otherwise it is refused and left as it is.
 pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
     let path = target.join("pgmi.yaml");
     let values = s.yaml();
     let text = match std::fs::read_to_string(&path) {
-        Ok(existing) if !replace => {
+        _ if replace => edit::fresh(&values),
+        Ok(existing) => {
             ProjectConfig::parse(&existing).map_err(|e| Error::config(unparseable(&e)))?;
             edit::set_connection(&existing, &values)?
         }
-        _ => edit::fresh(&values),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => edit::fresh(&values),
+        Err(e) => {
+            return Err(Error::config("pgmi.yaml exists but could not be read").with_source(e));
+        }
     };
     edit::write_atomic(&path, &text)
         .map_err(|e| Error::general(format!("failed to save config: {}", e.text())))
@@ -161,6 +168,33 @@ mod tests {
         save(dir.path(), &settings("appdb", "postgres"), true).unwrap();
         let cfg = ProjectConfig::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(cfg.connection.database.as_deref(), Some("appdb"));
+    }
+
+    #[test]
+    fn save_keeps_a_pgmi_yaml_it_cannot_read() {
+        let dir = TempDir::new("config-unreadable");
+        let path = dir.join("pgmi.yaml");
+        let utf16: &[u8] = b"\xff\xfec\x00o\x00n\x00:\x00\n\x00";
+        for bytes in [utf16, b"connection:\n  host: \xe9\n".as_slice()] {
+            std::fs::write(&path, bytes).unwrap();
+            let e = save(dir.path(), &settings("appdb", "postgres"), false).unwrap_err();
+            assert_eq!(e.kind(), Kind::Config);
+            assert!(
+                e.text()
+                    .starts_with("pgmi.yaml exists but could not be read: "),
+                "{}",
+                e.text()
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn a_wizard_left_is_exit_12_and_an_interrupted_one_130() {
+        assert_eq!(cancelled("config").exit_code(), 12);
+        assert_eq!(cancelled("config").text(), "config cancelled");
+        assert_eq!(interrupted("init").exit_code(), 130);
+        assert_eq!(interrupted("init").text(), "init interrupted");
     }
 
     #[test]
