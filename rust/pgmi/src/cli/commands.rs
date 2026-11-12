@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::builder::{PossibleValue, StringValueParser, TypedValueParser};
 use clap::{Args, Subcommand};
 
-use super::go_bool;
+use super::{go_bool, help_text};
 
 /// Any text, so `templates describe` keeps its own refusal of an unknown
 /// name; the template names are offered to shell completion.
@@ -47,9 +47,13 @@ pub(crate) struct TemplatesArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TemplatesCommand {
-    #[command(about = "List available templates")]
+    #[command(about = "List available templates", long_about = help_text::TEMPLATES_LIST)]
     List,
-    #[command(about = "Show the structure and features of a template")]
+    #[command(
+        about = "Show the structure and features of a template",
+        long_about = help_text::TEMPLATES_DESCRIBE,
+        after_help = help_text::TEMPLATES_DESCRIBE_EXAMPLES
+    )]
     Describe {
         #[arg(value_parser = TemplateName, hide_possible_values = true)]
         name: String,
@@ -64,7 +68,7 @@ pub(crate) struct AiArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AiCommand {
-    #[command(about = "Print the machine-readable session-API contract")]
+    #[command(about = "Print the machine-readable session-API contract", long_about = help_text::AI_CONTRACT)]
     Contract,
 }
 
@@ -76,11 +80,11 @@ pub(crate) struct MetadataArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum MetadataCommand {
-    #[command(about = "Show the execution plan pgmi_plan_view will hold")]
+    #[command(about = "Show the rows pgmi_plan_view will hold, in order", long_about = help_text::METADATA_PLAN)]
     Plan(MetadataReport),
-    #[command(about = "Check every <pgmi-meta> block and refuse bad or duplicate ids")]
+    #[command(about = "Check <pgmi-meta> XML validity and uniqueness", long_about = help_text::METADATA_VALIDATE)]
     Validate(MetadataReport),
-    #[command(about = "Add <pgmi-meta> blocks to SQL files that have none")]
+    #[command(about = "Add <pgmi-meta> blocks to files that lack one", long_about = help_text::METADATA_SCAFFOLD)]
     Scaffold(ScaffoldArgs),
 }
 

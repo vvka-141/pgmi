@@ -1,4 +1,5 @@
 pub(crate) mod commands;
+mod help_text;
 pub(crate) mod usage;
 
 use std::path::PathBuf;
@@ -15,7 +16,8 @@ pub(crate) use commands::*;
 #[derive(Debug, Parser)]
 #[command(
     name = "pgmi",
-    about = "PostgreSQL-native execution fabric",
+    about = "PostgreSQL-native deployment driver",
+    long_about = help_text::ROOT,
     disable_help_flag = true,
     disable_version_flag = true,
     disable_help_subcommand = true,
@@ -44,7 +46,7 @@ impl Cli {
                 c.arg(
                     clap::Arg::new("short_help")
                         .short('h')
-                        .action(ArgAction::Help)
+                        .action(ArgAction::HelpLong)
                         .hide(true),
                 )
             };
@@ -71,9 +73,10 @@ impl Cli {
         let matches = match cmd.try_get_matches_from_mut(args) {
             Ok(m) => m,
             Err(e) if checked_after_values(e.kind()) => {
-                let help = cmd
-                    .clone()
-                    .ignore_errors(true)
+                fn lenient(c: clap::Command) -> clap::Command {
+                    c.ignore_errors(true).mut_subcommands(lenient)
+                }
+                let help = lenient(cmd.clone())
                     .try_get_matches_from(args)
                     .ok()
                     .and_then(|m| asked_help(&cmd, &m));
@@ -120,60 +123,29 @@ fn asked_help(cmd: &clap::Command, m: &clap::ArgMatches) -> Option<String> {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Deploy a project: load it into a session and run its deploy.sql", long_about = DEPLOY_HELP)]
+    #[command(about = "Run deploy.sql against a target database", long_about = help_text::DEPLOY)]
     Deploy(Box<DeployArgs>),
-    #[command(about = "Write a project from a template")]
+    #[command(about = "Scaffold a new pgmi project", long_about = help_text::INIT)]
     Init(InitArgs),
-    #[command(about = "Print the version")]
+    #[command(about = "Print version, commit, build date", long_about = help_text::VERSION)]
     Version,
-    #[command(about = "Show help for a command")]
+    #[command(about = "Help about any command", long_about = help_text::HELP)]
     Help { command: Vec<String> },
-    #[command(about = "Show project structure summary (no database required)")]
+    #[command(about = "Show project structure summary (no database required)", long_about = help_text::INFO)]
     Info(InfoArgs),
-    #[command(about = "Inspect and scaffold <pgmi-meta> blocks (no DB connection)")]
+    #[command(about = "Inspect and scaffold <pgmi-meta> blocks (no DB connection)", long_about = help_text::METADATA)]
     Metadata(MetadataArgs),
-    #[command(about = "List or describe project templates")]
+    #[command(about = "List or describe project templates", long_about = help_text::TEMPLATES)]
     Templates(TemplatesArgs),
-    #[command(about = "Print pgmi documentation for AI assistants (llms.txt-style)")]
+    #[command(about = "Print pgmi documentation for AI assistants (llms.txt-style)", long_about = help_text::AI)]
     Ai(AiArgs),
-    #[command(about = "Expose pgmi's commands as MCP tools over stdio", long_about = SERVE_HELP)]
+    #[command(about = "Run pgmi as an MCP (Model Context Protocol) server over stdio", long_about = help_text::SERVE)]
     Serve,
-    #[command(about = "Run the connection wizard and save to pgmi.yaml", long_about = CONFIG_HELP)]
+    #[command(about = "Run the connection wizard and save to pgmi.yaml", long_about = help_text::CONFIG)]
     Config(ConfigArgs),
-    #[command(about = "Print a shell completion script to stdout")]
+    #[command(about = "Print a shell completion script to stdout", long_about = help_text::COMPLETION)]
     Completion(CompletionArgs),
 }
-
-const DEPLOY_HELP: &str = "Run deploy.sql against a target database.
-
-pgmi connects, loads project files into pg_temp tables, loads CLI parameters,
-then executes deploy.sql. Transactions, ordering, and idempotency are decided
-by deploy.sql, not by pgmi.
-
-  pgmi deploy . -d mydb
-  pgmi deploy . -d mydb --overwrite --force
-  pgmi deploy . -d mydb --params-file prod.params
-  pgmi deploy . -d mydb --param env=prod --param version=1.2.3
-  ./fetch-secrets | pgmi deploy . -d mydb --params-file -
-
-Password is never read from a flag. Use $PGPASSWORD, .pgpass, or a connection
-string. Cloud auth: --azure, --aws, --google, --databricks (no password needed).
-
-A project .env is loaded into the environment first (variables already set
-win); pgmi serve does not read it.
-
-Parameter precedence: --param > --params-file (later wins) > PGMI_PARAM_*
-environment variables > pgmi.yaml. PGMI_PARAM_DB_PASSWORD=x becomes
-current_setting('pgmi.db_password'); other environment variables are not read.
-Secrets go in the environment or a params file, never in --param.
-
-Exit codes:
-  0   success
-  10  invalid configuration       13  SQL execution failed
-  11  connection failed           14  deploy.sql not found
-  12  user denied overwrite       15  concurrent deploy in progress
-  16  timeout exceeded            130 interrupted (SIGINT, SIGTERM)
-A --timeout that runs out while connecting is 11: the server was not reached.";
 
 const CONNECTION_HELP: &str =
     "PostgreSQL connection string: URI, libpq keyword/value (host=... dbname=...), or ADO.NET.
@@ -193,34 +165,6 @@ Examples:
   -d myapp                          # Deploy to 'myapp' database
   --connection postgresql://user@host/myapp  # Database from connection string
   --connection postgresql://user@host/postgres -d myapp  # Override";
-
-const CONFIG_HELP: &str = "Launch the connection wizard and write the result to pgmi.yaml.
-
-  pgmi config              In the current directory
-  pgmi config ./project    In ./project
-
-The wizard handles local, Azure Entra ID, AWS IAM, and Google Cloud SQL
-auth. Requires an interactive terminal — for CI, write pgmi.yaml by hand.";
-
-const SERVE_HELP: &str = "Expose pgmi's commands as MCP tools over stdio (JSON-RPC 2.0).
-
-Tools: deploy, init, metadata_plan, metadata_validate, templates_list,
-ai_overview, ai_contract. deploy resolves its connection, database, timeout and
-parameters like pgmi deploy: tool arguments, then the server's environment, then
-the project's pgmi.yaml. The project .env is not read.
-
-The server reads JSON-RPC from stdin and writes responses to stdout; all
-diagnostics go to stderr. It exits cleanly on EOF or SIGINT.
-
-A failing tool answers with isError and the session continues. A malformed
-message gets a -32700 parse error with a null id and the session continues.
-Tool calls run concurrently: ping is answered during a deploy, and
-notifications/cancelled stops it. A deploy to a database another deploy
-holds exits 15.
-
-Add it to Claude Code with:
-
-  claude mcp add pgmi -- pgmi serve";
 
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
@@ -748,6 +692,32 @@ mod tests {
         assert!(text.contains("pgmi deploy"), "{text}");
         let e = parse(&["deploy", "--timeout", "banana", "--help"]).unwrap_err();
         assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn every_command_prints_its_long_description_for_help_and_h() {
+        for (line, text) in [
+            (&["--help"][..], "PostgreSQL-native deployment driver."),
+            (&["-h"], "You write the deployment in SQL"),
+            (
+                &["metadata", "plan", "--help"],
+                "every loaded non-test file once per sort key",
+            ),
+            (&["metadata", "plan", "-h"], "Use this to verify ordering"),
+            (
+                &["templates", "describe", "--help"],
+                "Examples:\n  pgmi templates describe basic",
+            ),
+            (&["info", "-h"], "Shows file counts by directory"),
+            (&["serve", "--help"], "MCP-capable assistants"),
+        ] {
+            let help = match parse(line) {
+                Ok(Parsed::Help(help)) => help,
+                Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp => e.render().to_string(),
+                other => panic!("{line:?}: {other:?}"),
+            };
+            assert!(help.contains(text), "{line:?}: {help}");
+        }
     }
 
     #[test]

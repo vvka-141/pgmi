@@ -1,6 +1,6 @@
 [package]
 name = "pgmi"
-description = "PostgreSQL-native execution fabric: deploys a project by running its deploy.sql inside one session"
+description = "PostgreSQL-native deployment driver: deploys a project by running its deploy.sql inside one session"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

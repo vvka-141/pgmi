@@ -280,11 +280,18 @@ accept:
     field: stderr
     go: 'existing database such as postgres: '
     go_as: 'existing database such as ***: '
-  - row: Help text (`--help`, `help <command>`)
-    case: cases/(commands/(help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|flags/bool-forms|terminal/no-terminal-queries)\.yaml
+  - row: Help layout (`--help`, `help <command>`)
+    case: &help cases/(commands/(help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|flags/bool-forms|terminal/no-terminal-queries)\.yaml
     field: stdout
-    go: '(?m)^Usage:$'
-    rust: '(?m)^Usage: pgmi'
+    go: '(?s)^Usage:\n.*\Z'
+    go_as: 'Usage:'
+    rust: '(?s)^Usage: pgmi .*\Z'
+    rust_as: 'Usage:'
+  - row: Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`)
+    case: *help
+    field: stdout
+    rust: '(?<=--google), --databricks(?= \(no password needed\))'
+    rust_as: ''
   - row: '`pgmi.yaml` that is not valid YAML or has an unknown key'
     case: 'cases/config/(yaml-duplicate-keys|yaml-tabs|yaml-unknown-keys|pgmi-yaml-invalid)\.yaml|variant/pgmi\.yaml: .*'
     field: stderr
