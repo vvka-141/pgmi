@@ -482,6 +482,54 @@ independent Codex review of 58bad99f. What changed:
 - **Summary.** `deploy::summary` returns `output::Summary { Done, Failed }`.
 - **CI.** The `blackbox-rust` job is blocking: every case on
   `rust/blackbox-passing.txt` passes, so one dropping off fails CI.
+- **Serve back-pressure.** The reader answers through `deliver()`, which
+  waits for room in the answer queue, racing the session and `DRAIN`. A full
+  queue no longer means the client stopped reading; only a client that takes
+  no answer for 2 s ends the session (record 0017).
+- **Session end.** `serve()` returns `Ended { EndOfInput, Stopped,
+  SlowReader, ReadFailed, WriteFailed }`; `Ended::into_result` makes a failed
+  read or write exit 1, as in Go. `serve::run` returns `Result` like the
+  other commands.
+- **Stop reason.** `deploy::Stop` carries the cancellation token and a
+  `OnceLock<StopReason { Signal, Cancelled }>` set by whoever stops the
+  deploy; the `Arc<AtomicBool>` and serve's dummy flag are gone.
+- **Params.** `Request.params` is `Vec<params::Param { Flag(text), Pair(key,
+  value) }>`. Serve passes the pairs it checked; a `--param` stays text until
+  `params::collect` splits it, where Go refuses a malformed one (exit 10, in
+  Go's order).
+- **Metadata.** `commands::metadata::Validated::Unreadable` holds
+  `MetaError`s, rendered by `metadata::unreadable` at the CLI and MCP edges.
+- **Blocking tools.** The blocking serve tools run through
+  `tools::on_blocking_thread`, which stops waiting when the call is
+  cancelled; the scan itself is not interrupted, the runtime's shutdown
+  abandons it.
+- **Cloud renewal.** AWS IAM and Google Cloud SQL renew through
+  `renew::Renewing` like Azure and Databricks. `Mint` has an associated
+  `Value`, so `Renewing` holds AWS credentials or a Cloud SQL session
+  (ephemeral certificate, TLS config and login token, renewed before the
+  certificate's notAfter). AWS reuses the chain's credentials while they
+  have more than five minutes left and asks again per connection when they
+  carry no expiry, as Go loads them per connection. `azure::Signin` pins the
+  first credential of the chain that gives a token and renews only that one,
+  as Go's `DefaultAzureCredential` does; Databricks' Azure route shares it.
+- **Typed cloud errors and secrets.** `google::DialerError { step, source }`;
+  AWS keeps the SDK error as the source. `cloud::Token::login` returns
+  `Login { password: Secret, cloud_sql }`; `pgpass::lookup` returns
+  `Lookup { Found(Secret), NotFound, TooOpen(path) }`; the dialer's secret
+  sink takes `&Secret`.
+- **Dial.** `connect_timeout` is refused above 9223372036 s (the longest Go
+  duration; Go wraps it) and deadlines use `checked_add`. Each attempt's
+  deadline starts before the password or sign-in token and bounds the host
+  lookup, so a stalled host fails over (pgx does not; contract row).
+  `DialFailure` keeps the typed `io::Error`, driver error or `TokenError`
+  behind each per-host line; `connect_once` returns `Unconnected`, whose
+  first typed cause becomes the connection error's unrendered source through
+  `Error::with_cause`. `attempt` is `Attempt::run` with `login`, `startup`
+  and `handshake` steps and one generic connect. `Session.tls_version` is
+  `TlsVersion(rustls::ProtocolVersion)`, rendered as Go's `tls.VersionName`.
+- **Connection strings.** A percent escape is two hex digits, a URI fragment
+  is dropped, and an unknown option written after a password is refused
+  without its name (`UnknownKeyBesidePassword`).
 
 ## Consequences
 
