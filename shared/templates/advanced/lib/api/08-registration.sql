@@ -1003,6 +1003,28 @@ COMMENT ON FUNCTION api.create_or_replace_rpc_handler(jsonb, text) IS
 -- database. A resource or a prompt declares none of them. Returns the effect
 -- block tools/list publishes under _meta["pgmi/effect"]; NULL for a resource
 -- or prompt.
+CREATE OR REPLACE FUNCTION internal.mcp_write_tool_exists(p_name text)
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path = common, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT FROM api.mcp_route r JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
+        WHERE r.mcp_type = 'tool' AND r.mcp_name = p_name AND r.effect->>'effect' = 'write');
+$$;
+
+COMMENT ON FUNCTION internal.mcp_write_tool_exists(text) IS
+    'True when p_name is a live MCP tool with effect write: the one test of what a proposal may name, used by registration and by membership.fn_propose. Runs as its caller; the kernel reads only the registry columns it needs.';
+
+DO $$
+DECLARE
+    v_kernel text := pg_temp.deployment_setting('database_kernel_role');
+BEGIN
+    EXECUTE format('GRANT EXECUTE ON ROUTINE internal.mcp_write_tool_exists(text) TO %I', v_kernel);
+    EXECUTE format('GRANT SELECT (handler_object_id, mcp_type, mcp_name, effect) ON api.mcp_route TO %I', v_kernel);
+    EXECUTE format('GRANT SELECT (object_id, deleted_at) ON api.handler TO %I', v_kernel);
+END $$;
+
 CREATE OR REPLACE FUNCTION internal.mcp_tool_effect(p_metadata jsonb, p_type text, p_label text)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE AS $$
@@ -1045,9 +1067,7 @@ BEGIN
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'Name the registered MCP tool with "effect": "write" that a person''s confirm runs.';
     END IF;
-    IF v_effect = 'proposal' AND NOT EXISTS (
-        SELECT FROM api.mcp_route r JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
-        WHERE r.mcp_type = 'tool' AND r.mcp_name = p_metadata->>'proposes' AND r.effect->>'effect' = 'write') THEN
+    IF v_effect = 'proposal' AND NOT internal.mcp_write_tool_exists(p_metadata->>'proposes') THEN
         RAISE EXCEPTION 'MCP tool "%" proposes "%", which is not a registered write tool', p_label, p_metadata->>'proposes'
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'Register the target tool, with "effect": "write", before the proposal tool, and spell its name as registered.';

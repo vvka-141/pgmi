@@ -117,7 +117,9 @@ BEGIN
                     (SELECT string_agg(n, ', ') FROM unnest(v_kernel.names) n WHERE NOT v_id ? n));
                 CONTINUE;
             END IF;
-            SELECT string_agg(format('%L::%s', v_id->>n, t), ', ' ORDER BY o) INTO v_args
+            SELECT string_agg(format('%L::%s', (v_id || CASE v_kernel.proname
+                                                            WHEN 'fn_settle_proposal' THEN '{"p_status": "rejected"}'
+                                                            ELSE '{}' END::jsonb)->>n, t), ', ' ORDER BY o) INTO v_args
             FROM unnest(v_kernel.names, v_kernel.types) WITH ORDINALITY u(n, t, o);
             v_sql := format('SELECT coalesce(jsonb_agg(to_jsonb(x)), ''[]'') FROM (SELECT * FROM %s(%s) r) x',
                             v_kernel.call, v_args);

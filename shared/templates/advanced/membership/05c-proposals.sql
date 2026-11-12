@@ -59,7 +59,7 @@ $$;
 
 -- Records a pending proposal of p_tool with p_arguments by the request's
 -- actual principal in its organization; NULL without an organization, a
--- principal or an arguments object.
+-- principal or an arguments object, or when p_tool is not a live write tool.
 CREATE OR REPLACE FUNCTION membership.fn_propose(p_tool text, p_arguments jsonb)
 RETURNS uuid
 LANGUAGE sql
@@ -70,6 +70,7 @@ AS $$
     SELECT r.organization, p_tool, p_arguments, r.actor, api.current_actor_kind()
     FROM (SELECT api.current_organization_id() AS organization, api.current_actual_principal_id() AS actor) r
     WHERE r.organization IS NOT NULL AND r.actor IS NOT NULL AND jsonb_typeof(p_arguments) = 'object'
+      AND internal.mcp_write_tool_exists(p_tool)
     RETURNING object_id;
 $$;
 

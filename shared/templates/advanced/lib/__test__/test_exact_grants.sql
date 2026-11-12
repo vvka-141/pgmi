@@ -9,7 +9,7 @@
 -- grant of its own (it is a member of the owner). PUBLIC executes nothing.
 -- The kernel role cannot log in, calls no SECURITY DEFINER routine of the
 -- owner, reaches outside membership and common only the request-context
--- readers, and its own routines are granted to no role but the owner. The
+-- readers and internal.mcp_write_tool_exists, and its own routines are granted to no role but the owner. The
 -- optional jobs login, when it exists and is a registered service principal,
 -- executes every api.job_* routine and nothing else; unregistered, it executes
 -- nothing. The gateway executes no job. With provider_role_pattern set, the
@@ -76,7 +76,8 @@ AS $$
                ('api.is_platform_operator()'),
                ('api.current_login_session_id()'),
                ('api.current_organization_session_id()'),
-               ('internal.transaction_is_read_only()')
+               ('internal.transaction_is_read_only()'),
+               ('internal.mcp_write_tool_exists(text)')
     )
     SELECT 'api', r.name, 'executable, not on the gateway''s list'
     FROM routine r, role

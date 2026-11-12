@@ -292,3 +292,36 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: the nested refusal rolls back with the 409, so it leaves no access_denial or mcp_exchange row; if that changed, update the README audit note';
     END IF;
 END $$;
+
+SELECT api.create_or_replace_mcp_handler(jsonb_build_object(
+    'id', 'f4570000-0000-4000-8000-000000000031', 'type', 'tool', 'effect', 'proposal', 'proposes', 'tp_create_probe',
+    'name', 'tp_propose_named', 'description', 'Proposes the tool its caller names',
+    'permissions', jsonb_build_array('task.propose')),
+    $body$
+DECLARE
+    v_id uuid := membership.fn_propose((request).arguments->>'tool', '{"title": "named"}');
+BEGIN
+    RETURN api.mcp_tool_result('[]', (request).request_id, v_id IS NULL, jsonb_build_object('proposalId', v_id));
+END;
+$body$);
+
+DO $$
+DECLARE
+    v_agent jsonb := pg_temp.test_mcp_context('test|alice-001', current_setting('test.corp_id')::uuid, 'agent.reader');
+    v_read  text := (SELECT mcp_name FROM api.mcp_route WHERE effect->>'effect' = 'read' ORDER BY mcp_name LIMIT 1);
+    v_id    text;
+    v_tool  text;
+BEGIN
+    FOREACH v_tool IN ARRAY ARRAY['no_such_tool', v_read] LOOP
+        v_id := (api.mcp_call_tool('tp_propose_named', jsonb_build_object('tool', v_tool), v_agent, '"n"')).envelope
+                ->'result'->'structuredContent'->>'proposalId';
+        IF v_id IS NOT NULL OR v_read IS NULL THEN
+            RAISE EXCEPTION 'TEST FAILED: fn_propose refuses %, which is not a live write tool, got %', v_tool, v_id;
+        END IF;
+    END LOOP;
+    v_id := (api.mcp_call_tool('tp_propose_named', '{"tool": "tp_create_probe"}', v_agent, '"n"')).envelope
+            ->'result'->'structuredContent'->>'proposalId';
+    IF (pg_temp.tp_proposal(v_id::uuid)).tool_name IS DISTINCT FROM 'tp_create_probe' THEN
+        RAISE EXCEPTION 'TEST FAILED: fn_propose records a live write tool, got %', v_id;
+    END IF;
+END $$;
