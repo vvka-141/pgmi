@@ -109,8 +109,9 @@ impl Guard {
     }
 
     /// Runs `fut` on `session` until it ends, the deploy is stopped or the
-    /// deadline passes. On a stop it sends PostgreSQL's cancel request,
-    /// then gives `fut` 2 s to finish before it returns the stop's error.
+    /// deadline passes. On a stop it sends PostgreSQL's cancel request and
+    /// gives `fut` 2 s from the stop to finish; a session that stays silent
+    /// is dropped, so cleanup does not wait on it.
     pub(super) async fn running<T>(
         &self,
         session: &Session,
@@ -122,10 +123,22 @@ impl Guard {
             () = self.stop.cancelled() => self.stop_error(),
             () = tokio::time::sleep_until(self.deadline) => self.expired_error(),
         };
-        session.cancel().await;
-        let reported = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
+        let cancel = session.cancel();
+        let grace = tokio::time::sleep(Duration::from_secs(2));
+        tokio::pin!(cancel, grace);
+        let mut cancel_sent = false;
+        let reported = loop {
+            tokio::select! {
+                r = &mut fut => break Some(r),
+                () = &mut cancel, if !cancel_sent => cancel_sent = true,
+                () = &mut grace => break None,
+            }
+        };
+        if reported.is_none() {
+            session.disconnect();
+        }
         Err(match reported {
-            Ok(Err(e)) if e.sql_diagnostics().is_some() => {
+            Some(Err(e)) if e.sql_diagnostics().is_some() => {
                 let text = match stopped.kind() {
                     Kind::Timeout => stopped.text(),
                     _ => e.text(),
