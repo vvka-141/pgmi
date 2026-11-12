@@ -46,6 +46,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `help`, `--help`, `<command> --help`, unknown command / wrong arity = 2 | ✓ `commands/help`, `commands/deploy-help-text` |
 | `-v` / `--verbose` (DEBUG notices shown, none from pgmi's own queries; parameter counts, never keys or values) | ✓ `commands/verbose`, `notices/verbose-no-internal-debug`, `params/verbose-counts` |
 | `serve`: initialize, `tools/list` (7 tools), a tool call, malformed message (-32700, session continues), unknown method (-32601), EOF exits 0 | ✓ `serve/session` |
+| `serve`: a client that reads while it pipelines 3000 requests gets every answer in order | ✓ `serve/burst` |
 | `serve`: `deploy` tool with params, ping answered during a deploy, `notifications/cancelled` rolls the deploy back | ✓ `serve/deploy-tool`, `serve/cancel`; WARNINGs in the text block ✓ `serve/deploy-warning-lines` |
 | `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `rust/docs/decisions/go-review.md` |
 | `serve`: protocol versions, `server/discover`, the 2026-07-28 stateless era | ✓ `serve/protocol-versions` |

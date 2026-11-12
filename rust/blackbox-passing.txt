@@ -165,6 +165,7 @@ params/env-var-reaches-session
 params/invalid-key
 params/precedence
 params/verbose-counts
+serve/burst
 serve/cancel
 serve/concurrent-deploys
 serve/deploy-guards

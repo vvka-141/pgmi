@@ -64,7 +64,10 @@ overridden. Used only if the hand-written server proves unworkable.
   `protocolVersion` first in the `initialize` result), which the case
   regexes rely on.
 - At end of input pgmi stops reading, waits for running calls to answer,
-  then exits 0. SIGINT cancels running calls first.
+  then exits 0. SIGINT cancels running calls first. `serve` returns why the
+  session ended (`Ended`: end of input, stopped, slow reader, read failed,
+  write failed); `run` maps a failed read or write to exit 1, as Go's
+  returned error is, and the rest to 0.
 - Tool panics come back as `JoinError`; the panic hook's captured stack goes
   into `structuredContent` (record 0002).
 - `deploy` runs the CLI's deploy function with the arguments mapped to flags,
@@ -141,12 +144,20 @@ overridden. Used only if the hand-written server proves unworkable.
   at most `wire::MAX_LINE` (16 MiB; `Lines` drops a longer one without
   buffering it and counts it, the reader answers -32600), `MAX_CALLS` (32)
   tool calls running (the next is -32000), and `QUEUED_ANSWERS` (1024) in
-  the bounded answer channel. The reader never waits on that channel: when
-  it is full, the client is not reading and the session ends, so
-  cancellations are always read. A call waits for room, racing the session.
-- `init`, `metadata_plan`, `metadata_validate` and `ai_contract` answer
-  "not implemented in this build" (exit 1) until the commands they wrap land
-  (PGMI-833 part B); their argument checks already match Go.
+  the bounded answer channel. A full channel does not mean the client
+  stopped reading: the reader answers a whole 64 KiB chunk at once, so a
+  reading client that pipelines a burst fills it before the writer runs.
+  The reader therefore waits for room, racing the session and the `DRAIN`
+  deadline; only a client that takes no answer for `DRAIN` ends the session
+  (`SlowReader`, exit 0). While it waits it reads nothing, so a
+  `notifications/cancelled` behind the burst is read once the client takes
+  an answer, or never if it takes none. A call waits for room, racing the
+  session.
+- The blocking tools (`init`, `metadata_plan`, `metadata_validate` and the
+  rest that answer from files) run on the blocking pool; a cancelled call
+  stops waiting for its thread at once, so a stalled filesystem cannot hold
+  up the end of a session. The thread itself runs on until the runtime's
+  100 ms shutdown abandons it.
 
 ## Serves
 

@@ -165,9 +165,13 @@ Once input ends or SIGINT/SIGTERM arrives and the running calls have ended,
 a client that no longer reads gets 2 s to take the remaining answers before
 serve exits. A failed write to stdout ends the session: running calls are
 cancelled and nothing more is read (Go stops reading only when an answer
-written by the reader fails, and then waits for the running calls). Rust unit tests
+written by the reader fails, and then waits for the running calls). A failed
+read of stdin or write of stdout exits 1 with `pgmi: error: read request: ...`
+or `pgmi: error: write response: ...` (Go: the read or write error itself);
+end of input, a signal and a client dropped for not reading exit 0. Rust unit tests
 `a_client_that_stops_reading_does_not_hold_up_the_stop`,
-`an_output_failure_ends_the_session`.
+`an_output_failure_ends_the_session`, `a_failed_read_ends_the_session_with_exit_1`,
+`the_end_of_input_ends_the_session_successfully`.
 
 Malformed input, each answered and the session continuing: text that is not
 JSON, including invalid UTF-8 outside a string, is -32700 with a null id;
@@ -209,7 +213,10 @@ failure. A `params` key that is not an identifier (one holding `=` too) is
 exit code 10 before connecting. A SQL `PASSWORD '...'` literal in a failed
 deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 
-Cases: `serve/session`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+A client that reads its answers while it pipelines thousands of requests gets
+every answer in order.
+
+Cases: `serve/session`, `serve/burst`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 
@@ -789,11 +796,14 @@ of memory. The Rust binary bounds all three:
 - With 32 tool calls running, another `tools/call` is answered at once with
   `-32000` (`32 tool calls are already running; wait for one to finish`).
   `ping`, `tools/list` and `notifications/cancelled` are still served.
-- When 1024 answers are waiting because the client does not read them, the
-  session ends: running calls are cancelled and serve exits as at the end
-  of input.
+- When 1024 answers are waiting, serve reads no further request until the
+  client takes one; a client that takes none for 2 s ends the session:
+  running calls are cancelled and serve exits 0 as at the end of input. A
+  client that reads is never dropped, however many requests it pipelines.
 
-Cases: none (Go accepts all three); Rust unit tests
+Cases: none for the limits (Go accepts all three); `serve/burst` pins that a
+reading client is served in full. Rust unit tests
+`a_client_that_reads_while_it_sends_a_burst_gets_every_answer`,
 `a_line_over_16_mib_is_refused_at_once_and_the_session_goes_on`,
 `calls_beyond_32_are_refused_and_cancels_still_get_through`,
 `a_client_that_never_reads_is_dropped_once_its_answers_pile_up`,
