@@ -18,7 +18,7 @@ from typing import Any
 
 import psycopg
 
-from pgmi_blackbox.case import Case, Expect, Fifo, Step, Symlink, Until
+from pgmi_blackbox.case import Case, Dir, Expect, Fifo, Step, Symlink, Until
 from pgmi_blackbox.server import Server
 
 _silent: socket.socket | None = None
@@ -131,6 +131,7 @@ def run_case(case: Case, ws: Workspace) -> None:
         if failures:
             raise AssertionError("\n\n".join(failures))
     finally:
+        _unlock_dirs(case, ws)
         _drop(ws)
 
 
@@ -164,7 +165,9 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
     for rel, content in case.project.files.items():
         target = ws.project / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(content, Symlink):
+        if isinstance(content, Dir):
+            target.mkdir(exist_ok=True)
+        elif isinstance(content, Symlink):
             target.symlink_to(ws.substitute(content.target))
         elif isinstance(content, Fifo):
             os.mkfifo(target)
@@ -172,6 +175,15 @@ def _prepare_project(case: Case, ws: Workspace) -> None:
             target.write_bytes(content)
         else:
             target.write_bytes(ws.substitute(content).encode())
+    for rel, content in sorted(case.project.files.items(), key=lambda f: -f[0].count("/")):
+        if isinstance(content, Dir):
+            (ws.project / rel).chmod(content.mode)
+
+
+def _unlock_dirs(case: Case, ws: Workspace) -> None:
+    for rel, content in case.project.files.items():
+        if isinstance(content, Dir):
+            (ws.project / rel).chmod(0o700)
 
 
 @dataclass

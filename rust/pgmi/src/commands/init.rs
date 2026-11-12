@@ -18,18 +18,39 @@ pub(crate) fn template(name: &str) -> Result<Template> {
         .map_err(|_| Error::usage(format!("unknown template: {name}")))
 }
 
-fn blocking(target: &impl Vfs) -> Vec<String> {
-    target
-        .read_dir("")
-        .unwrap_or_default()
+/// What in the target stops a scaffold. A missing target blocks nothing;
+/// one that cannot be listed is refused, as Go refuses it.
+fn blocking(target: &impl Vfs) -> Result<Vec<String>> {
+    let entries = match target.read_dir("") {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(unlistable(target, e)),
+    };
+    Ok(entries
         .into_iter()
         .map(|e| e.name.as_str().to_string())
         .filter(|n| !KEPT.contains(&n.as_str()))
-        .collect()
+        .collect())
+}
+
+fn unlistable(target: &impl Vfs, listing: std::io::Error) -> Error {
+    let path = target.display("");
+    let checking = "failed to create project: failed to check target directory";
+    match target.stat("") {
+        Err(e) => Error::general(format!(
+            "{checking}: failed to check directory: stat {path}"
+        ))
+        .with_source(e),
+        Ok(s) if s.kind != FileKind::Dir => {
+            Error::general(format!("{checking}: path exists but is not a directory"))
+        }
+        Ok(_) => Error::general(format!("{checking}: failed to read directory: open {path}"))
+            .with_source(listing),
+    }
 }
 
 pub(crate) fn check_empty(target: &impl Vfs) -> Result<()> {
-    let blocking = blocking(target);
+    let blocking = blocking(target)?;
     if blocking.is_empty() {
         return Ok(());
     }
@@ -187,12 +208,24 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
     }
 }
 
+/// Creates `path` with `bytes`, never replacing a file that exists. A
+/// dangling link is written through, creating its target, as Go does.
 fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| Error::general(format!("create {}", dir.display())).with_source(e))?;
     }
-    std::fs::write(path, bytes)
+    let target = match std::fs::read_link(path) {
+        Ok(link) => path
+            .parent()
+            .map_or_else(|| link.clone(), |dir| dir.join(&link)),
+        Err(_) => path.to_path_buf(),
+    };
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .and_then(|mut f| f.write_all(bytes))
         .map_err(|e| Error::general(format!("write {}", path.display())).with_source(e))
 }
 
@@ -220,7 +253,7 @@ mod tests {
                 .file("pgmi.yaml", "")
                 .file(".env", ""),
         ] {
-            assert!(blocking(&fs).is_empty());
+            assert!(blocking(&fs).unwrap().is_empty());
             assert!(check_empty(&fs).is_ok());
         }
         let missing = OsFs::new("/definitely/not/here");
@@ -233,7 +266,7 @@ mod tests {
             .dir(".git")
             .file("README.md", "x")
             .dir("lib");
-        assert_eq!(blocking(&fs), ["README.md", "lib"]);
+        assert_eq!(blocking(&fs).unwrap(), ["README.md", "lib"]);
         let e = check_empty(&fs).unwrap_err();
         assert_eq!(e.exit_code(), 2);
         assert!(
@@ -242,6 +275,60 @@ mod tests {
             "{}",
             e.text()
         );
+    }
+
+    #[test]
+    fn a_target_that_cannot_be_listed_is_refused() {
+        let e = check_empty(&MemFs::default().unreadable_dir("")).unwrap_err();
+        assert_eq!(e.exit_code(), 1);
+        assert_eq!(
+            e.text(),
+            "failed to create project: failed to check target directory: failed to read directory: open /mem: permission denied"
+        );
+    }
+
+    #[test]
+    fn a_file_as_the_target_is_refused() {
+        let dir = crate::testdir::TempDir::new("init-file-target");
+        let file = dir.join("deploy.sql");
+        std::fs::write(&file, "SELECT 'mine';").unwrap();
+        let e = check_empty(&OsFs::new(&file)).unwrap_err();
+        assert_eq!(e.exit_code(), 1);
+        assert_eq!(
+            e.text(),
+            "failed to create project: failed to check target directory: path exists but is not a directory"
+        );
+        let e = check_empty(&OsFs::new(file.join("inside"))).unwrap_err();
+        assert!(
+            e.text().starts_with(&format!(
+                "failed to create project: failed to check target directory: failed to check directory: stat {}",
+                file.join("inside").display()
+            )),
+            "{}",
+            e.text()
+        );
+    }
+
+    #[test]
+    fn scaffolding_never_replaces_an_existing_file() {
+        let dir = crate::testdir::TempDir::new("init-exclusive");
+        std::fs::write(dir.join("deploy.sql"), "SELECT 'mine';").unwrap();
+        let e = scaffold(dir.path(), Template::Minimal, Some("p")).unwrap_err();
+        assert_eq!(e.exit_code(), 1);
+        assert!(e.text().starts_with("write "), "{}", e.text());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("deploy.sql")).unwrap(),
+            "SELECT 'mine';"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_kept_link_is_written_through() {
+        let dir = crate::testdir::TempDir::new("init-dangling");
+        std::os::unix::fs::symlink("real.yaml", dir.join("pgmi.yaml")).unwrap();
+        scaffold(dir.path(), Template::Basic, Some("p")).unwrap();
+        assert!(dir.join("real.yaml").is_file());
     }
 
     #[test]

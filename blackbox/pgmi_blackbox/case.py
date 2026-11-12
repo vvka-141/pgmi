@@ -79,9 +79,14 @@ class Fifo:
 
 
 @dataclass(frozen=True, slots=True)
+class Dir:
+    mode: int
+
+
+@dataclass(frozen=True, slots=True)
 class Project:
     init: str | None
-    files: dict[str, str | bytes | Symlink | Fifo]
+    files: dict[str, str | bytes | Symlink | Fifo | Dir]
     generate: Generate | None = None
 
 
@@ -234,18 +239,24 @@ def _project(r: _Reader, value: Any) -> Project:
     return Project(init, _project_files(r, value.get("files", {})), generate)
 
 
-def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink | Fifo]:
+def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink | Fifo | Dir]:
     if not isinstance(value, dict):
         raise r.fail("project.files", "must map paths to contents")
-    files: dict[str, str | bytes | Symlink | Fifo] = {}
+    files: dict[str, str | bytes | Symlink | Fifo | Dir] = {}
     for path, item in value.items():
         at = f"project.files.{path}"
         if isinstance(item, str):
             files[path] = item
             continue
-        item = r.mapping(item, at, {"hex", "symlink", "fifo"})
+        item = r.mapping(item, at, {"hex", "symlink", "fifo", "dir"})
         if len(item) != 1:
-            raise r.fail(at, "needs exactly one of hex, symlink or fifo")
+            raise r.fail(at, "needs exactly one of hex, symlink, fifo or dir")
+        if "dir" in item:
+            mode = item["dir"]
+            if not isinstance(mode, str) or not re.fullmatch(r"0[0-7]{3}", mode):
+                raise r.fail(f"{at}.dir", 'must be an octal mode such as "0300"')
+            files[path] = Dir(int(mode, 8))
+            continue
         if "fifo" in item:
             if item["fifo"] is not True:
                 raise r.fail(f"{at}.fifo", "must be true")

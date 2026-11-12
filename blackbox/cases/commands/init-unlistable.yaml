@@ -1,0 +1,12 @@
+description: init refuses a directory it cannot list (exit 1) and leaves the files in it alone
+project:
+  files:
+    locked/deploy.sql: "SELECT 'mine';"
+    locked: {dir: "0300"}
+steps:
+  - pgmi: [init, "{project}/locked", -t, basic]
+    expect:
+      exit: 1
+      stderr: ["failed to check target directory: failed to read directory: open {project}/locked: (?i:permission denied)"]
+      files:
+        project/locked/deploy.sql: ["^SELECT 'mine';$"]

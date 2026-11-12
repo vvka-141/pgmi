@@ -39,6 +39,7 @@ project:
     data.bin: {hex: "610062"}        # raw bytes
     link.sql: {symlink: ../x.sql}    # a symbolic link
     pipe.sql: {fifo: true}           # a named pipe
+    locked: {dir: "0300"}            # a directory with this mode, set after every file (restored at the end)
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_TOKEN: abc}   # optional
