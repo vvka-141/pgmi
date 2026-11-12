@@ -1,0 +1,18 @@
+name: pgmi
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${NFPM_VERSION}
+maintainer: "Alexey Evlampiev <alexey.evlampiev@gmail.com>"
+description: "PostgreSQL-native deployment driver"
+vendor: vvka-141
+homepage: "https://github.com/vvka-141/pgmi"
+license: "MPL-2.0"
+contents:
+  - src: ./target/nfpm/pgmi
+    dst: /usr/bin/pgmi
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/doc/pgmi/LICENSE
+  - src: ./README.md
+    dst: /usr/share/doc/pgmi/README.md

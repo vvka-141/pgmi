@@ -88,3 +88,40 @@ zig is a C compiler, so the zig cross-builds go:
 
 templates, version, ai, completion, help (`version` output); Template
 deployments (the shipped binary embeds `shared/` complete).
+
+## As built (PGMI-925, 2026-11-12): native runners, no GoReleaser for Rust
+
+Record 0021 put each target on its own runner and linker (Apple's on macOS,
+MSVC on Windows, `rust-lld` for static Linux). GoReleaser OSS cannot take
+binaries built elsewhere, and no single runner links all six, so option 2
+above does not hold. Without GoReleaser Pro (owner, 2026-11-10), the Rust
+release is a plain workflow, `.github/workflows/release-rust.yml`:
+
+1. `verify`: tag equals the Cargo version (`rust/release/check-version.sh`),
+   commit on main and release notes (publish only), fmt, clippy (also with
+   `testhooks`), `cargo deny`, the no-C check, the packaging check, and the
+   whole test suite against PostgreSQL 18 and 17.
+2. `build`: one job per target on its native runner, `PGMI_COMMIT` and
+   `PGMI_BUILD_DATE` set, build paths remapped (the job fails if the binary
+   still holds one), `--version` checked where the runner can run it.
+   Six targets: Linux musl and macOS for x86_64 and aarch64, Windows MSVC
+   for x86_64 and aarch64 (aarch64 Windows is new to the matrix and not yet
+   proven on a runner).
+3. `blackbox`: the passing cases (`rust/blackbox-passing.txt`) against the
+   static Linux binary that ships.
+4. `package`: `rust/release/package.sh` writes `pgmi_<version>_<os>_<arch>`
+   archives (tar.gz, zip for Windows) with the Go release's names and
+   layout, reproducibly (fixed mtimes and owners), and `checksums.txt`;
+   nfpm (pinned image) builds the two `.deb` files from
+   `rust/release/nfpm.yaml`, one is installed in Debian and run;
+   `rust/release/cask.sh` writes the Homebrew cask.
+5. `publish` (only with `publish: true`): GitHub release with the notes
+   from `RELEASES.md`, attestation of `checksums.txt`, cask pushed to the
+   tap for stable versions.
+
+Until switch day the workflow runs only by hand; the v* tag still triggers
+the Go release. Switch day (PGMI-835) moves the tag trigger here and drops
+`release.yml`, `snapshot.yml` and `.goreleaser.yaml`. Lost against
+GoReleaser: the "Quick Install" header and the commit-log section of the
+release page (the notes come from `RELEASES.md` only). crates.io, PyPI and
+npm publishing stay with PGMI-850.

@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-include = ["Cargo.toml", "src/**", "build.rs"]
+include = ["Cargo.toml", "src/**"]
 
 [dependencies]
 aes.workspace = true

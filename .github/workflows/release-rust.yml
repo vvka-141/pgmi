@@ -1,0 +1,278 @@
+name: Release (Rust)
+
+# The Rust binary's release (record 0018, PGMI-925). Until switch day
+# (PGMI-835) it runs only by hand and only `publish: true` writes anything;
+# the Go release (release.yml) stays the one a v* tag triggers. Switch day
+# moves the tag trigger here.
+#
+# Every target builds on its own native runner (record 0021: no C, Apple's
+# linker on macOS, MSVC on Windows, rust-lld for static Linux), so GoReleaser
+# OSS, which cannot merge prebuilt binaries, does the packaging no more:
+# rust/release/package.sh writes the archives under the Go release's names,
+# which scripts/install.sh and install.ps1 expect.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, vX.Y.Z or vX.Y.Z-rc.N; must equal the Cargo version'
+        required: true
+      publish:
+        description: 'Publish the GitHub release, attestation and Homebrew cask (switch day and later only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  verify:
+    name: Pre-release verification
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: version
+        name: Tag equals the Cargo version
+        run: echo "version=$(rust/release/check-version.sh "$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Commit is on main
+        if: inputs.publish
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::$GITHUB_SHA is not on main; release from main"; exit 1; }
+
+      - name: Release notes exist for this tag
+        if: inputs.publish
+        run: ./scripts/release-notes.sh "$TAG" > /dev/null
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-pc-windows-msvc aarch64-apple-darwin x86_64-apple-darwin
+          cargo install --locked cargo-deny@0.20.2
+
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
+      - name: Dependencies (advisories, licences, no C)
+        run: cargo deny --locked check
+      - name: No C compiler on any release target
+        run: rust/check-no-c.sh
+      - name: Packaged files equal tracked files
+        run: rust/check-package.sh
+
+      - name: PostgreSQL for the tests
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18 -c max_locks_per_transaction=256
+          docker run -d --name pg17 -p 5417:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+          for c in pg pg17; do
+            for _ in $(seq 60); do docker exec $c pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+            docker exec $c pg_isready -h 127.0.0.1 -U postgres
+          done
+      - name: Tests
+        env:
+          PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          PGMI_TEST_CONN_PG17: postgresql://postgres:postgres@127.0.0.1:5417/postgres
+          PGMI_REQUIRE_DB: '1'
+        run: |
+          cargo test --locked --workspace
+          cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {os: ubuntu-latest, target: x86_64-unknown-linux-musl, linker: rust-lld}
+          - {os: ubuntu-latest, target: aarch64-unknown-linux-musl, linker: rust-lld}
+          - {os: macos-latest, target: aarch64-apple-darwin}
+          - {os: macos-latest, target: x86_64-apple-darwin}
+          - {os: windows-latest, target: x86_64-pc-windows-msvc}
+          - {os: windows-latest, target: aarch64-pc-windows-msvc}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - name: Build without a C compiler
+        env:
+          CC: /bin/false
+          CXX: /bin/false
+          PGMI_COMMIT: ${{ github.sha }}
+        run: |
+          if [ -n "${{ matrix.linker }}" ]; then
+            t=$(echo "${{ matrix.target }}" | tr a-z- A-Z_)
+            export "CARGO_TARGET_${t}_LINKER=${{ matrix.linker }}"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then unset CC CXX; fi
+          export PGMI_COMMIT="${PGMI_COMMIT:0:8}"
+          PGMI_BUILD_DATE="$(git log -1 --format=%cI)"
+          export PGMI_BUILD_DATE
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTFLAGS="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/pgmi"
+          cargo build --locked --release -p pgmi --target ${{ matrix.target }}
+      - name: Check the binary
+        run: |
+          bin=target/${{ matrix.target }}/release/pgmi
+          [ -f "$bin" ] || bin="$bin.exe"
+          case "${{ matrix.target }}" in
+            *linux-musl) file "$bin" | grep -q 'static' ;;
+            *apple-darwin) otool -L "$bin" ;;
+          esac
+          if command -v strings >/dev/null && strings "$bin" | grep -q -F -e "$GITHUB_WORKSPACE" -e "${CARGO_HOME:-$HOME/.cargo}"; then
+            echo "::error::the binary embeds a build path"; exit 1
+          fi
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl|aarch64-apple-darwin|x86_64-pc-windows-msvc)
+              out="$("$bin" --version)"; echo "$out"
+              echo "$out" | grep -q "pgmi ${{ needs.verify.outputs.version }} " || { echo "::error::wrong version"; exit 1; }
+              ! echo "$out" | grep -q unknown || { echo "::error::commit or build date missing"; exit 1; } ;;
+          esac
+          mkdir -p "out/${{ matrix.target }}" && cp "$bin" "out/${{ matrix.target }}/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: out/
+          retention-days: 7
+
+  blackbox:
+    name: Black-box suite on the built binary
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bin-x86_64-unknown-linux-musl
+          path: ${{ runner.temp }}/bin
+      - name: Build the Go reference
+        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+      - name: Run the passing cases against the binary that ships
+        env:
+          PGMI_BIN: ${{ runner.temp }}/bin/x86_64-unknown-linux-musl/pgmi
+          PGMI_REFERENCE_BIN: ${{ runner.temp }}/pgmi-go
+          PGMI_IMPL: rust
+        run: |
+          chmod +x "$PGMI_BIN"
+          python -m pip install uv==0.13.6
+          cd blackbox
+          mapfile -t cases < <(sed 's|.*|test_cases.py::test_case[cases/&.yaml]|' ../rust/blackbox-passing.txt)
+          uv run --locked pytest "${cases[@]}"
+
+  package:
+    name: Package
+    needs: [verify, build, blackbox]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-*
+          path: bins
+          merge-multiple: true
+      - name: Archives and checksums
+        run: rust/release/package.sh "$VERSION" bins dist
+      - name: Debian packages
+        run: |
+          for pair in x86_64-unknown-linux-musl:amd64 aarch64-unknown-linux-musl:arm64; do
+            target="${pair%%:*}"; arch="${pair##*:}"
+            mkdir -p target/nfpm && install -m 0755 "bins/$target/pgmi" target/nfpm/pgmi
+            docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -w /src \
+              -e NFPM_ARCH="$arch" -e NFPM_VERSION="$VERSION" \
+              goreleaser/nfpm@sha256:929e1056ba69bf1da57791e851d210e9d6d4f528fede53a55bd43cf85674450c \
+              package --config rust/release/nfpm.yaml --packager deb --target "dist/pgmi_${VERSION}_linux_${arch}.deb"
+          done
+          (cd dist && sha256sum pgmi_* | sort -k2 > checksums.txt && cat checksums.txt)
+      - name: Install the .deb and run it
+        run: |
+          docker run --rm -v "$PWD/dist:/d" debian:trixie-slim bash -c \
+            "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} '"
+      - name: Homebrew cask
+        run: rust/release/cask.sh "$VERSION" dist/checksums.txt > dist/pgmi.rb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ needs.verify.outputs.version }}
+          path: dist/
+          retention-days: 14
+
+  publish:
+    name: Publish
+    if: inputs.publish
+    needs: [verify, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.verify.outputs.version }}
+          path: dist
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/release-notes.sh "$TAG" > notes.md
+          pre=""; [[ "$VERSION" == *-* ]] && pre="--prerelease"
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "pgmi $TAG" --notes-file notes.md $pre \
+            dist/pgmi_* dist/checksums.txt
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: dist/checksums.txt
+      - name: Homebrew tap
+        if: ${{ !contains(needs.verify.outputs.version, '-') }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/vvka-141/homebrew-pgmi.git" tap
+          cp dist/pgmi.rb tap/Casks/pgmi.rb
+          cd tap
+          git -c user.name=pgmi-bot -c user.email=bot@pgmi.dev commit -am "pgmi $VERSION"
+          git push
