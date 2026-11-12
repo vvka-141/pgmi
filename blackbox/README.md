@@ -115,3 +115,37 @@ updates its row.
 A case is data. When it cannot say something, add the feature to the runner
 (`pgmi_blackbox/`), not Python to the case. `uv run pytest selftest` checks the
 runner's schema validation.
+
+## Differential run
+
+`test_differential.py` runs the Go and the Rust binary on the same input, each
+in its own workspace and database, and fails on every difference nothing
+explains. It is not in the default run.
+
+```bash
+cd blackbox
+PGMI_BIN=~/go/bin/pgmi PGMI_BIN_OTHER=$PWD/../target/release/pgmi uv run pytest test_differential.py
+PGMI_DIFF_EXAMPLES=200 ...                     # more generated variants (default 20 per kind)
+```
+
+Inputs are every case (its `pgmi` steps, run on each binary in turn) and
+variants `hypothesis` generates with a fixed seed: connection strings,
+`pgmi.yaml` files and project trees under `.pgmiignore` patterns. Per step it
+compares the exit code, stdout, stderr, the `--json` record and the target
+database's catalog (schemas, relations, columns, functions, ACLs, roles named
+after the database, row counts). Only the workspace paths, the database name,
+durations, each binary's version and build line, UUIDs, the volatile `--json`
+keys and the order of `serve` answers (they answer concurrently) are normalised.
+
+A difference is accepted when:
+
+- the case's `expect.rust` sets that field for that step (cited as the case), or
+- an `accept` entry in `differential-allow.yaml` matches it: `row` is the exact
+  first cell of a row (or a `###` heading) of "Behaviour changes in 0.20" in
+  `docs/design/behaviour-contract.md` and is checked against it; `case` is a
+  regex for the whole case path or variant name, `field` one of `exit`,
+  `stdout`, `stderr`, `json`, `db`, `error`; optional `step`; and at least one
+  of `go`/`rust`, a regex the output must contain. Keep entries narrow.
+
+`skip` in the same file names cases a lockstep comparison cannot judge, each
+with its reason. Never edit a case's expectations to quiet the harness.

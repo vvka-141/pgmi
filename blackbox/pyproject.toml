@@ -7,6 +7,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.170.15",
     "psycopg[binary]>=3.3.8",
     "pytest>=9.2.0",
     "pyyaml>=6.0.3",

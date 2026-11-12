@@ -1,0 +1,129 @@
+# Differences the 0.20 table in docs/design/behaviour-contract.md decided. See README "Differential run".
+skip:
+  cases/terminal/config-wizard.yaml: &wizard >-
+    full-screen wizard: the two TUI libraries paint the same screen with different escape streams, so the
+    stripped text is not comparable; the case's own regexes judge it
+  cases/terminal/config-esc.yaml: *wizard
+  cases/terminal/config-refusals.yaml: *wizard
+  cases/terminal/init-wizard.yaml: *wizard
+  cases/terminal/init-wizard-connection.yaml: *wizard
+  cases/terminal/init-wizard-connection-esc.yaml: *wizard
+
+accept:
+  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
+    case: cases/(notices/(pgpass-)?secrets-redacted|errors/diagnostics-secrets|deploy/advanced-template-.*|checksums/cross-binary-redeploy-advanced|tls/tls-only-and-plain-servers)\.yaml
+    field: stderr
+    rust: \*\*\*
+  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
+    case: cases/(notices/(pgpass-)?secrets-redacted|errors/diagnostics-secrets)\.yaml
+    field: json
+    rust: \*\*\*
+  - row: Connection-string parse errors
+    case: cases/errors/connection-string-(secrets|password-rest)\.yaml
+    field: stderr
+    rust: "--connection: invalid"
+  - row: Connection-string parse errors
+    case: cases/errors/connection-string-secrets\.yaml
+    field: json
+    rust: "--connection: invalid"
+  - row: Connection-string parse errors
+    case: cases/errors/connection-source\.yaml
+    step: steps[2]
+    field: stderr
+    rust: "DATABASE_URL: unterminated \\["
+  - row: Connection-string parse errors
+    case: cases/errors/connection-source\.yaml
+    step: steps[2]
+    field: json
+    rust: "DATABASE_URL: unterminated \\["
+  - row: '`hostaddr`'
+    case: cases/connection/hostaddr\.yaml
+    field: db
+    go: <no database>
+  - row: '`hostaddr`'
+    case: cases/connection/hostaddr\.yaml
+    step: steps[0]
+    field: stderr
+    go: cannot resolve host "no-such-host\.invalid"
+  - row: '`keepalives*`, `load_balance_hosts`, `gssencmode=disable`/`prefer`, `gssdelegation=0`, `sslcompression=0`'
+    case: cases/connection/(keepalives|load-balance-hosts|sslcompression)\.yaml
+    field: db
+    go: <no database>
+  - row: '`min_protocol_version=3.2` or `latest`'
+    case: cases/connection/protocol-version\.yaml
+    step: steps[0]
+    field: db
+    rust: <no database>
+  - row: '`min_protocol_version=3.2` or `latest`'
+    case: cases/connection/protocol-version\.yaml
+    step: steps[1]
+    field: stderr
+    rust: Database "\{db\}" does not exist; creating
+  - row: A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB)
+    case: cases/formats/size-limits\.yaml
+    field: db
+    rust: <no database>
+  - row: A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB)
+    case: cases/formats/size-limits\.yaml
+    step: steps[2]
+    field: stderr
+    rust: Database "\{db\}" does not exist; creating
+  - row: A project `.env` over `PGMI_MAX_FILE_SIZE`
+    case: cases/config/dotenv-size-limit\.yaml
+    step: steps[0]
+    field: db
+    rust: <no database>
+  - row: A project `.env` over `PGMI_MAX_FILE_SIZE`
+    case: cases/config/dotenv-size-limit\.yaml
+    step: steps[1]
+    field: stderr
+    rust: Database "\{db\}" does not exist; creating
+  - row: '`metadata scaffold` project-root search'
+    case: cases/commands/metadata-scaffold-and-checks\.yaml
+    field: stderr
+    rust: '^Project root:'
+  - row: '`serve`: a line holding only `null`'
+    case: cases/serve/malformed\.yaml
+    field: stdout
+    rust: a request must be a JSON object, not null
+  - row: Wizards
+    case: cases/terminal/prompt-cancel\.yaml
+    step: steps[4]
+    field: stdout
+    go: pgmi - Connection Setup
+  - row: POSIX class such as `[[:space:]]` in `.pgmiignore`
+    case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
+    field: exit
+    go: '^10$'
+  - row: POSIX class such as `[[:space:]]` in `.pgmiignore`
+    case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
+    field: stderr
+    go: 'invalid pattern'
+  - row: POSIX class such as `[[:space:]]` in `.pgmiignore`
+    case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
+    field: json
+    go: '"exitCode": 10'
+  - row: POSIX class such as `[[:space:]]` in `.pgmiignore`
+    case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
+    field: stdout
+    go: '.'
+  - row: POSIX class such as `[[:space:]]` in `.pgmiignore`
+    case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
+    field: db
+    go: '<no database>'
+  - row: Unknown connection-string key
+    case: variant/connection:.*frobnicate=1.*
+    field: exit
+    go: '^11$'
+  - row: Unknown connection-string key
+    case: variant/connection:.*frobnicate=1.*
+    field: stderr
+    go: 'frobnicate'
+  - row: Unknown connection-string key
+    case: variant/connection:.*frobnicate=1.*
+    field: db
+    go: '<no database>'
+  - row: Connection-string parse errors
+    case: variant/connection:.*
+    field: stderr
+    rust: \(not shown, it may hold a password\)

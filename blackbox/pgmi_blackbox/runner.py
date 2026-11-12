@@ -13,6 +13,7 @@ import termios
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,17 @@ class Outcome:
 
 
 def run_case(case: Case, ws: Workspace) -> None:
+    def check(label: str, step: Step, outcome: Outcome | None) -> list[str]:
+        if outcome is None:
+            return _check_sql(ws, step.expect, label) + _check_files(ws, step.expect)
+        return _check(ws, step.expect, outcome)
+
+    failures = play(case, ws, check)
+    if failures:
+        raise AssertionError("\n\n".join(failures))
+
+
+def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | None"], list[str]]) -> list[str]:
     ws.project.mkdir(parents=True)
     ws.home.mkdir()
     try:
@@ -120,17 +132,16 @@ def run_case(case: Case, ws: Workspace) -> None:
                 time.sleep(step.delay)
             if step.sql is not None:
                 _run_sql(ws, step.sql, maintenance=step.maintenance)
-                failures += _check_sql(ws, step.expect, label) + _check_files(ws, step.expect)
+                failures += observe(label, step, None)
                 continue
             run = _start(ws, step)
             if step.background:
                 pending.append((label, step, run))
                 continue
-            failures += _check(ws, step.expect, _finish(label, step, run))
+            failures += observe(label, step, _finish(label, step, run))
         for label, step, run in pending:
-            failures += _check(ws, step.expect, _finish(label, step, run))
-        if failures:
-            raise AssertionError("\n\n".join(failures))
+            failures += observe(label, step, _finish(label, step, run))
+        return failures
     finally:
         _unlock_dirs(case, ws)
         _drop(ws)
