@@ -877,6 +877,7 @@ impl Dialer {
         Err(Unconnected {
             db: db.to_string(),
             maintenance: db == spec.maintenance_db && db != spec.target_db,
+            user: spec.user.clone(),
             failed,
             first: (first.name.clone(), first.port),
         })
@@ -1000,6 +1001,7 @@ fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
 pub(crate) struct Unconnected {
     db: String,
     maintenance: bool,
+    user: String,
     failed: Vec<Failed>,
     first: (String, u16),
 }
@@ -1050,7 +1052,22 @@ impl std::fmt::Display for Unconnected {
                 f.write_str("\nthe server is at max_connections; close idle backends or wait")?;
             }
             Some("57P03") => f.write_str("\nit is starting up or recovering; retry shortly")?,
+            Some("28P01") => {
+                f.write_str("\ncheck $PGPASSWORD, ~/.pgpass, or the connection string")?;
+            }
+            Some("42501") => write!(
+                f,
+                "\ngrant access with: GRANT CONNECT ON DATABASE {} TO {}",
+                self.db, self.user
+            )?,
             _ => {}
+        }
+        if self
+            .failed
+            .iter()
+            .any(|x| matches!(x, Failed::Lookup(u) if !u.transient))
+        {
+            f.write_str("\ncheck the host name's spelling, DNS, and $PGHOST")?;
         }
         if self.failed.iter().any(Failed::closed_early) {
             let (h, p) = &self.first;
@@ -1255,6 +1272,7 @@ mod tests {
         Unconnected {
             db: "m".into(),
             maintenance,
+            user: "u".into(),
             failed,
             first: ("h".into(), 5432),
         }
@@ -1274,6 +1292,15 @@ mod tests {
         );
         let target = unconnected(false, vec![server("3D000")]);
         assert_eq!(target, "connect to \"m\": h:5432: refused (SQLSTATE 3D000)");
+    }
+
+    #[test]
+    fn a_missing_connect_privilege_says_what_to_grant() {
+        let text = unconnected(false, vec![server("42501")]);
+        assert!(
+            text.ends_with("\ngrant access with: GRANT CONNECT ON DATABASE m TO u"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1328,6 +1355,7 @@ mod tests {
         Unconnected {
             db: db.into(),
             maintenance: false,
+            user: "u".into(),
             failed,
             first: (first.0.into(), first.1),
         }
@@ -1342,7 +1370,7 @@ mod tests {
         assert_eq!(sqlstate(&e), Some("42501"));
         assert_eq!(
             e.text(),
-            "connect to \"d\": h:5432: refused (SQLSTATE 42501)"
+            "connect to \"d\": h:5432: refused (SQLSTATE 42501)\ngrant access with: GRANT CONNECT ON DATABASE d TO u"
         );
         assert_eq!(
             sqlstate(&one(vec![server("3D000"), server("3D000")])),
@@ -1390,7 +1418,7 @@ mod tests {
         );
         assert_eq!(
             e.text(),
-            "connect to \"app\": h:5432: password authentication failed (SQLSTATE 28P01)"
+            "connect to \"app\": h:5432: password authentication failed (SQLSTATE 28P01)\ncheck $PGPASSWORD, ~/.pgpass, or the connection string"
         );
     }
 
