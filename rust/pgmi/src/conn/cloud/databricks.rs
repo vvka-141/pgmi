@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -318,57 +319,146 @@ fn parse_ini(text: &str) -> HashMap<String, HashMap<String, String>> {
 /// A Lakebase database credential, renewed before it expires.
 pub(crate) type Lakebase = Renewing<Signin>;
 
-/// The workspace sign-in that mints Lakebase credentials.
+/// The workspace sign-in that mints Lakebase credentials. The first route
+/// that gives a bearer token is kept, so every later credential comes from
+/// the same identity, as `azure::Signin` keeps its credential.
 pub(crate) struct Signin {
     settings: Settings,
     azure: azure::Signin,
+    pinned: OnceLock<Route>,
 }
 
 pub(crate) async fn lakebase(req: &Options, env: &Env) -> Result<Lakebase> {
     Renewing::start(Signin {
         settings: settings(req, env)?,
         azure: azure::Signin::new(req.clone(), env.clone(), azure::DATABRICKS),
+        pinned: OnceLock::new(),
     })
     .await
+}
+
+/// Why one sign-in route gave no bearer token.
+#[derive(Debug)]
+pub(crate) enum RouteError {
+    M2m(Error),
+    Cli(CliError),
+    Azure(Error),
+}
+
+impl std::fmt::Display for RouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteError::M2m(e) | RouteError::Azure(e) => e.fmt(f),
+            RouteError::Cli(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RouteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RouteError::M2m(e) | RouteError::Azure(e) => Some(e),
+            RouteError::Cli(e) => Some(e),
+        }
+    }
+}
+
+/// Every route tried gave no token. `Display` is the message; `source` is
+/// the first route's error.
+#[derive(Debug)]
+pub(crate) struct NoRoute {
+    host: String,
+    failures: Vec<(&'static str, RouteError)>,
+}
+
+impl std::fmt::Display for NoRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to sign in to Databricks at {}: no credential worked; set DATABRICKS_TOKEN, or DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET, or run databricks auth login",
+            self.host
+        )?;
+        for (route, e) in &self.failures {
+            write!(f, "\n\t{route}: {e}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for NoRoute {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.failures.first().map(|(_, e)| e as _)
+    }
+}
+
+impl From<NoRoute> for Error {
+    fn from(e: NoRoute) -> Self {
+        Error::connection(e.to_string()).with_cause(e)
+    }
 }
 
 impl Mint for Signin {
     type Value = Secret;
 
     async fn mint(&self) -> Result<Fetched> {
-        let bearer = self.bearer().await?;
+        let bearer = self.bearer(|route| self.through(route)).await?;
         credential(&self.settings, &bearer).await
     }
 }
 
 impl Signin {
-    async fn bearer(&self) -> Result<Secret> {
-        let s = &self.settings;
-        let mut failures = Vec::new();
-        for route in &s.routes {
-            let result = match route {
-                Route::Pat(token) => return Ok(token.clone()),
-                Route::M2m { client_id, secret } => {
-                    return m2m(&s.host, client_id, secret).await;
+    /// The bearer token from the pinned route, or from the first route that
+    /// gives one, which is then pinned. An OAuth M2M failure ends the search,
+    /// as in the Databricks SDK.
+    async fn bearer<G, F>(&self, through: G) -> Result<Secret>
+    where
+        G: Fn(Route) -> F,
+        F: Future<Output = std::result::Result<Secret, RouteError>>,
+    {
+        let host = &self.settings.host;
+        if let Some(route) = self.pinned.get() {
+            return through(route.clone()).await.map_err(|e| match e {
+                RouteError::M2m(e) => e,
+                e => NoRoute {
+                    host: host.clone(),
+                    failures: vec![(route.name(), e)],
                 }
-                Route::Cli => cli(s).await.map_err(|e| e.to_string()),
-                Route::Azure => self
-                    .azure
-                    .mint()
-                    .await
-                    .map(|f| f.value)
-                    .map_err(|e| e.text()),
-            };
-            match result {
-                Ok(t) => return Ok(t),
-                Err(e) => failures.push(format!("\t{}: {e}", route.name())),
+                .into(),
+            });
+        }
+        let mut failures = Vec::new();
+        for route in &self.settings.routes {
+            match through(route.clone()).await {
+                Ok(t) => {
+                    let _ = self.pinned.set(route.clone());
+                    return Ok(t);
+                }
+                Err(RouteError::M2m(e)) => return Err(e),
+                Err(e) => failures.push((route.name(), e)),
             }
         }
-        Err(Error::connection(format!(
-            "failed to sign in to Databricks at {}: no credential worked; set DATABRICKS_TOKEN, or DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET, or run databricks auth login\n{}",
-            s.host,
-            failures.join("\n")
-        )))
+        Err(NoRoute {
+            host: host.clone(),
+            failures,
+        }
+        .into())
+    }
+
+    async fn through(&self, route: Route) -> std::result::Result<Secret, RouteError> {
+        let s = &self.settings;
+        match route {
+            Route::Pat(token) => Ok(token),
+            Route::M2m { client_id, secret } => m2m(&s.host, &client_id, &secret)
+                .await
+                .map_err(RouteError::M2m),
+            Route::Cli => cli(s).await.map_err(RouteError::Cli),
+            Route::Azure => self
+                .azure
+                .mint()
+                .await
+                .map(|f| f.value)
+                .map_err(RouteError::Azure),
+        }
     }
 }
 
@@ -656,7 +746,82 @@ async fn send(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    fn signin(routes: Vec<Route>) -> Signin {
+        Signin {
+            settings: Settings {
+                host: "https://adb-1.azuredatabricks.net".into(),
+                endpoint: EP.into(),
+                profile: None,
+                routes,
+            },
+            azure: azure::Signin::new(Options::default(), Env::default(), azure::DATABRICKS),
+            pinned: OnceLock::new(),
+        }
+    }
+
+    async fn bearer(
+        s: &Signin,
+        tried: &Mutex<Vec<&'static str>>,
+        works: &[&str],
+    ) -> Result<Secret> {
+        s.bearer(|route| {
+            let name = route.name();
+            tried.lock().unwrap().push(name);
+            let ok = works.contains(&name);
+            async move {
+                if ok {
+                    Ok(Secret::from(name))
+                } else {
+                    Err(RouteError::Cli(CliError::NoToken))
+                }
+            }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn every_bearer_after_the_first_comes_from_the_route_that_worked() {
+        let s = signin(vec![Route::Cli, Route::Azure]);
+        let tried = Mutex::new(Vec::new());
+        assert_eq!(
+            bearer(&s, &tried, &["azure"]).await.unwrap().expose(),
+            "azure"
+        );
+        assert_eq!(*tried.lock().unwrap(), ["databricks-cli", "azure"]);
+        tried.lock().unwrap().clear();
+        let e = bearer(&s, &tried, &["databricks-cli"]).await.unwrap_err();
+        assert_eq!(*tried.lock().unwrap(), ["azure"]);
+        assert_eq!(e.exit_code(), 11);
+        assert!(
+            e.text()
+                .ends_with("\n\tazure: databricks auth token printed no access_token"),
+            "{}",
+            e.text()
+        );
+    }
+
+    #[tokio::test]
+    async fn no_route_names_each_failure_and_keeps_the_first_as_the_source() {
+        let s = signin(vec![Route::Cli, Route::Azure]);
+        let tried = Mutex::new(Vec::new());
+        let e = bearer(&s, &tried, &[]).await.unwrap_err();
+        assert_eq!(
+            e.text(),
+            "failed to sign in to Databricks at https://adb-1.azuredatabricks.net: no credential worked; set DATABRICKS_TOKEN, or DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET, or run databricks auth login\n\tdatabricks-cli: databricks auth token printed no access_token\n\tazure: databricks auth token printed no access_token"
+        );
+        let cause = std::error::Error::source(&e)
+            .and_then(|c| c.downcast_ref::<NoRoute>())
+            .and_then(std::error::Error::source)
+            .and_then(|c| c.downcast_ref::<RouteError>());
+        assert!(matches!(cause, Some(RouteError::Cli(CliError::NoToken))));
+        tried.lock().unwrap().clear();
+        bearer(&s, &tried, &["azure"]).await.unwrap();
+        assert_eq!(*tried.lock().unwrap(), ["databricks-cli", "azure"]);
+    }
 
     fn req(endpoint: Option<&str>) -> Options {
         Options {
@@ -940,6 +1105,7 @@ mod tests {
                 ],
             },
             azure: azure::Signin::new(Options::default(), Env::default(), azure::DATABRICKS),
+            pinned: OnceLock::new(),
         };
         let source = Lakebase::holding(
             signin,
