@@ -47,3 +47,14 @@ def test_an_entry_accepts_only_its_case_step_field_and_pattern(tmp_path):
         Difference("variant/conn: x", "steps[0]", "exit", "11", "13"),
     ):
         assert allow.reason(other) is None
+
+
+def test_rewrites_accept_only_what_they_leave_equal(tmp_path):
+    allow = _allow(tmp_path, "{row: Unknown key, case: x, field: stderr, go: '(?<=: )infix: ', go_as: ''}")
+    assert allow.reason(Difference("x", "steps[0]", "stderr", "e: infix: a", "e: a")) == "0.20: Unknown key"
+    assert allow.reason(Difference("x", "steps[0]", "stderr", "e: infix: a", "e: b")) is None
+
+
+def test_a_rewrite_needs_the_pattern_it_rewrites(tmp_path):
+    with pytest.raises(ValueError, match="rust_as rewrites what rust matches"):
+        _allow(tmp_path, "{row: Unknown key, case: x, field: exit, go: '1', rust_as: ''}")

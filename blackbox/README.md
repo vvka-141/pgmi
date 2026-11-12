@@ -168,8 +168,11 @@ variants `hypothesis` generates with a fixed seed: connection strings,
 compares the exit code, stdout, stderr, the `--json` record and the target
 database's catalog (schemas, relations, columns, functions, ACLs, roles named
 after the database, row counts). Only the workspace paths, the database name,
-durations, each binary's version and build line, UUIDs, the volatile `--json`
-keys and the order of `serve` answers (they answer concurrently) are normalised.
+durations, each binary's version and build line, UUIDs, the server's process
+ids and OIDs (`process 121`, `relation 16862`), the volatile `--json` keys and
+the order of `serve` answers (they answer concurrently) are normalised. JSON on
+stdout, a whole document or one per line, is compared as data: key order and
+string escapes do not count.
 
 A difference is accepted when:
 
@@ -180,6 +183,10 @@ A difference is accepted when:
   regex for the whole case path or variant name, `field` one of `exit`,
   `stdout`, `stderr`, `json`, `db`, `error`; optional `step`; and at least one
   of `go`/`rust`, a regex the output must contain. Keep entries narrow.
+- after the rewrites of the entries that match it, the two outputs are equal:
+  an entry with `go_as` (or `rust_as`) replaces what its `go` (or `rust`)
+  pattern matches with that text instead of accepting the whole difference, so
+  it explains one wording change and nothing else in the same output.
 
 `skip` in the same file names cases a lockstep comparison cannot judge, each
 with its reason. Never edit a case's expectations to quiet the harness.

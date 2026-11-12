@@ -36,6 +36,7 @@ _DURATION = re.compile(r"\b(\d+(\.\d+)?(h|ms|µs|us|ns|m|s))+\b")
 _BUILD = re.compile(r"^Commit: .*, Built: .*$", re.MULTILINE)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 _JSON_VOLATILE = {"durationMs", "startedAt", "finishedAt"}
+_SERVER_NUMBER = re.compile(r"\b((?:[Pp]rocess|PID|pid|relation|database|transaction|OID|oid) )\d+\b")
 
 _USER = r"n.nspname !~ '^(pg_|information_schema$)'"
 _CATALOG = f"""
@@ -108,6 +109,7 @@ def normalise(text: str, ws: Workspace) -> str:
         (ws.database, "{db}"),
     ):
         text = text.replace(value, name)
+    text = _SERVER_NUMBER.sub(r"\1<n>", text)
     return _DURATION.sub("<duration>", _UUID.sub("<uuid>", _BUILD.sub("<build>", text)))
 
 
@@ -138,12 +140,32 @@ def _fields(ws: Workspace, step: Step, o: Outcome) -> dict[str, str]:
     except json.JSONDecodeError:
         record = None
     if record is None:
-        values["stdout"] = normalise(o.stdout, ws)
-        if step.args[0] == "serve":
-            values["stdout"] = "\n".join(sorted(values["stdout"].splitlines()))
+        values["stdout"] = _stdout(o.stdout, ws, sort=step.args[0] == "serve")
     else:
-        values["json"] = json.dumps(_normalise_json(record, ws), indent=1, sort_keys=True, ensure_ascii=False)
+        values["json"] = _canonical(record, ws, indent=1)
     return values
+
+
+def _canonical(value: Any, ws: Workspace, indent: int | None = None) -> str:
+    return json.dumps(_normalise_json(value, ws), indent=indent, sort_keys=True, ensure_ascii=False)
+
+
+def _stdout(text: str, ws: Workspace, sort: bool) -> str:
+    try:
+        return _canonical(json.loads(text), ws, indent=1)
+    except json.JSONDecodeError:
+        pass
+    lines = [_json_line(line, ws) for line in text.splitlines()]
+    return "\n".join(sorted(lines) if sort else lines) + ("\n" if text.endswith("\n") else "")
+
+
+def _json_line(line: str, ws: Workspace) -> str:
+    if line.startswith(("{", "[")):
+        try:
+            return _canonical(json.loads(line), ws)
+        except json.JSONDecodeError:
+            pass
+    return normalise(line, ws)
 
 
 def observe(case: Case, ws: Workspace) -> list[Observation]:
@@ -192,15 +214,30 @@ class Allowance:
     field: str
     go: re.Pattern[str] | None
     rust: re.Pattern[str] | None
+    go_as: str | None = None
+    rust_as: str | None = None
+
+    @property
+    def rewrites(self) -> bool:
+        return self.go_as is not None or self.rust_as is not None
+
+    def applies(self, d: Difference) -> bool:
+        return self.case.fullmatch(d.subject) is not None and self.step in (None, d.step) and self.field == d.field
 
     def accepts(self, d: Difference) -> bool:
         return (
-            self.case.fullmatch(d.subject) is not None
-            and self.step in (None, d.step)
-            and self.field == d.field
+            self.applies(d)
             and (self.go is None or self.go.search(_shown(d.go)) is not None)
             and (self.rust is None or self.rust.search(_shown(d.rust)) is not None)
         )
+
+    def rewrite(self, d: Difference) -> Difference:
+        go, rust = d.go, d.rust
+        if self.go_as is not None and go is not None:
+            go = self.go.sub(self.go_as, go)
+        if self.rust_as is not None and rust is not None:
+            rust = self.rust.sub(self.rust_as, rust)
+        return replace(d, go=go, rust=rust)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +246,18 @@ class AllowList:
     accept: tuple[Allowance, ...] = ()
 
     def reason(self, d: Difference) -> str | None:
-        return next((f"0.20: {a.row}" for a in self.accept if a.accepts(d)), None)
+        plain = next((a.row for a in self.accept if not a.rewrites and a.accepts(d)), None)
+        if plain is not None:
+            return f"0.20: {plain}"
+        rows: list[str] = []
+        for a in self.accept:
+            if a.rewrites and a.accepts(d):
+                d = a.rewrite(d)
+                rows.append(a.row)
+        if d.go == d.rust:
+            return "0.20: " + "; ".join(dict.fromkeys(rows))
+        row = next((a.row for a in self.accept if not a.rewrites and a.accepts(d)), None)
+        return None if row is None else "0.20: " + "; ".join(dict.fromkeys([*rows, row]))
 
 
 def contract_rows(text: str) -> set[str]:
@@ -224,14 +272,18 @@ def load_allow(path: Path, contract: Path = CONTRACT) -> AllowList:
     accept = []
     for i, entry in enumerate(doc.get("accept") or []):
         at = f"{path.name}: accept[{i}]"
-        if set(entry) - {"row", "case", "step", "field", "go", "rust"} or not {"row", "case", "field"} <= set(entry):
-            raise ValueError(f"{at}: needs row, case and field; may have step, go and rust")
+        keys = {"row", "case", "step", "field", "go", "rust", "go_as", "rust_as"}
+        if set(entry) - keys or not {"row", "case", "field"} <= set(entry):
+            raise ValueError(f"{at}: needs row, case and field; may have step, go, rust, go_as and rust_as")
         if entry["row"] not in rows:
             raise ValueError(f"{at}: row {entry['row']!r} is not a row or heading of '{SECTION}' in {contract.name}")
         if entry["field"] not in FIELDS:
             raise ValueError(f"{at}: field must be one of {', '.join(FIELDS)}")
         if "go" not in entry and "rust" not in entry:
             raise ValueError(f"{at}: needs a go or a rust pattern, so it matches narrowly")
+        for side in ("go", "rust"):
+            if f"{side}_as" in entry and side not in entry:
+                raise ValueError(f"{at}: {side}_as rewrites what {side} matches, so it needs {side}")
         accept.append(
             Allowance(
                 entry["row"],
@@ -240,6 +292,8 @@ def load_allow(path: Path, contract: Path = CONTRACT) -> AllowList:
                 entry["field"],
                 re.compile(entry["go"], re.MULTILINE) if "go" in entry else None,
                 re.compile(entry["rust"], re.MULTILINE) if "rust" in entry else None,
+                entry.get("go_as"),
+                entry.get("rust_as"),
             )
         )
     return AllowList(dict(doc.get("skip") or {}), tuple(accept))
