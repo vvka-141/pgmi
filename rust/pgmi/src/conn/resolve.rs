@@ -447,6 +447,8 @@ pub(crate) struct Spec {
     pub(crate) passfile: Option<PathBuf>,
     pub(crate) maintenance_db: String,
     pub(crate) target_db: String,
+    /// The connection string's own database when `-d` named another.
+    pub(crate) replaced_db: Option<String>,
     /// The mode asked for; `sslmode()` is the one used.
     pub(crate) requested_sslmode: Option<SslMode>,
     pub(crate) sslmode_source: SslModeSource,
@@ -635,7 +637,8 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
     let Databases {
         target: target_db,
         maintenance: maintenance_db,
-    } = databases(flags, string_db.as_deref(), env, yaml)?;
+        replaced: replaced_db,
+    } = databases(flags, string_db.as_deref(), source, env, yaml)?;
     let hosts = take_hosts(f)?;
     let tls = TlsSettings::take(f)?;
     check_protocol(f)?;
@@ -666,6 +669,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         passfile: f.remove("passfile").map(PathBuf::from),
         maintenance_db,
         target_db,
+        replaced_db,
         requested_sslmode: tls.requested_sslmode,
         sslmode_source,
         sslrootcert: tls.sslrootcert,
@@ -764,11 +768,13 @@ fn merge(
 struct Databases {
     target: String,
     maintenance: String,
+    replaced: Option<String>,
 }
 
 fn databases(
     flags: &Flags,
     string_db: Option<&str>,
+    source: Source,
     env: &Env,
     yaml: Option<&YamlConnection>,
 ) -> Result<Databases> {
@@ -787,9 +793,16 @@ fn databases(
         .map(str::to_string)
         .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
         .unwrap_or_else(|| "postgres".into());
+    let own = match string_db {
+        Some(d) => Some(d.to_string()),
+        None if source.is_string() => env.non_empty("PGDATABASE")?.map(str::to_string),
+        None => None,
+    };
+    let replaced = flags.database.as_ref().and(own).filter(|d| *d != target);
     Ok(Databases {
         target,
         maintenance,
+        replaced,
     })
 }
 

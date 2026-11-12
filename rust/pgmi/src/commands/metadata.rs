@@ -9,15 +9,35 @@ use crate::cli::{MetadataArgs, MetadataCommand, MetadataReport, ScaffoldArgs};
 use crate::config::edit::write_atomic;
 use crate::env::Env;
 use crate::error::{Error, Result};
+use crate::output::Reporter;
 use crate::project::metadata::{self, Meta, MetaError};
 use crate::project::walk::{self, File, is_sql};
 
-pub(crate) fn run(a: &MetadataArgs, env: &Env, help: impl FnOnce() -> Result<()>) -> Result<()> {
+pub(crate) fn run(
+    a: &MetadataArgs,
+    verbose: bool,
+    env: &Env,
+    help: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let reporter = Reporter::new(verbose, env);
     match &a.command {
         None => help(),
-        Some(MetadataCommand::Plan(r)) => plan(r, env),
-        Some(MetadataCommand::Validate(r)) => validate(r, env),
-        Some(MetadataCommand::Scaffold(s)) => scaffold(s, env),
+        Some(MetadataCommand::Plan(r)) => {
+            reporter.verbose(&format!("Project path: {}", r.path.display()));
+            reporter.verbose(&format!("JSON output: {}", r.json));
+            plan(r, env)
+        }
+        Some(MetadataCommand::Validate(r)) => {
+            reporter.verbose(&format!("Project path: {}", r.path.display()));
+            reporter.verbose(&format!("JSON output: {}", r.json));
+            validate(r, env)
+        }
+        Some(MetadataCommand::Scaffold(s)) => {
+            reporter.verbose(&format!("Project path: {}", s.path.display()));
+            reporter.verbose(&format!("Preview only: {}", !s.write));
+            reporter.verbose(&format!("Default idempotent: {}", s.idempotent));
+            scaffold(s, env)
+        }
     }
 }
 

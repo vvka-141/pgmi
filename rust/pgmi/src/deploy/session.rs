@@ -26,8 +26,6 @@ async fn load_json(client: &Client, sql: &str, payload: serde_json::Value) -> Re
 }
 
 pub(crate) struct Load<'a> {
-    pub(crate) version: &'a str,
-    pub(crate) params: &'a BTreeMap<String, String>,
     pub(crate) sources: &'a [File],
     pub(crate) tests: &'a [File],
     pub(crate) test_dir_files: &'a [String],
@@ -36,9 +34,7 @@ pub(crate) struct Load<'a> {
 
 const BATCH_BYTES: usize = 8 << 20;
 
-/// Fills the session tables, then gives them planner statistics: autovacuum
-/// never sees a temp table, and pgmi's plan and test queries join them.
-pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
+pub(crate) async fn create_tables(client: &Client, version: &str) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
@@ -46,20 +42,36 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
     load_json(
         client,
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",
-        json!([l.version]),
+        json!([version]),
     )
-    .await?;
-    if !l.params.is_empty() {
-        let rows: Vec<_> = l.params.iter().map(|(k, v)| json!([k, v])).collect();
-        load_json(
-            client,
-            "WITH p AS (SELECT r->>0 AS k, r->>1 AS v FROM jsonb_array_elements($1::text::jsonb) r), \
-             i AS (INSERT INTO pg_temp._pgmi_parameter (key, value) SELECT k, v FROM p) \
-             SELECT set_config('pgmi.' || k, v, false) FROM p",
-            json!(rows),
-        )
-        .await?;
+    .await
+}
+
+pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, String>) -> Result<()> {
+    if params.is_empty() {
+        return Ok(());
     }
+    let rows: Vec<_> = params.iter().map(|(k, v)| json!([k, v])).collect();
+    load_json(
+        client,
+        "WITH p AS (SELECT r->>0 AS k, r->>1 AS v FROM jsonb_array_elements($1::text::jsonb) r), \
+         i AS (INSERT INTO pg_temp._pgmi_parameter (key, value) SELECT k, v FROM p) \
+         SELECT set_config('pgmi.' || k, v, false) FROM p",
+        json!(rows),
+    )
+    .await
+}
+
+pub(crate) async fn apply_contract(client: &Client) -> Result<()> {
+    client
+        .batch_execute(shared_sql("contract/api-v1.sql")?)
+        .await
+        .map_err(|e| sql_error("create the session API views", e))
+}
+
+/// Fills the file tables, then gives them planner statistics: autovacuum
+/// never sees a temp table, and pgmi's plan and test queries join them.
+pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
     let mut batch = Vec::new();
     let mut size = 0;
     for f in l.sources {
@@ -123,10 +135,6 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
             .await
             .map_err(|e| sql_error("analyze the session tables", e))?;
     }
-    client
-        .batch_execute(shared_sql("contract/api-v1.sql")?)
-        .await
-        .map_err(|e| sql_error("create the session API views", e))?;
     Ok(())
 }
 

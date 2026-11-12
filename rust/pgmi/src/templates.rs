@@ -53,6 +53,29 @@ impl Template {
         }
     }
 
+    /// What a scaffold writes, in the order `pgmi init -v` names it: the
+    /// template's files by their embedded names, then the shared skills.
+    pub(crate) fn sources(self) -> io::Result<Vec<Source>> {
+        let names = |root: &str| -> io::Result<Vec<String>> {
+            Ok(vfs::files(&EmbeddedFs::new(root))?
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect())
+        };
+        let mut out: Vec<Source> = names(&format!("templates/{self}"))?
+            .into_iter()
+            .map(Source::Template)
+            .collect();
+        if self != Template::Minimal {
+            out.extend(
+                names("skills")?
+                    .into_iter()
+                    .map(|p| Source::Shared(format!(".agents/skills/{p}"))),
+            );
+        }
+        Ok(out)
+    }
+
     /// The files of a new project named `project`, as `(relative path,
     /// bytes)`: the embedded template with `{{PROJECT_NAME}}` filled in,
     /// `.scaffold` suffixes dropped, a first line in `deploy.sql` naming
@@ -86,6 +109,27 @@ impl Template {
                 }
             })
             .collect())
+    }
+}
+
+/// One file a scaffold writes, by the name it is embedded under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Source {
+    Template(String),
+    Shared(String),
+}
+
+impl Source {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Source::Template(n) | Source::Shared(n) => n,
+        }
+    }
+
+    /// The path the file is written to in the project.
+    pub(crate) fn path(&self) -> &str {
+        let name = self.name();
+        name.strip_suffix(".scaffold").unwrap_or(name)
     }
 }
 

@@ -1,0 +1,46 @@
+description: -v names each step in order - the --database choice, the resolved connection (never its password), the scan, how the database was found, created or recreated, the session tables, the API contract, TLS, the test macros and the units; init and metadata name their inputs and every file written; ignored paths follow the summary line
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CALL pgmi_test();
+      COMMIT;
+      SELECT 1;
+    a.sql: SELECT 1;
+    __test__/test_a.sql: SELECT 1;
+    .hidden: x
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v]
+    expect:
+      exit: 0
+      stderr:
+        - '(?s)^\[VERBOSE\] Using --database flag \({db}\) instead of connection string database \(postgres\)\n\[VERBOSE\] Connection resolved:\n  Host: {host}\n  Port: {port}\n  User: {user}\n  Target Database: {db}\n  Maintenance Database: postgres\n  SSL Mode: prefer\n  Auth Method: Standard\n\[VERBOSE\] Deploying to database "{db}"\n\[VERBOSE\] Source path: {project}\n\[VERBOSE\] Scanning {project}\n\[VERBOSE\] Found 2 files to load\n\[VERBOSE\] Database "{db}" not found; using the maintenance database to create it\n\[VERBOSE\] Connecting to maintenance database "postgres"\nDatabase "{db}" does not exist; creating\n\[VERBOSE\] Created database "{db}"\nPreparing session: scanning files, loading parameters\n\[VERBOSE\] Connecting to database "{db}"\n\[VERBOSE\] Creating pg_temp internal tables\n\[VERBOSE\] Loading files into pg_temp._pgmi_source\nLoaded 2 files\n\[VERBOSE\] Loading parameters into pg_temp._pgmi_parameter\n\[VERBOSE\] Applying API contract\n\[VERBOSE\] Applied API contract v1\n\[VERBOSE\] TLS: none \(sslmode=prefer\)\nExecuting deploy.sql\n\[VERBOSE\] Expanded 1 test macro\(s\) in deploy.sql\n\[VERBOSE\] deploy.sql splits into 2 execution units at the first top-level transaction terminator\n\[\d+\.\d\ds\] \[pgmi\] Test suite started\n'
+        - '(?s)^ok {db}: 2 files loaded, 1 paths ignored in \d+\.\d\ds\n  ignored \./\.hidden \(built-in\)$'
+      stderr_not: [':{password}@', '(?i)password']
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v]
+    expect:
+      exit: 0
+      stderr: ['(?s)\[VERBOSE\] Found 2 files to load\n\[VERBOSE\] Database "{db}" already exists\nPreparing session']
+      stderr_not: [not found; using the maintenance database, Created database]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v, --overwrite, --force]
+    expect:
+      exit: 0
+      stderr: ['(?s)\[VERBOSE\] Found 2 files to load\n\[VERBOSE\] Connecting to maintenance database "postgres"\n\[VERBOSE\] Database "{db}" exists; requesting approval\n--force: dropping and recreating "{db}"\n\[VERBOSE\] Preserving encoding \S+, collation \S+ across the recreate\n\[VERBOSE\] DROP DATABASE "{db}"\n\[VERBOSE\] CREATE DATABASE "{db}"\nRecreated database "{db}"\nPreparing session']
+      stderr_not: [already exists]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v, --json]
+    expect:
+      exit: 0
+      stderr_not: ['ignored \./\.hidden']
+  - pgmi: [init, "{workdir}/fresh", -t, basic, -v]
+    expect:
+      exit: 0
+      stderr:
+        - '(?s)^\[VERBOSE\] Creating project ''fresh'' at {workdir}/fresh with template ''basic''\n\[VERBOSE\] Creating file: \.gitignore\n.*\[VERBOSE\] Creating directory: __test__\n\[VERBOSE\] Creating file: __test__/test_function_privileges\.sql\n.*\[VERBOSE\] Creating directory: physical/__test__\n.*\[VERBOSE\] Creating file: \.agents/skills/pgmi-sql/SKILL\.md\n.*\[VERBOSE\] Project created successfully\n'
+  - pgmi: [metadata, plan, "{project}", -v]
+    expect:
+      exit: 0
+      stderr: ['(?s)^\[VERBOSE\] Project path: {project}\n\[VERBOSE\] JSON output: false\n']
+  - pgmi: [metadata, scaffold, "{project}", --sort-key, ./, --idempotent=false, -v]
+    expect:
+      exit: 0
+      stderr: ['(?s)^\[VERBOSE\] Project path: {project}\n\[VERBOSE\] Preview only: true\n\[VERBOSE\] Default idempotent: false\n']

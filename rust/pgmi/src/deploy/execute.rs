@@ -4,9 +4,10 @@ use std::sync::Arc;
 use tokio_postgres::types::Type;
 
 use super::blame::{Blame, Sent};
+use super::record::Tls;
 use super::script::{self, LineMap, Unit};
 use super::session::{self, Load};
-use super::{Execution, Failure, Guard, sql_error};
+use super::{ContractVersion, Execution, Failure, Guard, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
 use crate::conn::tap::TxStatus;
@@ -22,6 +23,9 @@ pub(crate) struct Input<'a> {
     pub(crate) project: &'a Project,
     pub(crate) meta: &'a [Meta],
     pub(crate) params: &'a BTreeMap<String, String>,
+    pub(crate) database: &'a str,
+    pub(crate) contract: ContractVersion,
+    pub(crate) tls: &'a Tls,
     pub(crate) verbose: bool,
     pub(crate) files_loaded: usize,
     pub(crate) execution: &'a mut Option<Execution>,
@@ -67,31 +71,45 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         project,
         meta,
         params,
+        database,
+        contract,
+        tls,
         verbose,
         files_loaded,
         execution,
     } = r;
+    let client = &session.client;
     reporter.line("Preparing session: scanning files, loading parameters");
+    reporter.verbose(&format!("Connecting to database \"{database}\""));
+    reporter.verbose("Creating pg_temp internal tables");
     guard
-        .running(
-            session,
-            session::load(
-                &session.client,
-                Load {
-                    version: VERSION,
-                    params,
-                    sources: &project.sources,
-                    tests: &project.tests,
-                    test_dir_files: &project.test_dir_files,
-                    metadata: meta,
-                },
-            ),
-        )
+        .running(session, session::create_tables(client, VERSION))
+        .await?;
+    reporter.verbose("Loading files into pg_temp._pgmi_source");
+    let files = Load {
+        sources: &project.sources,
+        tests: &project.tests,
+        test_dir_files: &project.test_dir_files,
+        metadata: meta,
+    };
+    guard
+        .running(session, session::load_files(client, files))
         .await?;
     reporter.line(&format!("Loaded {files_loaded} files"));
+    reporter.verbose("Loading parameters into pg_temp._pgmi_parameter");
+    guard
+        .running(session, session::load_params(client, params))
+        .await?;
     if !params.is_empty() {
         reporter.line(&format!("Loaded {} parameter(s)", params.len()));
     }
+    reporter.verbose("Applying API contract");
+    guard
+        .running(session, session::apply_contract(client))
+        .await?;
+    reporter.verbose(&format!("Applied API contract v{}", contract.as_str()));
+    reporter.verbose(&tls.line());
+    reporter.line("Executing deploy.sql");
     let mut units: Vec<(Unit, LineMap)> = Vec::new();
     let mut count = 0;
     for unit in script::split(&project.deploy_sql) {
@@ -123,6 +141,18 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             lines,
         ));
     }
+    if count > 0 {
+        reporter.verbose(&format!("Expanded {count} test macro(s) in deploy.sql"));
+    }
+    if let Some(notice) = unused_tests_notice(project, count) {
+        reporter.line(&notice);
+    }
+    if units.len() > 1 {
+        reporter.verbose(&format!(
+            "deploy.sql splits into {} execution units at the first top-level transaction terminator",
+            units.len()
+        ));
+    }
     if verbose {
         guard
             .running(session, async {
@@ -140,10 +170,6 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         committed: 0,
         failure: None,
     });
-    reporter.line("Executing deploy.sql");
-    if let Some(notice) = unused_tests_notice(project, count) {
-        reporter.line(&notice);
-    }
     for (i, (unit, lines)) in units.iter().enumerate() {
         let outcome = guard
             .running(session, async {

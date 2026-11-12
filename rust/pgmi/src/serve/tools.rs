@@ -227,6 +227,7 @@ fn init(arguments: Option<&RawValue>) -> Result<Value, Error> {
         target,
         init::template(template)?,
         args.string("name")?.as_deref(),
+        &|_| {},
     )?;
     Ok(json!({"created": true, "path": path, "template": template}))
 }
@@ -497,7 +498,7 @@ fn deploy_context(
 }
 
 async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
-    let reporter = Reporter::new(ctx.verbose, &ctx.env);
+    let reporter = Reporter::unstamped(ctx.verbose, &ctx.env);
     let mut run = Run::start();
     let result = run.deploy(&ctx, &reporter, Stop::on(token)).await;
     let secrets = run.secrets();

@@ -279,3 +279,5 @@ bad-weather/startup-refusals-retried
 bad-weather/reset-in-transaction
 bad-weather/reset-in-tail
 bad-weather/reset-in-session-setup
+commands/verbose-lines
+notices/deploy-sql-message-level

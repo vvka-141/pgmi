@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,8 @@ use crate::cli::InitArgs;
 use crate::commands::config::interrupted;
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::templates::Template;
+use crate::output::Reporter;
+use crate::templates::{Source, Template};
 use crate::tui;
 use crate::tui::init::Done;
 use crate::vfs::{FileKind, OsFs, Vfs};
@@ -61,7 +63,12 @@ pub(crate) fn check_empty(target: &impl Vfs) -> Result<()> {
     )))
 }
 
-pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> Result<()> {
+pub(crate) fn run(
+    a: &InitArgs,
+    verbose: bool,
+    env: &Env,
+    runtime: &tokio::runtime::Handle,
+) -> Result<()> {
     let target = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     check_empty(&OsFs::new(&target))?;
     let mut connection = None;
@@ -82,7 +89,8 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
         }
         None => Template::Minimal,
     };
-    scaffold(&target, template, None)?;
+    let reporter = Reporter::new(verbose, env);
+    scaffold(&target, template, None, &|n| reporter.verbose(n))?;
     let _ = writeln!(
         std::io::stderr(),
         "Wrote {} ({template} template).",
@@ -115,7 +123,12 @@ pub(crate) fn run(a: &InitArgs, env: &Env, runtime: &tokio::runtime::Handle) -> 
     Ok(())
 }
 
-pub(crate) fn scaffold(target: &Path, template: Template, name: Option<&str>) -> Result<()> {
+pub(crate) fn scaffold(
+    target: &Path,
+    template: Template,
+    name: Option<&str>,
+    note: &dyn Fn(&str),
+) -> Result<()> {
     let name = match name {
         Some(n) => n.to_string(),
         None => std::path::absolute(target)
@@ -123,12 +136,32 @@ pub(crate) fn scaffold(target: &Path, template: Template, name: Option<&str>) ->
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "project".into()),
     };
-    let files = template
-        .render(&name, crate::VERSION)
-        .map_err(|e| Error::internal(format!("embedded template {template}: {e}")))?;
-    for (rel, bytes) in writable(&OsFs::new(target), files) {
-        write(&target.join(&rel), &bytes)?;
+    let embedded =
+        |e: std::io::Error| Error::internal(format!("embedded template {template}: {e}"));
+    let rendered = template.render(&name, crate::VERSION).map_err(embedded)?;
+    let mut files: BTreeMap<String, Vec<u8>> = writable(&OsFs::new(target), rendered).collect();
+    note(&format!(
+        "Creating project '{name}' at {} with template '{template}'",
+        target.display()
+    ));
+    let mut dirs = BTreeSet::new();
+    for source in template.sources().map_err(embedded)? {
+        if let Source::Template(n) = &source {
+            for (i, _) in n.match_indices('/') {
+                if dirs.insert(n[..i].to_string()) {
+                    note(&format!("Creating directory: {}", &n[..i]));
+                }
+            }
+        }
+        match files.remove(source.path()) {
+            Some(bytes) => {
+                note(&format!("Creating file: {}", source.name()));
+                write(&target.join(source.path()), &bytes)?;
+            }
+            None => note(&format!("Skipping existing: {}", source.name())),
+        }
     }
+    note("Project created successfully");
     Ok(())
 }
 
@@ -313,7 +346,7 @@ mod tests {
     fn scaffolding_never_replaces_an_existing_file() {
         let dir = crate::testdir::TempDir::new("init-exclusive");
         std::fs::write(dir.join("deploy.sql"), "SELECT 'mine';").unwrap();
-        let e = scaffold(dir.path(), Template::Minimal, Some("p")).unwrap_err();
+        let e = scaffold(dir.path(), Template::Minimal, Some("p"), &|_| {}).unwrap_err();
         assert_eq!(e.exit_code(), 1);
         assert!(e.text().starts_with("write "), "{}", e.text());
         assert_eq!(
@@ -327,7 +360,7 @@ mod tests {
     fn a_dangling_kept_link_is_written_through() {
         let dir = crate::testdir::TempDir::new("init-dangling");
         std::os::unix::fs::symlink("real.yaml", dir.join("pgmi.yaml")).unwrap();
-        scaffold(dir.path(), Template::Basic, Some("p")).unwrap();
+        scaffold(dir.path(), Template::Basic, Some("p"), &|_| {}).unwrap();
         assert!(dir.join("real.yaml").is_file());
     }
 

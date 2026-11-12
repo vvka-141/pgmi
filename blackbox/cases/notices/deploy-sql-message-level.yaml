@@ -1,0 +1,17 @@
+description: LOG and DEBUG that deploy.sql asks for itself by lowering client_min_messages reach stderr and --json without -v, as bare messages; the server's own DEBUG (an implicit index) still stays back
+project:
+  files:
+    deploy.sql: |
+      SET client_min_messages = log;
+      DO $$ BEGIN RAISE LOG 'log-marker-903'; END $$;
+      SET client_min_messages = debug;
+      DO $$ BEGIN RAISE DEBUG 'debug-marker-903'; END $$;
+      CREATE TABLE keyed (id int PRIMARY KEY);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      stderr: ['^log-marker-903$', '^debug-marker-903$']
+      stderr_not: [will create implicit index, 'LOG:', 'DEBUG:']
+      stdout: ['"severity": "LOG"', '"message": "log-marker-903"', '"severity": "DEBUG"', '"message": "debug-marker-903"']
+      stdout_not: [will create implicit index]

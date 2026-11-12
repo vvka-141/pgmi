@@ -79,10 +79,21 @@ pub(crate) enum Style {
     Colored,
 }
 
+fn style(env: &Env) -> Style {
+    let term = std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
+    let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
+    match (term, no_color) {
+        (false, _) => Style::Plain,
+        (true, true) => Style::Glyphs,
+        (true, false) => Style::Colored,
+    }
+}
+
 /// Writes pgmi's own lines to one sink (stderr in production), one whole
 /// line at a time even when several deploys share it.
 pub(crate) struct Reporter {
     verbose: bool,
+    stamped: bool,
     start: Instant,
     style: Style,
     sink: Mutex<Box<dyn Write + Send>>,
@@ -90,20 +101,22 @@ pub(crate) struct Reporter {
 
 impl Reporter {
     pub(crate) fn new(verbose: bool, env: &Env) -> Arc<Self> {
-        let term =
-            std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
-        let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
-        let style = match (term, no_color) {
-            (false, _) => Style::Plain,
-            (true, true) => Style::Glyphs,
-            (true, false) => Style::Colored,
-        };
-        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style))
+        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style(env)))
+    }
+
+    /// For `serve`: `[VERBOSE]` lines, but notices without the elapsed
+    /// time, as Go.
+    pub(crate) fn unstamped(verbose: bool, env: &Env) -> Arc<Self> {
+        Arc::new(Reporter {
+            stamped: false,
+            ..Self::to(Box::new(std::io::stderr()), verbose, style(env))
+        })
     }
 
     pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, style: Style) -> Self {
         Reporter {
             verbose,
+            stamped: verbose,
             start: Instant::now(),
             style,
             sink: Mutex::new(sink),
@@ -111,12 +124,16 @@ impl Reporter {
     }
 
     pub(crate) fn line(&self, text: &str) {
+        self.write(text, false);
+    }
+
+    fn write(&self, text: &str, stamped: bool) {
         let mut sink = self
             .sink
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = String::new();
-        if self.verbose {
+        if stamped {
             let t = self.start.elapsed().as_secs_f64();
             for l in text.lines() {
                 let _ = writeln!(out, "[{t:.2}s] {l}");
@@ -131,19 +148,16 @@ impl Reporter {
 
     /// A `--verbose` line as Go prints it: `[VERBOSE] ` and no elapsed time.
     pub(crate) fn verbose(&self, text: &str) {
-        let mut sink = self
-            .sink
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = writeln!(sink, "[VERBOSE] {text}");
-        let _ = sink.flush();
+        if self.verbose {
+            self.write(&format!("[VERBOSE] {text}"), false);
+        }
     }
 
     pub(crate) fn notice(&self, n: &Notice) {
         let mut text = match &n.severity {
-            Severity::Log => return,
-            Severity::Debug if !self.verbose => return,
-            Severity::Notice | Severity::Info | Severity::Debug => n.message.clone(),
+            Severity::Notice | Severity::Info | Severity::Debug | Severity::Log => {
+                n.message.clone()
+            }
             s => format!("{}:  {}", s.as_str(), n.message),
         };
         if let Some(d) = &n.detail {
@@ -152,7 +166,7 @@ impl Reporter {
         if let Some(h) = &n.hint {
             let _ = write!(text, "\nHINT:  {h}");
         }
-        self.line(&text);
+        self.write(&text, self.stamped);
     }
 
     pub(crate) fn summary(&self, summary: &Summary) {
@@ -200,9 +214,6 @@ const TAIL: usize = 150;
 
 impl NoticeLog {
     pub(crate) fn push(&mut self, n: &Notice) {
-        if n.severity == Severity::Log {
-            return;
-        }
         self.total += 1;
         if n.severity == Severity::Warning {
             self.warning_total += 1;
@@ -313,21 +324,32 @@ mod tests {
     }
 
     #[test]
-    fn verbose_prefixes_every_line_with_the_elapsed_time() {
+    fn verbose_prefixes_notice_lines_only_with_the_elapsed_time() {
         let (r, out) = Captured::reporter(true, Style::Plain);
-        r.line("one\ntwo");
+        r.notice(&notice("NOTICE", Some("d"), None));
+        r.line("pgmi: error: x");
+        r.verbose("Connection resolved:\n  Host: h");
         let text = out.text();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
-        for (line, body) in lines.iter().zip(["one", "two"]) {
+        assert_eq!(lines.len(), 5, "{text}");
+        for (line, body) in lines.iter().zip(["msg", "DETAIL:  d"]) {
             let (stamp, rest) = line.split_once("] ").unwrap();
             assert_eq!(rest, body);
             let secs = stamp.strip_prefix('[').unwrap().strip_suffix('s').unwrap();
             assert_eq!(secs.split_once('.').unwrap().1.len(), 2, "{line}");
         }
+        assert_eq!(
+            lines[2..],
+            [
+                "pgmi: error: x",
+                "[VERBOSE] Connection resolved:",
+                "  Host: h"
+            ]
+        );
         let (r, out) = Captured::reporter(false, Style::Plain);
-        r.line("one\ntwo");
-        assert_eq!(out.text(), "one\ntwo\n");
+        r.notice(&notice("NOTICE", Some("d"), None));
+        r.verbose("hidden");
+        assert_eq!(out.text(), "msg\nDETAIL:  d\n");
     }
 
     #[test]
@@ -340,13 +362,8 @@ mod tests {
         r.notice(&notice("DEBUG", None, None));
         assert_eq!(
             out.text(),
-            "msg\nmsg\nWARNING:  msg\nDETAIL:  d\nHINT:  h\n"
+            "msg\nmsg\nWARNING:  msg\nDETAIL:  d\nHINT:  h\nmsg\nmsg\n"
         );
-        let (r, out) = Captured::reporter(true, Style::Plain);
-        r.notice(&notice("DEBUG", None, None));
-        r.notice(&notice("LOG", None, None));
-        assert!(out.text().ends_with("] msg\n"), "{}", out.text());
-        assert_eq!(out.text().lines().count(), 1);
     }
 
     fn n(sev: &str, i: usize) -> Notice {
@@ -406,7 +423,7 @@ mod tests {
         let mut log = NoticeLog::default();
         log.push(&n("NOTICE", 0));
         log.push(&n("LOG", 1));
-        assert_eq!(kept(&log), ["NOTICE m0"]);
+        assert_eq!(kept(&log), ["NOTICE m0", "LOG m1"]);
         assert_eq!(log.finish().1, None);
     }
 
@@ -456,7 +473,7 @@ mod tests {
         log.push(&notice("AVISO", None, None));
         log.push(&notice("LOG", None, None));
         log.push(&notice("WARNING", None, None));
-        assert_eq!((log.total, log.warning_total), (2, 1));
+        assert_eq!((log.total, log.warning_total), (3, 1));
         assert_eq!(log.finish().0[0]["severity"], "AVISO");
     }
 

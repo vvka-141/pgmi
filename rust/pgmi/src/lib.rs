@@ -64,11 +64,13 @@ pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&
         Some(Command::Version) => return print_version(true),
         Some(Command::Help { command }) => help(&command),
         Some(Command::Deploy(args)) => return run_deploy(*args, cli.verbose, env, export),
-        Some(Command::Init(a)) => with_runtime(|rt| commands::init::run(&a, &env, rt)),
+        Some(Command::Init(a)) => with_runtime(|rt| commands::init::run(&a, cli.verbose, &env, rt)),
         Some(Command::Info(a)) => commands::info::run(&a, &env),
         Some(Command::Templates(a)) => commands::templates::run(&a, || help(&["templates"])),
         Some(Command::Ai(a)) => commands::ai::run(&a, &env),
-        Some(Command::Metadata(a)) => commands::metadata::run(&a, &env, || help(&["metadata"])),
+        Some(Command::Metadata(a)) => {
+            commands::metadata::run(&a, cli.verbose, &env, || help(&["metadata"]))
+        }
         Some(Command::Completion(a)) => commands::completion::run(&a),
         Some(Command::Serve) => runtime().and_then(|rt| serve::run(rt, cli.verbose, env)),
         Some(Command::Config(a)) => with_runtime(|rt| commands::config::run(&a, &env, rt)),

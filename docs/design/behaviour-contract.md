@@ -150,18 +150,41 @@ Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/comple
 
 ### Verbose output
 
-`-v` shows `RAISE DEBUG` from `deploy.sql` and lists ignored paths; without it,
-DEBUG is hidden and NOTICE, INFO and WARNING are shown. With `-v` every notice
-line (DETAIL and HINT included) starts with the seconds since the deploy
-started, `[1.23s] `. No server DEBUG line from pgmi's own queries reaches
-stderr: the message level is raised only after `CALL pgmi_test()` is expanded.
+`-v` shows `RAISE DEBUG` from `deploy.sql`; without it, DEBUG is hidden and
+NOTICE, INFO and WARNING are shown. With `-v` every notice line (DETAIL and
+HINT included) starts with the seconds since the deploy started, `[1.23s] `;
+no other line does (`serve` prints notices without it). No server DEBUG line
+from pgmi's own queries reaches stderr: the message level is raised only after
+`CALL pgmi_test()` is expanded.
+
+`-v` names each step on stderr as `[VERBOSE] ...` lines, in Go's order and
+wording: `Using --database flag (<db>) instead of connection string database
+(<db>)` when `-d` replaced the string's database; the `Connection resolved:`
+block (host, port, user, target and maintenance database, SSL mode, SSL
+cert/key/root cert paths when set, auth method; never a password or token);
+`Deploying to database`, `Source path`, `Scanning`, `Found N files to load`;
+`Database "<db>" already exists`, or `not found; using the maintenance database
+to create it`, `Connecting to maintenance database`, `Created database`; under
+`--overwrite` `Connecting to maintenance database`, `exists; requesting
+approval`, `Preserving encoding E, collation C across the recreate`, `DROP
+DATABASE`, `CREATE DATABASE`; then `Connecting to database`, `Creating pg_temp
+internal tables`, `Loading files into pg_temp._pgmi_source`, `Loading
+parameters into pg_temp._pgmi_parameter`, `Applying API contract`, `Applied API
+contract v1`, `TLS: <version|none> (sslmode=<mode>)` before `Executing
+deploy.sql`, and after it `Expanded N test macro(s) in deploy.sql` and
+`deploy.sql splits into N execution units ...` when there are any. Ignored
+paths follow the summary line as `  ignored <path> (<rule>)`, not with
+`--json`. `init -v` names the project, every directory and file it creates
+(`Skipping existing: pgmi.yaml` for a kept one) and `Project created
+successfully`; `metadata plan|validate -v` names the project path and the JSON
+switch, `metadata scaffold -v` the path, preview and default idempotent.
 Parameter loading prints counts only, never a key or a value:
 `[VERBOSE] Loaded N parameter(s) from PGMI_PARAM_* environment variables`,
 per params file `[VERBOSE] Loading parameters from file: <path>` and
 `[VERBOSE] Loaded N parameter(s) from file (total: M)`, and
 `[VERBOSE] CLI parameters override N value(s)`.
 
-Cases: `commands/verbose`, `notices/verbose-elapsed`, `notices/verbose-no-internal-debug`, `notices/verbose-no-server-debug`, `params/verbose-counts`.
+Cases: `commands/verbose`, `commands/verbose-lines`, `notices/verbose-elapsed`, `notices/verbose-no-internal-debug`, `notices/verbose-no-server-debug`, `params/verbose-counts`.
 
 ### serve
 
@@ -531,7 +554,9 @@ Cases: `dialect/pgmi-test-macro`, `execution/pgmi-test-needs-begin`, `execution/
 Notices are written to stderr as they arrive, while the statement is still
 running, in psql's layout: NOTICE, INFO and DEBUG as the bare message, WARNING
 and above as `WARNING:  <message>`, then `DETAIL:  ...` and `HINT:  ...` lines
-(two spaces after the colon); LOG is not shown. The run ends with one summary line: `ok
+(two spaces after the colon). LOG and DEBUG reach stderr and `--json` only when
+`deploy.sql` lowers `client_min_messages` itself (or DEBUG under `-v`), as bare
+messages; the server's own DEBUG never does. The run ends with one summary line: `ok
 <db>: N files loaded in T` or `FAILED <db>: failed after T ...` when stderr is
 not a terminal, `✓`/`✗` and colours on a terminal; `NO_COLOR` removes colours.
 T is seconds with two decimals (`1.12s`). A success adds `, N paths ignored`
@@ -540,7 +565,7 @@ left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
 unit(s) already committed)` in psql mode, and `created database "<db>", left
 empty` when this run created it.
 
-Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
+Cases: `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
 
 ### The --json record
 

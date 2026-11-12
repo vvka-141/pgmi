@@ -95,6 +95,15 @@ pub(crate) struct Tls {
     pub(crate) version: Option<crate::conn::tls::TlsVersion>,
 }
 
+impl Tls {
+    pub(crate) fn line(&self) -> String {
+        let version = self
+            .version
+            .map_or_else(|| "none".to_string(), |v| v.to_string());
+        format!("TLS: {version} (sslmode={})", self.sslmode)
+    }
+}
+
 /// The parts of a record that do not come from the deploy's progress.
 pub(crate) struct Facts<'a> {
     pub(crate) dotenv_keys: &'a [String],

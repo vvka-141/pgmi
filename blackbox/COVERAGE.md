@@ -45,6 +45,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion`; PowerShell template and sslmode values ✗ (the scripts differ by design; Rust unit test `powershell_completes_template_names_and_sslmode_values`, checked by hand with `pwsh`) |
 | `help`, `--help`, `<command> --help`, unknown command / wrong arity = 2 | ✓ `commands/help`, `commands/deploy-help-text` |
 | `-v` / `--verbose` (DEBUG notices shown, none from pgmi's own queries; parameter counts, never keys or values) | ✓ `commands/verbose`, `notices/verbose-no-internal-debug`, `params/verbose-counts` |
+| `-v` step lines: `--database` choice, resolved connection without its password, scan, create/exists/recreate, session tables, contract, TLS, macros, units; ignored paths after the summary; `init` and `metadata` lines | ✓ `commands/verbose-lines` |
 | `serve`: initialize, `tools/list` (7 tools), a tool call, malformed message (-32700, session continues), unknown method (-32601), EOF exits 0 | ✓ `serve/session` |
 | `serve`: a client that reads while it pipelines 3000 requests gets every answer in order | ✓ `serve/burst` |
 | `serve`: a client that reads slowly after closing its input gets every answer as a complete line (8 KB/s through eight 16 KB answers; 800 KB/s through one 3.5 MB `metadata_plan`) | ✓ `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer` |
@@ -143,7 +144,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 7a | session tables analysed after loading (planner statistics) | ✓ `deploy/session-tables-analyzed` |
 | 8 | PGlite single-session server | ✗ needs a PGlite server; the Go integration test against PGlite and the manual check in `docs/CONNECTIONS.md` cover it |
 | 9 | NOTICE streamed while the statement runs | ✓ `notices/streaming` |
-| 10 | severities, DETAIL, HINT, LOG hidden | ✓ `notices/severity`; localized server messages ✗ (no non-English locale in the image) |
+| 10 | severities, DETAIL, HINT, LOG hidden; LOG and DEBUG shown when `deploy.sql` lowers `client_min_messages` | ✓ `notices/severity`, `notices/deploy-sql-message-level`; localized server messages ✗ (no non-English locale in the image) |
 | 11 | a notice before an error prints before it | ✓ `notices/severity` |
 | 12 | syntax error in deploy.sql | ✓ `errors/head-syntax` |
 | 13, 14 | error inside an executed file names the file | ✓ `errors/attribution` |

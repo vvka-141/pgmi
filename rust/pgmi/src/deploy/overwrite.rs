@@ -22,6 +22,7 @@ const LIST_GUCS: [&str; 6] = [
 /// What an existing target looked like before the drop: put back after the
 /// recreate.
 pub(crate) struct Snapshot {
+    own: Locale,
     locale: Option<String>,
     owner: String,
     connlimit: i32,
@@ -71,7 +72,7 @@ fn text(r: &Row, column: &str) -> Result<String> {
 }
 
 /// How a database stores and sorts text, as `CREATE DATABASE` takes it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Locale {
     encoding: String,
     collate: String,
@@ -219,6 +220,7 @@ async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapsh
     };
     Ok(Snapshot {
         locale: (own != template).then(|| locale_clause(&own)),
+        own,
         owner: text(r, "owner")?,
         connlimit: get(r, "connlimit")?,
         settings: get(r, "settings")?,
@@ -226,6 +228,16 @@ async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapsh
         role_settings,
         acl,
     })
+}
+
+impl Snapshot {
+    pub(crate) fn encoding(&self) -> &str {
+        &self.own.encoding
+    }
+
+    pub(crate) fn collation(&self) -> &str {
+        &self.own.collate
+    }
 }
 
 fn literal(s: &str) -> String {
@@ -411,9 +423,13 @@ pub(crate) async fn recreate(
     let work = async {
         let c = &maintenance.client;
         if snapshot.is_some() {
+            reporter.verbose(&format!("DROP DATABASE \"{db}\""));
             c.batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", quote_ident(db)))
                 .await
                 .map_err(|e| sql_error("drop the target database", e))?;
+        }
+        if snapshot.is_some() {
+            reporter.verbose(&format!("CREATE DATABASE \"{db}\""));
         }
         c.batch_execute(&create_sql(db, snapshot))
             .await
@@ -521,6 +537,7 @@ mod tests {
             icu_rules: "&a < b".into(),
         };
         let s = Snapshot {
+            own: Locale::default(),
             locale: Some(locale_clause(&own)),
             owner: "o\"w".into(),
             connlimit: 3,
@@ -559,6 +576,7 @@ mod tests {
     #[test]
     fn an_invalid_database_comes_back_without_a_connection_limit() {
         let s = Snapshot {
+            own: Locale::default(),
             locale: None,
             owner: "o".into(),
             connlimit: -2,
@@ -576,6 +594,7 @@ mod tests {
     #[test]
     fn privileges_are_reset_then_granted() {
         let s = Snapshot {
+            own: Locale::default(),
             locale: None,
             owner: "o".into(),
             connlimit: -1,

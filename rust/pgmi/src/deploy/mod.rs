@@ -200,6 +200,38 @@ impl Progress {
     }
 }
 
+/// The `-v` block naming where the deploy connects; never a password.
+fn resolved(spec: &Spec, provider: Option<Provider>) -> String {
+    let first = spec.first();
+    let mut text = format!(
+        "Connection resolved:\n  Host: {}\n  Port: {}\n  User: {}\n  Target Database: {}\n  Maintenance Database: {}\n  SSL Mode: {}",
+        first.name,
+        first.port,
+        spec.user,
+        spec.target_db,
+        spec.maintenance_db,
+        spec.sslmode()
+    );
+    for (label, value) in [
+        ("SSL Cert", &spec.sslcert),
+        ("SSL Key", &spec.sslkey),
+        ("SSL Root Cert", &spec.sslrootcert),
+    ] {
+        if let Some(v) = value {
+            let _ = write!(text, "\n  {label}: {v}");
+        }
+    }
+    let auth = match provider {
+        None => "Standard",
+        Some(Provider::Azure) => "Azure Entra ID",
+        Some(Provider::Aws) => "AWS IAM",
+        Some(Provider::Google) => "Google IAM",
+        Some(Provider::Databricks) => "Databricks",
+    };
+    let _ = write!(text, "\n  Auth Method: {auth}");
+    text
+}
+
 /// The stderr lines that say where each connection setting came from: the
 /// source (unless typed), the keys the project `.env` set, every `pgmi.yaml`
 /// value another source replaced, and `PGOPTIONS`.
@@ -444,7 +476,7 @@ impl Steps<'_> {
     ) -> Result<()> {
         let request = &self.ctx.request;
         let Target { mut spec, cloud } = self.target(st, yaml)?;
-        self.report_provenance(st, &spec)?;
+        self.report_provenance(st, &spec, cloud.as_ref().map(|(p, _)| *p))?;
         let params = self
             .params(yaml.map(ProjectConfig::param_values).unwrap_or_default())
             .await?;
@@ -456,9 +488,17 @@ impl Steps<'_> {
             self.ctx.approver.before_connecting(&spec.target_db)?;
         }
         st.phase = Phase::Deploying;
+        let project_path = request.project.display();
+        self.reporter
+            .verbose(&format!("Deploying to database \"{}\"", spec.target_db));
+        self.reporter
+            .verbose(&format!("Source path: {project_path}"));
+        self.reporter.verbose(&format!("Scanning {project_path}"));
         let loaded = self.load().await?;
-        self.record_loaded(st, &loaded);
-        contract?;
+        self.reporter
+            .verbose(&format!("Found {} files to load", loaded.files()));
+        Self::record_loaded(st, &loaded);
+        let contract = contract?;
         if request.overwrite {
             overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
         }
@@ -473,7 +513,7 @@ impl Steps<'_> {
         };
         let outcome = async {
             let session = self.open(st, &dialer, &spec).await?;
-            st.server = Some(self.server_info(&session, &spec).await?);
+            let server = st.server.insert(self.server_info(&session, &spec).await?);
             self.lock(&session, &spec.target_db).await?;
             let outcome = execute::run(execute::Input {
                 session: &session,
@@ -482,6 +522,9 @@ impl Steps<'_> {
                 project: &loaded.project,
                 meta: &loaded.meta,
                 params: &params,
+                database: &spec.target_db,
+                contract,
+                tls: &server.tls,
                 verbose: self.ctx.verbose,
                 files_loaded: loaded.files(),
                 execution: &mut st.execution,
@@ -515,7 +558,18 @@ impl Steps<'_> {
         Ok(Target { spec, cloud })
     }
 
-    fn report_provenance(&self, st: &Progress, spec: &Spec) -> Result<()> {
+    fn report_provenance(
+        &self,
+        st: &Progress,
+        spec: &Spec,
+        provider: Option<Provider>,
+    ) -> Result<()> {
+        if let Some(replaced) = &spec.replaced_db {
+            self.reporter.verbose(&format!(
+                "Using --database flag ({}) instead of connection string database ({replaced})",
+                spec.target_db
+            ));
+        }
         for line in provenance(
             spec,
             &crate::config::dotenv_path(&self.ctx.request.project),
@@ -525,6 +579,7 @@ impl Steps<'_> {
         ) {
             self.reporter.line(&line);
         }
+        self.reporter.verbose(&resolved(spec, provider));
         Ok(())
     }
 
@@ -588,17 +643,11 @@ impl Steps<'_> {
         Ok(LoadedProject { project, meta })
     }
 
-    fn record_loaded(&self, st: &mut Progress, loaded: &LoadedProject) {
+    fn record_loaded(st: &mut Progress, loaded: &LoadedProject) {
         st.loaded = Some(Loaded {
             files: loaded.files(),
             ignored: loaded.project.ignored.clone(),
         });
-        if self.ctx.verbose {
-            for i in &loaded.project.ignored {
-                self.reporter
-                    .line(&format!("ignored {} ({})", i.path, i.rule));
-            }
-        }
     }
 
     fn dialer(&self, log: &Arc<Mutex<NoticeLog>>) -> Dialer {
@@ -644,6 +693,10 @@ impl Steps<'_> {
 
     async fn overwrite(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
         let (guard, db) = (self.guard, spec.target_db.as_str());
+        self.reporter.verbose(&format!(
+            "Connecting to maintenance database \"{}\"",
+            spec.maintenance_db
+        ));
         let maintenance = guard
             .connecting(dialer.connect(spec, &spec.maintenance_db))
             .await?;
@@ -669,6 +722,8 @@ impl Steps<'_> {
     ) -> Result<()> {
         let guard = self.guard;
         let snapshot = if exists {
+            self.reporter
+                .verbose(&format!("Database \"{db}\" exists; requesting approval"));
             guard
                 .waiting(
                     self.ctx
@@ -679,6 +734,13 @@ impl Steps<'_> {
             guard
                 .running(maintenance, overwrite::snapshot(maintenance, db))
                 .await?
+                .inspect(|s| {
+                    self.reporter.verbose(&format!(
+                        "Preserving encoding {}, collation {} across the recreate",
+                        s.encoding(),
+                        s.collation()
+                    ));
+                })
         } else {
             None
         };
@@ -703,8 +765,22 @@ impl Steps<'_> {
             .await
         {
             Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {}
-            opened => return opened,
+            opened => {
+                if opened.is_ok() && !self.ctx.request.overwrite {
+                    self.reporter
+                        .verbose(&format!("Database \"{}\" already exists", spec.target_db));
+                }
+                return opened;
+            }
         }
+        self.reporter.verbose(&format!(
+            "Database \"{}\" not found; using the maintenance database to create it",
+            spec.target_db
+        ));
+        self.reporter.verbose(&format!(
+            "Connecting to maintenance database \"{}\"",
+            spec.maintenance_db
+        ));
         let maintenance = guard
             .connecting(dialer.connect(spec, &spec.maintenance_db))
             .await?;
@@ -719,6 +795,8 @@ impl Steps<'_> {
             .running(&maintenance, create_database(&maintenance, &spec.target_db))
             .await?;
         st.provision = Provision::Created;
+        self.reporter
+            .verbose(&format!("Created database \"{}\"", spec.target_db));
         drop(maintenance);
         guard
             .connecting(dialer.connect(spec, &spec.target_db))
@@ -801,6 +879,11 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
     let secrets = run.secrets();
     if let Some(s) = summary(st, result, elapsed) {
         reporter.summary(&s);
+    }
+    if ctx.verbose && !ctx.request.json && st.server.is_some() {
+        for i in st.loaded.iter().flat_map(|l| &l.ignored) {
+            reporter.line(&format!("  ignored {} ({})", i.path, i.rule));
+        }
     }
     let note = result.as_ref().err().and_then(|e| st.connection_note(e));
     if let Err(e) = result {
@@ -1041,6 +1124,29 @@ mod tests {
             ..resolve::Flags::default()
         };
         resolve::resolve(&flags, &Env::default(), None).unwrap()
+    }
+
+    #[test]
+    fn the_resolved_block_names_cert_paths_and_never_the_password() {
+        let mut s = spec("app");
+        s.sslcert = Some("/c.pem".into());
+        let text = resolved(&s, Some(Provider::Aws));
+        assert_eq!(
+            text,
+            "Connection resolved:\n  Host: db.example\n  Port: 6543\n  User: u\n  Target Database: app\n  Maintenance Database: postgres\n  SSL Mode: prefer\n  SSL Cert: /c.pem\n  Auth Method: AWS IAM"
+        );
+    }
+
+    #[test]
+    fn a_database_flag_names_the_strings_database_it_replaced() {
+        let flags = resolve::Flags {
+            connection: Some("postgresql://u@h/base".to_string().into()),
+            database: Some("app".into()),
+            ..resolve::Flags::default()
+        };
+        let s = resolve::resolve(&flags, &Env::default(), None).unwrap();
+        assert_eq!(s.replaced_db.as_deref(), Some("base"));
+        assert_eq!(spec("app").replaced_db, None);
     }
 
     fn loaded(db: &str) -> Progress {
