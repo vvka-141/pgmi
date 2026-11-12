@@ -1239,6 +1239,40 @@ fn every_variable_the_go_driver_reads_is_read_or_refused() {
             "{name} is read by Go (pgx) but not by resolve::ENV_DEFAULTS"
         );
     }
+    let mut env = Env::default();
+    env.insert("PGDATABASE", "from_env");
+    let s = resolve(&conn("host=h"), &env, None).unwrap();
+    assert_eq!(s.target_db, "from_env", "PGDATABASE names the database");
+    assert_eq!(
+        from_env("PGTZ", "UTC").unwrap().timezone.as_deref(),
+        Some("UTC"),
+        "PGTZ is sent as TimeZone"
+    );
+    assert!(matches!(
+        from_env("PGSERVICE", "app"),
+        Err(ResolveError::ServiceEnv)
+    ));
+    let mut env = Env::default();
+    env.insert("PGSERVICEFILE", "/nowhere/pg_service.conf");
+    env.insert("PGSERVICE", "app");
+    assert!(
+        matches!(
+            resolve(&conn("host=h dbname=d"), &env, None),
+            Err(ResolveError::ServiceEnv)
+        ),
+        "PGSERVICEFILE is read only for PGSERVICE or service=, which are refused"
+    );
+    assert_eq!(
+        format!(
+            "{:?}",
+            from_env("PGSERVICEFILE", "/nowhere/pg_service.conf").unwrap()
+        ),
+        format!(
+            "{:?}",
+            resolve(&conn("host=h dbname=d"), &Env::default(), None).unwrap()
+        ),
+        "PGSERVICEFILE alone changes nothing, as in pgx, which reads it only for a service"
+    );
     for (name, key) in ENV_DEFAULTS {
         assert!(
             super::parse::KNOWN.contains(key),
