@@ -57,7 +57,7 @@ yaml-edit.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-rustix = { workspace = true, features = ["event"] }
+rustix = { workspace = true, features = ["event", "process"] }
 
 [features]
 testhooks = []

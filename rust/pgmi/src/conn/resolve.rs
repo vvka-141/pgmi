@@ -645,11 +645,10 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
     }
     let user = match f.remove("user") {
         Some(u) => u,
-        None => env
-            .non_empty("USER")?
-            .or(env.non_empty("USERNAME")?)
-            .unwrap_or("postgres")
-            .to_string(),
+        None => match env.non_empty("USER")?.or(env.non_empty("USERNAME")?) {
+            Some(u) => u.to_string(),
+            None => os_user().unwrap_or_else(|| "postgres".into()),
+        },
     };
     let application_name = f.remove("application_name");
     let fallback_application_name = f.remove("fallback_application_name");
@@ -1119,5 +1118,38 @@ impl Spec {
     pub(crate) fn describe(&self) -> String {
         let first = self.first();
         format!("{}:{}/{}", first.name, first.port, self.target_db)
+    }
+}
+
+/// The account name the passwd database gives the process's uid, as Go's
+/// os/user does when `$USER` is not set (common in containers).
+#[cfg(unix)]
+fn os_user() -> Option<String> {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    passwd_name(&std::fs::read_to_string("/etc/passwd").ok()?, &uid)
+}
+
+#[cfg(not(unix))]
+fn os_user() -> Option<String> {
+    None
+}
+
+fn passwd_name(passwd: &str, uid: &str) -> Option<String> {
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let name = fields.next()?;
+        (fields.nth(1)? == uid && !name.is_empty()).then(|| name.to_string())
+    })
+}
+
+#[cfg(test)]
+mod os_user_tests {
+    #[test]
+    fn the_passwd_entry_of_the_uid_names_the_user() {
+        let passwd = "root:x:0:0::/root:/bin/sh\n# comment\napp:x:1000:1000:App:/home/app:/bin/sh\n:x:2000:2000::/:\n";
+        assert_eq!(super::passwd_name(passwd, "1000").as_deref(), Some("app"));
+        assert_eq!(super::passwd_name(passwd, "0").as_deref(), Some("root"));
+        assert_eq!(super::passwd_name(passwd, "2000"), None);
+        assert_eq!(super::passwd_name(passwd, "42"), None);
     }
 }
