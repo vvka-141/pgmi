@@ -369,6 +369,29 @@ fn connect_timeout_has_a_floor_of_two_seconds_and_zero_means_none() {
 }
 
 #[test]
+fn connect_timeout_beyond_a_go_duration_is_refused() {
+    let spec = |t: &str| {
+        resolve(
+            &conn(&format!("host=h dbname=d connect_timeout={t}")),
+            &Env::default(),
+            None,
+        )
+    };
+    assert_eq!(
+        spec("9223372036").unwrap().connect_timeout,
+        Some(Duration::from_secs(9_223_372_036))
+    );
+    assert!(matches!(
+        spec("9223372037"),
+        Err(ResolveError::ConnectTimeoutRange(t)) if t == "9223372037"
+    ));
+    assert_eq!(
+        refused(spec("9223372036854775807")).to_string(),
+        "invalid connect_timeout \"9223372036854775807\": at most 9223372036 seconds"
+    );
+}
+
+#[test]
 fn only_pg_host_port_or_user_in_the_environment() {
     for (env, host, port, user) in [
         (vec![("PGHOST", "customhost")], "customhost", 5432, None),

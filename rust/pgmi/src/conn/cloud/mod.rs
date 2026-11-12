@@ -57,6 +57,10 @@ pub(crate) struct Options {
 pub(crate) enum Token {
     #[cfg(test)]
     Fixed(Provider, Secret),
+    #[cfg(test)]
+    Stalled(Provider, u16),
+    #[cfg(test)]
+    Failing(Provider),
     Azure(Arc<renew::Renewing<azure::Signin>>),
     Aws(Arc<aws::Signer>),
     Google(Arc<renew::Renewing<google::Signin>>),
@@ -114,7 +118,7 @@ impl Token {
     pub(crate) fn provider(&self) -> Provider {
         match self {
             #[cfg(test)]
-            Token::Fixed(p, _) => *p,
+            Token::Fixed(p, _) | Token::Stalled(p, _) | Token::Failing(p) => *p,
             Token::Azure(_) => Provider::Azure,
             Token::Aws(_) => Provider::Aws,
             Token::Google(_) => Provider::Google,
@@ -132,6 +136,12 @@ impl Token {
         match self {
             #[cfg(test)]
             Token::Fixed(_, t) => Ok(Login::password(t.clone())),
+            #[cfg(test)]
+            Token::Stalled(_, stalled) if *stalled == port => std::future::pending().await,
+            #[cfg(test)]
+            Token::Stalled(..) => Ok(Login::password(Secret::from("token"))),
+            #[cfg(test)]
+            Token::Failing(_) => Err(TokenError::SignIn(Error::connection("sign-in refused"))),
             Token::Azure(a) => a
                 .current()
                 .await

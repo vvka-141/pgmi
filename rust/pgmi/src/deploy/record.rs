@@ -92,7 +92,7 @@ struct Target {
 pub(crate) struct Tls {
     pub(crate) enabled: bool,
     pub(crate) sslmode: crate::conn::resolve::SslMode,
-    pub(crate) version: Option<String>,
+    pub(crate) version: Option<crate::conn::tls::TlsVersion>,
 }
 
 /// The parts of a record that do not come from the deploy's progress.

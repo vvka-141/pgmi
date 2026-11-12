@@ -874,7 +874,7 @@ impl Steps<'_> {
             tls: Tls {
                 enabled: session.tls_enabled(),
                 sslmode: spec.sslmode(),
-                version: session.tls_version.clone(),
+                version: session.tls_version,
             },
         })
     }
@@ -1636,7 +1636,9 @@ mod tests {
                 tls: Tls {
                     enabled: true,
                     sslmode: crate::conn::resolve::SslMode::VerifyFull,
-                    version: Some("TLSv1.3".into()),
+                    version: Some(crate::conn::tls::TlsVersion(
+                        rustls::ProtocolVersion::TLSv1_3,
+                    )),
                 },
             }),
             execution: executed(3, None),
@@ -1664,7 +1666,7 @@ mod tests {
         assert_eq!(r["serverVersion"], "18.1");
         assert_eq!(
             r["tls"],
-            json!({"enabled": true, "sslmode": "verify-full", "version": "TLSv1.3"})
+            json!({"enabled": true, "sslmode": "verify-full", "version": "TLS 1.3"})
         );
         for key in ["error", "executionMode", "phase", "failedFile", "sqlstate"] {
             assert!(r.get(key).is_none(), "{key}");

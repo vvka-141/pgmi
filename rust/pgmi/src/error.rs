@@ -66,6 +66,7 @@ pub(crate) struct Error {
     kind: Kind,
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    cause: Option<Box<dyn std::error::Error + Send + Sync>>,
     sql: Option<Box<SqlDiagnostics>>,
     secrets: Vec<String>,
 }
@@ -76,6 +77,7 @@ impl Error {
             kind,
             message: message.into(),
             source: None,
+            cause: None,
             sql: None,
             secrets: Vec::new(),
         }
@@ -105,6 +107,13 @@ impl Error {
         self
     }
 
+    /// Keeps `e` as the source without rendering it: the message already
+    /// says what `e` says.
+    pub(crate) fn with_cause(mut self, e: impl std::error::Error + Send + Sync + 'static) -> Self {
+        self.cause = Some(Box::new(e));
+        self
+    }
+
     pub(crate) fn with_sql(mut self, d: SqlDiagnostics) -> Self {
         self.sql = Some(Box::new(d));
         self
@@ -116,6 +125,7 @@ impl Error {
             kind,
             message: message.into(),
             source: None,
+            cause: None,
             sql: self.sql,
             secrets: self.secrets,
         }
@@ -159,6 +169,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source
             .as_deref()
+            .or(self.cause.as_deref())
             .map(|e| e as &(dyn std::error::Error + 'static))
     }
 }

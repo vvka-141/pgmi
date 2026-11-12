@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context as TaskContext, Poll};
@@ -7,13 +8,14 @@ use std::time::Duration;
 
 use rand::seq::SliceRandom;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::Instant;
 use tokio_postgres::config::{
     ChannelBinding as PgChannelBinding, SslMode as PgSslMode, SslNegotiation as PgSslNegotiation,
 };
 use tokio_postgres::error::DbError;
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
-use super::cloud;
+use super::cloud::{self, TokenError};
 use super::pgpass;
 use super::resolve::{
     ChannelBinding, LoadBalanceHosts, Spec, SslMode, SslNegotiation, TargetSessionAttrs,
@@ -21,7 +23,7 @@ use super::resolve::{
 use super::retry::{self, Cause};
 use super::socket::Tcp;
 use super::tap::{self, Start, Tap, TapConnect};
-use super::tls::{self, Connect};
+use super::tls::{self, Connect, TlsVersion};
 use crate::error::{Error, Result, Secret};
 use crate::output::{Notice, Severity};
 use rustls::ClientConfig;
@@ -79,7 +81,7 @@ pub(crate) type SecretSink = Arc<dyn Fn(&Secret) + Send + Sync>;
 pub(crate) struct Session {
     pub(crate) client: Client,
     pub(crate) tap: Arc<tap::Shared>,
-    pub(crate) tls_version: Option<String>,
+    pub(crate) tls_version: Option<TlsVersion>,
     cancel: CancelToken,
     tls: Option<Connect>,
     peer: Peer,
@@ -175,14 +177,94 @@ impl std::fmt::Display for Answer {
     }
 }
 
+/// Whether a failed attempt is worth another round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Refused,
+    Transient,
+    Fatal,
+}
+
+/// The typed error behind a failed attempt.
+#[derive(Debug)]
+enum Origin {
+    Io(std::io::Error),
+    Driver(tokio_postgres::Error),
+    Token(TokenError),
+}
+
+impl Origin {
+    fn error(&self) -> &(dyn std::error::Error + 'static) {
+        match self {
+            Origin::Io(e) => e,
+            Origin::Driver(e) => e,
+            Origin::Token(e) => e,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum DialFailure {
-    Transient(String),
-    ConnectionRefused,
-    Fatal(String),
+    Broken {
+        text: String,
+        class: Class,
+        origin: Origin,
+    },
     Server(Answer),
-    Config(String),
-    Refused(Answer),
+    Timeout,
+    ProbeTimeout,
+    NotTarget(TargetSessionAttrs),
+}
+
+impl DialFailure {
+    fn class(&self) -> Class {
+        match self {
+            DialFailure::Broken { class, .. } => *class,
+            DialFailure::Server(answer) if retry::transient(Cause::Sqlstate(&answer.code)) => {
+                Class::Transient
+            }
+            DialFailure::Timeout => Class::Transient,
+            DialFailure::Server(_) | DialFailure::ProbeTimeout | DialFailure::NotTarget(_) => {
+                Class::Fatal
+            }
+        }
+    }
+
+    fn auth_refused(&self) -> bool {
+        matches!(self, DialFailure::Server(answer) if answer.code == "28000")
+    }
+
+    fn code(&self) -> Option<&str> {
+        match self {
+            DialFailure::Server(answer) if !self.auth_refused() && self.class() == Class::Fatal => {
+                Some(&answer.code)
+            }
+            _ => None,
+        }
+    }
+
+    fn origin(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DialFailure::Broken { origin, .. } => Some(origin.error()),
+            DialFailure::Server(_)
+            | DialFailure::Timeout
+            | DialFailure::ProbeTimeout
+            | DialFailure::NotTarget(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for DialFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DialFailure::Broken { text, .. } => f.write_str(text),
+            DialFailure::Server(answer) => answer.fmt(f),
+            DialFailure::Timeout | DialFailure::ProbeTimeout => f.write_str("timeout expired"),
+            DialFailure::NotTarget(want) => {
+                write!(f, "server does not satisfy target_session_attrs={want}")
+            }
+        }
+    }
 }
 
 /// One server that gave no session, and why.
@@ -200,33 +282,26 @@ enum Failed {
 impl Failed {
     fn code(&self) -> Option<&str> {
         match self {
-            Failed::At {
-                failure: DialFailure::Server(a),
-                ..
-            } => Some(&a.code),
-            _ => None,
+            Failed::At { failure, .. } => failure.code(),
+            Failed::Lookup(_) => None,
         }
     }
 
     fn connection_refused(&self) -> bool {
-        matches!(
-            self,
-            Failed::At {
-                failure: DialFailure::ConnectionRefused,
-                ..
-            }
-        )
+        matches!(self, Failed::At { failure, .. } if failure.class() == Class::Refused)
     }
 
     fn transient(&self) -> bool {
         match self {
             Failed::Lookup(u) => u.transient,
-            Failed::At { failure, .. } => {
-                matches!(
-                    failure,
-                    DialFailure::Transient(_) | DialFailure::ConnectionRefused
-                )
-            }
+            Failed::At { failure, .. } => failure.class() != Class::Fatal,
+        }
+    }
+
+    fn origin(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Failed::Lookup(u) => u.origin.as_ref().map(|e| e as _),
+            Failed::At { failure, .. } => failure.origin(),
         }
     }
 }
@@ -238,46 +313,50 @@ impl std::fmt::Display for Failed {
             Failed::At {
                 host,
                 port,
-                label,
                 failure,
-            } => match failure {
-                DialFailure::ConnectionRefused => write!(f, "connection refused to {host}:{port}"),
-                DialFailure::Transient(t) | DialFailure::Fatal(t) | DialFailure::Config(t) => {
-                    write!(f, "{label}: {t}")
-                }
-                DialFailure::Server(a) | DialFailure::Refused(a) => write!(f, "{label}: {a}"),
-            },
+                ..
+            } if failure.class() == Class::Refused => {
+                write!(f, "connection refused to {host}:{port}")
+            }
+            Failed::At { label, failure, .. } => write!(f, "{label}: {failure}"),
         }
     }
 }
 
-fn classify_io(e: &std::io::Error) -> bool {
-    retry::transient(Cause::Io(e.kind()))
+fn io_class(e: &std::io::Error) -> Class {
+    if e.kind() == std::io::ErrorKind::ConnectionRefused {
+        Class::Refused
+    } else if retry::transient(Cause::Io(e.kind())) {
+        Class::Transient
+    } else {
+        Class::Fatal
+    }
 }
 
 fn refuses_auth(e: &tap::Error) -> bool {
     matches!(e, tap::Error::AuthRequirement { .. })
 }
 
-/// Why `connect_raw` failed. `no_password` is whether the server asked for
-/// a password this attempt did not have.
+fn broken(text: String, class: Class, e: tokio_postgres::Error) -> DialFailure {
+    DialFailure::Broken {
+        text,
+        class,
+        origin: Origin::Driver(e),
+    }
+}
+
+/// What a failed handshake says about this attempt: `no_password` is
+/// whether the server asked for a password the attempt did not have.
 fn classify_pg(
-    e: &tokio_postgres::Error,
+    e: tokio_postgres::Error,
     host: &str,
     passfile: &str,
     no_password: bool,
 ) -> DialFailure {
     if let Some(db) = e.as_db_error() {
-        let answer = Answer::of(db);
-        if retry::transient(Cause::Sqlstate(&answer.code)) {
-            return DialFailure::Transient(answer.to_string());
-        }
-        if answer.code == "28000" {
-            return DialFailure::Refused(answer);
-        }
-        return DialFailure::Server(answer);
+        return DialFailure::Server(Answer::of(db));
     }
-    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(&e);
     while let Some(c) = cur {
         if let Some(io) = c.downcast_ref::<std::io::Error>() {
             if io
@@ -285,47 +364,45 @@ fn classify_pg(
                 .and_then(|i| i.downcast_ref::<tap::Error>())
                 .is_some_and(refuses_auth)
             {
-                return DialFailure::Fatal(io.to_string());
+                return broken(io.to_string(), Class::Fatal, e);
             }
-            if io.kind() == std::io::ErrorKind::ConnectionRefused {
-                return DialFailure::ConnectionRefused;
-            }
-            if classify_io(io) {
-                return DialFailure::Transient(io.to_string());
+            let class = io_class(io);
+            if class != Class::Fatal {
+                return broken(io.to_string(), class, e);
             }
         }
         if c.downcast_ref::<tap::Error>().is_some_and(refuses_auth) {
-            return DialFailure::Fatal(crate::error::chain(e));
+            return broken(crate::error::chain(&e), Class::Fatal, e);
         }
         cur = c.source();
     }
     if no_password {
-        return DialFailure::Fatal(format!(
-            "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
-        ));
+        return broken(
+            format!(
+                "no password supplied: the server asked for one and none was found in the connection string, PGPASSWORD or {passfile}"
+            ),
+            Class::Fatal,
+            e,
+        );
     }
-    DialFailure::Fatal(tls::describe_failure(e, host))
+    broken(tls::describe_failure(&e, host), Class::Fatal, e)
 }
 
-fn refused_token(
-    f: DialFailure,
-    e: &tokio_postgres::Error,
-    spec: &Spec,
-    db_name: Option<&str>,
-) -> DialFailure {
-    let (Some(token), Some(db)) = (&spec.token, e.as_db_error()) else {
-        return f;
+/// The refusal of a sign-in token, which names the database role to check.
+fn token_refused(e: &tokio_postgres::Error, spec: &Spec, db: &str) -> Option<String> {
+    let (Some(token), Some(answer)) = (&spec.token, e.as_db_error()) else {
+        return None;
     };
-    if !db.code().code().starts_with("28") {
-        return f;
-    }
-    DialFailure::Fatal(refused_token_text(
-        token.provider().label(),
-        &spec.user,
-        db_name.unwrap_or(&spec.target_db),
-        db.message(),
-        db.code().code(),
-    ))
+    let code = answer.code().code();
+    code.starts_with("28").then(|| {
+        refused_token_text(
+            token.provider().label(),
+            &spec.user,
+            db,
+            answer.message(),
+            code,
+        )
+    })
 }
 
 fn refused_token_text(provider: &str, user: &str, db: &str, message: &str, code: &str) -> String {
@@ -339,6 +416,20 @@ fn sslmode_of(mode: SslMode) -> PgSslMode {
         SslMode::Disable | SslMode::Allow => PgSslMode::Disable,
         SslMode::Prefer => PgSslMode::Prefer,
         SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull => PgSslMode::Require,
+    }
+}
+
+/// When a step started now under `connect_timeout` must end; `None` when
+/// there is no timeout or the deadline lies beyond the clock.
+fn deadline(timeout: Option<Duration>) -> Option<Instant> {
+    timeout.and_then(|t| Instant::now().checked_add(t))
+}
+
+/// `f`'s output, or `None` when `deadline` passed first.
+async fn by<F: Future>(deadline: Option<Instant>, f: F) -> Option<F::Output> {
+    match deadline {
+        Some(d) => tokio::time::timeout_at(d, f).await.ok(),
+        None => Some(f.await),
     }
 }
 
@@ -356,187 +447,217 @@ struct Attempt<'a> {
     secret: SecretSink,
 }
 
-async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
-    let spec = a.spec;
-    let mut config = Config::new();
-    config
-        .user(&spec.user)
-        .dbname(a.db)
-        .application_name(&spec.application_name);
-    let passfile = spec
-        .passfile
-        .clone()
-        .or_else(|| spec.pg_files.as_ref().map(|f| f.pgpass.clone()));
-    let (token, cloud_sql) = match &spec.token {
-        Some(t) => {
-            let login = t
-                .login(a.name, a.port, &spec.user)
-                .await
-                .map_err(|e| DialFailure::Fatal(e.to_string()))?;
-            (Some(login.password), login.cloud_sql)
+struct Login {
+    password: Option<Secret>,
+    cloud_sql: Option<Arc<cloud::CloudSql>>,
+}
+
+struct Opened {
+    client: Client,
+    tls: Option<Connect>,
+    peer: Peer,
+    connection: tokio::task::AbortHandle,
+}
+
+impl Attempt<'_> {
+    /// Opens a session within `connect_timeout`, counted from before the
+    /// password or sign-in token is fetched to the end of the
+    /// `target_session_attrs` probe.
+    async fn run(self) -> std::result::Result<Session, DialFailure> {
+        let deadline = deadline(self.spec.connect_timeout);
+        let policy = self.spec.require_auth.policy().ok().flatten().cloned();
+        let shared = tap::Shared::with_policy(policy);
+        let version = Arc::new(Mutex::new(None));
+        let opened = by(deadline, self.handshake(&shared, &version))
+            .await
+            .ok_or(DialFailure::Timeout)??;
+        let tls_version = version.lock().ok().and_then(|v| *v);
+        let session = Session {
+            cancel: opened.client.cancel_token(),
+            client: opened.client,
+            tap: shared,
+            tls: opened.tls.filter(|_| tls_version.is_some()),
+            tls_version,
+            peer: opened.peer,
+            tcp: self.spec.tcp,
+            connection: opened.connection,
+        };
+        match by(deadline, matches_attrs(&session.client, self.want)).await {
+            None => Err(DialFailure::ProbeTimeout),
+            Some(Ok(true)) => Ok(session),
+            Some(Ok(false)) => Err(DialFailure::NotTarget(self.want)),
+            Some(Err(e)) => Err(broken(e.to_string(), Class::Fatal, e)),
         }
-        None => (None, None),
-    };
-    let unix = a.host.starts_with('/') || cloud_sql.is_some();
-    let password = match token.or_else(|| spec.password.clone()) {
-        Some(p) => Some(p),
-        None => passfile.as_ref().and_then(|path| {
-            let found = pgpass::lookup(path, a.name, a.port, a.db, &spec.user);
-            if let Some(w) = found.warning() {
-                (a.log)(w);
+    }
+
+    fn passfile(&self) -> Option<PathBuf> {
+        self.spec
+            .passfile
+            .clone()
+            .or_else(|| self.spec.pg_files.as_ref().map(|f| f.pgpass.clone()))
+    }
+
+    /// The password this attempt presents: a sign-in token (with the Cloud
+    /// SQL session it opens), the one given, or the matching `.pgpass` line.
+    async fn login(&self, passfile: Option<&Path>) -> std::result::Result<Login, DialFailure> {
+        let spec = self.spec;
+        if let Some(t) = &spec.token {
+            return t
+                .login(self.name, self.port, &spec.user)
+                .await
+                .map(|l| Login {
+                    password: Some(l.password),
+                    cloud_sql: l.cloud_sql,
+                })
+                .map_err(|e| DialFailure::Broken {
+                    text: e.to_string(),
+                    class: Class::Fatal,
+                    origin: Origin::Token(e),
+                });
+        }
+        let password = match (&spec.password, passfile) {
+            (Some(p), _) => Some(p.clone()),
+            (None, None) => None,
+            (None, Some(path)) => {
+                let found = pgpass::lookup(path, self.name, self.port, self.db, &spec.user);
+                if let Some(w) = found.warning() {
+                    (self.log)(w);
+                }
+                found.password()
             }
-            found.password()
-        }),
-    };
-    let no_password = password.is_none();
-    if let Some(p) = &password {
-        (a.secret)(p);
-        config.password(p.expose());
+        };
+        Ok(Login {
+            password,
+            cloud_sql: None,
+        })
     }
-    let mut options = spec.options.clone().unwrap_or_default();
-    if let Some(tz) = &spec.timezone {
-        let _ = write!(options, " -c TimeZone={tz}");
+
+    fn startup(&self, mode: SslMode, password: Option<&str>) -> Config {
+        let spec = self.spec;
+        let mut config = Config::new();
+        config
+            .user(&spec.user)
+            .dbname(self.db)
+            .application_name(&spec.application_name);
+        if let Some(p) = password {
+            config.password(p);
+        }
+        let mut options = spec.options.clone().unwrap_or_default();
+        if let Some(tz) = &spec.timezone {
+            let _ = write!(options, " -c TimeZone={tz}");
+        }
+        if let Some(t) = spec.tcp.user_timeout {
+            let _ = write!(options, " -c tcp_user_timeout={}", t.as_millis());
+        }
+        if !options.trim().is_empty() {
+            config.options(options.trim());
+        }
+        config.ssl_mode(sslmode_of(mode));
+        if spec.sslnegotiation == SslNegotiation::Direct && mode != SslMode::Disable {
+            config.ssl_negotiation(PgSslNegotiation::Direct);
+        }
+        config.channel_binding(match spec.channel_binding {
+            ChannelBinding::Require => PgChannelBinding::Require,
+            ChannelBinding::Disable => PgChannelBinding::Disable,
+            ChannelBinding::Prefer => PgChannelBinding::Prefer,
+        });
+        config
     }
-    if let Some(t) = spec.tcp.user_timeout {
-        let _ = write!(options, " -c tcp_user_timeout={}", t.as_millis());
-    }
-    if !options.trim().is_empty() {
-        config.options(options.trim());
-    }
-    let mode = if unix { SslMode::Disable } else { a.tls_mode };
-    config.ssl_mode(sslmode_of(mode));
-    if spec.sslnegotiation == SslNegotiation::Direct && !unix {
-        config.ssl_negotiation(PgSslNegotiation::Direct);
-    }
-    config.channel_binding(match spec.channel_binding {
-        ChannelBinding::Require => PgChannelBinding::Require,
-        ChannelBinding::Disable => PgChannelBinding::Disable,
-        ChannelBinding::Prefer => PgChannelBinding::Prefer,
-    });
-    let shared = tap::Shared::with_policy(
-        spec.require_auth
-            .policy()
-            .map_err(|e| DialFailure::Config(e.to_string()))?
-            .cloned(),
-    );
-    let start = match sslmode_of(mode) {
-        PgSslMode::Disable => Start::Plain,
-        _ if spec.sslnegotiation == SslNegotiation::Direct => Start::Direct,
-        _ => Start::Negotiated,
-    };
-    let passfile_text = passfile
-        .as_ref()
-        .map_or_else(|| "~/.pgpass".into(), |p| p.display().to_string());
-    let tls_config = if matches!(sslmode_of(mode), PgSslMode::Disable) {
-        None
-    } else {
-        Some(a.tls.clone().ok_or_else(|| {
-            DialFailure::Config("TLS setup: no TLS configuration for this host".into())
-        })?)
-    };
-    let version = Arc::new(Mutex::new(None));
-    let run = async {
-        let opened = match &cloud_sql {
+
+    async fn handshake(
+        &self,
+        shared: &Arc<tap::Shared>,
+        version: &Arc<Mutex<Option<TlsVersion>>>,
+    ) -> std::result::Result<Opened, DialFailure> {
+        let spec = self.spec;
+        let passfile = self.passfile();
+        let login = self.login(passfile.as_deref()).await?;
+        let password = login.password;
+        if let Some(p) = &password {
+            (self.secret)(p);
+        }
+        let mode = if self.host.starts_with('/') || login.cloud_sql.is_some() {
+            SslMode::Disable
+        } else {
+            self.tls_mode
+        };
+        let config = self.startup(mode, password.as_ref().map(Secret::expose));
+        let start = match sslmode_of(mode) {
+            PgSslMode::Disable => Start::Plain,
+            _ if spec.sslnegotiation == SslNegotiation::Direct => Start::Direct,
+            _ => Start::Negotiated,
+        };
+        let connect = match (sslmode_of(mode), &self.tls) {
+            (PgSslMode::Disable, _) => None,
+            (_, Some(config)) => Some(Connect {
+                config: config.clone(),
+                host: self.name.to_string(),
+                version: version.clone(),
+            }),
+            (_, None) => {
+                let e = std::io::Error::other("TLS setup: no TLS configuration for this host");
+                return Err(DialFailure::Broken {
+                    text: e.to_string(),
+                    class: Class::Fatal,
+                    origin: Origin::Io(e),
+                });
+            }
+        };
+        let opened = match login.cloud_sql {
             Some(session) => {
-                let peer = Peer::Google(session.clone());
+                let peer = Peer::Google(session);
                 dial(&peer, &spec.tcp).await.map(|s| (s, peer))
             }
-            _ => open(a.host, a.port, &spec.tcp).await,
+            None => open(self.host, self.port, &spec.tcp).await,
         };
-        let (socket, peer) = opened.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                DialFailure::ConnectionRefused
-            } else if classify_io(&e) {
-                DialFailure::Transient(e.to_string())
-            } else {
-                DialFailure::Fatal(e.to_string())
-            }
+        let (socket, peer) = opened.map_err(|e| DialFailure::Broken {
+            text: e.to_string(),
+            class: io_class(&e),
+            origin: Origin::Io(e),
         })?;
         let stream = Tap::socket(socket, shared.clone(), start);
-        let notices = a.notices.clone();
-        match &tls_config {
-            None => {
-                let (client, connection) =
-                    config.connect_raw(stream, NoTls).await.map_err(|e| {
-                        refused_token(
-                            classify_pg(
-                                &e,
-                                a.name,
-                                &passfile_text,
-                                no_password && shared.asked_password(),
-                            ),
-                            &e,
-                            spec,
-                            config.get_dbname(),
-                        )
-                    })?;
-                let task = drive(connection, notices);
-                Ok((client, None, peer, task))
-            }
-            Some(t) => {
-                let connect = Connect {
-                    config: t.clone(),
-                    host: a.name.to_string(),
-                    version: version.clone(),
-                };
+        let started = match &connect {
+            None => started(config.connect_raw(stream, NoTls).await, &self.notices),
+            Some(c) => {
                 let tapped = TapConnect {
-                    inner: connect.clone(),
+                    inner: c.clone(),
                     shared: shared.clone(),
                 };
-                let (client, connection) =
-                    config.connect_raw(stream, tapped).await.map_err(|e| {
-                        refused_token(
-                            classify_pg(
-                                &e,
-                                a.name,
-                                &passfile_text,
-                                no_password && shared.asked_password(),
-                            ),
-                            &e,
-                            spec,
-                            config.get_dbname(),
-                        )
-                    })?;
-                let task = drive(connection, notices);
-                Ok((client, Some(connect), peer, task))
+                started(config.connect_raw(stream, tapped).await, &self.notices)
             }
-        }
-    };
-    let deadline = spec
-        .connect_timeout
-        .map(|t| tokio::time::Instant::now() + t);
-    let (client, tls, peer, connection) = match deadline {
-        Some(d) => tokio::time::timeout_at(d, run)
-            .await
-            .map_err(|_| DialFailure::Transient("timeout expired".into()))??,
-        None => run.await?,
-    };
-    let tls_version = version.lock().ok().and_then(|v| v.clone());
-    let session = Session {
-        cancel: client.cancel_token(),
-        client,
-        tap: shared,
-        tls: tls.filter(|_| tls_version.is_some()),
-        tls_version,
-        peer,
-        tcp: spec.tcp,
-        connection,
-    };
-    let probe = matches_attrs(&session.client, a.want);
-    let satisfied = match deadline {
-        Some(d) => tokio::time::timeout_at(d, probe)
-            .await
-            .map_err(|_| DialFailure::Fatal("timeout expired".into()))?,
-        None => probe.await,
-    };
-    match satisfied {
-        Ok(true) => Ok(session),
-        Ok(false) => Err(DialFailure::Fatal(format!(
-            "server does not satisfy target_session_attrs={}",
-            a.want
-        ))),
-        Err(e) => Err(DialFailure::Fatal(e.to_string())),
+        };
+        let (client, connection) = started.map_err(|e| {
+            let passfile = passfile
+                .as_ref()
+                .map_or_else(|| "~/.pgpass".into(), |p| p.display().to_string());
+            let no_password = password.is_none() && shared.asked_password();
+            match token_refused(&e, spec, self.db) {
+                Some(text) => broken(text, Class::Fatal, e),
+                None => classify_pg(e, self.name, &passfile, no_password),
+            }
+        })?;
+        Ok(Opened {
+            client,
+            tls: connect,
+            peer,
+            connection,
+        })
     }
+}
+
+fn started<S, T>(
+    connected: std::result::Result<
+        (Client, tokio_postgres::Connection<S, T>),
+        tokio_postgres::Error,
+    >,
+    notices: &NoticeSink,
+) -> std::result::Result<(Client, tokio::task::AbortHandle), tokio_postgres::Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (client, connection) = connected?;
+    Ok((client, drive(connection, notices.clone())))
 }
 
 fn drive<S, T>(
@@ -563,17 +684,28 @@ where
 struct Unresolved {
     text: String,
     transient: bool,
+    origin: Option<std::io::Error>,
 }
 
-async fn addresses(host: &str, port: u16) -> std::result::Result<Vec<String>, Unresolved> {
+async fn addresses(
+    host: &str,
+    port: u16,
+    deadline: Option<Instant>,
+) -> std::result::Result<Vec<String>, Unresolved> {
     if host.starts_with('/') || host.parse::<std::net::IpAddr>().is_ok() {
         return Ok(vec![host.to_string()]);
     }
-    let found = tokio::net::lookup_host((host, port))
+    let found = by(deadline, tokio::net::lookup_host((host, port)))
         .await
+        .ok_or_else(|| Unresolved {
+            text: format!("could not resolve host \"{host}\": timeout expired"),
+            transient: true,
+            origin: None,
+        })?
         .map_err(|e| Unresolved {
             text: format!("could not resolve host \"{host}\": {e}"),
             transient: retry::transient_lookup(&e),
+            origin: Some(e),
         })?;
     let mut out: Vec<String> = Vec::new();
     for a in found {
@@ -622,7 +754,8 @@ impl Dialer {
     /// `load_balance_hosts=random`), every address of each, `sslmode=allow`
     /// as plaintext then TLS, `prefer-standby` as two passes, until one
     /// satisfies `target_session_attrs`. A round whose failures were all
-    /// transient is retried with backoff (`conn::retry`).
+    /// transient is retried with backoff (`conn::retry`). A failure's
+    /// source is the last round, [`Unconnected`].
     pub(crate) async fn connect(&self, spec: &Spec, db: &str) -> Result<Session> {
         spec.require_auth
             .policy()
@@ -642,20 +775,18 @@ impl Dialer {
         let mut attempt_no = 0;
         loop {
             attempt_no += 1;
-            match self.connect_once(spec, db, tls.as_ref()).await {
+            let round = match self.connect_once(spec, db, tls.as_ref()).await {
                 Ok(s) => return Ok(s),
-                Err((e, transient)) => {
-                    let Some(wait) = retry::delay(attempt_no).filter(|_| transient) else {
-                        return Err(e);
-                    };
-                    (self.log)(format!(
-                        "Connection attempt {attempt_no} failed: {}; retrying in {}ms",
-                        e.text(),
-                        wait.as_millis()
-                    ));
-                    tokio::time::sleep(wait).await;
-                }
-            }
+                Err(round) => round,
+            };
+            let Some(wait) = retry::delay(attempt_no).filter(|_| round.transient()) else {
+                return Err(round.into());
+            };
+            (self.log)(format!(
+                "Connection attempt {attempt_no} failed: {round}; retrying in {}ms",
+                wait.as_millis()
+            ));
+            tokio::time::sleep(wait).await;
         }
     }
 
@@ -664,7 +795,7 @@ impl Dialer {
         spec: &Spec,
         db: &str,
         tls: Option<&Arc<ClientConfig>>,
-    ) -> std::result::Result<Session, (Error, bool)> {
+    ) -> std::result::Result<Session, Unconnected> {
         let passes = match spec.target_session_attrs {
             TargetSessionAttrs::PreferStandby => {
                 vec![TargetSessionAttrs::Standby, TargetSessionAttrs::Any]
@@ -682,7 +813,7 @@ impl Dialer {
                 } else if let Some(addr) = endpoint.addr {
                     Ok(vec![addr.to_string()])
                 } else {
-                    addresses(host, port).await
+                    addresses(host, port, deadline(spec.connect_timeout)).await
                 };
                 let mut addrs = match resolved {
                     Ok(a) => a,
@@ -704,7 +835,7 @@ impl Dialer {
                     }
                     let mut outcome = None;
                     for mode in modes {
-                        let r = attempt(Attempt {
+                        let r = Attempt {
                             spec,
                             db,
                             name: host,
@@ -716,23 +847,18 @@ impl Dialer {
                             notices: self.notices.clone(),
                             log: self.log.clone(),
                             secret: self.secret.clone(),
-                        })
+                        }
+                        .run()
                         .await;
-                        match r {
-                            Err(DialFailure::Refused(t)) if mode == SslMode::Allow => {
-                                outcome = Some(Err(DialFailure::Refused(t)));
-                            }
-                            other => {
-                                outcome = Some(other);
-                                break;
-                            }
+                        let again = mode == SslMode::Allow
+                            && r.as_ref().is_err_and(DialFailure::auth_refused);
+                        outcome = Some(r);
+                        if !again {
+                            break;
                         }
                     }
                     match outcome {
                         Some(Ok(s)) => return Ok(s),
-                        Some(Err(DialFailure::Config(t))) => {
-                            return Err((Error::config(t), false));
-                        }
                         Some(Err(failure)) => failed.push(Failed::At {
                             host: host.to_string(),
                             port,
@@ -744,8 +870,12 @@ impl Dialer {
                 }
             }
         }
-        let transient = !failed.is_empty() && failed.iter().all(Failed::transient);
-        Err((connect_error(db, &failed, spec.first()), transient))
+        let (first_host, first_port) = spec.first();
+        Err(Unconnected {
+            db: db.to_string(),
+            failed,
+            first: (first_host.to_string(), first_port),
+        })
     }
 }
 
@@ -764,35 +894,71 @@ fn balance<T>(items: &mut [T], mode: LoadBalanceHosts) {
     }
 }
 
-fn connect_error(db: &str, failed: &[Failed], first: (&str, u16)) -> Error {
-    let joined = failed
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ");
-    let mut message = format!("connect to \"{db}\": {joined}");
-    if failed.iter().any(Failed::connection_refused) {
-        let (h, p) = first;
-        let _ = write!(
-            message,
-            "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
-        );
+/// A round over every host that gave no session. `Display` is the message
+/// pgmi prints; `source` is the first typed cause (a sign-in
+/// [`TokenError`], an `io::Error` or the driver's error).
+#[derive(Debug)]
+pub(crate) struct Unconnected {
+    db: String,
+    failed: Vec<Failed>,
+    first: (String, u16),
+}
+
+impl Unconnected {
+    fn transient(&self) -> bool {
+        !self.failed.is_empty() && self.failed.iter().all(Failed::transient)
     }
-    if ["x509", "TLS", "certificate"]
-        .iter()
-        .any(|w| joined.contains(w))
-    {
-        message.push_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert");
+
+    fn sqlstate(&self) -> Option<&str> {
+        let mut codes = self.failed.iter().filter_map(Failed::code);
+        let first = codes.next();
+        first.filter(|c| codes.all(|o| o == *c))
     }
-    let error = Error::connection(message);
-    let mut codes = failed.iter().filter_map(Failed::code);
-    let first_code = codes.next();
-    match first_code.filter(|c| codes.all(|o| o == *c)) {
-        Some(code) => error.with_sql(crate::error::SqlDiagnostics {
-            sqlstate: Some(code.to_string()),
-            ..Default::default()
-        }),
-        None => error,
+}
+
+impl std::fmt::Display for Unconnected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let joined = self
+            .failed
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        write!(f, "connect to \"{}\": {joined}", self.db)?;
+        if self.failed.iter().any(Failed::connection_refused) {
+            let (h, p) = &self.first;
+            write!(
+                f,
+                "\nis PostgreSQL running? check: pg_isready -h {h} -p {p}\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
+            )?;
+        }
+        if ["x509", "TLS", "certificate"]
+            .iter()
+            .any(|w| joined.contains(w))
+        {
+            f.write_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Unconnected {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.failed.iter().find_map(Failed::origin)
+    }
+}
+
+impl From<Unconnected> for Error {
+    fn from(u: Unconnected) -> Self {
+        let error = Error::connection(u.to_string());
+        let error = match u.sqlstate() {
+            Some(code) => error.with_sql(crate::error::SqlDiagnostics {
+                sqlstate: Some(code.to_string()),
+                ..Default::default()
+            }),
+            None => error,
+        };
+        error.with_cause(u)
     }
 }
 
@@ -959,9 +1125,35 @@ mod tests {
         )
     }
 
+    fn fatal(text: &str) -> DialFailure {
+        DialFailure::Broken {
+            text: text.into(),
+            class: Class::Fatal,
+            origin: Origin::Io(std::io::Error::other(text.to_string())),
+        }
+    }
+
+    fn refused() -> DialFailure {
+        let e = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        DialFailure::Broken {
+            text: e.to_string(),
+            class: io_class(&e),
+            origin: Origin::Io(e),
+        }
+    }
+
+    fn connect_error(db: &str, failed: Vec<Failed>, first: (&str, u16)) -> Error {
+        Unconnected {
+            db: db.into(),
+            failed,
+            first: (first.0.into(), first.1),
+        }
+        .into()
+    }
+
     #[test]
     fn a_connect_error_keeps_the_sqlstate_every_host_agreed_on() {
-        let one = |failed: Vec<Failed>| connect_error("d", &failed, ("h", 5432));
+        let one = |failed: Vec<Failed>| connect_error("d", failed, ("h", 5432));
         let e = one(vec![server("42501")]);
         assert_eq!(e.exit_code(), 11);
         assert_eq!(sqlstate(&e), Some("42501"));
@@ -970,24 +1162,18 @@ mod tests {
             "connect to \"d\": h:5432: refused (SQLSTATE 42501)"
         );
         assert_eq!(
-            sqlstate(&one(vec![server("53300"), server("53300")])),
-            Some("53300")
+            sqlstate(&one(vec![server("3D000"), server("3D000")])),
+            Some("3D000")
         );
-        assert_eq!(sqlstate(&one(vec![server("53300"), server("28P01")])), None);
-        assert_eq!(
-            sqlstate(&one(vec![at("h", 1, DialFailure::Fatal("x".into()))])),
-            None
-        );
+        assert_eq!(sqlstate(&one(vec![server("3D000"), server("28P01")])), None);
+        assert_eq!(sqlstate(&one(vec![at("h", 1, fatal("x"))])), None);
     }
 
     #[test]
     fn a_connect_error_names_every_host_and_hints_at_the_cause() {
         let e = connect_error(
             "app",
-            &[
-                at("a", 1, DialFailure::ConnectionRefused),
-                at("b", 2, DialFailure::Transient("timeout expired".into())),
-            ],
+            vec![at("a", 1, refused()), at("b", 2, DialFailure::Timeout)],
             ("a", 1),
         );
         assert_eq!(
@@ -999,11 +1185,7 @@ mod tests {
             "TLS handshake",
             "bad certificate",
         ] {
-            let e = connect_error(
-                "app",
-                &[at("a", 1, DialFailure::Fatal(tls.into()))],
-                ("a", 1),
-            );
+            let e = connect_error("app", vec![at("a", 1, fatal(tls))], ("a", 1));
             assert!(
                 e.text()
                     .ends_with("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert"),
@@ -1013,10 +1195,10 @@ mod tests {
         }
         let e = connect_error(
             "app",
-            &[at(
+            vec![at(
                 "h",
                 5432,
-                DialFailure::Refused(Answer {
+                DialFailure::Server(Answer {
                     message: "password authentication failed".into(),
                     code: "28P01".into(),
                 }),
@@ -1065,14 +1247,18 @@ mod tests {
             Failed::Lookup(Unresolved {
                 text: "could not resolve host".into(),
                 transient,
+                origin: None,
             })
         };
         assert!(lookup(true).transient());
         assert!(!lookup(false).transient());
-        assert!(at("h", 1, DialFailure::ConnectionRefused).transient());
-        assert!(at("h", 1, DialFailure::Transient("t".into())).transient());
-        assert!(!server("53300").transient());
-        assert!(!at("h", 1, DialFailure::Fatal("f".into())).transient());
+        assert!(at("h", 1, refused()).transient());
+        assert!(at("h", 1, DialFailure::Timeout).transient());
+        assert!(server("57P03").transient());
+        assert!(server("53300").transient());
+        assert!(!server("3D000").transient());
+        assert!(!at("h", 1, DialFailure::ProbeTimeout).transient());
+        assert!(!at("h", 1, fatal("f")).transient());
     }
 
     #[test]
@@ -1173,6 +1359,60 @@ mod tests {
         let e = quiet().connect(&spec, "d").await.err().unwrap();
         assert_eq!(e.exit_code(), 10, "{}", e.text());
         assert_eq!(e.text(), "invalid require_auth method: \"scram-sha265\"");
+    }
+
+    #[test]
+    fn a_deadline_beyond_the_clock_is_no_deadline() {
+        assert_eq!(deadline(Some(Duration::MAX)), None);
+        assert_eq!(deadline(None), None);
+        assert!(deadline(Some(Duration::from_secs(9_223_372_036))).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_stalled_sign_in_counts_against_connect_timeout_and_the_next_host_is_tried() {
+        let (stalled, stalled_port) = super::fake::listen().await;
+        let (good, good_port) = super::fake::listen().await;
+        tokio::spawn(async move {
+            let _keep = stalled;
+            let _ = super::fake::signed_in(&good).await;
+            std::future::pending::<()>().await;
+        });
+        let mut spec = spec_for(&format!(
+            "host=127.0.0.1,127.0.0.1 port={stalled_port},{good_port} user=u dbname=d sslmode=disable connect_timeout=2"
+        ));
+        spec.token = Some(crate::conn::cloud::Token::Stalled(
+            crate::conn::cloud::Provider::Azure,
+            stalled_port,
+        ));
+        let started = std::time::Instant::now();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(20), quiet().connect(&spec, "d")).await;
+        let Ok(Ok(session)) = outcome else {
+            panic!("the stalled sign-in held the connection past connect_timeout")
+        };
+        assert!(started.elapsed() < Duration::from_secs(10));
+        session.disconnect();
+    }
+
+    #[tokio::test]
+    async fn a_failed_sign_in_stays_the_typed_source_of_the_connect_error() {
+        let mut spec = spec_for("host=127.0.0.1 port=1 user=u dbname=d sslmode=disable");
+        spec.token = Some(crate::conn::cloud::Token::Failing(
+            crate::conn::cloud::Provider::Azure,
+        ));
+        let e = quiet().connect(&spec, "d").await.err().unwrap();
+        assert_eq!(e.exit_code(), 11);
+        assert_eq!(e.text(), "connect to \"d\": 127.0.0.1:1: sign-in refused");
+        let mut cur = std::error::Error::source(&e);
+        let mut typed = None;
+        while let Some(c) = cur {
+            typed = typed.or(c.downcast_ref::<TokenError>());
+            cur = c.source();
+        }
+        assert!(
+            matches!(typed, Some(TokenError::SignIn(_))),
+            "no TokenError in the source chain"
+        );
     }
 
     #[tokio::test]

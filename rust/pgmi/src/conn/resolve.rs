@@ -286,6 +286,7 @@ pub(crate) enum ResolveError {
     TlsTooOld,
     ProtocolUnsupported(String),
     ConnectTimeout(String),
+    ConnectTimeoutRange(String),
     HostaddrCount { addrs: usize, hosts: usize },
     NotSupported { setting: String, why: &'static str },
     Unhandled(String),
@@ -341,6 +342,10 @@ impl fmt::Display for ResolveError {
                 "min_protocol_version={v}: protocol {v} is not supported yet; pgmi speaks protocol 3.0, so remove min_protocol_version or set it to 3.0"
             ),
             ResolveError::ConnectTimeout(t) => write!(f, "invalid connect_timeout \"{t}\""),
+            ResolveError::ConnectTimeoutRange(t) => write!(
+                f,
+                "invalid connect_timeout \"{t}\": at most {MAX_CONNECT_TIMEOUT} seconds"
+            ),
             ResolveError::HostaddrCount { addrs, hosts } => {
                 write!(f, "could not match {hosts} host names to {addrs} hostaddr values")
             }
@@ -393,6 +398,7 @@ impl ResolveError {
                 value: hide(value),
             },
             ResolveError::ConnectTimeout(t) => ResolveError::ConnectTimeout(hide(t)),
+            ResolveError::ConnectTimeoutRange(t) => ResolveError::ConnectTimeoutRange(hide(t)),
             ResolveError::NotSupported { setting, why } => ResolveError::NotSupported {
                 setting: hide(setting),
                 why,
@@ -856,12 +862,19 @@ fn keyword<T: FromStr<Err = Unknown>>(f: &mut Fields, key: &'static str, default
     f.remove(key).map_or(Ok(default), |v| setting(key, &v))
 }
 
+/// The longest `connect_timeout` in seconds: Go's `time.Duration` holds no
+/// more, and a deadline this far away still fits an `Instant`.
+const MAX_CONNECT_TIMEOUT: i64 = i64::MAX / 1_000_000_000;
+
 fn connect_timeout(given: Option<String>) -> Result<Option<Duration>> {
     let Some(t) = given else { return Ok(None) };
     let n: i64 = t
         .trim()
         .parse()
         .map_err(|_| ResolveError::ConnectTimeout(t.clone()))?;
+    if n > MAX_CONNECT_TIMEOUT {
+        return Err(ResolveError::ConnectTimeoutRange(t));
+    }
     Ok(u64::try_from(n)
         .ok()
         .filter(|n| *n > 0)

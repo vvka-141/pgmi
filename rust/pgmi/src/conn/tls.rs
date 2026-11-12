@@ -396,7 +396,27 @@ fn config_with(
 pub(crate) struct Connect {
     pub(crate) config: Arc<ClientConfig>,
     pub(crate) host: String,
-    pub(crate) version: Arc<Mutex<Option<String>>>,
+    pub(crate) version: Arc<Mutex<Option<TlsVersion>>>,
+}
+
+/// The TLS version a session negotiated; `TLS 1.3` in the `--json` record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TlsVersion(pub(crate) ProtocolVersion);
+
+impl std::fmt::Display for TlsVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            ProtocolVersion::TLSv1_3 => f.write_str("TLS 1.3"),
+            ProtocolVersion::TLSv1_2 => f.write_str("TLS 1.2"),
+            other => write!(f, "{other:?}"),
+        }
+    }
+}
+
+impl serde::Serialize for TlsVersion {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
 }
 
 impl<S> TlsConnect<S> for Connect
@@ -417,12 +437,7 @@ where
             let tls = tokio_rustls::TlsConnector::from(self.config)
                 .connect(name, stream)
                 .await?;
-            let version = match tls.get_ref().1.protocol_version() {
-                Some(ProtocolVersion::TLSv1_3) => Some("TLS 1.3".to_string()),
-                Some(ProtocolVersion::TLSv1_2) => Some("TLS 1.2".to_string()),
-                Some(other) => Some(format!("{other:?}")),
-                None => None,
-            };
+            let version = tls.get_ref().1.protocol_version().map(TlsVersion);
             if let Ok(mut slot) = self.version.lock() {
                 *slot = version;
             }
