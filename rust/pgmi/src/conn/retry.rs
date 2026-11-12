@@ -50,15 +50,36 @@ const DELAYS: [Duration; 3] = [
     Duration::from_millis(400),
 ];
 
-/// The wait after attempt `attempt` (from 1) failed transiently, or `None`
+/// The wait after attempt `attempt` (from 1) failed transiently, varied by
+/// up to 10% either way so runners hitting one server spread out, or `None`
 /// when it was the last.
 pub(crate) fn delay(attempt: usize) -> Option<Duration> {
-    DELAYS.get(attempt.checked_sub(1)?).copied()
+    let base = DELAYS.get(attempt.checked_sub(1)?)?;
+    Some(base.mul_f64(rand::random_range(0.9..=1.1)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_vary_within_ten_percent_of_go_s_schedule() {
+        for (attempt, base) in [(1, 100.0), (2, 200.0), (3, 400.0)] {
+            let waits: Vec<f64> = (0..200)
+                .map(|_| delay(attempt).unwrap().as_secs_f64() * 1000.0)
+                .collect();
+            assert!(
+                waits.iter().all(|w| (base * 0.9..=base * 1.1).contains(w)),
+                "{waits:?}"
+            );
+            assert!(
+                waits.iter().any(|w| (w - waits[0]).abs() > 0.5),
+                "no jitter: {waits:?}"
+            );
+        }
+        assert_eq!(delay(0), None);
+        assert_eq!(delay(4), None);
+    }
 
     #[test]
     fn server_errors_retried_are_class_08_too_many_connections_and_starting_up() {
@@ -123,13 +144,11 @@ mod tests {
     }
 
     #[test]
-    fn four_attempts_waiting_100_200_400_ms() {
-        let waits: Vec<_> = (1..).map_while(delay).collect();
+    fn four_attempts_three_waits() {
         assert_eq!(
-            waits,
-            [100, 200, 400].map(Duration::from_millis),
+            (1..).map_while(delay).count(),
+            3,
             "a wait after attempts 1 to 3, none after the fourth"
         );
-        assert_eq!(delay(0), None);
     }
 }
