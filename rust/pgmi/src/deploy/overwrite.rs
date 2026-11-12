@@ -124,7 +124,7 @@ pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
     let c = &maintenance.client;
     let held = rows(
         c,
-        "SELECT pg_try_advisory_lock(hashtextextended('pgmi.overwrite.' || $1, 0))",
+        "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0))",
         db,
     )
     .await?;
@@ -395,7 +395,7 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
 /// `CLEANUP` is closed instead.
 pub(crate) async fn unlock(maintenance: &Session, db: &str) {
     let sql = format!(
-        "SELECT pg_advisory_unlock(hashtextextended('pgmi.overwrite.{}', 0))",
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.{}', 0))",
         db.replace('\'', "''")
     );
     if !matches!(
@@ -507,7 +507,7 @@ mod tests {
         let sql = server.await.unwrap();
         assert_eq!(
             sql.trim_end_matches('\0'),
-            "SELECT pg_advisory_unlock(hashtextextended('pgmi.overwrite.o''app', 0))"
+            "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.o''app', 0))"
         );
     }
 

@@ -1022,7 +1022,7 @@ impl Steps<'_> {
                 session
                     .client
                     .query_typed(
-                        "SELECT pg_try_advisory_lock(hashtextextended('pgmi.deploy.' || current_database(), 0))",
+                        "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('pgmi.deploy.' || pg_catalog.current_database(), 0))",
                         &[],
                     )
                     .await

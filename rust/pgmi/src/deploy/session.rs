@@ -77,9 +77,9 @@ pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, Strin
     let rows: Vec<_> = params.iter().map(|(k, v)| json!([k, v])).collect();
     load_json(
         client,
-        "WITH p AS (SELECT r->>0 AS k, r->>1 AS v FROM jsonb_array_elements($1::text::jsonb) r), \
+        "WITH p AS (SELECT r->>0 AS k, r->>1 AS v FROM pg_catalog.jsonb_array_elements($1::text::jsonb) r), \
          i AS (INSERT INTO pg_temp._pgmi_parameter (key, value) SELECT k, v FROM p) \
-         SELECT set_config('pgmi.' || k, v, false) FROM p",
+         SELECT pg_catalog.set_config('pgmi.' || k, v, false) FROM p",
         json!(rows),
     )
     .await
@@ -123,8 +123,8 @@ pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
             client,
             "INSERT INTO pg_temp._pgmi_source_metadata (path, id, idempotent, sort_keys, description) \
              SELECT m->>'path', (m->>'id')::uuid, (m->>'idempotent')::boolean, \
-                    ARRAY(SELECT jsonb_array_elements_text(m->'sort_keys')), m->>'description' \
-             FROM jsonb_array_elements($1::text::jsonb) m",
+                    ARRAY(SELECT pg_catalog.jsonb_array_elements_text(m->'sort_keys')), m->>'description' \
+             FROM pg_catalog.jsonb_array_elements($1::text::jsonb) m",
             json!(rows),
         )
         .await?;
@@ -144,7 +144,7 @@ pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
         load_json(
             client,
             "INSERT INTO pg_temp._pgmi_test_source (path, directory, filename, content, is_fixture) \
-             SELECT t->>0, t->>1, t->>2, t->>3, (t->>4)::boolean FROM jsonb_array_elements($1::text::jsonb) t",
+             SELECT t->>0, t->>1, t->>2, t->>3, (t->>4)::boolean FROM pg_catalog.jsonb_array_elements($1::text::jsonb) t",
             json!(rows),
         )
         .await?;
@@ -164,7 +164,7 @@ pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
 async fn register(client: &Client, rows: Vec<serde_json::Value>) -> Result<()> {
     load_json(
         client,
-        "SELECT count(pg_temp.pgmi_register_file(f->>0, f->>1, f->>2, f->>3)) FROM jsonb_array_elements($1::text::jsonb) f",
+        "SELECT pg_catalog.count(pg_temp.pgmi_register_file(f->>0, f->>1, f->>2, f->>3)) FROM pg_catalog.jsonb_array_elements($1::text::jsonb) f",
         json!(rows),
     )
     .await
@@ -194,7 +194,7 @@ async fn load_test_directories(client: &Client, files: &[String]) -> Result<()> 
     load_json(
         client,
         "INSERT INTO pg_temp._pgmi_test_directory (path, parent_path, depth) \
-         SELECT d->>0, d->>1, (d->>2)::int FROM jsonb_array_elements($1::text::jsonb) d",
+         SELECT d->>0, d->>1, (d->>2)::int FROM pg_catalog.jsonb_array_elements($1::text::jsonb) d",
         json!(test_directories(files.iter().map(String::as_str))),
     )
     .await

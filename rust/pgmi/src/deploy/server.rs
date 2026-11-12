@@ -32,7 +32,7 @@ pub(super) async fn release(session: &Session) {
         }
         session
             .client
-            .batch_execute("SELECT pg_advisory_unlock_all()")
+            .batch_execute("SELECT pg_catalog.pg_advisory_unlock_all()")
             .await
     };
     if !matches!(tokio::time::timeout(CLEANUP, cleanup).await, Ok(Ok(()))) {
@@ -56,7 +56,7 @@ pub(super) async fn client_encoding(
         return session
             .client
             .batch_execute(
-                "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
+                "SELECT pg_catalog.set_config('client_encoding', pg_catalog.current_setting('server_encoding'), false)",
             )
             .await
             .map_err(|e| sql_error("match the client encoding to the database", e));
@@ -64,7 +64,7 @@ pub(super) async fn client_encoding(
     session
         .client
         .query_typed(
-            "SELECT set_config('client_encoding', $1, false)",
+            "SELECT pg_catalog.set_config('client_encoding', $1, false)",
             &[(&encoding, tokio_postgres::types::Type::TEXT)],
         )
         .await
@@ -105,7 +105,7 @@ pub(super) async fn check_server(session: &Session) -> Result<()> {
     let rows = session
         .client
         .simple_query(
-            "SELECT current_setting('server_version_num'), current_setting('server_version')",
+            "SELECT pg_catalog.current_setting('server_version_num'), pg_catalog.current_setting('server_version')",
         )
         .await
         .map_err(|e| sql_error("read the server version", e))?;
