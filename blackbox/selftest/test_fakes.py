@@ -17,8 +17,18 @@ from pgmi_blackbox.fakes import (
     LAKEBASE_TOKEN,
     _aws_answer,
     _databricks_answer,
+    _flaky,
     start_fakes,
 )
+
+
+def test_flaky_fails_the_first_n_requests_per_path():
+    assert _flaky("/azureml?x=1") == (None, "/azureml?x=1")
+    assert _flaky("/flaky/410x2/selftest-a?q=1") == (410, "/selftest-a?q=1")
+    assert _flaky("/flaky/410x2/selftest-a?q=2") == (410, "/selftest-a?q=2")
+    assert _flaky("/flaky/503x1/selftest-b") == (503, "/selftest-b")
+    assert _flaky("/flaky/410x2/selftest-a") == (None, "/selftest-a")
+    assert _flaky("/flaky/503x1/selftest-b") == (None, "/selftest-b")
 
 
 def test_aws_answers():

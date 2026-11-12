@@ -8,7 +8,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha1::Digest;
 
-use super::http::{client, encode};
+use super::http::{Retry, client, encode};
 use super::renew::Fetched;
 use crate::env::Env;
 use crate::error::{Error, Secret};
@@ -24,6 +24,7 @@ pub(crate) enum MsiError {
     ArcKey(ArcKeyError),
     Status(Source, reqwest::StatusCode),
     NoToken(Source),
+    Retried(Box<MsiError>, u32),
 }
 
 impl std::fmt::Display for MsiError {
@@ -54,6 +55,7 @@ impl std::fmt::Display for MsiError {
                 "{} managed identity endpoint returned no access_token",
                 s.name()
             ),
+            MsiError::Retried(last, attempts) => write!(f, "{last} (after {attempts} attempts)"),
         }
     }
 }
@@ -65,6 +67,7 @@ impl std::error::Error for MsiError {
             MsiError::Tls(e) => Some(e),
             MsiError::Http(e) => Some(e),
             MsiError::ArcKey(e) => Some(e),
+            MsiError::Retried(last, _) => last.source(),
             _ => None,
         }
     }
@@ -176,7 +179,53 @@ fn query(base: &str, pairs: &[(&str, &str)]) -> String {
     format!("{base}{sep}{}", joined.join("&"))
 }
 
+fn retryable(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+fn wait(attempt: u32) -> Duration {
+    Duration::from_millis(800)
+        .saturating_mul((1u32 << attempt.min(10)) - 1)
+        .min(Duration::from_secs(60))
+}
+
+pub(crate) const RETRY: Retry = Retry {
+    attempts: 4,
+    status: retryable,
+    wait,
+};
+
+/// Asks the managed identity endpoint for a token, again after no answer
+/// or a busy answer, as the Azure SDK's default retry policy does.
 pub(crate) async fn token(
+    source: Source,
+    client_id: Option<&str>,
+    resource: &str,
+    env: &Env,
+    retry: &Retry,
+) -> std::result::Result<Fetched, MsiError> {
+    let mut attempt = 1;
+    loop {
+        let outcome = once(source, client_id, resource, env).await;
+        let again = match &outcome {
+            Err(MsiError::Http(_)) => true,
+            Err(MsiError::Status(_, status) | MsiError::ArcChallenge(status)) => {
+                (retry.status)(*status)
+            }
+            _ => false,
+        };
+        if !again {
+            return outcome;
+        }
+        if attempt >= retry.attempts {
+            return outcome.map_err(|e| MsiError::Retried(Box::new(e), attempt));
+        }
+        tokio::time::sleep((retry.wait)(attempt)).await;
+        attempt += 1;
+    }
+}
+
+async fn once(
     source: Source,
     client_id: Option<&str>,
     resource: &str,
@@ -405,6 +454,54 @@ impl ServerCertVerifier for Thumbprint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conn::cloud::http::tests::scripted;
+
+    fn no_wait(_: u32) -> Duration {
+        Duration::ZERO
+    }
+
+    const QUICK: Retry = Retry {
+        attempts: 3,
+        status: retryable,
+        wait: no_wait,
+    };
+
+    async fn machine_learning(url: &str) -> std::result::Result<Fetched, MsiError> {
+        let env = Env::from_pairs(&[("MSI_ENDPOINT", url), ("MSI_SECRET", "s")]);
+        token(Source::MachineLearning, None, "https://r", &env, &QUICK).await
+    }
+
+    #[tokio::test]
+    async fn a_busy_endpoint_is_asked_again() {
+        let (url, served) =
+            scripted(vec![(429, ""), (503, ""), (200, r#"{"access_token":"t"}"#)]).await;
+        let fetched = machine_learning(&url).await.unwrap();
+        assert_eq!(fetched.value.expose(), "t");
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_final_and_a_lasting_failure_counts_its_attempts() {
+        let (url, served) = scripted(vec![(410, ""), (200, "")]).await;
+        assert!(matches!(
+            machine_learning(&url).await,
+            Err(MsiError::Status(_, s)) if s.as_u16() == 410
+        ));
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let (url, _) = scripted(vec![(503, ""), (503, ""), (503, "")]).await;
+        let e = machine_learning(&url).await.unwrap_err();
+        assert!(
+            e.to_string()
+                .ends_with("answered 503 Service Unavailable (after 3 attempts)"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn waits_grow_like_the_sdk_and_stop_at_60_s() {
+        let waits: Vec<u128> = (1..=7).map(|n| wait(n).as_millis()).collect();
+        assert_eq!(waits, [800, 2400, 5600, 12000, 24800, 50400, 60000]);
+    }
 
     #[test]
     fn detects_the_source_like_the_sdks() {

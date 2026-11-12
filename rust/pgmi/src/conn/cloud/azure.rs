@@ -356,6 +356,7 @@ async fn get(
                     ids.client.as_deref(),
                     audience.resource,
                     env,
+                    &super::azure_msi::RETRY,
                 )
                 .await
                 .map_err(CredentialError::Msi);

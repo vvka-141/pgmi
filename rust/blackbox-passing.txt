@@ -15,6 +15,7 @@ cloud/azure-client-id-never-uses-the-cli
 cloud/azure-cloud-shell
 cloud/azure-managed-identity
 cloud/azure-ml
+cloud/azure-msi-retry
 cloud/azure-powershell
 cloud/azure-service-fabric
 cloud/azure-token-credentials-invalid

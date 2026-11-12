@@ -1,0 +1,13 @@
+description: an Azure ML managed identity endpoint that answers 503 twice is asked again until it gives a token, as the Azure SDK does (408, 429, 500, 502, 503 and 504 are retried)
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {MSI_ENDPOINT: "{fake_http}/flaky/503x2/azureml-busy", MSI_SECRET: ml-secret}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        "{fake_http_log}": ["GET /flaky/503x2/azureml-busy\\?"]

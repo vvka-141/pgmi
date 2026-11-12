@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(all(test, target_os = "linux"))]
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -40,14 +40,20 @@ impl Fakes {
     }
 }
 
-#[test]
-fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
-    let root = std::env::temp_dir().join(format!("pgmi-cloudsql-{}", std::process::id()));
+struct Run {
+    root: PathBuf,
+    fakes: Fakes,
+    stderr: String,
+    code: Option<i32>,
+}
+
+fn deploy(name: &str, admin_path: &str) -> std::io::Result<Run> {
+    let root = std::env::temp_dir().join(format!("pgmi-cloudsql-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("project")).unwrap();
-    std::fs::create_dir_all(root.join("home")).unwrap();
-    std::fs::write(root.join("project/deploy.sql"), "SELECT 1;\n").unwrap();
-    let fakes = Fakes::start(&root).unwrap();
+    std::fs::create_dir_all(root.join("project"))?;
+    std::fs::create_dir_all(root.join("home"))?;
+    std::fs::write(root.join("project/deploy.sql"), "SELECT 1;\n")?;
+    let fakes = Fakes::start(&root)?;
     assert!(
         !fakes.get("{google_instance}").is_empty(),
         "{}",
@@ -70,18 +76,43 @@ fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
         )
         .env(
             "CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN",
-            format!("{}/", fakes.get("{fake_http}")),
+            format!("{}{admin_path}", fakes.get("{fake_http}")),
         )
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(11), "{stderr}");
-    assert!(
-        stderr.contains("recorded by the black-box recorder"),
-        "{stderr}"
-    );
-    let http = std::fs::read_to_string(fakes.get("{fake_http_log}")).unwrap();
-    let token = fakes.get("{google_token}");
+        .output()?;
+    Ok(Run {
+        root,
+        fakes,
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code(),
+    })
+}
+
+impl Run {
+    fn http_log(&self) -> std::io::Result<String> {
+        std::fs::read_to_string(self.fakes.get("{fake_http_log}"))
+    }
+
+    fn reached_the_instance(&self) {
+        assert_eq!(self.code, Some(11), "{}", self.stderr);
+        assert!(
+            self.stderr.contains("recorded by the black-box recorder"),
+            "{}",
+            self.stderr
+        );
+    }
+
+    fn done(self) -> std::io::Result<()> {
+        drop(self.fakes);
+        std::fs::remove_dir_all(&self.root)
+    }
+}
+
+#[test]
+fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
+    let run = deploy("plain", "/").unwrap();
+    run.reached_the_instance();
+    let http = run.http_log().unwrap();
+    let token = run.fakes.get("{google_token}");
     assert!(
         http.contains(&format!(
             "GET /sql/v1beta4/projects/fake-project/instances/fake-instance/connectSettings {{\"authorization\": \"Bearer {token}\""
@@ -95,7 +126,7 @@ fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
         "{http}"
     );
     let recorded: serde_json::Value = serde_json::from_str(
-        std::fs::read_to_string(fakes.get("{recorder_log}"))
+        std::fs::read_to_string(run.fakes.get("{recorder_log}"))
             .unwrap()
             .lines()
             .next()
@@ -104,6 +135,20 @@ fn google_sign_in_reaches_the_instance_through_the_fake_admin_api() {
     .unwrap();
     assert_eq!(recorded["user"], "sa@fake-project.iam");
     assert_eq!(recorded["password"], token.as_str());
-    drop(fakes);
-    std::fs::remove_dir_all(&root).unwrap();
+    run.done().unwrap();
+}
+
+#[test]
+fn admin_api_server_errors_are_asked_again_like_the_go_connector() {
+    let run = deploy("flaky", "/flaky/503x2/").unwrap();
+    run.reached_the_instance();
+    let http = run.http_log().unwrap();
+    for call in ["/connectSettings ", ":generateEphemeralCert "] {
+        assert_eq!(
+            http.lines().filter(|l| l.contains(call)).count(),
+            3,
+            "{call}: {http}"
+        );
+    }
+    run.done().unwrap();
 }

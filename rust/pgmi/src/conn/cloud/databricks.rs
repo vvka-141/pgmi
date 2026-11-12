@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 
 use super::Options;
 use super::azure;
-use super::http::{client, encode};
+use super::http::{Retry, Unanswered, client, encode};
 use super::renew::{Fetched, Mint, Renewing};
 use crate::env::Env;
 use crate::error::{Error, Result, Secret};
@@ -693,27 +693,28 @@ fn retryable(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
-/// A request that got no answer, after `attempts` tries.
+fn wait(attempt: u32) -> Duration {
+    Duration::from_secs(u64::from(attempt))
+}
+
+const RETRY: Retry = Retry {
+    attempts: ATTEMPTS,
+    status: retryable,
+    wait,
+};
+
+/// A request that got no answer.
 #[derive(Debug)]
 pub(crate) enum SendError {
     Client(Error),
-    Http {
-        error: reqwest::Error,
-        attempts: u32,
-    },
+    Http(Unanswered),
 }
 
 impl std::fmt::Display for SendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SendError::Client(e) => e.fmt(f),
-            SendError::Http { error, attempts } => {
-                f.write_str(&crate::error::chain(error))?;
-                if *attempts > 1 {
-                    write!(f, " (after {attempts} attempts)")?;
-                }
-                Ok(())
-            }
+            SendError::Http(e) => e.fmt(f),
         }
     }
 }
@@ -724,28 +725,9 @@ async fn send(
     build: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
 ) -> std::result::Result<(StatusCode, String), SendError> {
     let http = client().map_err(SendError::Client)?;
-    let mut attempt = 1;
-    loop {
-        let outcome = match build(&http).send().await {
-            Ok(r) => {
-                let status = r.status();
-                r.text().await.map(|t| (status, t))
-            }
-            Err(e) => Err(e),
-        };
-        let again = match &outcome {
-            Ok((status, _)) => retryable(*status),
-            Err(_) => true,
-        };
-        if !again || attempt >= ATTEMPTS {
-            return outcome.map_err(|error| SendError::Http {
-                error,
-                attempts: attempt,
-            });
-        }
-        tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
-        attempt += 1;
-    }
+    super::http::send(&http, &RETRY, build)
+        .await
+        .map_err(SendError::Http)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import random
+import re
 import socket
 import ssl
 import struct
@@ -150,6 +151,24 @@ def _cloud_sql_ca(d: Path) -> None:
     )
 
 
+_FLAKY = re.compile(r"/flaky/(\d{3})x(\d+)(/.*)")
+_flaky_seen: dict[str, int] = {}
+_flaky_lock = threading.Lock()
+
+
+def _flaky(path: str) -> tuple[int | None, str]:
+    """`/flaky/<code>x<n>/rest` answers <code> to the first n requests for each rest (query ignored), then serves rest."""
+    m = _FLAKY.fullmatch(path)
+    if not m:
+        return None, path
+    code, times, rest = int(m.group(1)), int(m.group(2)), m.group(3)
+    key = path.split("?")[0]
+    with _flaky_lock:
+        seen = _flaky_seen.get(key, 0)
+        _flaky_seen[key] = seen + 1
+    return (code if seen < times else None), rest
+
+
 class _Http(BaseHTTPRequestHandler):
     log_path: Path
     cloud_sql: CloudSql | None = None
@@ -159,6 +178,10 @@ class _Http(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode(errors="replace") if length else ""
         with self.log_path.open("a") as log:
             log.write(f"{self.command} {self.path} {json.dumps(dict(self.headers))} {body}\n")
+        failure, self.path = _flaky(self.path)
+        if failure:
+            self._send(failure, "application/json", json.dumps({"error": "flaky fake"}).encode())
+            return
         host = f"https://{self.headers.get('Host')}"
         code = 200
         databricks = _databricks_answer(self.command, self.path, self.headers.get("Authorization") or "", body)

@@ -662,8 +662,16 @@ server's roots coming from the system trust store; `--azure-tenant-id` wins
 over a wrong `AZURE_TENANT_ID`; a principal without a database role is exit 11
 naming the user (`check that the signed-in identity has a database role and
 that --username matches it`); a wrong tenant is exit 11 (`AADSTS90002`).
+A sign-in endpoint that fails briefly is asked again, as the Go SDKs do: a
+managed identity endpoint other than IMDS (Arc, Cloud Shell, Service
+Fabric, Azure ML) on 408, 429, 500, 502, 503, 504 or no answer (4 attempts,
+waits 0.8 s, 2.4 s, 5.6 s); the Cloud SQL Admin API on 5xx (5
+attempts, waits from about 0.3 s growing by 1.6); a Google access token on
+an error its library calls transient. When every attempt fails the error
+says how many were made. The Rust binary also retries an Admin API call that
+got no answer, which Go's connector does not.
 
-Cases: `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`.
+Cases: `cloud/azure-msi-retry`, `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust dialer is checked against the runner's fake Admin API by

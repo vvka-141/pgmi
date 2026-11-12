@@ -11,7 +11,7 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, Server
 use serde::Deserialize;
 
 use super::Options;
-use super::http::client;
+use super::http::{Retry, client, send};
 use super::renew::{Fetched, Mint};
 use crate::conn::socket::Tcp;
 use crate::conn::tls::Names;
@@ -143,6 +143,47 @@ where
     }
 }
 
+fn retryable(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+}
+
+fn wait(attempt: u32) -> Duration {
+    let mut d = Duration::from_millis(324);
+    for _ in 1..attempt.min(8) {
+        d = d.mul_f64(1.618);
+    }
+    d
+}
+
+const RETRY: Retry = Retry {
+    attempts: 5,
+    status: retryable,
+    wait,
+};
+
+/// One Cloud SQL Admin API call, retried on no answer and on 5xx like the
+/// Go connector, decoded as `T`.
+async fn admin_api<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    retry: &Retry,
+    step: Step,
+    build: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+) -> std::result::Result<T, DialerError> {
+    let (status, text) = send(http, retry, build).await.map_err(failed(step))?;
+    if (retry.status)(status) {
+        return Err(failed(step)(format!(
+            "the Cloud SQL Admin API answered {status} (after {} attempts)",
+            retry.attempts
+        )));
+    }
+    if !status.is_success() {
+        return Err(failed(step)(format!(
+            "the Cloud SQL Admin API answered {status}"
+        )));
+    }
+    serde_json::from_str(&text).map_err(failed(step))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectSettings {
@@ -230,7 +271,19 @@ async fn access_token(scope: &str, adc: Adc) -> std::result::Result<Secret, Dial
         Adc::File => Duration::from_secs(60),
         Adc::Discovered => Duration::from_secs(3),
     };
-    match tokio::time::timeout(wait, creds.access_token()).await {
+    let fetch = async {
+        let mut attempt = 1;
+        loop {
+            match creds.access_token().await {
+                Err(e) if e.is_transient() && attempt < RETRY.attempts => {
+                    tokio::time::sleep((RETRY.wait)(attempt)).await;
+                    attempt += 1;
+                }
+                outcome => return outcome,
+            }
+        }
+    };
+    match tokio::time::timeout(wait, fetch).await {
         Ok(Ok(t)) => Ok(Secret::from(t.token)),
         Ok(Err(e)) if adc == Adc::File => Err(DialerError::AccessToken(e)),
         _ => Err(DialerError::NoDefaultCredentials),
@@ -285,16 +338,11 @@ impl Signin {
         let admin = access_token(ADMIN_SCOPE, self.adc).await?;
         let login = access_token(LOGIN_SCOPE, self.adc).await?;
         let http = client().map_err(failed(Step::ConnectSettings))?;
-        let settings: ConnectSettings = http
-            .get(format!("{}/connectSettings", self.api))
-            .bearer_auth(admin.expose())
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(failed(Step::ConnectSettings))?
-            .json()
-            .await
-            .map_err(failed(Step::ConnectSettings))?;
+        let settings_url = format!("{}/connectSettings", self.api);
+        let settings: ConnectSettings = admin_api(&http, &RETRY, Step::ConnectSettings, |h| {
+            h.get(&settings_url).bearer_auth(admin.expose())
+        })
+        .await?;
         let address = settings
             .ip_addresses
             .iter()
@@ -310,17 +358,16 @@ impl Signin {
             .to_public_key_pem(LineEnding::LF)
             .map_err(failed(Step::RsaKey))?;
         let private = key.to_pkcs8_der().map_err(failed(Step::RsaKey))?;
-        let cert: EphemeralCert = http
-            .post(format!("{}:generateEphemeralCert", self.api))
-            .bearer_auth(admin.expose())
-            .json(&serde_json::json!({"public_key": public, "access_token": login.expose()}))
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(failed(Step::GenerateEphemeralCert))?
-            .json()
-            .await
-            .map_err(failed(Step::GenerateEphemeralCert))?;
+        let cert_url = format!("{}:generateEphemeralCert", self.api);
+        let cert_body =
+            serde_json::json!({"public_key": public, "access_token": login.expose()}).to_string();
+        let cert: EphemeralCert = admin_api(&http, &RETRY, Step::GenerateEphemeralCert, |h| {
+            h.post(&cert_url)
+                .bearer_auth(admin.expose())
+                .header("Content-Type", "application/json")
+                .body(cert_body.clone())
+        })
+        .await?;
         let client_cert = CertificateDer::from_pem_slice(cert.ephemeral_cert.cert.as_bytes())
             .map_err(failed(Step::EphemeralCertificate))?;
         let expires = not_after(&client_cert)?;
@@ -401,6 +448,53 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::conn::cloud::http::tests::scripted;
+
+    fn no_wait(_: u32) -> Duration {
+        Duration::ZERO
+    }
+
+    const QUICK: Retry = Retry {
+        attempts: 5,
+        status: retryable,
+        wait: no_wait,
+    };
+
+    async fn settings(url: &str) -> std::result::Result<ConnectSettings, DialerError> {
+        let http = reqwest::Client::new();
+        admin_api(&http, &QUICK, Step::ConnectSettings, |h| h.get(url)).await
+    }
+
+    #[tokio::test]
+    async fn the_admin_api_is_asked_again_after_a_server_error() {
+        let (url, served) = scripted(vec![(503, ""), (200, r#"{"dnsName":"d"}"#)]).await;
+        assert_eq!(settings(&url).await.unwrap().dns_name, "d");
+        assert_eq!(served.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_client_error_is_final_and_a_lasting_server_error_counts_attempts() {
+        let (url, served) = scripted(vec![(403, ""), (200, "{}")]).await;
+        let Err(e) = settings(&url).await else {
+            panic!("answered")
+        };
+        let e = crate::error::chain(&e);
+        assert!(e.ends_with("answered 403 Forbidden"), "{e}");
+        assert_eq!(served.load(Ordering::SeqCst), 1);
+        let (url, served) = scripted(vec![(500, ""); 5]).await;
+        let Err(e) = settings(&url).await else {
+            panic!("answered")
+        };
+        let e = crate::error::chain(&e);
+        assert!(e.ends_with("(after 5 attempts)"), "{e}");
+        assert_eq!(served.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn waits_grow_like_the_go_connector() {
+        let ms: Vec<u128> = (1..=4).map(|n| wait(n).as_millis()).collect();
+        assert_eq!(ms, [324, 524, 848, 1372]);
+    }
 
     /// Mints sessions for 127.0.0.1, counting each.
     #[derive(Default)]
