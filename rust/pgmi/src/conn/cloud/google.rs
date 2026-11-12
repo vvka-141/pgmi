@@ -174,17 +174,39 @@ struct EphemeralCert {
     ephemeral_cert: PemCert,
 }
 
-fn instance_parts(name: &str) -> Result<(String, String, String)> {
-    let mut parts: Vec<&str> = name.rsplitn(3, ':').collect();
-    parts.reverse();
-    match parts.as_slice() {
-        [p, r, i] if !p.is_empty() && !r.is_empty() && !i.is_empty() => {
-            Ok((p.to_string(), r.to_string(), i.to_string()))
+/// A `project:region:instance` connection name; the project may hold a
+/// domain (`example.com:proj`). The region is checked, not used.
+#[derive(Debug, PartialEq, Eq)]
+struct Instance {
+    project: String,
+    name: String,
+}
+
+impl std::str::FromStr for Instance {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let mut parts: Vec<&str> = s.rsplitn(3, ':').collect();
+        parts.reverse();
+        match parts.as_slice() {
+            [p, r, i] if !p.is_empty() && !r.is_empty() && !i.is_empty() => Ok(Instance {
+                project: (*p).to_string(),
+                name: (*i).to_string(),
+            }),
+            _ => Err(Error::config(format!(
+                "invalid --google-instance {s:?}: want project:region:instance"
+            ))),
         }
-        _ => Err(Error::config(format!(
-            "invalid --google-instance {name:?}: want project:region:instance"
-        ))),
     }
+}
+
+/// Whether Application Default Credentials come from a file, which may
+/// take a slow interactive refresh, or must be found (the metadata server),
+/// where no answer within 3 s means there are none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Adc {
+    File,
+    Discovered,
 }
 
 fn adc_well_known(env: &Env, windows: bool) -> Option<PathBuf> {
@@ -199,19 +221,18 @@ fn adc_well_known(env: &Env, windows: bool) -> Option<PathBuf> {
     })
 }
 
-async fn access_token(scope: &str, adc_file: bool) -> std::result::Result<Secret, DialerError> {
+async fn access_token(scope: &str, adc: Adc) -> std::result::Result<Secret, DialerError> {
     let creds = google_cloud_auth::credentials::Builder::default()
         .with_scopes([scope])
         .build_access_token_credentials()
         .map_err(DialerError::Credentials)?;
-    let fetched = tokio::time::timeout(
-        Duration::from_secs(if adc_file { 60 } else { 3 }),
-        creds.access_token(),
-    )
-    .await;
-    match fetched {
+    let wait = match adc {
+        Adc::File => Duration::from_secs(60),
+        Adc::Discovered => Duration::from_secs(3),
+    };
+    match tokio::time::timeout(wait, creds.access_token()).await {
         Ok(Ok(t)) => Ok(Secret::from(t.token)),
-        Ok(Err(e)) if adc_file => Err(DialerError::AccessToken(e)),
+        Ok(Err(e)) if adc == Adc::File => Err(DialerError::AccessToken(e)),
         _ => Err(DialerError::NoDefaultCredentials),
     }
 }
@@ -225,7 +246,7 @@ pub(crate) struct Signin {
     project: String,
     name: String,
     api: String,
-    adc_file: bool,
+    adc: Adc,
 }
 
 impl std::fmt::Debug for Signin {
@@ -237,9 +258,14 @@ impl std::fmt::Debug for Signin {
 impl Signin {
     pub(crate) fn new(req: &Options, env: &Env) -> Result<Self> {
         let instance = req.google_instance.clone().unwrap_or_default();
-        let (project, _region, name) = instance_parts(&instance)?;
-        let adc_file = env.non_empty("GOOGLE_APPLICATION_CREDENTIALS")?.is_some()
-            || adc_well_known(env, cfg!(windows)).is_some_and(|p| p.is_file());
+        let Instance { project, name } = instance.parse()?;
+        let adc = if env.non_empty("GOOGLE_APPLICATION_CREDENTIALS")?.is_some()
+            || adc_well_known(env, cfg!(windows)).is_some_and(|p| p.is_file())
+        {
+            Adc::File
+        } else {
+            Adc::Discovered
+        };
         let base = env
             .non_empty("CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN")?
             .unwrap_or("https://sqladmin.googleapis.com/")
@@ -251,13 +277,13 @@ impl Signin {
             project,
             name,
             api,
-            adc_file,
+            adc,
         })
     }
 
     async fn session(&self) -> std::result::Result<Fetched<Arc<Session>>, DialerError> {
-        let admin = access_token(ADMIN_SCOPE, self.adc_file).await?;
-        let login = access_token(LOGIN_SCOPE, self.adc_file).await?;
+        let admin = access_token(ADMIN_SCOPE, self.adc).await?;
+        let login = access_token(LOGIN_SCOPE, self.adc).await?;
         let http = client().map_err(failed(Step::ConnectSettings))?;
         let settings: ConnectSettings = http
             .get(format!("{}/connectSettings", self.api))
@@ -454,10 +480,15 @@ pub(crate) mod tests {
     #[test]
     fn instance_names() {
         assert_eq!(
-            instance_parts("example.com:proj:us-central1:db").unwrap(),
-            ("example.com:proj".into(), "us-central1".into(), "db".into())
+            "example.com:proj:us-central1:db"
+                .parse::<Instance>()
+                .unwrap(),
+            Instance {
+                project: "example.com:proj".into(),
+                name: "db".into()
+            }
         );
-        let e = instance_parts("proj:db").unwrap_err();
+        let e = "proj:db".parse::<Instance>().unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert_eq!(
             e.text(),

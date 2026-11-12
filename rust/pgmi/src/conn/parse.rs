@@ -128,7 +128,7 @@ impl std::error::Error for ParseError {}
 
 impl From<ParseError> for Error {
     fn from(e: ParseError) -> Self {
-        Error::new(Kind::Config, e.to_string())
+        Error::new(Kind::Config, e.to_string()).with_cause(e)
     }
 }
 
@@ -445,6 +445,15 @@ fn npgsql_sslmode(v: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_string_keeps_the_parse_error_as_its_source() {
+        let e = Error::from(ParseError::InvalidPort);
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(e.text(), ParseError::InvalidPort.to_string());
+        let source = std::error::Error::source(&e).and_then(|s| s.downcast_ref::<ParseError>());
+        assert_eq!(source, Some(&ParseError::InvalidPort));
+    }
 
     #[test]
     fn three_forms() {
