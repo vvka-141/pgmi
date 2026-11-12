@@ -247,7 +247,7 @@ pub fn conn_forms(settings: &Conn) -> Checked {
     }
     let sep = if uri.contains('?') { '&' } else { '?' };
     let refused = [
-        format!("{uri}{sep}bogus=1"),
+        format!("{uri}{sep}bogus-key=1"),
         format!("{uri}{sep}port=99999"),
         format!("{keyword} bogus=1"),
         format!("{keyword} port=99999"),

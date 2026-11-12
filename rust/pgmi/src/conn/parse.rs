@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use std::fmt;
+use std::fmt::Write as _;
 
 use crate::error::{Error, Kind};
 
@@ -321,7 +322,33 @@ fn uri(s: &str) -> Result<Fields> {
         };
         out.insert(k, decode(v)?);
     }
+    server_settings(&mut out);
     Ok(out)
+}
+
+/// A URI query key that is no connection keyword but could name a server
+/// setting goes to the server as `-c key=value` in `options`, as Go's driver
+/// sends it; the server refuses a name it does not know.
+fn server_settings(out: &mut Fields) {
+    let settings: Vec<String> = out
+        .keys()
+        .filter(|k| {
+            !KNOWN.contains(&k.as_str())
+                && k.as_str() != "service"
+                && k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+        })
+        .cloned()
+        .collect();
+    for k in settings {
+        let Some(v) = out.remove(&k) else { continue };
+        let escaped = v.replace('\\', "\\\\").replace(' ', "\\ ");
+        let options = out.entry("options".into()).or_default();
+        if !options.is_empty() {
+            options.push(' ');
+        }
+        let _ = write!(options, "-c {k}={escaped}");
+    }
 }
 
 fn keyword(s: &str) -> Result<Fields> {
@@ -498,6 +525,20 @@ mod tests {
     }
 
     #[test]
+    fn a_uri_query_key_that_is_no_keyword_becomes_a_server_setting() {
+        let f = parse("postgresql://h/d?search_path=app&statement_timeout=5s&application_name=x")
+            .unwrap();
+        assert_eq!(f["options"], "-c search_path=app -c statement_timeout=5s");
+        assert_eq!(f["application_name"], "x");
+        let f = parse("postgresql://h/d?options=-c%20a%3D1&tz=Europe%2FAmsterdam%20x").unwrap();
+        assert_eq!(f["options"], "-c a=1 -c tz=Europe/Amsterdam\\ x");
+        assert!(matches!(
+            parse("host=h bogus=1"),
+            Err(ParseError::UnknownKey(_))
+        ));
+    }
+
+    #[test]
     fn three_forms() {
         let u = parse("postgresql://u:p%40ss@h1:5432,[::1]:6000/db?sslmode=require").unwrap();
         assert_eq!(u["user"], "u");
@@ -528,7 +569,7 @@ mod tests {
     fn refusals() {
         assert_eq!(parse("service=x"), Err(ParseError::ServiceFile));
         assert!(ParseError::ServiceFile.to_string().contains("service"));
-        let e = parse("postgresql://h/db?bogus=1").unwrap_err();
+        let e = parse("host=h dbname=db bogus=1").unwrap_err();
         assert_eq!(e, ParseError::UnknownKey("bogus".into()));
         assert_eq!(e.to_string(), "invalid connection option \"bogus\"");
         assert!(parse("postgresql://h/db?statement_cache_capacity=0").is_ok());

@@ -112,18 +112,6 @@ accept:
     case: "variant/pgmiignore: .*\\[\\[:space:\\]\\].*"
     field: db
     go: '<no database>'
-  - row: Unknown connection-string key
-    case: variant/connection:.*frobnicate=1.*
-    field: exit
-    go: '^11$'
-  - row: Unknown connection-string key
-    case: variant/connection:.*frobnicate=1.*
-    field: stderr
-    go: 'frobnicate'
-  - row: Unknown connection-string key
-    case: variant/connection:.*frobnicate=1.*
-    field: db
-    go: '<no database>'
   - row: Connection-string parse errors
     case: variant/connection:.*
     field: stderr

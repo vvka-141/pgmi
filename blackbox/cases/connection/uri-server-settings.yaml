@@ -1,0 +1,11 @@
+description: a URI query key that is not a connection keyword is a server setting for the session, as Go sends it (search_path, statement_timeout); the server refuses a name it does not know (exit 11)
+project:
+  files:
+    deploy.sql: CREATE TABLE seen AS SELECT current_setting('search_path') AS path, current_setting('statement_timeout') AS timeout;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?search_path=app_schema%2Cpublic&statement_timeout=5s", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path, timeout FROM seen
+          rows: [["app_schema,public", 5s]]

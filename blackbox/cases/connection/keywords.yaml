@@ -1,4 +1,4 @@
-description: options, PGOPTIONS and PGTZ reach the session; an unknown connection-string key is sent to the server as a setting and refused there by Go (exit 11) and refused before connecting by Rust (exit 10, contract "Unknown connection-string keys are refused before connecting")
+description: options, PGOPTIONS and PGTZ reach the session; an unknown URI query key is sent to the server as a setting and refused there (exit 11)
 project:
   files:
     deploy.sql: |
@@ -18,4 +18,3 @@ steps:
     expect:
       exit: 11
       stderr: ['unrecognized configuration parameter "no_such_key"']
-      rust: {exit: 10, stderr: ['invalid connection option "no_such_key"']}

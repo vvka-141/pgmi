@@ -889,8 +889,7 @@ Go sends `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslcrl`,
 unknown value, is exit 10), `sslsni=0` (no SNI) and `sslcertmode=disable` (no
 client certificate is read or sent), and refuses with exit 10 before
 connecting `sslcrl`, `sslcrldir`, `requirepeer` and `sslcertmode=require`,
-which it cannot check. This extends "Unknown connection-string keys are
-refused before connecting". Owner-decided 2026-11-11 for the refusals.
+which it cannot check. Owner-decided 2026-11-11 for the refusals.
 
 Cases: none (Go fails these on the server); Rust unit tests
 `tls_keys_are_read_or_refused`, `refusals` (parse), `versions_and_sni_reach_the_config`.
@@ -1103,16 +1102,20 @@ retries with TLS, as libpq does.
 
 Cases: `tls/tls-only-and-plain-servers`.
 
-### Unknown connection-string keys are refused before connecting
+### A URI query key that is no keyword is a server setting
 
-Go sends an unknown key to the server as a setting, which refuses it (exit 11,
-`unrecognized configuration parameter`). The Rust binary refuses it before
-connecting with exit 10, naming the key, as libpq does. The three keys
-`docs/CONNECTIONS.md` documents for single-session servers
-(`default_query_exec_mode`, `statement_cache_capacity`,
-`description_cache_capacity`) keep their documented meaning.
+Owner-decided 2026-11-12 (PGMI-898), replacing the decision of 2026-11-10,
+which rested on a wrong belief about Go. As Go, a URI query key that is not
+a connection keyword goes to the server as a setting for the session
+(`?search_path=app&statement_timeout=5s` deploys with both set); the server
+refuses a name it does not know (exit 11, `unrecognized configuration
+parameter`). In the keyword/value form an unknown key is still refused before
+connecting (exit 10), as Go does. The three keys `docs/CONNECTIONS.md`
+documents for single-session servers (`default_query_exec_mode`,
+`statement_cache_capacity`, `description_cache_capacity`) keep their
+documented meaning.
 
-Cases: `connection/keywords`.
+Cases: `connection/keywords`, `connection/uri-server-settings`.
 
 ### PGPORT may list several ports
 
@@ -1359,7 +1362,6 @@ release notes take their "Behaviour changes" section from this table.
 | Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`) | not available | a credential from the workspace, refreshed before it expires | owner 2026-11-10 |
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
-| Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
 | Repeated URI query key (`?sslmode=disable&sslmode=require`) | the first value | the last value, as libpq | agent 2026-11-12 (PGMI-897), owner may revisit |
 | Unknown connection-string option written after a password | named in the refusal | not named (it may be the password's rest); exit 10 both | owner 2026-11-11 (never quote the input) |
 | `connect_timeout` above 9223372036 seconds | wrapped around (a negative or short timeout) | newly refused before connecting, exit 10 | intended |
