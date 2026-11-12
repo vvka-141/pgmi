@@ -70,6 +70,7 @@ config/yaml-crlf
 config/yaml-numbers
 config/yaml-tabs
 config/yaml-unknown-keys
+connection/ado-libpq-keywords
 connection/client-encoding
 connection/connect-timeout-range
 connection/gssapi-keys
@@ -89,6 +90,9 @@ connection/string-forms
 connection/target-session-attrs
 connection/tcp-user-timeout
 connection/unix-socket
+connection/uri-key-case
+connection/uri-plus
+connection/uri-repeated-key
 deploy/advanced-template-converges
 deploy/advanced-template-preflight
 deploy/basic-template-converges

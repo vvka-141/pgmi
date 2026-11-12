@@ -1,0 +1,18 @@
+description: a "+" in a URI query is a plus, not a space, in a password and in application_name
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (who text, app text);
+      INSERT INTO seen VALUES (current_user, current_setting('application_name'));
+steps:
+  - sql: CREATE ROLE "{db}_plus" LOGIN PASSWORD 'p+q'
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - sql: GRANT CREATE ON SCHEMA public TO "{db}_plus"; GRANT INSERT ON seen TO "{db}_plus"
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_plus@{host}:{port}/postgres?password=p+q&application_name=a+b", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT app FROM seen WHERE who = '{db}_plus'
+          rows: [[a+b]]

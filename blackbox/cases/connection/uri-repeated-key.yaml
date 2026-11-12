@@ -1,0 +1,17 @@
+description: a URI query key given twice takes the first value in Go and the last in Rust, as libpq does (contract "Behaviour changes in 0.20", repeated URI query key)
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (app text);
+      INSERT INTO seen VALUES (current_setting('application_name'));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?application_name=a&application_name=b", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT app FROM seen
+          rows: [[a]]
+      rust:
+        sql:
+          - query: SELECT app FROM seen
+            rows: [[b]]

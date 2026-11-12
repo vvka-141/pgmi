@@ -1,0 +1,13 @@
+description: URI query keys are read in any case, and applicationname and connecttimeout stand for application_name and connect_timeout
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS seen (app text);
+      INSERT INTO seen VALUES (current_setting('application_name'));
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}?SSLMODE=disable&applicationname=zz&ConnectTimeout=5", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT app FROM seen
+          rows: [[zz]]

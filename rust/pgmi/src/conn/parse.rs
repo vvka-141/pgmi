@@ -313,7 +313,13 @@ fn uri(s: &str) -> Result<Fields> {
     }
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        out.insert(decode(&k.replace('+', " "))?, decode(&v.replace('+', " "))?);
+        let k = decode(k)?.to_ascii_lowercase();
+        let k = match k.as_str() {
+            "applicationname" => "application_name".to_string(),
+            "connecttimeout" => "connect_timeout".to_string(),
+            _ => k,
+        };
+        out.insert(k, decode(v)?);
     }
     Ok(out)
 }
@@ -419,7 +425,7 @@ fn ado(s: &str) -> Result<Fields> {
             "port" => "port",
             "userid" | "username" | "user" | "uid" => "user",
             "password" | "pwd" => "password",
-            "database" | "initialcatalog" | "db" => "dbname",
+            "database" | "initialcatalog" | "db" | "dbname" => "dbname",
             "sslmode" => {
                 out.insert("sslmode".into(), npgsql_sslmode(&v)?);
                 continue;
@@ -433,6 +439,10 @@ fn ado(s: &str) -> Result<Fields> {
             "options" => "options",
             "targetsessionattributes" => "target_session_attrs",
             "channelbinding" => "channel_binding",
+            _ if KNOWN.contains(&k.as_str()) => {
+                out.insert(k, v);
+                continue;
+            }
             _ => return Err(ParseError::UnknownKey(k)),
         };
         out.insert(name.into(), v);
@@ -726,6 +736,60 @@ mod tests {
             );
         }
         assert_eq!(parse("postgresql://h/d%2Fx").unwrap()["dbname"], "d/x");
+    }
+
+    #[test]
+    fn a_plus_in_a_uri_query_stays_a_plus() {
+        let f = parse("postgresql://h/d?password=p+q&application_name=a+b%2Bc%20d").unwrap();
+        assert_eq!(f["password"], "p+q");
+        assert_eq!(f["application_name"], "a+b+c d");
+    }
+
+    #[test]
+    fn uri_query_keys_ignore_case_and_take_the_spellings_without_underscore() {
+        assert_eq!(
+            fields(
+                "postgresql://h/d?SSLMODE=disable&ApplicationName=a&CONNECTTIMEOUT=5&Connect_Timeout=6"
+            ),
+            pairs(&[
+                ("host", "h"),
+                ("dbname", "d"),
+                ("sslmode", "disable"),
+                ("application_name", "a"),
+                ("connect_timeout", "6"),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_repeated_uri_key_takes_the_last_value() {
+        let f = parse("postgresql://h/d?sslmode=disable&sslmode=require").unwrap();
+        assert_eq!(f["sslmode"], "require");
+    }
+
+    #[test]
+    fn ado_net_takes_dbname_and_libpq_keywords_as_written() {
+        assert_eq!(
+            fields(
+                "Host=h;dbname=db;Username=u;target_session_attrs=any;keepalives=1;client_encoding=UTF8"
+            ),
+            pairs(&[
+                ("host", "h"),
+                ("dbname", "db"),
+                ("user", "u"),
+                ("target_session_attrs", "any"),
+                ("keepalives", "1"),
+                ("client_encoding", "UTF8"),
+            ])
+        );
+        assert_eq!(
+            parse("Host=h;Target_Session_Attrs=any"),
+            Err(ParseError::UnknownKey("Target_Session_Attrs".into()))
+        );
+        assert_eq!(
+            parse("Host=h;Pooling=true"),
+            Err(ParseError::UnknownKey("Pooling".into()))
+        );
     }
 
     #[test]

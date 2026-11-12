@@ -336,7 +336,11 @@ The connection comes from `--connection`, else `PGMI_CONNECTION_STRING`, else
 else defaults (localhost:5432, maintenance database `postgres`). A connection
 string may be a URI, libpq keyword/value (spaces around `=`, quoted values
 holding `;`) or ADO.NET (a value quoted with `'` or `"`, a doubled quote
-inside; a port in `Host=h:port` wins over `Port=` wherever it stands). `-d` (or `PGDATABASE`, or
+inside; a port in `Host=h:port` wins over `Port=` wherever it stands;
+`dbname` and any libpq keyword spelled exactly are taken as written). In a URI
+query only `%XX` is decoded (`+` stays a plus), keys are read in any case,
+`applicationname` and `connecttimeout` stand for `application_name` and
+`connect_timeout`, and a repeated key takes its first value. `-d` (or `PGDATABASE`, or
 `pgmi.yaml` `database`) names the target; the string's database is the
 maintenance database. Refused with exit 10: `--connection` with `-h`, `-p` or
 `-U`; `-h`, `-p` or `-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL`;
@@ -356,7 +360,7 @@ or to resolve the connection, ends with `(connection from <source>)` or
 carries that line only when resolving failed. Full reference: `docs/CLI.md`
 "Precedence", `docs/CONFIGURATION.md`, `docs/CICD.md` "What the log shows".
 
-Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`, `config/overrides`, `config/dotenv-provenance`, `errors/connection-source`, `env/passfile-beats-pgpassfile`.
+Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`, `config/overrides`, `config/dotenv-provenance`, `errors/connection-source`, `env/passfile-beats-pgpassfile`, `connection/uri-plus`, `connection/uri-key-case`, `connection/uri-repeated-key`, `connection/ado-libpq-keywords`.
 
 ### Connection resolution
 
@@ -1241,6 +1245,7 @@ release notes take their "Behaviour changes" section from this table.
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
 | Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
+| Repeated URI query key (`?sslmode=disable&sslmode=require`) | the first value | the last value, as libpq | agent 2026-11-12 (PGMI-897), owner may revisit |
 | Unknown connection-string option written after a password | named in the refusal | not named (it may be the password's rest); exit 10 both | owner 2026-11-11 (never quote the input) |
 | `connect_timeout` above 9223372036 seconds | wrapped around (a negative or short timeout) | newly refused before connecting, exit 10 | intended |
 | `connect_timeout` with a stalled host lookup or sign-in | waits for it (pgx counts only the connection) | counted per attempt; the next host is tried | intended |

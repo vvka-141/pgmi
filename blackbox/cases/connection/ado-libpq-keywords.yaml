@@ -1,0 +1,7 @@
+description: an ADO.NET string takes dbname and libpq keywords spelled exactly, such as target_session_attrs
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "Host={host};Port={port};dbname=postgres;Username={user};Password={password};target_session_attrs=any", -d, "{db}"]
+    expect: {exit: 0}

@@ -164,6 +164,8 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 29 | Unix socket directory, with and without a port | ✓ `connection/unix-socket` |
 | 29a | libpq keys Go sends to the server (keepalives, `tcp_user_timeout`, `load_balance_hosts`, `hostaddr`, GSSAPI keys, `sslcompression`, `client_encoding`) and the pgx options' values | ✓ `connection/keepalives`, `connection/tcp-user-timeout`, `connection/load-balance-hosts`, `connection/hostaddr`, `connection/gssapi-keys`, `connection/sslcompression`, `connection/client-encoding`, `connection/pgx-options` |
 | 29b | keyword/value with spaces around `=` and a `;` in a quoted value; ADO.NET quoted values; ADO.NET `Host=h:port` beats `Port=` | ✓ `connection/string-forms` |
+| 29c | URI query: `+` stays a plus (password, `application_name`); keys in any case, `applicationname` and `connecttimeout`; a repeated key takes the first value (Go) or the last (Rust) | ✓ `connection/uri-plus`, `connection/uri-key-case`, `connection/uri-repeated-key` |
+| 29d | ADO.NET `dbname=` and exact libpq keywords such as `target_session_attrs` | ✓ `connection/ado-libpq-keywords` |
 | 30 | every sslmode; `~/.postgresql/root.crt`; `require` + root = verify-ca; `pgmi.yaml`'s certificate paths apply beside a connection string | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/yaml-certificates-with-string` |
 | 31 | hostname mismatch: verify-ca passes, verify-full fails | ✓ `tls/sslmode-matrix`, `tls/sslmode-refusals` |
 | 32 | `sslrootcert=system`, with `SSL_CERT_FILE`; it makes `verify-full` the default | ✓ `tls/system-roots` |
