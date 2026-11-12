@@ -19,6 +19,7 @@ cloud/azure-msi-retry
 cloud/azure-powershell
 cloud/azure-service-fabric
 cloud/azure-token-credentials-invalid
+cloud/azure-tenant-id-refused
 cloud/cloud-ids-env-beats-yaml
 cloud/databricks-azure
 cloud/databricks-cli

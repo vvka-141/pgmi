@@ -264,6 +264,9 @@ pub(crate) fn select(
 }
 
 pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &Env) -> Result<()> {
+    if let Some(t) = req.tenant_id.as_deref() {
+        azure::tenant_id(t)?;
+    }
     match provider {
         Provider::Google => {
             if req.google_instance.as_deref().is_none_or(str::is_empty) {

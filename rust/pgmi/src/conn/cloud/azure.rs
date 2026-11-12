@@ -58,7 +58,7 @@ impl Kind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Ids {
     tenant: Option<String>,
     client: Option<String>,
@@ -71,10 +71,27 @@ fn ids(req: &Options, env: &Env) -> Result<Ids> {
             None => env.non_empty(name)?.map(str::to_string),
         })
     };
+    let tenant = pick(&req.tenant_id, "AZURE_TENANT_ID")?;
+    if let Some(t) = &tenant {
+        tenant_id(t)?;
+    }
     Ok(Ids {
-        tenant: pick(&req.tenant_id, "AZURE_TENANT_ID")?,
+        tenant,
         client: pick(&req.client_id, "AZURE_CLIENT_ID")?,
     })
+}
+
+/// Refuses a tenant id that is not ASCII letters, digits, `.` and `-`, as
+/// the Azure SDKs do: it reaches a token URL and a PowerShell process.
+pub(super) fn tenant_id(t: &str) -> Result<()> {
+    if t.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return Ok(());
+    }
+    Err(Error::config(
+        "invalid Azure tenant id: use only letters, digits, '.' and '-' (a directory GUID or domain)",
+    ))
 }
 
 /// The credentials to try in order: those the settings name, or the
@@ -400,10 +417,14 @@ async fn get(
         .map_err(CredentialError::Token)
 }
 
-fn powershell_script(tenant: Option<&str>, resource: &str) -> String {
-    let tenant = tenant
-        .map(|t| format!("$params['TenantId'] = '{}'\n", t.replace('\'', "''")))
-        .unwrap_or_default();
+const TENANT_VARIABLE: &str = "PGMI_AZURE_TENANT_ID";
+
+fn powershell_script(tenant: bool, resource: &str) -> String {
+    let tenant = if tenant {
+        format!("$params['TenantId'] = $env:{TENANT_VARIABLE}\n")
+    } else {
+        String::new()
+    };
     format!(
         "$ErrorActionPreference = 'Stop'\n\
 $m = Import-Module Az.Accounts -MinimumVersion 2.2.0 -PassThru -ErrorAction SilentlyContinue\n\
@@ -423,10 +444,15 @@ async fn powershell(
     tenant: Option<&str>,
     audience: Audience,
 ) -> std::result::Result<Fetched, CredentialError> {
-    let script = powershell_script(tenant, audience.resource);
+    let script = powershell_script(tenant.is_some(), audience.resource);
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = Base64::encode_string(&utf16);
-    let child = tokio::process::Command::new("pwsh")
+    let mut command = tokio::process::Command::new("pwsh");
+    command.env_remove(TENANT_VARIABLE);
+    if let Some(t) = tenant {
+        command.env(TENANT_VARIABLE, t);
+    }
+    let child = command
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -716,6 +742,43 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn a_tenant_outside_letters_digits_dots_and_dashes_is_refused_before_any_sign_in() {
+        for bad in [
+            "x\u{2019}; New-Item PWNED; \u{2019}",
+            "x'; y",
+            "a b",
+            "a/b",
+            "t\u{0}",
+        ] {
+            let e = tenant_id(bad).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{bad:?}");
+            let opts = Options {
+                tenant_id: Some(bad.into()),
+                ..Options::default()
+            };
+            assert_eq!(ids(&opts, &Env::default()).unwrap_err().exit_code(), 10);
+        }
+        for good in [
+            "72f988bf-86f1-41af-91ab-2d7cd011db47",
+            "contoso.onmicrosoft.com",
+            "organizations",
+        ] {
+            tenant_id(good).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_powershell_script_carries_no_value_from_input() {
+        let script = powershell_script(true, "https://ossrdbms-aad.database.windows.net");
+        assert!(script.contains("$env:PGMI_AZURE_TENANT_ID"), "{script}");
+        assert_eq!(
+            powershell_script(false, "r").contains("TenantId"),
+            false,
+            "no tenant line without a tenant"
+        );
+    }
 
     fn signin() -> Signin {
         Signin::new(

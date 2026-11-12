@@ -1,0 +1,25 @@
+description: a tenant id that is not letters, digits, '.' and '-' (here from pgmi.yaml, with a typographic quote that ends a PowerShell string) is refused and no sign-in tool runs; Go refuses at sign-in (exit 11), Rust before connecting (exit 10)
+servers: [tls]
+home:
+  bin/pwsh:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$@" >> "$HOME/pwsh-calls.log"
+      exit 1
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      connection:
+        auth_method: azure
+        azure_tenant_id: "x’; New-Item -ItemType File -Path PWNED; ’"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "host=127.0.0.1 port={tls_port} user=nobody dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr: ["tenant"]
+      absent: [home/pwsh-calls.log]
+      rust: {exit: 10}
