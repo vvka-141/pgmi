@@ -1,4 +1,4 @@
-description: a pgmi.yaml port must be a YAML integer; a quoted port is invalid configuration (exit 10), a float with no fraction is read as that integer
+description: a pgmi.yaml port must be a YAML integer in Go, so a quoted port is invalid configuration (exit 10) there and accepted by Rust (contract "Behaviour changes in 0.20"); a float with no fraction is read as that integer
 project:
   files:
     quoted/deploy.sql: SELECT 1;
@@ -21,6 +21,7 @@ steps:
     expect:
       exit: 10
       stderr: ["line 3", "{port}"]
+      rust: {exit: 0, stderr: ['^connection: from pgmi\\.yaml \\({host}:{port}/{db}\\)$']}
   - pgmi: [deploy, "{project}/float"]
     env: {PGPASSWORD: "{password}"}
     expect:

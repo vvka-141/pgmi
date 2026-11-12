@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::conn::cloud::Provider;
 use crate::error::{Error, Result};
@@ -9,9 +9,9 @@ use crate::vfs::Vfs;
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_is_empty")]
     pub(crate) connection: Connection,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_is_empty")]
     pub(crate) params: BTreeMap<String, Option<String>>,
     pub(crate) timeout: Option<String>,
 }
@@ -42,17 +42,51 @@ pub(crate) struct Connection {
     pub(crate) google_instance: Option<String>,
 }
 
+fn null_is_empty<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// A port as Go's YAML reads an integer: `5432.0`, `0x1538` and `5_432`
+/// are 5432; anything else is kept as written for the resolver to judge.
+fn yaml_port(written: &str) -> std::result::Result<String, YamlError> {
+    if written.is_empty() {
+        return Err(YamlError::Port(written.to_string()));
+    }
+    let digits = written.replace('_', "");
+    let read = match digits.strip_prefix("0x") {
+        Some(hex) => u16::from_str_radix(hex, 16).ok(),
+        None => digits
+            .strip_suffix(".0")
+            .unwrap_or(&digits)
+            .parse::<u16>()
+            .ok(),
+    };
+    Ok(read.map_or_else(|| written.to_string(), |p| p.to_string()))
+}
+
 /// Why `pgmi.yaml`'s text is not a project configuration.
 #[derive(Debug)]
 pub(crate) enum YamlError {
     Syntax(serde_saphyr::Error),
     AuthMethod(String),
+    Port(String),
 }
 
 impl std::fmt::Display for YamlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            YamlError::Syntax(e) => e.fmt(f),
+            YamlError::Syntax(e) => f.write_str(
+                &e.to_string()
+                    .replace(", set DuplicateKeyPolicy in Options if acceptable", ""),
+            ),
+            YamlError::Port(text) => write!(
+                f,
+                "connection.port: invalid port {text:?}: expected a number"
+            ),
             YamlError::AuthMethod(text) => {
                 write!(
                     f,
@@ -67,7 +101,7 @@ impl std::error::Error for YamlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             YamlError::Syntax(e) => e.source(),
-            YamlError::AuthMethod(_) => None,
+            YamlError::AuthMethod(_) | YamlError::Port(_) => None,
         }
     }
 }
@@ -117,8 +151,14 @@ impl ProjectConfig {
         if text.trim().is_empty() {
             return Ok(Self::default());
         }
-        let mut cfg: ProjectConfig = serde_saphyr::from_str(text).map_err(YamlError::Syntax)?;
+        let Some(mut cfg) =
+            serde_saphyr::from_str::<Option<ProjectConfig>>(text).map_err(YamlError::Syntax)?
+        else {
+            return Ok(Self::default());
+        };
+        cfg.timeout = cfg.timeout.filter(|t| !t.is_empty());
         let c = &mut cfg.connection;
+        c.port = c.port.as_deref().map(yaml_port).transpose()?;
         c.auth_method = c
             .auth_method_text
             .take()
@@ -150,6 +190,62 @@ impl ProjectConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_documents_and_null_sections_mean_no_settings() {
+        for text in [
+            "---\n",
+            "~\n",
+            "connection:\n  # host: x\nparams:\n  # a: b\ntimeout:\n",
+            "timeout: \"\"\n",
+        ] {
+            let cfg = ProjectConfig::parse(text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert!(
+                cfg.params.is_empty() && cfg.connection.host.is_none() && cfg.timeout.is_none(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_duplicate_key_names_its_line_without_the_library_s_advice() {
+        let e = Error::from(
+            ProjectConfig::parse("params:\n  greeting: one\n  greeting: two\n").unwrap_err(),
+        );
+        assert!(
+            e.text().contains("greeting") && e.text().contains("line 3"),
+            "{}",
+            e.text()
+        );
+        assert!(!e.text().contains("DuplicateKeyPolicy"), "{}", e.text());
+    }
+
+    #[test]
+    fn ports_go_reads_as_integers_are_read_the_same_and_an_empty_port_is_refused() {
+        for (written, read) in [
+            ("5432.0", "5432"),
+            ("0x1538", "5432"),
+            ("5_432", "5432"),
+            ("\"5433\"", "5433"),
+        ] {
+            let cfg = ProjectConfig::parse(&format!("connection:\n  port: {written}\n")).unwrap();
+            assert_eq!(cfg.connection.port.as_deref(), Some(read), "{written}");
+        }
+        let e = Error::from(ProjectConfig::parse("connection:\n  port: \"\"\n").unwrap_err());
+        assert_eq!(e.exit_code(), 10);
+        assert!(e.text().contains("port"), "{}", e.text());
+    }
+
+    #[test]
+    fn a_timeout_without_a_unit_says_so() {
+        let cfg = ProjectConfig::parse("timeout: 30\n").unwrap();
+        let e = cfg.timeout().unwrap_err();
+        assert!(
+            e.text().contains("missing unit") && e.text().contains("\"30\""),
+            "{}",
+            e.text()
+        );
+    }
 
     #[test]
     fn param_values_as_written() {

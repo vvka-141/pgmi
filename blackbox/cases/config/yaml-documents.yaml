@@ -1,4 +1,4 @@
-description: a pgmi.yaml framed by --- and ... is read; a %YAML 1.2 directive is refused (exit 10); with two documents only the first is read
+description: a pgmi.yaml framed by --- and ... is read; Go refuses a %YAML 1.2 directive (exit 10) and reads only the first of two documents, Rust accepts the directive and refuses two documents (contract "Behaviour changes in 0.20")
 project:
   files:
     framed/deploy.sql: CREATE TABLE framed AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
@@ -18,9 +18,11 @@ steps:
     expect:
       exit: 10
       stderr: ["incompatible YAML document"]
+      rust: {exit: 0, stderr: []}
   - pgmi: [deploy, "{project}/two", --connection, "{conn}", -d, "{db}"]
     expect:
       exit: 0
       sql:
         - query: SELECT key, value FROM two
           rows: [[greeting, first]]
+      rust: {exit: 10, sql: []}

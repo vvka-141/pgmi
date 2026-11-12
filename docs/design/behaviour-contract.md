@@ -1188,6 +1188,11 @@ release notes take their "Behaviour changes" section from this table.
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| `pgmi.yaml` quoted port (`port: "5433"`) | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
+| `pgmi.yaml` with two YAML documents | the second is silently ignored | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
+| `pgmi.yaml` with a `%YAML 1.2` directive | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
+| `pgmi.yaml` `port: 0` | quietly 5432 | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
+| `pgmi.yaml` negative timeout (`-5s`) | runs, then exit 11 "exceeded --timeout -5s" | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | A host with several addresses fails to connect | only the last address's error | every address's error; exit 11 both | intended |
 | POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
 | `metadata scaffold` project-root search | walks past `.git` | stops at `.git`, prints `Project root:` | intended |

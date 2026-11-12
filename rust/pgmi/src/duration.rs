@@ -31,6 +31,9 @@ pub(crate) fn parse(s: &str) -> Result<Duration, String> {
         let u = rest
             .find(|c: char| c.is_ascii_digit() || c == '.')
             .unwrap_or(rest.len());
+        if u == 0 {
+            return Err(format!("missing unit in duration {s:?}"));
+        }
         let scale = match &rest[..u] {
             "ns" => 1e-9,
             "us" | "µs" | "μs" => 1e-6,
@@ -103,7 +106,8 @@ mod tests {
         assert_eq!(parse("1.5h").unwrap(), Duration::from_mins(90));
         assert_eq!(parse("300ms").unwrap(), Duration::from_millis(300));
         assert_eq!(parse("0").unwrap(), Duration::ZERO);
-        for s in ["banana", "10", "", "1.5.5s", "5x"] {
+        assert_eq!(parse("10"), Err("missing unit in duration \"10\"".into()));
+        for s in ["banana", "", "1.5.5s", "5x"] {
             assert_eq!(parse(s), Err(format!("invalid duration {s:?}")));
         }
         assert_eq!(
