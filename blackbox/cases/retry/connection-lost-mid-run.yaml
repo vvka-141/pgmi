@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt
+description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt with the units it committed
 impl: rust
 proxy:
   - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 1}
@@ -33,7 +33,7 @@ steps:
     expect:
       exit: 0
       json: {status: success, exitCode: 0}
-      stdout: ['"attempts": \[\s*\{\s*"durationMs": \d+,\s*"message": "[^"]+",\s*"startedAt": "[^"]+"\s*\},\s*\{\s*"durationMs": \d+,\s*"startedAt": "[^"]+"\s*\}\s*\]', '"timeUsedMs": \d+']
+      stdout: ['"attempts": \[\s*\{\s*"durationMs": \d+,\s*"message": "[^"]+",\s*"startedAt": "[^"]+",\s*"unitsCommitted": 2\s*\},\s*\{\s*"durationMs": \d+,\s*"startedAt": "[^"]+",\s*"unitsCommitted": 4\s*\}\s*\]', '"timeUsedMs": \d+']
       stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
