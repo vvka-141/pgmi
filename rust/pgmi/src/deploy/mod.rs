@@ -297,7 +297,8 @@ fn provenance(
 /// sign-in from a server the operator did not allow: its environment's own
 /// `host:port`, or a `PGMI_SERVE_HOSTS` entry (`host` for any port, or
 /// `host:port`). A password typed in the tool call's own connection string
-/// stays. Returns the first server not allowed, as `host:port`.
+/// stays. Returns the first server not allowed, as `host:port`, when an
+/// operator credential was withheld from it.
 fn restrict_to_allowed(
     spec: &mut Spec,
     flags: &resolve::Flags,
@@ -329,10 +330,11 @@ fn restrict_to_allowed(
     let typed = flags.connection.as_ref().is_some_and(|c| {
         crate::conn::parse::parse(c.expose()).is_ok_and(|f| f.contains_key("password"))
     });
-    if !typed {
-        spec.password = None;
-    }
     spec.ambient_passfile = false;
+    if typed {
+        return Ok(None);
+    }
+    spec.password = None;
     Ok(Some(host))
 }
 
@@ -2294,7 +2296,10 @@ mod tests {
         assert!(spec.password.is_none() && !spec.ambient_passfile);
 
         let (mut spec, flags) = resolved("host=evil.example user=u password=typed dbname=d", &env);
-        restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap();
+        assert_eq!(
+            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            None
+        );
         assert_eq!(spec.password.as_ref().map(Secret::expose), Some("typed"));
         assert!(!spec.ambient_passfile);
 
