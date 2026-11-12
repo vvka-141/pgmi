@@ -169,7 +169,9 @@ compares the exit code, stdout, stderr, the `--json` record and the target
 database's catalog (schemas, relations, columns, functions, ACLs, roles named
 after the database, row counts). Only the workspace paths, the database name,
 durations, each binary's version and build line, UUIDs, the server's process
-ids and OIDs (`process 121`, `relation 16862`), the volatile `--json` keys and
+ids and OIDs (`process 121`, `relation 16862`), the row count of a table
+bucketed by the minute (the advanced template's `api.access_denial`, which two
+runs fill across a different number of minutes), the volatile `--json` keys and
 the order of `serve` answers (they answer concurrently) are normalised. JSON on
 stdout, a whole document or one per line, is compared as data: key order and
 string escapes do not count.

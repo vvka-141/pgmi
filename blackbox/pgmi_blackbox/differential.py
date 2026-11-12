@@ -36,6 +36,7 @@ _DURATION = re.compile(r"\b(\d+(\.\d+)?(h|ms|µs|us|ns|m|s))+\b")
 _BUILD = re.compile(r"^Commit: .*, Built: .*$", re.MULTILINE)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 _JSON_VOLATILE = {"durationMs", "startedAt", "finishedAt"}
+_PER_MINUTE = {"api.access_denial"}
 _SERVER_NUMBER = re.compile(r"\b((?:[Pp]rocess|PID|pid|relation|database|transaction|OID|oid) )\d+\b")
 
 _USER = r"n.nspname !~ '^(pg_|information_schema$)'"
@@ -127,7 +128,10 @@ def snapshot(ws: Workspace) -> list[str]:
             lines = [r[0] for r in c.execute(_CATALOG)]
             for schema, table in c.execute(_TABLES).fetchall():
                 query = sql.SQL("SELECT count(*) FROM {}.{}").format(sql.Identifier(schema), sql.Identifier(table))
-                lines.append(f"rows {schema}.{table} {c.execute(query).fetchone()[0]}")
+                count = c.execute(query).fetchone()[0]
+                if f"{schema}.{table}" in _PER_MINUTE:
+                    count = "some" if count else "none"
+                lines.append(f"rows {schema}.{table} {count}")
     except psycopg.OperationalError:
         return ["<no database>"]
     return sorted(normalise(line, ws) for line in lines)
