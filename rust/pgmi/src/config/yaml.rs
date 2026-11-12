@@ -79,10 +79,20 @@ pub(crate) enum YamlError {
 impl std::fmt::Display for YamlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            YamlError::Syntax(e) => f.write_str(
-                &e.to_string()
-                    .replace(", set DuplicateKeyPolicy in Options if acceptable", ""),
-            ),
+            YamlError::Syntax(e) => {
+                let text = e.to_string();
+                let first = text.lines().next().unwrap_or_default();
+                f.write_str(
+                    &first
+                        .strip_prefix("error: ")
+                        .unwrap_or(first)
+                        .replace(", set DuplicateKeyPolicy in Options if acceptable", "")
+                        .replace(
+                            "; use from_str_multiple or from_str_multiple_with_options",
+                            "",
+                        ),
+                )
+            }
             YamlError::Port(text) => write!(
                 f,
                 "connection.port: invalid port {text:?}: expected a number"
@@ -144,7 +154,14 @@ impl ProjectConfig {
                 return Err(Error::config("failed to load pgmi.yaml").with_source(e));
             }
         };
-        Ok(Some(Self::parse(&text)?))
+        Self::parse(&text).map(Some).map_err(|e| match e {
+            YamlError::Syntax(_) => Error::config(format!(
+                "failed to load pgmi.yaml: parse {}",
+                project.display("pgmi.yaml")
+            ))
+            .with_source(e),
+            other => other.into(),
+        })
     }
 
     pub(crate) fn parse(text: &str) -> std::result::Result<Self, YamlError> {
@@ -173,8 +190,14 @@ impl ProjectConfig {
         self.timeout
             .as_deref()
             .map(|t| {
-                crate::duration::parse(t)
-                    .map_err(|e| Error::config(format!("failed to load pgmi.yaml: timeout: {e}")))
+                crate::duration::parse(t).map_err(|e| {
+                    let go = if e.ends_with("must not be negative") {
+                        ""
+                    } else {
+                        "time: "
+                    };
+                    Error::config(format!("invalid timeout in pgmi.yaml: {go}{e}"))
+                })
             })
             .transpose()
     }

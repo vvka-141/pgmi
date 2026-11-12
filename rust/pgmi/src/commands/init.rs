@@ -57,9 +57,9 @@ pub(crate) fn check_empty(target: &impl Vfs) -> Result<()> {
         return Ok(());
     }
     Err(Error::usage(format!(
-        "target directory '{}' is not empty ({})\n\npgmi init requires an empty directory to avoid overwriting existing files.\n\nOptions:\n• Choose a different location\n• Remove existing files manually\n• Use a new directory name",
+        "directory \"{}\" is not empty (blocking: [{}])\nremove the files or scaffold elsewhere: pgmi init ./new-project",
         target.display(""),
-        blocking.join(", ")
+        blocking.join(" ")
     )))
 }
 
@@ -73,7 +73,7 @@ pub(crate) fn run(
     check_empty(&OsFs::new(&target))?;
     let mut connection = None;
     let template = match a.template.as_deref() {
-        Some(t) => template(t)?,
+        Some(t) => t.parse().map_err(|_| super::templates::unknown(t))?,
         None if crate::tui::interactive(env) => {
             match tui::init::run(&target.display().to_string(), env, runtime)? {
                 Done::Finished {
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(e.exit_code(), 2);
         assert!(
             e.text()
-                .starts_with("target directory '/mem' is not empty (README.md, lib)\n"),
+                .starts_with("directory \"/mem\" is not empty (blocking: [README.md lib])\n"),
             "{}",
             e.text()
         );

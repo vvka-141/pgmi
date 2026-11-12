@@ -122,7 +122,7 @@ impl fmt::Display for MetaError {
                 }
                 write!(
                     f,
-                    "\n\nSee metadata format documentation:\n  {FORMAT_HINT}\n  Generate template: pgmi metadata scaffold <path>"
+                    "\n\nSee metadata format documentation:\n  {FORMAT_HINT}\n  Generate template: pgmi metadata scaffold <path>\n"
                 )
             }
         }
@@ -187,9 +187,13 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
     let id = match root.attribute("id").unwrap_or("") {
         "" => None,
         text => {
-            let id = uuid::Uuid::parse_str(text).map_err(|e| MetaError::NotUuid {
+            let id = uuid::Uuid::parse_str(text).map_err(|_| MetaError::NotUuid {
                 path: path.to_string(),
-                reason: e.to_string(),
+                reason: if matches!(text.len(), 32 | 36 | 38 | 45) {
+                    "invalid UUID format".into()
+                } else {
+                    format!("invalid UUID length: {}", text.len())
+                },
             })?;
             (!id.is_nil()).then_some(id)
         }
@@ -796,7 +800,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.ends_with("Generate template: pgmi metadata scaffold <path>"),
+            text.ends_with("Generate template: pgmi metadata scaffold <path>\n"),
             "{text}"
         );
     }

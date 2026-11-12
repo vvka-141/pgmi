@@ -16,4 +16,4 @@ steps:
       PGSSLKEY: "{client_key}"
     expect: {exit: 0}
   - pgmi: [deploy, "{project}", --connection, "postgresql://{cert_user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}"]
-    expect: {exit: 11}
+    expect: {exit: 11, stderr: ['^no pg_hba\.conf entry matches this host, user, and method$']}

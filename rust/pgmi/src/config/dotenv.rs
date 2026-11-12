@@ -16,14 +16,13 @@ pub(crate) enum Reason {
     NoEquals,
     InvalidKey(String),
     Unterminated(char),
-    EscapeInDoubleQuotes,
-    UnquotedComment,
     Ambiguous { key: String, why: Ambiguity },
     Nul,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ambiguity {
+    EscapeInDoubleQuotes,
     TextAfterQuote,
     CommentAfterSpace,
     Variable,
@@ -33,18 +32,13 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "line {}: ", self.line)?;
         match &self.reason {
-            Reason::NoEquals => f.write_str("expected KEY=VALUE"),
+            Reason::NoEquals => f.write_str("invalid format, expected KEY=VALUE"),
             Reason::Nul => f.write_str("a NUL byte cannot be put in the environment"),
             Reason::InvalidKey(key) => write!(f, "invalid key {key:?}"),
             Reason::Unterminated(q) => write!(f, "unterminated {q} quote"),
-            Reason::EscapeInDoubleQuotes => f.write_str(
-                "a backslash or $ inside double quotes is read differently by .env tools; use single quotes for a literal value",
-            ),
-            Reason::UnquotedComment => f.write_str(
-                "an unquoted # after a space starts a comment in some .env tools and not in others; use single quotes to keep it",
-            ),
             Reason::Ambiguous { key, why } => {
                 let why = match why {
+                    Ambiguity::EscapeInDoubleQuotes => "has a backslash or $ inside double quotes",
                     Ambiguity::TextAfterQuote => {
                         "has an unterminated quote or text after the closing one"
                     }
@@ -139,10 +133,7 @@ fn strict(text: &str) -> Result<Vec<(String, String)>, ParseError> {
                     line += 1;
                 }
                 if q == '"' && (c == '\\' || c == '$') {
-                    return Err(ParseError {
-                        line: start_line,
-                        reason: Reason::EscapeInDoubleQuotes,
-                    });
+                    return Err(ambiguous(start_line, key, Ambiguity::EscapeInDoubleQuotes));
                 }
                 k += 1;
             }
@@ -166,10 +157,7 @@ fn strict(text: &str) -> Result<Vec<(String, String)>, ParseError> {
                 return Err(ambiguous(start_line, key, Ambiguity::Variable));
             }
             if find_comment(rest).is_some() {
-                return Err(ParseError {
-                    line: start_line,
-                    reason: Reason::UnquotedComment,
-                });
+                return Err(ambiguous(start_line, key, Ambiguity::CommentAfterSpace));
             }
             value = rest.trim().to_string();
             i = end + 1;

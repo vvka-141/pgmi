@@ -152,10 +152,10 @@ fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
     String::from_utf8(bytes).map_err(|e| {
         let at = e.utf8_error().valid_up_to();
         if rel == "deploy.sql" {
-            Error::config(format!("deploy.sql is not valid UTF-8 at byte offset {at}"))
+            Error::config(format!("deploy.sql is not valid UTF-8 (first invalid byte at offset {at}); re-save the file as UTF-8 without BOM"))
         } else {
             Error::config(format!(
-                "file ./{rel} is not valid UTF-8 (byte offset {at}); exclude it in .pgmiignore or move it out of the project path"
+                "file ./{rel} is not valid UTF-8; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
             ))
         }
     })
@@ -233,11 +233,6 @@ fn walk(
         }
         if is_dir {
             let test = in_test || name == "__test__" || name == "__tests__";
-            if !test && name.len() > 4 && name.starts_with("__") && name.ends_with("__") {
-                return Err(Error::config(format!(
-                    "unsupported directory {name:?} in path \"./{child}/\"; only __test__ and __tests__ are allowed"
-                )));
-            }
             walk(fs, &child, test, rules, max_size, out)?;
             continue;
         }
@@ -253,12 +248,27 @@ fn walk(
             continue;
         }
         let content = read_text(fs, &child, max_size)?;
+        if let Some(dir) = unsupported_dunder(&child) {
+            return Err(Error::config(format!(
+                "unsupported directory \"{dir}\" in path \"./{child}\"; only __test__ and __tests__ are allowed"
+            )));
+        }
         out.sources.push(File {
             path: format!("./{child}"),
             content,
         });
     }
     Ok(())
+}
+
+fn unsupported_dunder(path: &str) -> Option<&str> {
+    let (dirs, _) = path.rsplit_once('/')?;
+    dirs.split('/').find(|d| {
+        d.len() > 4
+            && d.starts_with("__")
+            && d.ends_with("__")
+            && !matches!(*d, "__test__" | "__tests__")
+    })
 }
 
 #[cfg(test)]
@@ -460,7 +470,10 @@ mod tests {
         let fs = MemFs::default().file("deploy.sql", b"\xef\xbb\xbfSELECT 1;");
         assert_eq!(load(&fs, MAX).unwrap().deploy_sql, "SELECT 1;");
         let text = refused(&MemFs::default().file("deploy.sql", b"SELECT \xff;"));
-        assert_eq!(text, "deploy.sql is not valid UTF-8 at byte offset 7");
+        assert_eq!(
+            text,
+            "deploy.sql is not valid UTF-8 (first invalid byte at offset 7); re-save the file as UTF-8 without BOM"
+        );
     }
 
     #[test]
@@ -548,7 +561,10 @@ mod tests {
             refused(&project().file("a.sql", b"SELECT\0")),
             "failed to scan directory \"/mem\": file ./a.sql contains a NUL byte; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path"
         );
-        assert!(refused(&project().file("a.sql", b"SELECT \xff")).contains("byte offset 7"));
+        assert!(
+            refused(&project().file("a.sql", b"SELECT \xff"))
+                .ends_with("file ./a.sql is not valid UTF-8; pgmi loads project files as text, so exclude it in .pgmiignore or move it out of the project path")
+        );
         let big = project().file("a.sql", "x".repeat(11));
         let e = load(&big, 10).unwrap_err();
         assert!(e.text().contains("exceeds 10-byte limit"), "{}", e.text());

@@ -13,13 +13,13 @@ steps:
     timeout: 30
     expect:
       exit: 12
-      stdout: ["No input available"]
+      stdout: ["No input available", 'pgmi: error: approval denied\s*$']
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
     tty: true
     stdin: [{wait: 5}]
     signal: {name: SIGINT, after: 2}
     timeout: 30
-    expect: {exit: 130}
+    expect: {exit: 130, stdout: ["pgmi: error: overwrite cancelled"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
     tty: true
     env: {PGMI_NO_BANNER: "1"}

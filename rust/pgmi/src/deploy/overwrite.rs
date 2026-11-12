@@ -173,7 +173,7 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
         return Err(Error::new(
             Kind::Locked,
             format!(
-                "another pgmi deploy is running against \"{db}\"; --overwrite does not drop it"
+                "another pgmi deployment is running against \"{db}\"; --overwrite would end it"
             ),
         ));
     }

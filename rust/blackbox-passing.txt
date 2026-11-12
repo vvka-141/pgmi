@@ -139,6 +139,7 @@ errors/head-syntax
 errors/line-and-column
 errors/next-step-hints
 errors/parameter-value-not-in-statement-echo
+errors/refusal-wording
 errors/refused-before-deploy-no-summary
 errors/session-preparation
 errors/special-file

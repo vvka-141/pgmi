@@ -11,3 +11,4 @@ steps:
     delay: 3
     expect:
       exit: 15
+      stderr: ['^Preparing session: scanning files, loading parameters$', '^pgmi: error: another pgmi deployment is already running against "{db}"$']

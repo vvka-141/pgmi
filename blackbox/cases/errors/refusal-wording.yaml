@@ -1,0 +1,70 @@
+description: refusals read the same on every binary - a bad flag value says what it must be, a missing project path shows the usage and an example, parameter and params-file errors name the key, file and line, init names what blocks it and the templates there are, a broken pgmi-meta id or a __name__ directory names the file, a refused callback is a preprocessing error, service files and an environment connection string say what to do, a retry line names the address alone
+project:
+  files:
+    deploy.sql: SELECT 1;
+    bad.params: "garbage line\n"
+    dq.params: "double=\"a\\\\b\"\n"
+    twins.params: "a=1\nA=2\n"
+    meta/deploy.sql: SELECT 1;
+    meta/a.sql: '/* <pgmi-meta id="not-a-uuid" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    dunder/deploy.sql: SELECT 1;
+    dunder/__foo__/a.sql: SELECT 1;
+    callback/deploy.sql: |
+      BEGIN;
+      CALL pgmi_test('x', 'DROP TABLE users; --');
+      COMMIT;
+    timeout/deploy.sql: SELECT 1;
+    timeout/pgmi.yaml: "timeout: \"30\"\n"
+    plain/deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}", -p, abc]
+    expect: {exit: 2, stderr: ['^pgmi: error: invalid argument "abc" for "-p, --port" flag: must be an integer$']}
+  - pgmi: [deploy, "{project}", -d, "{db}", -p, ""]
+    expect: {exit: 2, stderr: ['^pgmi: error: invalid argument "" for "-p, --port" flag: must be an integer$']}
+  - pgmi: [deploy, "{project}", -d, "{db}", --timeout, banana]
+    expect: {exit: 2, stderr: ['^pgmi: error: invalid argument "banana" for "--timeout" flag: must be a duration like "30s" or "5m"$']}
+  - pgmi: [deploy, "{project}", -d, "{db}", --json=yes]
+    expect: {exit: 2, stderr: ['^pgmi: error: invalid argument "yes" for "--json" flag: must be true or false$']}
+  - pgmi: [deploy]
+    expect: {exit: 2, stderr: ['^pgmi: error: missing required argument: <project_path>$', '^Usage: pgmi deploy <project_path> \[flags\]$', '^Example:$', '^  pgmi deploy \. -d mydb$']}
+  - pgmi: [metadata, plan]
+    expect: {exit: 2, stderr: ['^Usage: pgmi metadata plan <project_path> \[flags\]$', '^  pgmi metadata plan \.$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, novalue]
+    expect: {exit: 10, stderr: ['^pgmi: error: invalid parameter format: parameter "novalue" is not in key=value format \(example: --param env=production\)$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_: v}
+    expect: {exit: 10, stderr: ['^pgmi: error: environment variable PGMI_PARAM_ has no parameter name after the prefix$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_TOKEN: ""}
+    expect: {exit: 10, stderr: ['^pgmi: error: environment variable PGMI_PARAM_TOKEN is set but empty; unset it, or check that the secret it is mapped from exists$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "-", --params-file, "-"]
+    expect: {exit: 10, stderr: ['^pgmi: error: --params-file - \(stdin\) given 2 times; stdin can be read once$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{workdir}/missing.params"]
+    expect: {exit: 10, stderr: ["^pgmi: error: failed to read params file '{workdir}/missing.params': open {workdir}/missing.params: no such file or directory$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/bad.params"]
+    expect: {exit: 10, stderr: ["^pgmi: error: failed to parse params file '{project}/bad.params': line 1: invalid format, expected KEY=VALUE$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/dq.params"]
+    expect: {exit: 10, stderr: ['line 1: the value of double has a backslash or \$ inside double quotes, so a \.env file reads it differently; put it in single quotes$']}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/twins.params"]
+    expect: {exit: 10, stderr: ["^pgmi: error: params file '{project}/twins.params': (invalid configuration: )?parameters \"A\" and \"a\" differ only in case; the session stores keys lowercased, so pass one$"]}
+  - pgmi: [init, "{project}"]
+    expect: {exit: 2, stderr: ['^pgmi: error: directory "{project}" is not empty \(blocking: \[.*deploy\.sql.*\]\)$', '^remove the files or scaffold elsewhere: pgmi init \./new-project$']}
+  - pgmi: [init, "{workdir}/fresh", -t, nosuch]
+    expect: {exit: 2, stderr: ['^pgmi: error: unknown template "nosuch" \(available: advanced, basic, minimal\)$', '^run `pgmi templates list` for descriptions$']}
+  - pgmi: [metadata, plan, "{project}/meta"]
+    expect: {exit: 10, stderr: ['metadata error in \./a\.sql: id attribute is not a UUID: invalid UUID length: 10$']}
+  - pgmi: [metadata, plan, "{project}/dunder"]
+    expect: {exit: 10, stderr: ['unsupported directory "__foo__" in path "\./__foo__/a\.sql"; only __test__ and __tests__ are allowed$']}
+  - pgmi: [deploy, "{project}/callback", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['^pgmi: error: failed to preprocess deploy\.sql: invalid callback "DROP TABLE users; --": "DROP TABLE users; --" is not a valid identifier$']}
+  - pgmi: [deploy, "{project}/timeout", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 10, stderr: ['^pgmi: error: invalid timeout in pgmi\.yaml: time: missing unit in duration "30"$']}
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGSERVICE: svc}
+    expect: {exit: 10, stderr: ['^pgmi: error: PGSERVICE is set: service files \(service=, PGSERVICE\) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE$']}
+  - pgmi: [deploy, "{project}", -d, "{db}", -h, "{host}"]
+    env: {DATABASE_URL: "{conn}"}
+    expect: {exit: 10, stderr: ['^pgmi: error: cannot combine -h with DATABASE_URL, which names its own server and login; unset DATABASE_URL to connect with the flags, or put the values in the string$']}
+  - pgmi: [deploy, "{project}/plain", --connection, "postgresql://u@127.0.0.1:1/postgres", -d, "{db}"]
+    timeout: 30
+    expect: {exit: 11, stderr: ['^Connection attempt 1 failed: connection refused to 127\.0\.0\.1:1$']}

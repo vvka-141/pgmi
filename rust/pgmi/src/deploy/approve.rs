@@ -58,7 +58,7 @@ impl Terminal {
 }
 
 fn interrupted() -> Error {
-    Error::new(Kind::Interrupted, "interrupted")
+    Error::new(Kind::Interrupted, "overwrite cancelled")
 }
 
 fn banner(db: &str) -> String {
@@ -112,7 +112,7 @@ impl Approver for Terminal {
             return Err(Error::new(
                 Kind::Denied,
                 format!(
-                    "approval denied: --overwrite must be confirmed at a terminal, and this is not one; pass --force to drop and recreate \"{db}\" from a script or CI job"
+                    "--overwrite must be confirmed at a terminal, and this is not one; pass --force to drop and recreate \"{db}\" from a script or CI job"
                 ),
             ));
         }
@@ -129,17 +129,15 @@ impl Approver for Terminal {
             () = token.cancelled() => return Err(interrupted()),
         };
         let Some(line) = line else {
-            return Err(Error::new(
-                Kind::Denied,
-                "approval denied: No input available. Use --force to bypass confirmation in non-interactive mode.",
-            ));
+            reporter.line(
+                "\nNo input available. Use --force to bypass confirmation in non-interactive mode.",
+            );
+            return Err(Error::new(Kind::Denied, "approval denied"));
         };
         let typed = line.trim();
         if typed != db {
-            return Err(Error::new(
-                Kind::Denied,
-                format!("approval denied: \"{typed}\" does not match \"{db}\". Cancelled."),
-            ));
+            reporter.line(&format!("\"{typed}\" does not match \"{db}\". Cancelled."));
+            return Err(Error::new(Kind::Denied, "approval denied"));
         }
         reporter.line("Confirmed.");
         Ok(())
@@ -205,7 +203,7 @@ mod tests {
         assert_eq!(e.exit_code(), 12);
         assert_eq!(
             e.text(),
-            "approval denied: --overwrite must be confirmed at a terminal, and this is not one; pass --force to drop and recreate \"app\" from a script or CI job"
+            "--overwrite must be confirmed at a terminal, and this is not one; pass --force to drop and recreate \"app\" from a script or CI job"
         );
         assert_eq!(out, "");
     }
@@ -218,23 +216,27 @@ mod tests {
             out,
             "\nWARNING: about to DROP and RECREATE database \"app\". This deletes all data.\nType the database name to confirm: Confirmed.\n"
         );
-        let (r, _) = ask(&terminal(false, true, Some("ap\n"))).await;
+        let (r, out) = ask(&terminal(false, true, Some("ap\n"))).await;
         let e = r.unwrap_err();
         assert_eq!(e.exit_code(), 12);
-        assert_eq!(
-            e.text(),
-            "approval denied: \"ap\" does not match \"app\". Cancelled."
+        assert_eq!(e.text(), "approval denied");
+        assert!(
+            out.ends_with("\"ap\" does not match \"app\". Cancelled.\n"),
+            "{out}"
         );
     }
 
     #[tokio::test]
     async fn no_answer_is_a_denial() {
-        let (r, _) = ask(&terminal(false, true, None)).await;
+        let (r, out) = ask(&terminal(false, true, None)).await;
         let e = r.unwrap_err();
         assert_eq!(e.exit_code(), 12);
-        assert_eq!(
-            e.text(),
-            "approval denied: No input available. Use --force to bypass confirmation in non-interactive mode."
+        assert_eq!(e.text(), "approval denied");
+        assert!(
+            out.ends_with(
+                "\nNo input available. Use --force to bypass confirmation in non-interactive mode.\n"
+            ),
+            "{out}"
         );
     }
 
@@ -276,7 +278,7 @@ mod tests {
         let (result, ()) = tokio::join!(t.approve_drop("app", &r, &token), cancel);
         let e = result.unwrap_err();
         assert_eq!(e.exit_code(), 130);
-        assert_eq!(e.text(), "interrupted");
+        assert_eq!(e.text(), "overwrite cancelled");
         let text = out.text();
         assert!(text.contains("in 3s."), "{text}");
         assert!(!text.contains("in 2s."), "{text}");
@@ -306,9 +308,10 @@ mod tests {
         let (r, out) = ask(&terminal(false, true, Some("\n"))).await;
         let e = r.unwrap_err();
         assert_eq!(e.exit_code(), 12);
-        assert_eq!(
-            e.text(),
-            "approval denied: \"\" does not match \"app\". Cancelled."
+        assert_eq!(e.text(), "approval denied");
+        assert!(
+            out.contains("\"\" does not match \"app\". Cancelled."),
+            "{out}"
         );
         assert!(!out.contains("Confirmed."));
     }

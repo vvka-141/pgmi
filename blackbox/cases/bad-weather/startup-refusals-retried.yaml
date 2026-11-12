@@ -12,7 +12,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 0
-      stderr: ["Connection attempt 3 failed: .*too many", "max_connections"]
+      stderr: ["Connection attempt 3 failed: .*too many", "^server is at max_connections; close idle backends or wait; retrying in "]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 0

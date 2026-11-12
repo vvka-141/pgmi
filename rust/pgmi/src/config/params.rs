@@ -59,7 +59,11 @@ impl Inputs<'_> {
             ("- (stdin)".to_string(), bytes)
         } else {
             let bytes = self.files.read_named(file, limit, self.stop).map_err(|e| {
-                Error::config(format!("failed to read params file {file}")).with_source(e)
+                Error::config(format!(
+                    "failed to read params file '{file}': open {file}: {}",
+                    crate::error::os_text(&e)
+                ))
+                .with_cause(e)
             })?;
             (file.to_string(), bytes)
         };
@@ -109,8 +113,10 @@ fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
 }
 
 fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let mut sorted: Vec<&str> = keys.into_iter().collect();
+    sorted.sort_unstable();
     let mut seen: BTreeMap<String, &str> = BTreeMap::new();
-    for k in keys {
+    for k in sorted {
         if let Some(prev) = seen.insert(k.to_lowercase(), k)
             && prev != k
         {
@@ -151,12 +157,12 @@ pub(crate) fn collect(
     for (name, value) in src.env.with_prefix(ENV_PREFIX) {
         if name.len() == ENV_PREFIX.len() {
             return Err(Error::config(format!(
-                "environment variable {name} has no parameter name; name it {ENV_PREFIX}<NAME>"
+                "environment variable {name} has no parameter name after the prefix"
             )));
         }
         if value.is_empty() {
             return Err(Error::config(format!(
-                "environment variable {name} is set but empty; unset it or give it a value"
+                "environment variable {name} is set but empty; unset it, or check that the secret it is mapped from exists"
             )));
         }
         keys.push(name[ENV_PREFIX.len()..].to_string());
@@ -171,7 +177,7 @@ pub(crate) fn collect(
     let stdin_count = src.files.iter().filter(|f| *f == "-").count();
     if stdin_count > 1 {
         return Err(Error::config(format!(
-            "--params-file - (stdin) given {stdin_count} times; stdin can be read only once"
+            "--params-file - (stdin) given {stdin_count} times; stdin can be read once"
         )));
     }
     let mut from_files = std::collections::BTreeSet::new();
@@ -187,21 +193,18 @@ pub(crate) fn collect(
         })?;
         let pairs = dotenv::parse(&text, Mode::Strict).map_err(|e| {
             let text = format!(
-                "failed to parse params file {name}: {}\n\nTip: Verify the file format (KEY=VALUE)",
+                "failed to parse params file '{name}': {}\n\nTip: Verify the file format (KEY=VALUE)",
                 crate::error::chain(&e)
             );
             Error::config(text).with_cause(e)
         })?;
+        no_case_twins(
+            &format!("params file '{name}'"),
+            pairs.iter().map(|(k, _)| k.as_str()),
+        )?;
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
         for (k, v) in pairs {
             let lower = k.to_lowercase();
-            if let Some(prev) = seen.get(&lower)
-                && *prev != k
-            {
-                return Err(Error::config(format!(
-                    "params file {name}: keys {prev:?} and {k:?} differ only in case"
-                )));
-            }
             seen.insert(lower.clone(), k.clone());
             keys.push(k);
             from_files.insert(lower.clone());
@@ -226,7 +229,7 @@ pub(crate) fn collect(
                 Some((k, v)) if !k.is_empty() => (k, v),
                 _ => {
                     return Err(Error::config(format!(
-                        "invalid parameter format {text:?}: expected key=value (example: --param env=production)"
+                        "invalid parameter format: parameter {text:?} is not in key=value format (example: --param env=production)"
                     )));
                 }
             },

@@ -81,7 +81,6 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         execution,
     } = r;
     let client = &session.client;
-    reporter.line("Preparing session: scanning files, loading parameters");
     reporter.verbose(&format!("Connecting to database \"{database}\""));
     reporter.verbose("Creating pg_temp internal tables");
     let temporary = Needs::Temporary { database, role };
@@ -131,7 +130,13 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             continue;
         }
         for cb in found.iter().filter_map(|m| m.callback.as_deref()) {
-            script::check_callback(cb)?;
+            script::check_callback(cb).map_err(|e| {
+                let (kind, text) = (
+                    e.kind(),
+                    format!("failed to preprocess deploy.sql: {}", e.text()),
+                );
+                e.reworded(kind, text)
+            })?;
         }
         let mut generated = Vec::new();
         for m in &found {

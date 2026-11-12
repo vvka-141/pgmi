@@ -225,7 +225,7 @@ Add it to Claude Code with:
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
     pub(crate) path: Option<PathBuf>,
-    #[arg(short = 't', long, value_parser = crate::templates::Template::ALL.map(|t| t.name()))]
+    #[arg(short = 't', long)]
     pub(crate) template: Option<String>,
 }
 
@@ -281,7 +281,7 @@ pub(crate) struct DeployArgs {
     pub(crate) overwrite: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Never block on an interactive prompt (for CI/CD; no-op when nothing would prompt)\nWith --overwrite: replaces the approval prompt with a 5-second countdown (Ctrl-C aborts)\nOnly affects confirmation dialogs, not deployment behavior")]
     pub(crate) force: bool,
-    #[arg(long, value_parser = crate::duration::parse, help = "Catastrophic failure protection timeout (default 3m)\nPrevents indefinite hangs from network issues or deadlocks\nUse 0 to disable the limit\nFor query-level timeouts, use SET statement_timeout in SQL\nExamples: 30s, 5m, 1h30m, 0 (default 3m0s)")]
+    #[arg(long, value_parser = timeout_flag, help = "Catastrophic failure protection timeout (default 3m)\nPrevents indefinite hangs from network issues or deadlocks\nUse 0 to disable the limit\nFor query-level timeouts, use SET statement_timeout in SQL\nExamples: 30s, 5m, 1h30m, 0 (default 3m0s)")]
     pub(crate) timeout: Option<Duration>,
     #[arg(
         long,
@@ -392,14 +392,24 @@ pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
     match s {
         "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
         "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
-        _ => Err(format!("invalid boolean {s:?}")),
+        _ => Err("must be true or false".into()),
     }
+}
+
+fn timeout_flag(s: &str) -> Result<std::time::Duration, String> {
+    crate::duration::parse(s).map_err(|e| {
+        if e.ends_with("must not be negative") {
+            e
+        } else {
+            r#"must be a duration like "30s" or "5m""#.into()
+        }
+    })
 }
 
 /// An integer as Go's `strconv.ParseInt(s, 0, 64)` reads it: a sign, then
 /// decimal, `0x`, `0o`, `0b` or a leading `0` for octal, `_` between digits.
 fn go_int(s: &str) -> Result<i64, String> {
-    let err = || format!("invalid integer {s:?}");
+    let err = || String::from("must be an integer");
     let (negative, body) = match s.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, s.strip_prefix('+').unwrap_or(s)),
@@ -495,7 +505,11 @@ mod tests {
         assert_eq!(d.timeout, Some(Duration::from_mins(90)));
         let e = Cli::try_parse_from(["pgmi", "deploy", ".", "--timeout", "banana"]).unwrap_err();
         assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
-        assert!(e.to_string().contains("invalid duration \"banana\""), "{e}");
+        assert!(
+            e.to_string()
+                .contains(r#"must be a duration like "30s" or "5m""#),
+            "{e}"
+        );
     }
 
     #[test]

@@ -297,7 +297,7 @@ impl fmt::Display for ResolveError {
         match self {
             ResolveError::Env(e) => f.write_str(&e.text()),
             ResolveError::ServiceEnv => f.write_str(
-                "PGSERVICE is set, but pgmi reads no service files; unset it and name the server with --connection, PGHOST or pgmi.yaml",
+                "PGSERVICE is set: service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
             ResolveError::ConnectionWith(flags, sslmode) => {
                 let mut passed = flags.clone();
@@ -316,8 +316,8 @@ impl fmt::Display for ResolveError {
             }
             ResolveError::FlagWithEnvString { flag, source } => write!(
                 f,
-                "cannot combine {flag} with {}; a connection string from the environment is used whole or not at all, so unset it or pass --connection",
-                source.label()
+                "cannot combine {flag} with {source}, which names its own server and login; unset {source} to connect with the flags, or put the values in the string",
+                source = source.label()
             ),
             ResolveError::Parse { source, error } => write!(f, "{}: {error}", source.label()),
             ResolveError::NoDatabase => f.write_str(

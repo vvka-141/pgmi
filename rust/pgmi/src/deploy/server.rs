@@ -44,7 +44,14 @@ pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
-pub(super) async fn client_encoding(session: &Session, named: Option<&str>) -> Result<()> {
+/// Sets the session's `client_encoding`; a value the server refuses is
+/// reported as a refused connection to `db` at `addr`, as Go reports it.
+pub(super) async fn client_encoding(
+    session: &Session,
+    named: Option<&str>,
+    db: &str,
+    addr: &str,
+) -> Result<()> {
     let Some(encoding) = named else {
         return session
             .client
@@ -63,10 +70,22 @@ pub(super) async fn client_encoding(session: &Session, named: Option<&str>) -> R
         .await
         .map(drop)
         .map_err(|e| {
-            let reason = e
-                .as_db_error()
-                .map_or_else(|| crate::error::chain(&e), |d| d.message().to_string());
-            Error::connection(format!("client_encoding \"{encoding}\": {reason}"))
+            let reason = e.as_db_error().map_or_else(
+                || {
+                    format!(
+                        "client_encoding \"{encoding}\": {}",
+                        crate::error::chain(&e)
+                    )
+                },
+                |d| {
+                    format!(
+                        "server at {addr} refused the connection: {} (SQLSTATE {})",
+                        d.message(),
+                        d.code().code()
+                    )
+                },
+            );
+            Error::connection(format!("connect to \"{db}\": {reason}"))
         })
 }
 

@@ -114,6 +114,8 @@ pub(crate) fn sql_error_needing(
     }
 }
 
+const PREPARING: &str = "Preparing session: scanning files, loading parameters";
+
 /// Where `--params-file -` reads from: the process's stdin for the CLI;
 /// none for `serve`, whose stdin carries the MCP session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,6 +445,7 @@ pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
                 let text = e.text();
                 e.reworded(Kind::Interrupted, text)
             }
+            Err(e) if e.kind() == Kind::Interrupted => e,
             _ => Error::new(Kind::Interrupted, "interrupted"),
         });
     }
@@ -509,7 +512,19 @@ impl Steps<'_> {
         }
         let dialer = self.dialer(log);
         if let Some((provider, options)) = &cloud {
-            spec.token = Some(self.sign_in(*provider, options).await?);
+            let first = if request.overwrite {
+                &spec.maintenance_db
+            } else {
+                &spec.target_db
+            };
+            spec.token = Some(self.sign_in(*provider, options).await.map_err(|e| {
+                if e.kind() == Kind::Connection {
+                    let text = format!("connect to \"{first}\": {}", e.text());
+                    e.reworded(Kind::Connection, text)
+                } else {
+                    e
+                }
+            })?);
         }
         let maintenance = if request.overwrite {
             Some(self.overwrite(st, &dialer, &spec).await?)
@@ -518,8 +533,12 @@ impl Steps<'_> {
         };
         let outcome = async {
             let session = self.open(st, &dialer, &spec).await?;
-            let server = st.server.insert(self.server_info(&session, &spec).await?);
+            self.settle(&session, &spec).await?;
+            if !request.overwrite {
+                self.reporter.line(PREPARING);
+            }
             self.lock(&session, &spec.target_db).await?;
+            let server = st.server.insert(self.server_info(&session, &spec).await?);
             let outcome = execute::run(execute::Input {
                 session: &session,
                 guard: self.guard,
@@ -736,7 +755,11 @@ impl Steps<'_> {
                         .approver
                         .approve_drop(db, self.reporter, guard.stop.token()),
                 )
-                .await?;
+                .await
+                .map_err(|e| match e.kind() {
+                    Kind::Interrupted => Error::new(Kind::Interrupted, "overwrite cancelled"),
+                    _ => e,
+                })?;
             guard
                 .running(maintenance, overwrite::snapshot(maintenance, db))
                 .await?
@@ -759,6 +782,7 @@ impl Steps<'_> {
             &mut st.provision,
         )
         .await?;
+        self.reporter.line(PREPARING);
         guard.check()
     }
 
@@ -809,15 +833,24 @@ impl Steps<'_> {
             .await
     }
 
-    async fn server_info(&self, session: &Session, spec: &Spec) -> Result<ServerInfo> {
+    async fn settle(&self, session: &Session, spec: &Spec) -> Result<()> {
         let guard = self.guard;
         guard.running(session, check_server(session)).await?;
         guard
             .running(
                 session,
-                client_encoding(session, spec.client_encoding.as_deref()),
+                client_encoding(
+                    session,
+                    spec.client_encoding.as_deref(),
+                    &spec.target_db,
+                    &format!("{}:{}", spec.first().name, spec.first().port),
+                ),
             )
-            .await?;
+            .await
+    }
+
+    async fn server_info(&self, session: &Session, spec: &Spec) -> Result<ServerInfo> {
+        let guard = self.guard;
         let version = guard
             .running(session, async {
                 Ok(first_value(session, "SHOW server_version")
@@ -854,9 +887,7 @@ impl Steps<'_> {
         if locked != Some(true) {
             return Err(Error::new(
                 Kind::Locked,
-                format!(
-                    "another pgmi deploy is already running against \"{db}\"; wait for it to finish"
-                ),
+                format!("another pgmi deployment is already running against \"{db}\""),
             ));
         }
         Ok(())

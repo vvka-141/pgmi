@@ -9,6 +9,7 @@ steps:
     timeout: 60
     expect:
       exit: 11
+      stderr: ['^pgmi: error: connect to "{db}": the AWS IAM token was refused for user "iam_flag" on database "{db}"$', '^check that the signed-in identity has a database role and that --username matches it$']
       files:
         "{recorder_log}": ['"user": "iam_flag", "password": "127\.0\.0\.1:{recorder_port}\?Action=connect&DBUser=iam_flag&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F\d{8}%2Fus-west-2%2Frds-db%2Faws4_request&X-Amz-Date=\d{8}T\d{6}Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=[0-9a-f]{64}"']
   - pgmi: [deploy, "{project}", --aws, --connection, "host=127.0.0.1 port={recorder_port} user=iam_env dbname=postgres sslmode=require", -d, "{db}"]

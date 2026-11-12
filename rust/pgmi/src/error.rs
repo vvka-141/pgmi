@@ -240,16 +240,39 @@ pub(crate) fn redact(text: &str, secrets: &[Secret]) -> String {
 /// an earlier one already contains. An [`Error`] renders its own sources,
 /// redacted, so the walk stops there.
 pub(crate) fn chain(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut parts = vec![e.to_string()];
+    let mut parts = vec![text_of(e)];
     let mut cur = e.source().filter(|_| !e.is::<Error>());
     while let Some(c) = cur {
-        let t = c.to_string();
+        let t = text_of(c);
         if !parts.iter().any(|p| p.contains(&t)) {
             parts.push(t);
         }
         cur = c.source().filter(|_| !c.is::<Error>());
     }
     parts.join(": ")
+}
+
+fn text_of(e: &(dyn std::error::Error + 'static)) -> String {
+    match e.downcast_ref::<std::io::Error>() {
+        Some(io) => os_text(io),
+        None => e.to_string(),
+    }
+}
+
+/// An operating-system error as Go prints one: `permission denied`, without
+/// Rust's capital and `(os error 13)`.
+pub(crate) fn os_text(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    let Some(code) = e.raw_os_error() else {
+        return text;
+    };
+    let text = text
+        .strip_suffix(&format!(" (os error {code})"))
+        .unwrap_or(&text);
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map_or_else(String::new, |c| c.to_lowercase().chain(chars).collect())
 }
 
 thread_local! {

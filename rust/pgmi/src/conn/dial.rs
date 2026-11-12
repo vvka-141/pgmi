@@ -228,6 +228,10 @@ enum DialFailure {
         origin: Origin,
     },
     Server(Answer),
+    TokenRefused {
+        text: String,
+        origin: tokio_postgres::Error,
+    },
     Timeout,
     ProbeTimeout,
     NotTarget(TargetSessionAttrs),
@@ -241,9 +245,10 @@ impl DialFailure {
                 Class::Transient
             }
             DialFailure::Timeout => Class::Transient,
-            DialFailure::Server(_) | DialFailure::ProbeTimeout | DialFailure::NotTarget(_) => {
-                Class::Fatal
-            }
+            DialFailure::Server(_)
+            | DialFailure::TokenRefused { .. }
+            | DialFailure::ProbeTimeout
+            | DialFailure::NotTarget(_) => Class::Fatal,
         }
     }
 
@@ -263,6 +268,7 @@ impl DialFailure {
     fn origin(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             DialFailure::Broken { origin, .. } => Some(origin.error()),
+            DialFailure::TokenRefused { origin, .. } => Some(origin),
             DialFailure::Server(_)
             | DialFailure::Timeout
             | DialFailure::ProbeTimeout
@@ -274,7 +280,9 @@ impl DialFailure {
 impl std::fmt::Display for DialFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DialFailure::Broken { text, .. } => f.write_str(text),
+            DialFailure::Broken { text, .. } | DialFailure::TokenRefused { text, .. } => {
+                f.write_str(text)
+            }
             DialFailure::Server(answer) => answer.fmt(f),
             DialFailure::Timeout | DialFailure::ProbeTimeout => f.write_str("timeout expired"),
             DialFailure::NotTarget(want) => {
@@ -318,6 +326,16 @@ impl Failed {
         matches!(self, Failed::At { failure: DialFailure::Broken { origin, .. }, .. } if origin.closed_early())
     }
 
+    fn token_refused(&self) -> bool {
+        matches!(
+            self,
+            Failed::At {
+                failure: DialFailure::TokenRefused { .. },
+                ..
+            }
+        )
+    }
+
     fn connection_refused(&self) -> bool {
         matches!(self, Failed::At { failure, .. } if failure.class() == Class::Refused)
     }
@@ -349,6 +367,10 @@ impl std::fmt::Display for Failed {
             } if failure.class() == Class::Refused => {
                 write!(f, "connection refused to {host}:{port}")
             }
+            Failed::At {
+                failure: failure @ DialFailure::TokenRefused { .. },
+                ..
+            } => failure.fmt(f),
             Failed::At {
                 host,
                 addr,
@@ -406,11 +428,11 @@ fn classify_pg(
                 .and_then(|i| i.downcast_ref::<tap::Error>())
                 .is_some_and(refuses_auth)
             {
-                return broken(io.to_string(), Class::Fatal, e);
+                return broken(crate::error::os_text(io), Class::Fatal, e);
             }
             let class = io_class(io);
             if class != Class::Fatal {
-                return broken(io.to_string(), class, e);
+                return broken(crate::error::os_text(io), class, e);
             }
         }
         if c.downcast_ref::<tap::Error>().is_some_and(refuses_auth) {
@@ -435,22 +457,15 @@ fn token_refused(e: &tokio_postgres::Error, spec: &Spec, db: &str) -> Option<Str
     let (Some(token), Some(answer)) = (&spec.token, e.as_db_error()) else {
         return None;
     };
-    let code = answer.code().code();
-    code.starts_with("28").then(|| {
-        refused_token_text(
-            token.provider().label(),
-            &spec.user,
-            db,
-            answer.message(),
-            code,
-        )
-    })
+    answer
+        .code()
+        .code()
+        .starts_with("28")
+        .then(|| refused_token_text(token.provider().label(), &spec.user, db))
 }
 
-fn refused_token_text(provider: &str, user: &str, db: &str, message: &str, code: &str) -> String {
-    format!(
-        "the {provider} token was refused for user \"{user}\" on database \"{db}\": {message} (SQLSTATE {code}); check that the signed-in identity has a database role and that --username matches it"
-    )
+fn refused_token_text(provider: &str, user: &str, db: &str) -> String {
+    format!("the {provider} token was refused for user \"{user}\" on database \"{db}\"")
 }
 
 fn sslmode_of(mode: SslMode) -> PgSslMode {
@@ -665,7 +680,7 @@ impl Attempt<'_> {
             None => open(self.host, self.port, &spec.tcp).await,
         };
         let (socket, peer) = opened.map_err(|e| DialFailure::Broken {
-            text: e.to_string(),
+            text: crate::error::os_text(&e),
             class: io_class(&e),
             origin: Origin::Io(e),
         })?;
@@ -686,7 +701,7 @@ impl Attempt<'_> {
                 .map_or_else(|| "~/.pgpass".into(), |p| p.display().to_string());
             let no_password = password.is_none() && shared.asked_password();
             match token_refused(&e, spec, self.db) {
-                Some(text) => broken(text, Class::Fatal, e),
+                Some(text) => DialFailure::TokenRefused { text, origin: e },
                 None => classify_pg(e, self.name, &passfile, no_password),
             }
         })?;
@@ -837,7 +852,8 @@ impl Dialer {
                 return Err(round.into());
             };
             (self.log)(format!(
-                "Connection attempt {attempt_no} failed: {round}; retrying in {}ms",
+                "Connection attempt {attempt_no} failed: {}; retrying in {}ms",
+                round.reason(),
                 wait.as_millis()
             ));
             tokio::time::sleep(wait).await;
@@ -1037,8 +1053,12 @@ impl Unconnected {
     }
 }
 
-impl std::fmt::Display for Unconnected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Unconnected {
+    fn reason(&self) -> Reason<'_> {
+        Reason(self)
+    }
+
+    fn write(&self, f: &mut std::fmt::Formatter<'_>, prefixed: bool) -> std::fmt::Result {
         if self.maintenance && self.answer() == Some("3D000") {
             return write!(
                 f,
@@ -1052,7 +1072,10 @@ impl std::fmt::Display for Unconnected {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        write!(f, "connect to \"{}\": {joined}", self.db)?;
+        if prefixed {
+            write!(f, "connect to \"{}\": ", self.db)?;
+        }
+        f.write_str(&joined)?;
         if self.failed.iter().any(Failed::connection_refused) {
             let (h, p) = &self.first;
             write!(
@@ -1062,11 +1085,14 @@ impl std::fmt::Display for Unconnected {
         }
         match self.answer() {
             Some("53300") => {
-                f.write_str("\nthe server is at max_connections; close idle backends or wait")?;
+                f.write_str("\nserver is at max_connections; close idle backends or wait")?;
             }
             Some("57P03") => f.write_str("\nit is starting up or recovering; retry shortly")?,
             Some("28P01") => {
                 f.write_str("\ncheck $PGPASSWORD, ~/.pgpass, or the connection string")?;
+            }
+            Some("28000") => {
+                f.write_str("\nno pg_hba.conf entry matches this host, user, and method")?;
             }
             Some("42501") => write!(
                 f,
@@ -1074,6 +1100,22 @@ impl std::fmt::Display for Unconnected {
                 self.db, self.user
             )?,
             _ => {}
+        }
+        if self.failed.iter().any(|x| {
+            matches!(
+                x,
+                Failed::At {
+                    failure: DialFailure::Timeout,
+                    ..
+                }
+            )
+        }) {
+            f.write_str("\ncheck network reachability and server load; raise --timeout if needed")?;
+        }
+        if self.failed.iter().any(Failed::token_refused) {
+            f.write_str(
+                "\ncheck that the signed-in identity has a database role and that --username matches it",
+            )?;
         }
         if self
             .failed
@@ -1088,13 +1130,29 @@ impl std::fmt::Display for Unconnected {
                 f,
                 "\nthe server closed the connection; it may still be starting up; check: pg_isready -h {h} -p {p}"
             )?;
-        } else if ["x509", "TLS", "certificate"]
-            .iter()
-            .any(|w| joined.contains(w))
+        } else if self.answer() != Some("28000")
+            && ["x509", "TLS", "certificate"]
+                .iter()
+                .any(|w| joined.contains(w))
         {
             f.write_str("\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert")?;
         }
         Ok(())
+    }
+}
+
+impl std::fmt::Display for Unconnected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write(f, true)
+    }
+}
+
+/// A round's failure as a retry line reads it: without the `connect to` prefix.
+struct Reason<'a>(&'a Unconnected);
+
+impl std::fmt::Display for Reason<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.write(f, false)
     }
 }
 
@@ -1324,7 +1382,7 @@ mod tests {
     fn a_full_or_starting_server_and_an_early_close_get_a_next_step() {
         let full = unconnected(false, vec![server("53300")]);
         assert!(
-            full.ends_with("\nthe server is at max_connections; close idle backends or wait"),
+            full.ends_with("\nserver is at max_connections; close idle backends or wait"),
             "{full}"
         );
         assert!(
@@ -1421,7 +1479,7 @@ mod tests {
         );
         assert_eq!(
             e.text(),
-            "connect to \"app\": connection refused to a:1; b:2: timeout expired\nis PostgreSQL running? check: pg_isready -h a -p 1\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml"
+            "connect to \"app\": connection refused to a:1; b:2: timeout expired\nis PostgreSQL running? check: pg_isready -h a -p 1\nor point pgmi elsewhere: --connection, PGMI_CONNECTION_STRING, pgmi.yaml\ncheck network reachability and server load; raise --timeout if needed"
         );
         for tls in [
             "x509: unknown authority",
@@ -1506,23 +1564,12 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_token_points_at_the_database_role() {
-        let t = refused_token_text(
-            "Azure Entra ID",
-            "app",
-            "shop",
-            "password authentication failed",
-            "28P01",
+    fn a_refused_token_names_the_user_and_database() {
+        let t = refused_token_text("Azure Entra ID", "app", "shop");
+        assert_eq!(
+            t,
+            "the Azure Entra ID token was refused for user \"app\" on database \"shop\""
         );
-        assert!(
-            t.starts_with(
-                "the Azure Entra ID token was refused for user \"app\" on database \"shop\""
-            ),
-            "{t}"
-        );
-        assert!(t.ends_with(
-            "check that the signed-in identity has a database role and that --username matches it"
-        ));
     }
 
     async fn silent_after_startup(listener: tokio::net::TcpListener) -> std::io::Result<usize> {

@@ -67,6 +67,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | "Did you mean this?" after a mistyped command; an extra argument (also after `--`) is a wrong arity; missing project path, bad or missing flag value and unknown shell are one line | ✓ `commands/usage-error-lines` |
 | next steps: `--connection` clash names every flag and where it goes, params-file `Tip:`, `--param` example, `.env` line rule, `<pgmi-meta>` expected format, `--force` when the prompt gets no input | ✓ `errors/next-step-hints` |
 | no summary line when a parameter source is refused before the deploy starts | ✓ `errors/refused-before-deploy-no-summary` |
+| refusal wording shared by both binaries: flag values, missing project path, parameters and params files, `init`, metadata ids and `__name__` directories, callbacks, service files, retry lines | ✓ `errors/refusal-wording` |
 | `-h` is help (exit 0) on every command but deploy; an invalid `--sslmode` value = 10 | ✓ `commands/short-help-and-sslmode-value` |
 | metadata id spellings, XML leniency, fallback id; broken blocks = 10 | ✓ `commands/metadata-forms`, `commands/metadata-refusals` |
 | summary line format; `-v` elapsed prefix on notices | ✓ `notices/summary-line`, `notices/verbose-elapsed` |

@@ -83,7 +83,7 @@ impl fmt::Display for ParseError {
                 "invalid connection string ({HIDDEN}): use postgresql://user@host:5432/dbname, host=... dbname=..., or Host=...;Database=..."
             ),
             ParseError::ServiceFile => f.write_str(
-                "the connection string names service=, but pgmi reads no service files; spell out host, port and dbname",
+                "service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
             ParseError::Unsupported(k) => {
                 write!(f, "{k} is not supported; remove it from the connection string")

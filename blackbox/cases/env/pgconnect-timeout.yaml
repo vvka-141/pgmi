@@ -8,6 +8,7 @@ steps:
     timeout: 30
     expect:
       exit: 11
+      stderr: ['^check network reachability and server load; raise --timeout if needed$']
   - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 3s]
     timeout: 30
     expect:

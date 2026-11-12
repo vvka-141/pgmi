@@ -208,7 +208,15 @@ fn usage_text(e: &clap::Error, args: &[OsString]) -> String {
         ErrorKind::MissingRequiredArgument => {
             let missing = strings(e, ContextKind::InvalidArg);
             if missing.iter().any(|m| matches!(*m, "<PROJECT>" | "<PATH>")) {
-                return "missing required argument: <project_path>".into();
+                let database = if at.arg_named("--database").is_some() {
+                    " -d mydb"
+                } else {
+                    ""
+                };
+                return format!(
+                    "missing required argument: <project_path>\n\nUsage: {path} <project_path> [flags]\n\nExample:\n  {path} .{database}",
+                    path = at.path
+                );
             }
             if !missing.iter().any(|m| m.starts_with('<')) {
                 let text = e.render().to_string();
@@ -237,7 +245,7 @@ fn invalid_value(e: &clap::Error, at: &Invocation, arg: &str) -> String {
     let long = arg.split([' ', '[', '=']).next().unwrap_or(arg).to_string();
     let found = at.arg_named(&long);
     let short = found.and_then(clap::Arg::get_short);
-    if value.is_empty() {
+    if value.is_empty() && e.kind() != ErrorKind::ValueValidation {
         let typed_short = short.filter(|s| at.rest.last().is_some_and(|w| *w == format!("-{s}")));
         let mut text = match typed_short {
             Some(s) => format!("flag needs an argument: '{s}' in -{s}"),
@@ -318,7 +326,11 @@ mod tests {
         assert_eq!(refused(&["completion"]), "accepts 1 arg(s), received 0");
         assert_eq!(
             refused(&["deploy"]),
-            "missing required argument: <project_path>"
+            "missing required argument: <project_path>\n\nUsage: pgmi deploy <project_path> [flags]\n\nExample:\n  pgmi deploy . -d mydb"
+        );
+        assert_eq!(
+            refused(&["metadata", "plan"]),
+            "missing required argument: <project_path>\n\nUsage: pgmi metadata plan <project_path> [flags]\n\nExample:\n  pgmi metadata plan ."
         );
         assert_eq!(
             refused(&["completion", "tcsh"]),

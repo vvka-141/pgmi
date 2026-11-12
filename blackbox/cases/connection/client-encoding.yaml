@@ -36,4 +36,4 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}?client_encoding=bogus", -d, "{db}"]
     expect:
       exit: 11
-      stderr: ['invalid value for parameter "client_encoding": "bogus"']
+      stderr: ['^pgmi: error: connect to "{db}": server at .* refused the connection: invalid value for parameter "client_encoding": "bogus" \(SQLSTATE 22023\)$']
