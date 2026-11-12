@@ -1204,6 +1204,8 @@ release notes take their "Behaviour changes" section from this table.
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| `.env` value ending in `\"` or `\\` before the closing quote (`"x\""`) | `x\`, or reads on into later lines | `x"`, `x\` | agent 2026-11-12 (PGMI-900), owner may revisit |
+| `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | file refused, exit 10 | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `pgmi help <unknown topic>` | "Unknown help topic", exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `pgmi help deploy <extra>` | extra argument ignored, exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `--sslmode ''` | treated as unset | refused, exit 10 | agent 2026-11-12 (PGMI-906), owner may revisit |
