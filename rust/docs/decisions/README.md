@@ -35,7 +35,7 @@ them.
 | [0022](0022-library-layout-and-seams.md) | One package with a lib target and a thin bin; `pub(crate)` by default; seams only where a test double exists (`Vfs`, `Approver`, Reporter sink, serve over any transport); `deploy::Request`, `DeployRecord`, typed settings and `Secret`; an ordered refactor plan that keeps the black-box suite green after each step |
 | [0023](0023-databricks-lakebase.md) | Databricks Lakebase sign-in hand-written (PGMI-849): `POST /api/2.0/postgres/credentials`, PAT, OAuth M2M, the Databricks CLI and Azure, a credential refreshed five minutes before it expires; `impl: rust` black-box cases against a fake workspace |
 | [0024](0024-templates-on-every-host.md) | Templates that deploy and pass their tests on local PostgreSQL and every listed cloud host with only the README's edits (PGMI-874) |
-| [0025](0025-whole-deploy-retry.md) | Proposed (PGMI-882): a transient failure reruns the whole deploy from the start, like a redeploy, inside the `--timeout` time box; the retried and never-retried failures, backoff, reporting, open choices for the owner |
+| [0025](0025-whole-deploy-retry.md) | Accepted (PGMI-882): a transient failure reruns the whole deploy from the start, like a redeploy, inside the `--timeout` time box; the retried and never-retried failures, backoff, reporting, open choices for the owner |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage

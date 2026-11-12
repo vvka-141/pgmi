@@ -1,6 +1,6 @@
 # 0025: Whole-deployment retry inside the --timeout time box
 
-Status: proposed, 2026-11-12. Ticket: PGMI-882 (design); build: PGMI-886.
+Status: accepted, 2026-11-12 (owner: "1a 2a 3a"; the --overwrite decision accepted). Ticket: PGMI-882 (design); build: PGMI-886.
 Owner intent 2026-11-11: pipelines need no retry step of their own; always
 retry from the start; `--timeout` is the time box and its meaning is exact.
 
@@ -68,7 +68,7 @@ every attempt and every wait between attempts.
 - When the attempts end on a final error inside the box, the exit code is that
   error's (11, 13, ...), not 16.
 - Default stays 3m. `--timeout 0` (no limit): retries stop after 5 attempts
-  (open choice 2).
+  (owner choice 2).
 
 ### Backoff
 
@@ -95,7 +95,7 @@ The CLI stays infrastructure-only (`TestDeployCmdHasNoOrchestrationFlags`).
 Retrying is a reaction to infrastructure faults, so it is on by default and
 needs no flag. A project whose deploy must never run twice (a tail that is
 not rerunnable) needs a way out: `retry: false` in `pgmi.yaml`, the project's
-own property (open choice 1).
+own property (owner choice 1).
 
 ### Docs plan
 
@@ -107,13 +107,11 @@ attempts, and a GitHub Actions job with no retry step. A row in the
 contract's "Behaviour changes in 0.20" table and a line in
 `rust/docs/release-notes-0.20.md`.
 
-## Open choices for the owner
+## Owner's choices (2026-11-12)
 
-1. **Off switch:** `retry: false` in `pgmi.yaml` (recommended); or an
-   environment variable `PGMI_RETRY=0`; or none.
-2. **No time box (`--timeout 0`):** stop after 5 attempts (recommended); or
-   retry forever; or no retry at all without a time box.
-3. **Backoff numbers:** 1 s doubling to 30 s, jitter ±20% (recommended).
+1. Off switch: `retry: false` in `pgmi.yaml`.
+2. No time box (`--timeout 0`): stop after 5 attempts.
+3. Backoff: 1 s doubling to 30 s, jitter ±20%.
 
 ## Consequences
 
