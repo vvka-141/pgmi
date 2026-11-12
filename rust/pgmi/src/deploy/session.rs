@@ -117,7 +117,7 @@ pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
         let rows: Vec<_> = l
             .metadata
             .iter()
-            .map(|m| json!({"path": m.path, "id": m.id, "idempotent": m.idempotent, "sort_keys": m.sort_keys, "description": m.description}))
+            .map(|m| json!({"path": m.path, "id": m.id, "idempotent": m.idempotent, "sort_keys": m.sort_keys, "description": m.description.as_deref().unwrap_or_default()}))
             .collect();
         load_json(
             client,

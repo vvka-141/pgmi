@@ -316,3 +316,4 @@ formats/binary-file-in-test-directory
 config/dotenv-refused-keys
 execution/tail-semicolon-in-parentheses
 retry/orphaned-session-holds-lock
+deploy/metadata-description-default

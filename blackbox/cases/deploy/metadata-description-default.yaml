@@ -1,0 +1,22 @@
+description: a <pgmi-meta> block without <description> gives description '' in pgmi_source_metadata_view, never NULL
+project:
+  files:
+    a.sql: |
+      /*
+      <pgmi-meta id="6a1f0c9e-3b0d-4a55-9a43-1f5f6f0b2a11" idempotent="true">
+        <sortKeys><key>001</key></sortKeys>
+      </pgmi-meta>
+      */
+      SELECT 1;
+    deploy.sql: |
+      CREATE TABLE seen AS
+        SELECT description IS NULL AS is_null, description FROM pg_temp.pgmi_source_metadata_view;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT is_null::text, description FROM seen
+          rows: [["false", ""]]
