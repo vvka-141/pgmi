@@ -18,6 +18,8 @@ pub(crate) enum Param {
     Flag(String),
     /// A key and a value given apart (serve's `params` object).
     Pair(String, String),
+    /// A `--param` whose value is not UTF-8: its key as far as it reads.
+    NotUtf8(String),
 }
 
 pub(crate) struct Sources<'a> {
@@ -215,6 +217,11 @@ pub(crate) fn collect(
     for p in src.flags {
         let (k, v) = match p {
             Param::Pair(k, v) => (k.as_str(), v.as_str()),
+            Param::NotUtf8(k) => {
+                return Err(Error::config(format!(
+                    "invalid parameter value for '{k}': not valid UTF-8"
+                )));
+            }
             Param::Flag(text) => match text.split_once('=') {
                 Some((k, v)) if !k.is_empty() => (k, v),
                 _ => {

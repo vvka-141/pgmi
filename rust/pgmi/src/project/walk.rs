@@ -116,9 +116,12 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
 
 fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
     let unreadable = |e: std::io::Error| {
-        let name = rel.rsplit('/').next().unwrap_or(rel);
+        let why = match e.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+            _ => e.to_string(),
+        };
         Error::config(format!(
-            "failed to read ./{rel}: cannot read {name}: {e}; exclude it in .pgmiignore or make it readable"
+            "failed to read ./{rel}: cannot read {rel}: {why}; exclude it in .pgmiignore or make it readable"
         ))
     };
     let too_big = |len: u64| {

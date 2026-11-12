@@ -1,0 +1,10 @@
+description: pgmi info on a project with no subdirectory prints no Directories heading, as Go
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [info, "{project}"]
+    expect:
+      exit: 0
+      stdout: ['Metadata: 0 / 0']
+      stdout_not: [Directories]

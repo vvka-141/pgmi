@@ -100,7 +100,7 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     });
     let _ = write!(
         text,
-        "pgmi.yaml: {}\n\nFiles\n  Total:    {}\n  SQL:      {}\n  Tests:    {}\n  Metadata: {} / {}\n\nDirectories\n",
+        "pgmi.yaml: {}\n\nFiles\n  Total:    {}\n  SQL:      {}\n  Tests:    {}\n  Metadata: {} / {}\n\n",
         info.config_file,
         info.total_files,
         info.sql_files,
@@ -108,6 +108,9 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
         info.metadata_with,
         info.total_files
     );
+    if !dirs.is_empty() {
+        text.push_str("Directories\n");
+    }
     for (dir, n) in &dirs {
         let _ = writeln!(text, "  {dir:<30} {n} files");
     }

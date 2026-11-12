@@ -77,7 +77,7 @@ the same as an object. A missing path is exit 10. It scans the project as
 directory: ...`); `metadata plan`, `validate` and `scaffold` refuse that
 `.pgmiignore` the same way.
 
-Cases: `commands/info`, `commands/info-scaffolded-by`, `commands/info-metadata-refusals`.
+Cases: `commands/info`, `commands/info-without-directories`, `commands/info-scaffolded-by`, `commands/info-metadata-refusals`.
 
 ### init
 

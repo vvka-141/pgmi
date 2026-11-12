@@ -294,7 +294,7 @@ pub(crate) struct DeployArgs {
         long = "param",
         help = "Parameters as key=value pairs (can be specified multiple times)\nAvailable as session variables: current_setting('pgmi.key') during deployment\nExample: --param env=prod --param region=us-west"
     )]
-    pub(crate) params: Vec<String>,
+    pub(crate) params: Vec<std::ffi::OsString>,
     #[arg(
         long = "params-file",
         help = "Load parameters from key=value files, e.g. prod.params (can be specified multiple times)\nUse - to read stdin (once). Later files override earlier ones, CLI --param overrides all"
@@ -367,7 +367,7 @@ impl From<DeployArgs> for crate::deploy::Request {
                 google_instance: a.google_instance,
                 databricks_endpoint: a.databricks_endpoint,
             },
-            params: a.params.into_iter().map(Param::Flag).collect(),
+            params: a.params.into_iter().map(param_arg).collect(),
             params_files: a.params_files,
             timeout: a.timeout,
             overwrite: a.overwrite,
@@ -420,6 +420,21 @@ fn go_int(s: &str) -> Result<i64, String> {
     }
     let magnitude = i128::from(u64::from_str_radix(&plain, radix).map_err(|_| err())?);
     i64::try_from(if negative { -magnitude } else { magnitude }).map_err(|_| err())
+}
+
+fn param_arg(arg: std::ffi::OsString) -> Param {
+    match arg.into_string() {
+        Ok(text) => Param::Flag(text),
+        Err(raw) => {
+            let lossy = raw.to_string_lossy();
+            Param::NotUtf8(
+                lossy
+                    .split_once('=')
+                    .map_or(&*lossy, |(k, _)| k)
+                    .to_string(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]

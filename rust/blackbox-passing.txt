@@ -294,3 +294,4 @@ bad-weather/reset-in-tail
 bad-weather/reset-in-session-setup
 commands/verbose-lines
 notices/deploy-sql-message-level
+commands/info-without-directories
