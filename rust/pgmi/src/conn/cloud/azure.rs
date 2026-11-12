@@ -773,9 +773,8 @@ mod tests {
     fn the_powershell_script_carries_no_value_from_input() {
         let script = powershell_script(true, "https://ossrdbms-aad.database.windows.net");
         assert!(script.contains("$env:PGMI_AZURE_TENANT_ID"), "{script}");
-        assert_eq!(
-            powershell_script(false, "r").contains("TenantId"),
-            false,
+        assert!(
+            !powershell_script(false, "r").contains("TenantId"),
             "no tenant line without a tenant"
         );
     }
