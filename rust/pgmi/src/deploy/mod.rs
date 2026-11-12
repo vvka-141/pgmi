@@ -47,18 +47,20 @@ pub(crate) use stop::{Stop, StopReason};
 /// The privilege a step needs, named in the error when the server answers
 /// 42501.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Needs {
-    Temporary,
+pub(crate) enum Needs<'a> {
+    Temporary { database: &'a str, role: &'a str },
     CreateDb,
 }
 
-fn privilege_hint(code: &str, needs: Option<Needs>) -> Option<&'static str> {
+fn privilege_hint(code: &str, needs: Option<Needs<'_>>) -> Option<String> {
     match (code, needs?) {
-        ("42501", Needs::Temporary) => Some(
-            "the login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE <db> TO <role>",
-        ),
+        ("42501", Needs::Temporary { database, role }) => Some(format!(
+            "the login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE {} TO {}",
+            quote_ident(database),
+            quote_ident(role)
+        )),
         ("42501", Needs::CreateDb) => Some(
-            "the database does not exist and this role cannot create it: check the -d name, or grant the role CREATEDB",
+            "the database does not exist and this role cannot create it: check the -d name, or grant the role CREATEDB".into(),
         ),
         _ => None,
     }
@@ -81,7 +83,7 @@ pub(crate) fn sql_error(context: &str, e: tokio_postgres::Error) -> Error {
 pub(crate) fn sql_error_needing(
     context: &str,
     e: tokio_postgres::Error,
-    needs: Option<Needs>,
+    needs: Option<Needs<'_>>,
 ) -> Error {
     match e.as_db_error() {
         Some(db) => {
@@ -89,7 +91,7 @@ pub(crate) fn sql_error_needing(
             let mut message = format!("{}: {} (SQLSTATE {code})", db.severity(), db.message());
             if let Some(hint) = privilege_hint(&code, needs) {
                 message.push('\n');
-                message.push_str(hint);
+                message.push_str(&hint);
             }
             let (position, internal_position, internal_query) = match db.position() {
                 Some(ErrorPosition::Original(p)) => (usize::try_from(*p).ok(), None, None),
@@ -152,13 +154,15 @@ impl ContractVersion {
     }
 }
 
-/// How far a deploy got before anything ran on the server: `Deploying`
-/// once the parameters are read and an overwrite was approved, the point
-/// from which the record counts files, tests and timings.
+/// How far a deploy got before anything ran on the server: `Configured`
+/// once the parameters are read, the point from which the summary line is
+/// printed; `Deploying` once an overwrite was approved too, the point from
+/// which the record counts files, tests and timings.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Phase {
     #[default]
     Preparing,
+    Configured,
     Deploying,
 }
 
@@ -484,6 +488,7 @@ impl Steps<'_> {
         if self.ctx.env.non_empty("PGMI_TEST_PANIC")?.is_some() {
             test_panic();
         }
+        st.phase = Phase::Configured;
         if request.overwrite {
             self.ctx.approver.before_connecting(&spec.target_db)?;
         }
@@ -518,6 +523,7 @@ impl Steps<'_> {
             let outcome = execute::run(execute::Input {
                 session: &session,
                 guard: self.guard,
+                role: &spec.user,
                 reporter: self.reporter,
                 project: &loaded.project,
                 meta: &loaded.meta,
@@ -907,6 +913,9 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
 }
 
 fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summary> {
+    if !p.reached(Phase::Configured) {
+        return None;
+    }
     let db = p.database()?;
     if result.is_ok() {
         let (files, ignored) = p
@@ -1706,10 +1715,16 @@ mod tests {
         assert_eq!(e.text(), "ERROR: x");
         let hint = privilege_hint("42501", Some(Needs::CreateDb)).unwrap();
         assert!(hint.contains("-d") && hint.contains("CREATEDB"));
-        assert!(
-            privilege_hint("42501", Some(Needs::Temporary))
-                .unwrap()
-                .contains("TEMPORARY")
+        assert_eq!(
+            privilege_hint(
+                "42501",
+                Some(Needs::Temporary {
+                    database: "app",
+                    role: "a\"b"
+                })
+            )
+            .unwrap(),
+            "the login needs the TEMPORARY privilege on the target database: GRANT TEMPORARY ON DATABASE \"app\" TO \"a\"\"b\""
         );
         assert_eq!(privilege_hint("42P04", Some(Needs::CreateDb)), None);
         assert_eq!(privilege_hint("42501", None), None);

@@ -67,7 +67,7 @@ pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(Strin
     let Ok(pairs) = dotenv::environment(&text) else {
         let _ = writeln!(
             std::io::stderr(),
-            "WARNING: {} could not be parsed, so none of its values were applied",
+            "WARNING: {} could not be parsed, so none of its values were applied.\nEvery line must be KEY=VALUE, a # comment, or blank.",
             project.display(".env")
         );
         return Ok(vec![]);

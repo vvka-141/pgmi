@@ -1,0 +1,16 @@
+description: a failure while pgmi prepares the session reads as one, not as a deploy.sql error, and the TEMPORARY remedy names the database and the role
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - sql: |
+      CREATE ROLE "{db}_notemp" LOGIN PASSWORD 'notemp-pw';
+      REVOKE TEMPORARY ON DATABASE "{db}" FROM PUBLIC;
+      GRANT CONNECT ON DATABASE "{db}" TO "{db}_notemp";
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_notemp:notemp-pw@{host}:{port}/{db}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["^pgmi: error: session preparation failed: ", "GRANT TEMPORARY ON DATABASE \"{db}\" TO \"{db}_notemp\""]
+      stderr_not: ["<db>", "<role>", "LOCATION: deploy\\.sql"]

@@ -131,7 +131,7 @@ impl Approver for Terminal {
         let Some(line) = line else {
             return Err(Error::new(
                 Kind::Denied,
-                "approval denied: No input available. Cancelled.",
+                "approval denied: No input available. Use --force to bypass confirmation in non-interactive mode.",
             ));
         };
         let typed = line.trim();
@@ -232,7 +232,10 @@ mod tests {
         let (r, _) = ask(&terminal(false, true, None)).await;
         let e = r.unwrap_err();
         assert_eq!(e.exit_code(), 12);
-        assert_eq!(e.text(), "approval denied: No input available. Cancelled.");
+        assert_eq!(
+            e.text(),
+            "approval denied: No input available. Use --force to bypass confirmation in non-interactive mode."
+        );
     }
 
     #[tokio::test]

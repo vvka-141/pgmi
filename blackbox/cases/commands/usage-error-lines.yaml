@@ -1,0 +1,23 @@
+description: a mistyped command gets Go's "Did you mean this?"; an extra argument, also after --, is a wrong arity and not an unknown command or flag; a bad or missing value, an unknown shell and a missing project path are one pgmi error line
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deplyo]
+    expect: {exit: 2, stderr: ['^pgmi: error: unknown command "deplyo" for "pgmi"$', "^Did you mean this\\?$", "^\tdeploy$"]}
+  - pgmi: [deploy, a, b]
+    expect: {exit: 2, stderr: ["^pgmi: error: accepts 1 arg\\(s\\), received 2$"], stderr_not: ["unknown command"]}
+  - pgmi: [deploy, "{project}", -d, x, --, --weird]
+    expect: {exit: 2, stderr: ["^pgmi: error: accepts 1 arg\\(s\\), received 2$"], stderr_not: ["unknown flag"]}
+  - pgmi: [init, a, b]
+    expect: {exit: 2, stderr: ["^pgmi: error: accepts at most 1 arg\\(s\\), received 2$"]}
+  - pgmi: [completion, tcsh]
+    expect: {exit: 2, stderr: ['\Apgmi: error: invalid argument "tcsh" for "pgmi completion"\n\Z']}
+  - pgmi: [completion]
+    expect: {exit: 2, stderr: ["\\Apgmi: error: accepts 1 arg\\(s\\), received 0\n\\Z"]}
+  - pgmi: [deploy]
+    expect: {exit: 2, stderr: ["^pgmi: error: missing required argument: <project_path>$"]}
+  - pgmi: [deploy, "{project}", --timeout, abc]
+    expect: {exit: 2, stderr: ['\Apgmi: error: invalid argument "abc" for "--timeout" flag: [^\n]*\n\Z']}
+  - pgmi: [deploy, "{project}", --connection]
+    expect: {exit: 2, stderr: ["\\Apgmi: error: flag needs an argument: --connection\n\\Z"]}

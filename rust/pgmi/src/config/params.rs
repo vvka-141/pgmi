@@ -175,9 +175,20 @@ pub(crate) fn collect(
     let mut from_files = std::collections::BTreeSet::new();
     for file in src.files {
         (src.note)(format!("Loading parameters from file: {file}"));
-        let (name, text) = inputs.read(file)?;
+        let (name, text) = inputs.read(file).map_err(|e| {
+            let text = format!(
+                "{}\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value",
+                e.text()
+            );
+            let kind = e.kind();
+            e.reworded(kind, text)
+        })?;
         let pairs = dotenv::parse(&text, Mode::Strict).map_err(|e| {
-            Error::config(format!("failed to parse params file {name}")).with_source(e)
+            let text = format!(
+                "failed to parse params file {name}: {}\n\nTip: Verify the file format (KEY=VALUE)",
+                crate::error::chain(&e)
+            );
+            Error::config(text).with_cause(e)
         })?;
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
         for (k, v) in pairs {
@@ -208,7 +219,7 @@ pub(crate) fn collect(
                 Some((k, v)) if !k.is_empty() => (k, v),
                 _ => {
                     return Err(Error::config(format!(
-                        "invalid parameter format {text:?}: expected key=value"
+                        "invalid parameter format {text:?}: expected key=value (example: --param env=production)"
                     )));
                 }
             },
@@ -273,14 +284,13 @@ mod tests {
         assert_eq!(e.exit_code(), 10);
         assert_eq!(
             e.text(),
-            "failed to read params file p.env: exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)"
+            "failed to read params file p.env: exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value"
         );
         let stdin = ["-".to_string()];
         let e = collect(sources(&env, &stdin), inputs(Some(&mut big.as_bytes()))).unwrap_err();
-        assert_eq!(
-            e.text(),
-            "failed to read params file - (stdin): exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)"
-        );
+        assert!(e.text().starts_with(
+            "failed to read params file - (stdin): exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)\n\nTip: "
+        ));
     }
 
     #[test]

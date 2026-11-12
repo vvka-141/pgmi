@@ -47,8 +47,12 @@ impl Guard {
     }
 
     pub(super) fn expired_error(&self) -> Error {
+        self.expired(Kind::Timeout)
+    }
+
+    fn expired(&self, kind: Kind) -> Error {
         Error::new(
-            Kind::Timeout,
+            kind,
             format!(
                 "the deploy exceeded --timeout {}; raise it, or pass --timeout 0 for no limit",
                 crate::duration::render(self.timeout)
@@ -104,7 +108,7 @@ impl Guard {
         tokio::select! {
             r = fut => r,
             () = self.stop.cancelled() => Err(self.stop_error()),
-            () = tokio::time::sleep_until(self.deadline) => Err(Error::connection("--timeout ran out while connecting")),
+            () = tokio::time::sleep_until(self.deadline) => Err(self.expired(Kind::Connection)),
         }
     }
 

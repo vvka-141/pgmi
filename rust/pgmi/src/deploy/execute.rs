@@ -7,7 +7,7 @@ use super::blame::{Blame, Sent};
 use super::record::Tls;
 use super::script::{self, LineMap, Unit};
 use super::session::{self, Load};
-use super::{ContractVersion, Execution, Failure, Guard, sql_error};
+use super::{ContractVersion, Execution, Failure, Guard, Needs, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
 use crate::conn::tap::TxStatus;
@@ -24,6 +24,7 @@ pub(crate) struct Input<'a> {
     pub(crate) meta: &'a [Meta],
     pub(crate) params: &'a BTreeMap<String, String>,
     pub(crate) database: &'a str,
+    pub(crate) role: &'a str,
     pub(crate) contract: ContractVersion,
     pub(crate) tls: &'a Tls,
     pub(crate) verbose: bool,
@@ -72,6 +73,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         meta,
         params,
         database,
+        role,
         contract,
         tls,
         verbose,
@@ -82,8 +84,12 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     reporter.line("Preparing session: scanning files, loading parameters");
     reporter.verbose(&format!("Connecting to database \"{database}\""));
     reporter.verbose("Creating pg_temp internal tables");
+    let temporary = Needs::Temporary { database, role };
     guard
-        .running(session, session::create_tables(client, VERSION))
+        .running(
+            session,
+            session::prepared(session::create_tables(client, VERSION, temporary)),
+        )
         .await?;
     reporter.verbose("Loading files into pg_temp._pgmi_source");
     let files = Load {
@@ -93,19 +99,25 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         metadata: meta,
     };
     guard
-        .running(session, session::load_files(client, files))
+        .running(
+            session,
+            session::prepared(session::load_files(client, files)),
+        )
         .await?;
     reporter.line(&format!("Loaded {files_loaded} files"));
     reporter.verbose("Loading parameters into pg_temp._pgmi_parameter");
     guard
-        .running(session, session::load_params(client, params))
+        .running(
+            session,
+            session::prepared(session::load_params(client, params)),
+        )
         .await?;
     if !params.is_empty() {
         reporter.line(&format!("Loaded {} parameter(s)", params.len()));
     }
     reporter.verbose("Applying API contract");
     guard
-        .running(session, session::apply_contract(client))
+        .running(session, session::prepared(session::apply_contract(client)))
         .await?;
     reporter.verbose(&format!("Applied API contract v{}", contract.as_str()));
     reporter.verbose(&tls.line());

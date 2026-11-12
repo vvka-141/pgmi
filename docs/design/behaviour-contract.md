@@ -50,8 +50,19 @@ argument even when it starts with `-` (`-d -x` names the database `-x`).
 anything else is 2, `0` leaves the port to `PGPORT`, pgmi.yaml or 5432, and
 one outside 1-65535 is 10 (`invalid --port flag: invalid port -1: must be
 between 1 and 65535`).
+A mistyped top-level command is followed by `Did you mean this?` and the
+nearest command, as cobra prints it. An extra argument, also one after `--`,
+is `accepts N arg(s), received M` (`accepts at most` where the argument is
+optional), never an unknown command or flag; a missing project path is
+`missing required argument: <project_path>`; a bad flag value is `invalid
+argument "<v>" for "<flag>" flag: <why>` and a missing one `flag needs an
+argument: <flag>`. A refusal names its next step: the flags that clash with
+`--connection` and where their values go, a `Tip:` after a params file that
+cannot be read or parsed, an example after a `--param` without `=`, the
+line rule after the `.env` WARNING, the expected `<pgmi-meta>` layout after
+malformed XML, and `--force` when the overwrite prompt gets no input.
 
-Cases: `flags/repeated-flags`, `flags/bool-forms`, `flags/port-values`, `commands/usage-errors`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`, `commands/short-help-and-sslmode-value`.
+Cases: `flags/repeated-flags`, `flags/bool-forms`, `flags/port-values`, `commands/usage-errors`, `commands/usage-error-lines`, `errors/next-step-hints`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`, `commands/short-help-and-sslmode-value`.
 Exit 3: no case; a release binary cannot panic on purpose. The Rust build proves it with its `testhooks` feature (`rust/pgmi/tests/panic.rs`): a panic exits 3 with the `--json` record, and a panicking serve tool answers `isError` with exit code 3.
 
 ## Commands
@@ -427,9 +438,13 @@ it is and to name an existing one (the connection string's database or
 `connection.maintenance_database`); 53300 that the server is at
 `max_connections`; 57P03 that it is starting up; a connection the server
 closed early to check `pg_isready` (never a TLS hint). A server error keeps
-its own severity (`FATAL:`, `ERROR:`).
+its own severity (`FATAL:`, `ERROR:`). A wrong password says to check
+`$PGPASSWORD`, `~/.pgpass` or the connection string, a missing CONNECT
+privilege gives the `GRANT CONNECT`, and a host DNS cannot find says to check
+its spelling, DNS and `$PGHOST`. The server's DETAIL follows the error as a
+`DETAIL:` line and is `detail` in `--json`.
 
-Cases: `errors/connection-failures`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`.
+Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`.
 
 ### TLS
 
@@ -568,9 +583,11 @@ T is seconds with two decimals (`1.12s`). A success adds `, N paths ignored`
 when discovery left paths out (dot-files count). A failure adds what was
 left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
 unit(s) already committed)` in psql mode, and `created database "<db>", left
-empty` when this run created it.
+empty` when this run created it. A run refused before the deploy starts (the
+connection cannot be resolved, a parameter source is refused) prints no
+summary line, only the error.
 
-Cases: `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
+Cases: `errors/refused-before-deploy-no-summary`, `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
 
 ### The --json record
 
@@ -608,14 +625,16 @@ first line, or the DO block's line). `WHERE` names a project file (`SQL
 statement in ./x.sql`) instead of quoting its text, and identical files are all
 named. `phase` is `test` when the file lies under `__test__/` or `__tests__/`.
 A `PASSWORD '...'` literal in these lines is shown as `[redacted]`. A login
-without the TEMPORARY privilege is told the `GRANT` it needs.
+without the TEMPORARY privilege is told the `GRANT` it needs, naming the
+database and the role. A failure while pgmi fills the session tables starts
+`session preparation failed: ` and is not placed in `deploy.sql`.
 
-Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`, `errors/line-and-column`, `errors/parameter-value-not-in-statement-echo`.
+Cases: `errors/attribution`, `errors/head-syntax`, `errors/temporary-privilege`, `errors/session-preparation`, `errors/line-and-column`, `errors/parameter-value-not-in-statement-echo`.
 
 ### Timeout, cancellation, interruption
 
 `--timeout` (default 3m, Go duration syntax) cancels the running statement on
-the server, gives the server 2 s to report the cancel, and is exit 16; running out while connecting is exit 11. SIGINT or
+the server, gives the server 2 s to report the cancel, and is exit 16; running out while connecting is exit 11 with the same message. SIGINT or
 SIGTERM cancels and is exit 130, saying `pgmi: interrupted, cancelling
 deployment... (again to quit at once)`; a second SIGINT ends at once, still
 130. A stopped statement keeps the server's report: the error is `the deploy
@@ -636,7 +655,7 @@ connection attempts, while the session tables are created, in the tail or at
 the lock release is exit 130 at once; in the tail the running statement is
 cancelled and the earlier ones stay committed.
 
-Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
+Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
 
 ### Checksums
 

@@ -1,0 +1,30 @@
+description: refusals carry the next step - which flags clash with --connection and where their values go, the params-file tips, a --param example, the line format a .env must follow, the expected <pgmi-meta> layout, and --force when the overwrite prompt gets no input
+project:
+  files:
+    deploy.sql: SELECT 1;
+    bad.params: "garbage line\n"
+    broken/.env: "PGMI_PARAM_QUOTE='it''s'\n"
+    broken/deploy.sql: SELECT 1;
+    plain/deploy.sql: SELECT 1;
+    meta/deploy.sql: SELECT 1;
+    meta/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>1</key></sortKeys> */'
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -h, x, -p, "1"]
+    expect: {exit: 10, stderr: ["^pgmi: error: cannot combine --connection with -h, -p; put the host, port and user in the connection string, or drop --connection and use -h, -p, -U$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --sslmode, require]
+    expect: {exit: 10, stderr: ["^pgmi: error: cannot combine --connection with --sslmode; put sslmode=require in the connection string$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{workdir}/missing.params"]
+    expect: {exit: 10, stderr: ["^Tip: Verify the path or use --param to set parameters directly:$", "^  pgmi deploy \\. --database mydb --param key=value$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/bad.params"]
+    expect: {exit: 10, stderr: ["^Tip: Verify the file format \\(KEY=VALUE\\)$"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, novalue]
+    expect: {exit: 10, stderr: ['novalue.*\(example: --param env=production\)$']}
+  - pgmi: [deploy, "{project}/broken", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0, stderr: ["^Every line must be KEY=VALUE, a # comment, or blank\\.$"]}
+  - pgmi: [metadata, plan, "{project}/meta"]
+    expect: {exit: 10, stderr: ["^Expected format:$", '^  <pgmi-meta id="UUID" idempotent="true\|false">$', "^  </pgmi-meta>$"]}
+  - pgmi: [deploy, "{project}/plain", --connection, "{conn}", -d, "{db}", --overwrite]
+    tty: true
+    stdin: [{wait: 2}, "\x04"]
+    timeout: 30
+    expect: {exit: 12, stdout: ["No input available\\. Use --force to bypass confirmation in non-interactive mode\\."]}

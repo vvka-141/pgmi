@@ -4,7 +4,7 @@ use serde_json::json;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
-use super::{Needs, sql_error, sql_error_needing};
+use super::{Needs, sql_error_needing};
 use crate::error::{Error, Result};
 use crate::project::checksum;
 use crate::project::metadata::Meta;
@@ -16,12 +16,31 @@ fn shared_sql(path: &str) -> Result<&'static str> {
         .ok_or_else(|| Error::internal(format!("embedded {path} is missing")))
 }
 
+fn failed(step: &str, e: tokio_postgres::Error, needs: Option<Needs<'_>>) -> Error {
+    let e = sql_error_needing(step, e, needs);
+    if e.sql_diagnostics().is_none() {
+        return e;
+    }
+    let text = format!("{step}: {}", e.text());
+    let kind = e.kind();
+    e.reworded(kind, text)
+}
+
+/// One step of session preparation, its failure named as such.
+pub(crate) async fn prepared<T>(step: impl Future<Output = Result<T>>) -> Result<T> {
+    step.await.map_err(|e| {
+        let text = format!("session preparation failed: {}", e.text());
+        let kind = e.kind();
+        e.reworded(kind, text)
+    })
+}
+
 async fn load_json(client: &Client, sql: &str, payload: serde_json::Value) -> Result<()> {
     let text = payload.to_string();
     client
         .query_typed(sql, &[(&text, Type::TEXT)])
         .await
-        .map_err(|e| sql_error("load the project into the session", e))?;
+        .map_err(|e| failed("load the project into the session", e, None))?;
     Ok(())
 }
 
@@ -34,11 +53,15 @@ pub(crate) struct Load<'a> {
 
 const BATCH_BYTES: usize = 8 << 20;
 
-pub(crate) async fn create_tables(client: &Client, version: &str) -> Result<()> {
+pub(crate) async fn create_tables(
+    client: &Client,
+    version: &str,
+    temporary: Needs<'_>,
+) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
-        .map_err(|e| sql_error_needing("create the session tables", e, Some(Needs::Temporary)))?;
+        .map_err(|e| failed("create the session tables", e, Some(temporary)))?;
     load_json(
         client,
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",
@@ -66,7 +89,7 @@ pub(crate) async fn apply_contract(client: &Client) -> Result<()> {
     client
         .batch_execute(shared_sql("contract/api-v1.sql")?)
         .await
-        .map_err(|e| sql_error("create the session API views", e))
+        .map_err(|e| failed("create the session API views", e, None))
 }
 
 /// Fills the file tables, then gives them planner statistics: autovacuum
@@ -133,7 +156,7 @@ pub(crate) async fn load_files(client: &Client, l: Load<'_>) -> Result<()> {
                  pg_temp._pgmi_test_source, pg_temp._pgmi_test_directory",
             )
             .await
-            .map_err(|e| sql_error("analyze the session tables", e))?;
+            .map_err(|e| failed("analyze the session tables", e, None))?;
     }
     Ok(())
 }

@@ -271,8 +271,7 @@ impl serde::Serialize for SslMode {
 pub(crate) enum ResolveError {
     Env(Error),
     ServiceEnv,
-    ConnectionWith(&'static str),
-    ConnectionWithSslmode,
+    ConnectionWith(Vec<&'static str>, Option<SslMode>),
     FlagWithEnvString { flag: &'static str, source: Source },
     Parse { source: Source, error: ParseError },
     NoDatabase,
@@ -300,13 +299,21 @@ impl fmt::Display for ResolveError {
             ResolveError::ServiceEnv => f.write_str(
                 "PGSERVICE is set, but pgmi reads no service files; unset it and name the server with --connection, PGHOST or pgmi.yaml",
             ),
-            ResolveError::ConnectionWith(flag) => write!(
-                f,
-                "cannot combine --connection with {flag}; put the value in the connection string"
-            ),
-            ResolveError::ConnectionWithSslmode => f.write_str(
-                "cannot combine --connection with --sslmode; put sslmode in the connection string",
-            ),
+            ResolveError::ConnectionWith(flags, sslmode) => {
+                let mut passed = flags.clone();
+                passed.extend(sslmode.map(|_| "--sslmode"));
+                write!(f, "cannot combine --connection with {}; ", passed.join(", "))?;
+                match sslmode.filter(|_| flags.is_empty()) {
+                    Some(mode) => write!(
+                        f,
+                        "put sslmode={} in the connection string",
+                        mode.as_str()
+                    ),
+                    None => f.write_str(
+                        "put the host, port and user in the connection string, or drop --connection and use -h, -p, -U",
+                    ),
+                }
+            }
             ResolveError::FlagWithEnvString { flag, source } => write!(
                 f,
                 "cannot combine {flag} with {}; a connection string from the environment is used whole or not at all, so unset it or pass --connection",
@@ -514,13 +521,8 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
     .into_iter()
     .filter_map(|(set, name)| set.then_some(name))
     .collect();
-    if flags.connection.is_some() {
-        if let Some(first) = granular.first() {
-            return Err(ResolveError::ConnectionWith(first));
-        }
-        if flags.sslmode.is_some() {
-            return Err(ResolveError::ConnectionWithSslmode);
-        }
+    if flags.connection.is_some() && (!granular.is_empty() || flags.sslmode.is_some()) {
+        return Err(ResolveError::ConnectionWith(granular, flags.sslmode));
     }
     let string = connection_string(flags, env)?;
     if let (Some((_, source)), Some(flag)) = (&string, granular.first()) {

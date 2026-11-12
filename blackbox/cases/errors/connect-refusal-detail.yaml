@@ -1,0 +1,18 @@
+description: a server that refuses the connection with a DETAIL has it printed under the error and kept in --json detail, next to the GRANT CONNECT that fixes it
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - sql: |
+      CREATE ROLE "{db}_nc" LOGIN PASSWORD 'nc-pw';
+      REVOKE CONNECT ON DATABASE "{db}" FROM PUBLIC;
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_nc:nc-pw@{host}:{port}/{db}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["GRANT CONNECT ON DATABASE", "^DETAIL: User does not have CONNECT privilege\\.$"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_nc:nc-pw@{host}:{port}/{db}", -d, "{db}", --json]
+    expect:
+      exit: 11
+      json: {status: failed, sqlstate: "42501", detail: User does not have CONNECT privilege.}

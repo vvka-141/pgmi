@@ -97,7 +97,7 @@ impl fmt::Display for MetaError {
         match self {
             MetaError::Xml { path, line, text } => write!(
                 f,
-                "metadata error in {path} (line {line}): {text}\n\nHint: Check that all XML tags are properly closed and attributes are quoted."
+                "metadata error in {path} (line {line}): {text}\n\nHint: Check that all XML tags are properly closed and attributes are quoted.\n\nExpected format:\n  <pgmi-meta id=\"UUID\" idempotent=\"true|false\">\n    <description>...</description>\n    <sortKeys><key>...</key></sortKeys>\n  </pgmi-meta>"
             ),
             MetaError::Multiple { path } => write!(
                 f,

@@ -54,6 +54,7 @@ commands/metadata-scaffold-and-checks
 commands/metadata-scaffold-run-once
 commands/short-help-and-sslmode-value
 commands/templates
+commands/usage-error-lines
 commands/usage-errors
 commands/verbose
 commands/version
@@ -128,6 +129,7 @@ env/pgservice-refused
 env/pg-tls-protocol-variables
 env/pg-variables
 errors/attribution
+errors/connect-refusal-detail
 errors/connection-failures
 errors/connection-source
 errors/connection-string-password-rest
@@ -135,9 +137,13 @@ errors/connection-string-secrets
 errors/diagnostics-secrets
 errors/head-syntax
 errors/line-and-column
+errors/next-step-hints
 errors/parameter-value-not-in-statement-echo
+errors/refused-before-deploy-no-summary
+errors/session-preparation
 errors/special-file
 errors/temporary-privilege
+errors/timeout-while-connecting
 execution/atomic-head
 execution/commit-and-chain
 execution/loader-at-scale

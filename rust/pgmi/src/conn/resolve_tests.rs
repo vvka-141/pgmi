@@ -94,10 +94,22 @@ fn refusals() {
     let mut fl = conn("postgresql://h/db");
     fl.host = Some("x".into());
     let e = refused(resolve(&fl, &Env::default(), None));
-    assert!(matches!(e, ResolveError::ConnectionWith("-h")), "{e}");
+    assert_eq!(
+        e.to_string(),
+        "cannot combine --connection with -h; put the host, port and user in the connection string, or drop --connection and use -h, -p, -U"
+    );
+    fl.port = Some(1);
+    fl.sslmode = Some(SslMode::Require);
     assert!(
-        e.to_string()
-            .contains("cannot combine --connection with -h")
+        refused(resolve(&fl, &Env::default(), None))
+            .to_string()
+            .starts_with("cannot combine --connection with -h, -p, --sslmode; put the host")
+    );
+    let mut fl = conn("postgresql://h/db");
+    fl.sslmode = Some(SslMode::Require);
+    assert_eq!(
+        refused(resolve(&fl, &Env::default(), None)).to_string(),
+        "cannot combine --connection with --sslmode; put sslmode=require in the connection string"
     );
     let env = Env::from_pairs(&[("PGSERVICE", "x")]);
     let e = refused(resolve(&flags(), &env, None));
@@ -893,7 +905,7 @@ fn the_connection_flag_and_the_sslmode_flag_are_refused_together() {
     let e = refused(resolve(&fl, &Env::default(), None));
     assert_eq!(
         e.to_string(),
-        "cannot combine --connection with --sslmode; put sslmode in the connection string"
+        "cannot combine --connection with --sslmode; put sslmode=require in the connection string"
     );
 }
 

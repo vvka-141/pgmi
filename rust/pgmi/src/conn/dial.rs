@@ -162,11 +162,12 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
     }
 }
 
-/// A server's refusal: its message and SQLSTATE.
+/// A server's refusal: its message, SQLSTATE and DETAIL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Answer {
     message: String,
     code: String,
+    detail: Option<String>,
 }
 
 impl Answer {
@@ -174,6 +175,7 @@ impl Answer {
         Answer {
             message: db.message().to_string(),
             code: db.code().code().to_string(),
+            detail: db.detail().map(str::to_string),
         }
     }
 }
@@ -1022,6 +1024,17 @@ impl Unconnected {
         let first = codes.next();
         first.filter(|c| codes.all(|o| o == *c))
     }
+
+    fn detail(&self) -> Option<&str> {
+        let code = self.answer()?;
+        self.failed.iter().find_map(|f| match f {
+            Failed::At {
+                failure: DialFailure::Server(a),
+                ..
+            } if a.code == code => a.detail.as_deref(),
+            _ => None,
+        })
+    }
 }
 
 impl std::fmt::Display for Unconnected {
@@ -1094,12 +1107,15 @@ impl std::error::Error for Unconnected {
 impl From<Unconnected> for Error {
     fn from(u: Unconnected) -> Self {
         let error = Error::connection(u.to_string());
-        let error = match u.sqlstate() {
-            Some(code) => error.with_sql(crate::error::SqlDiagnostics {
-                sqlstate: Some(code.to_string()),
+        let (sqlstate, detail) = (u.sqlstate(), u.detail());
+        let error = if sqlstate.is_some() || detail.is_some() {
+            error.with_sql(crate::error::SqlDiagnostics {
+                sqlstate: sqlstate.map(str::to_string),
+                detail: detail.map(str::to_string),
                 ..Default::default()
-            }),
-            None => error,
+            })
+        } else {
+            error
         };
         error.with_cause(u)
     }
@@ -1264,6 +1280,7 @@ mod tests {
             DialFailure::Server(Answer {
                 message: "refused".into(),
                 code: code.into(),
+                detail: Some(format!("detail of {code}")),
             }),
         )
     }
@@ -1381,6 +1398,21 @@ mod tests {
     }
 
     #[test]
+    fn a_connect_error_keeps_the_server_detail() {
+        let detail = |failed: Vec<Failed>| {
+            connect_error("d", failed, ("h", 5432))
+                .sql_diagnostics()
+                .and_then(|d| d.detail.clone())
+        };
+        assert_eq!(
+            detail(vec![server("42501")]).as_deref(),
+            Some("detail of 42501")
+        );
+        assert_eq!(detail(vec![server("3D000"), server("28P01")]), None);
+        assert_eq!(detail(vec![at("h", 1, fatal("x"))]), None);
+    }
+
+    #[test]
     fn a_connect_error_names_every_host_and_hints_at_the_cause() {
         let e = connect_error(
             "app",
@@ -1412,6 +1444,7 @@ mod tests {
                 DialFailure::Server(Answer {
                     message: "password authentication failed".into(),
                     code: "28P01".into(),
+                    detail: None,
                 }),
             )],
             ("h", 5432),

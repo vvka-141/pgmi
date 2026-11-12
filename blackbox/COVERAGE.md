@@ -64,6 +64,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `init`: next step shell-quotes the path | ✓ `commands/init-next-step-quoted` |
 | `pgmi` with no arguments; help instead of the banner under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `commands/bare`, `commands/bare-not-interactive` |
 | `pgmi: error:` prefix, unknown subcommand and shorthand, `-h` on deploy, several cloud flags = 10 | ✓ `commands/usage-errors` |
+| "Did you mean this?" after a mistyped command; an extra argument (also after `--`) is a wrong arity; missing project path, bad or missing flag value and unknown shell are one line | ✓ `commands/usage-error-lines` |
+| next steps: `--connection` clash names every flag and where it goes, params-file `Tip:`, `--param` example, `.env` line rule, `<pgmi-meta>` expected format, `--force` when the prompt gets no input | ✓ `errors/next-step-hints` |
+| no summary line when a parameter source is refused before the deploy starts | ✓ `errors/refused-before-deploy-no-summary` |
 | `-h` is help (exit 0) on every command but deploy; an invalid `--sslmode` value = 10 | ✓ `commands/short-help-and-sslmode-value` |
 | metadata id spellings, XML leniency, fallback id; broken blocks = 10 | ✓ `commands/metadata-forms`, `commands/metadata-refusals` |
 | summary line format; `-v` elapsed prefix on notices | ✓ `notices/summary-line`, `notices/verbose-elapsed` |
@@ -155,6 +158,9 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 15a | the connection password never reaches `--json` through DETAIL, HINT or CONTEXT | ✓ `errors/diagnostics-secrets` |
 | 15b | the connection password printed in a notice, an error, `--json` or a serve answer is `***` (Rust; Go prints it), also when it came from `~/.pgpass` | ✓ `notices/secrets-redacted`, `notices/pgpass-secret-redacted` |
 | 16 | 42501 TEMPORARY guidance; wrong password; missing maintenance database; hba reject | ✓ `errors/temporary-privilege`, `errors/connection-failures`, `tls/tls-only-and-plain-servers`; 53300, 57P03 ✗ (server states a case cannot produce reliably) |
+| 16a | a connection refusal's DETAIL on stderr and in `--json` `detail`, with the GRANT CONNECT | ✓ `errors/connect-refusal-detail` |
+| 16b | a session-preparation failure says so, and the TEMPORARY GRANT names the database and role | ✓ `errors/session-preparation` |
+| 16c | `--timeout` running out while connecting keeps "raise it, or pass --timeout 0 for no limit" (exit 11) | ✓ `errors/timeout-while-connecting` |
 | 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
 | 19 | cancel request blocked by a firewall | ✗ needs a firewall between client and server; `internal/db/cancel_integration_test.go` covers it |

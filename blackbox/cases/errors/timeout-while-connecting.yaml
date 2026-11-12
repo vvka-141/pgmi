@@ -1,0 +1,15 @@
+description: a --timeout that runs out while connecting is exit 11 and says how to raise or lift the limit
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 1s]
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["^pgmi: error: the deploy exceeded --timeout 1s; raise it, or pass --timeout 0 for no limit$"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 1s, --json]
+    timeout: 30
+    expect:
+      exit: 11
+      json: {error: "the deploy exceeded --timeout 1s; raise it, or pass --timeout 0 for no limit"}

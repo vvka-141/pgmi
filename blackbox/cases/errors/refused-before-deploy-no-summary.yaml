@@ -1,0 +1,16 @@
+description: a parameter source refused before the deploy starts (a PGMI_PARAM_ with no name, a missing --params-file, keys that differ only in case) prints the error alone, with no FAILED summary line
+project:
+  files:
+    deploy.sql: SELECT 1;
+    twins.params: "a=1\nA=2\n"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_: v}
+    expect: {exit: 10, stderr: ["^pgmi: error: environment variable PGMI_PARAM_ has no parameter name"], stderr_not: ["FAILED"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{workdir}/missing.params"]
+    expect: {exit: 10, stderr: ["^pgmi: error: failed to read params file"], stderr_not: ["FAILED"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/twins.params"]
+    expect: {exit: 10, stderr: ["differ only in case"], stderr_not: ["FAILED"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_X: "1", PGMI_PARAM_x: "2"}
+    expect: {exit: 10, stderr: ["differ only in case"], stderr_not: ["FAILED"]}
