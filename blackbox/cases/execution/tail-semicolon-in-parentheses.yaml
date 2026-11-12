@@ -1,0 +1,19 @@
+description: a tail statement holding a semicolon inside parentheses (a multi-action rule) runs as one statement, as psql sends it
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE r1 (id int);
+      CREATE TABLE r2 (id int);
+      COMMIT;
+      CREATE RULE rr AS ON INSERT TO r1 DO ALSO (INSERT INTO r2 VALUES (new.id); INSERT INTO r2 VALUES (new.id + 1));
+      INSERT INTO r1 VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT string_agg(id::text, ',' ORDER BY id) FROM r2
+          rows: [["1,2"]]

@@ -187,6 +187,7 @@ pub(crate) struct Progress {
     execution: Option<Execution>,
     attempts: Vec<Tried>,
     time_used: Option<Duration>,
+    lock_holders: Vec<i32>,
 }
 
 /// One run of the deploy from the start: when it began, how long it took,
@@ -727,7 +728,8 @@ impl Steps<'_> {
             if !self.ctx.request.overwrite {
                 self.reporter.line(PREPARING);
             }
-            self.lock(&session, &spec.target_db).await?;
+            self.lock(&session, &spec.target_db, &mut st.lock_holders)
+                .await?;
             let server = st.server.insert(self.server_info(&session, spec).await?);
             execute::run(execute::Input {
                 session: &session,
@@ -1099,29 +1101,112 @@ impl Steps<'_> {
         })
     }
 
-    async fn lock(&self, session: &Session, db: &str) -> Result<()> {
-        let locked = self
-            .guard
-            .running(session, async {
-                session
-                    .client
-                    .query_typed(
-                        "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('pgmi.deploy.' || pg_catalog.current_database(), 0))",
-                        &[],
-                    )
-                    .await
-                    .and_then(|rows| rows.first().map(|r| r.try_get::<_, bool>(0)).transpose())
-                    .map_err(|e| sql_error("query the server", e))
-            })
-            .await?;
-        if locked != Some(true) {
-            return Err(Error::new(
-                Kind::Locked,
-                format!("another pgmi deployment is already running against \"{db}\""),
+    /// Takes the deploy lock. A holder that is this deploy's own earlier
+    /// session, orphaned by a connection the server has not noticed is gone,
+    /// is ended so the retry can go on (PGMI-919).
+    async fn lock(&self, session: &Session, db: &str, holders: &mut Vec<i32>) -> Result<()> {
+        let (mut locked, pid) = self.guard.running(session, try_lock(session)).await?;
+        if !locked {
+            let holder = self.guard.running(session, lock_holder(session)).await?;
+            let Some(earlier) = holder.filter(|h| holders.contains(h)) else {
+                return Err(Error::new(
+                    Kind::Locked,
+                    format!("another pgmi deployment is already running against \"{db}\""),
+                ));
+            };
+            self.reporter.line(&format!(
+                "pgmi: the deploy lock is held by this deploy's earlier session (pid {earlier}), which the server has not noticed is gone; ending it"
             ));
+            locked = self
+                .guard
+                .running(session, take_from(session, earlier))
+                .await
+                .map_err(|e| {
+                    if e.kind() != Kind::Sql {
+                        return e;
+                    }
+                    Error::new(
+                        Kind::Locked,
+                        format!(
+                            "the deploy lock against \"{db}\" is held by this deploy's earlier session (pid {earlier}), which pgmi could not end: {}",
+                            e.text()
+                        ),
+                    )
+                })?;
+            if !locked {
+                return Err(Error::new(
+                    Kind::Locked,
+                    format!(
+                        "the deploy lock against \"{db}\" is still held by this deploy's earlier session (pid {earlier}) after pgmi ended it"
+                    ),
+                ));
+            }
         }
+        holders.push(pid);
         Ok(())
     }
+}
+
+const LOCK_KEY: &str =
+    "pg_catalog.hashtextextended('pgmi.deploy.' || pg_catalog.current_database(), 0)";
+
+async fn try_lock(session: &Session) -> Result<(bool, i32)> {
+    let sql =
+        format!("SELECT pg_catalog.pg_try_advisory_lock({LOCK_KEY}), pg_catalog.pg_backend_pid()");
+    let rows = session
+        .client
+        .query_typed(&sql, &[])
+        .await
+        .map_err(|e| sql_error("query the server", e))?;
+    let row = rows
+        .first()
+        .ok_or_else(|| Error::new(Kind::Sql, "the lock query returned no row"))?;
+    let locked = row
+        .try_get(0)
+        .map_err(|e| sql_error("query the server", e))?;
+    let pid = row
+        .try_get(1)
+        .map_err(|e| sql_error("query the server", e))?;
+    Ok((locked, pid))
+}
+
+async fn lock_holder(session: &Session) -> Result<Option<i32>> {
+    let sql = format!(
+        "SELECT l.pid FROM pg_catalog.pg_locks l \
+         WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 \
+         AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()) \
+         AND ((l.classid::pg_catalog.int8 << 32) | l.objid::pg_catalog.int8) = {LOCK_KEY}"
+    );
+    let rows = session
+        .client
+        .query_typed(&sql, &[])
+        .await
+        .map_err(|e| sql_error("query the server", e))?;
+    rows.first()
+        .map(|r| r.try_get(0))
+        .transpose()
+        .map_err(|e| sql_error("query the server", e))
+}
+
+const TAKE_TRIES: u32 = 50;
+const TAKE_PAUSE: Duration = Duration::from_millis(200);
+
+async fn take_from(session: &Session, earlier: i32) -> Result<bool> {
+    session
+        .client
+        .query_typed(
+            "SELECT pg_catalog.pg_terminate_backend($1)",
+            &[(&earlier, tokio_postgres::types::Type::INT4)],
+        )
+        .await
+        .map_err(|e| sql_error("end the earlier session", e))?;
+    for _ in 0..TAKE_TRIES {
+        if try_lock(session).await?.0 {
+            return Ok(true);
+        }
+        tokio::time::sleep(TAKE_PAUSE).await;
+    }
+    Ok(false)
 }
 
 impl LoadedProject {

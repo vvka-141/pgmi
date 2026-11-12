@@ -195,6 +195,18 @@ def test_a_fatal_error_after_a_delay_ends_a_running_query(proxy):
     assert server.queries() == [b"QSELECT pg_sleep(9)\0"]
 
 
+def test_cut_client_ends_the_client_side_and_leaves_the_server_side_open(proxy):
+    p, server = proxy({"query": "pg_sleep", "do": "cut-client", "after": 0.2})
+    sock = _connect(p.port)
+    sock.sendall(_query("SELECT pg_sleep(9)"))
+    assert _message(sock)[0] == b"C"
+    _message(sock)
+    with pytest.raises((ConnectionError, OSError)):
+        _message(sock)
+    time.sleep(0.3)
+    assert [m for _, m in server.seen if m == b"EOF"] == []
+
+
 def test_freeze_answers_nothing_more_on_any_connection(proxy):
     p, server = proxy({"query": "freeze", "do": "freeze"})
     sock = _connect(p.port, timeout=0.5)

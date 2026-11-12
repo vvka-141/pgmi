@@ -11,7 +11,7 @@ TEMPLATES = ("minimal", "basic", "advanced")
 SERVER_KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
 IMPLEMENTATIONS = ("go", "rust")
 FAULT_EVENTS = ("accept", "startup", "close")
-FAULT_ACTIONS = ("reset", "freeze")
+FAULT_ACTIONS = ("reset", "cut-client", "freeze")
 SEVERITIES = ("FATAL", "PANIC", "ERROR")
 
 
@@ -271,7 +271,7 @@ def _fault(r: _Reader, value: Any, field: str) -> Fault:
         return replace(fault, action=do)
     shape = f"{field}.do"
     if not isinstance(do, dict) or not {"delay", "error"} & do.keys():
-        raise r.fail(shape, "must be reset, freeze, {delay: seconds} or {error: SQLSTATE, severity, message}")
+        raise r.fail(shape, "must be reset, cut-client, freeze, {delay: seconds} or {error: SQLSTATE, severity, message}")
     if "delay" in do:
         r.mapping(do, shape, {"delay"})
         if fault.after is not None:

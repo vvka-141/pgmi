@@ -42,6 +42,7 @@ class _Conn:
     upstream: asyncio.StreamWriter | None = None
     status: bytes = b"I"
     discard_to_sync: bytes | None = None
+    cut: bool = False
     tasks: list[asyncio.Task] = field(default_factory=list)
 
 
@@ -121,7 +122,8 @@ class Proxy:
             await self._startup(conn, reader)
         except (OSError, asyncio.IncompleteReadError):
             self._log(conn, "gone")
-            self._abort(conn)
+            if not conn.cut:
+                self._abort(conn)
 
     async def _event(self, conn: _Conn, at: str, raw: bytes, sql: str = "") -> bool:
         """Applies the first matching rule; True when the triggering message is consumed, not forwarded."""
@@ -145,6 +147,9 @@ class Proxy:
     async def _act(self, conn: _Conn, fault: Fault, raw: bytes) -> None:
         if fault.action == "reset":
             self._abort(conn)
+        elif fault.action == "cut-client":
+            conn.cut = True
+            self._abort(_Conn(conn.number, conn.client))
         elif fault.action == "freeze":
             self._frozen.set()
             await asyncio.Future()
@@ -198,7 +203,8 @@ class Proxy:
             try:
                 head = await reader.readexactly(5)
             except asyncio.IncompleteReadError:
-                await self._closing(conn, b"")
+                if not conn.cut:
+                    await self._closing(conn, b"")
                 return
             kind = head[:1]
             raw = head + await reader.readexactly(struct.unpack("!i", head[1:])[0] - 4)
@@ -237,7 +243,8 @@ class Proxy:
                 await self._hold()
                 if head[:1] == b"Z":
                     conn.status = raw[5:6]
-                conn.client.write(raw)
+                if not conn.cut:
+                    conn.client.write(raw)
         except (OSError, asyncio.IncompleteReadError):
             await self._hold()
             conn.client.close()

@@ -26,6 +26,12 @@ attempt never connects (the server refuses, cannot be reached, stays busy,
 or the sign-in gives up), pgmi fails at once with exit 11: a wrong host or
 port is reported in a second, not after the whole time box.
 
+A connection can be cut without the server noticing (a NAT or load
+balancer drops it). The old server session then still runs and still holds
+the deploy lock. The retry recognises its own earlier session, ends it and
+takes the lock, and says so on stderr. If the role may not end it, the
+retry fails with exit 15 and names that session.
+
 `--overwrite` drops and recreates the database once, before the first
 attempt. A retry runs against the recreated database; it never drops it
 again and never asks again.

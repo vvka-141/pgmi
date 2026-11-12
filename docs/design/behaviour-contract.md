@@ -328,7 +328,7 @@ The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
+Cases: `dialect/pgmiignore`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 
@@ -547,7 +547,7 @@ created, before `deploy.sql`, it is exit 1. A lock held by another session is
 waited for; `lock_timeout`, a deadlock (40P01) and a serialization failure
 (40001) are exit 13 like any SQL error, and pgmi never retries them.
 
-Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`, `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`, `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`.
+Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/tail-semicolon-in-parentheses`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`, `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`, `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`.
 
 ### Test macro
 
@@ -712,7 +712,7 @@ In the Rust binary a params file, `-` and the project `.env` are read up to
 password file over 10 MiB is not read, with a WARNING (Rust unit test
 `a_password_file_over_the_limit_is_not_read_and_warned_about`).
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`, `config/dotenv-bom`, `config/dotenv-refused-keys`.
 
 ### Terminal behaviour
 
@@ -1197,6 +1197,7 @@ warns `could not save connection` and still exits 0; Go replaces the file. An
 connecting with exit 10 (Go: 1). Both wizards draw full-screen, as Go's do.
 
 Cases: `cloud/azure-token-credentials-invalid` (the exit code),
+`cloud/azure-tenant-id-refused` (a tenant id outside letters, digits, `.` and `-`),
 `terminal/init-wizard-keeps-unparseable-yaml` (init keeps the file). The fresh
 block: `terminal/config-replace-unparseable` checks what both binaries keep;
 the replacement itself is recorded in `rust/docs/decisions/0013-yaml.md`.
@@ -1305,6 +1306,16 @@ unreachable, busy or with a sign-in that gave up, fails at once as in Go
 the first attempt; its own failure is final, and a retry never drops again
 or asks again.
 
+A retry whose deploy lock is held by an earlier attempt's own server
+session (pgmi recorded that backend's pid when it took the lock; the
+connection was cut and the server has not noticed) ends that session with
+`pg_terminate_backend`, printing `pgmi: the deploy lock is held by this
+deploy's earlier session (pid N), which the server has not noticed is
+gone; ending it`, and waits up to 10 s for the lock (PGMI-919). If the role
+may not end it, or the lock stays held, the attempt fails with exit 15 and
+a message naming that earlier session. A lock held by any other session is
+a concurrent deploy, exit 15, as before.
+
 `--timeout` is the wall-clock box for every attempt and every wait. The wait
 before attempt n+1 is `min(30 s, 1 s * 2^(n-1))` times a random factor in
 [0.8, 1.2]. A wait that would end after the deadline is not started: the run
@@ -1322,7 +1333,7 @@ and `timeUsedMs`, present once an attempt started. SIGINT or SIGTERM during
 an attempt or a wait is exit 130 at once. `retry: false` in `pgmi.yaml`
 turns it off; there is no flag.
 
-Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`.
+Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/orphaned-session-holds-lock`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`.
 
 ## Behaviour changes in 0.20
 
@@ -1339,6 +1350,8 @@ release notes take their "Behaviour changes" section from this table.
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |
 | project `.env` setting a key that locates credentials, endpoints, proxies or trust roots: `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_CONTAINER_*`, `AWS_ENDPOINT_URL*`, `AZURE_AUTHORITY_HOST`, `AZURE_FEDERATED_TOKEN_FILE`, `IDENTITY_*`, `MSI_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_*`, `DATABRICKS_CONFIG_FILE`, `DATABRICKS_HOST`, `SSL_CERT_*`, `*_PROXY` (any case) | applied | refused; the rest of the file applies and the `.env applied:` line names each refused key; the operator's own environment can still set them | owner 2026-11-12 (PGMI-921) |
 | `pgmi serve`: a deploy to a server the operator did not allow (not its environment's own `host:port`, not in `PGMI_SERVE_HOSTS`) | the operator's `PGPASSWORD`, `.pgpass` and cloud sign-in are used | none of them is used (a password typed in the tool call's connection string still is); a cloud sign-in is refused, exit 10; stderr names the server; the plain CLI is unchanged | owner 2026-11-12 (PGMI-915) |
+| Failure summary after a stop or a retry | `nothing committed` whenever the run failed | names the units committed before a stop and those an earlier attempt committed; a unit the server never answered reads `whether it committed is unknown, check the database`; `--json` adds `outcomeUnknown` and `attempts[].unitsCommitted` | owner 2026-11-12 (PGMI-911, PGMI-912) |
+| Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
 | `deploy` on a terminal with no connection from flags, environment or `pgmi.yaml` | opens the connection wizard | never interactive: exit 10, listing the ways to set a connection; `pgmi init` and `pgmi config` keep their wizards | owner 2026-11-12 (PGMI-901) |
 | Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 11 (connection failed); `--json` still shows what committed | agent 2026-11-12 (PGMI-885), owner may revisit |

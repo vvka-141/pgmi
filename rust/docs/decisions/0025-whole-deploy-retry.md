@@ -159,3 +159,11 @@ deploy.sql is rerunnable opts back in with `retry_after_commit: true` in
 never came counts as not committed here (record 0025: a lost COMMIT reply
 is found done by the next attempt). `retry: false` still turns all retrying
 off.
+
+## Changed by PGMI-919
+
+An attempt records the backend pid that took the deploy lock. When a later
+attempt finds the lock held by one of those pids, the connection was cut
+without the server noticing; the attempt ends that backend with
+`pg_terminate_backend` and polls for the lock for up to 10 s instead of
+failing as a concurrent deploy (exit 15).

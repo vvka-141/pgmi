@@ -58,8 +58,14 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start = 0;
     let mut atomic = 0usize;
+    let mut parens = 0usize;
     let mut prev_word: Option<&[u8]> = None;
     for t in &toks {
+        match t.kind {
+            TokenKind::LParen => parens += 1,
+            TokenKind::RParen => parens = parens.saturating_sub(1),
+            _ => {}
+        }
         if t.kind == TokenKind::Word {
             let w = t.text(bytes);
             if atomic == 0 {
@@ -75,7 +81,7 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
         } else if !t.is_trivia() {
             prev_word = None;
         }
-        if t.kind == TokenKind::Semicolon && atomic == 0 {
+        if t.kind == TokenKind::Semicolon && atomic == 0 && parens == 0 {
             out.push((start, t.end));
             start = t.end;
         }
@@ -359,6 +365,18 @@ mod tests {
             2
         );
         assert!(texts("-- only\n").is_empty());
+    }
+
+    #[test]
+    fn a_semicolon_inside_parentheses_does_not_end_a_tail_statement() {
+        let src = "BEGIN;\nCOMMIT;\nCREATE RULE r AS ON INSERT TO t DO ALSO (INSERT INTO u VALUES (1); INSERT INTO u VALUES (2));\nSELECT 1;\n";
+        let t = texts(src);
+        assert_eq!(t.len(), 3, "{t:?}");
+        assert!(
+            t[1].starts_with("CREATE RULE") && t[1].ends_with("(2));"),
+            "{t:?}"
+        );
+        assert_eq!(texts("BEGIN; COMMIT; SELECT ';' , (1); SELECT 2;").len(), 3);
     }
 
     #[test]

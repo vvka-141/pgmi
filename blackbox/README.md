@@ -127,13 +127,14 @@ proxy:
   - {query: head_sleep, do: {error: "57P01"}, after: 0.5}  # forward, 0.5 s later end the session
   - {query: INSERT, do: {error: "25006", severity: ERROR}} # answer in the server's place, session goes on
   - {query: pg_sleep, do: freeze, after: 0.5}         # stop answering anything, cancel requests included
+  - {query: pg_sleep, do: cut-client, after: 0.5}     # RST the client only; the server's socket stays open
   - {query: "^CREATE DATABASE", do: {delay: 6}}       # hold that query 6 s on its way to the server
   - {at: close, do: {delay: 3}}                       # the client's close reaches the server 3 s late
 ```
 
 `at` is `accept`, `startup` or `close`; `query` is a regex on the text of a
 Query or Parse message (the two are exclusive). `do` is `reset` (RST both
-sides), `freeze`, `{delay: s}` or `{error: SQLSTATE, severity, message}`
+sides), `cut-client` (RST the client; the server never learns), `freeze`, `{delay: s}` or `{error: SQLSTATE, severity, message}`
 (`FATAL` by default; `ERROR` only for a query, not with `after`). Without
 `after` the fault acts instead of forwarding the message; with it the message
 goes through first. `times` limits a rule to its first matches; `step` to one

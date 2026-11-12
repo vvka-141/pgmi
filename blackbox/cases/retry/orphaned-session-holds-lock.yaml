@@ -1,0 +1,23 @@
+description: Rust only (contract "Whole-deployment retry"). The client side of the first attempt is cut while the server never learns it (a NAT or load-balancer drop), so the orphaned backend still runs the head and holds the deploy lock; the retry ends pgmi's own earlier session instead of failing with exit 15, and only the retry commits
+impl: rust
+proxy:
+  - {query: head_sleep, do: cut-client, after: 0.5, times: 1}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+      SELECT pg_sleep(20) AS head_sleep;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --timeout, 40s]
+    timeout: 60
+    expect:
+      exit: 0
+      stderr:
+        - "^pgmi: attempt 1 failed \\(connection lost\\); retrying in"
+        - "^pgmi: the deploy lock is held by this deploy's earlier session \\(pid [0-9]+\\), which the server has not noticed is gone; ending it"
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
