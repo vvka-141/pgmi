@@ -2,19 +2,19 @@ description: a params file or a project .env over PGMI_MAX_FILE_SIZE is read who
 project:
   files:
     deploy.sql: "SELECT 1;"
-    big.env: "a=0123456789abcdef\n"
+    .big.env: "a=0123456789abcdef\n"
 steps:
-  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/big.env"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/.big.env"]
     env: {PGMI_MAX_FILE_SIZE: "16"}
     expect:
       exit: 0
-      rust: {exit: 10, stderr: ["failed to read params file .*big.env: exceeds 16-byte limit \\(override via PGMI_MAX_FILE_SIZE\\)"]}
+      rust: {exit: 10, stderr: ["failed to read params file .*\\.big\\.env: exceeds 16-byte limit \\(override via PGMI_MAX_FILE_SIZE\\)"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "-"]
     env: {PGMI_MAX_FILE_SIZE: "16"}
     stdin: "a=0123456789abcdef\n"
     expect:
       exit: 0
       rust: {exit: 10, stderr: ["failed to read params file - \\(stdin\\): exceeds 16-byte limit"]}
-  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/big.env"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, "{project}/.big.env"]
     env: {PGMI_MAX_FILE_SIZE: "19"}
     expect: {exit: 0}
