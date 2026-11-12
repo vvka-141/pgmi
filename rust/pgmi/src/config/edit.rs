@@ -73,10 +73,9 @@ pub(crate) fn set_connection(text: &str, values: &[(&str, Option<String>)]) -> R
                 if !section.contains_key(key) {
                     added.push(key);
                 }
-                if v.parse::<u16>().is_ok() && key == "port" {
-                    section.set(key, v.parse::<i64>().unwrap_or_default());
-                } else {
-                    section.set(key, v.as_str());
+                match v.parse::<u16>() {
+                    Ok(port) if key == "port" => section.set(key, i64::from(port)),
+                    _ => section.set(key, v.as_str()),
                 }
             }
             None => {
