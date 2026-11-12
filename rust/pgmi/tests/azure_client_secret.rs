@@ -39,7 +39,7 @@ fn a_service_principal_secret_signs_in_and_its_token_is_the_password() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(11), "{stderr}");
     assert!(
-        stderr.contains("recorded by the black-box recorder"),
+        stderr.contains("the Azure Entra ID token was refused for user \"sp@tenant\""),
         "{stderr}"
     );
     let https = std::fs::read_to_string(fakes.get("{fake_https_log}")).unwrap();

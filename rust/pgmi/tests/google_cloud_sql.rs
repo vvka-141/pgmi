@@ -62,7 +62,7 @@ impl Run {
     fn reached_the_instance(&self) {
         assert_eq!(self.code, Some(11), "{}", self.stderr);
         assert!(
-            self.stderr.contains("recorded by the black-box recorder"),
+            self.stderr.contains("the Google IAM token was refused"),
             "{}",
             self.stderr
         );

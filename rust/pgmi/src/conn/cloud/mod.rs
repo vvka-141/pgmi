@@ -55,7 +55,7 @@ impl Provider {
         match self {
             Provider::Azure => "Azure Entra ID",
             Provider::Aws => "AWS IAM",
-            Provider::Google => "Google Cloud SQL IAM",
+            Provider::Google => "Google IAM",
             Provider::Databricks => "Databricks Lakebase",
         }
     }
