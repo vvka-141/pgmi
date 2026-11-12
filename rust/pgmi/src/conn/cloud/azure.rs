@@ -1,5 +1,6 @@
+use std::future::Future;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use azure_core::credentials::{Secret, TokenCredential};
@@ -180,10 +181,70 @@ impl std::error::Error for CredentialError {
 
 /// Signs in to Entra ID for one audience; each connection asks again unless
 /// the last token has more than five minutes left (Go asks per connection).
+/// The first credential of the chain that gives a token is kept, so every
+/// later token comes from the same identity, as Go's `DefaultAzureCredential`
+/// does.
 pub(crate) struct Signin {
-    pub(crate) request: Options,
-    pub(crate) env: Env,
-    pub(crate) audience: Audience,
+    request: Options,
+    env: Env,
+    audience: Audience,
+    pinned: OnceLock<Kind>,
+}
+
+impl Signin {
+    pub(crate) fn new(request: Options, env: Env, audience: Audience) -> Self {
+        Signin {
+            request,
+            env,
+            audience,
+            pinned: OnceLock::new(),
+        }
+    }
+
+    async fn sign_in<G, F>(&self, ids: &Ids, get: G) -> Result<Fetched>
+    where
+        G: Fn(Kind) -> F,
+        F: Future<Output = std::result::Result<Fetched, CredentialError>>,
+    {
+        if let Some(&kind) = self.pinned.get() {
+            return get(kind).await.map_err(|e| {
+                Error::connection(format!("failed to acquire Azure token: {}", kind.name()))
+                    .with_source(e)
+            });
+        }
+        let (kinds, chain) = plan(ids, &self.env)?;
+        let probing = chain
+            && self.env.non_empty("IDENTITY_ENDPOINT")?.is_none()
+            && self.env.non_empty("MSI_ENDPOINT")?.is_none();
+        let mut failures = Vec::new();
+        for kind in kinds {
+            let attempt = get(kind);
+            let result = if kind == Kind::Managed && probing {
+                match tokio::time::timeout(Duration::from_secs(2), attempt).await {
+                    Ok(r) => r,
+                    Err(_) => Err(CredentialError::NoManagedIdentityResponse),
+                }
+            } else {
+                attempt.await
+            };
+            match result {
+                Ok(t) => {
+                    let _ = self.pinned.set(kind);
+                    return Ok(t);
+                }
+                Err(e) => failures.push(format!("\t{}: {e}", kind.name())),
+            }
+        }
+        let head = if chain {
+            "DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:"
+        } else {
+            "failed to acquire a token:"
+        };
+        Err(Error::connection(format!(
+            "failed to acquire Azure token: {head}\n{}",
+            failures.join("\n")
+        )))
+    }
 }
 
 impl std::fmt::Debug for Signin {
@@ -193,46 +254,17 @@ impl std::fmt::Debug for Signin {
 }
 
 impl Mint for Signin {
+    type Value = crate::error::Secret;
+
     async fn mint(&self) -> Result<Fetched> {
-        token(&self.request, &self.env, self.audience).await
+        let ids = ids(&self.request, &self.env)?;
+        self.sign_in(&ids, |kind| get(kind, &ids, &self.env, self.audience))
+            .await
     }
 }
 
 fn expiry(unix_seconds: i64) -> Option<jiff::Timestamp> {
     jiff::Timestamp::from_second(unix_seconds).ok()
-}
-
-pub(crate) async fn token(req: &Options, env: &Env, audience: Audience) -> Result<Fetched> {
-    let ids = ids(req, env)?;
-    let (kinds, chain) = plan(&ids, env)?;
-    let probing = chain
-        && env.non_empty("IDENTITY_ENDPOINT")?.is_none()
-        && env.non_empty("MSI_ENDPOINT")?.is_none();
-    let mut failures = Vec::new();
-    for kind in kinds {
-        let attempt = get(kind, &ids, env, audience);
-        let result = if kind == Kind::Managed && probing {
-            match tokio::time::timeout(Duration::from_secs(2), attempt).await {
-                Ok(r) => r,
-                Err(_) => Err(CredentialError::NoManagedIdentityResponse),
-            }
-        } else {
-            attempt.await
-        };
-        match result {
-            Ok(t) => return Ok(t),
-            Err(e) => failures.push(format!("\t{}: {e}", kind.name())),
-        }
-    }
-    let head = if chain {
-        "DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:"
-    } else {
-        "failed to acquire a token:"
-    };
-    Err(Error::connection(format!(
-        "failed to acquire Azure token: {head}\n{}",
-        failures.join("\n")
-    )))
 }
 
 async fn get(
@@ -311,7 +343,7 @@ async fn get(
         .get_token(&[audience.scope], None)
         .await
         .map(|t| Fetched {
-            token: crate::error::Secret::from(t.token.secret()),
+            value: crate::error::Secret::from(t.token.secret()),
             expires: expiry(t.expires_on.unix_timestamp()),
         })
         .map_err(CredentialError::Token)
@@ -383,7 +415,7 @@ async fn powershell(
         .and_then(|t| t.as_str())
         .ok_or(CredentialError::PowerShellNoToken)?;
     Ok(Fetched {
-        token: crate::error::Secret::from(token),
+        value: crate::error::Secret::from(token),
         expires: value
             .get("ExpiresOn")
             .and_then(serde_json::Value::as_i64)
@@ -621,5 +653,90 @@ mod certificate {
                 .to_string();
             assert!(wrong.contains("PKCS#12"), "{wrong}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    fn signin() -> Signin {
+        Signin::new(
+            Options::default(),
+            Env::from_pairs(&[("IDENTITY_ENDPOINT", "http://127.0.0.1:1")]),
+            POSTGRES,
+        )
+    }
+
+    async fn sign_in(s: &Signin, tried: &Mutex<Vec<Kind>>, works: &[Kind]) -> Result<Fetched> {
+        let ids = ids(&s.request, &s.env).unwrap();
+        s.sign_in(&ids, |kind| {
+            tried.lock().unwrap().push(kind);
+            let ok = works.contains(&kind);
+            async move {
+                if ok {
+                    Ok(Fetched {
+                        value: crate::error::Secret::from(kind.name()),
+                        expires: None,
+                    })
+                } else {
+                    Err(CredentialError::PowerShellNoToken)
+                }
+            }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn every_token_after_the_first_comes_from_the_credential_that_worked() {
+        let s = signin();
+        let tried = Mutex::new(Vec::new());
+        let first = sign_in(&s, &tried, &[Kind::Cli, Kind::DeveloperCli])
+            .await
+            .unwrap();
+        assert_eq!(first.value.expose(), "AzureCLICredential");
+        assert_eq!(*tried.lock().unwrap(), [Kind::Managed, Kind::Cli]);
+        tried.lock().unwrap().clear();
+        let again = sign_in(&s, &tried, &[Kind::Managed, Kind::Cli])
+            .await
+            .unwrap();
+        assert_eq!(again.value.expose(), "AzureCLICredential");
+        assert_eq!(*tried.lock().unwrap(), [Kind::Cli]);
+    }
+
+    #[tokio::test]
+    async fn a_pinned_credential_that_fails_is_not_replaced_by_another_identity() {
+        let s = signin();
+        let tried = Mutex::new(Vec::new());
+        sign_in(&s, &tried, &[Kind::Cli]).await.unwrap();
+        tried.lock().unwrap().clear();
+        let e = sign_in(&s, &tried, &[Kind::Managed]).await.unwrap_err();
+        assert_eq!(*tried.lock().unwrap(), [Kind::Cli]);
+        assert_eq!(e.exit_code(), 11);
+        assert_eq!(
+            e.text(),
+            "failed to acquire Azure token: AzureCLICredential: Azure PowerShell printed no token"
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_pinned_while_no_credential_works() {
+        let s = signin();
+        let tried = Mutex::new(Vec::new());
+        let e = sign_in(&s, &tried, &[]).await.unwrap_err();
+        assert!(
+            e.text()
+                .starts_with("failed to acquire Azure token: DefaultAzureCredential:"),
+            "{}",
+            e.text()
+        );
+        tried.lock().unwrap().clear();
+        sign_in(&s, &tried, &[Kind::DeveloperCli]).await.unwrap();
+        assert_eq!(
+            *tried.lock().unwrap(),
+            [Kind::Managed, Kind::Cli, Kind::DeveloperCli]
+        );
     }
 }

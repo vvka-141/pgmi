@@ -1,42 +1,55 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub(crate) struct Lookup {
-    pub(crate) password: Option<String>,
-    pub(crate) warning: Option<String>,
+use crate::error::Secret;
+
+/// What a password file holds for one connection.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Lookup {
+    Found(Secret),
+    NotFound,
+    TooOpen(PathBuf),
 }
 
-pub(crate) fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Lookup {
-    let none = Lookup {
-        password: None,
-        warning: None,
-    };
-    let Ok(meta) = std::fs::metadata(path) else {
-        return none;
-    };
-    if !meta.is_file() {
-        return none;
-    }
-    if group_or_world(&meta) {
-        return Lookup {
-            password: None,
-            warning: Some(format!(
+impl Lookup {
+    /// libpq's warning for a file it refuses to read.
+    pub(crate) fn warning(&self) -> Option<String> {
+        match self {
+            Lookup::TooOpen(path) => Some(format!(
                 "WARNING: password file \"{}\" has group or world access; permissions should be u=rw (0600) or less",
                 path.display()
             )),
-        };
+            Lookup::Found(_) | Lookup::NotFound => None,
+        }
+    }
+
+    pub(crate) fn password(self) -> Option<Secret> {
+        match self {
+            Lookup::Found(p) => Some(p),
+            Lookup::NotFound | Lookup::TooOpen(_) => None,
+        }
+    }
+}
+
+pub(crate) fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Lookup {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Lookup::NotFound;
+    };
+    if !meta.is_file() {
+        return Lookup::NotFound;
+    }
+    if group_or_world(&meta) {
+        return Lookup::TooOpen(path.to_path_buf());
     }
     let Ok(text) = std::fs::read_to_string(path) else {
-        return none;
+        return Lookup::NotFound;
     };
     let host = if host.starts_with('/') {
         "localhost"
     } else {
         host
     };
-    Lookup {
-        password: find(&text, host, &port.to_string(), db, user),
-        warning: None,
-    }
+    find(&text, host, &port.to_string(), db, user)
+        .map_or(Lookup::NotFound, |p| Lookup::Found(Secret::from(p)))
 }
 
 #[cfg(unix)]
@@ -267,6 +280,45 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "stale");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn lookup_tells_a_found_password_from_a_missing_file_and_a_missing_line() {
+        let dir = crate::testdir::TempDir::new("pgpass-lookup");
+        let path = dir.join("pgpass.conf");
+        assert_eq!(lookup(&path, "h", 5432, "d", "u"), Lookup::NotFound);
+        save(&path, "h", 5432, &["d"], "u", "s3cret").unwrap();
+        let found = lookup(&path, "h", 5432, "d", "u");
+        assert_eq!(found.warning(), None);
+        assert_eq!(
+            found.password().as_ref().map(Secret::expose),
+            Some("s3cret")
+        );
+        assert_eq!(lookup(&path, "h", 5432, "d", "other"), Lookup::NotFound);
+        assert_eq!(
+            format!("{:?}", lookup(&path, "h", 5432, "d", "u")),
+            "Found([redacted])"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_others_can_read_is_refused_with_libpqs_warning() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testdir::TempDir::new("pgpass-open");
+        let path = dir.join("pgpass.conf");
+        save(&path, "h", 5432, &["d"], "u", "s3cret").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let refused = lookup(&path, "h", 5432, "d", "u");
+        assert_eq!(refused, Lookup::TooOpen(path.clone()));
+        assert_eq!(
+            refused.warning().unwrap(),
+            format!(
+                "WARNING: password file \"{}\" has group or world access; permissions should be u=rw (0600) or less",
+                path.display()
+            )
+        );
+        assert_eq!(refused.password(), None);
     }
 
     #[test]

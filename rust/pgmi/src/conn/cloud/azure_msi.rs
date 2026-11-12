@@ -258,7 +258,7 @@ pub(crate) async fn token(
         .and_then(|v| v.get("access_token")?.as_str())
         .ok_or(MsiError::NoToken(source))?;
     Ok(Fetched {
-        token: Secret::from(token),
+        value: Secret::from(token),
         expires: value.as_ref().and_then(expires_on),
     })
 }

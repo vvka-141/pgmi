@@ -7,23 +7,26 @@ use crate::error::{Result, Secret};
 
 const REFRESH_MARGIN: SignedDuration = SignedDuration::from_mins(5);
 
-/// A sign-in token and when it expires, if its issuer said.
-pub(crate) struct Fetched {
-    pub(crate) token: Secret,
+/// A sign-in credential (a token by default) and when it expires, if its
+/// issuer said.
+#[derive(Debug)]
+pub(crate) struct Fetched<T = Secret> {
+    pub(crate) value: T,
     pub(crate) expires: Option<Timestamp>,
 }
 
-/// Where a provider's tokens come from.
+/// Where a provider's credentials come from.
 pub(crate) trait Mint: Send + Sync {
-    fn mint(&self) -> impl Future<Output = Result<Fetched>> + Send;
+    type Value: Clone + Send + Sync;
+    fn mint(&self) -> impl Future<Output = Result<Fetched<Self::Value>>> + Send;
 }
 
-/// A provider's token for each connection: the last one while it has more
-/// than five minutes left, a new one otherwise (always, when its expiry is
-/// unknown).
-pub(crate) struct Renewing<M> {
+/// A provider's credential for each connection: the last one while it has
+/// more than five minutes left, a new one otherwise (always, when its expiry
+/// is unknown).
+pub(crate) struct Renewing<M: Mint> {
     mint: M,
-    current: Mutex<Option<Fetched>>,
+    current: Mutex<Option<Fetched<M::Value>>>,
 }
 
 pub(crate) fn fresh(expires: Option<Timestamp>, now: Timestamp) -> bool {
@@ -46,29 +49,29 @@ impl<M: Mint> Renewing<M> {
         }
     }
 
-    pub(crate) async fn password(&self) -> Result<String> {
-        self.password_at(Timestamp::now()).await
+    pub(crate) async fn current(&self) -> Result<M::Value> {
+        self.current_at(Timestamp::now()).await
     }
 
-    async fn password_at(&self, now: Timestamp) -> Result<String> {
+    async fn current_at(&self, now: Timestamp) -> Result<M::Value> {
         let cached = self.current.lock().ok().and_then(|c| {
             c.as_ref()
                 .filter(|c| fresh(c.expires, now))
-                .map(|c| c.token.expose().to_string())
+                .map(|c| c.value.clone())
         });
         match cached {
-            Some(t) => Ok(t),
+            Some(v) => Ok(v),
             None => self.renew().await,
         }
     }
 
-    async fn renew(&self) -> Result<String> {
+    async fn renew(&self) -> Result<M::Value> {
         let fetched = self.mint.mint().await?;
-        let token = fetched.token.expose().to_string();
+        let value = fetched.value.clone();
         if let Ok(mut c) = self.current.lock() {
             *c = Some(fetched);
         }
-        Ok(token)
+        Ok(value)
     }
 
     #[cfg(test)]
@@ -77,7 +80,7 @@ impl<M: Mint> Renewing<M> {
     }
 
     #[cfg(test)]
-    pub(crate) fn holding(mint: M, fetched: Fetched) -> Self {
+    pub(crate) fn holding(mint: M, fetched: Fetched<M::Value>) -> Self {
         let r = Self::idle(mint);
         if let Ok(mut c) = r.current.lock() {
             *c = Some(fetched);
@@ -86,7 +89,7 @@ impl<M: Mint> Renewing<M> {
     }
 }
 
-impl<M: std::fmt::Debug> std::fmt::Debug for Renewing<M> {
+impl<M: Mint + std::fmt::Debug> std::fmt::Debug for Renewing<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.mint.fmt(f)
     }
@@ -104,10 +107,11 @@ mod tests {
     }
 
     impl Mint for Counting {
+        type Value = Secret;
         fn mint(&self) -> impl Future<Output = Result<Fetched>> + Send {
             let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             std::future::ready(Ok(Fetched {
-                token: Secret::from(format!("token-{n}")),
+                value: Secret::from(format!("token-{n}")),
                 expires: self.lifetime.map(|l| self.now + l),
             }))
         }
@@ -138,13 +142,19 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(r.password_at(now).await.unwrap(), "token-1");
+        assert_eq!(r.current_at(now).await.unwrap().expose(), "token-1");
         assert_eq!(
-            r.password_at(at("2026-11-11T10:50:00Z")).await.unwrap(),
+            r.current_at(at("2026-11-11T10:50:00Z"))
+                .await
+                .unwrap()
+                .expose(),
             "token-1"
         );
         assert_eq!(
-            r.password_at(at("2026-11-11T11:30:00Z")).await.unwrap(),
+            r.current_at(at("2026-11-11T11:30:00Z"))
+                .await
+                .unwrap()
+                .expose(),
             "token-2"
         );
     }
@@ -159,8 +169,8 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(r.password_at(now).await.unwrap(), "token-2");
-        assert_eq!(r.password_at(now).await.unwrap(), "token-3");
+        assert_eq!(r.current_at(now).await.unwrap().expose(), "token-2");
+        assert_eq!(r.current_at(now).await.unwrap().expose(), "token-3");
         assert_eq!(r.mint_source().calls.load(Ordering::SeqCst), 3);
     }
 }

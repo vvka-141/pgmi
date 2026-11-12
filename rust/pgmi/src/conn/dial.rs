@@ -13,6 +13,7 @@ use tokio_postgres::config::{
 use tokio_postgres::error::DbError;
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 
+use super::cloud;
 use super::pgpass;
 use super::resolve::{
     ChannelBinding, LoadBalanceHosts, Spec, SslMode, SslNegotiation, TargetSessionAttrs,
@@ -21,7 +22,7 @@ use super::retry::{self, Cause};
 use super::socket::Tcp;
 use super::tap::{self, Start, Tap, TapConnect};
 use super::tls::{self, Connect};
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Secret};
 use crate::output::{Notice, Severity};
 use rustls::ClientConfig;
 
@@ -73,7 +74,7 @@ impl AsyncWrite for Stream {
 
 pub(crate) type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 pub(crate) type LogSink = Arc<dyn Fn(String) + Send + Sync>;
-pub(crate) type SecretSink = Arc<dyn Fn(&str) + Send + Sync>;
+pub(crate) type SecretSink = Arc<dyn Fn(&Secret) + Send + Sync>;
 
 pub(crate) struct Session {
     pub(crate) client: Client,
@@ -107,7 +108,7 @@ impl Drop for Session {
 enum Peer {
     Tcp(std::net::SocketAddr),
     Socket(String),
-    Google(crate::conn::cloud::Token),
+    Google(Arc<cloud::CloudSql>),
 }
 
 pub(crate) fn notice_of(db: &DbError) -> Notice {
@@ -148,10 +149,7 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
         Peer::Socket(path) => Err(std::io::Error::other(format!(
             "Unix sockets are not supported here: {path}"
         ))),
-        Peer::Google(token) => match token.google() {
-            Some(g) => Ok(Stream::CloudSql(Box::new(g.dial(tcp).await?))),
-            None => Err(std::io::Error::other("no Cloud SQL dialer")),
-        },
+        Peer::Google(session) => Ok(Stream::CloudSql(Box::new(session.dial(tcp).await?))),
     }
 }
 
@@ -360,8 +358,6 @@ struct Attempt<'a> {
 
 async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     let spec = a.spec;
-    let google = spec.token.as_ref().and_then(|t| t.google()).cloned();
-    let unix = a.host.starts_with('/') || google.is_some();
     let mut config = Config::new();
     config
         .user(&spec.user)
@@ -371,31 +367,31 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
         .passfile
         .clone()
         .or_else(|| spec.pg_files.as_ref().map(|f| f.pgpass.clone()));
-    let token = match &spec.token {
-        Some(t) => Some(
-            t.password(a.name, a.port, &spec.user)
+    let (token, cloud_sql) = match &spec.token {
+        Some(t) => {
+            let login = t
+                .login(a.name, a.port, &spec.user)
                 .await
-                .map_err(|e| DialFailure::Fatal(e.to_string()))?,
-        ),
-        None => None,
+                .map_err(|e| DialFailure::Fatal(e.to_string()))?;
+            (Some(login.password), login.cloud_sql)
+        }
+        None => (None, None),
     };
-    let password = match token.or_else(|| spec.password.as_ref().map(|p| p.expose().to_string())) {
+    let unix = a.host.starts_with('/') || cloud_sql.is_some();
+    let password = match token.or_else(|| spec.password.clone()) {
         Some(p) => Some(p),
-        None => match &passfile {
-            Some(path) => {
-                let found = pgpass::lookup(path, a.name, a.port, a.db, &spec.user);
-                if let Some(w) = found.warning {
-                    (a.log)(w);
-                }
-                found.password
+        None => passfile.as_ref().and_then(|path| {
+            let found = pgpass::lookup(path, a.name, a.port, a.db, &spec.user);
+            if let Some(w) = found.warning() {
+                (a.log)(w);
             }
-            None => None,
-        },
+            found.password()
+        }),
     };
     let no_password = password.is_none();
     if let Some(p) = &password {
         (a.secret)(p);
-        config.password(p);
+        config.password(p.expose());
     }
     let mut options = spec.options.clone().unwrap_or_default();
     if let Some(tz) = &spec.timezone {
@@ -440,9 +436,9 @@ async fn attempt(a: Attempt<'_>) -> std::result::Result<Session, DialFailure> {
     };
     let version = Arc::new(Mutex::new(None));
     let run = async {
-        let opened = match &spec.token {
-            Some(token) if google.is_some() => {
-                let peer = Peer::Google(token.clone());
+        let opened = match &cloud_sql {
+            Some(session) => {
+                let peer = Peer::Google(session.clone());
                 dial(&peer, &spec.tcp).await.map(|s| (s, peer))
             }
             _ => open(a.host, a.port, &spec.tcp).await,
@@ -681,7 +677,7 @@ impl Dialer {
             balance(&mut endpoints, spec.load_balance_hosts);
             for endpoint in endpoints {
                 let (host, port) = (endpoint.name.as_str(), endpoint.port);
-                let resolved = if spec.token.as_ref().and_then(|t| t.google()).is_some() {
+                let resolved = if spec.token.as_ref().is_some_and(cloud::Token::cloud_sql) {
                     Ok(vec![host.to_string()])
                 } else if let Some(addr) = endpoint.addr {
                     Ok(vec![addr.to_string()])
@@ -755,7 +751,7 @@ impl Dialer {
 
 fn needs_tls(spec: &Spec) -> bool {
     spec.sslmode() != SslMode::Disable
-        && spec.token.as_ref().and_then(|t| t.google()).is_none()
+        && !spec.token.as_ref().is_some_and(cloud::Token::cloud_sql)
         && spec
             .hosts
             .endpoints()

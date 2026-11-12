@@ -6,12 +6,14 @@ mod google;
 mod http;
 mod renew;
 
+pub(crate) use google::Session as CloudSql;
+
 use std::sync::Arc;
 
 use crate::config::yaml::ProjectConfig;
 use crate::conn::resolve::{Spec, SslMode};
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Secret};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Provider {
@@ -54,16 +56,32 @@ pub(crate) struct Options {
 #[derive(Clone)]
 pub(crate) enum Token {
     #[cfg(test)]
-    Fixed(Provider, crate::error::Secret),
+    Fixed(Provider, Secret),
     Azure(Arc<renew::Renewing<azure::Signin>>),
     Aws(Arc<aws::Signer>),
-    Google(Arc<google::Dialer>),
+    Google(Arc<renew::Renewing<google::Signin>>),
     Databricks(Arc<databricks::Lakebase>),
 }
 
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Token({})", self.provider().label())
+    }
+}
+
+/// What one connection presents: the password, and for Cloud SQL the
+/// session its socket is opened with.
+pub(crate) struct Login {
+    pub(crate) password: Secret,
+    pub(crate) cloud_sql: Option<Arc<google::Session>>,
+}
+
+impl Login {
+    fn password(password: Secret) -> Self {
+        Login {
+            password,
+            cloud_sql: None,
+        }
     }
 }
 
@@ -104,27 +122,41 @@ impl Token {
         }
     }
 
-    pub(crate) async fn password(
+    /// Signs in for one connection, renewing an expired credential first.
+    pub(crate) async fn login(
         &self,
         host: &str,
         port: u16,
         user: &str,
-    ) -> std::result::Result<String, TokenError> {
+    ) -> std::result::Result<Login, TokenError> {
         match self {
             #[cfg(test)]
-            Token::Fixed(_, t) => Ok(t.expose().to_string()),
-            Token::Azure(a) => a.password().await.map_err(TokenError::SignIn),
-            Token::Aws(s) => s.token(host, port, user).map_err(TokenError::Aws),
-            Token::Google(d) => Ok(d.password()),
-            Token::Databricks(l) => l.password().await.map_err(TokenError::SignIn),
+            Token::Fixed(_, t) => Ok(Login::password(t.clone())),
+            Token::Azure(a) => a
+                .current()
+                .await
+                .map(Login::password)
+                .map_err(TokenError::SignIn),
+            Token::Aws(s) => s.token(host, port, user).await.map(Login::password),
+            Token::Google(g) => {
+                let session = g.current().await.map_err(TokenError::SignIn)?;
+                Ok(Login {
+                    password: session.password().clone(),
+                    cloud_sql: Some(session),
+                })
+            }
+            Token::Databricks(l) => l
+                .current()
+                .await
+                .map(Login::password)
+                .map_err(TokenError::SignIn),
         }
     }
 
-    pub(crate) fn google(&self) -> Option<&Arc<google::Dialer>> {
-        match self {
-            Token::Google(d) => Some(d),
-            _ => None,
-        }
+    /// Whether connections go through the Cloud SQL dialer instead of the
+    /// host and port.
+    pub(crate) fn cloud_sql(&self) -> bool {
+        matches!(self, Token::Google(_))
     }
 }
 
@@ -221,15 +253,15 @@ pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &En
 pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
-        Provider::Azure => renew::Renewing::start(azure::Signin {
-            request: req.clone(),
-            env: env.clone(),
-            audience: azure::POSTGRES,
-        })
+        Provider::Azure => renew::Renewing::start(azure::Signin::new(
+            req.clone(),
+            env.clone(),
+            azure::POSTGRES,
+        ))
         .await
         .map(|a| Token::Azure(Arc::new(a))),
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
-        Provider::Google => google::dialer(req, env)
+        Provider::Google => renew::Renewing::start(google::Signin::new(req, env)?)
             .await
             .map(|d| Token::Google(Arc::new(d))),
         Provider::Databricks => databricks::lakebase(req, env)

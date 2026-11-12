@@ -780,7 +780,7 @@ impl Steps<'_> {
             log: Arc::new(move |line: String| {
                 line_reporter.line(&redact(&line, &line_secrets.list()));
             }),
-            secret: Arc::new(move |secret: &str| found.insert(secret)),
+            secret: Arc::new(move |secret: &crate::error::Secret| found.insert(secret.expose())),
         }
     }
 

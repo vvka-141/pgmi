@@ -321,20 +321,20 @@ pub(crate) type Lakebase = Renewing<Signin>;
 /// The workspace sign-in that mints Lakebase credentials.
 pub(crate) struct Signin {
     settings: Settings,
-    request: Options,
-    env: Env,
+    azure: azure::Signin,
 }
 
 pub(crate) async fn lakebase(req: &Options, env: &Env) -> Result<Lakebase> {
     Renewing::start(Signin {
         settings: settings(req, env)?,
-        request: req.clone(),
-        env: env.clone(),
+        azure: azure::Signin::new(req.clone(), env.clone(), azure::DATABRICKS),
     })
     .await
 }
 
 impl Mint for Signin {
+    type Value = Secret;
+
     async fn mint(&self) -> Result<Fetched> {
         let bearer = self.bearer().await?;
         credential(&self.settings, &bearer).await
@@ -352,9 +352,11 @@ impl Signin {
                     return m2m(&s.host, client_id, secret).await;
                 }
                 Route::Cli => cli(s).await.map_err(|e| e.to_string()),
-                Route::Azure => azure::token(&self.request, &self.env, azure::DATABRICKS)
+                Route::Azure => self
+                    .azure
+                    .mint()
                     .await
-                    .map(|f| f.token)
+                    .map(|f| f.value)
                     .map_err(|e| e.text()),
             };
             match result {
@@ -588,7 +590,7 @@ fn parse_credential(body: &str) -> std::result::Result<Fetched, AnswerError> {
         None => None,
     };
     Ok(Fetched {
-        token: Secret::from(token),
+        value: Secret::from(token),
         expires,
     })
 }
@@ -871,7 +873,7 @@ mod tests {
         let c =
             parse_credential(r#"{"token":"eyJ.a.b","expire_time":"2026-11-11T10:59:59.123456Z"}"#)
                 .unwrap();
-        assert_eq!(c.token.expose(), "eyJ.a.b");
+        assert_eq!(c.value.expose(), "eyJ.a.b");
         assert_eq!(
             c.expires,
             Some("2026-11-11T10:59:59.123456Z".parse().unwrap())
@@ -937,13 +939,12 @@ mod tests {
                     },
                 ],
             },
-            request: Options::default(),
-            env: Env::default(),
+            azure: azure::Signin::new(Options::default(), Env::default(), azure::DATABRICKS),
         };
         let source = Lakebase::holding(
             signin,
             Fetched {
-                token: Secret::from("lakebase-secret"),
+                value: Secret::from("lakebase-secret"),
                 expires: None,
             },
         );

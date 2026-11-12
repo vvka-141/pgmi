@@ -12,26 +12,30 @@ use serde::Deserialize;
 
 use super::Options;
 use super::http::client;
+use super::renew::{Fetched, Mint};
 use crate::conn::socket::Tcp;
 use crate::conn::tls::Names;
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::{Error, Kind, Result, Secret};
 
 const ADMIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.admin";
 const LOGIN_SCOPE: &str = "https://www.googleapis.com/auth/sqlservice.login";
 const PORT: u16 = 3307;
 const ADC_FILE: &str = "application_default_credentials.json";
 
-pub(crate) struct Dialer {
+/// A Cloud SQL connection's credentials: the instance address, the TLS
+/// configuration with the ephemeral client certificate, and the IAM login
+/// token that is the password.
+pub(crate) struct Session {
     address: String,
     config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
-    login_token: String,
+    login_token: Secret,
 }
 
-impl Dialer {
-    pub(crate) fn password(&self) -> String {
-        self.login_token.clone()
+impl Session {
+    pub(crate) fn password(&self) -> &Secret {
+        &self.login_token
     }
 
     pub(crate) async fn dial(
@@ -46,8 +50,97 @@ impl Dialer {
     }
 }
 
-fn failed(e: impl std::fmt::Display) -> Error {
-    Error::connection(format!("failed to create Cloud SQL dialer: {e}"))
+/// The step of creating a Cloud SQL session that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    ConnectSettings,
+    GenerateEphemeralCert,
+    RsaKey,
+    EphemeralCertificate,
+    ServerCa,
+    Tls,
+    ServerName,
+}
+
+impl std::fmt::Display for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Step::ConnectSettings => "connectSettings",
+            Step::GenerateEphemeralCert => "generateEphemeralCert",
+            Step::RsaKey => "RSA key",
+            Step::EphemeralCertificate => "ephemeral certificate",
+            Step::ServerCa => "server CA",
+            Step::Tls => "TLS",
+            Step::ServerName => "server name",
+        })
+    }
+}
+
+/// Why the Cloud SQL dialer could not be created.
+#[derive(Debug)]
+pub(crate) enum DialerError {
+    NoDefaultCredentials,
+    Credentials(google_cloud_auth::build_errors::Error),
+    AccessToken(google_cloud_auth::errors::CredentialsError),
+    NoPublicIp(String),
+    NoServerCa,
+    KeyTask(tokio::task::JoinError),
+    Failed {
+        step: Step,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+impl std::fmt::Display for DialerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DialerError::NoDefaultCredentials => f.write_str(
+                "failed to create default credentials: credentials: could not find default credentials. See https://cloud.google.com/docs/authentication/external/set-up-adc for more information",
+            ),
+            DialerError::Credentials(_) => f.write_str("failed to create default credentials"),
+            DialerError::AccessToken(_) => f.write_str("failed to get an access token"),
+            DialerError::NoPublicIp(instance) => {
+                write!(f, "instance {instance} has no public IP address")
+            }
+            DialerError::NoServerCa => f.write_str("connectSettings has no server CA certificate"),
+            DialerError::KeyTask(_) => Step::RsaKey.fmt(f),
+            DialerError::Failed { step, .. } => step.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for DialerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DialerError::Credentials(e) => Some(e),
+            DialerError::AccessToken(e) => Some(e),
+            DialerError::KeyTask(e) => Some(e),
+            DialerError::Failed { source, .. } => Some(source.as_ref()),
+            DialerError::NoDefaultCredentials
+            | DialerError::NoPublicIp(_)
+            | DialerError::NoServerCa => None,
+        }
+    }
+}
+
+impl From<DialerError> for Error {
+    fn from(e: DialerError) -> Self {
+        let kind = match e {
+            DialerError::KeyTask(_) => Kind::Internal,
+            _ => Kind::Connection,
+        };
+        Error::new(kind, "failed to create Cloud SQL dialer").with_source(e)
+    }
+}
+
+fn failed<E>(step: Step) -> impl FnOnce(E) -> DialerError
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    move |e| DialerError::Failed {
+        step,
+        source: e.into(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -106,131 +199,223 @@ fn adc_well_known(env: &Env, windows: bool) -> Option<PathBuf> {
     })
 }
 
-async fn access_token(scope: &str, env: &Env) -> Result<String> {
-    let adc_file = env.non_empty("GOOGLE_APPLICATION_CREDENTIALS")?.is_some()
-        || adc_well_known(env, cfg!(windows)).is_some_and(|p| p.is_file());
+async fn access_token(scope: &str, adc_file: bool) -> std::result::Result<Secret, DialerError> {
     let creds = google_cloud_auth::credentials::Builder::default()
         .with_scopes([scope])
         .build_access_token_credentials()
-        .map_err(|e| failed(format!("failed to create default credentials: {e}")))?;
+        .map_err(DialerError::Credentials)?;
     let fetched = tokio::time::timeout(
         Duration::from_secs(if adc_file { 60 } else { 3 }),
         creds.access_token(),
     )
     .await;
     match fetched {
-        Ok(Ok(t)) => Ok(t.token),
-        Ok(Err(e)) if adc_file => Err(failed(format!("failed to get an access token: {e}"))),
-        _ => Err(failed(
-            "failed to create default credentials: credentials: could not find default credentials. See https://cloud.google.com/docs/authentication/external/set-up-adc for more information",
-        )),
+        Ok(Ok(t)) => Ok(Secret::from(t.token)),
+        Ok(Err(e)) if adc_file => Err(DialerError::AccessToken(e)),
+        _ => Err(DialerError::NoDefaultCredentials),
     }
 }
 
-pub(crate) async fn dialer(req: &Options, env: &Env) -> Result<Dialer> {
-    let instance = req.google_instance.clone().unwrap_or_default();
-    let (project, _region, name) = instance_parts(&instance)?;
-    let admin = access_token(ADMIN_SCOPE, env).await?;
-    let login = access_token(LOGIN_SCOPE, env).await?;
-    let base = env
-        .non_empty("CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN")?
-        .unwrap_or("https://sqladmin.googleapis.com/")
-        .trim_end_matches('/')
-        .to_string();
-    let api = format!("{base}/sql/v1beta4/projects/{project}/instances/{name}");
-    let http = client()?;
-    let settings: ConnectSettings = http
-        .get(format!("{api}/connectSettings"))
-        .bearer_auth(&admin)
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| failed(format!("connectSettings: {e}")))?
-        .json()
-        .await
-        .map_err(|e| failed(format!("connectSettings: {e}")))?;
-    let address = settings
-        .ip_addresses
-        .iter()
-        .find(|a| a.kind == "PRIMARY")
-        .map(|a| a.ip_address.clone())
-        .ok_or_else(|| failed(format!("instance {instance} has no public IP address")))?;
-    let key = tokio::task::spawn_blocking(|| PrivateKey::new(&mut rand::rng(), 2048))
-        .await
-        .map_err(|e| Error::internal(format!("RSA key: {e}")))?
-        .map_err(|e| failed(format!("RSA key: {e}")))?;
-    let public = key
-        .to_public_key()
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|e| failed(format!("RSA key: {e}")))?;
-    let private = key
-        .to_pkcs8_der()
-        .map_err(|e| failed(format!("RSA key: {e}")))?;
-    let cert: EphemeralCert = http
-        .post(format!("{api}:generateEphemeralCert"))
-        .bearer_auth(&admin)
-        .json(&serde_json::json!({"public_key": public, "access_token": login}))
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| failed(format!("generateEphemeralCert: {e}")))?
-        .json()
-        .await
-        .map_err(|e| failed(format!("generateEphemeralCert: {e}")))?;
-    let client_cert = CertificateDer::from_pem_slice(cert.ephemeral_cert.cert.as_bytes())
-        .map_err(|e| failed(format!("ephemeral certificate: {e}")))?;
-    let ca_pem = settings
-        .server_ca_cert
-        .map(|c| c.cert)
-        .ok_or_else(|| failed("connectSettings has no server CA certificate"))?;
-    let mut roots = RootCertStore::empty();
-    for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
-        let c = c.map_err(|e| failed(format!("server CA: {e}")))?;
-        roots
-            .add(c)
-            .map_err(|e| failed(format!("server CA: {e}")))?;
+/// Opens Cloud SQL sessions for one instance. A session lasts until its
+/// ephemeral certificate expires (about an hour, and never past the login
+/// token it was issued for), so each connection reuses it while it has
+/// more than five minutes left and asks for a new one otherwise.
+pub(crate) struct Signin {
+    instance: String,
+    project: String,
+    name: String,
+    api: String,
+    adc_file: bool,
+}
+
+impl std::fmt::Debug for Signin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CloudSql({})", self.instance)
     }
-    let provider = crate::conn::tls::provider();
-    let cas = settings.server_ca_mode.contains("CAS") && !settings.dns_name.is_empty();
-    let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-        .build()
-        .map_err(|e| failed(format!("server CA: {e}")))?;
-    let verifier = crate::conn::tls::Verifier::new(
-        Some(chain),
-        if cas {
-            Names::Check
+}
+
+impl Signin {
+    pub(crate) fn new(req: &Options, env: &Env) -> Result<Self> {
+        let instance = req.google_instance.clone().unwrap_or_default();
+        let (project, _region, name) = instance_parts(&instance)?;
+        let adc_file = env.non_empty("GOOGLE_APPLICATION_CREDENTIALS")?.is_some()
+            || adc_well_known(env, cfg!(windows)).is_some_and(|p| p.is_file());
+        let base = env
+            .non_empty("CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN")?
+            .unwrap_or("https://sqladmin.googleapis.com/")
+            .trim_end_matches('/')
+            .to_string();
+        let api = format!("{base}/sql/v1beta4/projects/{project}/instances/{name}");
+        Ok(Signin {
+            instance,
+            project,
+            name,
+            api,
+            adc_file,
+        })
+    }
+
+    async fn session(&self) -> std::result::Result<Fetched<Arc<Session>>, DialerError> {
+        let admin = access_token(ADMIN_SCOPE, self.adc_file).await?;
+        let login = access_token(LOGIN_SCOPE, self.adc_file).await?;
+        let http = client().map_err(failed(Step::ConnectSettings))?;
+        let settings: ConnectSettings = http
+            .get(format!("{}/connectSettings", self.api))
+            .bearer_auth(admin.expose())
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(failed(Step::ConnectSettings))?
+            .json()
+            .await
+            .map_err(failed(Step::ConnectSettings))?;
+        let address = settings
+            .ip_addresses
+            .iter()
+            .find(|a| a.kind == "PRIMARY")
+            .map(|a| a.ip_address.clone())
+            .ok_or_else(|| DialerError::NoPublicIp(self.instance.clone()))?;
+        let key = tokio::task::spawn_blocking(|| PrivateKey::new(&mut rand::rng(), 2048))
+            .await
+            .map_err(DialerError::KeyTask)?
+            .map_err(failed(Step::RsaKey))?;
+        let public = key
+            .to_public_key()
+            .to_public_key_pem(LineEnding::LF)
+            .map_err(failed(Step::RsaKey))?;
+        let private = key.to_pkcs8_der().map_err(failed(Step::RsaKey))?;
+        let cert: EphemeralCert = http
+            .post(format!("{}:generateEphemeralCert", self.api))
+            .bearer_auth(admin.expose())
+            .json(&serde_json::json!({"public_key": public, "access_token": login.expose()}))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(failed(Step::GenerateEphemeralCert))?
+            .json()
+            .await
+            .map_err(failed(Step::GenerateEphemeralCert))?;
+        let client_cert = CertificateDer::from_pem_slice(cert.ephemeral_cert.cert.as_bytes())
+            .map_err(failed(Step::EphemeralCertificate))?;
+        let expires = not_after(&client_cert)?;
+        let ca_pem = settings
+            .server_ca_cert
+            .map(|c| c.cert)
+            .ok_or(DialerError::NoServerCa)?;
+        let mut roots = RootCertStore::empty();
+        for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+            let c = c.map_err(failed(Step::ServerCa))?;
+            roots.add(c).map_err(failed(Step::ServerCa))?;
+        }
+        let provider = crate::conn::tls::provider();
+        let cas = settings.server_ca_mode.contains("CAS") && !settings.dns_name.is_empty();
+        let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+            .build()
+            .map_err(failed(Step::ServerCa))?;
+        let verifier = crate::conn::tls::Verifier::new(
+            Some(chain),
+            if cas {
+                Names::Check
+            } else {
+                Names::CommonName(format!("{}:{}", self.project, self.name))
+            },
+        );
+        let config = ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(failed(Step::Tls))?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_client_auth_cert(
+                vec![client_cert],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(private.as_bytes().to_vec())),
+            )
+            .map_err(failed(Step::Tls))?;
+        let host = if cas {
+            settings.dns_name.trim_end_matches('.').to_string()
         } else {
-            Names::CommonName(format!("{project}:{name}"))
-        },
-    );
-    let config = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .map_err(|e| failed(format!("TLS: {e}")))?
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_client_auth_cert(
-            vec![client_cert],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(private.as_bytes().to_vec())),
-        )
-        .map_err(|e| failed(format!("TLS: {e}")))?;
-    let host = if cas {
-        settings.dns_name.trim_end_matches('.').to_string()
-    } else {
-        address.clone()
-    };
-    let server_name =
-        ServerName::try_from(host).map_err(|e| failed(format!("server name: {e}")))?;
-    Ok(Dialer {
-        address,
-        config: Arc::new(config),
-        server_name,
-        login_token: login,
-    })
+            address.clone()
+        };
+        let server_name = ServerName::try_from(host).map_err(failed(Step::ServerName))?;
+        Ok(Fetched {
+            value: Arc::new(Session {
+                address,
+                config: Arc::new(config),
+                server_name,
+                login_token: login,
+            }),
+            expires: Some(expires),
+        })
+    }
+}
+
+impl Mint for Signin {
+    type Value = Arc<Session>;
+
+    async fn mint(&self) -> Result<Fetched<Arc<Session>>> {
+        Ok(self.session().await?)
+    }
+}
+
+fn not_after(cert: &CertificateDer<'_>) -> std::result::Result<jiff::Timestamp, DialerError> {
+    use x509_cert::der::Decode;
+    let parsed =
+        x509_cert::Certificate::from_der(cert).map_err(failed(Step::EphemeralCertificate))?;
+    let since_epoch = parsed
+        .tbs_certificate()
+        .validity()
+        .not_after
+        .to_unix_duration();
+    jiff::SignedDuration::try_from(since_epoch)
+        .map_err(failed(Step::EphemeralCertificate))
+        .and_then(|d| jiff::Timestamp::from_duration(d).map_err(failed(Step::EphemeralCertificate)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_expires_with_its_ephemeral_certificate() {
+        let pem = include_bytes!("testdata/sp.crt");
+        let cert = CertificateDer::from_pem_slice(pem).unwrap();
+        assert_eq!(
+            not_after(&cert).unwrap(),
+            "2126-10-18T00:15:41Z".parse::<jiff::Timestamp>().unwrap()
+        );
+        let e = not_after(&CertificateDer::from(vec![1, 2, 3])).unwrap_err();
+        assert!(matches!(
+            e,
+            DialerError::Failed {
+                step: Step::EphemeralCertificate,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn dialer_errors_keep_their_cause_as_the_source() {
+        let e = Error::from(failed(Step::ConnectSettings)(std::io::Error::other(
+            "503 Service Unavailable",
+        )));
+        assert_eq!(e.exit_code(), 11);
+        assert_eq!(
+            e.text(),
+            "failed to create Cloud SQL dialer: connectSettings: 503 Service Unavailable"
+        );
+        let dialer = std::error::Error::source(&e)
+            .and_then(|s| s.downcast_ref::<DialerError>())
+            .unwrap();
+        assert!(std::error::Error::source(dialer).is_some());
+        let e = Error::from(DialerError::NoDefaultCredentials);
+        assert_eq!(e.exit_code(), 11);
+        assert!(
+            e.text().starts_with(
+                "failed to create Cloud SQL dialer: failed to create default credentials: credentials: could not find default credentials."
+            ),
+            "{}",
+            e.text()
+        );
+    }
 
     #[test]
     fn instance_names() {
