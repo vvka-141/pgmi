@@ -121,15 +121,23 @@ fn read_text(fs: &impl Vfs, rel: &str, max_size: u64) -> Result<String> {
             "failed to read ./{rel}: cannot read {name}: {e}; exclude it in .pgmiignore or make it readable"
         ))
     };
+    let too_big = |len: u64| {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        Error::config(format!(
+            "failed to read ./{rel}: file {name} is {len} bytes, exceeds {max_size}-byte limit (override via PGMI_MAX_FILE_SIZE)"
+        ))
+    };
     let stat = fs.stat(rel).map_err(unreadable)?;
     if stat.len > max_size {
-        let name = rel.rsplit('/').next().unwrap_or(rel);
-        return Err(Error::config(format!(
-            "failed to read ./{rel}: file {name} is {} bytes, exceeds {max_size}-byte limit (override via PGMI_MAX_FILE_SIZE)",
-            stat.len
-        )));
+        return Err(too_big(stat.len));
     }
-    let mut bytes = fs.read(rel).map_err(unreadable)?;
+    let mut bytes = fs.read_bounded(rel, max_size).map_err(unreadable)?;
+    if bytes.len() as u64 > max_size {
+        return Err(too_big(
+            fs.stat(rel)
+                .map_or(stat.len, |s| s.len.max(bytes.len() as u64)),
+        ));
+    }
     if bytes.starts_with(b"\xef\xbb\xbf") {
         bytes.drain(..3);
     }
@@ -533,6 +541,31 @@ mod tests {
         let e = load(&big, 10).unwrap_err();
         assert!(e.text().contains("exceeds 10-byte limit"), "{}", e.text());
         assert!(load(&big, 11).is_ok());
+    }
+
+    struct Grown(MemFs);
+
+    impl Vfs for Grown {
+        fn root(&self) -> &std::path::Path {
+            self.0.root()
+        }
+        fn stat(&self, rel: &str) -> std::io::Result<crate::vfs::Stat> {
+            self.0.stat(rel).map(|s| crate::vfs::Stat { len: 1, ..s })
+        }
+        fn read(&self, rel: &str) -> std::io::Result<Vec<u8>> {
+            self.0.read(rel)
+        }
+        fn read_dir(&self, rel: &str) -> std::io::Result<Vec<crate::vfs::Entry>> {
+            self.0.read_dir(rel)
+        }
+    }
+
+    #[test]
+    fn a_file_that_grows_past_the_limit_after_its_stat_is_refused() {
+        let grown = Grown(project().file("a.sql", "x".repeat(100)));
+        let e = read_text(&grown, "a.sql", 10).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(e.text().contains("exceeds 10-byte limit"), "{}", e.text());
     }
 
     #[test]

@@ -54,6 +54,14 @@ pub(crate) trait Vfs {
     fn read(&self, rel: &str) -> io::Result<Vec<u8>>;
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>>;
 
+    /// Reads at most `limit` + 1 bytes, so a caller learns that a file is
+    /// over its limit without holding all of it.
+    fn read_bounded(&self, rel: &str, limit: u64) -> io::Result<Vec<u8>> {
+        let mut bytes = self.read(rel)?;
+        bytes.truncate(usize::try_from(limit.saturating_add(1)).unwrap_or(usize::MAX));
+        Ok(bytes)
+    }
+
     /// Reads a file as UTF-8 text, failing as `std::fs::read_to_string` does.
     fn read_to_string(&self, rel: &str) -> io::Result<String> {
         String::from_utf8(self.read(rel)?).map_err(|_| {
@@ -153,6 +161,14 @@ impl Vfs for OsFs {
     fn read(&self, rel: &str) -> io::Result<Vec<u8>> {
         let mut out = Vec::new();
         open_regular(&self.path(rel))?.read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    fn read_bounded(&self, rel: &str, limit: u64) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        open_regular(&self.path(rel))?
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut out)?;
         Ok(out)
     }
 
@@ -467,6 +483,17 @@ impl Vfs for EmbeddedFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bounded_read_stops_one_byte_past_the_limit() {
+        let dir = crate::testdir::TempDir::new("vfs-bounded");
+        std::fs::write(dir.join("a.sql"), "0123456789").unwrap();
+        let fs = OsFs::new(dir.path());
+        assert_eq!(fs.read_bounded("a.sql", 4).unwrap(), b"01234");
+        assert_eq!(fs.read_bounded("a.sql", 10).unwrap(), b"0123456789");
+        let mem = MemFs::default().file("a.sql", "0123456789");
+        assert_eq!(mem.read_bounded("a.sql", 4).unwrap(), b"01234");
+    }
 
     #[test]
     fn mem_fs_lists_children_in_order_and_creates_parents() {
