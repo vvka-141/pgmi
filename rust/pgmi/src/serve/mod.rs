@@ -305,7 +305,9 @@ impl CallId {
     fn of(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         match raw.as_bytes().first()? {
-            b'"' => serde_json::from_str(raw).ok().map(CallId::Text),
+            b'"' => Some(CallId::Text(
+                serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()),
+            )),
             b'-' | b'0'..=b'9' => Some(CallId::Number(raw.to_string())),
             _ => None,
         }
@@ -638,6 +640,28 @@ mod tests {
                 .unwrap()
                 .contains_key(&CallId::Number("7".into()))
         );
+    }
+
+    #[tokio::test]
+    async fn a_call_whose_id_holds_a_lone_surrogate_still_runs() {
+        let (tx, _rx) = channel::<String>(1);
+        let server = Arc::new(Server {
+            out: tx,
+            calls: Mutex::new(HashMap::new()),
+            slots: Arc::new(Semaphore::new(MAX_CALLS)),
+            root: CancellationToken::new(),
+            tools: Arc::new(tools::Tools {
+                env: Env::default(),
+                verbose: false,
+            }),
+        });
+        let mut tasks = JoinSet::new();
+        let answer = server.handle(
+            br#"{"jsonrpc":"2.0","id":"\ud800","method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
+            &mut tasks,
+        );
+        assert_eq!(answer, None);
+        assert_eq!(tasks.len(), 1);
     }
 
     #[test]

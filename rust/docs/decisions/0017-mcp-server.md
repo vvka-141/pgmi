@@ -136,14 +136,23 @@ overridden. Used only if the hand-written server proves unworkable.
   '0>>` for every `'0` while `Connect` implements it only for `'static`. The
   socket is now an enum (`Tcp`, `Unix`, `CloudSql`) with no lifetime, and the
   dozen borrow sites the earlier attempt chased were symptoms of that one.
-- The writer task watches the session (PGMI-868): a failed write cancels
-  the session token, which stops the reader and every call; after the
-  reader ends, the remaining answers get 2 s (`DRAIN`), so a client that
-  keeps stdout open but stops reading cannot hold up the exit.
+- `serve()` joins two named halves (fix round 4): `Reader` (reads lines,
+  answers what needs no tool, starts a task per call, then waits for every
+  call) and `writer` (one flushed line per answer). Their one shared piece
+  of end-of-session state is `InputEnd`, marked by the reader when it stops
+  reading for any reason. Until then the writer waits on the client as
+  long as the client takes; after it, every write step must make progress
+  within `DRAIN` (2 s). A failed write cancels the session token, which
+  stops the reader and every call. So a batch client that reads slowly but
+  steadily after closing its input gets every answer (it used to get 2 s in
+  total), and a client that never reads ends 2 s after its input even while
+  calls wait to queue answers (it used to hang, because the 2 s started
+  only once every call had ended).
 - Bounds (PGMI-868, decided changes in the behaviour contract): a line of
   at most `wire::MAX_LINE` (16 MiB; `Lines` drops a longer one without
   buffering it and counts it, the reader answers -32600), `MAX_CALLS` (32)
-  tool calls running (the next is -32000), and `QUEUED_ANSWERS` (1024) in
+  tool calls running (the next is -32000; counted by a semaphore whose
+  `Slot` a call holds until its work really ends), and `QUEUED_ANSWERS` (1024) in
   the bounded answer channel. A full channel does not mean the client
   stopped reading: the reader answers a whole 64 KiB chunk at once, so a
   reading client that pipelines a burst fills it before the writer runs.
@@ -154,10 +163,16 @@ overridden. Used only if the hand-written server proves unworkable.
   an answer, or never if it takes none. A call waits for room, racing the
   session.
 - The blocking tools (`init`, `metadata_plan`, `metadata_validate` and the
-  rest that answer from files) run on the blocking pool; a cancelled call
-  stops waiting for its thread at once, so a stalled filesystem cannot hold
-  up the end of a session. The thread itself runs on until the runtime's
-  100 ms shutdown abandons it.
+  rest that answer from files) run on the blocking pool, and the call's
+  `Slot` moves into the blocking closure. A cancelled read-only call stops
+  waiting for its thread at once, so a stalled filesystem cannot hold up the
+  end of a session, but its slot stays taken until the thread ends, so
+  cancelling cannot pile work beyond 32 calls. `init`, which writes, is
+  never abandoned: a cancelled `init` call still waits for its thread, so
+  the runtime's 100 ms shutdown never cuts a project half-written.
+- On Unix a client that closes stdout kills serve with SIGPIPE, as it does
+  Go's: `main` keeps the signal's default action (record 0002), so a closed
+  pipe never reaches `Ended::WriteFailed`; other write errors exit 1.
 
 ## Serves
 
