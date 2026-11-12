@@ -761,9 +761,13 @@ unquoted password holding a `;`, a space or a `&` splits there, and the
 option after it is the password's rest, so the refusal says the option is not
 shown and how to quote the password. A percent sign in a URI takes exactly
 two hex digits (`%+F` is refused, as Go's URL parser does), and a URI
-`#fragment` is dropped, as in Go.
+`#fragment` is dropped, as in Go. A keyword/value string is ADO.NET only with
+an unquoted semicolon, or a single capitalised pair (`Password='p;q'`), so
+`HOST=h password=x` is keyword/value and its unknown key is refused (exit 10);
+an unknown "key" that is not key-shaped (it holds `:`, `/`, `@` or `?`) is
+never named.
 
-Cases: `errors/connection-string-secrets` (the forms Go hides too),
+Cases: `connection/keyword-uppercase-no-echo`, `connection/uri-scheme-case`, `errors/connection-string-secrets` (the forms Go hides too),
 `errors/connection-string-password-rest`; Rust unit tests
 `errors_never_echo_the_input`, `errors_redact_the_password`,
 `an_unknown_key_beside_a_password_is_not_named`,
@@ -1188,6 +1192,7 @@ release notes take their "Behaviour changes" section from this table.
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| URI scheme not in lowercase (`POSTGRESQL://`) | refused as an unknown form, exit 10 | read as a URI | agent 2026-11-12 (PGMI-896), owner may revisit |
 | `pgmi.yaml` quoted port (`port: "5433"`) | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` with two YAML documents | the second is silently ignored | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` with a `%YAML 1.2` directive | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |

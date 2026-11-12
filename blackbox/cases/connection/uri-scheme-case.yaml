@@ -1,0 +1,15 @@
+description: a URI whose scheme is not lowercase never prints its password; Go refuses it as an unknown form (exit 10), Rust reads the scheme case-insensitively and deploys (contract "Behaviour changes in 0.20")
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --json, --connection, "POSTGRESQL://{user}:{password}@{host}:{port}/postgres?application_name=SeCrEt99x", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr_not: ["{password}@"]
+      rust: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Postgres://u:SeCrEt99x@{host}:1/postgres?sslmode=disable", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr_not: [SeCrEt99x]
+      rust: {exit: 11}

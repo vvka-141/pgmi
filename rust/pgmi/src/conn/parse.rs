@@ -140,9 +140,16 @@ type Result<T> = std::result::Result<T, ParseError>;
 pub(crate) fn parse(s: &str) -> Result<Fields> {
     let t = s.trim();
     fields(t).map_err(|e| match e {
-        ParseError::UnknownKey(k) if after_password(t, &k) => ParseError::UnknownKeyBesidePassword,
+        ParseError::UnknownKey(k) if after_password(t, &k) || !key_shaped(&k) => {
+            ParseError::UnknownKeyBesidePassword
+        }
         e => e,
     })
+}
+
+fn key_shaped(key: &str) -> bool {
+    key.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.'))
 }
 
 fn after_password(s: &str, key: &str) -> bool {
@@ -153,7 +160,10 @@ fn after_password(s: &str, key: &str) -> bool {
 }
 
 fn fields(t: &str) -> Result<Fields> {
-    let fields = if t.starts_with("postgresql://") || t.starts_with("postgres://") {
+    let scheme = t.get(..t.find("://").map_or(0, |i| i + 3)).unwrap_or("");
+    let fields = if scheme.eq_ignore_ascii_case("postgresql://")
+        || scheme.eq_ignore_ascii_case("postgres://")
+    {
         uri(t)?
     } else if !t.contains('=') {
         return Err(ParseError::UnknownForm);
@@ -190,11 +200,15 @@ fn check(f: &Fields) -> Result<()> {
 }
 
 fn looks_like_ado(s: &str) -> bool {
-    let Some((first, _)) = s.split_once('=') else {
+    if unquoted_semicolon(s) {
+        return true;
+    }
+    let Some((first, value)) = s.split_once('=') else {
         return false;
     };
-    let first = first.trim();
-    unquoted_semicolon(s) || first.contains(' ') || first.chars().any(|c| c.is_ascii_uppercase())
+    let value = value.trim_start();
+    (first.contains(' ') || first.chars().any(|c| c.is_ascii_uppercase()))
+        && (value.starts_with(['\'', '"']) || !value.contains('='))
 }
 
 fn unquoted_semicolon(s: &str) -> bool {
@@ -453,6 +467,24 @@ mod tests {
         assert_eq!(e.text(), ParseError::InvalidPort.to_string());
         let source = std::error::Error::source(&e).and_then(|s| s.downcast_ref::<ParseError>());
         assert_eq!(source, Some(&ParseError::InvalidPort));
+    }
+
+    #[test]
+    fn a_password_never_reaches_a_message_through_a_misread_form() {
+        let upper = parse("HOST=127.0.0.1 password=SeCrEt99 dbname=postgres").unwrap_err();
+        assert!(
+            matches!(upper, ParseError::UnknownKey(ref k) if k == "HOST"),
+            "{upper:?}"
+        );
+        let other = parse("garbage://u:SeCrEt99@h/d?sslmode=require").unwrap_err();
+        let text = Error::from(other).text();
+        assert!(!text.contains("SeCrEt99"), "{text}");
+        let scheme = parse("POSTGRESQL://u:SeCrEt99@h/d?sslmode=require").unwrap();
+        assert_eq!(
+            (scheme["host"].as_str(), scheme["password"].as_str()),
+            ("h", "SeCrEt99")
+        );
+        assert_eq!(parse("Host=h;Password=SeCrEt99").unwrap()["host"], "h");
     }
 
     #[test]

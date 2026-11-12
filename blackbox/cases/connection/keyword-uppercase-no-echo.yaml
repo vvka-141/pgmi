@@ -1,0 +1,11 @@
+description: a keyword/value connection string with an uppercase key is read as keyword/value, not ADO.NET, so the unknown key is refused before connecting (exit 10) and the password never reaches stderr or --json
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --json, --connection, "HOST={host} port={port} password=SeCrEt99x dbname=postgres", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ['"HOST"']
+      stderr_not: [SeCrEt99x]
+      stdout_not: [SeCrEt99x]

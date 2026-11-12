@@ -240,3 +240,5 @@ config/yaml-timeout
 config/yaml-port
 config/yaml-documents
 serve/deploy-timeout-zero
+connection/keyword-uppercase-no-echo
+connection/uri-scheme-case
