@@ -120,3 +120,23 @@ move into the fork's `connect_raw`.
 Execution contract (transaction status); Concurrency (rollback before
 unlock); TLS (`require_auth`); Encrypted legacy client keys and require_auth
 are kept.
+
+## Changed by PGMI-914 and PGMI-922 (2026-11-12): the tap signs in with SCRAM
+
+tokio-postgres's SCRAM (postgres-protocol) refuses more than 100,000
+iterations, so a role an administrator hashed with 600,000 (the OWASP
+figure) could not sign in; Go's cap is 10,000,000. Owner decision
+(PGMI-914, option a): no fork, no vendored patch; pgmi's own layer does the
+exchange.
+
+Until the first `ReadyForQuery` the tap now reads whole frames. When it
+holds a password and the server asks for SASL, it answers itself with
+`conn/scram.rs` (SCRAM-SHA-256 and -PLUS, `tls-server-end-point` binding,
+SASLprep, iteration cap 10,000,000, server signature checked, the key
+derivation on the blocking pool) and keeps those messages from the driver,
+which then sees `AuthenticationOk` as after `trust`. `channel_binding=require`
+is enforced by the tap in that case (the driver is told `prefer`), with the
+driver's own words: `server did not use channel binding`. Cleartext and MD5
+stay with the driver. Before the first `ReadyForQuery` a message over 64 KiB
+is refused unread (PGMI-922: one header could otherwise make the driver
+reserve gigabytes). After it, the tap is the passive reader it was.

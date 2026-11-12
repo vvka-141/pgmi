@@ -398,7 +398,14 @@ fn io_class(e: &std::io::Error) -> Class {
 }
 
 fn refuses_auth(e: &tap::Error) -> bool {
-    matches!(e, tap::Error::AuthRequirement { .. })
+    matches!(
+        e,
+        tap::Error::AuthRequirement { .. }
+            | tap::Error::Scram(_)
+            | tap::Error::ChannelBinding
+            | tap::Error::UnsupportedSasl
+            | tap::Error::Oversized(_)
+    )
 }
 
 fn broken(text: String, class: Class, e: tokio_postgres::Error) -> DialFailure {
@@ -520,7 +527,7 @@ impl Attempt<'_> {
         let policy = self.spec.require_auth.policy().ok().flatten().cloned();
         let shared = tap::Shared::with_policy(policy);
         let version = Arc::new(Mutex::new(None));
-        let opened = by(deadline, self.handshake(&shared, &version))
+        let opened = by(deadline, Box::pin(self.handshake(&shared, &version)))
             .await
             .ok_or(DialFailure::Timeout)??;
         let tls_version = version.lock().ok().and_then(|v| *v);
@@ -624,6 +631,7 @@ impl Attempt<'_> {
             config.ssl_negotiation(PgSslNegotiation::Direct);
         }
         config.channel_binding(match spec.channel_binding {
+            ChannelBinding::Require if password.is_some() => PgChannelBinding::Prefer,
             ChannelBinding::Require => PgChannelBinding::Require,
             ChannelBinding::Disable => PgChannelBinding::Disable,
             ChannelBinding::Prefer => PgChannelBinding::Prefer,
@@ -644,6 +652,14 @@ impl Attempt<'_> {
         };
         if let Some(p) = &password {
             (self.secret)(p);
+            shared.sign_in_with(tap::Login {
+                password: p.expose().as_bytes().to_vec(),
+                binding: match spec.channel_binding {
+                    ChannelBinding::Require => tap::BindingPolicy::Require,
+                    ChannelBinding::Prefer => tap::BindingPolicy::Prefer,
+                    ChannelBinding::Disable => tap::BindingPolicy::Disable,
+                },
+            });
         }
         let mode = if self.host.starts_with('/') || cloud_sql.is_some() {
             SslMode::Disable

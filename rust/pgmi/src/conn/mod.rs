@@ -8,6 +8,7 @@ pub(crate) mod resolve;
 #[cfg(test)]
 mod resolve_tests;
 pub(crate) mod retry;
+mod scram;
 pub(crate) mod socket;
 pub mod tap;
 pub(crate) mod tls;

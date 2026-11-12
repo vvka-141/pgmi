@@ -7,12 +7,14 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, TlsConnect, TlsStream};
+
+use super::scram::{self, Binding, Client, ScramError};
 
 /// Why the tap refused a connection: a `require_auth` value it cannot
 /// read, a method the policy does not allow, or a malformed frame.
@@ -22,6 +24,10 @@ pub enum Error {
     UnknownMethod(String),
     AuthRequirement { policy: String, what: &'static str },
     Length,
+    Oversized(usize),
+    Scram(String),
+    ChannelBinding,
+    UnsupportedSasl,
 }
 
 impl fmt::Display for Error {
@@ -37,11 +43,43 @@ impl fmt::Display for Error {
                 "authentication method requirement \"{policy}\" failed: {what}"
             ),
             Error::Length => f.write_str("invalid message length from server"),
+            Error::Oversized(n) => write!(
+                f,
+                "the server sent a {n}-byte message before authentication finished; pgmi refuses more than {STARTUP_FRAME_MAX} bytes there"
+            ),
+            Error::Scram(text) => f.write_str(text),
+            Error::ChannelBinding => f.write_str("server did not use channel binding"),
+            Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<ScramError> for Error {
+    fn from(e: ScramError) -> Self {
+        Error::Scram(e.to_string())
+    }
+}
+
+/// The largest message the tap accepts before the first `ReadyForQuery`:
+/// startup traffic is small, and a hostile server could otherwise make the
+/// client reserve gigabytes.
+pub const STARTUP_FRAME_MAX: usize = 64 * 1024;
+
+/// What the tap signs in with when the server asks for SASL.
+#[derive(Clone)]
+pub(crate) struct Login {
+    pub(crate) password: Vec<u8>,
+    pub(crate) binding: BindingPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingPolicy {
+    Require,
+    Prefer,
+    Disable,
+}
 
 /// The transaction status of the last `ReadyForQuery`. A byte other than `I`
 /// or `E` counts as a block in progress.
@@ -66,6 +104,7 @@ pub struct Shared {
     status: AtomicU8,
     policy: Option<Policy>,
     asked_password: AtomicBool,
+    login: OnceLock<Login>,
 }
 
 impl Shared {
@@ -79,7 +118,13 @@ impl Shared {
             status: AtomicU8::new(b'I'),
             policy,
             asked_password: AtomicBool::new(false),
+            login: OnceLock::new(),
         })
+    }
+
+    /// The password the tap answers a SASL request with.
+    pub(crate) fn sign_in_with(&self, login: Login) {
+        let _ = self.login.set(login);
     }
 
     /// Whether the server asked for a password: cleartext, MD5 or SASL.
@@ -264,6 +309,200 @@ pub(crate) struct Tap<S> {
     shared: Arc<Shared>,
     parser: Parser,
     mode: Mode,
+    startup: Option<Startup>,
+    end_point: Option<Vec<u8>>,
+}
+
+/// The tap's part of authentication: whole frames until the first
+/// `ReadyForQuery`, SASL answered here and kept from the driver, which
+/// then sees a server that signed it in.
+#[derive(Default)]
+struct Startup {
+    pending: Vec<u8>,
+    deliver: Vec<u8>,
+    send: Vec<u8>,
+    flush: bool,
+    sasl: Sasl,
+    finished: bool,
+}
+
+#[derive(Default)]
+enum Sasl {
+    #[default]
+    Idle,
+    Sent(Box<Client>, bool),
+    Computing(tokio::task::JoinHandle<scram::Final>, bool),
+    Final(Vec<u8>, bool),
+    Done(bool),
+}
+
+fn frame(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(body.len() + 5);
+    v.push(tag);
+    v.extend_from_slice(
+        &u32::try_from(body.len() + 4)
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
+    v.extend_from_slice(body);
+    v
+}
+
+fn next_frame(pending: &mut Vec<u8>) -> Result<Option<Vec<u8>>, Error> {
+    let Some(header) = pending.get(..5) else {
+        return Ok(None);
+    };
+    let len = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+    let body = len.checked_sub(4).ok_or(Error::Length)?;
+    if body > STARTUP_FRAME_MAX {
+        return Err(Error::Oversized(body));
+    }
+    if pending.len() < body + 5 {
+        return Ok(None);
+    }
+    Ok(Some(pending.drain(..body + 5).collect()))
+}
+
+fn mechanisms(body: &[u8]) -> (bool, bool) {
+    let names = body.split(|b| *b == 0).filter(|n| !n.is_empty());
+    let (mut scram, mut plus) = (false, false);
+    for n in names {
+        scram |= n == scram::SCRAM_SHA_256.as_bytes();
+        plus |= n == scram::SCRAM_SHA_256_PLUS.as_bytes();
+    }
+    (scram, plus)
+}
+
+impl Startup {
+    fn handle(
+        &mut self,
+        f: &[u8],
+        shared: &Shared,
+        parser: &mut Parser,
+        end_point: Option<&[u8]>,
+    ) -> Result<(), Error> {
+        parser.feed(f, shared)?;
+        let login = shared.login.get();
+        let code = (f[0] == b'R')
+            .then(|| f.get(5..9))
+            .flatten()
+            .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]));
+        let data = f.get(9..).unwrap_or_default();
+        let require = login.is_some_and(|l| l.binding == BindingPolicy::Require);
+        match (code, login) {
+            (Some(10), Some(login)) => {
+                let (has_scram, has_plus) = mechanisms(data);
+                let point = end_point.filter(|_| login.binding != BindingPolicy::Disable);
+                let (plus, binding) = match (has_plus, has_scram, point) {
+                    (true, _, Some(p)) => (true, Binding::EndPoint(p.to_vec())),
+                    (true, _, None) | (false, true, None) => (false, Binding::Unsupported),
+                    (false, true, Some(_)) => (false, Binding::Unrequested),
+                    (false, false, _) => return Err(Error::UnsupportedSasl),
+                };
+                if !plus && require {
+                    return Err(Error::ChannelBinding);
+                }
+                let client = Client::new(&login.password, binding);
+                let first = client.first();
+                let mechanism = if plus {
+                    scram::SCRAM_SHA_256_PLUS
+                } else {
+                    scram::SCRAM_SHA_256
+                };
+                let mut body = mechanism.as_bytes().to_vec();
+                body.push(0);
+                body.extend_from_slice(
+                    &i32::try_from(first.len()).unwrap_or(i32::MAX).to_be_bytes(),
+                );
+                body.extend_from_slice(&first);
+                self.send.extend(frame(b'p', &body));
+                self.sasl = Sasl::Sent(Box::new(client), plus);
+                return Ok(());
+            }
+            (Some(11), Some(_)) => {
+                if let Sasl::Sent(client, plus) = std::mem::take(&mut self.sasl) {
+                    let first = client.server_first(data)?;
+                    let job = crate::blocking::spawn(move || client.finish(&first));
+                    self.sasl = Sasl::Computing(job, plus);
+                    return Ok(());
+                }
+            }
+            (Some(12), Some(_)) => {
+                if let Sasl::Final(signature, plus) = std::mem::take(&mut self.sasl) {
+                    scram::verify(&signature, data)?;
+                    self.sasl = Sasl::Done(plus);
+                    return Ok(());
+                }
+            }
+            (Some(0), Some(_)) if require && !matches!(self.sasl, Sasl::Done(true)) => {
+                return Err(Error::ChannelBinding);
+            }
+            (Some(3 | 5), Some(_)) if require => return Err(Error::ChannelBinding),
+            _ => {}
+        }
+        self.deliver.extend_from_slice(f);
+        if f[0] == b'Z' {
+            parser.feed(&self.pending, shared)?;
+            self.deliver.append(&mut self.pending);
+            self.finished = true;
+        }
+        Ok(())
+    }
+
+    fn poll_read<S: AsyncRead + AsyncWrite + Unpin>(
+        &mut self,
+        inner: &mut S,
+        shared: &Shared,
+        parser: &mut Parser,
+        end_point: Option<&[u8]>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            if !self.deliver.is_empty() {
+                let n = self.deliver.len().min(buf.remaining());
+                buf.put_slice(&self.deliver[..n]);
+                self.deliver.drain(..n);
+                return Poll::Ready(Ok(()));
+            }
+            if self.finished {
+                return Poll::Ready(Ok(()));
+            }
+            while !self.send.is_empty() {
+                let n = ready!(Pin::new(&mut *inner).poll_write(cx, &self.send))?;
+                if n == 0 {
+                    return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                }
+                self.send.drain(..n);
+                self.flush = true;
+            }
+            if self.flush {
+                ready!(Pin::new(&mut *inner).poll_flush(cx))?;
+                self.flush = false;
+            }
+            if let Sasl::Computing(job, plus) = &mut self.sasl {
+                let plus = *plus;
+                let done = ready!(Pin::new(job).poll(cx)).map_err(io::Error::other)?;
+                self.send.extend(frame(b'p', &done.message));
+                self.sasl = Sasl::Final(done.server_signature, plus);
+                continue;
+            }
+            if let Some(f) = next_frame(&mut self.pending).map_err(io::Error::other)? {
+                self.handle(&f, shared, parser, end_point)
+                    .map_err(io::Error::other)?;
+                continue;
+            }
+            let mut chunk = [0u8; 8192];
+            let mut read = ReadBuf::new(&mut chunk);
+            ready!(Pin::new(&mut *inner).poll_read(cx, &mut read))?;
+            if read.filled().is_empty() {
+                self.deliver.append(&mut self.pending);
+                self.finished = true;
+                continue;
+            }
+            self.pending.extend_from_slice(read.filled());
+        }
+    }
 }
 
 impl<S> Tap<S> {
@@ -278,26 +517,45 @@ impl<S> Tap<S> {
             shared,
             parser: Parser::default(),
             mode,
+            startup: Some(Startup::default()),
+            end_point: None,
         }
     }
 
-    fn tls(inner: S, shared: Arc<Shared>) -> Self {
+    fn tls(inner: S, shared: Arc<Shared>, end_point: Option<Vec<u8>>) -> Self {
         Tap {
             inner,
             shared,
             parser: Parser::default(),
             mode: Mode::Parsing,
+            startup: Some(Startup::default()),
+            end_point,
         }
     }
 }
 
-impl<S: AsyncRead + Unpin> AsyncRead for Tap<S> {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Tap<S> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let this = self.get_mut();
+        if this.mode == Mode::Parsing
+            && let Some(startup) = &mut this.startup
+        {
+            if !(startup.finished && startup.deliver.is_empty()) {
+                return startup.poll_read(
+                    &mut this.inner,
+                    &this.shared,
+                    &mut this.parser,
+                    this.end_point.as_deref(),
+                    cx,
+                    buf,
+                );
+            }
+            this.startup = None;
+        }
         let start = buf.filled().len();
         ready!(Pin::new(&mut this.inner).poll_read(cx, buf))?;
         let mut new = &buf.filled()[start..];
@@ -353,10 +611,16 @@ pub(crate) struct TapConnect<C> {
     pub(crate) shared: Arc<Shared>,
 }
 
+/// The TLS end-point hash (`tls-server-end-point`) a SCRAM-SHA-256-PLUS
+/// exchange binds to.
+pub(crate) trait EndPoint {
+    fn end_point(&self) -> Option<Vec<u8>>;
+}
+
 impl<S, C> TlsConnect<S> for TapConnect<C>
 where
     C: TlsConnect<S>,
-    C::Stream: Send + 'static,
+    C::Stream: EndPoint + Send + 'static,
     C::Future: Send + 'static,
 {
     type Stream = Tap<C::Stream>;
@@ -366,7 +630,110 @@ where
     fn connect(self, stream: S) -> Self::Future {
         let shared = self.shared;
         let fut = self.inner.connect(stream);
-        Box::pin(async move { Ok(Tap::tls(fut.await?, shared)) })
+        Box::pin(async move {
+            let stream = fut.await?;
+            let point = stream.end_point();
+            Ok(Tap::tls(stream, shared, point))
+        })
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn auth(code: u32, data: &[u8]) -> Vec<u8> {
+        let mut body = code.to_be_bytes().to_vec();
+        body.extend_from_slice(data);
+        frame(b'R', &body)
+    }
+
+    async fn read_err(
+        server: impl FnOnce(tokio::io::DuplexStream) -> tokio::task::JoinHandle<()>,
+        binding: BindingPolicy,
+    ) -> io::Error {
+        let (client, theirs) = tokio::io::duplex(1 << 16);
+        let shared = Shared::new(None).unwrap();
+        shared.sign_in_with(Login {
+            password: b"pw".to_vec(),
+            binding,
+        });
+        let job = server(theirs);
+        let mut tap = Tap::socket(client, shared, Start::Plain);
+        let mut buf = vec![0u8; 1024];
+        let e = tokio::time::timeout(std::time::Duration::from_secs(5), tap.read(&mut buf))
+            .await
+            .expect("the tap answered in time")
+            .unwrap_err();
+        job.abort();
+        e
+    }
+
+    fn tap_error(e: &io::Error) -> &Error {
+        e.get_ref().and_then(|i| i.downcast_ref::<Error>()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn three_hundred_million_iterations_are_refused_before_any_key_derivation() {
+        let e = read_err(
+            |mut s| {
+                tokio::spawn(async move {
+                    s.write_all(&auth(10, b"SCRAM-SHA-256\0\0")).await.unwrap();
+                    let mut head = [0u8; 5];
+                    s.read_exact(&mut head).await.unwrap();
+                    assert_eq!(head[0], b'p');
+                    let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
+                    let mut body = vec![0u8; len - 4];
+                    s.read_exact(&mut body).await.unwrap();
+                    let text = String::from_utf8_lossy(&body).into_owned();
+                    let nonce = text.split("r=").nth(1).unwrap().to_string();
+                    let first = format!("r={nonce}X,s=c2FsdA==,i=300000000");
+                    s.write_all(&auth(11, first.as_bytes())).await.unwrap();
+                    std::future::pending::<()>().await;
+                })
+            },
+            BindingPolicy::Prefer,
+        )
+        .await;
+        assert_eq!(
+            tap_error(&e).to_string(),
+            "the server asks for 300000000 SCRAM iterations; pgmi allows 1 to 10000000"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_message_before_authentication_is_refused_unread() {
+        let e = read_err(
+            |mut s| {
+                tokio::spawn(async move {
+                    let mut huge = vec![b'E'];
+                    huge.extend_from_slice(&0x7fff_fff0_u32.to_be_bytes());
+                    s.write_all(&huge).await.unwrap();
+                    std::future::pending::<()>().await;
+                })
+            },
+            BindingPolicy::Prefer,
+        )
+        .await;
+        assert_eq!(tap_error(&e), &Error::Oversized(0x7fff_ffec));
+    }
+
+    #[tokio::test]
+    async fn channel_binding_require_refuses_scram_without_plus_and_a_cleartext_request() {
+        for request in [auth(10, b"SCRAM-SHA-256\0\0"), auth(3, b"")] {
+            let e = read_err(
+                move |mut s| {
+                    tokio::spawn(async move {
+                        s.write_all(&request).await.unwrap();
+                        std::future::pending::<()>().await;
+                    })
+                },
+                BindingPolicy::Require,
+            )
+            .await;
+            assert_eq!(tap_error(&e), &Error::ChannelBinding);
+        }
     }
 }
 

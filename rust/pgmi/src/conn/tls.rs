@@ -483,16 +483,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for PgTls<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for PgTls<S> {
     fn channel_binding(&self) -> ChannelBinding {
-        match self
-            .0
+        match super::tap::EndPoint::end_point(self) {
+            Some(hash) => ChannelBinding::tls_server_end_point(hash),
+            None => ChannelBinding::none(),
+        }
+    }
+}
+
+impl<S> super::tap::EndPoint for PgTls<S> {
+    fn end_point(&self) -> Option<Vec<u8>> {
+        self.0
             .get_ref()
             .1
             .peer_certificates()
             .and_then(|c| c.first())
-        {
-            Some(cert) => ChannelBinding::tls_server_end_point(end_point_hash(cert.as_ref())),
-            None => ChannelBinding::none(),
-        }
+            .map(|cert| end_point_hash(cert.as_ref()))
     }
 }
 
