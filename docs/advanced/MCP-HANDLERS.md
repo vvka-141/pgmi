@@ -62,7 +62,10 @@ one changes nothing.
 
 A proposal's `"proposes"` names a tool already registered with
 `"effect": "write"`; registration refuses a missing, unknown or non-write
-target and a `"reversible"`. The body calls
+target and a `"reversible"`. Confirming runs at read committed, so
+registration also refuses a target whose `minTransactionIsolation` is
+repeatable read or serializable, in either order: such a tool is called
+directly. The body calls
 `membership.fn_propose('<write tool>', (request).arguments)` and answers the
 proposal id at once. A person signed in on the web, acting as themselves and
 holding `proposals.decide`, confirms it with `POST /proposals/{id}/confirm`,

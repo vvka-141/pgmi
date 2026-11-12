@@ -454,7 +454,9 @@ connection carries no second factor, so it never holds a platform permission.
 **Proposals: an agent proposes, a person confirms.** A tool with
 `"effect": "proposal"` names, in `"proposes"`, a registered tool with
 `"effect": "write"` (registration refuses a missing, unknown or non-write
-target, and `"reversible"`: nothing changes until someone confirms). Its body
+target, and `"reversible"`: nothing changes until someone confirms; it also
+refuses a target above read committed, because confirming runs at read
+committed, so such a tool is called directly). Its body
 calls only `membership.fn_propose(<target>, (request).arguments)` and answers
 `{"proposalId": ...}` at once; the call never waits for a person. It is called
 under the permission it declares, like any tool, so a role's grant list stays

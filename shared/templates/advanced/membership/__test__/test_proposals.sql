@@ -191,3 +191,51 @@ BEGIN
     PERFORM pg_temp.test_act_as(NULL);
     RAISE NOTICE '  ✓ proposals: an agent proposes, only a person with proposals.decide confirms, once, as themselves';
 END $$;
+
+DO $$
+DECLARE
+    v_message text;
+BEGIN
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f4570000-0000-4000-8000-000000000011', 'type', 'tool', 'effect', 'write', 'reversible', true,
+        'name', 'tp_serial_target', 'permissions', jsonb_build_array('task.write'), 'description', 'A write that needs serializable',
+        'minTransactionIsolation', 'serializable'),
+        $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+    v_message := NULL;
+    BEGIN
+        PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+            'id', 'f4570000-0000-4000-8000-000000000012', 'type', 'tool', 'effect', 'proposal',
+            'proposes', 'tp_serial_target', 'name', 'tp_propose_serial', 'permissions', jsonb_build_array('task.write'), 'description', 'Proposes a serializable write'),
+            $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_message := SQLERRM;
+    END;
+    IF coalesce(v_message, '') NOT LIKE '%"tp_propose_serial" proposes "tp_serial_target"%serializable%' THEN
+        RAISE EXCEPTION 'TEST FAILED: a tool above read committed cannot be proposed, got %', COALESCE(v_message, 'no error');
+    END IF;
+
+    v_message := NULL;
+    BEGIN
+        PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+            'id', 'f4570000-0000-4000-8000-000000000001', 'type', 'tool', 'effect', 'write', 'reversible', true,
+            'name', 'tp_create_probe', 'description', 'Creates a probe row as its caller',
+            'permissions', jsonb_build_array('task.write'), 'minTransactionIsolation', 'repeatable read',
+            'inputSchema', jsonb_build_object('type', 'object')),
+            $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_message := SQLERRM;
+    END;
+    IF coalesce(v_message, '') NOT LIKE '%"tp_create_probe" declares minTransactionIsolation repeatable read%"tp_propose_probe"%' THEN
+        RAISE EXCEPTION 'TEST FAILED: a proposed tool cannot raise its floor above read committed, got %', COALESCE(v_message, 'no error');
+    END IF;
+
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f4570000-0000-4000-8000-000000000013', 'type', 'tool', 'effect', 'write', 'reversible', true,
+        'name', 'tp_committed_target', 'permissions', jsonb_build_array('task.write'), 'description', 'A write at read committed',
+        'minTransactionIsolation', 'read committed'),
+        $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+    PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
+        'id', 'f4570000-0000-4000-8000-000000000014', 'type', 'tool', 'effect', 'proposal',
+        'proposes', 'tp_committed_target', 'name', 'tp_propose_committed', 'permissions', jsonb_build_array('task.write'), 'description', 'Proposes a read committed write'),
+        $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+END $$;

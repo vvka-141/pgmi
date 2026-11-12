@@ -40,7 +40,10 @@ SELECT api.create_or_replace_mcp_handler(
   `destructiveHint`); hand-written `annotations` are refused.
 - **A write a person must confirm is a proposal tool**: `'effect',
   'proposal', 'proposes', '<write tool>'`, no `reversible`. The target is a
-  registered tool with effect `write`, registered first. The body only calls
+  registered tool with effect `write`, registered first, at read committed:
+  confirming runs at read committed, so the deploy refuses a target whose
+  `minTransactionIsolation` is higher (either registration order). Such a
+  tool is called directly by a person allowed to call it. The body only calls
   `membership.fn_propose('<write tool>', (request).arguments)` and answers
   `{"proposalId": ...}`; nothing waits. Declare its own permission
   (`task.propose`): any role granting it may propose, without the target's.

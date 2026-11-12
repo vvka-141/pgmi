@@ -1144,6 +1144,8 @@ DECLARE
     v_tags text[];
     v_existing_handler uuid;
     v_effect jsonb;
+    v_floor text;
+    v_proposer text;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
@@ -1222,6 +1224,31 @@ BEGIN
     IF v_read_only IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'MCP handler "%" cannot be readOnly: every MCP exchange is logged, and a READ ONLY transaction cannot write the log', v_name
             USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF v_effect->>'effect' = 'proposal' THEN
+        SELECT h.min_transaction_isolation INTO v_floor
+        FROM api.mcp_route r JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
+        WHERE r.mcp_type = 'tool' AND r.mcp_name = v_effect->>'proposes'
+          AND internal.transaction_isolation_rank(h.min_transaction_isolation) > 1;
+        IF FOUND THEN
+            RAISE EXCEPTION 'MCP tool "%" proposes "%", whose minTransactionIsolation is %, but a proposal is confirmed at read committed',
+                v_name, v_effect->>'proposes', v_floor
+                USING ERRCODE = 'invalid_parameter_value',
+                      HINT = 'A tool that needs repeatable read or serializable cannot be proposed: a person allowed to call it calls it directly.';
+        END IF;
+    ELSIF v_effect->>'effect' = 'write' AND internal.transaction_isolation_rank(v_min_isolation) > 1 THEN
+        SELECT r.mcp_name INTO v_proposer
+        FROM api.mcp_route r JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
+        WHERE r.mcp_type = 'tool' AND r.effect->>'effect' = 'proposal' AND r.effect->>'proposes' = v_name
+          AND r.handler_object_id <> v_id
+        ORDER BY r.mcp_name
+        LIMIT 1;
+        IF FOUND THEN
+            RAISE EXCEPTION 'MCP tool "%" declares minTransactionIsolation %, but proposal tool "%" proposes it and a proposal is confirmed at read committed',
+                v_name, v_min_isolation, v_proposer
+                USING ERRCODE = 'invalid_parameter_value',
+                      HINT = 'Drop the proposal tool, or keep this tool at read committed: a tool that needs a higher floor is called directly.';
+        END IF;
     END IF;
     v_tags := CASE
         WHEN p_metadata->'tags' IS NOT NULL
