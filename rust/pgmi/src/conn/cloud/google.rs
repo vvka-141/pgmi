@@ -474,6 +474,7 @@ pub(crate) mod tests {
     };
 
     async fn settings(url: &str) -> std::result::Result<ConnectSettings, DialerError> {
+        crate::conn::tls::install();
         let http = reqwest::Client::new();
         admin_api(&http, &QUICK, Step::ConnectSettings, |h| h.get(url)).await
     }
