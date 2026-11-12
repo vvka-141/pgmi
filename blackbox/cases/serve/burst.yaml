@@ -1,0 +1,10 @@
+description: a client that reads its answers while it sends a burst of 3000 pings gets every answer in order and serve exits 0
+steps:
+  - pgmi: [serve]
+    stdin:
+      - {text: "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n", times: 3000}
+      - {text: "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"ping\"}\n"}
+    expect:
+      exit: 0
+      stdout:
+        - '\A(?:\{"jsonrpc":"2\.0","id":7,"result":\{\}\}\n){3000}\{"jsonrpc":"2\.0","id":8,"result":\{\}\}\n\Z'

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -9,7 +10,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{Outcome, Toolbox, serve};
+use super::{Ended, Outcome, Toolbox, serve};
 
 const MODERN_META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#;
 
@@ -111,7 +112,7 @@ struct Running {
     input: DuplexStream,
     output: BufReader<DuplexStream>,
     stop: CancellationToken,
-    server: tokio::task::JoinHandle<()>,
+    server: tokio::task::JoinHandle<Ended>,
 }
 
 impl Running {
@@ -143,11 +144,15 @@ impl Running {
     }
 
     async fn ended(self) -> BufReader<DuplexStream> {
-        timeout(Duration::from_secs(3), self.server)
+        self.ended_as().await.1
+    }
+
+    async fn ended_as(self) -> (Ended, BufReader<DuplexStream>) {
+        let ended = timeout(Duration::from_secs(3), self.server)
             .await
             .expect("serve did not return within 3s")
             .expect("serve panicked");
-        self.output
+        (ended, self.output)
     }
 }
 
@@ -216,7 +221,8 @@ async fn stopping_the_server_during_a_tool_call_ends_it_cleanly() {
     probes.started.recv().await.unwrap();
     s.stop.cancel();
     assert_eq!(probes.stopped.recv().await, Some("cancelled"));
-    let mut output = s.ended().await;
+    let (ended, mut output) = s.ended_as().await;
+    assert!(matches!(ended, Ended::Stopped), "{ended:?}");
     let mut rest = String::new();
     tokio::io::AsyncReadExt::read_to_string(&mut output, &mut rest)
         .await
@@ -493,10 +499,14 @@ async fn an_output_failure_ends_the_session() {
         .unwrap();
     let stopped = timeout(Duration::from_secs(3), probes.stopped.recv()).await;
     assert_eq!(stopped.expect("the call kept running"), Some("cancelled"));
-    timeout(Duration::from_secs(3), server)
+    let ended = timeout(Duration::from_secs(3), server)
         .await
         .expect("serve kept reading after its output failed")
         .unwrap();
+    assert!(matches!(ended, Ended::WriteFailed(_)), "{ended:?}");
+    let e = ended.into_result().unwrap_err();
+    assert_eq!(e.exit_code(), 1);
+    assert!(e.text().starts_with("write response: "), "{}", e.text());
     drop(input);
 }
 
@@ -599,9 +609,84 @@ async fn a_client_that_never_reads_is_dropped_once_its_answers_pile_up() {
         }
         input
     });
-    timeout(Duration::from_secs(10), server)
+    let ended = timeout(Duration::from_secs(10), server)
         .await
         .expect("serve kept queueing answers nobody reads")
         .unwrap();
+    assert!(matches!(ended, Ended::SlowReader), "{ended:?}");
+    assert!(ended.into_result().is_ok());
     drop(pings);
+}
+
+#[tokio::test]
+async fn a_client_that_reads_while_it_sends_a_burst_gets_every_answer() {
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, output) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    let reader = tokio::spawn(async move {
+        let mut lines = BufReader::new(output).lines();
+        let mut ids = Vec::new();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let v: Value = serde_json::from_str(&line).unwrap();
+            ids.push(v["id"].as_u64().unwrap());
+        }
+        ids
+    });
+    let mut burst = String::new();
+    for id in 0..3000 {
+        let _ = writeln!(
+            burst,
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}"
+        );
+    }
+    input.write_all(burst.as_bytes()).await.unwrap();
+    input.shutdown().await.unwrap();
+    let ended = timeout(Duration::from_secs(10), server)
+        .await
+        .expect("serve did not end")
+        .unwrap();
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+    let ids = reader.await.unwrap();
+    assert_eq!(ids, (0..3000).collect::<Vec<u64>>());
+}
+
+struct Broken;
+
+impl tokio::io::AsyncRead for Broken {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::IsADirectory)))
+    }
+}
+
+#[tokio::test]
+async fn a_failed_read_ends_the_session_with_exit_1() {
+    let mut out = Vec::new();
+    let ended = serve(Broken, &mut out, fakes().0, CancellationToken::new()).await;
+    assert!(matches!(ended, Ended::ReadFailed(_)), "{ended:?}");
+    let e = ended.into_result().unwrap_err();
+    assert_eq!(e.exit_code(), 1);
+    assert!(e.text().starts_with("read request: "), "{}", e.text());
+}
+
+#[tokio::test]
+async fn the_end_of_input_ends_the_session_successfully() {
+    let mut out = Vec::new();
+    let ended = serve(
+        &br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#[..],
+        &mut out,
+        fakes().0,
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+    assert!(ended.into_result().is_ok());
 }
