@@ -1,22 +1,23 @@
 mod approve;
 mod blame;
 mod execute;
+mod guard;
 mod overwrite;
 mod record;
 mod request;
 pub(crate) mod script;
+mod secrets;
+mod server;
 mod session;
 mod stop;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::future::Future;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::runtime::Runtime;
-use tokio::time::Instant as TokioInstant;
 use tokio_postgres::error::ErrorPosition;
 
 use crate::config::params::{self, Sources};
@@ -34,9 +35,13 @@ use crate::vfs::OsFs;
 
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
 pub(crate) use blame::redact_sql_passwords;
+use guard::{Guard, deadline, limit, spawn_signals};
 pub(crate) use record::DeployRecord;
 use record::Tls;
 pub(crate) use request::Request;
+use secrets::Secrets;
+pub(crate) use server::quote_ident;
+use server::{check_server, client_encoding, create_database, first_value, release};
 pub(crate) use stop::{Stop, StopReason};
 
 /// The privilege a step needs, named in the error when the server answers
@@ -259,151 +264,6 @@ pub(crate) struct Failure {
     blame: blame::Blame,
 }
 
-struct Guard {
-    stop: Stop,
-    deadline: TokioInstant,
-    timeout: Duration,
-}
-
-impl Guard {
-    fn stop_error(&self) -> Error {
-        match self.stop.reason() {
-            Some(StopReason::Signal) => Error::new(Kind::Interrupted, "interrupted"),
-            _ => Error::new(Kind::Interrupted, "the deploy was cancelled"),
-        }
-    }
-
-    fn expired_error(&self) -> Error {
-        Error::new(
-            Kind::Timeout,
-            format!(
-                "the deploy exceeded --timeout {}; raise it, or pass --timeout 0 for no limit",
-                crate::duration::render(self.timeout)
-            ),
-        )
-    }
-
-    async fn waiting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
-        tokio::select! {
-            r = fut => r,
-            () = self.stop.cancelled() => Err(self.stop_error()),
-            () = tokio::time::sleep_until(self.deadline) => Err(self.expired_error()),
-        }
-    }
-
-    async fn blocking<T: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> Result<T> + Send + 'static,
-    ) -> Result<T> {
-        self.waiting(async {
-            tokio::task::spawn_blocking(work)
-                .await
-                .map_err(|e| Error::internal("blocking task").with_source(e))?
-        })
-        .await
-    }
-
-    /// Like `blocking`, but only a signal or a cancel stops it: `--timeout`
-    /// does not bound reading `--params-file -`, in Go either.
-    async fn interruptible<T: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> Result<T> + Send + 'static,
-    ) -> Result<T> {
-        tokio::select! {
-            r = tokio::task::spawn_blocking(work) => {
-                r.map_err(|e| Error::internal("blocking task").with_source(e))?
-            }
-            () = self.stop.cancelled() => Err(self.stop_error()),
-        }
-    }
-
-    fn check(&self) -> Result<()> {
-        if self.stop.is_cancelled() {
-            Err(self.stop_error())
-        } else if TokioInstant::now() >= self.deadline {
-            Err(self.expired_error())
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
-        tokio::select! {
-            r = fut => r,
-            () = self.stop.cancelled() => Err(self.stop_error()),
-            () = tokio::time::sleep_until(self.deadline) => Err(Error::connection("--timeout ran out while connecting")),
-        }
-    }
-
-    /// Runs `fut` on `session` until it ends, the deploy is stopped or the
-    /// deadline passes. On a stop it sends PostgreSQL's cancel request,
-    /// then gives `fut` 2 s to finish before it returns the stop's error.
-    async fn running<T>(
-        &self,
-        session: &Session,
-        fut: impl Future<Output = Result<T>>,
-    ) -> Result<T> {
-        tokio::pin!(fut);
-        let stopped = tokio::select! {
-            r = &mut fut => return r,
-            () = self.stop.cancelled() => self.stop_error(),
-            () = tokio::time::sleep_until(self.deadline) => self.expired_error(),
-        };
-        session.cancel().await;
-        let reported = tokio::time::timeout(Duration::from_secs(2), &mut fut).await;
-        Err(match reported {
-            Ok(Err(e)) if e.sql_diagnostics().is_some() => {
-                let text = match stopped.kind() {
-                    Kind::Timeout => stopped.text(),
-                    _ => e.text(),
-                };
-                e.reworded(stopped.kind(), text)
-            }
-            _ => stopped,
-        })
-    }
-}
-
-/// The secrets of a deploy, each added where it becomes known: the
-/// connection's passwords once it is resolved, and every password or
-/// sign-in token the dialer presents, renewed tokens included. Shared with
-/// the dialer's callbacks, so an append-only set behind a short lock.
-#[derive(Clone, Default)]
-struct Secrets(Arc<Mutex<Vec<Secret>>>);
-
-impl Secrets {
-    fn insert(&self, secret: &Secret) {
-        let mut s = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !s.contains(secret) {
-            s.push(secret.clone());
-        }
-    }
-
-    fn resolved(&self, spec: &Spec) {
-        for p in [&spec.password, &spec.sslpassword].into_iter().flatten() {
-            self.insert(p);
-        }
-    }
-
-    fn list(&self) -> Vec<Secret> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    fn notice(&self, mut n: Notice) -> Notice {
-        let secrets = self.list();
-        n.message = redact(&n.message, &secrets);
-        n.detail = n.detail.map(|d| redact(&d, &secrets));
-        n.hint = n.hint.map(|h| redact(&h, &secrets));
-        n
-    }
-}
-
 pub(crate) struct Run {
     st: Progress,
     log: Arc<Mutex<NoticeLog>>,
@@ -431,7 +291,11 @@ impl Run {
     ) -> Result<()> {
         let contract = ContractVersion::of(ctx.request.compat.as_deref());
         self.st.contract = contract.as_ref().ok().copied();
-        let yaml = ProjectConfig::load(&OsFs::project(&ctx.request.project)?)?;
+        let project = ctx.request.project.clone();
+        let yaml = guard::before_guard(&stop, move || {
+            ProjectConfig::load(&OsFs::project(&project)?)
+        })
+        .await?;
         let yaml_timeout = yaml.as_ref().map(ProjectConfig::timeout).transpose()?;
         let timeout = limit(ctx.request.timeout.or(yaml_timeout.flatten()));
         let guard = Guard {
@@ -533,66 +397,6 @@ pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     }
     runtime.shutdown_timeout(Duration::from_millis(100));
     finish(ctx, &run, &result, &reporter)
-}
-
-const CLEANUP: Duration = Duration::from_secs(3);
-
-fn deadline(timeout: Duration) -> TokioInstant {
-    let now = TokioInstant::now();
-    now.checked_add(timeout)
-        .or_else(|| now.checked_add(Duration::from_hours(876_000)))
-        .unwrap_or(now)
-}
-
-fn limit(timeout: Option<Duration>) -> Duration {
-    timeout.map_or(Duration::from_secs(180), |t| {
-        if t.is_zero() {
-            Duration::from_hours(876_000)
-        } else {
-            t
-        }
-    })
-}
-
-const INTERRUPTED: &str = "pgmi: interrupted, cancelling deployment... (again to quit at once)";
-const INTERRUPTED_AGAIN: &str = "pgmi: interrupted again, quitting";
-
-fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
-    tokio::spawn(async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let (Ok(mut int), Ok(mut term)) = (
-                signal(SignalKind::interrupt()),
-                signal(SignalKind::terminate()),
-            ) else {
-                return;
-            };
-            tokio::select! {
-                _ = int.recv() => {}
-                _ = term.recv() => {}
-            }
-            reporter.line(INTERRUPTED);
-            stop.signal();
-            tokio::select! {
-                _ = int.recv() => {}
-                _ = term.recv() => {}
-            }
-            reporter.line(INTERRUPTED_AGAIN);
-            std::process::exit(i32::from(Kind::Interrupted.exit_code()));
-        }
-        #[cfg(not(unix))]
-        {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                reporter.line(INTERRUPTED);
-                stop.signal();
-            }
-            if tokio::signal::ctrl_c().await.is_ok() {
-                reporter.line(INTERRUPTED_AGAIN);
-                std::process::exit(i32::from(Kind::Interrupted.exit_code()));
-            }
-        }
-    });
 }
 
 /// The connection a deploy resolved before reading anything else.
@@ -917,126 +721,10 @@ impl LoadedProject {
     }
 }
 
-async fn create_database(maintenance: &Session, db: &str) -> Result<()> {
-    maintenance
-        .client
-        .batch_execute(&format!("CREATE DATABASE {}", quote_ident(db)))
-        .await
-        .map_err(|e| {
-            created_elsewhere(sql_error_needing(
-                "create the target database",
-                e,
-                Some(Needs::CreateDb),
-            ))
-        })
-}
-
-/// Rolls back an open transaction and releases the deploy lock; a session
-/// that does not answer within `CLEANUP` is closed instead.
-async fn release(session: &Session) {
-    let cleanup = async {
-        if session.tap.status() != crate::conn::tap::TxStatus::Idle {
-            session.client.batch_execute("ROLLBACK").await?;
-        }
-        session
-            .client
-            .batch_execute("SELECT pg_advisory_unlock_all()")
-            .await
-    };
-    if !matches!(tokio::time::timeout(CLEANUP, cleanup).await, Ok(Ok(()))) {
-        session.disconnect();
-    }
-}
-
 #[cfg(feature = "testhooks")]
 #[allow(clippy::panic)]
 fn test_panic() -> ! {
     panic!("PGMI_TEST_PANIC is set")
-}
-
-pub(crate) fn quote_ident(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
-}
-
-async fn client_encoding(session: &Session, named: Option<&str>) -> Result<()> {
-    let Some(encoding) = named else {
-        return session
-            .client
-            .batch_execute(
-                "SELECT set_config('client_encoding', current_setting('server_encoding'), false)",
-            )
-            .await
-            .map_err(|e| sql_error("match the client encoding to the database", e));
-    };
-    session
-        .client
-        .query_typed(
-            "SELECT set_config('client_encoding', $1, false)",
-            &[(&encoding, tokio_postgres::types::Type::TEXT)],
-        )
-        .await
-        .map(drop)
-        .map_err(|e| {
-            let reason = e
-                .as_db_error()
-                .map_or_else(|| crate::error::chain(&e), |d| d.message().to_string());
-            Error::connection(format!("client_encoding \"{encoding}\": {reason}"))
-        })
-}
-
-const MIN_SERVER_VERSION_NUM: u32 = 150_000;
-
-fn supported_server(num: &str, text: &str) -> Result<()> {
-    match num.trim().parse::<u32>() {
-        Ok(n) if n >= MIN_SERVER_VERSION_NUM => Ok(()),
-        _ => Err(Error::config(format!(
-            "this server reports PostgreSQL {text}, and pgmi requires {} or newer",
-            MIN_SERVER_VERSION_NUM / 10_000
-        ))),
-    }
-}
-
-async fn check_server(session: &Session) -> Result<()> {
-    let rows = session
-        .client
-        .simple_query(
-            "SELECT current_setting('server_version_num'), current_setting('server_version')",
-        )
-        .await
-        .map_err(|e| sql_error("read the server version", e))?;
-    let (num, text) = match first_row(&rows) {
-        Some(r) => {
-            let read = |i| {
-                r.try_get(i)
-                    .map(|v| v.unwrap_or_default().to_string())
-                    .map_err(|e| sql_error("read the server version", e))
-            };
-            (read(0)?, read(1)?)
-        }
-        None => Default::default(),
-    };
-    supported_server(&num, &text)
-}
-
-fn first_row(
-    messages: &[tokio_postgres::SimpleQueryMessage],
-) -> Option<&tokio_postgres::SimpleQueryRow> {
-    messages.iter().find_map(|m| match m {
-        tokio_postgres::SimpleQueryMessage::Row(r) => Some(r),
-        _ => None,
-    })
-}
-
-async fn first_value(session: &Session, sql: &str) -> Result<Option<String>> {
-    let rows = session
-        .client
-        .simple_query(sql)
-        .await
-        .map_err(|e| sql_error("query the server", e))?;
-    first_row(&rows)
-        .map(|r| r.try_get(0).map_err(|e| sql_error("query the server", e)))
-        .transpose()
-        .map(|v| v.flatten().map(str::to_string))
 }
 
 fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) -> u8 {
@@ -1803,30 +1491,7 @@ mod tests {
     #[test]
     fn a_huge_timeout_never_overflows_the_deadline() {
         let far = deadline(Duration::MAX);
-        assert!(far > TokioInstant::now() + Duration::from_hours(8760));
-    }
-
-    #[test]
-    fn a_server_below_postgres_15_is_refused_as_invalid_config() {
-        for (num, text) in [
-            ("110016", "11.16 (Debian 11.16-1.pgdg90+1)"),
-            ("140023", "14.23"),
-            ("", ""),
-        ] {
-            let e = supported_server(num, text).unwrap_err();
-            assert_eq!(e.kind(), Kind::Config, "{text}");
-            assert_eq!(
-                e.text(),
-                format!("this server reports PostgreSQL {text}, and pgmi requires 15 or newer")
-            );
-        }
-        for (num, text) in [
-            ("150000", "15.0"),
-            ("150018", "15.18 (Debian 15.18-1.pgdg120+1)"),
-            ("180004", "18.4"),
-        ] {
-            assert!(supported_server(num, text).is_ok(), "{text}");
-        }
+        assert!(far > tokio::time::Instant::now() + Duration::from_hours(8760));
     }
 
     #[test]
