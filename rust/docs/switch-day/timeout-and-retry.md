@@ -96,11 +96,20 @@ The record (and the `structuredContent` of `pgmi serve`'s deploy tool) adds,
 once an attempt started:
 
 - `attempts`: one object per attempt, in order, with `startedAt`,
-  `durationMs`, and for a failed one `sqlstate` (when the server sent one)
-  and `message`;
+  `durationMs`, for a failed one `sqlstate` (when the server sent one)
+  and `message`, and `unitsCommitted` when that attempt committed units;
 - `timeUsedMs`: the time box used, in milliseconds.
 
-`exitCode`, `error` and `sqlstate` are those of the run's end.
+`exitCode`, `error`, `sqlstate` and `unitsCommitted` are those of the run's
+end, so of the last attempt. When a unit was sent and the server never
+answered (the connection dropped, or a stop found it silent), the record
+adds `"outcomeUnknown": true`: that unit may have committed, so check the
+database before deploying again.
+
+The summary line says what earlier attempts committed, for example
+`attempt 1 committed 1 unit(s); the last attempt committed nothing`, and
+stderr ends with the first attempt's error as well as the last:
+`attempt 1 of 2 failed with: ERROR: lock busy (SQLSTATE 55P03)`.
 
 ```json
 "attempts": [
