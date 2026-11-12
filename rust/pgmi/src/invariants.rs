@@ -385,7 +385,7 @@ pub fn sql_text(src: &str) -> Checked {
     let out_lines = out.bytes().filter(|b| *b == b'\n').count() + 1;
     let mut prev = 0;
     for l in 1..=out_lines {
-        let (orig, _) = lines.original(l);
+        let orig = lines.original(l).line();
         ensure!(
             (1..=src_lines).contains(&orig) && orig >= prev,
             "expanded line {l} maps to {orig} (script has {src_lines}, previous {prev})"

@@ -163,11 +163,11 @@ impl DeployRecord {
             started_at: timestamp(facts.started),
             status: if exit_code == 0 { "success" } else { "failed" },
             target: p.spec.as_ref().map(|s| {
-                let (host, port) = s.first();
+                let first = s.first();
                 Target {
                     database: s.target_db.clone(),
-                    host: host.to_string(),
-                    port,
+                    host: first.name.clone(),
+                    port: first.port,
                 }
             }),
             test_macros: execution

@@ -425,8 +425,8 @@ pub(crate) struct Hosts {
 }
 
 impl Hosts {
-    pub(crate) fn first(&self) -> (&str, u16) {
-        (self.first.name.as_str(), self.first.port)
+    pub(crate) fn first(&self) -> &Endpoint {
+        &self.first
     }
 
     pub(crate) fn endpoints(&self) -> impl Iterator<Item = &Endpoint> {
@@ -625,7 +625,10 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
     let sslmode_source = SslModeSource::of(flags, &fields, source, env, yaml)?;
     merge(&mut fields, flags, env, yaml, source)?;
     let f = &mut fields;
-    let (target_db, maintenance_db) = databases(flags, string_db.as_deref(), env, yaml)?;
+    let Databases {
+        target: target_db,
+        maintenance: maintenance_db,
+    } = databases(flags, string_db.as_deref(), env, yaml)?;
     let hosts = take_hosts(f)?;
     let tls = TlsSettings::take(f)?;
     check_protocol(f)?;
@@ -752,12 +755,17 @@ fn merge(
 }
 
 /// The database to deploy to, and the one to connect to for creating it.
+struct Databases {
+    target: String,
+    maintenance: String,
+}
+
 fn databases(
     flags: &Flags,
     string_db: Option<&str>,
     env: &Env,
     yaml: Option<&YamlConnection>,
-) -> Result<(String, String)> {
+) -> Result<Databases> {
     let target = flags
         .database
         .clone()
@@ -773,7 +781,10 @@ fn databases(
         .map(str::to_string)
         .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
         .unwrap_or_else(|| "postgres".into());
-    Ok((target, maintenance))
+    Ok(Databases {
+        target,
+        maintenance,
+    })
 }
 
 fn take_hosts(f: &mut Fields) -> Result<Hosts> {
@@ -1090,7 +1101,7 @@ fn tls_versions(
 }
 
 impl Spec {
-    pub(crate) fn first(&self) -> (&str, u16) {
+    pub(crate) fn first(&self) -> &Endpoint {
         self.hosts.first()
     }
 
@@ -1106,7 +1117,7 @@ impl Spec {
     }
 
     pub(crate) fn describe(&self) -> String {
-        let (h, p) = self.first();
-        format!("{h}:{p}/{}", self.target_db)
+        let first = self.first();
+        format!("{}:{}/{}", first.name, first.port, self.target_db)
     }
 }

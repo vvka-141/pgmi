@@ -176,7 +176,7 @@ mod tests {
     use crate::output::Captured;
 
     fn reporter() -> (Reporter, Captured) {
-        Captured::reporter(false, false, false)
+        Captured::reporter(false, crate::output::Style::Plain)
     }
 
     fn terminal(force: bool, interactive: bool, typed: Option<&'static str>) -> Terminal {

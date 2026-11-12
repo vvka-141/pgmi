@@ -260,19 +260,35 @@ struct Span {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct LineMap(Vec<Span>);
 
+/// Where a line of an expanded unit came from: a line as written, or the
+/// line of the macro whose expansion holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Written(usize),
+    Macro(usize),
+}
+
+impl Origin {
+    pub(crate) fn line(self) -> usize {
+        match self {
+            Origin::Written(l) | Origin::Macro(l) => l,
+        }
+    }
+}
+
 impl LineMap {
-    pub(crate) fn original(&self, expanded: usize) -> (usize, bool) {
+    pub(crate) fn original(&self, expanded: usize) -> Origin {
         let mut shift = 0;
         for span in &self.0 {
             if expanded < span.first {
                 break;
             }
             if expanded <= span.last {
-                return (span.line, true);
+                return Origin::Macro(span.line);
             }
             shift = span.shift_after;
         }
-        (expanded.saturating_add_signed(-shift), false)
+        Origin::Written(expanded.saturating_add_signed(-shift))
     }
 }
 
@@ -386,16 +402,16 @@ mod tests {
         assert_eq!(
             mapped,
             [
-                (1, false),
-                (2, true),
-                (2, true),
-                (2, true),
-                (3, false),
-                (4, true),
-                (6, false)
+                Origin::Written(1),
+                Origin::Macro(2),
+                Origin::Macro(2),
+                Origin::Macro(2),
+                Origin::Written(3),
+                Origin::Macro(4),
+                Origin::Written(6)
             ]
         );
-        assert_eq!(LineMap::default().original(9), (9, false));
+        assert_eq!(LineMap::default().original(9), Origin::Written(9));
         assert!(macros("CALL pgmi_test('a','b','c')").is_empty());
         assert_eq!(
             macros("CALL /* c */ pgmi_test -- c\n( '/a/' /* c */ ) ;").len(),
@@ -545,19 +561,19 @@ mod tests {
         let src = "BEGIN;\nSAVEPOINT s;\nCALL pgmi_test();\nROLLBACK TO SAVEPOINT s;\nCOMMIT;\nSELECT 1/0;\n";
         let (_, lines) = expand(src, &macros(src), &["A;\nB;\nC;\nD;".into()]);
         for (expanded, want) in [
-            (1, (1, false)),
-            (2, (2, false)),
-            (3, (3, true)),
-            (6, (3, true)),
-            (7, (4, false)),
-            (9, (6, false)),
+            (1, Origin::Written(1)),
+            (2, Origin::Written(2)),
+            (3, Origin::Macro(3)),
+            (6, Origin::Macro(3)),
+            (7, Origin::Written(4)),
+            (9, Origin::Written(6)),
         ] {
             assert_eq!(lines.original(expanded), want, "line {expanded}");
         }
         let src = "CALL pgmi_test();\nX;\nCALL pgmi_test();\nY;\n";
         let (_, lines) = expand(src, &macros(src), &["a;\nb;".into(), "c;\nd;\ne;".into()]);
         for (expanded, want) in [(3, 2), (4, 3), (6, 3), (7, 4)] {
-            assert_eq!(lines.original(expanded).0, want, "line {expanded}");
+            assert_eq!(lines.original(expanded).line(), want, "line {expanded}");
         }
     }
 

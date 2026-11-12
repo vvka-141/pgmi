@@ -845,11 +845,11 @@ impl Dialer {
                 }
             }
         }
-        let (first_host, first_port) = spec.first();
+        let first = spec.first();
         Err(Unconnected {
             db: db.to_string(),
             failed,
-            first: (first_host.to_string(), first_port),
+            first: (first.name.clone(), first.port),
         })
     }
 }

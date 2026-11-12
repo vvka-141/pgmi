@@ -18,6 +18,10 @@ fn conn(s: &str) -> Flags {
     }
 }
 
+fn first(s: &Spec) -> (&str, u16) {
+    (s.first().name.as_str(), s.first().port)
+}
+
 fn hosts(s: &Spec) -> Vec<(String, u16)> {
     s.hosts
         .endpoints()
@@ -261,7 +265,7 @@ fn one_port_serves_every_host_and_an_empty_host_is_localhost() {
         hosts(&s),
         vec![("a".into(), 7), ("localhost".into(), 7), ("c".into(), 7)]
     );
-    assert_eq!(s.first(), ("a", 7));
+    assert_eq!(first(&s), ("a", 7));
     assert_eq!(s.describe(), "a:7/d");
 }
 
@@ -412,7 +416,7 @@ fn only_pg_host_port_or_user_in_the_environment() {
         let mut pairs = env.clone();
         pairs.push(("PGDATABASE", "d"));
         let s = resolve(&flags(), &Env::from_pairs(&pairs), None).unwrap();
-        assert_eq!(s.first(), (host, port), "{env:?}");
+        assert_eq!(first(&s), (host, port), "{env:?}");
         if let Some(user) = user {
             assert_eq!(s.user, user);
         }
@@ -444,7 +448,7 @@ fn database_url_is_used_unless_a_connection_flag_names_another() {
     let env = Env::from_pairs(&[("DATABASE_URL", "postgresql://user:pass@dbhost:6002/mydb")]);
     let s = resolve(&flags(), &env, None).unwrap();
     assert_eq!(
-        (s.first(), s.source),
+        (first(&s), s.source),
         (("dbhost", 6002), Source::DatabaseUrl)
     );
     let env = Env::from_pairs(&[(
@@ -458,7 +462,7 @@ fn database_url_is_used_unless_a_connection_flag_names_another() {
     )
     .unwrap();
     assert_eq!(
-        (s.first(), s.target_db.as_str()),
+        (first(&s), s.target_db.as_str()),
         (("primary", 5432), "maindb")
     );
     let env = Env::from_pairs(&[
@@ -467,7 +471,7 @@ fn database_url_is_used_unless_a_connection_flag_names_another() {
     ]);
     let s = resolve(&flags(), &env, None).unwrap();
     assert_eq!(
-        (s.first().0, s.source),
+        (first(&s).0, s.source),
         ("pgmi", Source::PgmiConnectionString)
     );
 }
@@ -504,9 +508,9 @@ fn pgport_edge_cases() {
             None,
         )
     };
-    assert_eq!(port("6004").unwrap().first().1, 6004);
-    assert_eq!(port("").unwrap().first().1, 5432);
-    assert_eq!(port(" 5432 ").unwrap().first().1, 5432);
+    assert_eq!(port("6004").unwrap().first().port, 6004);
+    assert_eq!(port("").unwrap().first().port, 5432);
+    assert_eq!(port(" 5432 ").unwrap().first().port, 5432);
     for bad in ["abc", "-1", "999999", "0", "not-a-number"] {
         assert_eq!(
             refused(port(bad)).to_string(),
@@ -577,7 +581,7 @@ fn a_string_takes_what_it_omits_from_the_environment() {
         "SSL Mode=Disable;",
     ] {
         let spec = resolve(&conn(s), &env, None).unwrap();
-        assert_eq!(spec.first(), ("db.example", 6000), "{s}");
+        assert_eq!(first(&spec), ("db.example", 6000), "{s}");
         assert_eq!(spec.target_db, "maint", "{s}");
         assert_eq!(spec.user, "alice", "{s}");
         assert_eq!(spec.application_name, "ci-deploy", "{s}");
@@ -601,7 +605,7 @@ fn what_a_string_names_beats_the_environment() {
         None,
     )
     .unwrap();
-    assert_eq!(s.first(), ("own", 7000));
+    assert_eq!(first(&s), ("own", 7000));
     assert_eq!(
         (
             s.target_db.as_str(),
@@ -615,7 +619,7 @@ fn what_a_string_names_beats_the_environment() {
 #[test]
 fn defaults_without_an_environment() {
     let s = resolve(&conn("sslmode=disable dbname=d"), &Env::default(), None).unwrap();
-    assert_eq!(s.first(), ("localhost", 5432));
+    assert_eq!(first(&s), ("localhost", 5432));
     assert_eq!(
         (s.maintenance_db.as_str(), s.application_name.as_str()),
         ("postgres", "pgmi")
@@ -623,7 +627,7 @@ fn defaults_without_an_environment() {
     assert_eq!(s.source, Source::ConnectionFlag);
     let env = Env::from_pairs(&[("PGDATABASE", "d")]);
     let s = resolve(&flags(), &env, None).unwrap();
-    assert_eq!(s.first(), ("localhost", 5432));
+    assert_eq!(first(&s), ("localhost", 5432));
     assert_eq!(s.source, Source::Defaults);
     let env = Env::from_pairs(&[("PGDATABASE", "d"), ("USER", "os-user")]);
     assert_eq!(resolve(&flags(), &env, None).unwrap().user, "os-user");
@@ -669,7 +673,7 @@ fn a_flag_beats_the_environment_which_beats_the_default() {
         ("PGDATABASE", "d"),
     ]);
     let s = resolve(&fl, &env, None).unwrap();
-    assert_eq!(s.first(), ("flaghost", 6005));
+    assert_eq!(first(&s), ("flaghost", 6005));
     assert_eq!(s.user, "envuser");
     assert_eq!(s.source, Source::Flags);
 }
@@ -678,7 +682,7 @@ fn a_flag_beats_the_environment_which_beats_the_default() {
 fn pgmi_yaml_fills_what_flags_and_the_environment_leave() {
     let y = yaml();
     let s = resolve(&flags(), &Env::default(), Some(&y)).unwrap();
-    assert_eq!(s.first(), ("yamlhost", 5434));
+    assert_eq!(first(&s), ("yamlhost", 5434));
     assert_eq!(
         (s.user.as_str(), s.target_db.as_str(), s.sslmode()),
         ("yamluser", "yamldb", SslMode::Require)
@@ -687,14 +691,14 @@ fn pgmi_yaml_fills_what_flags_and_the_environment_leave() {
 
     let env = Env::from_pairs(&[("PGHOST", "envhost"), ("PGPORT", "6006")]);
     let s = resolve(&flags(), &env, Some(&y)).unwrap();
-    assert_eq!(s.first(), ("envhost", 6006));
+    assert_eq!(first(&s), ("envhost", 6006));
     assert_eq!(s.user, "yamluser");
     assert_eq!(s.source, Source::PgHost);
 
     let mut fl = flags();
     fl.host = Some("flaghost".into());
     let s = resolve(&fl, &Env::default(), Some(&y)).unwrap();
-    assert_eq!(s.first(), ("flaghost", 5434));
+    assert_eq!(first(&s), ("flaghost", 5434));
 }
 
 #[test]
@@ -796,12 +800,12 @@ fn a_certificate_flag_beats_the_string() {
 fn a_string_replaces_the_pgmi_yaml_connection_block() {
     let y = yaml();
     let s = resolve(&conn("postgresql://stringhost"), &Env::default(), Some(&y)).unwrap();
-    assert_eq!(s.first(), ("stringhost", 5432));
+    assert_eq!(first(&s), ("stringhost", 5432));
     assert_ne!(s.user, "yamluser");
     assert_eq!((s.requested_sslmode, s.sslmode()), (None, SslMode::Prefer));
     assert_eq!(s.target_db, "yamldb");
     let s = resolve(&flags(), &Env::default(), Some(&y)).unwrap();
-    assert_eq!(s.first(), ("yamlhost", 5434));
+    assert_eq!(first(&s), ("yamlhost", 5434));
     assert_eq!(s.sslmode(), SslMode::Require);
 }
 
@@ -855,7 +859,7 @@ fn the_sslmode_flag_applies_to_an_environment_string() {
         "postgresql://u:p@envhost:6009/envdb?sslmode=require",
     )]);
     let s = resolve(&fl, &env, None).unwrap();
-    assert_eq!(s.first(), ("envhost", 6009));
+    assert_eq!(first(&s), ("envhost", 6009));
     assert_eq!(
         (s.target_db.as_str(), s.sslmode()),
         ("envdb", SslMode::Disable)

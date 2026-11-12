@@ -1197,7 +1197,7 @@ mod tests {
             ..loaded("app")
         };
         run.secrets.resolved(run.st.spec.as_ref().unwrap());
-        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        let (reporter, out) = crate::output::Captured::reporter(false, crate::output::Style::Plain);
         let code = finish(
             &context(),
             &run,
@@ -1224,7 +1224,7 @@ mod tests {
             execution: executed(0, failure(1, in_file(&["./a.sql", "./b.sql"], Some(line)))),
             ..loaded("app")
         };
-        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        let (reporter, out) = crate::output::Captured::reporter(false, crate::output::Style::Plain);
         finish(&context(), &run, &Err(sql_failure("boom")), &reporter);
         let text = out.text();
         let lines: Vec<&str> = text.lines().skip(1).collect();
@@ -1648,7 +1648,7 @@ mod tests {
             phase: Phase::Deploying,
             ..resolved
         };
-        let (reporter, out) = crate::output::Captured::reporter(false, false, false);
+        let (reporter, out) = crate::output::Captured::reporter(false, crate::output::Style::Plain);
         assert_eq!(finish(&context(), &run, &Err(refused), &reporter), 11);
         let text = out.text();
         let lines: Vec<&str> = text.lines().skip(1).collect();

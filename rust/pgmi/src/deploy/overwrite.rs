@@ -27,7 +27,14 @@ pub(crate) struct Snapshot {
     settings: Vec<String>,
     comment: Option<String>,
     role_settings: Vec<RoleSettings>,
-    acl: Option<Vec<(String, String, bool)>>,
+    acl: Option<Vec<Grant>>,
+}
+
+/// One privilege on the database; no grantee is PUBLIC.
+struct Grant {
+    grantee: Option<String>,
+    privilege: String,
+    grantable: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -199,7 +206,11 @@ async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapsh
                     .into_iter()
                     .zip(privileges)
                     .zip(grantable)
-                    .map(|((g, p), o)| (g, p, o))
+                    .map(|((g, privilege), grantable)| Grant {
+                        grantee: (!g.is_empty()).then_some(g),
+                        privilege,
+                        grantable,
+                    })
                     .collect(),
             )
         }
@@ -345,14 +356,20 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     }
     if let Some(acl) = &s.acl {
         let mut grants = vec![format!("REVOKE ALL ON DATABASE {d} FROM PUBLIC")];
-        for (grantee, privilege, grantable) in acl {
-            let to = if grantee.is_empty() {
-                "PUBLIC".to_string()
+        for g in acl {
+            let to = g
+                .grantee
+                .as_deref()
+                .map_or_else(|| "PUBLIC".to_string(), quote_ident);
+            let option = if g.grantable {
+                " WITH GRANT OPTION"
             } else {
-                quote_ident(grantee)
+                ""
             };
-            let option = if *grantable { " WITH GRANT OPTION" } else { "" };
-            grants.push(format!("GRANT {privilege} ON DATABASE {d} TO {to}{option}"));
+            grants.push(format!(
+                "GRANT {} ON DATABASE {d} TO {to}{option}",
+                g.privilege
+            ));
         }
         out.push(("the privileges on the database".into(), grants.join(";\n")));
     }
@@ -517,8 +534,16 @@ mod tests {
                 options: vec!["work_mem=8MB".into()],
             }],
             acl: Some(vec![
-                (String::new(), "CONNECT".into(), false),
-                ("r".into(), "TEMPORARY".into(), true),
+                Grant {
+                    grantee: None,
+                    privilege: "CONNECT".into(),
+                    grantable: false,
+                },
+                Grant {
+                    grantee: Some("r".into()),
+                    privilege: "TEMPORARY".into(),
+                    grantable: true,
+                },
             ]),
         };
         let sql: Vec<String> = restore_sql("d", &s).into_iter().map(|(_, s)| s).collect();

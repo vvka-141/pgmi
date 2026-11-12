@@ -70,13 +70,21 @@ impl Notice {
     }
 }
 
+/// How the summary line marks success or failure: words (`ok`, `FAILED`)
+/// off a terminal, glyphs on one, glyphs in color unless `NO_COLOR`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Style {
+    Plain,
+    Glyphs,
+    Colored,
+}
+
 /// Writes pgmi's own lines to one sink (stderr in production), one whole
 /// line at a time even when several deploys share it.
 pub(crate) struct Reporter {
     verbose: bool,
     start: Instant,
-    fancy: bool,
-    color: bool,
+    style: Style,
     sink: Mutex<Box<dyn Write + Send>>,
 }
 
@@ -85,20 +93,19 @@ impl Reporter {
         let term =
             std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
         let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
-        Arc::new(Self::to(
-            Box::new(std::io::stderr()),
-            verbose,
-            term,
-            term && !no_color,
-        ))
+        let style = match (term, no_color) {
+            (false, _) => Style::Plain,
+            (true, true) => Style::Glyphs,
+            (true, false) => Style::Colored,
+        };
+        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style))
     }
 
-    pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, fancy: bool, color: bool) -> Self {
+    pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, style: Style) -> Self {
         Reporter {
             verbose,
             start: Instant::now(),
-            fancy,
-            color,
+            style,
             sink: Mutex::new(sink),
         }
     }
@@ -150,13 +157,13 @@ impl Reporter {
 
     pub(crate) fn summary(&self, summary: &Summary) {
         let ok = matches!(summary, Summary::Done(_));
-        let (word, open, close) = match (ok, self.fancy, self.color) {
-            (true, true, true) => ("✓", "\x1b[32m", "\x1b[0m"),
-            (true, true, false) => ("✓", "", ""),
-            (true, false, _) => ("ok", "", ""),
-            (false, true, true) => ("✗", "\x1b[31m", "\x1b[0m"),
-            (false, true, false) => ("✗", "", ""),
-            (false, false, _) => ("FAILED", "", ""),
+        let (word, open, close) = match (ok, self.style) {
+            (true, Style::Colored) => ("✓", "\x1b[32m", "\x1b[0m"),
+            (true, Style::Glyphs) => ("✓", "", ""),
+            (true, Style::Plain) => ("ok", "", ""),
+            (false, Style::Colored) => ("✗", "\x1b[31m", "\x1b[0m"),
+            (false, Style::Glyphs) => ("✗", "", ""),
+            (false, Style::Plain) => ("FAILED", "", ""),
         };
         self.line(&format!("{open}{word}{close} {}", summary.text()));
     }
@@ -249,12 +256,9 @@ pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 
 #[cfg(test)]
 impl Captured {
-    pub(crate) fn reporter(verbose: bool, fancy: bool, color: bool) -> (Reporter, Captured) {
+    pub(crate) fn reporter(verbose: bool, style: Style) -> (Reporter, Captured) {
         let out = Captured::default();
-        (
-            Reporter::to(Box::new(out.clone()), verbose, fancy, color),
-            out,
-        )
+        (Reporter::to(Box::new(out.clone()), verbose, style), out)
     }
 
     pub(crate) fn text(&self) -> String {
@@ -289,28 +293,28 @@ mod tests {
 
     #[test]
     fn the_summary_glyph_follows_the_terminal() {
-        for (fancy, color, ok, want) in [
-            (false, false, true, "ok app: done\n"),
-            (false, false, false, "FAILED app: done\n"),
-            (true, false, true, "✓ app: done\n"),
-            (true, false, false, "✗ app: done\n"),
-            (true, true, true, "\x1b[32m✓\x1b[0m app: done\n"),
-            (true, true, false, "\x1b[31m✗\x1b[0m app: done\n"),
+        for (style, ok, want) in [
+            (Style::Plain, true, "ok app: done\n"),
+            (Style::Plain, false, "FAILED app: done\n"),
+            (Style::Glyphs, true, "✓ app: done\n"),
+            (Style::Glyphs, false, "✗ app: done\n"),
+            (Style::Colored, true, "\x1b[32m✓\x1b[0m app: done\n"),
+            (Style::Colored, false, "\x1b[31m✗\x1b[0m app: done\n"),
         ] {
-            let (r, out) = Captured::reporter(false, fancy, color);
+            let (r, out) = Captured::reporter(false, style);
             let summary = if ok {
                 Summary::Done("app: done".into())
             } else {
                 Summary::Failed("app: done".into())
             };
             r.summary(&summary);
-            assert_eq!(out.text(), want, "fancy={fancy} color={color} ok={ok}");
+            assert_eq!(out.text(), want, "{style:?} ok={ok}");
         }
     }
 
     #[test]
     fn verbose_prefixes_every_line_with_the_elapsed_time() {
-        let (r, out) = Captured::reporter(true, false, false);
+        let (r, out) = Captured::reporter(true, Style::Plain);
         r.line("one\ntwo");
         let text = out.text();
         let lines: Vec<&str> = text.lines().collect();
@@ -321,14 +325,14 @@ mod tests {
             let secs = stamp.strip_prefix('[').unwrap().strip_suffix('s').unwrap();
             assert_eq!(secs.split_once('.').unwrap().1.len(), 2, "{line}");
         }
-        let (r, out) = Captured::reporter(false, false, false);
+        let (r, out) = Captured::reporter(false, Style::Plain);
         r.line("one\ntwo");
         assert_eq!(out.text(), "one\ntwo\n");
     }
 
     #[test]
     fn notices_are_laid_out_as_psql_does() {
-        let (r, out) = Captured::reporter(false, false, false);
+        let (r, out) = Captured::reporter(false, Style::Plain);
         r.notice(&notice("NOTICE", None, None));
         r.notice(&notice("INFO", None, None));
         r.notice(&notice("WARNING", Some("d"), Some("h")));
@@ -338,7 +342,7 @@ mod tests {
             out.text(),
             "msg\nmsg\nWARNING:  msg\nDETAIL:  d\nHINT:  h\n"
         );
-        let (r, out) = Captured::reporter(true, false, false);
+        let (r, out) = Captured::reporter(true, Style::Plain);
         r.notice(&notice("DEBUG", None, None));
         r.notice(&notice("LOG", None, None));
         assert!(out.text().ends_with("] msg\n"), "{}", out.text());
@@ -445,7 +449,7 @@ mod tests {
         }
         assert_eq!(Severity::from("WARNING"), Severity::Warning);
         assert_eq!(Severity::from("debug"), Severity::Other("debug".into()));
-        let (r, out) = Captured::reporter(false, false, false);
+        let (r, out) = Captured::reporter(false, Style::Plain);
         r.notice(&notice("AVISO", None, None));
         assert_eq!(out.text(), "AVISO:  msg\n");
         let mut log = NoticeLog::default();

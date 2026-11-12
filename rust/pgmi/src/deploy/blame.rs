@@ -1,4 +1,4 @@
-use super::script::LineMap;
+use super::script::{LineMap, Origin};
 use crate::error::SqlDiagnostics;
 use crate::project::walk::{File, is_sql};
 use std::fmt::Write as _;
@@ -222,8 +222,12 @@ fn locate_in_file(d: &SqlDiagnostics, where_: &str, f: &File) -> Option<Location
 
 impl Sent<'_> {
     fn locate(&self, line: usize, column: usize) -> Location {
-        let (original, in_macro) = self.lines.original(line);
-        let mut column = if in_macro { 0 } else { column };
+        let origin = self.lines.original(line);
+        let original = origin.line();
+        let mut column = match origin {
+            Origin::Macro(_) => 0,
+            Origin::Written(_) => column,
+        };
         let line_start = self.deploy_sql[..self.start]
             .rfind('\n')
             .map_or(0, |i| i + 1);
