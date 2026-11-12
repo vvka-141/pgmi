@@ -587,7 +587,7 @@ empty` when this run created it. A run refused before the deploy starts (the
 connection cannot be resolved, a parameter source is refused) prints no
 summary line, only the error.
 
-Cases: `errors/refused-before-deploy-no-summary`, `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
+Cases: `errors/refused-before-deploy-no-summary`, `errors/refusal-wording`, `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
 
 ### The --json record
 
@@ -1300,6 +1300,22 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi.yaml` negative timeout (`-5s`) | runs, then exit 11 "exceeded --timeout -5s" | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | A host with several addresses fails to connect | only the last address's error | every address's error; exit 11 both | intended |
 | POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
+| `invalid configuration:` inside an error message | `failed to scan directory: invalid configuration: .pgmiignore excludes deploy.sql ...` | the same message without the infix; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Driver error text in connection and retry lines | pgx's text, sorted by pgmi (`server at h:p refused the connection: ...`, `password authentication failed for user "u" on database "d"`, `SSL/TLS connection error: ...`) | each host as `h:p: ` with the server's message and SQLSTATE, or the TLS or driver library's text; the next-step lines and exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Azure, AWS and Google sign-in failure text | the Go SDKs' wording, credential chain and troubleshooting links | pgmi's own sign-in chain: one line per credential tried; `connect to "<db>": ` and the exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Help text (`--help`, `help <command>`) | cobra layout: long descriptions, examples, `Flags:` with `[=true|false]` | clap layout and shorter descriptions (known gap: the long descriptions and examples are not ported) | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Input refused before connecting | `FAILED <db>: failed after ...`, then the error (an invalid parameter key, a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| A connection attempt that runs out of `connect_timeout` | not retried | retried like every transient failure; exit 11 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| A project path that does not exist | `failed to scan directory: failed to open directory: failed to access path: stat <path>: no such file or directory` | `project path "<path>" does not exist`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `PGMI_MAX_FILE_SIZE` that is not a positive whole number | reported inside the first file read (`failed to read ./x.sql: PGMI_MAX_FILE_SIZE=...`) | reported alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| A `.pgmiignore` pattern that cannot be read | Go regexp's reason (`error parsing regexp: ...`, `empty character class`) | `invalid pattern "<p>"`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `--json` `target` of a deploy refused before connecting | null | the resolved host, port and database | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `--json` `filesLoaded` when connecting fails | 0 | the files loaded before connecting | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Refusal order: a bad `pgmi.yaml` timeout and no database | the missing database | the timeout; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Connection source named after refusing a flag beside an environment connection string | `(connection defaults)`, or none | `(connection from DATABASE_URL)` (the variable that clashed); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `--sslmode` value that is not a mode | the error, then `(connection defaults)` | the error alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `metadata scaffold` project-root search | walks past `.git` | stops at `.git`, prints `Project root:` | intended |
 | Azure service principal with a certificate | not reachable | signs in | owner 2026-11-10 |
 | `sslrootcert=system` with an explicit weaker sslmode | upgraded to `verify-full` | newly refused, exit 10 | owner 2026-11-11 |

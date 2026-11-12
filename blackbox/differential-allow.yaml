@@ -8,6 +8,7 @@ skip:
   cases/terminal/init-wizard.yaml: *wizard
   cases/terminal/init-wizard-connection.yaml: *wizard
   cases/terminal/init-wizard-connection-esc.yaml: *wizard
+  cases/terminal/config-replace-unparseable.yaml: *wizard
 
 accept:
   - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
@@ -132,3 +133,242 @@ accept:
     step: steps[0]
     field: stdout
     rust: '# bash completion V2 for pgmi'
+  - row: '`invalid configuration:` inside an error message'
+    case: .*
+    field: stderr
+    go: '(?<=: )invalid configuration: '
+    go_as: ''
+  - row: '`invalid configuration:` inside an error message'
+    case: .*
+    field: json
+    go: '(?<=: )invalid configuration: '
+    go_as: ''
+  - row: Driver error text in connection and retry lines
+    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/connection: .*'
+    field: stderr
+    go: '(?m)^(pgmi: error: connect to "[^"]*": |Connection attempt \d+ failed: ).*?(; retrying in <duration>)?$'
+    go_as: '\1<driver text>\2'
+  - row: Driver error text in connection and retry lines
+    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/connection: .*'
+    field: stderr
+    rust: '(?m)^(pgmi: error: connect to "[^"]*": |Connection attempt \d+ failed: ).*?(; retrying in <duration>)?$'
+    rust_as: '\1<driver text>\2'
+  - row: Driver error text in connection and retry lines
+    case: cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml
+    field: json
+    go: '(?m)^( "error": "connect to \\"[^\\]*\\": )(?:[^\\"]|\\[^n])*'
+    go_as: '\1<driver text>'
+  - row: Driver error text in connection and retry lines
+    case: cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml
+    field: json
+    rust: '(?m)^( "error": "connect to \\"[^\\]*\\": )(?:[^\\"]|\\[^n])*'
+    rust_as: '\1<driver text>'
+  - row: Driver error text in connection and retry lines
+    case: cases/connection/target-session-attrs\.yaml
+    step: steps[7]
+    field: stderr
+    go: '(?m)^\t.*\n'
+    go_as: ''
+  - row: Driver error text in connection and retry lines
+    case: cases/connection/target-session-attrs\.yaml
+    step: steps[7]
+    field: stderr
+    go: '\ncheck --sslmode, --sslcert, --sslkey, --sslrootcert$'
+    go_as: ''
+  - row: Driver error text in connection and retry lines
+    case: cases/bad-weather/reset-in-(tail|transaction)\.yaml
+    field: stderr
+    go: '(?m)^pgmi: error: conn closed$'
+    go_as: 'pgmi: error: execute deploy.sql: connection closed'
+  - row: Driver error text in connection and retry lines
+    case: cases/bad-weather/reset-in-session-setup\.yaml
+    field: stderr
+    go: 'conn closed$'
+    go_as: 'connection closed'
+  - row: Driver error text in connection and retry lines
+    case: cases/tls/encrypted-client-key\.yaml
+    step: steps[1]
+    field: stderr
+    go: 'unable to decrypt key: x509: decryption password incorrect'
+    rust: 'private key ".*client_enc\.key": decryption password incorrect'
+  - row: A host with several addresses fails to connect
+    case: cases/connection/multi-host\.yaml
+    step: steps[1]
+    field: stderr
+    go: 'pg_isready -h 127\.0\.0\.1:1,127\.0\.0\.1:2 -p 5432'
+    go_as: 'pg_isready -h 127.0.0.1 -p 1'
+  - row: A connection attempt that runs out of `connect_timeout`
+    case: cases/env/pgconnect-timeout\.yaml
+    step: steps[0]
+    field: stderr
+    rust: '\A(Connection attempt \d failed: <driver text>\ncheck network reachability and server load; raise --timeout if needed; retrying in <duration>\n){3}FAILED'
+  - row: Session-preparation failure
+    case: cases/(bad-weather|connection|errors)/.*\.yaml
+    field: stderr
+    go: 'session preparation failed: (execution failed: )?failed to create internal tables: failed to create pgmi schema: '
+    go_as: 'session preparation failed: create the session tables: '
+  - row: Session-preparation failure
+    case: cases/(bad-weather|errors)/.*\.yaml
+    field: stderr
+    go: '; pgmi''s session tables need the TEMPORARY privilege: '
+    go_as: '\nthe login needs the TEMPORARY privilege on the target database: '
+  - row: Azure, AWS and Google sign-in failure text
+    case: cases/(bad-weather|cloud)/azure-.*\.yaml
+    field: stderr
+    go: '(?s)failed to acquire Azure token: azure token acquisition failed: DefaultAzureCredential: .*'
+    rust: '(?s)failed to acquire Azure token: DefaultAzureCredential: .*'
+  - row: '`AZURE_TOKEN_CREDENTIALS` naming no credential'
+    case: cases/cloud/azure-token-credentials-invalid\.yaml
+    field: stderr
+    rust: '^pgmi: error: invalid AZURE_TOKEN_CREDENTIALS value "NoSuchCredential"'
+  - row: Google sign-in without Application Default Credentials
+    case: cases/cloud/google-arguments\.yaml
+    step: steps[1]
+    field: stderr
+    rust: '\n\(connection defaults\)$'
+  - row: Input refused before connecting
+    case: cases/cloud/google-arguments\.yaml
+    step: steps[0]
+    field: stderr
+    rust: '\Apgmi: error: Google Cloud SQL IAM auth requires --google-instance \(project:region:instance\)\n\(connection defaults\)$'
+  - row: Input refused before connecting
+    case: cases/cloud/aws-iam-token\.yaml
+    step: steps[3]
+    field: stderr
+    rust: '\Apgmi: error: AWS IAM auth requires region \(use --aws-region or \$AWS_REGION\)$'
+  - row: Input refused before connecting
+    case: cases/(params/invalid-key|flags/repeated-flags)\.yaml
+    field: stderr
+    go: '\AFAILED \{db\}: failed after <duration>\n'
+    go_as: ''
+  - row: A parameter key in an error message
+    case: cases/params/invalid-key\.yaml
+    step: steps[3]
+    field: stderr
+    go: "'a-b'"
+    go_as: "'A-B'"
+  - row: Connection-string parse errors
+    case: cases/(connection/pgx-options|env/pg-tls-protocol-variables|tls/(client-certificate-pairs|require-auth-and-version))\.yaml
+    field: stderr
+    go: 'cannot parse `postgresql://'
+    rust: '(?m)^pgmi: error: (invalid [a-z_]+ (value|method): "[^"]*"|both "sslcert" and "sslkey" are required: give the client certificate and its private key together)$'
+  - row: Connection-string parse errors
+    case: cases/(connection/keyword-uppercase-no-echo|env/pgservice-refused)\.yaml
+    field: stderr
+    go: '\Apgmi: error: invalid connection string: '
+    go_as: 'pgmi: error: --connection: '
+  - row: Connection-string parse errors
+    case: cases/connection/keyword-uppercase-no-echo\.yaml
+    field: json
+    go: '"error": "invalid connection string: '
+    go_as: '"error": "--connection: '
+  - row: Connection-string parse errors
+    case: 'variant/connection: .*connect_timeout=x.*'
+    field: stderr
+    go: 'invalid connect_timeout "x": strconv\.Atoi'
+    rust: '\Apgmi: error: invalid connect_timeout "x"$'
+  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
+    case: cases/notices/pgpass-secret-redacted\.yaml
+    field: stderr
+    rust: \*\*\*
+  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
+    case: cases/notices/pgpass-secret-redacted\.yaml
+    field: json
+    rust: \*\*\*
+  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
+    case: cases/(connection/maintenance-database-only-when-needed|errors/connection-failures)\.yaml
+    field: stderr
+    go: 'existing database such as postgres: '
+    go_as: 'existing database such as ***: '
+  - row: Help text (`--help`, `help <command>`)
+    case: cases/(commands/(help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|flags/bool-forms|terminal/no-terminal-queries)\.yaml
+    field: stdout
+    go: '(?m)^Usage:$'
+    rust: '(?m)^Usage: pgmi'
+  - row: '`pgmi.yaml` that is not valid YAML or has an unknown key'
+    case: 'cases/config/(yaml-duplicate-keys|yaml-tabs|yaml-unknown-keys|pgmi-yaml-invalid)\.yaml|variant/pgmi\.yaml: .*'
+    field: stderr
+    go: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/(\w+/)?pgmi\.yaml: yaml: '
+    rust: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/(\w+/)?pgmi\.yaml: line \d+ column \d+: [^\n]*$'
+  - row: '`pgmi.yaml` with two YAML documents'
+    case: cases/config/yaml-documents\.yaml
+    field: stderr
+    rust: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/two/pgmi\.yaml: line 5 column 1: multiple YAML documents detected$'
+  - row: '`pgmi.yaml` quoted port (`port: "5433"`)'
+    case: cases/config/yaml-port\.yaml
+    step: steps[0]
+    field: db
+    go: '<no database>'
+  - row: '`pgmi.yaml` quoted port (`port: "5433"`)'
+    case: cases/config/yaml-port\.yaml
+    step: steps[1]
+    field: stderr
+    go: '(?m)^Database "\{db\}" does not exist; creating\n'
+    go_as: ''
+  - row: URI scheme not in lowercase (`POSTGRESQL://`)
+    case: cases/connection/uri-scheme-case\.yaml
+    field: db
+    go: '<no database>'
+  - row: URI scheme not in lowercase (`POSTGRESQL://`)
+    case: cases/connection/uri-scheme-case\.yaml
+    field: stderr
+    go: '\Apgmi: error: invalid connection string: invalid connection option "(POSTGRESQL|Postgres)://'
+  - row: URI scheme not in lowercase (`POSTGRESQL://`)
+    case: cases/connection/uri-scheme-case\.yaml
+    field: json
+    go: '"error": "invalid connection string: invalid connection option \\"POSTGRESQL://'
+  - row: A project path that does not exist
+    case: cases/commands/info\.yaml
+    step: steps[3]
+    field: stderr
+    rust: '\Apgmi: error: project path "\{workdir\}/missing" does not exist$'
+  - row: '`PGMI_MAX_FILE_SIZE` that is not a positive whole number'
+    case: cases/commands/metadata-refusals\.yaml
+    step: steps[12]
+    field: stderr
+    go: 'failed to scan directory: failed to read \./big\.sql: '
+    go_as: ''
+  - row: A `.pgmiignore` pattern that cannot be read
+    case: cases/dialect/pgmiignore-broken-patterns\.yaml
+    field: stderr
+    go: '(?m): error parsing regexp: .*$'
+    go_as: ''
+  - row: A `.pgmiignore` pattern that cannot be read
+    case: cases/dialect/pgmiignore-broken-patterns\.yaml
+    field: stderr
+    go: '(?m)empty character class in ("[^"]*")$'
+    go_as: 'invalid pattern \1'
+  - row: '`--json` `ignoredPaths` path of a directory'
+    case: cases/dialect/project-walk\.yaml
+    step: steps[8]
+    field: json
+    go: '"path": "\./lib",'
+    go_as: '"path": "./lib/",'
+  - row: '`--json` `target` of a deploy refused before connecting'
+    case: cases/flags/json-database-before-load\.yaml
+    step: steps[0]
+    field: json
+    go: '"target": null,'
+    rust: '"target": \{'
+  - row: 'Refusal order: a bad `pgmi.yaml` timeout and no database'
+    case: "variant/pgmi\\.yaml: .*'timeout': 'abc'.*"
+    field: stderr
+    go: '\Apgmi: error: database name is required'
+    rust: '\Apgmi: error: invalid timeout in pgmi\.yaml: time: invalid duration "abc"$'
+  - row: Connection source named after refusing a flag beside an environment connection string
+    case: cases/(env/connection-string-vars-refuse-flags|errors/refusal-wording)\.yaml
+    field: stderr
+    go: 'which names its own server and login'
+    rust: '\n\(connection from (DATABASE_URL|PGMI_CONNECTION_STRING)\)$'
+  - row: '`--json` `filesLoaded` when connecting fails'
+    case: cases/errors/connection-source\.yaml
+    step: steps[0]
+    field: json
+    go: '"filesLoaded": 0,'
+    go_as: '"filesLoaded": 1,'
+  - row: '`--sslmode` value that is not a mode'
+    case: cases/commands/short-help-and-sslmode-value\.yaml
+    step: steps[4]
+    field: stderr
+    go: '\n\(connection defaults\)$'
+    go_as: ''
