@@ -5,10 +5,20 @@ use std::path::PathBuf;
 use crate::error::{Error, Result};
 
 /// The process environment, read once by the caller of [`crate::run`].
-#[derive(Debug, Default, Clone)]
+/// `Debug` lists the variable names only, never their values.
+#[derive(Default, Clone)]
 pub struct Env {
     vars: BTreeMap<String, String>,
     not_utf8: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Env")
+            .field("vars", &self.vars.keys().collect::<Vec<_>>())
+            .field("not_utf8", &self.not_utf8)
+            .finish()
+    }
 }
 
 impl Env {
@@ -138,6 +148,16 @@ fn norm(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_names_the_variables_and_hides_their_values() {
+        let env = Env::from_pairs(&[("PGPASSWORD", "s3cret-pw"), ("PGMI_PARAM_TOKEN", "tok-xyz")]);
+        let shown = format!("{env:?}");
+        assert!(shown.contains("PGPASSWORD"), "{shown}");
+        assert!(shown.contains("PGMI_PARAM_TOKEN"), "{shown}");
+        assert!(!shown.contains("s3cret-pw"), "{shown}");
+        assert!(!shown.contains("tok-xyz"), "{shown}");
+    }
 
     #[test]
     fn lookups() {
