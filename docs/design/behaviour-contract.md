@@ -709,7 +709,9 @@ Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`
 ### Terminal behaviour
 
 Wizards and prompts run only on a terminal and never when `CI` is set or
-`PGMI_NON_INTERACTIVE=1`. Long output (`pgmi ai`) goes through `PGMI_PAGER`,
+`PGMI_NON_INTERACTIVE=1`. In the Rust binary `deploy` never opens a wizard:
+with no connection it exits 10 and lists the ways to set one (owner
+2026-11-12); `pgmi init` and `pgmi config` keep theirs. Long output (`pgmi ai`) goes through `PGMI_PAGER`,
 else `PAGER`, else `less -R`, on a terminal only; `PGMI_PAGER=cat` prints
 directly. The pager command is split on white space and run without a shell
 (no quoting, no `$` expansion); a pager that cannot start means the output is
@@ -1280,6 +1282,7 @@ release notes take their "Behaviour changes" section from this table.
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| `deploy` on a terminal with no connection from flags, environment or `pgmi.yaml` | opens the connection wizard | never interactive: exit 10, listing the ways to set a connection; `pgmi init` and `pgmi config` keep their wizards | owner 2026-11-12 (PGMI-901) |
 | Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 11 (connection failed); `--json` still shows what committed | agent 2026-11-12 (PGMI-885), owner may revisit |
 | `.env` value ending in `\"` or `\\` before the closing quote (`"x\""`) | `x\`, or reads on into later lines | `x"`, `x\` | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | file refused, exit 10 | agent 2026-11-12 (PGMI-900), owner may revisit |
