@@ -309,6 +309,22 @@ impl std::fmt::Debug for Signin {
     }
 }
 
+const ADMIN_API: &str = "https://sqladmin.googleapis.com";
+
+#[cfg(feature = "testhooks")]
+fn admin_api_base(env: &Env) -> Result<String> {
+    Ok(env
+        .non_empty("CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN")?
+        .unwrap_or(ADMIN_API)
+        .trim_end_matches('/')
+        .to_string())
+}
+
+#[cfg(not(feature = "testhooks"))]
+fn admin_api_base(_: &Env) -> Result<String> {
+    Ok(ADMIN_API.to_string())
+}
+
 impl Signin {
     pub(crate) fn new(req: &Options, env: &Env) -> Result<Self> {
         let instance = req.google_instance.clone().unwrap_or_default();
@@ -320,11 +336,7 @@ impl Signin {
         } else {
             Adc::Discovered
         };
-        let base = env
-            .non_empty("CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN")?
-            .unwrap_or("https://sqladmin.googleapis.com/")
-            .trim_end_matches('/')
-            .to_string();
+        let base = admin_api_base(env)?;
         let api = format!("{base}/sql/v1beta4/projects/{project}/instances/{name}");
         Ok(Signin {
             instance,
@@ -464,6 +476,23 @@ pub(crate) mod tests {
     async fn settings(url: &str) -> std::result::Result<ConnectSettings, DialerError> {
         let http = reqwest::Client::new();
         admin_api(&http, &QUICK, Step::ConnectSettings, |h| h.get(url)).await
+    }
+
+    #[cfg(not(feature = "testhooks"))]
+    #[test]
+    fn a_release_build_always_asks_the_real_admin_api() {
+        let req = Options {
+            google_instance: Some("p:r:i".into()),
+            ..Options::default()
+        };
+        let env = Env::from_pairs(&[(
+            "CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN",
+            "http://127.0.0.1:1/x/",
+        )]);
+        assert_eq!(
+            Signin::new(&req, &env).unwrap().api,
+            "https://sqladmin.googleapis.com/sql/v1beta4/projects/p/instances/i"
+        );
     }
 
     #[tokio::test]

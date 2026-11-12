@@ -1,4 +1,4 @@
-#![cfg(all(test, target_os = "linux"))]
+#![cfg(all(test, target_os = "linux", feature = "testhooks"))]
 
 mod fakes;
 

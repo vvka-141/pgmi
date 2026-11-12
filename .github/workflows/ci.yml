@@ -317,8 +317,11 @@ jobs:
           PGMI_TEST_CONN_PG17: postgresql://postgres:postgres@127.0.0.1:5417/postgres
           PGMI_REQUIRE_DB: '1'
         run: cargo test --locked --workspace
-      - name: Panic exits 3 (testhooks)
-        run: cargo test --locked -p pgmi --features testhooks --test panic
+      - name: Test hooks (panic exits 3, Google sign-in through the fake admin API)
+        env:
+          PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          PGMI_REQUIRE_DB: '1'
+        run: cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
       - name: Dependencies (advisories, licences, no C)
         run: cargo deny --locked check
       - name: No C compiler on any release target
