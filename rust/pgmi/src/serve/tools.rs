@@ -410,6 +410,30 @@ fn path_argument(
     }
 }
 
+/// The servers the operator's own credentials may go to: the `host:port`s
+/// its environment resolves to, and the comma-separated `PGMI_SERVE_HOSTS`
+/// (`host` for any port, or `host:port`).
+fn operator_hosts(env: &Env) -> Result<Vec<String>, Error> {
+    let mut hosts: Vec<String> = env
+        .non_empty("PGMI_SERVE_HOSTS")?
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Ok(spec) = crate::conn::resolve::resolve(&Flags::default(), env, None) {
+        hosts.extend(
+            spec.hosts
+                .endpoints()
+                .map(|e| format!("{}:{}", e.name, e.port)),
+        );
+    }
+    Ok(hosts)
+}
+
 /// A connection from a tool call may not point the operator's password
 /// file elsewhere, or connect to an address other than the host whose
 /// `.pgpass` entry it gets.
@@ -512,6 +536,7 @@ fn deploy_context(
         env: env.clone(),
         dotenv_keys: Vec::new(),
         dotenv_refused: Vec::new(),
+        serve_hosts: Some(operator_hosts(env)?),
         stdin: Stdin::Unavailable,
         approver: Box::new(ConfirmedName(confirm)),
     })

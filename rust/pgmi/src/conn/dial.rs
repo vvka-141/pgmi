@@ -550,6 +550,9 @@ impl Attempt<'_> {
     }
 
     fn passfile(&self) -> Option<PathBuf> {
+        if !self.spec.ambient_passfile {
+            return None;
+        }
         self.spec
             .passfile
             .clone()

@@ -21,6 +21,10 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
   QUICKSTART.md, `docs/LAKEBASE.md` (the staged `--databricks` section,
   `lakebase-databricks.md`, says `prefer` is refused: drop that sentence).
 
+- `pgmi serve` keeps the operator's credentials for the servers it allows
+  (PGMI-915): document `PGMI_SERVE_HOSTS` in CLI.md (the `serve` section and
+  the env table) with the text staged in `switch-day/serve-allowed-hosts.md`.
+
 ## Go internals named in the docs (wording, not behaviour)
 
 - CLI.md:806: "pgmi uses the jackc/pgx driver"; rewrite without pgx.

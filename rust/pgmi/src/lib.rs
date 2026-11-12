@@ -156,6 +156,7 @@ fn run_deploy(
             env,
             dotenv_keys: dotenv.applied.into_iter().map(|(k, _)| k).collect(),
             dotenv_refused: dotenv.refused,
+            serve_hosts: None,
             stdin: deploy::Stdin::Process,
             approver,
         },
