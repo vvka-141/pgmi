@@ -58,6 +58,7 @@ impl Kind {
     }
 }
 
+#[derive(Clone)]
 struct Ids {
     tenant: Option<String>,
     client: Option<String>,
@@ -76,14 +77,30 @@ fn ids(req: &Options, env: &Env) -> Result<Ids> {
     })
 }
 
-fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
+/// The credentials to try in order: those the settings name, or the
+/// default chain, which probes for a managed identity and reports as
+/// `DefaultAzureCredential`.
+enum Plan {
+    Named(Vec<Kind>),
+    Chain(Vec<Kind>),
+}
+
+impl Plan {
+    fn kinds(&self) -> &[Kind] {
+        match self {
+            Plan::Named(k) | Plan::Chain(k) => k,
+        }
+    }
+}
+
+fn plan(ids: &Ids, env: &Env) -> Result<Plan> {
     let set = |n: &str| env.non_empty(n).map(|v| v.is_some());
     if ids.tenant.is_some() && ids.client.is_some() {
         if set("AZURE_CLIENT_SECRET")? {
-            return Ok((vec![Kind::Secret], false));
+            return Ok(Plan::Named(vec![Kind::Secret]));
         }
         if set("AZURE_CLIENT_CERTIFICATE_PATH")? {
-            return Ok((vec![Kind::Certificate], false));
+            return Ok(Plan::Named(vec![Kind::Certificate]));
         }
     }
     let federated = set("AZURE_FEDERATED_TOKEN_FILE")?;
@@ -93,7 +110,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
             kinds.push(Kind::Workload);
         }
         kinds.push(Kind::Managed);
-        return Ok((kinds, false));
+        return Ok(Plan::Named(kinds));
     }
     let mut chain = Vec::new();
     if federated && ids.tenant.is_some() {
@@ -106,7 +123,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
         Kind::PowerShell,
     ]);
     let Some(selected) = env.non_empty("AZURE_TOKEN_CREDENTIALS")? else {
-        return Ok((chain, true));
+        return Ok(Plan::Chain(chain));
     };
     let lower = selected.to_ascii_lowercase();
     let picked: Vec<Kind> = match lower.as_str() {
@@ -126,7 +143,7 @@ fn plan(ids: &Ids, env: &Env) -> Result<(Vec<Kind>, bool)> {
             "invalid AZURE_TOKEN_CREDENTIALS value {selected:?}. Valid values are \"dev\", \"prod\", or the name of any credential type in the default chain"
         )));
     }
-    Ok((picked, true))
+    Ok(Plan::Chain(picked))
 }
 
 /// Why one credential of the chain gave no token, worded as the Azure SDKs
@@ -189,6 +206,7 @@ pub(crate) struct Signin {
     env: Env,
     audience: Audience,
     pinned: OnceLock<Kind>,
+    assertion: tokio::sync::OnceCell<certificate::Assertion>,
 }
 
 impl Signin {
@@ -198,7 +216,27 @@ impl Signin {
             env,
             audience,
             pinned: OnceLock::new(),
+            assertion: tokio::sync::OnceCell::new(),
         }
+    }
+
+    /// The client certificate's signing key, read and decoded (a PKCS#12
+    /// key derivation) once, on a blocking thread.
+    async fn assertion(
+        &self,
+        ids: &Ids,
+    ) -> std::result::Result<certificate::Assertion, certificate::CertificateError> {
+        self.assertion
+            .get_or_try_init(|| {
+                let (ids, env) = (ids.clone(), self.env.clone());
+                async move {
+                    tokio::task::spawn_blocking(move || certificate::Assertion::load(&ids, &env))
+                        .await
+                        .map_err(certificate::CertificateError::Task)?
+                }
+            })
+            .await
+            .cloned()
     }
 
     async fn sign_in<G, F>(&self, ids: &Ids, get: G) -> Result<Fetched>
@@ -212,12 +250,12 @@ impl Signin {
                     .with_source(e)
             });
         }
-        let (kinds, chain) = plan(ids, &self.env)?;
-        let probing = chain
+        let plan = plan(ids, &self.env)?;
+        let probing = matches!(plan, Plan::Chain(_))
             && self.env.non_empty("IDENTITY_ENDPOINT")?.is_none()
             && self.env.non_empty("MSI_ENDPOINT")?.is_none();
         let mut failures = Vec::new();
-        for kind in kinds {
+        for &kind in plan.kinds() {
             let attempt = get(kind);
             let result = if kind == Kind::Managed && probing {
                 match tokio::time::timeout(Duration::from_secs(2), attempt).await {
@@ -235,10 +273,11 @@ impl Signin {
                 Err(e) => failures.push(format!("\t{}: {e}", kind.name())),
             }
         }
-        let head = if chain {
-            "DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:"
-        } else {
-            "failed to acquire a token:"
+        let head = match plan {
+            Plan::Chain(_) => {
+                "DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:"
+            }
+            Plan::Named(_) => "failed to acquire a token:",
         };
         Err(Error::connection(format!(
             "failed to acquire Azure token: {head}\n{}",
@@ -258,8 +297,7 @@ impl Mint for Signin {
 
     async fn mint(&self) -> Result<Fetched> {
         let ids = ids(&self.request, &self.env)?;
-        self.sign_in(&ids, |kind| get(kind, &ids, &self.env, self.audience))
-            .await
+        self.sign_in(&ids, |kind| get(kind, &ids, self)).await
     }
 }
 
@@ -270,9 +308,9 @@ fn expiry(unix_seconds: i64) -> Option<jiff::Timestamp> {
 async fn get(
     kind: Kind,
     ids: &Ids,
-    env: &Env,
-    audience: Audience,
+    signin: &Signin,
 ) -> std::result::Result<Fetched, CredentialError> {
+    let (env, audience) = (&signin.env, signin.audience);
     let text = CredentialError::Sdk;
     let credential: Arc<dyn TokenCredential> = match kind {
         Kind::PowerShell => return powershell(ids.tenant.as_deref(), audience).await,
@@ -291,8 +329,10 @@ async fn get(
             .map_err(text)?
         }
         Kind::Certificate => {
-            let assertion =
-                certificate::Assertion::load(ids, env).map_err(CredentialError::Certificate)?;
+            let assertion = signin
+                .assertion(ids)
+                .await
+                .map_err(CredentialError::Certificate)?;
             ClientAssertionCredential::new(
                 ids.tenant.clone().unwrap_or_default(),
                 ids.client.clone().unwrap_or_default(),
@@ -455,6 +495,7 @@ mod certificate {
         },
         NotRsa,
         Sign(rustls::Error),
+        Task(tokio::task::JoinError),
     }
 
     impl std::fmt::Display for CertificateError {
@@ -474,6 +515,7 @@ mod certificate {
                 CertificateError::Key(e) | CertificateError::Sign(e) => e.fmt(f),
                 CertificateError::In { path, error } => write!(f, "{path}: {error}"),
                 CertificateError::NotRsa => f.write_str("the certificate key is not an RSA key"),
+                CertificateError::Task(e) => write!(f, "reading the certificate: {e}"),
             }
         }
     }
@@ -485,11 +527,13 @@ mod certificate {
                 CertificateError::Pem(e) | CertificateError::NoPemKey(e) => Some(e),
                 CertificateError::Key(e) | CertificateError::Sign(e) => Some(e),
                 CertificateError::In { error, .. } => Some(error.as_ref()),
+                CertificateError::Task(e) => Some(e),
                 _ => None,
             }
         }
     }
 
+    #[derive(Clone)]
     pub(crate) struct Assertion {
         key: std::sync::Arc<dyn rustls::sign::SigningKey>,
         thumbprint: String,
@@ -719,6 +763,28 @@ mod tests {
             e.text(),
             "failed to acquire Azure token: AzureCLICredential: Azure PowerShell printed no token"
         );
+    }
+
+    #[tokio::test]
+    async fn the_client_certificate_is_read_once() {
+        crate::conn::tls::install();
+        let dir = crate::testdir::TempDir::new("azure-certificate-once");
+        let path = dir.join("sp.pem");
+        std::fs::write(&path, include_bytes!("testdata/sp.pem")).unwrap();
+        let path = path.display().to_string();
+        let s = Signin::new(
+            Options::default(),
+            Env::from_pairs(&[
+                ("AZURE_TENANT_ID", "t"),
+                ("AZURE_CLIENT_ID", "c"),
+                ("AZURE_CLIENT_CERTIFICATE_PATH", &path),
+            ]),
+            POSTGRES,
+        );
+        let ids = ids(&s.request, &s.env).unwrap();
+        s.assertion(&ids).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        s.assertion(&ids).await.unwrap();
     }
 
     #[tokio::test]
