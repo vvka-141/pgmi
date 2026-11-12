@@ -329,8 +329,12 @@ pub(crate) struct Signin {
 }
 
 pub(crate) async fn lakebase(req: &Options, env: &Env) -> Result<Lakebase> {
+    let (owned, vars) = (req.clone(), env.clone());
+    let settings = crate::blocking::spawn(move || settings(&owned, &vars))
+        .await
+        .map_err(|e| Error::internal("reading the Databricks configuration").with_source(e))??;
     Renewing::start(Signin {
-        settings: settings(req, env)?,
+        settings,
         azure: azure::Signin::new(req.clone(), env.clone(), azure::DATABRICKS),
         pinned: OnceLock::new(),
     })

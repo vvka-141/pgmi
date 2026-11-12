@@ -82,7 +82,7 @@ pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
         }
     };
     edit::write_atomic(&path, &text)
-        .map_err(|e| Error::general(format!("failed to save config: {}", e.text())))
+        .map_err(|e| Error::general("failed to save config").with_source(e))
 }
 
 pub(crate) fn offer_pgpass(s: &Settings, env: &Env) {
@@ -174,6 +174,25 @@ mod tests {
         save(dir.path(), &settings("appdb", "postgres"), true).unwrap();
         let cfg = ProjectConfig::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(cfg.connection.database.as_deref(), Some("appdb"));
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_write_error_as_its_source() {
+        let dir = TempDir::new("config-unwritable");
+        let missing = dir.join("missing");
+        let e = save(&missing, &settings("appdb", "postgres"), false).unwrap_err();
+        assert!(
+            e.text().starts_with("failed to save config: "),
+            "{}",
+            e.text()
+        );
+        let source = std::error::Error::source(&e)
+            .and_then(|s| s.downcast_ref::<Error>())
+            .expect("the write error is the source");
+        assert_eq!(
+            e.text(),
+            format!("failed to save config: {}", source.text())
+        );
     }
 
     #[test]

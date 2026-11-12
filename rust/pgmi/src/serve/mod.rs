@@ -42,7 +42,11 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> Result<(), Error
     crate::conn::tls::install();
     let stop = CancellationToken::new();
     let ended = runtime.block_on(async {
-        let signals = tokio::spawn(on_signals(stop.clone()));
+        let first = stop.clone();
+        let signals = tokio::spawn(crate::signals::first_stops_second_exits(
+            move || first.cancel(),
+            || {},
+        ));
         let ended = serve(
             tokio::io::stdin(),
             tokio::io::stdout(),
@@ -358,41 +362,6 @@ async fn writer(
         }
     }
     Delivery::Delivered
-}
-
-/// Cancels `stop` at the first SIGINT or SIGTERM, so serve drains its
-/// answers, and exits 130 at the second, as `deploy` does.
-async fn on_signals(stop: CancellationToken) {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut int), Ok(mut term)) = (
-            signal(SignalKind::interrupt()),
-            signal(SignalKind::terminate()),
-        ) else {
-            return;
-        };
-        tokio::select! {
-            _ = int.recv() => {}
-            _ = term.recv() => {}
-        }
-        stop.cancel();
-        tokio::select! {
-            _ = int.recv() => {}
-            _ = term.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        if tokio::signal::ctrl_c().await.is_err() {
-            return;
-        }
-        stop.cancel();
-        if tokio::signal::ctrl_c().await.is_err() {
-            return;
-        }
-    }
-    std::process::exit(i32::from(crate::error::Kind::Interrupted.exit_code()));
 }
 
 /// The protocol generation a request speaks: the session-based one

@@ -119,7 +119,8 @@ The lib target is not published as a library API (0001 still holds).
   `stderr()` in production, `Vec<u8>` in tests. Summary line, verbose
   prefixes and redaction become unit-testable.
 - **MCP server over any transport.** `serve::serve(input: impl AsyncRead,
-  output: impl AsyncWrite, tools: &impl Toolbox, stop: CancellationToken)`.
+  output: impl AsyncWrite, backlog: impl Backlog, tools: &impl Toolbox,
+  stop: CancellationToken)`.
   `Toolbox::call(name, args, token) -> Outcome`; production is the existing
   `Tool` enum; tests use a slow or panicking toolbox over
   `tokio::io::duplex`. Signals cancel `stop` from a task in `run`, so no
@@ -642,6 +643,50 @@ reproduced on 6f94c1ad before the fix. What changed:
   `&Endpoint` from `first()`, and `Grant`, with `None` as PUBLIC instead of
   an empty string. The `*_for(windows)` test seams and `asked_before` stay,
   as recorded.
+
+### Fix round 6 (2026-11-12)
+
+The fifth gate review (`.private/reviews/rust-gates-2026-11-12d.md`: both
+gates met, trivial leftovers) and a Codex review of d4edac2e with two HIGHs,
+both reproduced first as failing tests in `tests/serve_pipes.rs`.
+
+- **Progress is any byte a pipe reader takes.** A Linux pipe frees room a
+  page at a time, so a flushed slice proved progress only per page: a
+  reader at 1 KB/s through a one-page pipe was dropped mid-line. The writer
+  now samples a `Backlog` (`serve::Backlog`, one method `unread`) every
+  100 ms while a slice waits and counts any change; stdout's is `FIONREAD`
+  through `rustix` when it is a pipe on Linux, `Untold` elsewhere, where
+  progress stays a slice, now 512 bytes. The seam lets the in-process
+  tests fake a backlog.
+- **`blocking`: blocking work keeps its call's place.** `blocking::Slot`
+  (the semaphore permit, moved out of `serve`) is a task-local for the
+  duration of a call (`Slot::hold`), and `blocking::spawn` is the only way
+  to start blocking work (clippy `disallowed-methods` bans
+  `tokio::task::spawn_blocking`); it moves the current slot, if any, into
+  the closure. `Toolbox::call` lost its slot parameter. A task-local
+  rather than a parameter, because the blocking pieces of a deploy sit
+  four layers down (`guard`, `dial`, `azure`, `google`) and none of them
+  should know about serve.
+- **Params files through the `Vfs` seam.** `params::collect` takes
+  `Inputs { files: &dyn Vfs, stdin, limit, stop }`; `Vfs::read_named`
+  reads a named file of any kind up to the limit, and `OsFs` polls a pipe
+  or device (`rustix::event::poll`, 100 ms) so a cancel ends the wait
+  without touching the descriptor's flags. `OsFs::cwd()` resolves paths as
+  given. Tests read params files from `MemFs`.
+- **Size limits.** Params files, `-` and the project `.env` stop at
+  `PGMI_MAX_FILE_SIZE`; a password file at 10 MiB (`Lookup::TooLarge`).
+- **Renewal is single-flight.** `Renewing::renew` takes a
+  `tokio::sync::Mutex<()>` across the mint's `.await` (the one lock held
+  across an await, on purpose: it serialises sign-ins and is never taken
+  while another lock is held), then rechecks the cache with the caller's
+  own test, so a waiter takes the value just minted. The background task
+  tests "newer than the value I scheduled on", not the wall clock, and
+  tells a `LogSink` (a `--verbose` line, redacted) when a renewal fails.
+- **Small ones.** `signals::first_stops_second_exits` is the one
+  two-signal loop (deploy and serve); `NoticeCounts` replaces the
+  `(u64, u64)` and a poisoned notice log is recovered, not read as zeros;
+  `pgmi config`'s save error keeps the write error as its source; the Arc
+  key and the Databricks config file are read on the blocking pool.
 
 ## Consequences
 

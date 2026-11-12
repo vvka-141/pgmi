@@ -158,41 +158,14 @@ const INTERRUPTED: &str = "pgmi: interrupted, cancelling deployment... (again to
 const INTERRUPTED_AGAIN: &str = "pgmi: interrupted again, quitting";
 
 pub(super) fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
-    tokio::spawn(async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let (Ok(mut int), Ok(mut term)) = (
-                signal(SignalKind::interrupt()),
-                signal(SignalKind::terminate()),
-            ) else {
-                return;
-            };
-            tokio::select! {
-                _ = int.recv() => {}
-                _ = term.recv() => {}
-            }
+    let again = reporter.clone();
+    tokio::spawn(crate::signals::first_stops_second_exits(
+        move || {
             reporter.line(INTERRUPTED);
             stop.signal();
-            tokio::select! {
-                _ = int.recv() => {}
-                _ = term.recv() => {}
-            }
-            reporter.line(INTERRUPTED_AGAIN);
-            std::process::exit(i32::from(Kind::Interrupted.exit_code()));
-        }
-        #[cfg(not(unix))]
-        {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                reporter.line(INTERRUPTED);
-                stop.signal();
-            }
-            if tokio::signal::ctrl_c().await.is_ok() {
-                reporter.line(INTERRUPTED_AGAIN);
-                std::process::exit(i32::from(Kind::Interrupted.exit_code()));
-            }
-        }
-    });
+        },
+        move || again.line(INTERRUPTED_AGAIN),
+    ));
 }
 
 #[cfg(test)]

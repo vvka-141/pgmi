@@ -240,7 +240,13 @@ pub(crate) async fn token(
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or_default()
                 .to_string();
-            let key = arc_key(&header, &arc_dir(env)).map_err(MsiError::ArcKey)?;
+            let dir = arc_dir(env);
+            let key = crate::blocking::spawn(move || arc_key(&header, &dir))
+                .await
+                .map_err(|e| {
+                    MsiError::Client(Error::internal("reading the Arc key").with_source(e))
+                })?
+                .map_err(MsiError::ArcKey)?;
             http.get(url)
                 .header("Metadata", "true")
                 .header("Authorization", format!("Basic {key}"))

@@ -20,6 +20,7 @@ pub mod invariants;
 mod output;
 mod project;
 pub mod serve;
+mod signals;
 mod templates;
 #[cfg(test)]
 mod testdir;

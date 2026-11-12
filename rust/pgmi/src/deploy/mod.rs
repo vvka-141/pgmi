@@ -264,6 +264,13 @@ pub(crate) struct Failure {
     blame: blame::Blame,
 }
 
+/// How many notices a deploy printed, and how many of them were warnings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoticeCounts {
+    pub(crate) notices: u64,
+    pub(crate) warnings: u64,
+}
+
 pub(crate) struct Run {
     st: Progress,
     log: Arc<Mutex<NoticeLog>>,
@@ -320,11 +327,19 @@ impl Run {
         self.st.database()
     }
 
-    pub(crate) fn notice_counts(&self) -> (u64, u64) {
+    pub(crate) fn notice_counts(&self) -> NoticeCounts {
+        let log = self.log();
+        NoticeCounts {
+            notices: log.total,
+            warnings: log.warning_total,
+        }
+    }
+
+    /// The notices so far; a panic while one was logged leaves the log as it was.
+    fn log(&self) -> std::sync::MutexGuard<'_, NoticeLog> {
         self.log
             .lock()
-            .map(|l| (l.total, l.warning_total))
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The lines psql would print under the error: DETAIL, HINT, WHERE, and
@@ -368,7 +383,7 @@ impl Run {
                 dotenv_keys: &ctx.dotenv_keys,
                 started: self.started,
                 elapsed: self.t0.elapsed(),
-                notices: self.log.lock().ok().map(|l| l.finish()),
+                notices: Some(self.log().finish()),
                 secrets: &secrets,
             },
         )
@@ -588,9 +603,9 @@ impl Steps<'_> {
             notices: Arc::new(move |n: Notice| {
                 let n = secrets.notice(n);
                 reporter.notice(&n);
-                if let Ok(mut l) = log.lock() {
-                    l.push(&n);
-                }
+                log.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(&n);
             }),
             log: Arc::new(move |line: String| {
                 line_reporter.line(&redact(&line, &line_secrets.list()));
@@ -836,6 +851,30 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notice_counts_survive_a_panic_while_the_log_was_held() {
+        let run = Run::start();
+        {
+            let mut log = run.log();
+            log.total = 3;
+            log.warning_total = 1;
+        }
+        let log = run.log.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = log.lock().unwrap();
+            panic!("a notice sink failed");
+        })
+        .join();
+        assert!(run.log.is_poisoned());
+        assert_eq!(
+            run.notice_counts(),
+            NoticeCounts {
+                notices: 3,
+                warnings: 1
+            }
+        );
+    }
     use serde_json::{Value, json};
 
     impl Run {

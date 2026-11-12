@@ -504,7 +504,7 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
     let mut record = run.record(&ctx, &result);
     match &result {
         Ok(()) => {
-            let (notices, warnings) = run.notice_counts();
+            let crate::deploy::NoticeCounts { notices, warnings } = run.notice_counts();
             let mut text = format!(
                 "deployed {}: {} files loaded, {} paths ignored, {notices} notices ({warnings} warnings) in {}ms; the full record is in structuredContent",
                 run.database().unwrap_or_default(),
