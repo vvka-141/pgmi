@@ -339,7 +339,6 @@ these, allowed workspace-wide:
 | Lint | Why it stays allowed |
 |---|---|
 | `missing_errors_doc` | The library is pgmi's own; its `pub` surface exists for the fuzz targets (0001). |
-| `too_many_lines` | Test bodies, and six straight-line functions that read as one pass: `dotenv::parse`, `params::collect` and `overrides::overrides` (Go's precedence order), `dial::attempt` (one connection attempt), `execute::run` (one plan) and the connection wizard's `update`. The deploy orchestrator and `resolve::finish` are split into steps (gate 2 round). |
 | `items_after_statements` | Integration tests declare a helper next to the step that uses it. |
 | `assert_is_empty` | `assert!(v.is_empty())` reads better than the `[] as [T; 0]` comparison the lint rewrites it to. |
 | `case_sensitive_file_extension_comparisons` | Extensions compare case-sensitively, as in Go; changing it changes which files run. |
@@ -460,9 +459,10 @@ translated Go. What changed:
 The second gate review (`.private/reviews/rust-gates-2026-11-12.md`) and an
 independent Codex review of 58bad99f. What changed:
 
-- **Redaction in one place.** `Error::redact` records the secrets and
+- **Redaction of errors.** `Error::redact` records the secrets and
   `Error::text` (so `Display`) hides them in the whole rendering, the source
-  chain included. `error::chain` stops at a nested `Error`, which renders and
+  chain included. Its one caller is `resolve`; the deploy summary, `--json`
+  and serve redact the rendered text with `error::redact`. `error::chain` stops at a nested `Error`, which renders and
   redacts its own sources.
 - **Terminal restore.** `tui::Screen` holds a `Restore` guard made as soon
   as raw mode is on; a failing alternate-screen switch or `Terminal::new`
@@ -530,6 +530,67 @@ independent Codex review of 58bad99f. What changed:
 - **Connection strings.** A percent escape is two hex digits, a URI fragment
   is dropped, and an unknown option written after a password is refused
   without its name (`UnknownKeyBesidePassword`).
+
+### Fix round 4 (2026-11-12)
+
+The third gate review (`.private/reviews/rust-gates-2026-11-12b.md`) and an
+independent Codex review of 100d33ef. What changed:
+
+- **Serve's end of session.** `serve()` joins a named `Reader` and
+  `writer`; `InputEnd` is the one end-of-session state between them. After
+  input ends, each write step must progress within `DRAIN`, instead of all
+  remaining answers sharing one 2 s. Tool calls hold a semaphore `Slot`
+  until their work really ends; blocking tools move it into the blocking
+  closure; `init` finishes even when cancelled (record 0017).
+- **init.** A target that cannot be listed is refused with Go's message
+  and exit 1 instead of read as empty, and scaffold files are created with
+  `create_new` (a dangling kept link is written through, as Go does).
+  `commands::config::save` refuses a `pgmi.yaml` it cannot read unless the
+  user confirmed replacing it.
+- **`.env` export.** `dotenv::environment` refuses a `.env` holding a NUL
+  byte as unparseable, so `main`'s `set_var` can no longer panic; the
+  `dotenv_text` invariant checks that every pair the environment receives
+  can be exported.
+- **Errors.** `Error`'s `Debug` is hand-written (kind and redacted text).
+  `redact` hides the merged ranges of every occurrence of every secret, so
+  overlapping secrets leave nothing visible. `reworded` keeps the original
+  error as the unrendered source. Secrets travel as `Secret` throughout,
+  and the deploy's secret set survives a poisoned lock. `execute::generate`
+  reports a value that does not decode instead of "returned nothing".
+- **deploy modules.** `deploy/guard.rs` (guard, deadline, signals),
+  `deploy/secrets.rs` and `deploy/server.rs` (version check, client
+  encoding, CREATE DATABASE, release) leave `deploy/mod.rs` the
+  orchestration. `pgmi.yaml`, which the guard is built from, is read on the
+  blocking pool through `guard::before_guard`, stopped by a signal.
+- **Bounded reads.** `Vfs::read_bounded` reads at most limit + 1 bytes;
+  `walk::read_text` refuses a file that grew past `PGMI_MAX_FILE_SIZE`
+  after its stat.
+- **Cloud and dial.** `dial::Peer::Google` holds `cloud::CloudSql`, the
+  Cloud SQL route over `Renewing<google::Signin>`, and takes the current
+  session each time a socket opens, so a cancel request after the ephemeral
+  certificate's hour presents a renewed one, as Go's cloudsqlconn dialer
+  does. `databricks::Signin` pins the first route that gives a bearer token
+  (`OnceLock<Route>`), as `azure::Signin` pins its credential; route
+  failures are `RouteError { M2m, Cli, Azure }`, collected in `NoRoute`,
+  whose text is unchanged and whose source is the first failure. The Azure
+  client certificate is read and decoded (PKCS#12 key derivation) once, on
+  a blocking thread, into a `OnceCell` on `azure::Signin`; the `.pgpass`
+  lookup inside `Attempt::login` runs on a blocking thread. `azure::plan`
+  returns `Plan { Named, Chain }`; `google::Instance { project, name }`
+  (via `FromStr`) and `google::Adc { File, Discovered }` replace a string
+  triple and a bool. `From<ParseError> for Error` keeps the parse error as
+  the unrendered source. `connect_once` is a loop over a `Round` with
+  `endpoint`, `addresses`, `address` and `attempt` steps. `Failed::At`
+  renders `host (addr):port` in `Display` instead of storing a label. The
+  dial layer's own `Login` is gone: `Attempt::login` returns
+  `Option<cloud::Login>`.
+- **Small ones.** `stopped(what, bool)` is `cancelled` and `interrupted`;
+  a `tools/call` whose id holds a lone surrogate is answered; the
+  `pgmi.yaml` editor parses a port once.
+- **Lints.** `too_many_lines` is no longer allowed workspace-wide: each
+  function over the limit carries `#[expect(clippy::too_many_lines, reason
+  = ..)]` (`dotenv::parse`, `params::collect`, `overrides::overrides`,
+  `execute::run`, the wizard form's `new`, and test bodies).
 
 ## Consequences
 

@@ -191,6 +191,10 @@ fn skill_dirs(fs: &impl Vfs, root: &str) -> Vec<String> {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of spec violations, each case a line"
+)]
 fn validate_skill_flags_each_spec_violation() {
     let skill = |front: &str, body: &str| format!("---\n{front}\n---\n{body}");
     let good = skill(

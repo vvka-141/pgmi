@@ -23,6 +23,7 @@ fn job_count(c: &Client, job: &str) -> i64 {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "one job lifecycle, step by step")]
 fn background_jobs() {
     let _serial = adv::serial();
     let Some(pg) = pg() else { return };

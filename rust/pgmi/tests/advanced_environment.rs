@@ -34,6 +34,10 @@ fn case(name: &'static str, params: &[(&'static str, &str)], want: &str) -> Case
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one refusal per parameter, each a short block"
+)]
 fn refuses_bad_parameters() {
     let _serial = adv::serial();
     let Some(pg) = pg() else { return };
@@ -273,6 +277,10 @@ fn refuses_bad_parameters() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one deploy per environment, checked in sequence"
+)]
 fn environment_label() {
     let _serial = adv::serial();
     let Some(pg) = pg() else { return };

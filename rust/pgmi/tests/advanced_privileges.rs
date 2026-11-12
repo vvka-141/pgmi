@@ -295,6 +295,10 @@ fn drop_provider_roles(pg: &common::Pg, db: &str) {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one provider setup, then the deploy and its checks"
+)]
 fn deploys_beside_provider_grants() {
     let Some(pg) = pg() else { return };
     let name = "pgmi_rs_b_advanced_provider";

@@ -75,6 +75,10 @@ pub(crate) fn environment(text: &str) -> Result<Vec<(String, String)>, ParseErro
     parse(text, Mode::Dotenv)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the text; the quote and value rules read in order"
+)]
 pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, ParseError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let chars: Vec<char> = text.chars().collect();

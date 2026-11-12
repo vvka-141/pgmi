@@ -68,6 +68,10 @@ fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> R
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Go's precedence order, one source after another"
+)]
 pub(crate) fn collect(
     src: Sources<'_>,
     mut stdin: Option<&mut dyn Read>,

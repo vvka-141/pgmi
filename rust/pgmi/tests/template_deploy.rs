@@ -267,6 +267,10 @@ fn data_drift_spares_only_growing_append_only_tables() {
     assert_eq!(shrank.len(), 1);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one deploy, then each check Go's template test makes"
+)]
 fn deploy_template(template: &str) {
     let Some(pg) = pg() else { return };
     let project = Project::init(template);

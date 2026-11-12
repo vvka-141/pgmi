@@ -82,6 +82,10 @@ fn given(v: Option<&String>) -> Option<&str> {
 /// string `pgmi.yaml` supplies only the database and the certificate paths;
 /// its `sslmode` never applies. A string that does not parse has no notes:
 /// resolving it reports the error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Go's precedence order, one connection value after another"
+)]
 pub(crate) fn overrides(
     flags: &Flags,
     env: &Env,

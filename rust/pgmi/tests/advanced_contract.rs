@@ -181,6 +181,10 @@ fn switch_on_flips_only_the_named_row() {
     assert_eq!(switch_on(src, "absent"), None);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the guard fixtures as literal SQL, one per file"
+)]
 fn guard_files(option: &str) -> Vec<(&'static str, String)> {
     match option {
         "strict_fk_index" => vec![(

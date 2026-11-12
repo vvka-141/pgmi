@@ -325,6 +325,10 @@ enum FormOutcome {
 }
 
 impl Form {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the form's fields in display order, one per provider and method"
+    )]
     fn new(provider: &Provider, method: Method, initial: Option<&Connection>) -> Self {
         let (subtitle, inputs, notes): (_, Vec<Input>, &'static [&'static str]) = match method {
             Method::Password => {

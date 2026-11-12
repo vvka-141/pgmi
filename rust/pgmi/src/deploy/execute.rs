@@ -55,6 +55,10 @@ fn generated<E: std::error::Error + Send + Sync + 'static>(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one plan: load, run deploy.sql, run the units in order"
+)]
 pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     let Input {
         session,
