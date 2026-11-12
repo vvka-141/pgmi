@@ -1,0 +1,15 @@
+description: a project .env over PGMI_MAX_FILE_SIZE is applied by Go and refused with exit 10 by Rust, naming the file and never its text (contract "Behaviour changes in 0.20")
+project:
+  files:
+    .env: "PGMI_PARAM_SECRET=0123456789abcdef\n"
+    deploy.sql: "SELECT 1;"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_MAX_FILE_SIZE: "16"}
+    expect:
+      exit: 0
+      stderr_not: ["0123456789abcdef"]
+      rust: {exit: 10, stderr: ["pgmi: error: failed to read .*\\.env: exceeds 16-byte limit \\(override via PGMI_MAX_FILE_SIZE\\)"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_MAX_FILE_SIZE: "35"}
+    expect: {exit: 0}

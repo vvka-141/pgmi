@@ -2,12 +2,16 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Secret;
 
+/// The largest password file read, as `PGMI_MAX_FILE_SIZE`'s default.
+const MAX_LEN: u64 = crate::project::walk::DEFAULT_MAX_FILE_SIZE;
+
 /// What a password file holds for one connection.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Lookup {
     Found(Secret),
     NotFound,
     TooOpen(PathBuf),
+    TooLarge(PathBuf),
 }
 
 impl Lookup {
@@ -18,6 +22,10 @@ impl Lookup {
                 "WARNING: password file \"{}\" has group or world access; permissions should be u=rw (0600) or less",
                 path.display()
             )),
+            Lookup::TooLarge(path) => Some(format!(
+                "WARNING: password file \"{}\" is over {MAX_LEN} bytes; it was not read",
+                path.display()
+            )),
             Lookup::Found(_) | Lookup::NotFound => None,
         }
     }
@@ -25,7 +33,7 @@ impl Lookup {
     pub(crate) fn password(self) -> Option<Secret> {
         match self {
             Lookup::Found(p) => Some(p),
-            Lookup::NotFound | Lookup::TooOpen(_) => None,
+            Lookup::NotFound | Lookup::TooOpen(_) | Lookup::TooLarge(_) => None,
         }
     }
 }
@@ -40,8 +48,12 @@ pub(crate) fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -
     if group_or_world(&meta) {
         return Lookup::TooOpen(path.to_path_buf());
     }
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Lookup::NotFound;
+    let text = match read(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::FileTooLarge => {
+            return Lookup::TooLarge(path.to_path_buf());
+        }
+        Err(_) => return Lookup::NotFound,
     };
     let host = if host.starts_with('/') {
         "localhost"
@@ -50,6 +62,19 @@ pub(crate) fn lookup(path: &Path, host: &str, port: u16, db: &str, user: &str) -
     };
     find(&text, host, &port.to_string(), db, user)
         .map_or(Lookup::NotFound, |p| Lookup::Found(Secret::from(p)))
+}
+
+/// Reads a password file of at most `MAX_LEN` bytes as text.
+fn read(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(MAX_LEN + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_LEN {
+        return Err(std::io::ErrorKind::FileTooLarge.into());
+    }
+    Ok(text)
 }
 
 #[cfg(unix)]
@@ -122,7 +147,7 @@ pub(crate) fn save(
         b.create(dir)
             .map_err(|e| Error::general("create .pgpass directory").with_source(e))?;
     }
-    let existing = match std::fs::read_to_string(path) {
+    let existing = match read(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => {
@@ -151,6 +176,35 @@ pub(crate) fn save(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_password_file_over_the_limit_is_not_read_and_warned_about() {
+        let dir = crate::testdir::TempDir::new("pgpass-large");
+        let path = dir.join(".pgpass");
+        let mut text = "h:5432:db:u:secret\n".to_string();
+        text.push_str(&"#".repeat(usize::try_from(MAX_LEN).unwrap()));
+        std::fs::write(&path, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let found = lookup(&path, "h", 5432, "db", "u");
+        assert_eq!(found, Lookup::TooLarge(path.clone()));
+        assert_eq!(
+            found.warning().unwrap(),
+            format!(
+                "WARNING: password file \"{}\" is over 10485760 bytes; it was not read",
+                path.display()
+            )
+        );
+        let e = save(&path, "h", 5432, &["db"], "u", "p").unwrap_err();
+        assert!(
+            e.text().starts_with("failed to read existing .pgpass"),
+            "{}",
+            e.text()
+        );
+    }
 
     #[test]
     fn save_puts_entries_first_and_escapes() {

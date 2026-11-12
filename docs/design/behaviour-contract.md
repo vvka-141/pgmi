@@ -606,7 +606,12 @@ and an unquoted ` #`, which `.env` readers disagree on. `pgmi.yaml` values
 become text: `~` is empty, numbers and booleans as written (`5432.0` stays
 `5432.0`), block scalars keep their final newline.
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`.
+In the Rust binary a params file, `-` and the project `.env` are read up to
+`PGMI_MAX_FILE_SIZE` (10 MiB by default) and a larger one is exit 10; a
+password file over 10 MiB is not read, with a WARNING (Rust unit test
+`a_password_file_over_the_limit_is_not_read_and_warned_about`).
+
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`.
 
 ### Terminal behaviour
 
@@ -1185,6 +1190,8 @@ release notes take their "Behaviour changes" section from this table.
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
 | A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB) | read whole | newly refused, exit 10 (`exceeds N-byte limit`) | intended |
+| A project `.env` over `PGMI_MAX_FILE_SIZE` | applied | newly refused, exit 10, naming the file | intended |
+| A password file (`.pgpass`, `PGPASSFILE`, `passfile`) over 10 MiB | read | not read, with a WARNING naming it, as a world-readable one is | intended |
 | `serve`: a `tools/call` while 32 calls run | runs | newly refused with `-32000` | owner 2026-11-11 |
 | `serve`: 1024 answers the client has not read | queued | the session ends | owner 2026-11-11 |
 | `serve`: a second SIGINT or SIGTERM while answers are written | ignored, answers drained, exit 0 | ends at once, exit 130 | owner 2026-11-12 |

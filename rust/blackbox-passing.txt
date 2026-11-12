@@ -54,6 +54,7 @@ commands/verbose
 commands/version
 config/dotenv
 config/dotenv-provenance
+config/dotenv-size-limit
 config/overrides
 config/pgmi-yaml
 config/pgmi-yaml-invalid
@@ -156,6 +157,7 @@ formats/dotenv-expansion
 formats/dotenv-nul
 formats/params-file-edges
 formats/pgmi-yaml-edges
+formats/size-limits
 notices/pgpass-secret-redacted
 notices/secrets-redacted
 notices/severity

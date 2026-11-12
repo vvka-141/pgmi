@@ -37,8 +37,24 @@ pub(crate) fn dotenv_path(project: &Path) -> String {
     }
 }
 
+/// The project `.env`'s pairs that the environment does not set, read up
+/// to `PGMI_MAX_FILE_SIZE`.
 pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(String, String)>> {
-    let text = match project.read_to_string(".env") {
+    let limit = crate::project::walk::max_size(env)?;
+    let read = project.read_bounded(".env", limit).and_then(|bytes| {
+        if bytes.len() as u64 > limit {
+            return Err(std::io::Error::other(format!(
+                "exceeds {limit}-byte limit (override via PGMI_MAX_FILE_SIZE)"
+            )));
+        }
+        String::from_utf8(bytes).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    });
+    let text = match read {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => return Ok(vec![]),
@@ -119,6 +135,27 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_dotenv_over_the_file_size_limit_is_invalid_config() {
+        let fs = MemFs::default().file(".env", "PGHOST=x\n");
+        let env = Env::from_pairs(&[("PGMI_MAX_FILE_SIZE", "8")]);
+        let e = project_dotenv(&fs, &env).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        let path = std::path::Path::new("/mem").join(".env");
+        assert_eq!(
+            e.text(),
+            format!(
+                "failed to read {}: exceeds 8-byte limit (override via PGMI_MAX_FILE_SIZE)",
+                path.display()
+            )
+        );
+        let env = Env::from_pairs(&[("PGMI_MAX_FILE_SIZE", "9")]);
+        assert_eq!(
+            project_dotenv(&fs, &env).unwrap(),
+            [("PGHOST".into(), "x".into())]
+        );
     }
 
     #[test]
