@@ -606,7 +606,15 @@ Cases: `checksums/golden`, `checksums/cross-binary-redeploy`, `checksums/cross-b
 single quotes literal, double quotes with escapes and multiple lines). `.env`
 expands `$NAME` and `${NAME}` in unquoted and double-quoted values from the
 lines above only (a name set only in the environment, or nowhere, expands to
-empty); a `.env` that does not parse applies nothing and prints a WARNING
+empty). `.env` reads every form as godotenv 1.5 does: `KEY: value`, `export`
+followed by any blank, `\$` for a literal dollar, `\n` and `\r` the only
+escapes in double quotes (`\t` is `t`), `$name` in lowercase left as written,
+the last ` #` starting a comment, and an assignment after a closing quote on
+the same line; in the Rust binary `\"` and `\\` just before the closing double
+quote read as `"` and `\`, a leading byte-order mark is skipped (godotenv
+misreads the first and refuses the second), and a line with no key, such as
+`=x` or a last line without `=` or a newline, makes the file unparseable
+(godotenv applies the rest and tries to set an empty name); a `.env` that does not parse applies nothing and prints a WARNING
 naming the file, never its text. A NUL byte anywhere in the `.env` makes it
 unparseable in the Rust binary (Go drops a pair whose value holds one and
 applies the rest); neither binary prints the value. `.env` values enter the process environment,
@@ -621,7 +629,7 @@ In the Rust binary a params file, `-` and the project `.env` are read up to
 password file over 10 MiB is not read, with a WARNING (Rust unit test
 `a_password_file_over_the_limit_is_not_read_and_warned_about`).
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`.
 
 ### Terminal behaviour
 

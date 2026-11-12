@@ -590,8 +590,8 @@ pub fn metadata_block(meta: &Meta) -> Checked {
 }
 
 /// `.env` text is read or refused at a line of the text in both modes; what
-/// strict mode accepts, dotenv mode reads as the same keys, and as the same
-/// values when nothing can expand. What a project `.env` puts in the process
+/// strict mode accepts in plain ASCII text without `$` or a backslash, under
+/// keys godotenv accepts, dotenv mode reads alike. What a project `.env` puts in the process
 /// environment is what dotenv mode reads, and every pair of it can be
 /// exported.
 pub fn dotenv_text(text: &str) -> Checked {
@@ -621,17 +621,26 @@ pub fn dotenv_text(text: &str) -> Checked {
             "the error names no line of the text: {e}"
         );
     }
-    if let Ok(s) = &strict {
+    let plain = text
+        .chars()
+        .all(|c| c.is_ascii() && (!c.is_ascii_control() || matches!(c, '\t' | '\n' | '\r')))
+        && !text.contains(['$', '\\'])
+        && !text.replace("\r\n", "").contains('\r');
+    let key = |k: &str| {
+        k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    };
+    if let Ok(s) = &strict
+        && plain
+        && s.iter().all(|(k, _)| key(k))
+    {
         let l = loose.map_err(|e| format!("strict mode accepted what dotenv mode refused: {e}"))?;
         let keys = |v: &[(String, String)]| v.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
         ensure!(
             keys(s) == keys(&l),
             "the modes read different keys: {s:?} and {l:?}"
         );
-        ensure!(
-            text.contains('$') || *s == l,
-            "the modes read different values: {s:?} and {l:?}"
-        );
+        ensure!(*s == l, "the modes read different values: {s:?} and {l:?}");
     }
     Ok(())
 }
@@ -657,7 +666,12 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
         .collect();
     let single: Vec<(String, String)> = pairs
         .iter()
-        .map(|(k, v)| (k.clone(), v.replace('\'', "")))
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v.replace('\'', "").trim_end_matches('\\').to_string(),
+            )
+        })
         .collect();
     let quoted = |pairs: &[(String, String)]| {
         pairs.iter().fold(String::new(), |mut s, (k, v)| {
@@ -667,7 +681,11 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
     };
     let text = quoted(&single);
     let got = dotenv::parse(&text, Mode::Dotenv).map_err(|e| format!("{text:?}: {e}"))?;
-    ensure!(got == single, "{text:?} read as {got:?}");
+    let want: Vec<(String, String)> = single
+        .iter()
+        .map(|(k, v)| (k.clone(), v.replace("\r\n", "\n")))
+        .collect();
+    ensure!(got == want, "{text:?} read as {got:?}");
     let one_line: Vec<(String, String)> = single
         .iter()
         .map(|(k, v)| (k.clone(), v.replace(['\n', '\r'], "")))
@@ -684,8 +702,7 @@ pub fn dotenv_pairs(pairs: &[(String, String)]) -> Checked {
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
             .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
+            .replace('\r', "\\r");
         let _ = write!(s, "export {k}=\"{v}\"\r\n");
         s
     });

@@ -54,6 +54,7 @@ commands/usage-errors
 commands/verbose
 commands/version
 config/dotenv
+config/dotenv-forms
 config/dotenv-provenance
 config/dotenv-size-limit
 config/overrides

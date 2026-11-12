@@ -198,7 +198,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 
 | Format | Coverage |
 |---|---|
-| `.env` edge cases | ✓ `formats/dotenv-edges`; a NUL byte ✓ `formats/dotenv-nul` |
+| `.env` edge cases | ✓ `formats/dotenv-edges`; a NUL byte ✓ `formats/dotenv-nul`; godotenv's forms (`\$`, `KEY: value`, `export` with a tab, escapes, `'it''s'` refused) ✓ `config/dotenv-forms` |
 | `--params-file` edge cases; refuses `\` or `$` in double quotes and an unquoted ` #` (10) | ✓ `formats/params-file-edges` |
 | A params file, `-` or the project `.env` over `PGMI_MAX_FILE_SIZE` (Rust: 10) | ✓ `formats/size-limits`, `config/dotenv-size-limit` |
 | `pgmi.yaml` edge cases (`~`, numbers, `5432.0`, booleans, folded and literal blocks) | ✓ `formats/pgmi-yaml-edges` |

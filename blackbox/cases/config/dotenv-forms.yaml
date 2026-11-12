@@ -1,0 +1,33 @@
+description: the project .env reads every form as godotenv does - an escaped $ stays literal, double-quote escapes other than \n and \r drop the backslash, KEY:value, export with a tab, \' inside single quotes, lowercase $names left alone, the last ' #' starts the comment, a second assignment after a closing quote; text after a closing quote that is not an assignment makes the whole file unparseable
+project:
+  files:
+    .env: "PGMI_PARAM_DOLLAR_QUOTED=\"p\\$word\"\nPGMI_PARAM_DOLLAR_UNQUOTED=p\\$word\nPGMI_PARAM_ESCAPES=\"a\\tb \\\\ \\\"q\\\" x\\ny\"\nPGMI_PARAM_COLON: colon\nexport\tPGMI_PARAM_EXPORT_TAB=tab\nPGMI_PARAM_SINGLE='it\\'s'\nPGMI_PARAM_LOWER=x$home\nPGMI_PARAM_COMMENTS=a #b #c\nPGMI_PARAM_FIRST=\"x\" PGMI_PARAM_SECOND=y\n"
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+    broken/.env: "PGMI_PARAM_GOOD=yes\nPGMI_PARAM_QUOTE='it''s'\n"
+    broken/deploy.sql: |
+      CREATE TABLE broken_seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - [colon, colon]
+            - [comments, "a #b"]
+            - [dollar_quoted, "p$word"]
+            - [dollar_unquoted, "p$word"]
+            - [escapes, "atb \\ \"q\" x\ny"]
+            - [export_tab, tab]
+            - [first, x]
+            - [lower, "x$home"]
+            - [second, y]
+            - [single, "it\\'s"]
+  - pgmi: [deploy, "{project}/broken", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["WARNING: .*broken/\\.env could not be parsed, so none of its values were applied"]
+      sql:
+        - query: SELECT count(*) FROM broken_seen
+          rows: [[0]]
