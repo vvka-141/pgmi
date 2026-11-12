@@ -140,3 +140,7 @@ contract's "Behaviour changes in 0.20" table and a line in
   read `time box of <d> used up after N attempts; last error: ...`; with no
   time box, `gave up after 5 attempts with no time box (--timeout 0); ...`.
 - `--json` names an attempt's start `startedAt`, as the record's own.
+- Owner decision PGMI-909 (option A): only a run whose attempt reached the
+  server (opened its session) is retried. A first attempt that never
+  connects, or whose sign-in gives up, fails at once as Go does; the last two
+  table rows apply only after an earlier attempt connected.

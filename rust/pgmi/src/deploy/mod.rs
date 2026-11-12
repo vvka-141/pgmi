@@ -575,6 +575,7 @@ impl Steps<'_> {
     async fn attempts(&self, st: &mut Progress, plan: &Plan<'_>, spec: &mut Spec) -> Result<()> {
         let guard = self.guard;
         let mut last: Option<Error> = None;
+        let mut reached = false;
         loop {
             let n = st.attempts.len() + 1;
             st.execution = None;
@@ -598,7 +599,8 @@ impl Steps<'_> {
                 });
             }
             seen.in_test = st.failure().is_some_and(|f| f.blame.phase() == "test");
-            let why = if self.retry.enabled && !guard.stop.is_cancelled() {
+            reached |= seen.connected;
+            let why = if self.retry.enabled && reached && !guard.stop.is_cancelled() {
                 retry::transient(&e, seen)
             } else {
                 None
@@ -644,6 +646,7 @@ impl Steps<'_> {
         }
         let spec = &*spec;
         let session = self.open(st, plan.dialer, spec).await?;
+        seen.connected = true;
         let outcome = async {
             self.settle(&session, spec).await?;
             if !self.ctx.request.overwrite {

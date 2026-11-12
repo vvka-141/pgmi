@@ -60,6 +60,7 @@ const SERVER: [&str; 7] = [
 pub(super) struct Seen {
     pub(super) in_test: bool,
     pub(super) hot_standby: bool,
+    pub(super) connected: bool,
 }
 
 /// Why `e` is worth another attempt, or `None` when it is final.
@@ -241,6 +242,7 @@ mod tests {
         let seen = Seen {
             in_test: true,
             hot_standby: true,
+            connected: true,
         };
         for code in ["40P01", "40001", "08006", "57P01"] {
             assert_eq!(transient(&coded(Kind::Sql, code), seen), None, "{code}");

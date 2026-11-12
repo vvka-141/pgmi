@@ -22,7 +22,7 @@ steps:
     timeout: 30
     expect:
       exit: 0
-      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in [0-9.]+s, [0-9ms.]+ left$"]
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in [0-9.]+m?s, [0-9ms.]+ left$"]
       stderr_not: ["attempt 2 failed"]
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker

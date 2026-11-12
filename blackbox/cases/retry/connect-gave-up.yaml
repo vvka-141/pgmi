@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). When the connect retry gives up on a transient failure (four startups refused with 53300 too many connections, or with 08P01), the whole deploy runs again after its own wait and succeeds; class 08 mid-run (FATAL 08P01 in the tail) is retried too
+description: Rust only (contract "Whole-deployment retry"). A first attempt that never reaches the server (four startups refused with 53300 too many connections, or with 08P01) fails fast as in Go, exit 11 with no whole-deploy retry (owner decision PGMI-909); once an attempt has connected, class 08 mid-run (FATAL 08P01 in the tail) is retried
 impl: rust
 proxy:
   - {at: startup, do: {error: "53300"}, times: 4, step: 1}
@@ -18,16 +18,15 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     timeout: 30
     expect:
-      exit: 0
-      stderr: ["Connection attempt 3 failed: .*too many", "^pgmi: attempt 1 failed \\(could not connect\\); retrying in"]
-      sql:
-        - query: SELECT count(*) FROM marker
-          rows: [[1]]
+      exit: 11
+      stderr: ["Connection attempt 3 failed: .*too many"]
+      stderr_not: ["^pgmi: attempt 1 failed"]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     timeout: 30
     expect:
-      exit: 0
-      stderr: ["Connection attempt 3 failed: .*invalid frontend message type", "^pgmi: attempt 1 failed \\(could not connect\\); retrying in"]
+      exit: 11
+      stderr: ["Connection attempt 3 failed: .*invalid frontend message type"]
+      stderr_not: ["^pgmi: attempt 1 failed"]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     timeout: 30
     expect:
@@ -35,4 +34,4 @@ steps:
       stderr: ["^pgmi: attempt 1 failed \\(08P01 connection exception\\); retrying in"]
       sql:
         - query: SELECT count(*) FROM marker
-          rows: [[4]]
+          rows: [[2]]

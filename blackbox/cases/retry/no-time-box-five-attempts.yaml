@@ -15,7 +15,7 @@ steps:
     expect:
       exit: 13
       stderr:
-        - "^pgmi: attempt 1 failed \\(55P03 lock not available\\); retrying in [0-9.]+s, 4 attempts left$"
-        - "^pgmi: attempt 4 failed \\(55P03 lock not available\\); retrying in [0-9.]+s, 1 attempt left$"
+        - "^pgmi: attempt 1 failed \\(55P03 lock not available\\); retrying in [0-9.]+m?s, 4 attempts left$"
+        - "^pgmi: attempt 4 failed \\(55P03 lock not available\\); retrying in [0-9.]+m?s, 1 attempt left$"
         - "^pgmi: error: gave up after 5 attempts with no time box \\(--timeout 0\\); last error: ERROR: .*\\(SQLSTATE 55P03\\)"
       stderr_not: ["attempt 5 failed"]

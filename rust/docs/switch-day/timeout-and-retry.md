@@ -21,6 +21,11 @@ ledger, everything else is rerunnable by design. When the answer to a
 would. PostgreSQL does not undo sequence advances, and nothing undoes effects
 outside the database.
 
+Only a deploy that has reached the server is retried. When the first
+attempt never connects (the server refuses, cannot be reached, stays busy,
+or the sign-in gives up), pgmi fails at once with exit 11: a wrong host or
+port is reported in a second, not after the whole time box.
+
 `--overwrite` drops and recreates the database once, before the first
 attempt. A retry runs against the recreated database; it never drops it
 again and never asks again.
@@ -35,8 +40,8 @@ again and never asks again.
 | 40001, 40P01 | serialization failure or deadlock with live traffic |
 | 55P03 | a `lock_timeout` or `NOWAIT` in a lock-safe deploy |
 | 25006, only while the server reports `in_hot_standby = on` | a failover left pgmi on a standby |
-| a cloud sign-in that still fails after its own retries | the token endpoint is down |
-| the connect retry giving up on a transient failure | the server stays unreachable |
+| a cloud sign-in that still fails after its own retries, after an earlier attempt connected | the token endpoint is down |
+| the connect retry giving up on a transient failure, after an earlier attempt connected | a restart or failover takes longer |
 
 Connecting has its own short retry inside each attempt (4 tries, about 0.1,
 0.2 and 0.4 s apart). The SQLSTATE is the server's, read from the error that

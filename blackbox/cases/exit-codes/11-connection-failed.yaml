@@ -1,10 +1,11 @@
-description: a server that refuses the connection is exit 11 (--timeout 2s bounds Rust, which retries a refused connection until the time box, contract "Whole-deployment retry")
+description: a server that refuses the connection is exit 11, fast and with no whole-deploy retry, because the first attempt never reached the server (contract "Whole-deployment retry", owner decision PGMI-909)
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
-  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}", --timeout, 2s]
-    timeout: 60
+  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}"]
+    timeout: 10
     expect:
       exit: 11
       stderr: ["refused"]
+      stderr_not: ["^pgmi: attempt 1 failed"]
