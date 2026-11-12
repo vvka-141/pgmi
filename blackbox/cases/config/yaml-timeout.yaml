@@ -1,0 +1,21 @@
+description: a pgmi.yaml timeout without a unit is invalid configuration (exit 10) that says the unit is missing; an empty or null timeout means no limit
+project:
+  files:
+    bare/deploy.sql: SELECT 1;
+    bare/pgmi.yaml: |
+      timeout: 30
+    empty/deploy.sql: SELECT 1;
+    empty/pgmi.yaml: |
+      timeout: ""
+    null/deploy.sql: SELECT 1;
+    null/pgmi.yaml: |
+      timeout: ~
+steps:
+  - pgmi: [deploy, "{project}/bare", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["timeout", "missing unit", '"30"']
+  - pgmi: [deploy, "{project}/empty", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/null", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}

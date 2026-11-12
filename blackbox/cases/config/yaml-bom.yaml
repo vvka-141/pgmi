@@ -1,0 +1,12 @@
+description: a pgmi.yaml that starts with a UTF-8 byte order mark is read as if the mark were absent
+project:
+  files:
+    pgmi.yaml: {hex: "efbbbf706172616d733a0a20206772656574696e673a206f6e650a"}
+    deploy.sql: CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen
+          rows: [[greeting, one]]

@@ -1,0 +1,28 @@
+description: pgmi.yaml full-line and trailing comments are ignored, a hash inside quotes, after a non-space or inside a block scalar is text
+project:
+  files:
+    pgmi.yaml: |
+      # project settings
+      params:   # deploy parameters
+        # indented comment
+        plain: value # trailing
+        quoted: "kept # here"
+        glued: value#hash
+        block: |
+          line # kept
+          # also kept
+        # after the block
+        last: x
+    deploy.sql: CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - [block, "line # kept\n# also kept\n"]
+            - [glued, "value#hash"]
+            - [last, x]
+            - [plain, value]
+            - [quoted, "kept # here"]

@@ -238,7 +238,7 @@ deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 A client that reads its answers while it pipelines thousands of requests gets
 every answer in order.
 
-Cases: `serve/session`, `serve/deploy-verbose`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+Cases: `serve/session`, `serve/deploy-verbose`, `serve/deploy-timeout-zero`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 
@@ -384,8 +384,14 @@ whole seconds; in the Rust binary it bounds each attempt from
 before the host lookup and the sign-in token, so a stalled host is given up
 and the next one tried, and a value above 9223372036 (the longest Go
 duration, which Go wraps around) is refused before connecting, exit 10.
+A refusal ends with its next step: a missing maintenance database says what
+it is and to name an existing one (the connection string's database or
+`connection.maintenance_database`); 53300 that the server is at
+`max_connections`; 57P03 that it is starting up; a connection the server
+closed early to check `pg_isready` (never a TLS hint). A server error keeps
+its own severity (`FATAL:`, `ERROR:`).
 
-Cases: `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
+Cases: `errors/connection-failures`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
 
 ### TLS
 
@@ -611,7 +617,7 @@ In the Rust binary a params file, `-` and the project `.env` are read up to
 password file over 10 MiB is not read, with a WARNING (Rust unit test
 `a_password_file_over_the_limit_is_not_read_and_warned_about`).
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`.
 
 ### Terminal behaviour
 

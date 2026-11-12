@@ -61,6 +61,15 @@ config/pgmi-yaml
 config/pgmi-yaml-invalid
 config/pgmi-yaml-timeout-too-long
 config/precedence
+config/yaml-anchors
+config/yaml-block-scalars
+config/yaml-bom
+config/yaml-booleans
+config/yaml-comments
+config/yaml-crlf
+config/yaml-numbers
+config/yaml-tabs
+config/yaml-unknown-keys
 connection/client-encoding
 connection/connect-timeout-range
 connection/gssapi-keys

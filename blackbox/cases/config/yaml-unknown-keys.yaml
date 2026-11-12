@@ -1,0 +1,21 @@
+description: pgmi.yaml keys are case-sensitive and closed; Params or an extension key holding anchors is invalid configuration (exit 10) naming the key
+project:
+  files:
+    case/deploy.sql: SELECT 1;
+    case/pgmi.yaml: |
+      Params:
+        greeting: one
+    extension/deploy.sql: SELECT 1;
+    extension/pgmi.yaml: |
+      x-defaults: &d
+        greeting: one
+      params: *d
+steps:
+  - pgmi: [deploy, "{project}/case", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["Params"]
+  - pgmi: [deploy, "{project}/extension", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["x-defaults"]

@@ -1,0 +1,14 @@
+description: a pgmi.yaml with CRLF line endings is read like LF, and a block scalar's lines end in LF only
+project:
+  files:
+    pgmi.yaml: "params:\r\n  greeting: one\r\n  block: |\r\n    x\r\n    y\r\n"
+    deploy.sql: CREATE TABLE seen AS SELECT key, value FROM pg_temp.pgmi_parameter_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT key, value FROM seen ORDER BY key
+          rows:
+            - [block, "x\ny\n"]
+            - [greeting, one]

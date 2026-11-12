@@ -1,0 +1,28 @@
+description: a pgmi.yaml port must be a YAML integer; a quoted port is invalid configuration (exit 10), a float with no fraction is read as that integer
+project:
+  files:
+    quoted/deploy.sql: SELECT 1;
+    quoted/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: "{port}"
+        username: "{user}"
+        database: "{db}"
+    float/deploy.sql: SELECT 1;
+    float/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}.0
+        username: "{user}"
+        database: "{db}"
+steps:
+  - pgmi: [deploy, "{project}/quoted"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 10
+      stderr: ["line 3", "{port}"]
+  - pgmi: [deploy, "{project}/float"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      stderr: ['^connection: from pgmi\.yaml \({host}:{port}/{db}\)$']

@@ -1,0 +1,29 @@
+description: the serve deploy tool's timeout "0" means no limit, as --timeout 0 does on the CLI, and beats the project's pgmi.yaml timeout of 2s, which without it ends the same deploy with exit code 16
+project:
+  files:
+    pgmi.yaml: |
+      timeout: 2s
+    deploy.sql: |
+      SELECT pg_sleep(4);
+      CREATE TABLE marker AS SELECT 1 AS done;
+steps:
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","timeout":"0"}}}'
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ['(?m)^{"jsonrpc":"2.0","id":2,"result":{']
+      stdout_not: ['"isError":true']
+      sql:
+        - query: SELECT done FROM marker
+          rows: [[1]]
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ['(?m)^{"jsonrpc":"2.0","id":2,"result":{.*"exitCode":16.*"isError":true}}$']

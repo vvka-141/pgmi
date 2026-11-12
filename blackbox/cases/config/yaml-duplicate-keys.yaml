@@ -1,0 +1,23 @@
+description: a key written twice in pgmi.yaml, nested or at the top, is invalid configuration (exit 10) naming the line, not a silent last-wins
+project:
+  files:
+    nested/deploy.sql: SELECT 1;
+    nested/pgmi.yaml: |
+      params:
+        greeting: one
+        greeting: two
+    top/deploy.sql: SELECT 1;
+    top/pgmi.yaml: |
+      timeout: 5s
+      timeout: 6s
+steps:
+  - pgmi: [deploy, "{project}/nested", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["line 3", "greeting"]
+      stderr_not: [DuplicateKeyPolicy]
+  - pgmi: [deploy, "{project}/top", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["line 2", "timeout"]
+      stderr_not: [DuplicateKeyPolicy]

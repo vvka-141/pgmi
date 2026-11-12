@@ -1,0 +1,29 @@
+description: an empty pgmi.yaml, one with only comments, only a document marker or only null, and sections left empty (params with every entry commented out) all mean no settings
+project:
+  files:
+    blank/deploy.sql: SELECT 1;
+    blank/pgmi.yaml: ""
+    comments/deploy.sql: SELECT 1;
+    comments/pgmi.yaml: "\n# nothing yet\n\n"
+    marker/deploy.sql: SELECT 1;
+    marker/pgmi.yaml: "---\n"
+    null/deploy.sql: SELECT 1;
+    null/pgmi.yaml: "~\n"
+    sections/deploy.sql: SELECT 1;
+    sections/pgmi.yaml: |
+      connection:
+        # host: localhost
+      params:
+        # greeting: hello
+      timeout:
+steps:
+  - pgmi: [deploy, "{project}/blank", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/comments", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/marker", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/null", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}/sections", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
