@@ -36,8 +36,9 @@ index 7afae9d8..cb8cddcb 100644
 +> **Checked on real Lakebase** on 2026-11-11 (Azure Databricks, PostgreSQL 18):
 +> the Azure CLI sign-in, a personal access token, and OAuth M2M from a
 +> workstation and from a serverless job, each deploying with `verify-full`
-+> and no `PGPASSWORD`. The Databricks CLI route was not checked: it needs
-+> `databricks auth login` (a browser) first. The credential lasts one hour.
++> and no `PGPASSWORD`. Checked on 2026-11-12: the Databricks CLI route
++> (after `databricks auth login`), and a job running as a service principal
++> with only the job's own token. The credential lasts one hour.
 +> A project scaffolded by `pgmi init` sets `sslmode: prefer` in `pgmi.yaml`,
 +> which `--databricks` refuses: pass `--sslmode verify-full` or edit
 +> `pgmi.yaml`.

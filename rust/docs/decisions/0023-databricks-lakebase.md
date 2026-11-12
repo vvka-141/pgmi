@@ -139,7 +139,15 @@ Option 3, in `conn/cloud/databricks.rs`.
   reconnects. A pgmi subprocess inside a job sees no credentials until the
   job's script sets `DATABRICKS_HOST` and a token or client secret. An
   invalid personal access token is answered with 403, so the 403 advice
-  names the token too. Not verified: the Databricks CLI route (its login
-  needs a browser) and a job running as the service principal itself (needs
-  an account-level role grant); the 55-minute refresh was not exercised on
-  real Lakebase (the fake covers it).
+  names the token too. The 55-minute refresh was not exercised on real
+  Lakebase (the fake covers it).
+- Verified on real Lakebase, 2026-11-12 (PGMI-849, owner option B, Azure
+  Databricks, PostgreSQL 17): the Databricks CLI route (a profile with
+  `auth_type = databricks-cli` after `databricks auth login`, chosen with
+  `DATABRICKS_CONFIG_PROFILE` and `DATABRICKS_AUTH_TYPE=databricks-cli`,
+  nothing else in the environment) deploys with no `PGPASSWORD`; and a
+  serverless job whose `run_as` is a service principal deploys as that
+  principal (`current_user` is its application ID) with only the job's own
+  runtime token passed as `DATABRICKS_TOKEN`, no client secret. Setting
+  `run_as` to a principal needs `roles/servicePrincipal.user` on it and the
+  principal needs the `workspace-access` entitlement and a Lakebase role.
