@@ -55,6 +55,8 @@ pub(crate) struct DeployRecord {
     notices: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notices_truncated: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome_unknown: Option<bool>,
     overrides: Vec<Override>,
     pub(crate) paths_ignored: Option<usize>,
     pgmi_version: &'static str,
@@ -94,6 +96,8 @@ struct Attempt {
     #[serde(skip_serializing_if = "Option::is_none")]
     sqlstate: Option<String>,
     started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    units_committed: Option<usize>,
 }
 
 fn millis(d: Duration) -> u64 {
@@ -155,6 +159,7 @@ impl DeployRecord {
                     message: a.failure.as_ref().map(|f| clean(&f.message)),
                     sqlstate: a.failure.as_ref().and_then(|f| f.sqlstate.clone()),
                     started_at: timestamp(a.started),
+                    units_committed: (a.committed > 0).then_some(a.committed),
                 })
                 .collect(),
             column: None,
@@ -183,6 +188,9 @@ impl DeployRecord {
             message: None,
             notices,
             notices_truncated,
+            outcome_unknown: execution
+                .and_then(|x| x.failure.as_ref())
+                .and_then(|f| f.unknown.then_some(true)),
             overrides: p.overrides.clone(),
             paths_ignored: loaded
                 .map(|l| l.ignored.len())

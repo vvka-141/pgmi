@@ -113,14 +113,17 @@ impl Guard {
     }
 
     /// Runs `fut` on `session` until it ends, the deploy is stopped or the
-    /// deadline passes. On a stop it sends PostgreSQL's cancel request and
-    /// gives `fut` 2 s from the stop to finish; a session that stays silent
-    /// is dropped, so cleanup does not wait on it.
+    /// deadline passes; once stopped, `fut` is not started. On a stop it
+    /// sends PostgreSQL's cancel request and gives `fut` 2 s from the stop
+    /// to finish: work that still completes (a COMMIT the cancel came too
+    /// late for) keeps its result, and the next step reports the stop. A
+    /// session that stays silent is dropped, so cleanup does not wait on it.
     pub(super) async fn running<T>(
         &self,
         session: &Session,
         fut: impl Future<Output = Result<T>>,
     ) -> Result<T> {
+        self.check()?;
         tokio::pin!(fut);
         let stopped = tokio::select! {
             r = &mut fut => return r,
@@ -140,6 +143,9 @@ impl Guard {
         };
         if reported.is_none() {
             session.disconnect();
+        }
+        if let Some(Ok(done)) = reported {
+            return Ok(done);
         }
         Err(match reported {
             Some(Err(e)) if e.sql_diagnostics().is_some() => {
@@ -188,6 +194,48 @@ pub(super) fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_statement_that_completes_after_the_deadline_keeps_its_result() {
+        use crate::conn::dial::fake;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (listener, port) = fake::listen().await;
+        let server = tokio::spawn(async move {
+            let mut s = fake::signed_in(&listener).await.unwrap();
+            assert_eq!(s.read_u8().await.unwrap(), b'Q');
+            let len = s.read_u32().await.unwrap();
+            let mut body = vec![0; usize::try_from(len).unwrap() - 4];
+            s.read_exact(&mut body).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            s.write_all(b"C\0\0\0\x0bCOMMIT\0Z\0\0\0\x05I")
+                .await
+                .unwrap();
+            let _ = listener.accept().await;
+            s
+        });
+        let spec = fake::spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
+        ));
+        let session = fake::quiet().connect(&spec, "d").await.unwrap();
+        let guard = Guard {
+            stop: Stop::default(),
+            deadline: TokioInstant::now() + Duration::from_millis(100),
+            timeout: Duration::from_millis(100),
+        };
+        let committed = guard
+            .running(&session, async {
+                session
+                    .client
+                    .batch_execute("COMMIT")
+                    .await
+                    .map_err(|e| crate::deploy::sql_error("execute deploy.sql", e))
+            })
+            .await;
+        assert!(committed.is_ok(), "{:?}", committed.err().map(|e| e.text()));
+        let next = guard.running(&session, async { Ok(()) }).await;
+        assert_eq!(next.unwrap_err().exit_code(), 16);
+        drop(server);
+    }
 
     #[tokio::test]
     async fn a_stop_ends_the_wait_for_work_before_the_guard() {

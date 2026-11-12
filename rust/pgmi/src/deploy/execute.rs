@@ -188,6 +188,14 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         failure: None,
     });
     for (i, (unit, lines)) in units.iter().enumerate() {
+        if let Err(e) = guard.check() {
+            execution.failure = Some(Failure {
+                unit: i + 1,
+                blame: Blame::default(),
+                unknown: false,
+            });
+            return Err(e);
+        }
         let outcome = guard
             .running(session, async {
                 session
@@ -208,6 +216,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             };
             execution.failure = Some(Failure {
                 unit: i + 1,
+                unknown: e.sql_diagnostics().is_none(),
                 blame: e
                     .sql_diagnostics()
                     .map(|d| Blame::new(d, &e.text(), &sent, &files))
@@ -223,6 +232,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         execution.failure = Some(Failure {
             unit: units.len(),
             blame: Blame::default(),
+            unknown: false,
         });
         return Err(Error::sql(
             "deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT",

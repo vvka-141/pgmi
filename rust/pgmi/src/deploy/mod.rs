@@ -191,6 +191,7 @@ pub(crate) struct Progress {
 struct Tried {
     started: SystemTime,
     duration: Duration,
+    committed: usize,
     failure: Option<Ended>,
 }
 
@@ -317,6 +318,9 @@ pub(crate) struct Execution {
 pub(crate) struct Failure {
     unit: usize,
     blame: blame::Blame,
+    /// The unit was sent and the server never answered: it may have
+    /// committed.
+    unknown: bool,
 }
 
 /// How many notices a deploy printed, and how many of them were warnings.
@@ -585,6 +589,7 @@ impl Steps<'_> {
             st.attempts.push(Tried {
                 started,
                 duration: t0.elapsed(),
+                committed: st.execution.as_ref().map_or(0, |x| x.committed),
                 failure: result.as_ref().err().map(|e| Ended {
                     sqlstate: e.sql_diagnostics().and_then(|d| d.sqlstate.clone()),
                     message: e.text(),
@@ -1074,7 +1079,24 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
             .as_deref()
             .map(|n| format!("\n{n}"))
             .unwrap_or_default();
-        let text = format!("pgmi: error: {}{note}{}", e.text(), run.diagnostics(e));
+        let first = st
+            .attempts
+            .first()
+            .filter(|_| st.attempts.len() > 1)
+            .and_then(|a| a.failure.as_ref())
+            .map(|f| {
+                format!(
+                    "\nattempt 1 of {} failed with: {}",
+                    st.attempts.len(),
+                    f.message
+                )
+            })
+            .unwrap_or_default();
+        let text = format!(
+            "pgmi: error: {}{note}{}{first}",
+            e.text(),
+            run.diagnostics(e)
+        );
         reporter.line(&redact(&blame::redact_sql_passwords(&text), &secrets));
     }
     if ctx.request.json {
@@ -1110,18 +1132,40 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
     }
     let mut text = format!("{db}: failed after {}", seconds(elapsed));
     let committed = p.execution.as_ref().map_or(0, |x| x.committed);
-    let mut notes = Vec::new();
-    match &p.execution {
-        Some(x) if committed > 0 && x.failure.is_some() => {
-            let failed = x.failure.as_ref().map_or(0, |f| f.unit);
-            let _ = write!(
-                text,
-                " (unit {failed} of {} failed; {committed} earlier unit(s) already committed)",
-                x.units
-            );
+    let earlier: Vec<String> = p
+        .attempts
+        .iter()
+        .enumerate()
+        .take(p.attempts.len().saturating_sub(1))
+        .filter(|(_, a)| a.committed > 0)
+        .map(|(i, a)| format!("attempt {} committed {} unit(s)", i + 1, a.committed))
+        .collect();
+    let mut notes = earlier.clone();
+    if let Some(x) = &p.execution {
+        match &x.failure {
+            Some(f) if f.unknown => {
+                if committed > 0 {
+                    let _ = write!(text, " ({committed} earlier unit(s) committed)");
+                }
+                notes.push(format!(
+                    "unit {} of {} got no answer from the server; whether it committed is unknown, check the database",
+                    f.unit, x.units
+                ));
+            }
+            Some(f) if committed > 0 => {
+                let _ = write!(
+                    text,
+                    " (unit {} of {} failed; {committed} earlier unit(s) already committed)",
+                    f.unit, x.units
+                );
+            }
+            Some(_) if earlier.is_empty() => notes.push("nothing committed".to_string()),
+            Some(_) => notes.push("the last attempt committed nothing".to_string()),
+            None if committed > 0 => {
+                let _ = write!(text, " (all {committed} unit(s) committed before the stop)");
+            }
+            None => {}
         }
-        Some(x) if x.failure.is_some() => notes.push("nothing committed".to_string()),
-        _ => {}
     }
     let verb = match p.provision {
         Provision::Existing => None,
@@ -1129,7 +1173,16 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
         Provision::Recreated => Some("recreated"),
     };
     if let Some(verb) = verb.filter(|_| p.loaded.is_some()) {
-        let left = if committed == 0 { ", left empty" } else { "" };
+        let unknown = p
+            .execution
+            .as_ref()
+            .and_then(|x| x.failure.as_ref())
+            .is_some_and(|f| f.unknown);
+        let left = if committed == 0 && earlier.is_empty() && !unknown {
+            ", left empty"
+        } else {
+            ""
+        };
         notes.push(format!("{verb} database \"{db}\"{left}"));
     }
     if !notes.is_empty() {
@@ -1359,7 +1412,11 @@ mod tests {
     }
 
     fn failure(unit: usize, blame: blame::Blame) -> Option<Failure> {
-        Some(Failure { unit, blame })
+        Some(Failure {
+            unit,
+            blame,
+            unknown: false,
+        })
     }
 
     fn in_file(files: &[&str], line: Option<blame::Line>) -> blame::Blame {
@@ -1473,6 +1530,82 @@ mod tests {
         assert_eq!(
             summary_of(&created_then_sql, &sql).unwrap().text(),
             "app: failed after 1.23s — nothing committed; created database \"app\", left empty"
+        );
+    }
+
+    #[test]
+    fn a_unit_whose_reply_never_came_is_not_reported_as_rolled_back() {
+        let lost = Err(Error::new(
+            Kind::Timeout,
+            "the deploy exceeded --timeout 4s",
+        ));
+        let head = Progress {
+            execution: Some(Execution {
+                test_macros: 0,
+                units: 1,
+                committed: 0,
+                failure: Some(Failure {
+                    unit: 1,
+                    blame: blame::Blame::default(),
+                    unknown: true,
+                }),
+            }),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&head, &lost).unwrap().text(),
+            "app: failed after 1.23s — unit 1 of 1 got no answer from the server; whether it committed is unknown, check the database"
+        );
+        let tail = Progress {
+            execution: executed(
+                1,
+                Some(Failure {
+                    unit: 2,
+                    blame: blame::Blame::default(),
+                    unknown: true,
+                }),
+            ),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&tail, &lost).unwrap().text(),
+            "app: failed after 1.23s (1 earlier unit(s) committed) — unit 2 of 3 got no answer from the server; whether it committed is unknown, check the database"
+        );
+    }
+
+    #[test]
+    fn a_stop_after_every_unit_committed_says_so() {
+        let p = Progress {
+            execution: executed(3, None),
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&p, &Err(Error::new(Kind::Interrupted, "interrupted")))
+                .unwrap()
+                .text(),
+            "app: failed after 1.23s (all 3 unit(s) committed before the stop)"
+        );
+    }
+
+    #[test]
+    fn a_retried_run_still_reports_what_an_earlier_attempt_committed() {
+        let tried = |committed: usize| Tried {
+            started: SystemTime::UNIX_EPOCH,
+            duration: Duration::ZERO,
+            committed,
+            failure: Some(Ended {
+                sqlstate: Some("55P03".into()),
+                message: "ERROR: lock busy (SQLSTATE 55P03)".into(),
+            }),
+        };
+        let p = Progress {
+            execution: executed(0, failure(1, blame::Blame::default())),
+            attempts: vec![tried(1), tried(0)],
+            ..loaded("app")
+        };
+        assert_eq!(
+            summary_of(&p, &Err(Error::sql("boom"))).unwrap().text(),
+            "app: failed after 1.23s — attempt 1 committed 1 unit(s); the last attempt committed nothing"
         );
     }
 
@@ -1708,6 +1841,7 @@ mod tests {
                 Tried {
                     started: at,
                     duration: Duration::from_millis(1210),
+                    committed: 0,
                     failure: Some(Ended {
                         sqlstate: Some("40P01".into()),
                         message: "ERROR: deadlock near s3cret-pw (SQLSTATE 40P01)".into(),
@@ -1716,6 +1850,7 @@ mod tests {
                 Tried {
                     started: at + Duration::from_secs(2),
                     duration: Duration::from_millis(830),
+                    committed: 0,
                     failure: None,
                 },
             ],
