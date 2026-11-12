@@ -135,7 +135,7 @@ fn run_deploy(
             return e.exit_code();
         }
     };
-    for (k, v) in &dotenv {
+    for (k, v) in &dotenv.applied {
         export(k, v);
         env.insert(k, v);
     }
@@ -154,7 +154,8 @@ fn run_deploy(
             request,
             verbose,
             env,
-            dotenv_keys: dotenv.into_iter().map(|(k, _)| k).collect(),
+            dotenv_keys: dotenv.applied.into_iter().map(|(k, _)| k).collect(),
+            dotenv_refused: dotenv.refused,
             stdin: deploy::Stdin::Process,
             approver,
         },

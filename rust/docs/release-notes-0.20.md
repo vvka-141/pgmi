@@ -51,6 +51,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `sslrootcert` is given, the system trust store vouches for the server, so
   pgmi also checks the server's name, as `verify-full` does. With an
   explicit root file `verify-ca` is unchanged.
+- **A project `.env` cannot redirect credentials.** Keys that locate
+  credentials, endpoints, proxies or trust roots (`AWS_CONFIG_FILE`,
+  `SSL_CERT_FILE`, `HTTPS_PROXY` and the rest listed in the behaviour
+  contract) are refused when a checked-out project sets them; the
+  `.env applied:` line names them. Set them in the environment pgmi runs in.
 - **Whole-deployment retry inside `--timeout`.** A transient failure (a lost
   connection, a server restart, too many connections, a deadlock or
   serialization failure, a lock timeout, a failover to a standby, a sign-in

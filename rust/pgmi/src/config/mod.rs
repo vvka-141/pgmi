@@ -39,7 +39,44 @@ pub(crate) fn dotenv_path(project: &Path) -> String {
 
 /// The project `.env`'s pairs that the environment does not set, read up
 /// to `PGMI_MAX_FILE_SIZE`.
-pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(String, String)>> {
+/// What the project `.env` set, and the keys in it pgmi refused.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Dotenv {
+    pub(crate) applied: Vec<(String, String)>,
+    pub(crate) refused: Vec<String>,
+}
+
+/// Keys a checked-out project may not set: they locate credentials,
+/// endpoints, proxies or trust roots, which only the operator decides.
+/// The behaviour contract lists the same keys.
+const REFUSED_EXACT: [&str; 9] = [
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AZURE_AUTHORITY_HOST",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "DATABRICKS_CONFIG_FILE",
+    "DATABRICKS_HOST",
+    "SSL_CERT_DIR",
+];
+const REFUSED_PREFIXES: [&str; 6] = [
+    "AWS_CONTAINER_",
+    "AWS_ENDPOINT_URL",
+    "IDENTITY_",
+    "MSI_",
+    "CLOUDSDK_",
+    "SSL_CERT_",
+];
+
+pub(crate) fn refused_in_dotenv(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    REFUSED_EXACT.contains(&upper.as_str())
+        || REFUSED_PREFIXES.iter().any(|p| upper.starts_with(p))
+        || upper.ends_with("_PROXY")
+}
+
+pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Dotenv> {
     let limit = crate::project::walk::max_size(env)?;
     let read = project.read_bounded(".env", limit).and_then(|bytes| {
         if bytes.len() as u64 > limit {
@@ -56,8 +93,8 @@ pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(Strin
     });
     let text = match read {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => return Ok(vec![]),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Dotenv::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => return Ok(Dotenv::default()),
         Err(e) => {
             return Err(
                 Error::config(format!("failed to read {}", project.display(".env"))).with_source(e),
@@ -70,11 +107,18 @@ pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(Strin
             "WARNING: {} could not be parsed, so none of its values were applied.\nEvery line must be KEY=VALUE, a # comment, or blank.",
             project.display(".env")
         );
-        return Ok(vec![]);
+        return Ok(Dotenv::default());
     };
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
     for (k, v) in pairs {
         if env.contains(&k) {
+            continue;
+        }
+        if refused_in_dotenv(&k) {
+            if !refused.contains(&k) {
+                refused.push(k);
+            }
             continue;
         }
         if let Some(slot) = out.iter_mut().find(|(n, _)| *n == k) {
@@ -84,7 +128,11 @@ pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(Strin
         }
     }
     out.sort();
-    Ok(out)
+    refused.sort();
+    Ok(Dotenv {
+        applied: out,
+        refused,
+    })
 }
 
 #[cfg(test)]
@@ -97,8 +145,38 @@ mod tests {
         let fs = MemFs::default().file(".env", "B=1\nPGHOST=from-file\nA=x\nB=2\n");
         let env = Env::from_pairs(&[("PGHOST", "")]);
         assert_eq!(
-            project_dotenv(&fs, &env).unwrap(),
+            project_dotenv(&fs, &env).unwrap().applied,
             [("A".into(), "x".into()), ("B".into(), "2".into())]
+        );
+    }
+
+    #[test]
+    fn a_project_env_cannot_point_credentials_endpoints_proxies_or_trust_roots_elsewhere() {
+        let fs = MemFs::default().file(
+            ".env",
+            "AWS_CONFIG_FILE=./aws\nAWS_ACCESS_KEY_ID=AKID\nhttps_proxy=http://evil\nPGHOST=db\n\
+             SSL_CERT_FILE=./ca.pem\nAWS_ENDPOINT_URL_STS=http://evil\nPGMI_PARAM_X=1\n\
+             IDENTITY_ENDPOINT=http://evil\nCLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN=http://evil\n",
+        );
+        let d = project_dotenv(&fs, &Env::default()).unwrap();
+        assert_eq!(
+            d.applied,
+            [
+                ("AWS_ACCESS_KEY_ID".into(), "AKID".into()),
+                ("PGHOST".into(), "db".into()),
+                ("PGMI_PARAM_X".into(), "1".into()),
+            ]
+        );
+        assert_eq!(
+            d.refused,
+            [
+                "AWS_CONFIG_FILE",
+                "AWS_ENDPOINT_URL_STS",
+                "CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN",
+                "IDENTITY_ENDPOINT",
+                "SSL_CERT_FILE",
+                "https_proxy",
+            ]
         );
     }
 
@@ -121,9 +199,14 @@ mod tests {
     #[test]
     fn project_dotenv_absent_or_unparseable_applies_nothing() {
         let env = Env::default();
-        assert!(project_dotenv(&MemFs::default(), &env).unwrap().is_empty());
+        assert!(
+            project_dotenv(&MemFs::default(), &env)
+                .unwrap()
+                .applied
+                .is_empty()
+        );
         let fs = MemFs::default().file(".env", "A=1\nnot a pair\n");
-        assert!(project_dotenv(&fs, &env).unwrap().is_empty());
+        assert!(project_dotenv(&fs, &env).unwrap().applied.is_empty());
     }
 
     #[test]
@@ -131,7 +214,10 @@ mod tests {
         for text in ["A=1\nPGPASSWORD=abc\0def\n", "A=1\nB\0C=2\n", "A=1\n# \0\n"] {
             let fs = MemFs::default().file(".env", text);
             assert!(
-                project_dotenv(&fs, &Env::default()).unwrap().is_empty(),
+                project_dotenv(&fs, &Env::default())
+                    .unwrap()
+                    .applied
+                    .is_empty(),
                 "{text:?}"
             );
         }
@@ -153,7 +239,7 @@ mod tests {
         );
         let env = Env::from_pairs(&[("PGMI_MAX_FILE_SIZE", "9")]);
         assert_eq!(
-            project_dotenv(&fs, &env).unwrap(),
+            project_dotenv(&fs, &env).unwrap().applied,
             [("PGHOST".into(), "x".into())]
         );
     }

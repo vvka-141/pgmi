@@ -313,3 +313,4 @@ retry/signal-during-a-wait
 retry/wait-cut-at-the-deadline
 config/dotenv-bom
 formats/binary-file-in-test-directory
+config/dotenv-refused-keys

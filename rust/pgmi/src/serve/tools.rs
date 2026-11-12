@@ -511,6 +511,7 @@ fn deploy_context(
         verbose,
         env: env.clone(),
         dotenv_keys: Vec::new(),
+        dotenv_refused: Vec::new(),
         stdin: Stdin::Unavailable,
         approver: Box::new(ConfirmedName(confirm)),
     })
