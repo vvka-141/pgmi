@@ -1,11 +1,13 @@
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 
 use crate::error::{Result, Secret};
 
 const REFRESH_MARGIN: SignedDuration = SignedDuration::from_mins(5);
+const RETRY: Duration = Duration::from_secs(30);
 
 /// A sign-in credential (a token by default) and when it expires, if its
 /// issuer said.
@@ -27,6 +29,17 @@ pub(crate) trait Mint: Send + Sync {
 pub(crate) struct Renewing<M: Mint> {
     mint: M,
     current: Mutex<Option<Fetched<M::Value>>>,
+    ahead: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+impl<M: Mint> Drop for Renewing<M> {
+    fn drop(&mut self) {
+        if let Ok(mut ahead) = self.ahead.lock()
+            && let Some(task) = ahead.take()
+        {
+            task.abort();
+        }
+    }
 }
 
 pub(crate) fn fresh(expires: Option<Timestamp>, now: Timestamp) -> bool {
@@ -46,7 +59,57 @@ impl<M: Mint> Renewing<M> {
         Renewing {
             mint,
             current: Mutex::new(None),
+            ahead: Mutex::new(None),
         }
+    }
+
+    /// The last value while it has not expired, even inside the renewal
+    /// margin; a new one only after it has (or when its expiry is unknown).
+    pub(crate) async fn valid(&self) -> Result<M::Value> {
+        let now = Timestamp::now();
+        let cached = self.current.lock().ok().and_then(|c| {
+            c.as_ref()
+                .filter(|c| c.expires.is_some_and(|e| e > now))
+                .map(|c| c.value.clone())
+        });
+        match cached {
+            Some(v) => Ok(v),
+            None => self.renew().await,
+        }
+    }
+
+    /// Renews in the background five minutes before the value expires, and
+    /// 30 s after a renewal that failed, keeping the last value meanwhile.
+    /// Ends when the last owner drops this.
+    pub(crate) fn renew_ahead(self: &Arc<Self>)
+    where
+        M: 'static,
+    {
+        let owner = Arc::downgrade(self);
+        let task = tokio::spawn(async move {
+            loop {
+                let due = match owner.upgrade() {
+                    Some(r) => r.due(Timestamp::now()),
+                    None => return,
+                };
+                let Some(due) = due else { return };
+                tokio::time::sleep(due.max(RETRY)).await;
+                let Some(r) = owner.upgrade() else { return };
+                if r.renew().await.is_err() {
+                    drop(r);
+                    tokio::time::sleep(RETRY).await;
+                }
+            }
+        });
+        if let Ok(mut ahead) = self.ahead.lock() {
+            *ahead = Some(task.abort_handle());
+        }
+    }
+
+    fn due(&self, now: Timestamp) -> Option<Duration> {
+        let expires = self.current.lock().ok()?.as_ref()?.expires?;
+        let left = (expires - REFRESH_MARGIN).duration_since(now);
+        Some(Duration::try_from(left).unwrap_or(Duration::ZERO))
     }
 
     pub(crate) async fn current(&self) -> Result<M::Value> {
@@ -157,6 +220,50 @@ mod tests {
                 .expose(),
             "token-2"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_value_is_renewed_in_the_background_before_it_expires() {
+        let now = Timestamp::now();
+        let r = Arc::new(Renewing::holding(
+            Counting {
+                calls: AtomicUsize::new(0),
+                lifetime: Some(SignedDuration::from_hours(1)),
+                now,
+            },
+            Fetched {
+                value: Secret::from("token-0"),
+                expires: Some(now + SignedDuration::from_mins(6)),
+            },
+        ));
+        r.renew_ahead();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert_eq!(r.mint_source().calls.load(Ordering::SeqCst), 0);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(r.mint_source().calls.load(Ordering::SeqCst), 1);
+        assert_eq!(r.current().await.unwrap().expose(), "token-1");
+        assert_eq!(r.mint_source().calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn background_renewal_ends_with_its_owner() {
+        let now = Timestamp::now();
+        let r = Arc::new(Renewing::holding(
+            Counting {
+                calls: AtomicUsize::new(0),
+                lifetime: Some(SignedDuration::from_hours(1)),
+                now,
+            },
+            Fetched {
+                value: Secret::from("token-0"),
+                expires: Some(now + SignedDuration::from_mins(6)),
+            },
+        ));
+        r.renew_ahead();
+        let task = r.ahead.lock().unwrap().clone().unwrap();
+        drop(r);
+        tokio::task::yield_now().await;
+        assert!(task.is_finished());
     }
 
     #[tokio::test]

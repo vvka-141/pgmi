@@ -406,6 +406,7 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct Sessions {
         pub(crate) minted: AtomicUsize,
+        pub(crate) stalled: bool,
     }
 
     pub(crate) fn session() -> Arc<Session> {
@@ -427,10 +428,16 @@ pub(crate) mod tests {
 
         fn mint(&self) -> impl std::future::Future<Output = Result<Fetched<Arc<Session>>>> + Send {
             self.minted.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(Ok(Fetched {
-                value: session(),
-                expires: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)),
-            }))
+            let stalled = self.stalled;
+            async move {
+                if stalled {
+                    std::future::pending::<()>().await;
+                }
+                Ok(Fetched {
+                    value: session(),
+                    expires: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)),
+                })
+            }
         }
     }
 

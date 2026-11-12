@@ -100,9 +100,9 @@ pub(crate) enum CloudSql {
 impl CloudSql {
     async fn session(&self) -> Result<Arc<google::Session>> {
         match self {
-            CloudSql::Signin(r) => r.current().await,
+            CloudSql::Signin(r) => r.valid().await,
             #[cfg(test)]
-            CloudSql::Minted(r) => r.current().await,
+            CloudSql::Minted(r) => r.valid().await,
         }
     }
 
@@ -298,9 +298,11 @@ pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Resul
         .await
         .map(|a| Token::Azure(Arc::new(a))),
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
-        Provider::Google => renew::Renewing::start(google::Signin::new(req, env)?)
-            .await
-            .map(|d| Token::Google(Arc::new(d))),
+        Provider::Google => {
+            let signin = Arc::new(renew::Renewing::start(google::Signin::new(req, env)?).await?);
+            signin.renew_ahead();
+            Ok(Token::Google(signin))
+        }
         Provider::Databricks => databricks::lakebase(req, env)
             .await
             .map(|l| Token::Databricks(Arc::new(l))),
@@ -326,6 +328,32 @@ mod tests {
             .mint_source()
             .minted
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_cancel_uses_the_certificate_in_hand_until_it_expires() {
+        let renewing = Arc::new(renew::Renewing::holding(
+            google::tests::Sessions {
+                stalled: true,
+                ..Default::default()
+            },
+            renew::Fetched {
+                value: google::tests::session(),
+                expires: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_mins(3)),
+            },
+        ));
+        let route = CloudSql::Minted(renewing.clone());
+        tokio::time::timeout(std::time::Duration::from_secs(1), route.session())
+            .await
+            .expect("the cancel waited for a new sign-in")
+            .unwrap();
+        assert_eq!(
+            renewing
+                .mint_source()
+                .minted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]
