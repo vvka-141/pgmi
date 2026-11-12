@@ -239,3 +239,56 @@ BEGIN
         'proposes', 'tp_committed_target', 'name', 'tp_propose_committed', 'permissions', jsonb_build_array('task.write'), 'description', 'Proposes a read committed write'),
         $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
 END $$;
+
+SELECT api.create_or_replace_mcp_handler(jsonb_build_object(
+    'id', 'f4570000-0000-4000-8000-000000000021', 'type', 'tool', 'effect', 'write', 'reversible', true,
+    'name', 'tp_operate_probe', 'description', 'A write only a platform operator may make',
+    'permissions', jsonb_build_array('platform.operate')),
+    $body$ BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END; $body$);
+
+SELECT api.create_or_replace_mcp_handler(jsonb_build_object(
+    'id', 'f4570000-0000-4000-8000-000000000022', 'type', 'tool', 'effect', 'proposal', 'proposes', 'tp_operate_probe',
+    'name', 'tp_propose_operate', 'description', 'Proposes a platform write',
+    'permissions', jsonb_build_array('task.propose')),
+    $body$
+DECLARE
+    v_id uuid := membership.fn_propose('tp_operate_probe', (request).arguments);
+BEGIN
+    RETURN api.mcp_tool_result('[]', (request).request_id, v_id IS NULL, jsonb_build_object('proposalId', v_id));
+END;
+$body$);
+
+DO $$
+DECLARE
+    v_agent    jsonb := pg_temp.test_mcp_context('test|alice-001', current_setting('test.corp_id')::uuid, 'agent.reader');
+    v_owner    extensions.hstore := pg_temp.test_session_headers('test|owner-001', current_setting('test.corp_id')::uuid);
+    v_id       uuid;
+    v_response api.http_response;
+    v_logged   jsonb;
+BEGIN
+    v_id := ((api.mcp_call_tool('tp_propose_operate', '{}', v_agent, '"o"')).envelope
+             ->'result'->'structuredContent'->>'proposalId')::uuid;
+    v_response := api.rest_invoke('POST', '/proposals/' || v_id || '/confirm', v_owner, NULL::bytea);
+    IF (v_response).status_code IS DISTINCT FROM 409
+       OR api.content_json((v_response).content)->>'code' IS DISTINCT FROM 'membership.proposal.tool_refused'
+       OR coalesce((api.content_json((v_response).content)->'answer')::text, '') NOT LIKE '%"pgmi.forbidden"%'
+       OR (pg_temp.tp_proposal(v_id)).status IS DISTINCT FROM 'pending' THEN
+        RAISE EXCEPTION 'TEST FAILED: a confirmer without the target''s permission gets 409 with the nested refusal, got % %',
+            (v_response).status_code, api.content_json((v_response).content);
+    END IF;
+
+    SELECT api.content_json((e.response).content) INTO v_logged
+    FROM api.rest_exchange e
+    WHERE (e.request).url LIKE '%/proposals/' || v_id || '/confirm'
+    ORDER BY e.sequence_number DESC
+    LIMIT 1;
+    IF coalesce((v_logged->'answer')::text, '') NOT LIKE '%"pgmi.forbidden"%' THEN
+        RAISE EXCEPTION 'TEST FAILED: the confirm request''s exchange row records the nested refusal, got %', v_logged;
+    END IF;
+    IF EXISTS (SELECT FROM api.access_denial d JOIN api.mcp_route r ON r.handler_object_id = d.handler_object_id
+               WHERE r.mcp_name = 'tp_operate_probe')
+       OR EXISTS (SELECT FROM api.mcp_exchange x JOIN api.mcp_route r ON r.handler_object_id = x.handler_object_id
+                  WHERE r.mcp_name = 'tp_operate_probe') THEN
+        RAISE EXCEPTION 'TEST FAILED: the nested refusal rolls back with the 409, so it leaves no access_denial or mcp_exchange row; if that changed, update the README audit note';
+    END IF;
+END $$;

@@ -467,7 +467,11 @@ A person signed in on the web, acting as themselves and holding
 (`POST /proposals/{id}/reject`) each. Confirming runs the target tool through
 the MCP dispatcher as that person, so the target's own permission applies to
 them, and answers the proposal with the tool's `answer`; a target that refuses
-answers 409 `membership.proposal.tool_refused` and leaves it pending. An agent
+answers 409 `membership.proposal.tool_refused` and leaves it pending. The 409
+rolls back everything the confirm wrote, the target's `api.access_denial` and
+`api.mcp_exchange` rows included; the refusal is recorded in the confirm
+request's `api.rest_exchange` row, whose response carries the target's error,
+refusal code included, under `answer`. An agent
 never decides (403 `membership.proposal.human_required`), and a decided
 proposal is decided for good (409 `membership.proposal.decided`).
 
