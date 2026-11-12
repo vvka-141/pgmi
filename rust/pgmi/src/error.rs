@@ -61,14 +61,24 @@ pub(crate) struct SqlDiagnostics {
     pub(crate) internal_position: Option<usize>,
 }
 
-#[derive(Debug)]
 pub(crate) struct Error {
     kind: Kind,
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
     cause: Option<Box<dyn std::error::Error + Send + Sync>>,
     sql: Option<Box<SqlDiagnostics>>,
-    secrets: Vec<String>,
+    secrets: Vec<Secret>,
+}
+
+/// The kind and the redacted text: the message, its sources and the secrets
+/// themselves never reach a `{:?}`.
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Error")
+            .field("kind", &self.kind)
+            .field("text", &self.text())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Error {
@@ -119,21 +129,24 @@ impl Error {
         self
     }
 
-    /// The same error, server diagnostics kept, under another kind and message.
+    /// The same error under another kind and message: server diagnostics
+    /// and secrets kept, the original kept as the unrendered source.
     pub(crate) fn reworded(self, kind: Kind, message: impl Into<String>) -> Self {
+        let sql = self.sql.clone();
+        let secrets = self.secrets.clone();
         Error {
             kind,
             message: message.into(),
             source: None,
-            cause: None,
-            sql: self.sql,
-            secrets: self.secrets,
+            cause: Some(Box::new(self)),
+            sql,
+            secrets,
         }
     }
 
     /// Hides `secrets` wherever the error is rendered: the message and every
     /// source in the chain.
-    pub(crate) fn redact(mut self, secrets: &[String]) -> Self {
+    pub(crate) fn redact(mut self, secrets: &[Secret]) -> Self {
         self.secrets.extend_from_slice(secrets);
         self
     }
@@ -213,12 +226,30 @@ impl fmt::Debug for Secret {
     }
 }
 
-/// Replaces every secret of three or more bytes in `text` with `***`.
-pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
-    let mut out = text.to_string();
-    for s in secrets.iter().filter(|s| s.len() >= 3) {
-        out = out.replace(s.as_str(), "***");
+/// Replaces every stretch of `text` covered by a secret of three or more
+/// bytes with `***`. Occurrences are found in the original text and merged,
+/// so a secret inside or overlapping another leaves no part of either.
+pub(crate) fn redact(text: &str, secrets: &[Secret]) -> String {
+    let mut hidden: Vec<(usize, usize)> = Vec::new();
+    for s in secrets.iter().map(Secret::expose).filter(|s| s.len() >= 3) {
+        let step = s.chars().next().map_or(1, char::len_utf8);
+        let mut from = 0;
+        while let Some(at) = text.get(from..).and_then(|t| t.find(s)) {
+            hidden.push((from + at, from + at + s.len()));
+            from += at + step;
+        }
     }
+    hidden.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut shown = 0;
+    for (start, end) in hidden {
+        if start >= shown {
+            out.push_str(text.get(shown..start).unwrap_or_default());
+            out.push_str("***");
+        }
+        shown = shown.max(end);
+    }
+    out.push_str(text.get(shown..).unwrap_or_default());
     out
 }
 
@@ -328,6 +359,10 @@ mod tests {
         let e = Error::connection("cannot connect")
             .with_source(inner)
             .redact(&["hunter2".into()]);
+        assert_eq!(
+            format!("{e:?}"),
+            "Error { kind: Connection, text: \"cannot connect: bad value pw=***\", .. }"
+        );
         assert_eq!(e.text(), "cannot connect: bad value pw=***");
         assert_eq!(e.to_string(), e.text());
         let outer = Error::general("deploy failed").with_source(e);
@@ -341,6 +376,38 @@ mod tests {
             "postgresql://u:***@h"
         );
         assert_eq!(redact("a:ab@h", &["ab".into()]), "a:ab@h");
+    }
+
+    #[test]
+    fn a_secret_inside_or_across_another_leaves_no_part_visible() {
+        let s = |v: &[&str]| v.iter().map(|&x| Secret::from(x)).collect::<Vec<_>>();
+        assert_eq!(redact("pw=abcdef!", &s(&["def", "abcdef"])), "pw=***!");
+        assert_eq!(redact("pw=abcdef!", &s(&["abcd", "cdef"])), "pw=***!");
+        assert_eq!(redact("ababab", &s(&["abab"])), "***");
+        assert_eq!(redact("x abc y abc", &s(&["abc"])), "x *** y ***");
+        assert_eq!(redact("é-secret-é", &s(&["secret", "é-s"])), "***-é");
+        assert_eq!(redact("none here", &s(&["abc"])), "none here");
+    }
+
+    #[test]
+    fn a_reworded_error_keeps_the_original_as_its_source() {
+        let e = Error::sql("canceling statement due to user request")
+            .with_sql(SqlDiagnostics {
+                sqlstate: Some("57014".into()),
+                ..SqlDiagnostics::default()
+            })
+            .reworded(Kind::Timeout, "the deploy exceeded --timeout 2s");
+        assert_eq!(e.text(), "the deploy exceeded --timeout 2s");
+        assert_eq!(e.exit_code(), 16);
+        assert_eq!(
+            e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()),
+            Some("57014")
+        );
+        let source = std::error::Error::source(&e).map(ToString::to_string);
+        assert_eq!(
+            source.as_deref(),
+            Some("canceling statement due to user request")
+        );
     }
 
     #[test]

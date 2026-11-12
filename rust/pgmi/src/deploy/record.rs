@@ -101,7 +101,7 @@ pub(crate) struct Facts<'a> {
     pub(crate) started: SystemTime,
     pub(crate) elapsed: Duration,
     pub(crate) notices: Option<(Value, Option<u64>)>,
-    pub(crate) secrets: &'a [String],
+    pub(crate) secrets: &'a [crate::error::Secret],
 }
 
 impl DeployRecord {
@@ -206,7 +206,12 @@ impl DeployRecord {
         }
     }
 
-    fn fail(&mut self, e: &crate::error::Error, failure: Option<&Failure>, secrets: &[String]) {
+    fn fail(
+        &mut self,
+        e: &crate::error::Error,
+        failure: Option<&Failure>,
+        secrets: &[crate::error::Secret],
+    ) {
         if failure.is_some() {
             self.execution_mode = Some(if self.units_committed == Some(0) {
                 "atomic"

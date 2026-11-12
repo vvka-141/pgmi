@@ -27,7 +27,7 @@ use crate::conn::overrides::{Override, overrides};
 use crate::conn::resolve::{self, Source, Spec};
 use crate::env::Env;
 use crate::error::redact;
-use crate::error::{Error, Kind, Result, SqlDiagnostics};
+use crate::error::{Error, Kind, Result, Secret, SqlDiagnostics};
 use crate::output::{Notice, NoticeLog, Reporter, Summary, seconds};
 use crate::project::{metadata, walk};
 use crate::vfs::OsFs;
@@ -369,25 +369,30 @@ impl Guard {
 /// sign-in token the dialer presents, renewed tokens included. Shared with
 /// the dialer's callbacks, so an append-only set behind a short lock.
 #[derive(Clone, Default)]
-struct Secrets(Arc<Mutex<Vec<String>>>);
+struct Secrets(Arc<Mutex<Vec<Secret>>>);
 
 impl Secrets {
-    fn insert(&self, secret: &str) {
-        if let Ok(mut s) = self.0.lock()
-            && !s.iter().any(|f| f == secret)
-        {
-            s.push(secret.to_string());
+    fn insert(&self, secret: &Secret) {
+        let mut s = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !s.contains(secret) {
+            s.push(secret.clone());
         }
     }
 
     fn resolved(&self, spec: &Spec) {
         for p in [&spec.password, &spec.sslpassword].into_iter().flatten() {
-            self.insert(p.expose());
+            self.insert(p);
         }
     }
 
-    fn list(&self) -> Vec<String> {
-        self.0.lock().map(|s| s.clone()).unwrap_or_default()
+    fn list(&self) -> Vec<Secret> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn notice(&self, mut n: Notice) -> Notice {
@@ -486,7 +491,7 @@ impl Run {
         blame::redact_sql_passwords(&out)
     }
 
-    pub(crate) fn secrets(&self) -> Vec<String> {
+    pub(crate) fn secrets(&self) -> Vec<Secret> {
         self.secrets.list()
     }
 
@@ -773,7 +778,7 @@ impl Steps<'_> {
             log: Arc::new(move |line: String| {
                 line_reporter.line(&redact(&line, &line_secrets.list()));
             }),
-            secret: Arc::new(move |secret: &crate::error::Secret| found.insert(secret.expose())),
+            secret: Arc::new(move |secret: &Secret| found.insert(secret)),
         }
     }
 
@@ -1238,7 +1243,7 @@ mod tests {
     fn a_password_the_dialer_found_is_redacted_like_the_specs() {
         let secrets = Secrets::default();
         secrets.resolved(&spec("d"));
-        secrets.insert("from-pgpass");
+        secrets.insert(&"from-pgpass".into());
         let n = secrets.notice(Notice {
             severity: crate::output::Severity::Notice,
             message: "a=from-pgpass b=s3cret-pw".into(),
@@ -1251,7 +1256,7 @@ mod tests {
             secrets,
             ..Run::start()
         };
-        assert!(run.secrets().iter().any(|s| s == "from-pgpass"));
+        assert!(run.secrets().iter().any(|s| s.expose() == "from-pgpass"));
     }
 
     fn spec(db: &str) -> Spec {

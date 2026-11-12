@@ -388,7 +388,7 @@ impl From<ResolveError> for Error {
 }
 
 impl ResolveError {
-    fn redact(self, secrets: &[String]) -> Self {
+    fn redact(self, secrets: &[Secret]) -> Self {
         let hide = |s: String| crate::error::redact(&s, secrets);
         match self {
             ResolveError::Env(e) => ResolveError::Env(e.redact(secrets)),
@@ -570,13 +570,13 @@ impl Given {
         })
     }
 
-    fn secrets(&self, env: &Env) -> Result<Vec<String>> {
-        let mut secrets: Vec<String> = ["password", "sslpassword"]
+    fn secrets(&self, env: &Env) -> Result<Vec<Secret>> {
+        let mut secrets: Vec<Secret> = ["password", "sslpassword"]
             .iter()
-            .filter_map(|k| self.fields.get(*k).cloned())
+            .filter_map(|k| self.fields.get(*k).map(|v| Secret::from(v.as_str())))
             .collect();
         for name in ["PGPASSWORD", "PGSSLPASSWORD"] {
-            secrets.extend(env.non_empty(name)?.map(str::to_string));
+            secrets.extend(env.non_empty(name)?.map(Secret::from));
         }
         Ok(secrets)
     }
